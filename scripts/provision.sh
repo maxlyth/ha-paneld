@@ -503,6 +503,7 @@ setup_next_headline() {
     renderer)         echo "choose how this panel shows its dashboard" ;;
     ha_url)           echo "set the Home Assistant address" ;;
     ha_credentials)   echo "sign in to Home Assistant" ;;
+    home_dashboard)   echo "choose which Home Assistant dashboard to show" ;;
     entity_filter)    echo "answer the entity-filter question" ;;
     render_proof)     echo "confirm the dashboard renders" ;;
     *)                echo "finish guided setup" ;;

@@ -267,6 +267,9 @@ JSON
       identity)
         printf '{"complete":false,"repair":false,"next":"identity","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"blocked","blocking":true,"detail":"test-panel"},{"stage":"mqtt_broker","status":"blocked","blocking":false,"detail":""}]}\n'
         ;;
+      home_dashboard)
+        printf '{"complete":false,"repair":false,"next":"home_dashboard","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"home_dashboard","status":"blocked","blocking":true,"detail":""}]}\n'
+        ;;
       ha_credentials)
         printf '{"complete":false,"repair":false,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"},{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n'
         ;;
