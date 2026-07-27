@@ -1200,6 +1200,69 @@ browserTest('Auto-sleep blank-Area transport failure recovers without retry refl
   assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), false);
 });
 
+browserTest('Auto-sleep case-equivalent Area settles despite a late stale retry', async (t) => {
+  let statusCalls = 0;
+  let historyCalls = 0;
+  let assignedArea = 'Office';
+  const staleRetry = deferred();
+  const transportFailure = {
+    enabled: true, available: false, phase: 'discovery_failed', reason: 'discovery_failed',
+    detail: 'registry_transport', area_name: '', source_count: 0, discovered_source_count: 0,
+  };
+  const schema = [
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+    { key: 'friendly_name', label: 'Panel name', group: 'System', type: 'STRING', available: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { auto_sleep: 'true', friendly_name: 'Panel' }, ha_expose: {}, ha_auth: { configured: true },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/home-dashboards') return json({ items: [], default: {} });
+    if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: assignedArea });
+    if (path === '/api/v1/auto-sleep') {
+      statusCalls++;
+      if (statusCalls <= 2) return json(transportFailure);
+      if (statusCalls === 3) return staleRetry.promise;
+      return json({ enabled: true, available: true, phase: 'live', area_name: ' studio ', source_count: 1 });
+    }
+    if (path === '/api/v1/auto-sleep/history') {
+      historyCalls++;
+      return json(autoSleepHistory({ hours: 24, areaName: 'STUDIO' }));
+    }
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 800 } });
+  page.setDefaultTimeout(7_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Office', { exact: true }).waitFor();
+  for (let attempt = 0; attempt < 140 && statusCalls < 3; attempt++) await page.waitForTimeout(50);
+  assert.equal(statusCalls, 3);
+
+  assignedArea = 'Studio';
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Studio', { exact: true }).waitFor();
+  await page.locator('.auto-sleep-lane.source').waitFor();
+  assert.equal(statusCalls, 4);
+  assert.equal(historyCalls, 1);
+  const settledSummary = await page.locator('#auto-sleep-summary').textContent();
+
+  staleRetry.resolve(json({
+    enabled: true, available: false, phase: 'discovery_failed', reason: 'discovery_failed',
+    detail: 'registry_projection', area_name: 'Garage', source_count: 0,
+  }));
+  await page.waitForTimeout(300);
+  assert.equal(statusCalls, 4);
+  assert.equal(historyCalls, 1);
+  assert.equal(await page.locator('#auto-sleep-summary').textContent(), settledSummary);
+  assert.equal(await page.locator('.auto-sleep-lane.source').count(), 1);
+  assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), false);
+});
+
 browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snapshot atomically', async (t) => {
   const sourcePost = deferred();
   const refreshedHistory = deferred();

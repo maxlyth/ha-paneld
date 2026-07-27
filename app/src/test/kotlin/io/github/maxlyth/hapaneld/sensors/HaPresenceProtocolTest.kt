@@ -138,6 +138,25 @@ class HaPresenceProtocolTest {
         assertEquals(HaPresenceAuthority.ASSERT_PRESENCE, projection.candidates.single().authority)
     }
 
+    @Test fun `entity with an unprojectable device remains supporting only`() {
+        val devices = response(JSONArray()
+            .put(device("panel-device", "kitchen", "ha-paneld-aid-abc"))
+            .put(JSONObject().put("area_id", "kitchen")))
+        val areas = response(JSONArray().put(JSONObject().put("area_id", "kitchen").put("name", "Kitchen")))
+        val entities = JSONObject().put("result", JSONObject().put("entities", JSONArray()
+            .put(JSONObject().put("ei", "binary_sensor.unprojectable_motion")
+                .put("di", "missing-device").put("ai", "kitchen").put("pl", "mqtt"))))
+        val states = JSONArray().put(state("binary_sensor.unprojectable_motion", "on", "motion"))
+
+        val projection = HaPresenceProtocol.projectArea(devices, areas, entities, states, "abc", "panel")
+
+        assertEquals(listOf("binary_sensor.unprojectable_motion"), projection.candidates.map { it.entityId })
+        assertEquals(HaPresenceAuthority.SUPPORTING_ONLY, projection.candidates.single().authority)
+        assertFalse(projection.candidates.any {
+            it.authority == HaPresenceAuthority.ASSERT_PRESENCE && it.value == HaPresenceValue.ON
+        })
+    }
+
     @Test fun `entity area override excludes a device inherited from panel area`() {
         val devices = response(JSONArray()
             .put(device("panel-device", "kitchen", "ha-paneld-aid-abc"))

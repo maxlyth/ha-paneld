@@ -1401,7 +1401,7 @@
 
   function autoSleepAreaMatchesName(value, expected) {
     var actual = value && (value.area_name != null ? value.area_name : value.areaName);
-    return String(actual || "").trim() === String(expected || "").trim();
+    return String(actual || "").trim().toLowerCase() === String(expected || "").trim().toLowerCase();
   }
 
   function autoSleepAreaMatches(value) {
@@ -1416,7 +1416,7 @@
     actual = String(actual || "").trim();
     // A differently named Area is a stale-but-valid result while HA registry discovery catches up.
     // A blank Area is also how terminal failures are reported, so it must not imply endless retry.
-    return !!expected && !!actual && actual !== expected;
+    return !!expected && !!actual && !autoSleepAreaMatchesName(value, expected);
   }
 
   function autoSleepHistoryReady(status) {
