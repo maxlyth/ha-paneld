@@ -95,6 +95,10 @@ api_contract_requirements=(
   '`/api/v1/restore`'
   '`/api/v1/input`'
   '`/api/v1/perf/history`'
+  '`/api/v1/logship/status`'
+  '`/api/v1/power-safety`'
+  '`/api/v1/auto-sleep`'
+  '`/api/v1/config/probe-log-sink`'
 )
 for requirement in "${api_contract_requirements[@]}"; do
   if ! grep -Fq -- "$requirement" docs/api.md; then

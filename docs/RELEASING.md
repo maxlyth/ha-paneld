@@ -29,7 +29,7 @@ A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/wo
 4. **Docs** — any new capability has a matching `docs/` entry (hardware page, recipe, etc.).
 5. **Build + sanity-test** on at least one real panel (`scripts/update-fleet.sh --apk <built.apk> -- <ip>`).
    - For a rooted panel and local APK, provisioning extracts the ABI-matched helper embedded in that exact APK. It treats the APK and helper as one compatibility unit and refuses to replace the APK unless the running helper reports the embedded source-derived build identity and required protocol.
-   - Tagged builds rerun the helper unit, peer-authentication, filesystem-boundary, installer-security and app/daemon contract checks before producing either privileged binary.
+   - Before tagging, wait for the final `main` CI and Security workflows for the exact contender commit to complete successfully. The tag workflow requires the latest successful Android build, host contracts, dependency-integrity, privileged-helper and CodeQL checks for that source commit, rejects open CodeQL alerts, and independently creates the release inputs from a clean checkout of the exact tag.
 6. **Authorship / no-secrets gate** — verify that commit authors and trailers are intentional and that the published history contains no keystore or credentials. Scan the pending commits before pushing.
 
 ## Tag + publish

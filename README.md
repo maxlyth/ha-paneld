@@ -111,7 +111,7 @@ For the simplest ownership model, choose one panel stack: ha-paneld's built-in r
 | Ambient light / proximity | `sensor.<panel>_illuminance`, learned `binary_sensor.<panel>_proximity` + fleet-normalized `sensor.<panel>_proximity_level` (0 far–100 near) — see [Adaptive proximity and wake on wave](docs/adaptive-proximity.md) |
 | Adaptive brightness | Optional seven-day learning from the panel light sensor or one selected Home Assistant illuminance entity — see [Adaptive brightness](docs/adaptive-brightness.md) |
 | URL navigate | `text.<panel>_navigate` |
-| Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
+| Return to / reload dashboard; reboot | Home Assistant buttons for reload and reboot, plus separate **Dashboard** and **Reload** actions in remote Controls |
 | TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) — server-side TTS recipe in [docs/tts.md](docs/tts.md) |
 | Dashboard screenshot / remote tap | View and refresh the panel screenshot from the Dashboard tab; in Relaxed mode, click it to send a pixel tap and receive a fresh screenshot |
 | Panel info + config web page | `GET /` (the device "Visit" link) |
@@ -154,13 +154,13 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 **Latest release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
 
-**Release candidate — 0.9.6-rc2 (under test):** guided setup now takes a new panel through its remaining connection and dashboard choices, while presence-aware auto sleep combines local activity with selected Home Assistant presence sources. The Dashboard tab can remotely tap a panel in Relaxed mode, upgrades preserve more recoverable configuration, and `--reset-config` can safely return a panel to first-run setup after making a checked settings export. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
+**Release candidate — 0.9.6-rc2 (under test):** panels now warn about storage, database and Android power conditions that could make them unreliable, with a verified power-safety repair where the platform supports it. Log shipping is testable from the panel and supports syslog over TCP or UDP as well as HTTP, while dashboard controls, automatic sleep, sensor continuity, durable settings changes and installer recovery have all received reliability work. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
 
 **Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
 ## Documentation
 
-- **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/openapi.json`.
+- **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/api/v1/openapi.json`.
 - **[docs/security-mode.md](docs/security-mode.md)** — Relaxed and Hardened modes, protected actions requiring physical approval at the panel that cannot be given remotely, and the exact network retry contract.
 - **[docs/profiles/](docs/profiles/)** — create, validate, test and exchange human-readable panel profiles at runtime, without Android Studio or a source build.
 - **[docs/provisioning.md](docs/provisioning.md)** — unattended provisioning, whole-fleet updates, adb bootstrap, and the permission grants.

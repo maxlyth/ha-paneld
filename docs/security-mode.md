@@ -57,10 +57,12 @@ Hardened mode requires on-panel approval before a network client can:
 - import configuration, restore a stored configuration revision or restore a panel backup;
 - activate or roll back a hardware profile;
 - play media fetched from a remote URL;
-- reboot the panel;
-- repair Home Assistant Companion configuration or clear the built-in dashboard's browsing data; or
-- change system display density or font scaling; or
-- disable the configured keep-awake or prevent-idle-dim reachability guard through Configure or Home Assistant.
+- reload the dashboard renderer or reboot the panel;
+- repair Home Assistant Companion configuration or clear the built-in dashboard's browsing data;
+- change system display density or font scaling;
+- disable the configured keep-awake or prevent-idle-dim reachability guard through Configure or Home Assistant;
+- repair panel power safety; or
+- hide one exact unchanged manual-only power-safety caution. This acknowledgement changes presentation only; the underlying assessment, diagnostics and installer result remain unchanged.
 
 A remote Hardened Configure request must save a power-safety reduction separately from package-taming or software-installation policy changes because those actions require different approval classes. Relaxed-mode and loopback combined saves remain direct.
 

@@ -1,36 +1,44 @@
 # Changelog
 
-## Unreleased
+## v0.9.6-rc2 - 2026-07-27
 
-- Prepare the reconciled `0.9.6-rc2` integration line from the published rc1 source and verified post-release CI fixes.
+### Important changes — please read before upgrading
 
-### Fixed
-
-- **Automatic Home dashboard selection is now deterministic.** A blank setting resolves only from the signed-in account's legal dashboard list: its user default, then the system default, then the first available dashboard. It no longer depends on the entity scanner, and startup or reconnect failures retry instead of silently opening an invented or inaccessible route.
-
-- **A failed settings save is no longer allowed to look successful.** Configuration saves through the control plane remain invisible until the SQLite transaction is durable; if the write fails, the previous settings and listeners stay in place, the request fails, and a retry starts from the last known-good state.
-
-- **TPA10 room temperature, humidity and proximity reporting recover correctly again.** The Android climate sensors now remain active long enough for the helper-backed CHT8305 readings to refresh, without bringing back the retired duplicate Home Assistant entities. The continuously streaming proximity sensor no longer gets disrupted by periodic on-change re-registration, and ordinary sub-dwell noise no longer makes its Home Assistant entity briefly unavailable; a genuinely stalled stream or sustained model contradiction still fails closed and enters bounded recovery.
-
-- **Log shipping can now actually reach a standard syslog collector.** Until now the syslog transport only ever spoke TCP, while the port defaulted to 514 — which is a UDP port on essentially every collector. The out-of-the-box configuration therefore could not work: panels reported `connection refused`, and putting `udp://` in the host box made things worse, because the whole string was treated as a hostname and the resulting warning quoted the destination without naming any fault. **Protocol** is now a choice of **syslog-tcp** (the new default), **syslog-udp** or **http**, all on port 514 for syslog. TCP is the default because it is the transport that tells you when it is wrong: pointed at a UDP-only collector it is refused loudly and you can correct it, whereas UDP pointed at a TCP-only collector succeeds locally and every record vanishes with nothing to notice. TCP also carries whole lines, where UDP truncates each datagram at 1 KiB. Panels that explicitly selected the old `syslog` value keep TCP and are unaffected.
-
-- **A collector hostname that resolves to both IPv4 and IPv6 now works.** Previously the panel used whichever address its resolver happened to return first; when that was an IPv6 address and the collector was listening on IPv4, nothing ever arrived — and over UDP the panel could not tell, so it reported success while every record vanished. The panel now prefers IPv4 and, on TCP and HTTP, tries every address the name resolves to until one answers. An IPv6-only collector is unaffected.
-
-- **Log shipping is no longer marked experimental.** It has now been verified end to end against a live collector: all three transports deliver both a test record and the real log stream, addressed by hostname.
-
-- **Failures say what went wrong, and are actually shown.** A sink that cannot be resolved, refuses the connection, or rejects a batch now names the real fault instead of repeating the address back at you — and that state is visible where you need it: a **Current state** row on the Configure tab's Logging card, refreshed while the page is open, plus the Behaviour row on the info page. Previously an enabled-but-failing sink looked identical to a working one on every surface. Over UDP the status deliberately reads `sending (UDP is unacknowledged)` rather than `connected`, because a connectionless transport cannot tell you the records arrived — a silently discarded stream would otherwise look exactly like a healthy one.
+**This release candidate is primarily about keeping panels reachable and making failures visible while they can still be recovered.** It warns about storage, database and Android power conditions that could make a panel unreliable, stops failed configuration changes from masquerading as success, and improves dashboard, installer and hardware-sensor recovery. Testers should focus on upgrades, sleep and wake behaviour, log delivery and sensor continuity.
 
 ### Added
 
-- **Panels now monitor the storage that holds their database at startup and every 24 hours.** The Dashboard, status API and diagnostics report free space, database and WAL growth, page use and SQLite's bounded health check from one shared result. Home Assistant gets a diagnostic sensor, while critical pressure or a real database failure also raises a persistent on-panel warning and makes fleet verification fail with recovery guidance. The first safety release detects and escalates only; it never triggers pruning, checkpoint compaction, `VACUUM` or other automatic reclamation.
+- **Panels now warn when storage or database problems could make them unreliable.** The Dashboard, diagnostics and Home Assistant report available space, database growth and database health. Serious problems produce a persistent warning and cause fleet verification to fail with recovery guidance. This release only detects and reports problems; it never deletes data or performs automatic database maintenance.
 
-- **A "Test sink" button on the Configure tab's Logging card** checks the collector from the panel's own network, which is the only vantage point that counts, and does it without saving first so a typo can be caught before it is committed. It sends one real, marked record in whatever format you have selected — an RFC5424 frame for syslog, an NDJSON POST for HTTP — rather than merely opening a connection, because a connection succeeds against any listening port and so cannot tell your collector from something else that happens to be there. You always get the marker back, so you can search for it in the collector; over UDP that search is the only confirmation possible, and the panel says so instead of claiming delivery.
+- **Panels can identify Android power settings that may make them unreachable after the screen switches off.** A warning explains the risk and offers **Repair power safety** where ha-paneld can safely apply and verify the supported safeguards without rebooting. Where Android requires a manual change, the panel provides specific guidance and lets you hide that exact unchanged caution after acting on it; diagnostics and installer verification continue to report the underlying state.
 
-- **A standalone receiver for checking log shipping end to end**, at `tools/logship-receiver/`. It is a single dependency-free Node script that listens for syslog over UDP and TCP and for NDJSON over HTTP at the same time, prints a full breakdown of every record, and says so loudly when something does not parse — the failure a real collector performs in silence. Run it with `--self-test` first to rule out your own machine.
+- **Remote Controls can now return a panel to its configured Dashboard.** Dashboard navigation remains separate from Reload, so routine navigation does not unnecessarily rebuild the page. A remote Reload in Hardened security mode requires approval on the panel.
+
+### Changed
+
+- **Log shipping now works reliably with standard collectors and is easier to troubleshoot.** You can choose syslog over TCP or UDP, or HTTP, test the destination from the panel before saving, and see a useful explanation when the collector cannot be reached. Hostnames with both IPv4 and IPv6 addresses are handled correctly, existing installations retain their transport behaviour, and UDP status is described honestly because delivery cannot be confirmed. Fresh installations default to TCP because a rejected connection can be reported instead of silently losing records. A dependency-free [test receiver](tools/logship-receiver/README.md) is included for end-to-end checks.
+
+### Fixed
+
+- **Failed settings changes no longer look successful or replace working configuration.** A change becomes visible only after it has been written durably. If saving fails, the previous settings and their active behaviour remain in place, the request reports the failure, and a retry starts from the last known-good state.
+
+- **Automatic Home dashboard selection is predictable and only chooses a dashboard the signed-in user can access.** A blank selection follows the user's default, then the Home Assistant system default, then the first available dashboard. Temporary Home Assistant failures are retried instead of opening an invented or inaccessible route.
+
+- **TPA10 temperature, humidity and proximity sensors recover correctly again.** Climate readings remain active long enough to refresh, a trustworthy learned proximity model survives restart validation, and brief noise no longer makes the Home Assistant entity appear unavailable. A genuinely stalled or contradictory sensor still fails safely and enters bounded recovery.
+
+- **The installer can recover an app that Android has placed into its stopped state.** It verifies that the normal launcher route actually restored panel health and uses a bounded fallback when it did not, rather than reporting success while the panel remains unavailable.
+
+- **Automatic-sleep activity updates no longer make the Configure page flash, collapse or jump.** Presence-source and history refreshes update the affected content while preserving settled controls, chart position, focus and scroll state. Temporary Home Assistant registry or history failures retry without replacing useful information with a misleading broken state.
 
 ### Upgrade notes
 
-- Anything typed into **Sink host** is now interpreted the way you would expect: `udp://collector`, `collector:1514` and `[::1]:514` all select the transport and port they name. If you had worked around the old behaviour by putting a scheme in the host box, that value now does the right thing rather than failing to resolve.
+- Use the normal installer for an in-place update. No configuration reset or manual Home Assistant entity cleanup is expected.
+
+- Existing installations retain their effective log-shipping transport: an explicit legacy `syslog` selection remains TCP, while an upgraded configuration that never stored a protocol continues using UDP. Fresh installations default to TCP. A scheme or port entered in **Sink host**, such as `udp://collector` or `collector:1514`, is now interpreted directly.
+
+- A critical storage or database warning now makes installer and fleet verification stop. Preserve `ha-paneld.db`, restore storage headroom or correct the reported database or I/O problem, then rerun verification; RC2 does not delete or compact data automatically.
+
+- A panel may show a new **Power safety** warning if Android cannot prove that it will remain reachable with the screen off. Review the guidance and use **Repair power safety** where offered; the repair does not reboot the panel. In Hardened security mode, remote repair, Reload and acknowledgement of a manual-only caution require physical approval on the panel.
 
 ## v0.9.6-rc1 - 2026-07-27
 
