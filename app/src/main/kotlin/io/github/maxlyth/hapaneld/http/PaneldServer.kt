@@ -387,6 +387,54 @@ internal suspend fun receiveBoundedFormParameters(
     return parseQueryString(body)
 }
 
+internal data class RemoteActionRouteDependencies(
+    val authorizeSensitive: suspend (ApplicationCall, SensitiveOperation, String, String) -> Boolean,
+    val admit: suspend (ApplicationCall, String) -> Unit,
+)
+
+/** HTTP boundary for the software-navbar actions. Dashboard foregrounding remains routine; Reload
+ * deliberately restarts a renderer and therefore shares the exact-request physical-approval policy
+ * used by the other sensitive process and power operations. */
+internal fun io.ktor.server.routing.Route.remoteActionRoute(dependencies: RemoteActionRouteDependencies) {
+    post("/action") {
+        val parameters = receiveBoundedFormParameters(call) ?: return@post
+        val action = parameters["a"]
+        if (action !in REMOTE_ACTIONS) {
+            call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
+            return@post
+        }
+        val sensitive = when (action) {
+            "reload" -> SensitiveOperation.DASHBOARD_RELOAD to "Reload the dashboard renderer"
+            "reboot" -> SensitiveOperation.DEVICE_REBOOT to "Reboot this panel"
+            else -> null
+        }
+        if (sensitive != null && !dependencies.authorizeSensitive(
+                call,
+                sensitive.first,
+                exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+                sensitive.second,
+            )
+        ) return@post
+        dependencies.admit(call, action!!)
+    }
+}
+
+/** One renderer-sensitive execution seam shared by the live queue and endpoint behavior tests. */
+internal fun executeRemoteDashboardAction(
+    action: String,
+    dashboardPackage: String,
+    launch: (String) -> Unit,
+    reload: (String) -> Unit,
+): Boolean = when (action) {
+    "dashboard" -> { launch(dashboardPackage); true }
+    "reload" -> { reload(dashboardPackage); true }
+    else -> false
+}
+
+internal val REMOTE_ACTIONS = setOf(
+    "back", "recents", "launcher", "admin_launcher", "dashboard", "reload", "reboot", "volup", "voldn",
+)
+
 /** Result of validating a direct config POST before any preference or controller mutation. */
 internal sealed class ConfigPostParameters {
     data class Ok(val values: Parameters) : ConfigPostParameters()
@@ -1029,16 +1077,17 @@ class PaneldServer internal constructor(
         val ok = try {
             when (command) {
                 is RemoteControl.Tap -> executeRemoteTap(command)
-                is RemoteControl.Action -> when (command.name) {
+                is RemoteControl.Action -> if (executeRemoteDashboardAction(
+                        command.name,
+                        config.dashboardPackage,
+                        launch = { system.launchHome(it) },
+                        reload = { system.reloadDashboard(it) },
+                    )
+                ) true else when (command.name) {
                     "back" -> interactive.back()
                     "recents" -> interactive.recents()
                     "launcher" -> { system.launchLauncher(config.launcherPackage); true }
                     "admin_launcher" -> { system.launchAdminLauncher(); true }
-                    // Preserve renderer selection in SystemController: blank Auto, built-in and an
-                    // explicit foreign package all share this foreground-only route. Recovery stays
-                    // deliberately separate below so a remote Dashboard tap never reloads it.
-                    "dashboard" -> { system.launchHome(config.dashboardPackage); true }
-                    "reload" -> { system.reloadDashboard(config.dashboardPackage); true }
                     "reboot" -> { system.reboot(); true }
                     "volup" -> { volume.step(up = true); true }
                     "voldn" -> { volume.step(up = false); true }
@@ -2170,21 +2219,14 @@ class PaneldServer internal constructor(
                         }
                     }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
-                    post("/action") {
-                        val parameters = receiveBoundedFormParameters(call) ?: return@post
-                        val a = parameters["a"]
-                        if (a !in REMOTE_ACTIONS) call.respondText("bad-action\n", status = HttpStatusCode.BadRequest)
-                        else {
-                            if (a == "reboot" && !authorizeSensitive(
-                                    call,
-                                    SensitiveOperation.DEVICE_REBOOT,
-                                    exactHttpApprovalPayload(call, parameters.canonicalDigest()),
-                                    "Reboot this panel",
-                                )
-                            ) return@post
-                            respondRemoteAdmission(call, RemoteControl.Action(a!!))
-                        }
-                    }
+                    remoteActionRoute(
+                        RemoteActionRouteDependencies(
+                            authorizeSensitive = ::authorizeSensitive,
+                            admit = { request, action ->
+                                respondRemoteAdmission(request, RemoteControl.Action(action))
+                            },
+                        ),
+                    )
                     // Debug-only sensor trace (RAM ring buffer, on by default) for fit-testing the
                     // auto-brightness + proximity filters. CSV by default (drop into a plot); ?format=json
                     // for programmatic use / a future on-panel chart. Not an HA/MQTT surface.
@@ -7867,9 +7909,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         private const val REMOTE_SCREENSHOT_WAIT_MS = 25_000L
         private const val REMOTE_TAP_CAPTURE_TIMEOUT_MS = 45_000L
         private const val REMOTE_TAP_CAPTURE_RESPONSE_TIMEOUT_MS = 60_000L
-        private val REMOTE_ACTIONS = setOf(
-            "back", "recents", "launcher", "admin_launcher", "dashboard", "reload", "reboot", "volup", "voldn",
-        )
         private val OPAQUE_AUTO_SLEEP_KEY = Regex("^[a-f0-9]{64}$")
 
         /** Keys routed through [applySetting] after an HTTP persistence commit, declared by the registry. */

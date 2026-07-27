@@ -51,7 +51,14 @@ class HardenedControlContractTest {
         assertRouteAuthorizesBefore("/display/density", "density.reset()")
         assertRouteAuthorizesBefore("/power-safety/repair", "onRepairPowerSafety()")
         assertRouteAuthorizesBefore("/tame", "updateTameSelection")
-        assertRouteAuthorizesBefore("/action", "respondRemoteAdmission(")
+        val remoteAction = server.substring(
+            server.indexOf("internal fun io.ktor.server.routing.Route.remoteActionRoute"),
+            server.indexOf("/** One renderer-sensitive execution seam"),
+        )
+        assertTrue(remoteAction.contains("SensitiveOperation.DASHBOARD_RELOAD"))
+        assertTrue(remoteAction.contains("SensitiveOperation.DEVICE_REBOOT"))
+        assertTrue(remoteAction.indexOf("dependencies.authorizeSensitive(") <
+            remoteAction.indexOf("dependencies.admit("))
 
         val tame = route("/tame")
         assertTrue(tame.contains("tame.recommendedSelections(tameProfileCandidates)"))
