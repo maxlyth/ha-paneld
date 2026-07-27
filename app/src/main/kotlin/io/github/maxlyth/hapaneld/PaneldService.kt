@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -14,9 +15,11 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.OperationCanceledException
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -104,6 +107,12 @@ import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
 import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
+import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
+import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
+import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
+import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
+import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
+import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CancellationException
@@ -201,6 +210,63 @@ internal fun shouldAttemptPeriodicAdminHomeRepair(
     failedGeneration: Long,
 ): Boolean = !serviceStopping && adminHomeSelected && admittedRoute != null &&
     failedGeneration != policyGeneration
+
+internal sealed interface StorageHealthNotificationDecision {
+    data object KeepExisting : StorageHealthNotificationDecision
+    data object Cancel : StorageHealthNotificationDecision
+    data class Show(val title: String, val body: String) : StorageHealthNotificationDecision
+}
+
+/** Pure notification projection: the storage authority owns thresholds, hysteresis and failure latching. */
+internal fun storageHealthNotificationDecision(
+    snapshot: StorageHealthSnapshot,
+): StorageHealthNotificationDecision = when (snapshot.severity) {
+    StorageHealthSeverity.UNCHECKED -> StorageHealthNotificationDecision.KeepExisting
+    StorageHealthSeverity.HEALTHY,
+    StorageHealthSeverity.WARNING -> StorageHealthNotificationDecision.Cancel
+    StorageHealthSeverity.CRITICAL -> {
+        val capacity = if (snapshot.totalBytes > 0L) {
+            " (${snapshot.usableBytes.coerceAtLeast(0L) / (1024L * 1024L)} MiB filesystem free)"
+        } else ""
+        StorageHealthNotificationDecision.Show(
+            title = "Panel storage/database pressure critical",
+            body = "Storage or database-file pressure is critical$capacity. " +
+                "Open ha-paneld and review free space and WAL growth before changing configuration.",
+        )
+    }
+    StorageHealthSeverity.DATABASE_FAILURE -> StorageHealthNotificationDecision.Show(
+        title = "Panel database needs attention",
+        body = when (snapshot.databaseFailureKind) {
+            StorageDatabaseFailureKind.STORAGE_FULL ->
+                "A panel database write failed when storage was full. Open ha-paneld; recovery is not yet verified."
+            StorageDatabaseFailureKind.IO ->
+                "The panel database reported a disk I/O failure. Open ha-paneld; retry only after resolving the cause."
+            StorageDatabaseFailureKind.CORRUPTION ->
+                "The panel database failed its integrity check. Preserve it and open ha-paneld diagnostics before further writes."
+            StorageDatabaseFailureKind.BUSY ->
+                "The panel database remained busy or locked. Open ha-paneld diagnostics and wait for a clean check before retrying."
+            StorageDatabaseFailureKind.UNKNOWN,
+            null -> "The panel database reported a failure. Preserve it and open ha-paneld diagnostics before retrying."
+        },
+    )
+}
+
+internal enum class StorageHealthObservationQuality { COMPLETE, FAILED, INCOMPLETE }
+
+/** Pure admission rule for the daily probe's bounded retry loop. */
+internal fun storageHealthObservationQuality(
+    observation: StorageHealthObservation,
+): StorageHealthObservationQuality = when {
+    observation.quickCheck == StorageQuickCheck.FAILED -> StorageHealthObservationQuality.FAILED
+    observation.checkedAtMillis <= 0L || observation.totalBytes <= 0L ||
+        observation.mainDatabaseBytes <= 0L || observation.pageSizeBytes <= 0L ||
+        observation.pageCount <= 0L || observation.schemaVersion <= 0 ||
+        observation.quickCheck == StorageQuickCheck.NOT_RUN -> StorageHealthObservationQuality.INCOMPLETE
+    else -> StorageHealthObservationQuality.COMPLETE
+}
+
+internal fun storageHealthObservationNeedsRetry(observation: StorageHealthObservation): Boolean =
+    storageHealthObservationQuality(observation) == StorageHealthObservationQuality.INCOMPLETE
 
 internal enum class ServiceStartupDisposition {
     RUNNING,
@@ -619,6 +685,8 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
     private lateinit var entityLearning: EntityLearningManager
+    private var storageHealthSubscription: AutoCloseable? = null
+    private val storageHealthCancellation = AtomicReference<CancellationSignal?>()
     private lateinit var companionDataOperationState: CompanionDataOperationState
     private val mqtt: MqttBridge get() = runtime.current().mqtt
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
@@ -1150,7 +1218,9 @@ class PaneldService : Service() {
                     generation = status.activation.generation,
                 )
             },
+            storageHealth = StorageHealthRuntime::snapshot,
         )
+        storageHealthSubscription = StorageHealthRuntime.subscribe(::onStorageHealthSnapshot)
         sensors.setLearnedProximityListener {
             server.invalidateCapabilitySnapshot()
             runtime.observe()?.value?.mqtt?.notifyLearnedProximityChanged()
@@ -1199,6 +1269,7 @@ class PaneldService : Service() {
             },
             onExternalSettingApplied = liveSettingAuthority::discard,
             zigbeeHealth = zigbeeHealth::snapshot,
+            storageHealth = StorageHealthRuntime::snapshot,
             onZigbeeExplicitRetry = zigbeeHealth::explicitRetry,
             stalePanelId = stalePanelId,
             profileIdentity = activeProfileIdentity,
@@ -2277,6 +2348,7 @@ class PaneldService : Service() {
 
             // Everything below can start work, write hardware state, attach a process-global owner, or
             // create an overlay. Keep all of it behind the predecessor fence, not merely HTTP/MQTT start.
+            startStorageHealthChecks()
             reconcileHelperInstallStaging()
             registerBrightnessPreferenceObserver()
             refreshAdaptiveBrightnessInputs(restartSource = false)
@@ -2857,6 +2929,123 @@ class PaneldService : Service() {
         runCatching { cm.registerDefaultNetworkCallback(cb) }.onSuccess { netCallback = cb }
     }
 
+    private fun startStorageHealthChecks() {
+        scope.periodic(
+            intervalMs = STORAGE_HEALTH_CHECK_MS,
+            initialDelayMs = 0L,
+            tag = TAG,
+            name = "storage-health",
+            // The shared health authority already retains a controlled failure category. Do not copy
+            // SQLite messages or app-private paths into log shipping/support output.
+            onError = { error -> Log.w(TAG, "storage health check failed (${error.javaClass.simpleName})") },
+        ) {
+            repeat(STORAGE_HEALTH_CHECK_ATTEMPTS) { index ->
+                if (teardownBoundary.isStopping) return@periodic
+                val attempt = index + 1
+                val cancellationSignal = CancellationSignal()
+                if (!storageHealthCancellation.compareAndSet(null, cancellationSignal)) {
+                    Log.w(TAG, "storage health check skipped because a prior check is still active")
+                    return@periodic
+                }
+                try {
+                    // Capture immediately before the read. A database failure recorded while this
+                    // observation is in flight must remain newer truth when the result returns.
+                    val observationToken = StorageHealthRuntime.beginObservation()
+                    val observation = entityLearning.storageHealthObservation(cancellationSignal)
+                    if (teardownBoundary.isStopping || storageHealthCancellation.get() !== cancellationSignal) {
+                        return@periodic
+                    }
+                    val quality = storageHealthObservationQuality(observation)
+                    // A completed integrity failure is authoritative corruption evidence, not an
+                    // incomplete sample. Publish it once; retry only partial observations/exceptions.
+                    if (!storageHealthObservationNeedsRetry(observation)) {
+                        StorageHealthRuntime.refresh(observation, observationToken)
+                        return@periodic
+                    }
+                    // Partial evidence is still truthful: publish its unknown fields immediately so
+                    // every surface sees the completed probe, then make the bounded recovery attempt.
+                    StorageHealthRuntime.refresh(observation, observationToken)
+                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) {
+                        Log.w(TAG, "storage health check remained ${quality.name.lowercase(Locale.ROOT)} " +
+                            "after $attempt attempts")
+                        return@periodic
+                    }
+                    Log.w(TAG, "storage health check ${quality.name.lowercase(Locale.ROOT)}; " +
+                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (cancelled: OperationCanceledException) {
+                    if (teardownBoundary.isStopping) return@periodic
+                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) throw cancelled
+                    Log.w(TAG, "storage health check interrupted; " +
+                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
+                } catch (failure: Exception) {
+                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) throw failure
+                    Log.w(TAG, "storage health check failed (${failure.javaClass.simpleName}); " +
+                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
+                } finally {
+                    storageHealthCancellation.compareAndSet(cancellationSignal, null)
+                }
+                kotlinx.coroutines.delay(STORAGE_HEALTH_RETRY_MS)
+            }
+        }
+    }
+
+    private fun onStorageHealthSnapshot(snapshot: StorageHealthSnapshot) {
+        if (teardownBoundary.isStopping) return
+        server.invalidateStorageHealthDiagnostics()
+        updateStorageHealthNotification(snapshot)
+        runtime.observe()?.value?.mqtt?.publishStorageHealth()
+    }
+
+    private fun updateStorageHealthNotification(snapshot: StorageHealthSnapshot) {
+        when (val decision = storageHealthNotificationDecision(snapshot)) {
+            StorageHealthNotificationDecision.KeepExisting -> Unit
+            StorageHealthNotificationDecision.Cancel -> runCatching {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                    .cancel(STORAGE_HEALTH_NOTIF_ID)
+            }.onFailure { Log.w(TAG, "could not clear storage health notification", it) }
+            is StorageHealthNotificationDecision.Show -> runCatching {
+                val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (mgr.getNotificationChannel(STORAGE_HEALTH_CHANNEL_ID) == null) {
+                    mgr.createNotificationChannel(
+                        NotificationChannel(
+                            STORAGE_HEALTH_CHANNEL_ID,
+                            "Storage health",
+                            NotificationManager.IMPORTANCE_HIGH,
+                        ).apply {
+                            description = "Critical panel storage and SQLite failures"
+                            setSound(null, null)
+                            enableVibration(false)
+                        },
+                    )
+                }
+                val contentIntent = PendingIntent.getActivity(
+                    this,
+                    STORAGE_HEALTH_NOTIF_ID,
+                    Intent(this, ConfigActivity::class.java)
+                        .putExtra("path", "/")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                val notification = NotificationCompat.Builder(this, STORAGE_HEALTH_CHANNEL_ID)
+                    .setContentTitle(decision.title)
+                    .setContentText(decision.body)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(decision.body))
+                    .setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setCategory(NotificationCompat.CATEGORY_ERROR)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setOngoing(true)
+                    .setAutoCancel(false)
+                    .setOnlyAlertOnce(true)
+                    .setSilent(true)
+                    .setContentIntent(contentIntent)
+                    .build()
+                mgr.notify(STORAGE_HEALTH_NOTIF_ID, notification)
+            }.onFailure { Log.w(TAG, "could not show storage health notification", it) }
+        }
+    }
+
     private fun notificationChannel(silent: Boolean): Pair<NotificationManager, String> {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = if (silent) SILENT_CHANNEL_ID else CHANNEL_ID
@@ -2924,6 +3113,9 @@ class PaneldService : Service() {
         // External display/system-policy recovery remains mandatory even after this deadline expires.
         val asyncTeardownDeadline = MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)
         teardownBoundary.markStopping()
+        storageHealthSubscription?.close()
+        storageHealthSubscription = null
+        storageHealthCancellation.getAndSet(null)?.cancel()
         lightMqttPublisher.close()
         adaptiveSiteGeneration.incrementAndGet()
         brightnessObserver?.let { observer ->
@@ -3437,7 +3629,14 @@ class PaneldService : Service() {
         // Channel sound is immutable after creation. A distinct ID guarantees the silence setting can
         // supersede an older install whose original channel was created with a notification sound.
         private const val SILENT_CHANNEL_ID = "ha-paneld-silent-v1"
+        private const val STORAGE_HEALTH_CHANNEL_ID = "ha-paneld-storage-health-v1"
         private const val NOTIF_ID = 1
+        private const val STORAGE_HEALTH_NOTIF_ID = 2
+        // Daily rather than wall-clock scheduled: the service owns one immediate check, then delays
+        // from completion. A bounded short retry absorbs transient StatFs/SQLite observation failures.
+        private const val STORAGE_HEALTH_CHECK_MS = 24L * 3_600L * 1_000L
+        private const val STORAGE_HEALTH_CHECK_ATTEMPTS = 3
+        private const val STORAGE_HEALTH_RETRY_MS = 5_000L
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
         // Fresh-client broker-progress lease. A previously-live process crosses its controlled boundary

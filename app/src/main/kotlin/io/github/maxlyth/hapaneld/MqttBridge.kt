@@ -40,6 +40,9 @@ import io.github.maxlyth.hapaneld.security.ApprovalBroker
 import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.sensors.ProximityReportGate
+import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
+import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
+import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.mqtt.HiveMqTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttCallbacks
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectionLease
@@ -69,6 +72,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.RejectedExecutionException
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.WeakHashMap
 import org.json.JSONObject
 
@@ -115,6 +119,38 @@ internal fun hiddenReadOnlyStateTopic(key: String, panel: String): String? =
     SettingsRegistry.spec(key)?.ha?.takeIf { it.readOnly }?.stateTopic(panel)
 
 private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
+
+/** Path-free, bounded Home Assistant attributes derived from the shared immutable snapshot. */
+internal fun storageHealthMqttAttributes(snapshot: StorageHealthSnapshot): String {
+    val probeRan = snapshot.checkedAtMillis > 0L
+    val capacityKnown = probeRan && snapshot.totalBytes > 0L
+    val sqliteMetricsKnown = probeRan && snapshot.pageSizeBytes > 0L && snapshot.pageCount > 0L
+    val databaseFilesBytes = listOf(
+        snapshot.mainDatabaseBytes,
+        snapshot.walBytes,
+        snapshot.sidecarBytes,
+    ).fold(0L) { total, value ->
+        if (value > Long.MAX_VALUE - total) Long.MAX_VALUE else total + value
+    }
+    fun valueOrNull(value: Any?, known: Boolean = probeRan): Any? = if (known) value else JSONObject.NULL
+    return JSONObject()
+        .put("storage_pressure", snapshot.pressureSeverity.name.lowercase(Locale.ROOT))
+        .put("failure_category", snapshot.databaseFailureKind?.name?.lowercase(Locale.ROOT) ?: JSONObject.NULL)
+        .put("usable_bytes", valueOrNull(snapshot.usableBytes, capacityKnown))
+        .put("total_bytes", valueOrNull(snapshot.totalBytes, capacityKnown))
+        .put("used_percent", if (capacityKnown) snapshot.usedPercent ?: JSONObject.NULL else JSONObject.NULL)
+        .put("main_database_bytes", valueOrNull(snapshot.mainDatabaseBytes))
+        .put("wal_bytes", valueOrNull(snapshot.walBytes))
+        .put("database_sidecar_bytes", valueOrNull(snapshot.sidecarBytes))
+        .put("database_files_bytes", valueOrNull(databaseFilesBytes))
+        .put("page_size_bytes", valueOrNull(snapshot.pageSizeBytes, sqliteMetricsKnown))
+        .put("page_count", valueOrNull(snapshot.pageCount, sqliteMetricsKnown))
+        .put("freelist_count", valueOrNull(snapshot.freelistCount, sqliteMetricsKnown))
+        .put("schema_version", valueOrNull(snapshot.schemaVersion, sqliteMetricsKnown && snapshot.schemaVersion > 0))
+        .put("quick_check", snapshot.quickCheck.name.lowercase(Locale.ROOT))
+        .put("checked_at_epoch_seconds", valueOrNull(snapshot.checkedAtMillis / 1_000L))
+        .toString()
+}
 
 internal fun diagnosticObservation(
     key: String,
@@ -739,6 +775,7 @@ internal class MqttBridge(
     // timed out ahead of it, even though their dispatcher conflation keys intentionally differ.
     private val onExternalSettingApplied: (String) -> Boolean = { true },
     private val zigbeeHealth: () -> ZigbeeHealthSnapshot = { ZigbeeHealthSnapshot() },
+    private val storageHealth: () -> StorageHealthSnapshot = StorageHealthRuntime::snapshot,
     private val onZigbeeExplicitRetry: () -> Unit = {},
     // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
@@ -1004,6 +1041,8 @@ internal class MqttBridge(
     private val stateHumidity = "ha-paneld/$panel/humidity/state"
     private val stateZigbeeHealth = "ha-paneld/$panel/zigbee_gateway_health/state"
     private val attrZigbeeHealth = "ha-paneld/$panel/zigbee_gateway_health/attributes"
+    private val stateStorageHealth = "ha-paneld/$panel/storage_health/state"
+    private val attrStorageHealth = "ha-paneld/$panel/storage_health/attributes"
     private val cmdAutoBright = "ha-paneld/$panel/auto_brightness/set"
     private val stateAutoBright = "ha-paneld/$panel/auto_brightness/state"
     private val stateCommandTopics by lazy {
@@ -1078,6 +1117,12 @@ internal class MqttBridge(
             observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
         ) = c.register(io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(key, topic, retain, observe, equivalent))
 
+        channel("storage_health", stateStorageHealth) {
+            known(storageHealth().severity.name.lowercase(Locale.ROOT))
+        }
+        channel("storage_health_attributes", attrStorageHealth) {
+            known(storageHealthMqttAttributes(storageHealth()))
+        }
         channel("screen", stateScreen) {
             if (!config.haExposed("screen", true)) return@channel unknown
             when (screen.observedDark()) {
@@ -2342,6 +2387,15 @@ internal class MqttBridge(
         }
     }
 
+    /** Re-project the shared authority after a startup/daily observation or immediate database failure. */
+    fun publishStorageHealth() {
+        lifecycle.runIfOpen(Unit) {
+            if (state != "connected") return@runIfOpen
+            stateConverger.reconcile("storage_health", force = true)
+            stateConverger.reconcile("storage_health_attributes", force = true)
+        }
+    }
+
     // Boot/connect RECONCILE for the Zigbee router. Vendor firmware boot-starts the NSPanel Pro gateway
     // independently of us (and on 120P/3.7.1 the vendor guard CPU-spins), so we drive it to the user's
     // explicit choice on every connect: start it if they left it ON and nothing has; STOP it if they
@@ -3010,6 +3064,12 @@ internal class MqttBridge(
         registryExposable("auto_brightness") {
             stateConverger.reconcile("auto_brightness", force = true)
         }
+        publishConfig(
+            "sensor", "${panel}_storage_health",
+            """{"name":"Storage health","object_id":"${panel}_storage_health","unique_id":"${panel}_storage_health","state_topic":"$stateStorageHealth","json_attributes_topic":"$attrStorageHealth","icon":"mdi:database-alert","entity_category":"diagnostic",$avail,$device}""",
+        )
+        stateConverger.reconcile("storage_health", force = true)
+        stateConverger.reconcile("storage_health_attributes", force = true)
         // Zigbee router — only on panels with the Sonoff gateway package (NSPanel Pro). present()
         // costs a su exec; safe here because onConnected runs off the main thread.
         if (channelShape.zigbee) {
@@ -3768,6 +3828,7 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "sensor" to "${panel}_diag_memory", "sensor" to "${panel}_diag_soc_temp",
     "sensor" to "${panel}_diag_boot", "sensor" to "${panel}_diag_wifi_ssid",
     "sensor" to "${panel}_diag_wifi_rssi", "sensor" to "${panel}_diag_schema_reconcile",
+    "sensor" to "${panel}_storage_health",
     "button" to "${panel}_reload", "button" to "${panel}_reboot",
     "button" to "${panel}_launcher", "button" to "${panel}_home",
     "button" to "${panel}_admin_launcher",

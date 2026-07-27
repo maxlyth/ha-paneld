@@ -188,6 +188,33 @@ JSON
     [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
     printf 'ha-paneld test health\n'
     ;;
+  */api/v1/status)
+    storage_health="${MOCK_STORAGE_HEALTH:-healthy}"
+    case "$storage_health" in
+      transport-fail) exit 22 ;;
+      legacy|legacy-json) printf '{"version":"legacy fixture"}\n' ;;
+      malformed) printf '{"storage_health":' ;;
+      unchecked-then-healthy)
+        attempts_file="${MOCK_STATE_DIR:?}/storage-status-attempts"
+        attempts=0
+        [ ! -f "$attempts_file" ] || attempts="$(cat "$attempts_file")"
+        attempts=$((attempts + 1))
+        printf '%s\n' "$attempts" > "$attempts_file"
+        if [ "$attempts" -lt 3 ]; then
+          printf '{"storage_health":{"state":"unchecked"}}\n'
+        else
+          printf '{"storage_health":{"state":"healthy"}}\n'
+        fi
+        ;;
+      always-unchecked) printf '{"storage_health":{"state":"unchecked"}}\n' ;;
+      healthy|unchecked|warning|critical|database_failure)
+        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}}\n' \
+          "$storage_health"
+        ;;
+      missing-state) printf '{"storage_health":{"summary":"fixture storage summary"}}\n' ;;
+      *) printf '{"storage_health":{"state":"%s"}}\n' "$storage_health" ;;
+    esac
+    ;;
   */api/v1/provisioning/plan.txt)
     plan_status=200
     case "${MOCK_PLAN:-ok}" in

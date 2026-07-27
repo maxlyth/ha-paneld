@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.persistence
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -178,6 +180,197 @@ class AppStateConcurrencyTest {
         }
     }
 
+    @Test fun configBatchFailureRetainsPriorValuesAndListenersUntilRetrySucceeds() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            assertTrue(
+                preferences.commitWithDurableVisibility { putString("panel_id", "old_panel") },
+            )
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+            val config = Config(preferences)
+            val afterCommitCalls = AtomicInteger()
+
+            assertFalse(config.applyBatch({ afterCommitCalls.incrementAndGet() }) {
+                config.setPanelId("new_panel")
+                config.setHttpAllowedHosts("panel.example")
+            })
+
+            assertEquals("old_panel", config.panelId)
+            assertEquals("", config.httpAllowedHostsRaw)
+            assertTrue(changed.isEmpty())
+            assertEquals(0, afterCommitCalls.get())
+
+            assertTrue(config.applyBatch({ afterCommitCalls.incrementAndGet() }) {
+                config.setPanelId("new_panel")
+                config.setHttpAllowedHosts("panel.example")
+            })
+
+            assertEquals("new_panel", config.panelId)
+            assertEquals("panel.example", config.httpAllowedHostsRaw)
+            assertEquals(setOf("panel_id", "http_allowed_hosts"), changed.toSet())
+            assertEquals(1, afterCommitCalls.get())
+            assertEquals(
+                mapOf("panel_id" to "new_panel", "http_allowed_hosts" to "panel.example"),
+                persistence.replacedSnapshot,
+            )
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun configBatchPublishesValuesListenersAndCallbackOnlyAfterDurability() {
+        val persistenceStarted = CountDownLatch(1)
+        val releasePersistence = CountDownLatch(1)
+        val persistence = RecordingPersistence(
+            persistBlock = {
+                persistenceStarted.countDown()
+                releasePersistence.await(5, TimeUnit.SECONDS)
+            },
+        )
+        val writer = Executors.newSingleThreadExecutor()
+        val caller = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+            val config = Config(preferences)
+            val afterCommitCalls = AtomicInteger()
+
+            val committed = caller.submit<Boolean> {
+                config.applyBatch({ afterCommitCalls.incrementAndGet() }) {
+                    config.setPanelId("new_panel")
+                    config.setHttpAllowedHosts("panel.example")
+                }
+            }
+            assertTrue(persistenceStarted.await(5, TimeUnit.SECONDS))
+
+            assertFalse(committed.isDone)
+            assertFalse(preferences.contains("panel_id"))
+            assertEquals("", config.httpAllowedHostsRaw)
+            assertTrue(changed.isEmpty())
+            assertEquals(0, afterCommitCalls.get())
+
+            releasePersistence.countDown()
+            assertTrue(committed.get(5, TimeUnit.SECONDS))
+            assertEquals("new_panel", config.panelId)
+            assertEquals("panel.example", config.httpAllowedHostsRaw)
+            assertEquals(setOf("panel_id", "http_allowed_hosts"), changed.toSet())
+            assertEquals(1, afterCommitCalls.get())
+        } finally {
+            releasePersistence.countDown()
+            caller.shutdownNow()
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedRawLiveSettingCommitKeepsOldValueAndIdenticalRetryAdmitted() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val config = Config(preferences)
+            val zoom = requireNotNull(SettingsRegistry.spec("dashboard_zoom"))
+            assertTrue(config.commitRaw(zoom, "100"))
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+
+            assertFalse(config.commitRaw(zoom, "125"))
+            assertEquals("100", config.getRaw(zoom))
+            assertTrue(changed.isEmpty())
+
+            assertTrue(config.commitRaw(zoom, "125"))
+            assertEquals("125", config.getRaw(zoom))
+            assertEquals(listOf("dashboard_zoom"), changed)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedAreaLiveCommitPublishesNeitherValueNorOverrideAndRetryPublishesBoth() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val config = Config(preferences)
+            val area = requireNotNull(SettingsRegistry.spec("ha_area"))
+            assertTrue(config.commitRaw(area, "Office"))
+            assertEquals("Office", config.haArea)
+            assertTrue(config.haAreaUserOverride)
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+
+            assertFalse(config.commitRaw(area, ""))
+            assertEquals("Office", config.haArea)
+            assertTrue(config.haAreaUserOverride)
+            assertTrue(changed.isEmpty())
+
+            assertTrue(config.commitRaw(area, ""))
+            assertEquals("", config.haArea)
+            assertFalse(config.haAreaUserOverride)
+            assertEquals(setOf("ha_area", "device_local_ha_area_user_override"), changed.toSet())
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun failedBooleanSideEffectAuthorityCommitKeepsOldGetterUntilRetry() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val config = Config(preferences)
+            assertTrue(config.commitKioskLock(true))
+
+            assertFalse(config.commitKioskLock(false))
+            assertTrue(config.kioskLock)
+
+            assertTrue(config.commitKioskLock(false))
+            assertFalse(config.kioskLock)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
+    @Test fun callerStagedConfigCommitAlsoDefersPublicationUntilDurable() {
+        val persistence = RecordingPersistence(failPersistCall = 2)
+        val writer = Executors.newSingleThreadExecutor()
+        try {
+            val preferences = SqliteStatePreferences(persistence, writer)
+            val config = Config(preferences)
+            val zoom = requireNotNull(SettingsRegistry.spec("dashboard_zoom"))
+            config.editor().also { editor ->
+                config.stage(editor, zoom, "100")
+                assertTrue(config.commit(editor))
+            }
+            val changed = Collections.synchronizedList(mutableListOf<String>())
+            preferences.registerOnSharedPreferenceChangeListener(
+                SharedPreferences.OnSharedPreferenceChangeListener { _, key -> changed += key },
+            )
+            val retryable = config.editor().also { config.stage(it, zoom, "125") }
+
+            assertFalse(config.commit(retryable))
+            assertEquals("100", config.getRaw(zoom))
+            assertTrue(changed.isEmpty())
+
+            assertTrue(config.commit(retryable))
+            assertEquals("125", config.getRaw(zoom))
+            assertEquals(listOf("dashboard_zoom"), changed)
+        } finally {
+            writer.shutdownNow()
+        }
+    }
+
     @Test fun nextWriteReconcilesCompleteSnapshotAfterFailedApply() {
         val persistence = RecordingPersistence(failFirstPersist = true)
         val writer = Executors.newSingleThreadExecutor()
@@ -244,6 +437,165 @@ class AppStateConcurrencyTest {
         } finally {
             writer.shutdownNow()
         }
+    }
+
+    @Test fun compositeWriteDoesNotTouchEitherStoreWhenIntentIsNotDurable() {
+        val original = linkedMapOf<String, Any>(
+            "keep" to "old",
+            "remove" to true,
+        )
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(original))
+            it.failNextIntent = true
+        }
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata)
+        assertEquals(original, persistence.initialize())
+
+        assertFalse(
+            persistence.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf("add" to "new", "remove" to null),
+                ),
+            ),
+        )
+
+        assertEquals(original, primary.snapshot())
+        assertEquals(original, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() == null)
+    }
+
+    @Test fun failedSqliteCompositeWriteCannotReimportAddedOrRemovedXmlOnRestart() {
+        val original = linkedMapOf<String, Any>(
+            "keep" to "old",
+            "remove" to true,
+        )
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(original))
+        }
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata)
+        assertEquals(original, persistence.initialize())
+        primary.failNextPersist = true
+
+        assertFalse(
+            persistence.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf("add" to "new", "remove" to null),
+                ),
+            ),
+        )
+        assertEquals(original, primary.snapshot())
+        assertEquals(original, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() != null)
+
+        val restarted = DowngradeCompatibleStatePersistence(primary, legacy, metadata).initialize()
+        assertEquals(original, restarted)
+        assertEquals(original, primary.snapshot())
+        assertEquals(original, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() == null)
+    }
+
+    @Test fun legacyFailureAfterSqliteReportsCommittedAndSqliteWinsOnRestart() {
+        val original = linkedMapOf<String, Any>(
+            "keep" to "old",
+            "remove" to true,
+        )
+        val candidate = mapOf<String, Any>("keep" to "old", "add" to "new")
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(original))
+        }
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata)
+        assertEquals(original, persistence.initialize())
+        legacy.failNextPersist = true
+
+        assertTrue(
+            persistence.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf("add" to "new", "remove" to null),
+                ),
+            ),
+        )
+        assertEquals(candidate, primary.snapshot())
+        assertEquals(original, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() != null)
+
+        val restarted = DowngradeCompatibleStatePersistence(primary, legacy, metadata).initialize()
+        assertEquals(candidate, restarted)
+        assertEquals(candidate, primary.snapshot())
+        assertEquals(candidate, legacy.snapshot())
+        assertEquals(stateSnapshotHash(candidate), metadata.readHash())
+        assertTrue(metadata.readWriteIntent() == null)
+    }
+
+    @Test fun completionMarkerFailureDoesNotTurnDurableCompositeIntoFalseFailure() {
+        val original = mapOf<String, Any>("mode" to "old")
+        val candidate = mapOf<String, Any>("mode" to "new")
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(original))
+        }
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata)
+        assertEquals(original, persistence.initialize())
+        metadata.failNextHash = true
+
+        assertTrue(
+            persistence.persist(
+                StateMutation(clear = false, changes = mapOf("mode" to "new")),
+            ),
+        )
+        assertEquals(candidate, primary.snapshot())
+        assertEquals(candidate, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() != null)
+
+        val restarted = DowngradeCompatibleStatePersistence(primary, legacy, metadata).initialize()
+        assertEquals(candidate, restarted)
+        assertEquals(candidate, legacy.snapshot())
+        assertEquals(stateSnapshotHash(candidate), metadata.readHash())
+        assertTrue(metadata.readWriteIntent() == null)
+    }
+
+    @Test fun nextLiveWriteFullyRepairsJournalAfterLegacyFailure() {
+        val original = mapOf<String, Any>("base" to "kept")
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(original))
+        }
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata)
+        assertEquals(original, persistence.initialize())
+        legacy.failNextPersist = true
+
+        assertTrue(
+            persistence.persist(
+                StateMutation(clear = false, changes = mapOf("first" to "durable")),
+            ),
+        )
+        assertEquals(original, legacy.snapshot())
+        assertTrue(metadata.readWriteIntent() != null)
+
+        assertTrue(
+            persistence.persist(
+                StateMutation(clear = false, changes = mapOf("second" to "also-durable")),
+            ),
+        )
+        val expected = mapOf<String, Any>(
+            "base" to "kept",
+            "first" to "durable",
+            "second" to "also-durable",
+        )
+        assertEquals(expected, primary.snapshot())
+        assertEquals(expected, legacy.snapshot())
+        assertEquals(stateSnapshotHash(expected), metadata.readHash())
+        assertTrue(metadata.readWriteIntent() == null)
     }
 
     @Test fun markerlessDivergenceKeepsSqliteActiveAndLegacyUntouched() {
@@ -625,10 +977,16 @@ class AppStateConcurrencyTest {
         imported: Map<String, Any>,
     ) : StateNamespacePersistence {
         private val values = imported.toMutableMap()
+        var failNextPersist = false
+        var failNextReplace = false
 
         override fun initialize(): Map<String, Any> = values.toMap()
 
         override fun persist(mutation: StateMutation): Boolean {
+            if (failNextPersist) {
+                failNextPersist = false
+                return false
+            }
             if (mutation.clear) values.clear()
             mutation.changes.forEach { (key, value) ->
                 if (value == null) values.remove(key) else values[key] = value
@@ -637,6 +995,10 @@ class AppStateConcurrencyTest {
         }
 
         override fun replace(snapshot: Map<String, Any>): Boolean {
+            if (failNextReplace) {
+                failNextReplace = false
+                return false
+            }
             values.clear()
             values.putAll(snapshot)
             return true
@@ -649,10 +1011,16 @@ class AppStateConcurrencyTest {
         initial: Map<String, Any>,
     ) : LegacyStateMirror {
         private val values = initial.toMutableMap()
+        var failNextPersist = false
+        var failNextReplace = false
 
         override fun snapshot(): Map<String, Any> = values.toMap()
 
         override fun persist(mutation: StateMutation): Boolean {
+            if (failNextPersist) {
+                failNextPersist = false
+                return false
+            }
             if (mutation.clear) values.clear()
             mutation.changes.forEach { (key, value) ->
                 if (value == null) values.remove(key) else values[key] = value
@@ -661,6 +1029,10 @@ class AppStateConcurrencyTest {
         }
 
         override fun replace(snapshot: Map<String, Any>): Boolean {
+            if (failNextReplace) {
+                failNextReplace = false
+                return false
+            }
             values.clear()
             values.putAll(snapshot)
             return true
@@ -669,13 +1041,32 @@ class AppStateConcurrencyTest {
 
     private class RecordingBridgeMetadata : BridgeMetadata {
         private var hash: String? = null
+        private var writeIntent: String? = null
+        var failNextIntent = false
+        var failNextHash = false
         var conflict: Pair<String, String>? = null
             private set
 
         override fun readHash(): String? = hash
 
+        override fun readWriteIntent(): String? = writeIntent
+
+        override fun writeIntent(candidateHash: String): Boolean {
+            if (failNextIntent) {
+                failNextIntent = false
+                return false
+            }
+            writeIntent = candidateHash
+            return true
+        }
+
         override fun writeHash(hash: String): Boolean {
+            if (failNextHash) {
+                failNextHash = false
+                return false
+            }
             this.hash = hash
+            writeIntent = null
             conflict = null
             return true
         }

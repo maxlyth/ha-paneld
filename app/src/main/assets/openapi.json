@@ -17,6 +17,30 @@
           "approval_id": { "type": "string" },
           "message": { "type": "string" }
         }
+      },
+      "StorageHealth": {
+        "type": "object",
+        "description": "Sanitized latest observation of the filesystem containing ha-paneld's SQLite database. No filesystem paths, configuration values or raw exception text are exposed. Metrics remain JSON null when their underlying probe is unavailable.",
+        "required": ["state", "pressure_state", "usable_bytes", "total_bytes", "used_percent", "database_bytes", "wal_bytes", "sidecar_bytes", "page_size_bytes", "page_count", "freelist_count", "schema_version", "quick_check", "checked_at", "summary", "action"],
+        "properties": {
+          "state": { "type": "string", "enum": ["unchecked", "healthy", "warning", "critical", "database_failure"], "description": "Overall state. database_failure takes precedence over the underlying pressure band." },
+          "pressure_state": { "type": "string", "enum": ["unchecked", "healthy", "warning", "critical"], "description": "Underlying filesystem/WAL pressure band, retained when state is database_failure." },
+          "usable_bytes": { "type": "integer", "format": "int64", "nullable": true },
+          "total_bytes": { "type": "integer", "format": "int64", "nullable": true },
+          "used_percent": { "type": "number", "format": "double", "minimum": 0, "maximum": 100, "nullable": true },
+          "database_bytes": { "type": "integer", "format": "int64", "nullable": true, "description": "Main database file size; excludes WAL and sidecars." },
+          "wal_bytes": { "type": "integer", "format": "int64", "nullable": true },
+          "sidecar_bytes": { "type": "integer", "format": "int64", "nullable": true, "description": "Combined size of allowlisted SQLite sidecars other than the WAL." },
+          "page_size_bytes": { "type": "integer", "format": "int64", "nullable": true },
+          "page_count": { "type": "integer", "format": "int64", "nullable": true },
+          "freelist_count": { "type": "integer", "format": "int64", "nullable": true },
+          "schema_version": { "type": "integer", "nullable": true },
+          "quick_check": { "type": "string", "enum": ["not_run", "ok", "failed"] },
+          "checked_at": { "type": "integer", "format": "int64", "nullable": true, "description": "Unix epoch milliseconds for the underlying storage/SQLite check." },
+          "failure": { "type": "string", "enum": ["storage_full", "io", "corruption", "busy", "unknown"], "description": "Optional controlled failure kind; never raw exception text or operation details." },
+          "summary": { "type": "string" },
+          "action": { "type": "string" }
+        }
       }
     },
     "responses": {
@@ -40,7 +64,7 @@
         "responses": { "200": { "description": "playing" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
-    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix and Zigbee gateway health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}], zigbee_gateway:{state,...}|null}" }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
+    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix, Zigbee gateway health and storage/SQLite health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "Health warnings plus structured component snapshots. storage_health is always present and starts as unchecked until the startup observation completes.", "content": { "application/json": { "schema": { "type": "object", "required": ["warnings", "capabilities", "zigbee_gateway", "storage_health"], "properties": { "warnings": { "type": "array", "items": { "type": "string", "description": "Ready-to-render trusted HTML warning" } }, "capabilities": { "type": "array", "items": { "type": "object" } }, "zigbee_gateway": { "type": "object", "nullable": true }, "storage_health": { "$ref": "#/components/schemas/StorageHealth" } } } } } }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
     "/api/v1/setup": { "get": { "summary": "What setup still needs before this panel can show a dashboard, and the single next step", "tags": ["status"], "responses": { "200": { "description": "{complete, next|null, panel:{id,name}, steps:[{stage,status,blocking,detail}], discovery:{outcome,reason,explanation}}. In-memory reads only, so it is safe to poll while a step is in flight; no-store." }, "403": { "description": "Cross-origin or unverifiable browser request refused" } } } },
     "/api/v1/setup/identity": { "post": { "summary": "Record that a human saw and accepted the panel identity during guided setup", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Not a setting: never on the Configure form, in bundles, or as an HA entity" } } } },
     "/api/v1/setup/home-dashboard": { "post": { "summary": "Record that the guided-setup dashboard question was answered, including choosing the account's default", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Records the answer only; the dashboard itself is an ordinary POST /api/v1/config home_dashboard beforehand" } } } },

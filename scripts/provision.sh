@@ -330,9 +330,11 @@ PANEL_POST_CONNECT_TIMEOUT_SECONDS="${PANEL_POST_CONNECT_TIMEOUT_SECONDS:-5}"
 PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-30}"
 PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-60}"
 APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-300}"
+STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-6}"
+STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-2}"
 for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
     PANEL_POST_CONNECT_TIMEOUT_SECONDS PANEL_POST_TIMEOUT_SECONDS PANEL_RESTORE_TIMEOUT_SECONDS \
-    APK_INSTALL_TIMEOUT_SECONDS; do
+    APK_INSTALL_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
   timeout_value="${!timeout_name}"
   case "$timeout_value" in
     ''|*[!0-9]*|0)
@@ -341,6 +343,12 @@ for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
       ;;
   esac
 done
+case "$STORAGE_HEALTH_VERIFY_POLL_SECONDS" in
+  ''|*[!0-9]*)
+    echo "${RED}✗ STORAGE_HEALTH_VERIFY_POLL_SECONDS must be a non-negative whole number of seconds.${X}" >&2
+    exit 2
+    ;;
+esac
 
 # A CLI restore is a config JSON import, whose server envelope is 1 MiB. Validate it before even
 # contacting adb so a missing, unreadable, empty, symlinked, or oversized input cannot fail after an
@@ -569,10 +577,110 @@ print_next_step() {
   return 0
 }
 
+STORAGE_HEALTH_RESULT=""
+STORAGE_HEALTH_STATE=""
+
+# Read the small status contract without adding jq as a fleet-host dependency. A successful response
+# without storage_health is distinguishable only as a legacy build until this run installs a current
+# APK; a present-but-invalid object is already evidence of a broken current contract.
+read_storage_health() {
+  local status flat_status
+  STORAGE_HEALTH_RESULT="transport"
+  STORAGE_HEALTH_STATE=""
+  if ! status="$(curl -fsS --max-time 5 "$URL/api/v1/status" 2>/dev/null)"; then
+    return 0
+  fi
+  flat_status="$(printf '%s' "$status" | tr '\n' ' ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if ! printf '%s' "$status" | grep -Eq '"storage_health"[[:space:]]*:'; then
+    case "$flat_status" in
+      \{*\}) STORAGE_HEALTH_RESULT="absent" ;;
+      *) STORAGE_HEALTH_RESULT="malformed" ;;
+    esac
+    return 0
+  fi
+  STORAGE_HEALTH_STATE="$(printf '%s' "$flat_status" | sed -n \
+    's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  STORAGE_HEALTH_STATE="$(printf '%s' "$STORAGE_HEALTH_STATE" | sanitize_terminal)"
+  if [ -z "$STORAGE_HEALTH_STATE" ]; then
+    STORAGE_HEALTH_RESULT="malformed"
+    return 0
+  fi
+  case "$STORAGE_HEALTH_STATE" in
+    healthy|unchecked|warning|critical|database_failure) STORAGE_HEALTH_RESULT="valid" ;;
+    *) STORAGE_HEALTH_RESULT="unknown" ;;
+  esac
+}
+
+# Package replacement and process startup are asynchronous. Poll incomplete results after mutation,
+# but cap both attempts and per-request duration so a wedged panel cannot hang a fleet worker.
+read_storage_health_for_verify() {
+  local attempt=1 waiting=0
+  while :; do
+    read_storage_health
+    [ "$VERIFY_DIRECT_GRANTS" = 1 ] || return 0
+    case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
+      valid:unchecked|transport:|absent:) ;;
+      *) return 0 ;;
+    esac
+    [ "$attempt" -lt "$STORAGE_HEALTH_VERIFY_ATTEMPTS" ] || return 0
+    if [ "$waiting" = 0 ]; then
+      warn "the installed app's storage health check is not ready; waiting for a bounded retry"
+      waiting=1
+    fi
+    attempt=$((attempt + 1))
+    [ "$STORAGE_HEALTH_VERIFY_POLL_SECONDS" = 0 ] || sleep "$STORAGE_HEALTH_VERIFY_POLL_SECONDS"
+  done
+}
+
+# Known destructive-risk states block every requested mutation before release resolution, backup,
+# helper changes, APK install, settings writes, or config import. Successful absence remains compatible
+# with an older app; transport failure is allowed only when Android proves this is a fresh install.
+preflight_storage_health() {
+  local package_path package_status
+  read_storage_health
+  case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
+    transport:)
+      # A missing app has no status server yet and is eligible for first installation. If the package
+      # exists, however, inability to read its storage authority is UNKNOWN risk and must fail closed.
+      if package_path="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
+        package_status=0
+      else
+        package_status=$?
+      fi
+      [ "$package_status" -eq 0 ] || fail "could not determine whether ha-paneld is already installed" \
+        "The storage-health endpoint and Android package query were both unavailable, so mutation safety could not be established." \
+        "Nothing was installed or changed. Restore adb/package-manager responsiveness, then retry."
+      if printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:'; then
+        fail "the installed app's storage-health status could not be reached" \
+          "Nothing was installed or changed. Restore $URL/api/v1/status, verify storage and SQLite health, then retry."
+      fi
+      ;;
+    valid:critical)
+      fail "storage health: critical — storage or database-file pressure is critical" \
+        "Recover panel headroom or address WAL growth before writes fail, then re-run verification. Details: $URL" \
+        "Nothing was installed or changed."
+      ;;
+    valid:database_failure)
+      fail "storage health: database failure — SQLite writes or health checks failed" \
+        "Preserve ha-paneld.db, free panel storage if low, inspect $URL/api/v1/diag, then re-run verification." \
+        "Nothing was installed or changed."
+      ;;
+    malformed:)
+      fail "the installed app returned malformed storage-health status" \
+        "Nothing was installed or changed. Inspect $URL/api/v1/status, then repair or update the installed app before retrying."
+      ;;
+    unknown:*)
+      fail "the installed app returned an unrecognised storage-health state: $STORAGE_HEALTH_STATE" \
+        "Nothing was installed or changed. Update this provisioner or inspect $URL/api/v1/status before retrying."
+      ;;
+  esac
+}
+
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
   local health diag cfg rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
   health="$(curl -fsS --max-time 5 "$URL/health" 2>/dev/null || true)"
+  read_storage_health_for_verify
   diag="$(curl -fsS --max-time 25 "$URL/api/v1/diag" 2>/dev/null || true)"
   if [ -z "$diag" ] && [ -n "$health" ] && [ "$VERIFY_DIRECT_GRANTS" != 1 ]; then
     warn "the agent is healthy but diagnostics are still starting; retrying once"
@@ -603,6 +711,56 @@ verify() {
   fi
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$health" "ha-paneld"
+  case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
+    valid:healthy)
+      echo "   ${GRN}✓${X} storage health: healthy"
+      ;;
+    valid:unchecked)
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${RED}✗ storage health: not checked after bounded post-install retries.${X}"
+        echo "     ${D}Wait for the scheduled check to complete, inspect $URL/api/v1/status, then re-run verification.${X}"
+        rc=1
+      else
+        echo "   ${YEL}ℹ${X} storage health: not checked yet ${D}(the scheduled check has not completed)${X}"
+      fi
+      ;;
+    valid:warning)
+      echo "   ${YEL}⚠ storage health: warning — storage or database-file pressure is elevated.${X}"
+      echo "     ${D}Review panel free space and WAL/database growth, then check $URL again.${X}"
+      ;;
+    valid:critical)
+      echo "   ${RED}✗ storage health: critical — storage or database-file pressure is critical.${X}"
+      echo "     ${D}Recover panel headroom or address WAL growth before writes fail, then re-run verification. Details: $URL${X}"
+      rc=1
+      ;;
+    valid:database_failure)
+      echo "   ${RED}✗ storage health: database failure — SQLite writes or health checks failed.${X}"
+      echo "     ${D}Preserve ha-paneld.db, free panel storage if low, inspect $URL/api/v1/diag, then re-run verification.${X}"
+      rc=1
+      ;;
+    transport:)
+      echo "   ${RED}✗ storage health: the status endpoint could not be reached.${X}"
+      echo "     ${D}Restore $URL/api/v1/status and re-run verification; transport failure is not a legacy result.${X}"
+      rc=1
+      ;;
+    absent:)
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${RED}✗ storage health: the installed app did not return the required status contract.${X}"
+        echo "     ${D}Inspect $URL/api/v1/status and re-run verification; a current build must report storage health.${X}"
+        rc=1
+      fi
+      ;;
+    malformed:)
+      echo "   ${RED}✗ storage health: malformed status response.${X}"
+      echo "     ${D}Inspect $URL/api/v1/status, then repair or update the app before relying on storage verification.${X}"
+      rc=1
+      ;;
+    unknown:*)
+      echo "   ${RED}✗ storage health: unrecognised state '${STORAGE_HEALTH_STATE}'.${X}"
+      echo "     ${D}Update this provisioner or inspect $URL/api/v1/status before relying on storage verification.${X}"
+      rc=1
+      ;;
+  esac
   if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
     chk "WRITE_SETTINGS granted" "$write_settings_state" 'WRITE_SETTINGS: allow'
     chk "accessibility enabled"  "$a11y_granted" '^1$'
@@ -2912,8 +3070,8 @@ auto_export_before_upgrade() {
 #
 # ha-paneld.db is the canonical store — configuration, the entity catalog, proximity and ambient
 # history and the revision ring all live in it. The pre-upgrade snapshot below stages a full copy
-# before pulling it, so the installer requires a conservative 64 MB of headroom before proceeding.
-DATA_CAPACITY_MIN_KB=65536
+# before pulling it, so the installer requires more than 128 MiB of headroom before proceeding.
+DATA_CAPACITY_MIN_KB=131072
 
 check_data_capacity() {
   local out row extra available
@@ -2933,13 +3091,13 @@ check_data_capacity() {
     fi
   fi
   if [ -z "$available" ]; then
-    # Not observable — say so rather than block an install on a number we could not read.
-    echo "   ${D}panel storage: could not read /data capacity; continuing without the free-space check${X}"
-    return 0
+    fail "panel storage capacity could not be determined safely" \
+      "The /data free-space response was missing or malformed, so the safe upgrade headroom could not be verified." \
+      "Nothing was installed or changed. Restore adb/df visibility, then re-run the same command."
   fi
-  if [ "$available" -lt "$DATA_CAPACITY_MIN_KB" ]; then
+  if [ "$available" -le "$DATA_CAPACITY_MIN_KB" ]; then
     fail "the panel has too little free storage for a safe upgrade" \
-      "/data has ${available}KB free; ${DATA_CAPACITY_MIN_KB}KB is required." \
+      "/data has ${available}KB free; more than ${DATA_CAPACITY_MIN_KB}KB (128 MiB) is required." \
       "ha-paneld's database holds the configuration, entity catalog and history, and the pre-upgrade backup stages a full copy of it before pulling it — so an upgrade needs room for two copies." \
       "Nothing was installed or changed. Free space on the panel (Settings → Storage, or clear app caches with: adb -s $TARGET shell pm trim-caches 999G), then re-run."
   fi
@@ -3113,6 +3271,10 @@ fi
 # Refuse a panel that cannot hold its data store plus the copy the backup below stages, before a
 # release is downloaded or anything on the panel is touched.
 check_data_capacity
+
+# Block known storage/database danger before release resolution or any panel mutation. Older builds
+# without the contract remain eligible for upgrade; the post-install verification below is strict.
+preflight_storage_health
 
 resolve_apk
 

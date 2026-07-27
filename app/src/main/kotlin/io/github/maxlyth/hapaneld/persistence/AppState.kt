@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
+import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import org.json.JSONArray
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
@@ -420,6 +421,8 @@ internal interface StateNamespacePersistence {
  * Keeps the pre-SQLite XML namespace current for the supported 0.9.x downgrade window.
  *
  * A separate hash marker distinguishes supported downgrade edits after the bridge is established.
+ * A durable write-intent marker brackets runtime composite writes so an interrupted bridge update is
+ * never mistaken for a later old-build edit; while an intent exists, SQLite is authoritative.
  * Markerless divergence is possible only after unpublished SQLite-only builds: neither side has
  * reliable ordering evidence, so SQLite stays active, XML is left untouched, and metadata records
  * the conflict for diagnostics rather than destroying either state.
@@ -437,6 +440,24 @@ internal class DowngradeCompatibleStatePersistence(
         val journal = legacy.snapshot()
         val journalHash = stateSnapshotHash(journal)
         val marker = metadata.readHash()
+        if (metadata.readWriteIntent() != null) {
+            // A composite write was admitted but did not durably reach its completion marker. The
+            // SQLite transaction is the authority in every interruption position: it is either the
+            // complete new candidate or the complete previous snapshot. Never interpret the XML
+            // mismatch as a deliberate downgrade edit while this marker is present.
+            snapshot = current
+            markerlessConflict = false
+            if (!runCatching { legacy.replace(current) }.getOrDefault(false)) {
+                Log.w(TAG, "could not repair interrupted legacy compatibility journal")
+            } else if (
+                !runCatching { metadata.writeHash(stateSnapshotHash(current)) }.getOrDefault(false)
+            ) {
+                // Both stores now agree. Keeping the intent marker merely causes the same safe repair
+                // on the next start, so metadata pressure must not make the durable state unavailable.
+                Log.w(TAG, "could not complete interrupted compatibility marker")
+            }
+            return current
+        }
         snapshot = when {
             marker == null -> {
                 if (journal == current) {
@@ -493,31 +514,53 @@ internal class DowngradeCompatibleStatePersistence(
 
     override fun persist(mutation: StateMutation): Boolean {
         val candidate = snapshot.toMutableMap().applyMutation(mutation)
-        val succeeded = if (markerlessConflict) {
-            legacy.replace(candidate) &&
-                primary.replace(candidate) &&
-                metadata.writeHash(stateSnapshotHash(candidate))
-        } else {
-            legacy.persist(mutation) &&
-                primary.persist(mutation) &&
-                metadata.writeHash(stateSnapshotHash(candidate))
+        val candidateHash = stateSnapshotHash(candidate)
+        val fullReconcile = markerlessConflict || metadata.readWriteIntent() != null
+        if (!runCatching { metadata.writeIntent(candidateHash) }.getOrDefault(false)) return false
+
+        val primarySucceeded = runCatching {
+            if (fullReconcile) primary.replace(candidate) else primary.persist(mutation)
+        }.getOrDefault(false)
+        if (!primarySucceeded) return false
+
+        snapshot = candidate
+        markerlessConflict = false
+        val legacySucceeded = runCatching {
+            if (fullReconcile) legacy.replace(candidate) else legacy.persist(mutation)
+        }.getOrDefault(false)
+        if (!legacySucceeded) {
+            // SQLite is already durable, so this save is committed. The intent must remain: a restart
+            // repairs XML from SQLite, while another live-process write notices the intent and uses a
+            // complete replacement instead of extending a stale compatibility journal.
+            Log.w(TAG, "SQLite state durable but legacy compatibility journal update failed")
+            return true
         }
-        if (succeeded) {
-            snapshot = candidate
-            markerlessConflict = false
+
+        if (!runCatching { metadata.writeHash(candidateHash) }.getOrDefault(false)) {
+            // The primary and compatibility journal are already durable. Returning false here would
+            // publish a false failure to config callers and invite a retry of an already-saved change.
+            // The surviving intent marker makes the next startup repair/finalize this safely.
+            Log.w(TAG, "state stores durable but compatibility marker completion failed")
         }
-        return succeeded
+        return true
     }
 
     override fun replace(snapshot: Map<String, Any>): Boolean {
-        val succeeded = legacy.replace(snapshot) &&
-            primary.replace(snapshot) &&
-            metadata.writeHash(stateSnapshotHash(snapshot))
-        if (succeeded) {
-            this.snapshot = snapshot.toMap()
-            markerlessConflict = false
+        val durableSnapshot = snapshot.toMap()
+        val snapshotHash = stateSnapshotHash(durableSnapshot)
+        if (!runCatching { metadata.writeIntent(snapshotHash) }.getOrDefault(false)) return false
+        if (!runCatching { primary.replace(durableSnapshot) }.getOrDefault(false)) return false
+
+        this.snapshot = durableSnapshot
+        markerlessConflict = false
+        if (!runCatching { legacy.replace(durableSnapshot) }.getOrDefault(false)) {
+            Log.w(TAG, "SQLite state durable but legacy compatibility journal replacement failed")
+            return true
         }
-        return succeeded
+        if (!runCatching { metadata.writeHash(snapshotHash) }.getOrDefault(false)) {
+            Log.w(TAG, "state stores durable but compatibility marker completion failed")
+        }
+        return true
     }
 
     private companion object {
@@ -533,6 +576,8 @@ internal interface LegacyStateMirror {
 
 internal interface BridgeMetadata {
     fun readHash(): String?
+    fun readWriteIntent(): String?
+    fun writeIntent(candidateHash: String): Boolean
     fun writeHash(hash: String): Boolean
     fun writeConflict(sqliteHash: String, legacyHash: String): Boolean
 }
@@ -542,9 +587,15 @@ private class SharedPreferencesBridgeMetadata(
     private val key: String,
 ) : BridgeMetadata {
     override fun readHash(): String? = preferences.getString(key, null)
+    override fun readWriteIntent(): String? = preferences.getString("$key.write_in_progress", null)
+    override fun writeIntent(candidateHash: String): Boolean = preferences.edit()
+        .putString("$key.write_in_progress", candidateHash)
+        .commit()
+
     override fun writeHash(hash: String): Boolean = preferences.edit()
         .putString(key, hash)
         .remove("$key.conflict")
+        .remove("$key.write_in_progress")
         .commit()
 
     override fun writeConflict(sqliteHash: String, legacyHash: String): Boolean =
@@ -734,7 +785,7 @@ private class SqliteNamespacePersistence(
         pruneRevisions(this)
     }
 
-    private fun writeTransaction(block: SQLiteDatabase.() -> Unit): Boolean = runCatching {
+    private fun writeTransaction(block: SQLiteDatabase.() -> Unit): Boolean = try {
         val db = helper.writableDatabase
         db.beginTransaction()
         try {
@@ -743,8 +794,12 @@ private class SqliteNamespacePersistence(
         } finally {
             db.endTransaction()
         }
+        StorageHealthRuntime.recordDatabaseWriteSuccess()
         true
-    }.getOrDefault(false)
+    } catch (failure: Throwable) {
+        StorageHealthRuntime.recordDatabaseFailure("app_state:$namespace", failure)
+        false
+    }
 
     private fun insertRevision(db: SQLiteDatabase, source: String): Long {
         db.execSQL(

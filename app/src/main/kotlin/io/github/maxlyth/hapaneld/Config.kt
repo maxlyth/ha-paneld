@@ -158,7 +158,7 @@ class Config private constructor(
      * cannot cross and leave both durable authorities enabled. */
     fun setSecurityMode(mode: SecurityMode): Boolean = synchronized(CONFIG_LOCK) {
         if (mode == SecurityMode.HARDENED && prefs.getBoolean("network_adb_enabled", false)) return@synchronized false
-        prefs.edit().putBoolean(SECURITY_MODE_PREF, mode == SecurityMode.HARDENED).commit()
+        durableCommit { putBoolean(SECURITY_MODE_PREF, mode == SecurityMode.HARDENED) }
     }
 
     val hardenedSecurityEnabled: Boolean get() = securityMode == SecurityMode.HARDENED
@@ -336,20 +336,20 @@ class Config private constructor(
 
     internal fun rememberMqttFamilyPreference(brokerIdentity: String, preferIpv4: Boolean): Boolean =
         synchronized(CONFIG_LOCK) {
-            prefs.edit()
-                .putString(MQTT_FAMILY_BROKER_PREF, brokerIdentity)
-                .putBoolean(MQTT_FAMILY_IPV4_PREF, preferIpv4)
-                .commit()
+            durableCommit {
+                putString(MQTT_FAMILY_BROKER_PREF, brokerIdentity)
+                putBoolean(MQTT_FAMILY_IPV4_PREF, preferIpv4)
+            }
         }
 
     internal fun forgetMqttFamilyPreference(): Boolean = synchronized(CONFIG_LOCK) {
         if (!prefs.contains(MQTT_FAMILY_BROKER_PREF) && !prefs.contains(MQTT_FAMILY_IPV4_PREF)) {
             return@synchronized true
         }
-        prefs.edit()
-            .remove(MQTT_FAMILY_BROKER_PREF)
-            .remove(MQTT_FAMILY_IPV4_PREF)
-            .commit()
+        durableCommit {
+            remove(MQTT_FAMILY_BROKER_PREF)
+            remove(MQTT_FAMILY_IPV4_PREF)
+        }
     }
 
     /** True when this exact MQTT configuration still owns its one announcement-wedge process boundary. */
@@ -357,17 +357,17 @@ class Config private constructor(
         val consumed = prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) ?: return@synchronized true
         if (consumed == identity) return@synchronized false
         // A relevant broker/profile/credential identity change starts a new bounded recovery epoch.
-        prefs.edit().remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF).commit()
+        durableCommit { remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF) }
     }
 
     internal fun consumeMqttAnnouncementBoundary(identity: String): Boolean = synchronized(CONFIG_LOCK) {
         if (prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) == identity) return@synchronized false
-        prefs.edit().putString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, identity).commit()
+        durableCommit { putString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, identity) }
     }
 
     internal fun clearMqttAnnouncementBoundary(identity: String): Boolean = synchronized(CONFIG_LOCK) {
         if (prefs.getString(MQTT_ANNOUNCEMENT_BOUNDARY_PREF, null) != identity) return@synchronized true
-        prefs.edit().remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF).commit()
+        durableCommit { remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF) }
     }
 
     /** Stable per-panel id used in entity_ids / MQTT topics. A fresh install persists its generated
@@ -382,7 +382,7 @@ class Config private constructor(
         prefs.getString("panel_id", null)?.takeIf { it.isNotBlank() }?.let { return@synchronized it }
         val generated = defaultValue().takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("generated panel id is blank")
-        if (!prefs.edit().putString("panel_id", generated).commit()) {
+        if (!durableCommit { putString("panel_id", generated) }) {
             Log.w(TAG, "could not persist generated panel id; retaining runtime fallback")
         }
         generated
@@ -404,12 +404,28 @@ class Config private constructor(
     @Volatile private var batchThread: Thread? = null
 
     /** Run [block] with every [edit]-based setter write staged into one editor and committed atomically
-     *  when it returns. Confined to the calling thread: a setter fired on another thread during the batch
-     *  takes its normal immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting;
-     *  the /config apply that uses it is single-threaded per request. */
+     *  when it returns. SQLite-backed production state does not publish values or listeners until the
+     *  commit is durable; plain SharedPreferences test doubles retain their ordinary commit behaviour.
+     *  Confined to the calling thread: a setter fired on another thread during the batch takes its normal
+     *  immediate-apply path (SharedPreferences.Editor isn't thread-safe). Non-nesting; the /config apply
+     *  that uses it is single-threaded per request. */
     fun applyBatch(afterCommit: () -> Unit = {}, block: () -> Unit): Boolean = synchronized(CONFIG_LOCK) {
-        val ed = prefs.edit()
-        batchEditor = ed
+        val committed = durableCommit {
+            runBatch(this, block)
+        }
+        committed.also { if (it) afterCommit() }
+    }
+
+    /** Commit a synchronous mutation without publishing a SQLite-backed candidate before it is durable. */
+    private fun durableCommit(mutation: SharedPreferences.Editor.() -> Unit): Boolean =
+        (prefs as? DurableVisibilityPreferences)?.commitWithDurableVisibility(mutation)
+            ?: prefs.edit().run {
+                mutation()
+                commit()
+            }
+
+    private fun runBatch(editor: SharedPreferences.Editor, block: () -> Unit) {
+        batchEditor = editor
         batchThread = Thread.currentThread()
         try {
             block()
@@ -417,7 +433,6 @@ class Config private constructor(
             batchEditor = null
             batchThread = null
         }
-        ed.commit().also { committed -> if (committed) afterCommit() }
     }
 
     /** Serialize a compound config operation across every Config wrapper in this process. */
@@ -446,9 +461,7 @@ class Config private constructor(
                 b.block()
                 true
             } else {
-                val e = prefs.edit()
-                e.block()
-                e.commit()
+                durableCommit(block)
             }
         }
 
@@ -640,10 +653,10 @@ class Config private constructor(
     internal fun setHaServerVersionIfOwned(url: String, version: String): Boolean = synchronized(CONFIG_LOCK) {
         val owner = url.trim().trimEnd('/')
         if (haUrl.trim().trimEnd('/') != owner) return@synchronized false
-        prefs.edit()
-            .putString("dashboard_ha_version_owner", owner)
-            .putString("dashboard_ha_version", version.take(64))
-            .commit()
+        durableCommit {
+            putString("dashboard_ha_version_owner", owner)
+            putString("dashboard_ha_version", version.take(64))
+        }
     }
 
     /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. Either a
@@ -713,10 +726,10 @@ class Config private constructor(
         expiryEpochSec: Long,
     ): Boolean = synchronized(CONFIG_LOCK) {
         if (haAuthSnapshot() != expected) return false
-        prefs.edit()
-            .putString("ha_token", access)
-            .putLong("ha_token_expiry", expiryEpochSec)
-            .commit()
+        durableCommit {
+            putString("ha_token", access)
+            putLong("ha_token_expiry", expiryEpochSec)
+        }
     }
 
     /** Set (or clear, with "") the OAuth refresh token — provisioning path. */
@@ -804,8 +817,10 @@ class Config private constructor(
         if (boolPref("auto_sleep") == on) return@synchronized AutoSleepWriteResult.UNCHANGED
         // MQTT immediately asks the runtime to refresh, so durability must precede that refresh.
         val generation = nextAutoSleepGenerationLocked()
-        if (prefs.edit().putBoolean("auto_sleep", on)
-                .putLong(AUTO_SLEEP_GENERATION_PREF, generation).commit()
+        if (durableCommit {
+                putBoolean("auto_sleep", on)
+                putLong(AUTO_SLEEP_GENERATION_PREF, generation)
+            }
         ) AutoSleepWriteResult.COMMITTED
         else AutoSleepWriteResult.FAILED
     }
@@ -869,9 +884,9 @@ class Config private constructor(
             if (encoded.toByteArray(Charsets.UTF_8).size > MAX_AUTO_SLEEP_EXCLUSIONS_BYTES) {
                 return@synchronized false
             }
-            (prefs as? DurableVisibilityPreferences)?.commitWithDurableVisibility {
+            durableCommit {
                 putString(AUTO_SLEEP_EXCLUSIONS_PREF, encoded)
-            } ?: prefs.edit().putString(AUTO_SLEEP_EXCLUSIONS_PREF, encoded).commit()
+            }
         }
 
     /** Null means the opaque key belonged to a different HA installation by commit time. */
@@ -951,7 +966,7 @@ class Config private constructor(
         edit { putBoolean("kiosk_lock", on) }
     }
     fun commitKioskLock(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
-        prefs.edit().putBoolean("kiosk_lock", on).commit()
+        durableCommit { putBoolean("kiosk_lock", on) }
     }
 
     /** Device-local acknowledgement of the built-in launch screen for one exact app version. This is
@@ -965,7 +980,7 @@ class Config private constructor(
 
     /** Commit only after MainActivity has actually selected and installed the intro view. */
     fun commitLaunchScreenVersionShown(versionCode: Long): Boolean = synchronized(CONFIG_LOCK) {
-        prefs.edit().putLong(LAST_LAUNCH_SCREEN_VERSION_PREF, versionCode).commit()
+        durableCommit { putLong(LAST_LAUNCH_SCREEN_VERSION_PREF, versionCode) }
     }
 
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
@@ -1028,7 +1043,7 @@ class Config private constructor(
     val networkAdbEnabled: Boolean get() = prefs.getBoolean("network_adb_enabled", false)
     fun setNetworkAdbEnabled(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
         if (on && prefs.getBoolean(SECURITY_MODE_PREF, false)) return@synchronized false
-        prefs.edit().putBoolean("network_adb_enabled", on).commit()
+        durableCommit { putBoolean("network_adb_enabled", on) }
     }
 
     // The ha-paneld version whose discovery set was last published to HA. On an upgrade (this differs
@@ -1053,7 +1068,7 @@ class Config private constructor(
     var haArea: String
         get() = stringPref("ha_area")
         set(value) = synchronized(CONFIG_LOCK) {
-            prefs.edit().putString("ha_area", value.trim()).commit()
+            durableCommit { putString("ha_area", value.trim()) }
             Unit
         }
 
@@ -1067,9 +1082,17 @@ class Config private constructor(
     var haAreaUserOverride: Boolean
         get() = prefs.getBoolean(HA_AREA_USER_OVERRIDE_PREF, false)
         set(value) = synchronized(CONFIG_LOCK) {
-            prefs.edit().putBoolean(HA_AREA_USER_OVERRIDE_PREF, value).commit()
+            durableCommit { putBoolean(HA_AREA_USER_OVERRIDE_PREF, value) }
             Unit
         }
+
+    /** Persist the requested Area and its ownership bit as one live-setting authority. */
+    internal fun commitHaArea(value: String, userOverride: Boolean): Boolean = synchronized(CONFIG_LOCK) {
+        durableCommit {
+            putString("ha_area", value.trim())
+            putBoolean(HA_AREA_USER_OVERRIDE_PREF, userOverride)
+        }
+    }
 
     val homeDashboard: String get() = stringPref("home_dashboard")
     fun setHomeDashboard(p: String) {
@@ -1885,17 +1908,25 @@ class Config private constructor(
         if (spec.transient || spec.readOnly) return false
         val value = (SettingValue.validate(spec, normalized) as? Validation.Ok)?.normalized ?: return false
         val autoSleepChanged = spec.key == "auto_sleep" && boolPref("auto_sleep") != value.toBoolean()
-        val committed = prefs.edit().also { editor ->
-            if (spec.key == "home_dashboard") stageHomeDashboard(editor, value, homeDashboard)
-            else stage(editor, spec, value)
-            if (autoSleepChanged) editor.putLong(AUTO_SLEEP_GENERATION_PREF, nextAutoSleepGenerationLocked())
-        }.commit()
+        val committed = durableCommit {
+            when (spec.key) {
+                "home_dashboard" -> stageHomeDashboard(this, value, homeDashboard)
+                "ha_area" -> {
+                    stage(this, spec, value)
+                    putBoolean(HA_AREA_USER_OVERRIDE_PREF, value.isNotBlank())
+                }
+                else -> stage(this, spec, value)
+            }
+            if (autoSleepChanged) putLong(AUTO_SLEEP_GENERATION_PREF, nextAutoSleepGenerationLocked())
+        }
         if (committed && spec.key == "wake_on_wave") wakeOnWaveEpoch.incrementAndGet()
         committed
     }
 
-    /** A new editor for staging a batch of registry writes (commit with [SharedPreferences.Editor.commit]). */
-    fun editor(): SharedPreferences.Editor = prefs.edit()
+    /** A new editor for staging a batch of registry writes. SQLite-backed commits publish only once
+     * the complete candidate is durable, matching [applyBatch] and one-value live-setting commits. */
+    fun editor(): SharedPreferences.Editor =
+        if (prefs is DurableVisibilityPreferences) DurableStagingEditor() else prefs.edit()
 
     /** Commit a caller-staged transaction under the same lock as grouped credential mutation and OAuth
      * refresh ownership checks. */
@@ -1904,6 +1935,32 @@ class Config private constructor(
         afterCommit: () -> Unit = {},
     ): Boolean = synchronized(CONFIG_LOCK) {
         editor.commit().also { committed -> if (committed) afterCommit() }
+    }
+
+    private inner class DurableStagingEditor : SharedPreferences.Editor {
+        private val operations = mutableListOf<(SharedPreferences.Editor) -> Unit>()
+
+        override fun putString(key: String, value: String?) = add { it.putString(key, value) }
+        override fun putStringSet(key: String, values: Set<String>?) =
+            add { it.putStringSet(key, values?.toSet()) }
+        override fun putInt(key: String, value: Int) = add { it.putInt(key, value) }
+        override fun putLong(key: String, value: Long) = add { it.putLong(key, value) }
+        override fun putFloat(key: String, value: Float) = add { it.putFloat(key, value) }
+        override fun putBoolean(key: String, value: Boolean) = add { it.putBoolean(key, value) }
+        override fun remove(key: String) = add { it.remove(key) }
+        override fun clear() = add { it.clear() }
+
+        override fun commit(): Boolean = synchronized(CONFIG_LOCK) {
+            durableCommit { operations.forEach { operation -> operation(this) } }
+        }
+
+        override fun apply() {
+            commit()
+        }
+
+        private fun add(operation: (SharedPreferences.Editor) -> Unit): SharedPreferences.Editor = apply {
+            operations += operation
+        }
     }
 
     /** Schema the live store was last written at. Absent → 1 (the original shape, before this tracking),

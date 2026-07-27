@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import android.content.Context
+import android.os.CancellationSignal
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
@@ -10,6 +11,7 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.ktor.client.HttpClient
@@ -999,6 +1001,10 @@ class EntityLearningManager(
 
     /** Cheap cached evidence for the shared app database; does not start entity synchronization. */
     fun databaseUsage(): EntityCatalogStore.DatabaseUsage = store.databaseUsage()
+
+    /** Service-owned startup/daily health check; teardown cancellation reaches SQLite quick_check. */
+    fun storageHealthObservation(cancellationSignal: CancellationSignal? = null): StorageHealthObservation =
+        store.storageHealthObservation(cancellationSignal)
 
     @Synchronized fun setIssueIgnored(fingerprint: String, ignored: Boolean): String {
         ensureInitialized()

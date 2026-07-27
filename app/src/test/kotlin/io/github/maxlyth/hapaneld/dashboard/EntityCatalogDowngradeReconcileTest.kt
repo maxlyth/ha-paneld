@@ -79,15 +79,41 @@ class EntityCatalogDowngradeReconcileTest {
     @Test fun upgradeSkipsBackupWhenCheckpointFails() {
         writeDb(target, "v12")
         val result = reconcilePreOpen(target, currentVersion = 13, onDiskVersion = 12, checkpoint = { false })
-        assertEquals(SchemaReconcileAction.BACKED_UP, result.action) // the upgrade still proceeds
+        assertEquals(SchemaReconcileAction.NONE, result.action) // the upgrade still proceeds, but no backup is claimed
+        assertFalse(premig(12).exists())
+    }
+
+    @Test fun upgradeDoesNotClaimBackupWhenCheckpointThrows() {
+        writeDb(target, "v12")
+        val result = reconcilePreOpen(
+            target,
+            currentVersion = 13,
+            onDiskVersion = 12,
+            checkpoint = { throw IllegalStateException("checkpoint failed") },
+        )
+
+        assertEquals(SchemaReconcileAction.NONE, result.action)
+        assertEquals("v12", markerOf(target))
         assertFalse(premig(12).exists())
     }
 
     @Test fun upgradeSkipsBackupWhenDatabaseTooLarge() {
         writeDb(target, "0123456789")
         val result = reconcilePreOpen(target, currentVersion = 13, onDiskVersion = 12, maxBackupBytes = 4)
-        assertEquals(SchemaReconcileAction.BACKED_UP, result.action)
+        assertEquals(SchemaReconcileAction.NONE, result.action)
         assertFalse(premig(12).exists())
+    }
+
+    @Test fun upgradeDoesNotClaimBackupWhenCompletedCopyCannotBeInstalled() {
+        writeDb(target, "v12")
+        assertTrue(premig(12).mkdirs()) // a directory at the destination forces renameTo to fail
+
+        val result = reconcilePreOpen(target, currentVersion = 13, onDiskVersion = 12)
+
+        assertEquals(SchemaReconcileAction.NONE, result.action)
+        assertEquals("v12", markerOf(target))
+        assertTrue(premig(12).isDirectory)
+        assertFalse(File(premig(12).path + ".tmp").exists())
     }
 
     @Test fun upgradePrunesToNewestBackups() {
@@ -108,7 +134,7 @@ class EntityCatalogDowngradeReconcileTest {
         val result = reconcilePreOpen(
             target, currentVersion = 13, onDiskVersion = 12, keepBackups = 2, freeSpace = { 1L },
         )
-        assertEquals(SchemaReconcileAction.BACKED_UP, result.action) // upgrade proceeds
+        assertEquals(SchemaReconcileAction.NONE, result.action) // upgrade proceeds, but no backup is claimed
         assertFalse(premig(12).exists()) // no room even after pruning -> skipped, not failed
         assertFalse(premig(10).exists()) // old snapshots dropped to try to free room
         assertFalse(premig(11).exists())

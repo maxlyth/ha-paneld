@@ -6,6 +6,9 @@ import android.database.Cursor
 import android.database.SQLException
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.os.CancellationSignal
+import android.os.OperationCanceledException
+import android.os.StatFs
 import android.util.Log
 import io.github.maxlyth.hapaneld.control.AMBIENT_RETENTION_MINUTES
 import io.github.maxlyth.hapaneld.control.AmbientHistoryMinute
@@ -16,6 +19,9 @@ import io.github.maxlyth.hapaneld.metrics.MetricPayload
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
+import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
+import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -30,6 +36,26 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     private val databaseBytesCacheLock = Any()
     private var databaseBytesCachedAt = Long.MIN_VALUE
     private var databaseUsageCachedValue = DatabaseUsage(0L, 0L, 0)
+
+    /** Report a completed catalog/history mutation, or latch its original SQLite failure and rethrow. */
+    private inline fun <T> observedWrite(
+        operation: String,
+        reportsSuccessfulWrite: (T) -> Boolean = { true },
+        write: () -> T,
+    ): T = try {
+        write().also { if (reportsSuccessfulWrite(it)) StorageHealthRuntime.recordDatabaseWriteSuccess() }
+    } catch (failure: SQLException) {
+        StorageHealthRuntime.recordDatabaseFailure(operation, failure)
+        throw failure
+    }
+
+    /** Schema setup can contain a best-effort vaulted restore; never clear a failure it retained. */
+    private inline fun observedSchemaWrite(operation: String, write: () -> Unit) = try {
+        write()
+    } catch (failure: SQLException) {
+        StorageHealthRuntime.recordDatabaseFailure(operation, failure)
+        throw failure
+    }
 
     init {
         // Use the helper-level API so WAL is enabled before the database is opened. Calling
@@ -91,7 +117,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         db.setForeignKeyConstraintsEnabled(true)
     }
 
-    override fun onCreate(db: SQLiteDatabase) {
+    override fun onCreate(db: SQLiteDatabase) = observedSchemaWrite("database-create") {
         db.execSQL(ENTITY_TABLE_SQL)
         db.execSQL(DASHBOARD_TABLE_SQL)
         db.execSQL(DASHBOARD_ENTITY_TABLE_SQL)
@@ -120,7 +146,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         restoreConfigurationInto(db, appContext)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) =
+        observedSchemaWrite("database-upgrade") {
         for (step in EntityCatalogSchema.plan(oldVersion, newVersion)) {
             for (sql in step.sql) execMigration(db, sql)
             step.transform?.invoke(db)
@@ -157,7 +184,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         // additive (see reconcilePreOpen).
     }
 
-    fun markStatus(instance: String, path: String, status: String, error: String = "") {
+    fun markStatus(instance: String, path: String, status: String, error: String = ""): Unit =
+        observedWrite("catalog-status") {
         writableDatabase.execSQL("INSERT OR IGNORE INTO dashboard(instance,path) VALUES(?,?)", arrayOf(instance, path))
         writableDatabase.execSQL("UPDATE dashboard SET status=?,error=? WHERE instance=? AND path=?", arrayOf(status, error.take(500), instance, path))
     }
@@ -176,7 +204,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         now: Long,
         issues: List<JSONObject> = emptyList(),
         defaultIgnoredFingerprints: Set<String> = emptySet(),
-    ) {
+    ): Unit = observedWrite("catalog-sync") {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -263,7 +291,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         maintainSoftLimit(now)
     }
 
-    fun recordAccess(instance: String, path: String, counts: Map<String, Long>, now: Long) {
+    fun recordAccess(instance: String, path: String, counts: Map<String, Long>, now: Long): Unit =
+        observedWrite("catalog-access-history") {
         if (counts.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
@@ -289,7 +318,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         maintainSoftLimit(now)
     }
 
-    fun recordMetrics(instance: String, path: String, metrics: Map<String, Pair<Long, Long>>, now: Long) {
+    fun recordMetrics(instance: String, path: String, metrics: Map<String, Pair<Long, Long>>, now: Long): Unit =
+        observedWrite("catalog-metric-history") {
         if (metrics.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
@@ -321,7 +351,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         maintainSoftLimit(now)
     }
 
-    internal fun recordDashboardPerformance(samples: List<DashboardPerformanceAggregate>) {
+    internal fun recordDashboardPerformance(samples: List<DashboardPerformanceAggregate>): Unit =
+        observedWrite("dashboard-performance-history") {
         if (samples.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
@@ -366,7 +397,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         nowMs: Long,
         activeContextId: String = samples.lastOrNull()?.key?.contextId.orEmpty(),
         activeSourceId: String = samples.lastOrNull()?.key?.sourceId.orEmpty(),
-    ) {
+    ): Unit = observedWrite("ambient-history") {
         if (samples.isEmpty() || nowMs < 0L) return
         val nowMinute = nowMs / MINUTE_MS
         val oldestMinute = nowMinute - AMBIENT_RETENTION_MINUTES
@@ -416,7 +447,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     }
 
     /** Idempotent bootstrap sink. Existing live rows win wholesale over imported HA history. */
-    internal fun seedAmbientHistory(samples: List<AmbientMinuteAggregate>, nowMs: Long) {
+    internal fun seedAmbientHistory(samples: List<AmbientMinuteAggregate>, nowMs: Long): Unit =
+        observedWrite("ambient-history-seed") {
         if (samples.isEmpty() || nowMs < 0L) return
         val nowMinute = nowMs / MINUTE_MS
         val oldestMinute = nowMinute - AMBIENT_RETENTION_MINUTES
@@ -508,12 +540,15 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         )
     }
 
-    internal fun resetAmbientHistory(contextId: String? = null, sourceId: String? = null): Int = when {
-        contextId == null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", null, null)
-        contextId != null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", "context_id=?", arrayOf(contextId))
-        contextId != null -> writableDatabase.delete("ambient_lux_minute", "context_id=? AND source_id=?", arrayOf(contextId, sourceId!!))
-        else -> 0
-    }
+    internal fun resetAmbientHistory(contextId: String? = null, sourceId: String? = null): Int =
+        observedWrite("ambient-history-reset") {
+            when {
+                contextId == null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", null, null)
+                contextId != null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", "context_id=?", arrayOf(contextId))
+                contextId != null -> writableDatabase.delete("ambient_lux_minute", "context_id=? AND source_id=?", arrayOf(contextId, sourceId!!))
+                else -> 0
+            }
+        }
 
     internal fun dashboardPerformanceHistory(
         instance: String,
@@ -539,7 +574,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         setOverrides(instance, path, listOf(entityId), override)
     }
 
-    fun setOverrides(instance: String, path: String, entityIds: Collection<String>, override: String) {
+    fun setOverrides(instance: String, path: String, entityIds: Collection<String>, override: String): Unit =
+        observedWrite("catalog-overrides") {
         val pinned = if (override == "pinned") 1 else 0
         val excluded = if (override == "forced_exclude") 1 else 0
         val db = writableDatabase
@@ -555,7 +591,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     }
 
     /** Clear rebuildable evidence for one dashboard while retaining the instance-wide HA catalog. */
-    fun resetEvidence(instance: String, path: String) {
+    fun resetEvidence(instance: String, path: String): Unit = observedWrite("catalog-reset") {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -653,20 +689,22 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
 
     /** Persist a dashboard-scoped diagnostic override only for an issue visible in the current scan. */
-    fun setIssueIgnored(instance: String, path: String, fingerprint: String, ignored: Boolean, now: Long): Boolean {
-        if (!FINGERPRINT.matches(fingerprint)) return false
+    fun setIssueIgnored(instance: String, path: String, fingerprint: String, ignored: Boolean, now: Long): Boolean =
+        observedWrite("catalog-issue-override", reportsSuccessfulWrite = { it }) {
+        if (!FINGERPRINT.matches(fingerprint)) return@observedWrite false
         val db = writableDatabase
         db.beginTransaction()
-        return try {
+        try {
             val stored = db.rawQuery(
                 "SELECT issues_json FROM dashboard WHERE instance=? AND path=?",
                 arrayOf(instance, path),
-            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null } ?: return false
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+                ?: return@observedWrite false
             val issues = JSONArray(EntityCatalogIssuePersistence.boundExistingJson(stored))
             val issue = (0 until issues.length()).asSequence().mapNotNull(issues::optJSONObject)
                 .firstOrNull { it.optString("fingerprint") == fingerprint }
-                ?: return false
-            if (!EntityCatalogIssuePersistence.canIgnore(issue)) return false
+                ?: return@observedWrite false
+            if (!EntityCatalogIssuePersistence.canIgnore(issue)) return@observedWrite false
             if (ignored) {
                 db.execSQL(
                     "INSERT OR REPLACE INTO dashboard_ignored_issue(instance,path,fingerprint,ignored_at) VALUES(?,?,?,?)",
@@ -1129,9 +1167,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         require(model.algorithmVersion in 1..10_000)
         require(model.behaviorSignature.length <= 500)
         require(model.snapshotJson.toByteArray(Charsets.UTF_8).size <= MAX_PROXIMITY_SNAPSHOT_BYTES)
-        val db = writableDatabase
-        db.beginTransaction()
-        try {
+        observedWrite("proximity-history") {
+            val db = writableDatabase
+            db.beginTransaction()
+            try {
             // SQLite REPLACE deletes the parent before inserting it. With foreign keys enabled that
             // would cascade-delete all rollups and episodes at every model checkpoint, so use a
             // portable update-then-insert upsert instead of REPLACE/modern ON CONFLICT syntax.
@@ -1223,14 +1262,19 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                 db.delete("proximity_sample", "fingerprint NOT IN ($placeholders)", args)
                 db.delete("proximity_episode", "fingerprint NOT IN ($placeholders)", args)
             }
-            db.setTransactionSuccessful()
-        } finally { db.endTransaction() }
+                db.setTransactionSuccessful()
+            } finally { db.endTransaction() }
+        }
         // Proximity evidence is additive and already committed. File-size maintenance is best-effort
         // here so its failure cannot make the runtime retry and double rollups or episodes.
-        runCatching { maintainSoftLimit(now) }
+        runCatching { maintainSoftLimit(now) }.onFailure { failure ->
+            if (failure is SQLException) {
+                StorageHealthRuntime.recordDatabaseFailure("proximity-history-maintenance", failure)
+            }
+        }
     }
 
-    fun clearProximityLearning(fingerprint: String) {
+    fun clearProximityLearning(fingerprint: String): Unit = observedWrite("proximity-history-reset") {
         if (!PROXIMITY_FINGERPRINT.matches(fingerprint)) return
         val db = writableDatabase
         db.beginTransaction()
@@ -1336,6 +1380,55 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             }
         }
         return measureDatabaseUsage().also { updateDatabaseUsageCache(now, it) }
+    }
+
+    /**
+     * Bounded, path-free health evidence for the filesystem containing the database that SQLite
+     * actually opened. [cancellationSignal] reaches every PRAGMA cursor, including quick_check(1).
+     */
+    fun storageHealthObservation(
+        cancellationSignal: CancellationSignal? = null,
+        checkedAtMillis: Long = System.currentTimeMillis(),
+    ): StorageHealthObservation = try {
+        val db = readableDatabase
+        val database = File(db.path)
+        // A filesystem probe failure makes capacity unknown; it must not discard valid SQLite evidence
+        // or masquerade as a database failure.
+        val statFs = runCatching { StatFs(database.path) }.getOrNull()
+
+        fun pragmaLong(name: String): Long = db.rawQuery("PRAGMA $name", null, cancellationSignal).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0).coerceAtLeast(0L) else 0L
+        }
+
+        val quickCheck = db.rawQuery("PRAGMA quick_check(1)", null, cancellationSignal).use { cursor ->
+            if (cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)) {
+                StorageQuickCheck.OK
+            } else {
+                StorageQuickCheck.FAILED
+            }
+        }
+        val blockSize = statFs?.blockSizeLong?.coerceAtLeast(0L) ?: 0L
+        StorageHealthObservation(
+            checkedAtMillis = checkedAtMillis,
+            usableBytes = storageSaturatedMultiply(statFs?.availableBlocksLong?.coerceAtLeast(0L) ?: 0L, blockSize),
+            totalBytes = storageSaturatedMultiply(statFs?.blockCountLong?.coerceAtLeast(0L) ?: 0L, blockSize),
+            mainDatabaseBytes = storageKnownFileBytes(database),
+            walBytes = storageKnownFileBytes(File(database.path + "-wal")),
+            sidecarBytes = storageSaturatedAdd(
+                storageKnownFileBytes(File(database.path + "-shm")),
+                storageKnownFileBytes(File(database.path + "-journal")),
+            ),
+            pageSizeBytes = pragmaLong("page_size"),
+            pageCount = pragmaLong("page_count"),
+            freelistCount = pragmaLong("freelist_count"),
+            schemaVersion = db.version.coerceAtLeast(0),
+            quickCheck = quickCheck,
+        )
+    } catch (cancelled: OperationCanceledException) {
+        throw cancelled
+    } catch (failure: SQLException) {
+        StorageHealthRuntime.recordDatabaseFailure("storage-health-read", failure)
+        throw failure
     }
 
     private fun updateDatabaseUsageCache(now: Long, usage: DatabaseUsage) = synchronized(databaseBytesCacheLock) {
@@ -1600,6 +1693,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         // ---- Schema downgrade safety net (Tier-2). See reconcilePreOpen() below. ----
         private val SCHEMA_RECONCILE_LOCK = Any()
 
+        private fun retainDatabaseFailure(operation: String, failure: Throwable) {
+            if (failure is SQLException) StorageHealthRuntime.recordDatabaseFailure(operation, failure)
+        }
+
         /** Outcome of the most recent pre-open schema reconciliation, for health reporting. */
         @Volatile
         internal var lastSchemaReconcile: SchemaReconcile? = null
@@ -1628,7 +1725,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                     vaultConfig = { database -> vaultConfiguration(context, database) },
                 )
                 lastSchemaReconcile = retainFirstSchemaReconcile(lastSchemaReconcile, outcome)
-            }
+            }.onFailure { retainDatabaseFailure("database-preopen-reconcile", it) }
             DATABASE_NAME
         }
 
@@ -1650,7 +1747,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                 null,
                 flags or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
             ).use { it.version }
-        }.getOrNull()
+        }.onFailure { retainDatabaseFailure("database-version-read", it) }.getOrNull()
 
         /**
          * Copies configuration and imported device profiles into the vault before the structure changes.
@@ -1687,7 +1784,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                         }
                     }
                 }
-            }.getOrDefault(emptyList())
+            }.onFailure { retainDatabaseFailure("database-vault-read", it) }.getOrDefault(emptyList())
 
             val profiles = runCatching {
                 File(context.filesDir, IMPORTED_PROFILE_DIRECTORY).listFiles()
@@ -1756,7 +1853,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                     }
                 }
                 lastConfigRestore = ConfigRestore(export.rows.size, export.profiles.size)
-            }
+            }.onFailure { retainDatabaseFailure("database-vault-restore", it) }
         }
 
         private fun countRows(db: SQLiteDatabase, table: String): Int =
@@ -1869,8 +1966,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         }
 
         /** Flushes WAL into the main file so a single-file pre-migration copy is complete. */
-        private fun checkpointDatabaseFile(database: File): Boolean = runCatching {
-            SQLiteDatabase.openDatabase(
+        private fun checkpointDatabaseFile(database: File): Boolean = try {
+            val completed = SQLiteDatabase.openDatabase(
                 database.path,
                 null,
                 SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
@@ -1879,7 +1976,19 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                     cursor.moveToFirst() && cursor.getInt(0) == 0
                 }
             }
-        }.getOrDefault(false)
+            if (completed) {
+                StorageHealthRuntime.recordDatabaseWriteSuccess()
+            } else {
+                StorageHealthRuntime.recordDatabaseFailure(
+                    "database-checkpoint",
+                    IllegalStateException("database is busy"),
+                )
+            }
+            completed
+        } catch (failure: Throwable) {
+            StorageHealthRuntime.recordDatabaseFailure("database-checkpoint", failure)
+            false
+        }
     }
 }
 
@@ -1923,6 +2032,19 @@ private const val SUPERSEDED_SUFFIX = "superseded"
 private const val MAX_PREMIGRATE_BACKUPS = 2
 private const val MAX_PREMIGRATE_BYTES = 64L * 1024 * 1024
 private const val SPACE_MARGIN_BYTES = 8L * 1024 * 1024
+private fun storageKnownFileBytes(file: File): Long = runCatching {
+    file.takeIf(File::isFile)?.length()?.coerceAtLeast(0L) ?: 0L
+}.getOrDefault(0L)
+
+private fun storageSaturatedAdd(left: Long, right: Long): Long =
+    if (left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
+
+private fun storageSaturatedMultiply(left: Long, right: Long): Long = when {
+    left == 0L || right == 0L -> 0L
+    left > Long.MAX_VALUE / right -> Long.MAX_VALUE
+    else -> left * right
+}
+
 private val DB_SIDECAR_SUFFIXES = listOf("-wal", "-shm", "-journal")
 
 /** Path of the pre-migration snapshot taken at [version] for [target] (a restore source). */
@@ -1987,8 +2109,19 @@ internal fun reconcilePreOpen(
         }
         // Upgrade imminent: snapshot the pre-migration structure so a later downgrade can roll back.
         // Space-aware and best-effort — an upgrade must never fail for lack of room to archive a copy.
-        writePreMigrationBackup(target, onDiskVersion, keepBackups, maxBackupBytes, freeSpace, checkpoint)
-        return SchemaReconcile(SchemaReconcileAction.BACKED_UP, onDiskVersion, currentVersion)
+        val backedUp = writePreMigrationBackup(
+            target,
+            onDiskVersion,
+            keepBackups,
+            maxBackupBytes,
+            freeSpace,
+            checkpoint,
+        )
+        return SchemaReconcile(
+            if (backedUp) SchemaReconcileAction.BACKED_UP else SchemaReconcileAction.NONE,
+            onDiskVersion,
+            currentVersion,
+        )
     }
     // Downgrade: this build is older than the on-disk structure and cannot open it directly. Choose the
     // newest snapshot this build understands that is also a structurally valid SQLite file.
@@ -2027,12 +2160,12 @@ private fun writePreMigrationBackup(
     maxBytes: Long,
     freeSpace: (File) -> Long,
     checkpoint: (File) -> Boolean,
-) {
-    runCatching {
-        if (!target.isFile || !checkpoint(target)) return
+): Boolean {
+    return runCatching {
+        if (!target.isFile || !checkpoint(target)) return false
         val size = target.length()
-        if (size > maxBytes) return
-        val dir = target.parentFile ?: return
+        if (size > maxBytes) return false
+        val dir = target.parentFile ?: return false
         // Retain at most keepBackups-1 existing snapshots so the new copy stays within budget, then drop
         // further snapshots while disk space is tight. An upgrade must never fail for lack of room to
         // archive a rollback copy: a reduced or absent backup is acceptable, a failed upgrade is not.
@@ -2042,11 +2175,16 @@ private fun writePreMigrationBackup(
             keepExisting--
             pruneVersioned(target, PREMIGRATE_SUFFIX, keepExisting)
         }
-        if (freeSpace(dir) < size + SPACE_MARGIN_BYTES) return // no room even after pruning — skip
+        if (freeSpace(dir) < size + SPACE_MARGIN_BYTES) return false // no room even after pruning — skip
         val dest = preMigrationBackupFile(target, version)
         val tmp = File(dest.path + ".tmp")
         target.copyTo(tmp, overwrite = true)
-        if (!tmp.renameTo(dest)) tmp.delete()
+        val installed = tmp.length() == size && tmp.renameTo(dest) && dest.isFile && dest.length() == size
+        if (!installed) tmp.delete()
+        installed
+    }.getOrElse {
+        runCatching { File(preMigrationBackupFile(target, version).path + ".tmp").delete() }
+        false
     }
 }
 

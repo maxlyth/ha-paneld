@@ -59,13 +59,26 @@ class HaAreaProtocolTest {
             File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
         ).first { it.isFile }.readText()
-        assertTrue(server.contains("config.haAreaUserOverride = config.haArea.isNotBlank()"))
+        assertFalse(server.contains("config.haAreaUserOverride = config.haArea.isNotBlank()"))
+        assertTrue(server.contains("config.haAreaUserOverride == requested.isNotBlank()"))
+        assertTrue(server.contains("if (requestedHaArea != null && durableHaArea == null)"))
+        assertTrue(server.contains("if (nothingSaved) \"commit-failed\" else \"saved-partial\""))
+        assertTrue(server.contains("config.commitHaArea(catalog.device.areaName, userOverride = false)"))
+        val config = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt"),
+        ).first { it.isFile }.readText()
+        assertTrue(config.contains("\"ha_area\" -> {"))
+        assertTrue(config.contains("putBoolean(HA_AREA_USER_OVERRIDE_PREF, value.isNotBlank())"))
         assertTrue(server.contains("autoSleepHttpApi.noteAreaChanged()"))
         assertFalse(
             "noteAreaChanged must remain abstract rather than silently defaulting to a no-op",
             server.contains("    fun noteAreaChanged() {}"),
         )
-        assertTrue("adoption retires the bit", server.contains("config.haAreaUserOverride = false"))
+        assertTrue(
+            "adoption retires the bit in the same transaction as the Area value",
+            server.contains("config.commitHaArea(snapshot.localArea, userOverride = false)"),
+        )
         assertTrue("the fence must include the bit", server.contains("snapshot.userOverride == config.haAreaUserOverride"))
         // Wherever the value is displayed at rest it must disclose the override — the Dashboard tab's
         // Behaviour card row carries the suffix so the state is visible without opening Configure.
@@ -239,7 +252,7 @@ class HaAreaProtocolTest {
         assertTrue(server.contains("captureHaAreaSnapshot()"))
         assertTrue(server.contains("catalog.ownerKey != snapshot.ownerKey"))
         assertTrue(server.contains("synchronized(directConfigMutationLock)"))
-        assertTrue(server.contains("\"ha_area\" in mutationPlan.changedKeys"))
+        assertTrue(server.contains("firstOrNull { it.first == \"ha_area\" }"))
     }
 
     @Test fun staleCatalogsAndWritesCarryTheCredentialOwnerThatProducedThem() {

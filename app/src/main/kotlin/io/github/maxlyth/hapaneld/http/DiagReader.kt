@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
+import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.BoundedLaunchGate
@@ -252,6 +253,7 @@ object DiagReader {
         privilege: PrivilegedRouteObservation,
         capabilityRows: List<Cap>,
         displaySizing: DisplaySizingEvidence? = null,
+        storage: StorageHealthSnapshot = StorageHealthSnapshot.UNCHECKED,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
         val routes = privilege
@@ -282,6 +284,7 @@ object DiagReader {
                     "containment=${it.containment.wireValue} recursive_watchdog=${it.recursiveWatchdogAssignment}",
             )
         }
+        appendLine(HealthAudit.storage(storage).diagnosticLine())
         evdevRequestDescription(profile)?.let { requested ->
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }

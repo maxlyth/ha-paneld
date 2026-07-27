@@ -106,7 +106,7 @@ run_provision() {
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
-  rm -f "$TMP/plan-attempts"
+  rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
   if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
@@ -116,6 +116,7 @@ run_provision() {
   fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
+  MOCK_STORAGE_HEALTH="${MOCK_STORAGE_HEALTH:-healthy}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
   MOCK_EXPORT="${MOCK_EXPORT:-ok}" \
   MOCK_CONFIG="${MOCK_CONFIG:-ok}" \
@@ -201,6 +202,8 @@ run_provision() {
   PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-1}" \
   PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-1}" \
   APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-30}" \
+  STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-3}" \
+  STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-0}" \
   MOCK_APK_INSTALL_PID_FILE="${MOCK_APK_INSTALL_PID_FILE:-}" \
     bash "$PROVISION" "$@" "${unsigned_ack[@]}" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -414,9 +417,94 @@ if [ "$(cat "$SYMLINK_TARGET")" = 'do not replace' ]; then pass "symlink target 
 run_provision "$MOCK_TARGET" --verify
 assert_success "verify-only succeeds for a healthy panel"
 assert_contains 'Detected panel: Test Panel' "verify-only displays the app-owned hardware profile guidance"
+assert_contains 'storage health: healthy' "verify-only reports healthy storage"
+assert_log_contains '^curl .* /api/v1/status$|^curl .*http://panel\.test:8888/api/v1/status$' "verify-only reads the shared storage-health status"
 assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://panel\.test:8888/api/v1/provisioning/plan\.txt$' "verify-only reads the provisioning plan"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
+
+MOCK_STORAGE_HEALTH=unchecked run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only accepts storage health before the first scheduled check"
+assert_contains 'storage health: not checked yet' "unchecked storage health is explained without failing verification"
+
+MOCK_STORAGE_HEALTH=legacy run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only remains compatible with panels before storage-health status"
+assert_not_contains 'storage health:' "$LAST_OUTPUT" "legacy verification does not invent a storage-health result"
+
+MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only accepts a successful legacy status response without storage health"
+assert_not_contains 'storage health:' "$LAST_OUTPUT" "legacy status JSON remains advisory during read-only verification"
+
+MOCK_STORAGE_HEALTH=transport-fail run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects storage-status transport failure"
+assert_contains 'status endpoint could not be reached' "read-only transport failure is not mistaken for a legacy response"
+
+MOCK_STORAGE_HEALTH=missing-state run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects a current storage-health object with no state"
+assert_contains 'storage health: malformed status response' "missing current-build storage state is identified"
+
+MOCK_STORAGE_HEALTH=malformed run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects malformed current status JSON"
+assert_contains 'storage health: malformed status response' "malformed current-build status is identified"
+
+MOCK_STORAGE_HEALTH=future-state run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects an unknown current storage-health state"
+assert_contains "storage health: unrecognised state 'future-state'" "unknown current-build storage state is identified"
+
+MOCK_STORAGE_HEALTH=warning run_provision "$MOCK_TARGET" --verify
+assert_success "storage warning remains advisory"
+assert_contains 'storage health: warning.*pressure is elevated' "storage warning clearly identifies pressure"
+assert_contains 'Review panel free space and WAL/database growth.*then check' "storage warning provides a recovery action"
+
+MOCK_STORAGE_HEALTH=critical run_provision "$MOCK_TARGET" --verify
+assert_failure "critical storage makes verification fail"
+assert_contains 'storage health: critical.*pressure is critical' "critical storage identifies the failing condition"
+assert_contains 'Recover panel headroom or address WAL growth before writes fail.*re-run verification' "critical storage failure provides a recovery action"
+
+MOCK_STORAGE_HEALTH=database_failure run_provision "$MOCK_TARGET" --verify
+assert_failure "database failure makes verification fail"
+assert_contains 'storage health: database failure.*SQLite writes or health checks failed' "database failure identifies the failing condition"
+assert_contains 'Preserve ha-paneld\.db.*inspect.*/api/v1/diag.*re-run verification' "database failure protects the database and provides a recovery action"
+
+# Mutating runs gate known danger before install, then require a complete current-build contract
+# after install. The latter is bounded because package replacement and app startup are asynchronous.
+MOCK_STORAGE_HEALTH=critical run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "critical storage blocks provisioning before mutation"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "critical storage blocks the APK install"
+
+MOCK_STORAGE_HEALTH=database_failure run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "database failure blocks provisioning before mutation"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "database failure blocks the APK install"
+
+MOCK_STORAGE_HEALTH=missing-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a malformed installed-app storage contract blocks provisioning before mutation"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "malformed storage status blocks the APK install"
+
+MOCK_STORAGE_HEALTH=future-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unknown installed-app storage state blocks provisioning before mutation"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unknown storage state blocks the APK install"
+
+MOCK_STORAGE_HEALTH=unchecked-then-healthy run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "post-install verification polls until storage health becomes healthy"
+assert_contains 'storage health check is not ready; waiting for a bounded retry' "post-install storage polling explains the wait"
+if [ "$(grep -Ec '/api/v1/status$' "$MOCK_CALL_LOG")" -ge 3 ]; then
+  pass "post-install storage verification retries the shared status endpoint"
+else
+  fail_test "post-install storage verification retries the shared status endpoint"
+fi
+
+MOCK_STORAGE_HEALTH=always-unchecked run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "post-install verification fails when storage health never completes"
+assert_contains 'not checked after bounded post-install retries' "bounded unchecked failure names the incomplete health check"
+
+MOCK_STORAGE_HEALTH=transport-fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an installed package with unavailable storage status blocks provisioning"
+assert_contains "installed app's storage-health status could not be reached" "installed-package transport failure names the unavailable authority"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "installed-package transport failure stops before APK install"
+
+MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "post-install verification rejects a current build with missing storage status"
+assert_contains 'installed app did not return the required status contract' "current-build missing status names the required contract"
 
 # Pre-plan releases remain verifiable. A 404 is an explicit compatibility result, not a reason to
 # discard the established health, permissions and diagnostics checks.
@@ -1835,10 +1923,19 @@ assert_contains 'too little free storage' "insufficient panel storage is named b
 assert_contains 'room for two copies' "the storage requirement explains why twice the database is needed"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "insufficient storage stops before any APK install"
 
-# Not observable is not the same as insufficient: an unreadable df must not block an install.
+MOCK_DATA_AVAIL_KB=131072 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "exactly 128 MiB free is below the safe capacity floor"
+assert_contains 'more than 131072KB \(128 MiB\) is required' "the capacity boundary is explicit"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the exact capacity floor stops before APK install"
+
+# Unknown capacity cannot prove that the database plus its staged copy fit, so it fails closed.
 MOCK_DATA_CAPACITY=wrapped run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "an unreadable df does not block an upgrade"
-assert_contains 'could not read /data capacity' "an unreadable df says so rather than guessing a number"
+assert_failure "an unreadable df blocks an upgrade safely"
+assert_contains 'storage capacity could not be determined safely' "an unreadable df fails without guessing a number"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unreadable capacity stops before APK install"
+
+MOCK_DATA_AVAIL_KB=131073 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "capacity immediately above 128 MiB permits an upgrade"
 
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "an upgrade with adequate storage succeeds"
@@ -2013,6 +2110,18 @@ fi
 assert_log_contains 'curl .*--proto =https --proto-redir =https .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet download pins the exact release asset name"
 assert_not_contains '^gh ' "$MOCK_CALL_LOG" "fleet release resolution has no unbounded GitHub CLI branch"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet workers retain and verify the authenticated release tag"
+
+# Fleet workers inherit provision.sh's final storage gate. A successfully installed panel whose
+# shared health authority is critical must still fail the wave with the same recovery guidance.
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-storage-critical-output.txt"
+MOCK_STORAGE_HEALTH=critical MOCK_GITHUB_API=pretty \
+  bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet update rejects a critically storage-constrained panel"
+assert_contains 'storage health: critical.*pressure is critical' "fleet output retains the storage-pressure cause"
+assert_contains 'Recover panel headroom or address WAL growth before writes fail.*re-run verification' "fleet failure retains the actionable storage recovery"
+assert_contains 'fleet update: 0 OK, 1 failed' "fleet summary counts critical storage as a failed panel"
 
 # The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
 # newer stable release and bind the candidate tag to that candidate's APK.

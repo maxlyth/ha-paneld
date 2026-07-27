@@ -6,11 +6,15 @@
 
 ### Fixed
 
+- **A failed settings save is no longer allowed to look successful.** Configuration saves through the control plane remain invisible until the SQLite transaction is durable; if the write fails, the previous settings and listeners stay in place, the request fails, and a retry starts from the last known-good state.
+
 - **Log shipping can now actually reach a standard syslog collector.** Until now the syslog transport only ever spoke TCP, while the port defaulted to 514 — which is a UDP port on essentially every collector. The out-of-the-box configuration therefore could not work: panels reported `connection refused`, and putting `udp://` in the host box made things worse, because the whole string was treated as a hostname and the resulting warning quoted the destination without naming any fault. **Protocol** is now a choice of **syslog-udp** (the new default, and what a stock collector listens for), **syslog-tcp** or **http**. Panels that explicitly selected the old `syslog` value keep TCP and are unaffected.
 
 - **Failures say what went wrong.** A sink that cannot be resolved, refuses the connection, or rejects a batch now reports the actual fault on the info page and in `/diag` instead of repeating the address back at you. Over UDP the status deliberately reads `sending (UDP is unacknowledged)` rather than `connected`, because a connectionless transport cannot tell you the records arrived — a silently discarded stream would otherwise look exactly like a healthy one.
 
 ### Added
+
+- **Panels now monitor the storage that holds their database at startup and every 24 hours.** The Dashboard, status API and diagnostics report free space, database and WAL growth, page use and SQLite's bounded health check from one shared result. Home Assistant gets a diagnostic sensor, while critical pressure or a real database failure also raises a persistent on-panel warning and makes fleet verification fail with recovery guidance. The first safety release detects and escalates only; it never triggers pruning, checkpoint compaction, `VACUUM` or other automatic reclamation.
 
 - **A "Test sink" button on the Configure tab's Logging card** checks the collector from the panel's own network, which is the only vantage point that counts, and does it without saving first so a typo can be caught before it is committed. It sends one real, marked record in whatever format you have selected — an RFC5424 frame for syslog, an NDJSON POST for HTTP — rather than merely opening a connection, because a connection succeeds against any listening port and so cannot tell your collector from something else that happens to be there. You always get the marker back, so you can search for it in the collector; over UDP that search is the only confirmation possible, and the panel says so instead of claiming delivery.
 

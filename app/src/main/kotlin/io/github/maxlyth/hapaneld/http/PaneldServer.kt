@@ -84,6 +84,8 @@ import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.sensors.HaCurrentUserClient
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
+import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
+import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
@@ -840,6 +842,9 @@ class PaneldServer internal constructor(
     private val provisioningActivation: () -> ProvisioningActivationSnapshot = {
         error("provisioning activation provider is unavailable")
     },
+    // Cheap process-local storage/database-health snapshot. The runtime starts at UNCHECKED, so
+    // staged callers and tests that omit this provider retain an explicit, truthful initial state.
+    private val storageHealth: () -> StorageHealthSnapshot = { StorageHealthRuntime.snapshot() },
 ) {
     private suspend fun authorizeSensitive(
         call: ApplicationCall,
@@ -3344,6 +3349,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val management = snapStaleOk()
         val companion = companionServersStaleOk()
         val radio = radioStatus()
+        val storage = HealthAudit.storage(storageHealth())
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version). Same finding
         // set as the dashboard banner + Install tab (HealthAudit); the audit lists ALL available updates
         // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
@@ -3368,6 +3374,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         radio?.let { z ->
             zigbeeWarning(z)?.let(warns::add)
         }
+        storage.warningHtml()?.let(warns::add)
         runCatching(mdnsWarning).getOrNull()?.let(warns::add)
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
@@ -3379,7 +3386,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val zigbee = radio?.let {
             JSONObject(it.mqttAttributes()).put("state", it.state.wireValue).toString()
         } ?: "null"
-        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps],\"zigbee_gateway\":$zigbee}"
+        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
+            "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}}"
     }
 
     /** A health finding as a one-line HTML warning for GET /api/v1/status (no Ignore button; updates keep
@@ -3598,6 +3606,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 management.densityCur,
                 management.fontScale,
             ),
+            storage = storageHealth(),
         )
     }
 
@@ -3613,6 +3622,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  the next Configure/dashboard request reflects learned reporting eligibility immediately. */
     internal fun invalidateCapabilitySnapshot() {
         snapCache.invalidate()
+        diagCache.invalidate()
+    }
+
+    /** Storage is sampled live by status/UI; only the bounded diagnostic dump can retain an old value. */
+    internal fun invalidateStorageHealthDiagnostics() {
         diagCache.invalidate()
     }
 
@@ -3719,6 +3733,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     /** The setup / health / update banners — everything above the cards. Needs the facts map (MQTT
      *  state), so on a cold start it hydrates with the rest. */
     private fun bannersHtml(s: Snap, h: HealthInputs): String {
+        val storage = HealthAudit.storage(storageHealth())
         val mqtt = s.facts["MQTT"] ?: "disabled"
         // Pure decision (unit-tested in SetupBannerTest) — note a CONFIGURED broker that's merely
         // mid-(re)connect must not be reported as missing.
@@ -3747,10 +3762,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // (cached, so cheap). Shared decision — see HealthAudit; updates are filtered by the per-version
         // dismissals so an "Ignore this version" click stays hidden until a newer release ticks it back.
         val findings = healthFindings(h, s.facts["System WebView"] ?: "", UpdateChecker.current(appContext, config.ignoredUpdates))
-        // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
-        // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
-        // warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
-        return adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
+        // Order: storage/database safety first, then actively-broken render states, render findings
+        // (WebView / renderer / updates), and finally the needs-config setup notice. On the dashboard the
+        // ad-hoc warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
+        return storage.bannerHtml() + adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
             findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + mqttProgress + setup
     }
 
@@ -4914,16 +4929,28 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         )
                     }
                 }
-                if (saved && "ha_area" in mutationPlan.changedKeys) {
-                    // A value saved HERE was chosen by a person: record it as a deliberate override so
-                    // adoption cannot revert it seconds later (the maintainer set Hall's area to a
-                    // neighbouring room for auto-sleep sources and watched the save silently undo itself,
-                    // 2026-07-26). Blank means "follow Home Assistant" and hands the value back to
-                    // adoption. Auto-sleep re-reads its configuration so the area takes effect now.
-                    config.haAreaUserOverride = config.haArea.isNotBlank()
+                val requestedHaArea = mutationPlan.changedLive
+                    .firstOrNull { it.first == "ha_area" }
+                    ?.second
+                    ?.trim()
+                val durableHaArea = requestedHaArea?.takeIf { requested ->
+                    saved && config.haArea == requested &&
+                        config.haAreaUserOverride == requested.isNotBlank()
+                }
+                if (requestedHaArea != null && durableHaArea == null) {
+                    // A pending live journal is not the Area authority: until the atomic Config commit
+                    // publishes both fields, HTTP must not call this saved or start Area-dependent work.
+                    liveApplied.remove("ha_area")
+                    livePending.remove("ha_area")
+                    if ("ha_area" !in liveRejected) liveRejected += "ha_area"
+                }
+                if (durableHaArea != null) {
+                    // commitRaw owns Area + override in one durable transaction. Only the matching
+                    // read-back may admit dependent work; a failed SQLite commit leaves both old values
+                    // visible and the response's live outcome remains rejected for an explicit retry.
                     autoSleepHttpApi.noteAreaChanged()
                 }
-                if (saved && "ha_area" in mutationPlan.changedKeys && config.haArea.isNotBlank()) {
+                if (!durableHaArea.isNullOrBlank()) {
                     // Requested-area write-back, post-commit and in the background: admin sessions move
                     // the device now; non-admin attempts fail closed inside and the request simply stands
                     // (it seeds discovery's suggested_area and retries when an admin next reads the
@@ -4996,13 +5023,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             if (failedOwner !in liveRejected) liveRejected += failedOwner
         }
         if (liveRejected.isNotEmpty()) {
+            val nothingSaved = liveApplied.isEmpty() && livePending.isEmpty()
+            val failureMessage = if (nothingSaved) {
+                "Settings could not be durably accepted: ${liveRejected.joinToString()}."
+            } else {
+                "Some settings were saved, but ${liveRejected.joinToString()} could not be durably accepted."
+            }
             respondConfigMutation(
                 call,
-                "saved-partial",
+                if (nothingSaved) "commit-failed" else "saved-partial",
                 liveApplied,
                 livePending,
                 liveRejected,
-                "Some settings were saved, but ${liveRejected.joinToString()} could not be durably accepted.",
+                failureMessage,
                 HttpStatusCode.InternalServerError,
             )
             return
@@ -5788,11 +5821,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     config.synchronizedTransaction {
                         if (!ownsHaAreaSnapshot(snapshot)) return@synchronizedTransaction false
                         Log.i(TAG, "ha-area: adopting Home Assistant's area for this device")
-                        config.haArea = catalog.device.areaName
                         // Adoption is only reachable for a non-override value, or for an override that
                         // matches HA in a different casing — either way nothing local-only remains.
-                        config.haAreaUserOverride = false
-                        true
+                        config.commitHaArea(catalog.device.areaName, userOverride = false)
                     }
                 }
             }
@@ -5819,8 +5850,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         if (!ownsHaAreaSnapshot(snapshot)) return@synchronized
                         config.synchronizedTransaction {
                             if (!ownsHaAreaSnapshot(snapshot)) return@synchronizedTransaction false
-                            config.haAreaUserOverride = false
-                            true
+                            config.commitHaArea(snapshot.localArea, userOverride = false)
                         }
                     }
                 }
