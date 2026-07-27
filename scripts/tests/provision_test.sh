@@ -3,6 +3,12 @@
 # All adb and HTTP interactions are faked; this script never contacts a panel or the network.
 set -u
 
+PROVISION_TEST_SCOPE="${PROVISION_TEST_SCOPE:-all}"
+case "$PROVISION_TEST_SCOPE" in
+  core|all) ;;
+  *) echo "PROVISION_TEST_SCOPE must be core or all" >&2; exit 2 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROVISION="$ROOT/scripts/provision.sh"
 UPDATE_FLEET="$ROOT/scripts/update-fleet.sh"
@@ -1338,6 +1344,7 @@ assert_status 2 "invalid internal release tag is rejected as a usage error"
 assert_contains 'invalid release tag' "invalid internal release tag gives a direct correction"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
+if [ "$PROVISION_TEST_SCOPE" = all ]; then
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
 # start the authenticated installed native starter. The fake checksum tool makes this deterministic without network
 # access while the call log proves the security-sensitive ordering.
@@ -1530,6 +1537,7 @@ assert_contains 'installed Shizuku manager cannot be trusted' "untrusted Shizuku
 assert_contains 'remove the manager and re-run' "untrusted Shizuku failure gives a recovery path"
 assert_not_contains 'shizuku-v13\.6\.0\.r1086.*-o .*/shizuku\.apk' "$MOCK_CALL_LOG" "untrusted newer Shizuku is not overwritten by a download"
 assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "untrusted Shizuku is never launched or rearmed"
+fi
 
 # A launched app that never answers is not provisioned, even if adb install itself succeeded.
 MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -2119,6 +2127,7 @@ else
   fail_test "fleet interruption leaves no orphan panel mutation"
 fi
 
+if [ "$PROVISION_TEST_SCOPE" = all ]; then
 # A foreground adb inspection is not one of provision.sh's explicitly tracked subprocesses. Fleet
 # ownership must still terminate it through the provisioner's dedicated process group.
 : > "$MOCK_CALL_LOG"
@@ -2207,6 +2216,7 @@ LAST_STATUS=$?
 assert_failure "fleet update fails when Shizuku service setup times out"
 assert_contains '0 OK, 1 failed' "fleet summary does not count timed-out Shizuku setup as success"
 assert_contains 'service start timed out after 1s' "fleet output retains the Shizuku timeout reason"
+fi
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-duplicate-output.txt"
@@ -2434,12 +2444,14 @@ run_moving_advanced_installer() {
   LAST_STATUS=$?
 }
 
+if [ "$PROVISION_TEST_SCOPE" = all ]; then
 run_advanced_installer --provision panel.test --id kitchen --shizuku
 assert_success "checkout-free advanced provisioning succeeds without repository prompts"
 assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk> <--release-tag> <v0\.9\.2-rc3> <--id> <kitchen> <--shizuku>$' \
   "mutating advanced provisioning receives the exact paired release APK"
 assert_log_contains 'ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk -o ' \
   "mutating advanced provisioning downloads the paired APK"
+fi
 
 run_generated_installer_with_real_provisioner --provision panel.test --verify
 assert_success "generated installer composes with the real provisioner for read-only verification"
@@ -2508,6 +2520,7 @@ assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases/l
 assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.3-manual-setup-required\.apk> <--release-tag> <v0\.9\.3> <--id> <kitchen>$' \
   "moving stable-channel provisioning pairs the resolved APK and provisioner"
 
+if [ "$PROVISION_TEST_SCOPE" = all ]; then
 run_moving_advanced_installer --prerelease --provision panel.test --shizuku
 assert_success "moving prerelease-channel advanced provisioning succeeds"
 assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases\?per_page=100' \
@@ -2519,6 +2532,7 @@ MOCK_ADVANCED_GITHUB_API=oversized run_moving_advanced_installer --prerelease --
 assert_success "moving installer consumes an oversized prerelease response without SIGPIPE"
 assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk> <--release-tag> <v0\.9\.4-rc1> <--shizuku>$' \
   "oversized moving-installer response retains the first prerelease asset"
+fi
 
 run_moving_advanced_installer --provision panel.test --verify
 assert_success "moving stable-channel verification succeeds without an APK"
@@ -2538,11 +2552,22 @@ LAST_OUTPUT="$TMP/provision-help.txt"
 bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "provisioner exposes help without requiring a panel"
-assert_contains '^ *--shizuku +Install/start pinned Shizuku' "provisioner help advertises enhanced-access setup"
+if [ "$PROVISION_TEST_SCOPE" = all ]; then
+  assert_contains '^ *--shizuku +Install/start pinned Shizuku' "provisioner help advertises enhanced-access setup"
+fi
 
 RELEASE_WORKFLOW="$ROOT/.github/workflows/release.yml"
+CI_WORKFLOW="$ROOT/.github/workflows/ci.yml"
+SHIZUKU_WORKFLOW="$ROOT/.github/workflows/shizuku-emulator.yml"
 LAST_OUTPUT="$TMP/release-workflow-contract.txt"
 cp "$RELEASE_WORKFLOW" "$LAST_OUTPUT"
+if grep -Fq 'PROVISION_TEST_SCOPE: core' "$CI_WORKFLOW" && \
+   grep -Fq 'PROVISION_TEST_SCOPE: core' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'PROVISION_TEST_SCOPE=all scripts/tests/provision_test.sh' "$SHIZUKU_WORKFLOW"; then
+  pass "Shizuku provisioning contracts stay outside CI and release gates"
+else
+  fail_test "Shizuku provisioning contracts stay outside CI and release gates"
+fi
 if grep -Fq 'release-input/hapaneld-helper-armeabi-v7a' "$RELEASE_WORKFLOW" && \
    grep -Fq 'release-input/hapaneld-helper-arm64-v8a' "$RELEASE_WORKFLOW"; then
   pass "release workflow builds both supported helper ABIs"
