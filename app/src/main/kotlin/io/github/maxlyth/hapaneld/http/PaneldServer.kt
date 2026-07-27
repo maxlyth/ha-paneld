@@ -71,6 +71,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import io.github.maxlyth.hapaneld.persistence.StateBackupPolicy
@@ -1793,7 +1794,7 @@ class PaneldServer internal constructor(
                             android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
                         }.getOrDefault(-1)
                         call.respondText(
-                            """{${sensors.valuesJson()},"volume_pct":${runCatching { volume.getPercent() }.getOrDefault(-1)},"brightness":$bright}""",
+                            """{${sensors.valuesJson(if (profile.hasCht8305) PanelMetrics.shared.roomClimate() else null)},"volume_pct":${runCatching { volume.getPercent() }.getOrDefault(-1)},"brightness":$bright}""",
                             ContentType.Application.Json,
                         )
                     }

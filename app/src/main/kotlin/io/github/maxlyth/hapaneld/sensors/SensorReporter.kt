@@ -12,6 +12,7 @@ import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.device.DeviceProfile
+import io.github.maxlyth.hapaneld.metrics.RoomClimate
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 
@@ -84,6 +85,26 @@ internal fun environmentalSensorUse(
     else -> EnvironmentalSensorUse.PUBLISH
 }
 
+internal fun environmentalSensorPublishes(use: EnvironmentalSensorUse): Boolean =
+    use == EnvironmentalSensorUse.PUBLISH
+
+internal fun environmentalEndpointJson(
+    use: EnvironmentalSensorUse,
+    androidValue: Float,
+    androidAgeSeconds: Long?,
+    helperValue: Double?,
+    activationState: ActivationRegistrationState?,
+): String {
+    if (use == EnvironmentalSensorUse.ACTIVATE_ONLY) {
+        val value = helperValue?.takeIf { it.isFinite() }?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "null"
+        val state = (activationState ?: ActivationRegistrationState.IDLE).name.lowercase(Locale.ROOT)
+        return "\"present\":true,\"value\":$value,\"source\":\"helper\",\"activation\":\"$state\""
+    }
+    if (use == EnvironmentalSensorUse.ABSENT) return "\"present\":false"
+    val value = if (androidValue.isNaN()) "null" else formatSensorValue(androidValue)
+    return "\"present\":true,\"value\":$value,\"age_s\":${androidAgeSeconds ?: "null"},\"source\":\"android\""
+}
+
 /**
  * Reports standard Android environmental sensors and feeds every proximity source through one
  * hardware-neutral learner. Device-native proximity values never become HA state: HA sees only a
@@ -125,6 +146,8 @@ class SensorReporter(
     private var listener: SensorEventListener? = null
     private var sensorThread: HandlerThread? = null
     private var sensorHandler: Handler? = null
+    private var tempActivation: ActivationRegistrationLifecycle? = null
+    private var humidityActivation: ActivationRegistrationLifecycle? = null
     private var gpioClient: GpioProximityClient? = null
     private var proximitySampleCount = 0
     private var cadenceClassified = false
@@ -231,8 +254,8 @@ class SensorReporter(
     fun hasLight() = lightSensor != null
     fun hasProximity() = proximitySensor != null || proximityGpio != null
     fun hasLearnedProximity() = proximityRuntime?.isLearnedSignal() == true
-    fun hasTemperature() = tempUse == EnvironmentalSensorUse.PUBLISH
-    fun hasHumidity() = humidityUse == EnvironmentalSensorUse.PUBLISH
+    fun hasTemperature() = environmentalSensorPublishes(tempUse)
+    fun hasHumidity() = environmentalSensorPublishes(humidityUse)
 
     fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
 
@@ -254,16 +277,18 @@ class SensorReporter(
     }
 
     /** Live readings for the panel UI. Raw proximity is diagnostic-only and never leaves this API. */
-    fun valuesJson(): String {
+    fun valuesJson(roomClimate: RoomClimate? = null): String {
         val now = SystemClock.elapsedRealtime()
         fun age(at: Long): Long? = if (at <= 0L) null else ((now - at).coerceAtLeast(0L) / 1000L)
         val light = if (!hasLight()) "\"present\":false" else
             "\"present\":true,\"lux\":${if (liveLux.isNaN()) "null" else fmtV(liveLux)},\"age_s\":${age(liveLuxAt) ?: "null"}"
         val proximity = proximityRuntime?.json(lastRaw, age(liveProximityAt)) ?: "{\"present\":false}"
-        val temp = if (!hasTemperature()) "\"present\":false" else
-            "\"present\":true,\"c\":${if (liveTemp.isNaN()) "null" else fmtV(liveTemp)},\"age_s\":${age(liveTempAt) ?: "null"}"
-        val humidity = if (!hasHumidity()) "\"present\":false" else
-            "\"present\":true,\"pct\":${if (liveHumid.isNaN()) "null" else fmtV(liveHumid)},\"age_s\":${age(liveHumidAt) ?: "null"}"
+        val temp = environmentalEndpointJson(
+            tempUse, liveTemp, age(liveTempAt), roomClimate?.tempC, tempActivation?.state,
+        ).replace("\"value\":", "\"c\":")
+        val humidity = environmentalEndpointJson(
+            humidityUse, liveHumid, age(liveHumidAt), roomClimate?.humidityPct, humidityActivation?.state,
+        ).replace("\"value\":", "\"pct\":")
         return "\"light\":{$light},\"proximity\":$proximity,\"temperature\":{$temp},\"humidity\":{$humidity}"
     }
 
@@ -322,7 +347,7 @@ class SensorReporter(
                     }
                     Sensor.TYPE_PROXIMITY -> handleProximity(event.values[0], run)
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
-                        if (tempUse != EnvironmentalSensorUse.PUBLISH) return
+                        if (!environmentalSensorPublishes(tempUse)) return
                         val value = event.values[0]
                         val now = SystemClock.elapsedRealtime()
                         liveTemp = value
@@ -330,7 +355,7 @@ class SensorReporter(
                         run.temperature(value, now)
                     }
                     Sensor.TYPE_RELATIVE_HUMIDITY -> {
-                        if (humidityUse != EnvironmentalSensorUse.PUBLISH) return
+                        if (!environmentalSensorPublishes(humidityUse)) return
                         val value = event.values[0]
                         val now = SystemClock.elapsedRealtime()
                         liveHumid = value
@@ -382,13 +407,41 @@ class SensorReporter(
                 }
             }
         ) return
-        tempSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
-        humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
+        tempActivation = registerEnvironmentalSensor(tempSensor, tempUse, "temperature", run, handler)
+        humidityActivation = registerEnvironmentalSensor(humiditySensor, humidityUse, "humidity", run, handler)
         Log.i(
             TAG,
             "sensors started (light=${hasLight()} proximity=${hasProximity()} " +
                 "temp=$tempUse humidity=$humidityUse)",
         )
+    }
+
+    private fun registerEnvironmentalSensor(
+        sensor: Sensor?,
+        use: EnvironmentalSensorUse,
+        label: String,
+        run: SensorRunCallbacks,
+        handler: Handler,
+    ): ActivationRegistrationLifecycle? {
+        sensor ?: return null
+        if (environmentalSensorPublishes(use)) {
+            sm.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL, handler)
+            return null
+        }
+        if (use != EnvironmentalSensorUse.ACTIVATE_ONLY) return null
+        return ActivationRegistrationLifecycle(
+            register = {
+                val activeListener = listener
+                run.isOpen() && activeRun === run && activeListener != null &&
+                    sm.registerListener(activeListener, sensor, SensorManager.SENSOR_DELAY_NORMAL, handler)
+            },
+            schedule = { delayMs, retry ->
+                val task = Runnable(retry)
+                handler.postDelayed(task, delayMs)
+                ActivationRetryCancellation { handler.removeCallbacks(task) }
+            },
+            onState = { state -> Log.i(TAG, "$label activation registration=${state.name.lowercase(Locale.ROOT)}") },
+        ).also { it.start() }
     }
 
     private fun handleProximity(raw: Float, run: SensorRunCallbacks) {
@@ -516,6 +569,10 @@ class SensorReporter(
     fun stop(): CompletableFuture<Unit> {
         activeRun?.close()
         activeRun = null
+        tempActivation?.stop()
+        tempActivation = null
+        humidityActivation?.stop()
+        humidityActivation = null
         gpioClient?.stop()
         gpioClient = null
         listener?.let { sm.unregisterListener(it) }
