@@ -190,6 +190,9 @@ JSON
     ;;
   */health)
     [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
+    if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [ -f "${MOCK_STATE_DIR:?}/package-stopped" ]; then
+      exit 22
+    fi
     printf 'ha-paneld test health\n'
     ;;
   */api/v1/power-safety/state)

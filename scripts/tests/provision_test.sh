@@ -108,6 +108,7 @@ run_provision() {
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
   rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
+  rm -f "$TMP/package-stopped"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
   if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
     cp "$MOCK_INSTALLED_APK_SOURCE" "$TMP/installed-apk"
@@ -116,6 +117,8 @@ run_provision() {
   fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
+  MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
+  MOCK_LAUNCHER_START="${MOCK_LAUNCHER_START:-ok}" \
   MOCK_STORAGE_HEALTH="${MOCK_STORAGE_HEALTH:-healthy}" \
   MOCK_POWER_SAFETY="${MOCK_POWER_SAFETY:-safe}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
@@ -354,7 +357,7 @@ assert_success "export-only succeeds"
 if [ -s "$EXPORT" ]; then pass "export-only writes a non-empty bundle"; else fail_test "export-only writes a non-empty bundle"; fi
 if [ "$(stat -c '%a' "$EXPORT")" = 600 ]; then pass "secret export is owner-readable only"; else fail_test "secret export is owner-readable only"; fi
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "export-only never installs an APK"
-assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "export-only performs no panel mutation"
+assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start|monkey -p io\.github\.maxlyth\.hapaneld))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "export-only performs no panel mutation"
 
 FAILED_EXPORT="$TMP/failed-backup.json"
 MOCK_EXPORT=fail run_provision "$MOCK_TARGET" --export "$FAILED_EXPORT" --apk "$APK"
@@ -424,7 +427,7 @@ assert_log_contains '^curl .* /api/v1/status$|^curl .*http://panel\.test:8888/ap
 assert_log_contains '^curl .* /api/v1/power-safety/state$|^curl .*http://panel\.test:8888/api/v1/power-safety/state$' "verify-only reads the one-token app-owned power state"
 assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://panel\.test:8888/api/v1/provisioning/plan\.txt$' "verify-only reads the provisioning plan"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
-assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
+assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start|monkey -p io\.github\.maxlyth\.hapaneld))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
 
 MOCK_POWER_SAFETY=caution run_provision "$MOCK_TARGET" --verify
 assert_success "a caution power classification remains advisory"
@@ -584,13 +587,36 @@ assert_contains 'inspecting version.*installed ha-paneld package' "install repor
 assert_contains 'inspecting access.*root route.*helper compatibility' "install reports privilege and helper inspection"
 assert_contains 'Detected panel: Test Panel' "successful install identifies the resolved panel profile"
 assert_not_contains '/api/v1/tame' "$MOCK_CALL_LOG" "ordinary install never auto-applies profile recommendations"
-start_line="$(grep -nE '^adb .* shell am start -n ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+start_line="$(grep -nE '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 plan_line="$(grep -nE '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 if [ -n "$start_line" ] && [ -n "$plan_line" ] && [ "$start_line" -lt "$plan_line" ]; then
   pass "profile guidance is read only after the newly installed app is launched"
 else
   fail_test "profile guidance is read only after the newly installed app is launched"
 fi
+
+# Package replacement on API 27 can leave ha-paneld stopped even though a direct component start was
+# requested. Model that state explicitly: only Android's normal package LAUNCHER route clears it, and
+# health plus the ordinary post-install verification must then become reachable.
+MOCK_STOPPED_STATE=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "normal package launcher clears the post-install stopped state"
+assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "stopped-state recovery uses Android's normal launcher route"
+assert_not_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "$MOCK_CALL_LOG" "successful launcher recovery does not bypass the normal package route"
+install_line="$(grep -nE '^adb .* install -r -g .*ha-paneld\.apk$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+launcher_line="$(grep -nE '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+plan_line="$(grep -nE '^curl .*api/v1/provisioning/plan\.txt' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$install_line" ] && [ -n "$launcher_line" ] && [ -n "$plan_line" ] && \
+   [ "$install_line" -lt "$launcher_line" ] && [ "$launcher_line" -lt "$plan_line" ]; then
+  pass "stopped-state recovery launches after install and before verified app-owned guidance"
+else
+  fail_test "stopped-state recovery launches after install and before verified app-owned guidance"
+fi
+
+# Retain the old direct component route only as compatibility recovery when the launcher tool itself
+# reports failure. Its exit status is not health: the same bounded HTTP polling still decides success.
+MOCK_LAUNCHER_START=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "direct component fallback remains available when the launcher command fails"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "launcher command failure invokes the direct component fallback"
 
 # A settling profile returns 503. The portable client retries it and then displays the final plan.
 MOCK_PLAN=transient run_provision "$MOCK_TARGET" --apk "$APK"
@@ -1406,7 +1432,7 @@ assert_contains 'Windows:.*Git Bash or WSL' "missing OpenSSL gives novice-friend
 assert_contains 'macOS:.*xcode-select' "missing OpenSSL gives novice-friendly macOS guidance"
 assert_contains 'Debian/Ubuntu:.*apt install openssl' "missing OpenSSL gives novice-friendly Linux guidance"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "missing OpenSSL stops before APK install"
-assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "missing OpenSSL stops before launch or grants"
+assert_not_contains '^adb .* shell (am start|monkey -p io\.github\.maxlyth\.hapaneld|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "missing OpenSSL stops before launch or grants"
 
 MOCK_RELEASE_PROOF_DOWNLOAD=checksum_fail \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
@@ -1453,14 +1479,14 @@ assert_failure "release APK with a foreign signer fails closed"
 assert_contains 'release APK signer mismatch' "foreign signer failure names the trust violation"
 assert_contains 'Nothing was installed, started, or privileged' "foreign signer failure states the safe outcome"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign signer is rejected before APK install"
-assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign signer is rejected before launch or grants"
+assert_not_contains '^adb .* shell (am start|monkey -p io\.github\.maxlyth\.hapaneld|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign signer is rejected before launch or grants"
 
 MOCK_RELEASE_PACKAGE=example.foreign \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_failure "release APK with a foreign package name fails closed"
 assert_contains 'release APK package mismatch' "foreign package failure names the trust violation"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "foreign package is rejected before APK install"
-assert_not_contains '^adb .* shell (am start|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign package is rejected before launch or grants"
+assert_not_contains '^adb .* shell (am start|monkey -p io\.github\.maxlyth\.hapaneld|settings put|appops set|pm grant)' "$MOCK_CALL_LOG" "foreign package is rejected before launch or grants"
 
 run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag '../../main' --no-tame
 assert_status 2 "invalid internal release tag is rejected as a usage error"
@@ -1589,7 +1615,7 @@ MOCK_SHIZUKU_START=fail run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no
 assert_failure "Shizuku service-start failure returns nonzero"
 assert_contains 'service did not start' "Shizuku start failure names the incomplete step"
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku start failure still installs the core agent"
-assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "Shizuku start failure still launches the core agent"
+assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "Shizuku start failure still launches the core agent"
 
 # A stuck device-side script must be terminated at a host deadline. It has the same recoverable
 # semantics as any other service-start failure: install and relaunch the core agent, then return
@@ -1600,7 +1626,7 @@ MOCK_SHIZUKU_START=hang MOCK_SHIZUKU_HANG_PID_FILE="$SHIZUKU_HANG_PID_FILE" \
 assert_failure "stuck Shizuku service start returns nonzero at its host deadline"
 assert_contains 'service start timed out after 1s' "Shizuku timeout reports the bounded failed step"
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku timeout still installs the core agent"
-assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "Shizuku timeout still launches the core agent"
+assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "Shizuku timeout still launches the core agent"
 if [ -s "$SHIZUKU_HANG_PID_FILE" ] && ! kill -0 "$(cat "$SHIZUKU_HANG_PID_FILE")" 2>/dev/null; then
   pass "Shizuku timeout leaves no service-start worker behind"
 else
@@ -1629,7 +1655,7 @@ else
   fail_test "portable fallback leaves no service-start worker or child behind"
 fi
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "portable fallback timeout still installs the core agent"
-assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "portable fallback timeout still launches the core agent"
+assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "portable fallback timeout still launches the core agent"
 
 # Re-running --shizuku against the trusted curated manager (or a trusted newer manager) must not try
 # to downgrade it. The manager stays locally approved; provisioning only restarts its service.
@@ -1666,6 +1692,9 @@ fi
 MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "launch timeout returns nonzero"
 assert_contains '(did not start|not answering|launch|health)' "launch timeout explains what failed"
+launcher_attempts="$(grep -Ec '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "$MOCK_CALL_LOG" || true)"
+if [ "$launcher_attempts" -eq 2 ]; then pass "launch timeout performs exactly one bounded retry"
+else fail_test "launch timeout performs exactly one bounded retry (expected 2 launches, got $launcher_attempts)"; fi
 unset MOCK_HEALTH
 
 # Some panels answer /health before the heavier diagnostics endpoint finishes root/capability probes.

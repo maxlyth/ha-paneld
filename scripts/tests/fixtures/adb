@@ -5,6 +5,13 @@ printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
 [ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
 
+mark_hapaneld_stopped() {
+  local apk_path="$1"
+  if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [[ "$apk_path" != */shizuku.apk ]]; then
+    : > "$STATE_DIR/package-stopped"
+  fi
+}
+
 emit_system_layout_probe() {
   if [ "${MOCK_SYSTEM_WRITABLE:-1}" = 1 ]; then
     printf 'SYSTEM_RW\n'
@@ -109,12 +116,15 @@ case "${1:-}" in
       exit 1
     elif [ "${MOCK_APK_INSTALL:-ok}" = grant_flag_unsupported ]; then
       cp "${!#}" "$STATE_DIR/installed-apk"
+      mark_hapaneld_stopped "${!#}"
       printf 'Success\n'
     elif [ "${MOCK_APK_INSTALL:-ok}" = ok ]; then
       cp "${!#}" "$STATE_DIR/installed-apk"
+      mark_hapaneld_stopped "${!#}"
       printf 'Success\n'
     elif [ "${MOCK_APK_INSTALL:-ok}" = ambiguous_commit ]; then
       cp "${!#}" "$STATE_DIR/installed-apk"
+      mark_hapaneld_stopped "${!#}"
       printf 'error: transport closed after install request\n' >&2
       exit 1
     else
@@ -128,6 +138,13 @@ case "${1:-}" in
     shift
     command_text="$*"
     case "$command_text" in
+      "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
+        [ "${MOCK_LAUNCHER_START:-ok}" = ok ] || exit 1
+        rm -f "$STATE_DIR/package-stopped"
+        ;;
+      "am start -n io.github.maxlyth.hapaneld/.MainActivity")
+        # A direct component start deliberately does not clear the modeled package stopped state.
+        ;;
       "dumpsys package moe.shizuku.privileged.api")
         if [ "${MOCK_SHIZUKU_INSPECT:-ok}" = block ]; then
           [ -z "${MOCK_SHIZUKU_INSPECT_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_INSPECT_PID_FILE"

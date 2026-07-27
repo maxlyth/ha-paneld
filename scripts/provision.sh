@@ -21,7 +21,7 @@
 #   scripts/provision.sh <panel-ip:5555> --verify        # check end-state only, make no changes
 #
 # IDEMPOTENCY (safe to re-run after a cancel/failure — re-running converges to the full state):
-#   - install -r / appops allow / pm grant / accessibility_enabled / am start  : no-ops on re-run
+#   - install -r / appops allow / pm grant / accessibility_enabled / app launch : no-ops on re-run
 #   - enabled_accessibility_services : appends our service only if absent (guarded)
 #   - POST /api/v1/config            : partial-merge — only sets the keys you pass
 # `set -e` aborts cleanly on any failure; the ERR trap tells you to re-run, and every run ends with a
@@ -3646,10 +3646,14 @@ fi
 # MUST launch after install: `adb install -r` leaves the app in Android's "stopped" state, which does
 # NOT auto-start — not even via START_STICKY — until something launches it (or the device reboots). A
 # fleet update that installs without this step leaves panels installed-but-dead (their entities go
-# `unavailable` in HA). launch_and_wait polls the panel's web server (host-side curl, so it works even
-# on panels that ship no `curl` themselves) and is retried once to cover a stopped-state / slow-boot race.
+# `unavailable` in HA). Android's normal LAUNCHER route is the reporter-proven stopped-state recovery
+# path on PX30/API 27; keep the direct activity start only for devices where monkey itself is missing
+# or fails. launch_and_wait polls the panel's web server (host-side curl, so it works even on panels
+# that ship no `curl` themselves) and is retried once to cover a stopped-state / slow-boot race.
 launch_and_wait() {
-  adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+  if ! adb -s "$TARGET" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; then
+    adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+  fi
   local attempt=0
   while [ "$attempt" -lt 15 ]; do
     attempt=$((attempt + 1))
