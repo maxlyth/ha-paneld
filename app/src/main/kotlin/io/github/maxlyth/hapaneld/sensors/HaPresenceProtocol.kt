@@ -133,9 +133,14 @@ internal object HaPresenceProtocol {
         val panelAreaId = panelArea.id
         val panelAreaName = panelArea.name
 
-        val deviceAreas = devices.associate { device ->
-            registryId(device, "id", "device_id") to device.optString("area_id").trim().lowercase(Locale.ROOT)
-        }
+        // Device registry rows outside the selected Area are not discovery authority. A stale or
+        // malformed unrelated row must therefore not take auto-sleep down for every panel in the HA
+        // installation. Referenced entities whose device cannot be projected remain supporting-only.
+        val deviceAreas = devices.mapNotNull { device ->
+            registryIdOrNull(device, "id", "device_id")?.let { id ->
+                id to device.optString("area_id").trim().lowercase(Locale.ROOT)
+            }
+        }.toMap()
         val currentStates = linkedMapOf<String, JSONObject>()
         require(states.length() <= MAX_STATE_ROWS) { "Home Assistant state list is too large" }
         for (index in 0 until states.length()) {
@@ -342,9 +347,12 @@ internal object HaPresenceProtocol {
         return (0 until source.length()).map { source.optJSONObject(it) ?: throw HaProtocolException("Home Assistant $name is invalid") }
     }
 
-    private fun registryId(row: JSONObject, vararg keys: String): String = keys.firstNotNullOfOrNull { key ->
+    private fun registryIdOrNull(row: JSONObject, vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
         row.optString(key).trim().lowercase(Locale.ROOT).takeIf(::validRegistryId)
-    } ?: throw HaProtocolException("Home Assistant registry row has no valid id")
+    }
+
+    private fun registryId(row: JSONObject, vararg keys: String): String =
+        registryIdOrNull(row, *keys) ?: throw HaProtocolException("Home Assistant registry row has no valid id")
 
     private fun hasIdentifier(device: JSONObject, domain: String, identifier: String): Boolean {
         val identifiers = device.optJSONArray("identifiers") ?: return false

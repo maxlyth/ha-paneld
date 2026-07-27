@@ -514,6 +514,45 @@ class HaPresenceSourceManagerTest {
         owner.close()
     }
 
+    @Test fun `registry projection failure retains the independently resolved Area`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { malformedEntityRegistry = true }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates,
+        )
+
+        manager.configure(request())
+        runCurrent()
+
+        val terminal = aggregates.last()
+        assertEquals(HaPresencePhase.DISCOVERY_FAILED, terminal.phase)
+        assertEquals("registry_projection", terminal.detail)
+        assertEquals("Room", terminal.areaName)
+        assertTrue(terminal.selectedEntityIds.isEmpty())
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `history transport failure retains the projected Area`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { historyTransportFailure = true }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates,
+        )
+
+        manager.configure(request())
+        runCurrent()
+
+        val terminal = aggregates.last()
+        assertEquals(HaPresencePhase.DISCOVERY_FAILED, terminal.phase)
+        assertEquals("history_transport", terminal.detail)
+        assertEquals("Room", terminal.areaName)
+        manager.close()
+        owner.close()
+    }
+
     @Test fun `history shape and volume failures remain distinct`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val discovery = FakePresenceTransport().apply { malformedHistory = true }
@@ -658,6 +697,8 @@ class HaPresenceSourceManagerTest {
         var registryAuthFailures = 0
         var includePanelActivity = false
         var includeSupportingActivity = false
+        var malformedEntityRegistry = false
+        var historyTransportFailure = false
         var malformedHistory = false
         var oversizedHistory = false
         val historyEntitySets = mutableListOf<Set<String>>()
@@ -693,7 +734,8 @@ class HaPresenceSourceManagerTest {
             return HaPresenceRegistrySnapshot(
                 JSONObject().put("result", devices),
                 JSONObject().put("result", JSONArray().put(JSONObject().put("area_id", areaId).put("name", areaName))),
-                JSONObject().put("result", JSONObject().put("entities", entities)),
+                if (malformedEntityRegistry) JSONObject().put("result", JSONObject())
+                else JSONObject().put("result", JSONObject().put("entities", entities)),
                 states,
             )
         }
@@ -724,6 +766,7 @@ class HaPresenceSourceManagerTest {
         ) = JSONArray().apply {
             historyEntitySets += entityIds.toSet()
             historyRequests += Triple(entityIds.toSet(), startEpochMs, endEpochMs)
+            if (historyTransportFailure) error("history unavailable")
             if (malformedHistory) {
                 put(JSONObject())
                 return@apply

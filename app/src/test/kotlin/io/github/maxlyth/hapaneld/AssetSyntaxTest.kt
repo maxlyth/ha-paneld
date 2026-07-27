@@ -80,7 +80,7 @@ class AssetSyntaxTest {
               throw new Error('unterminated '+name);
             }
             vm.runInThisContext([
-              'autoSleepAreaMatchesName','autoSleepAreaMatches','autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepHistoryTerminalMessage',
+              'autoSleepAreaMatchesName','autoSleepAreaMatches','autoSleepAreaTransitioning','autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepStatusRetryable','autoSleepHistoryTerminalMessage',
               'scheduleAutoSleepReadiness','loadAutoSleepHistory','invalidateAutoSleepHistory',
               'invalidateAutoSleepData','autoSleepDisplayedHours','loadAutoSleepData'
             ].map(take).join('\n'));
@@ -159,7 +159,21 @@ class AssetSyntaxTest {
               timers.splice(0);statuses=[{available:false,enabled:true,phase:'discovery_failed',reason:'discovery_failed',detail:'history_parse',source_count:0}];
               invalidateAutoSleepData();loadAutoSleepData();await flush();
               if(!autoSleepHistoryError.includes('activity timestamps')||autoSleepHistoryError.includes('connection')||timers.some(timer=>!timer.cancelled))process.exit(15);
-            })().catch(error=>{console.error(error);process.exit(16)});
+              // A known prerequisite Area plus a blank-Area terminal failure is not an Area transition.
+              timers.splice(0);autoSleepAssignedAreaName='Office';statuses=[{available:false,enabled:true,phase:'discovery_failed',reason:'discovery_failed',detail:'registry_projection',area_name:'',source_count:0}];
+              invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(!autoSleepHistoryError.includes('source discovery failed')||timers.some(timer=>!timer.cancelled))process.exit(16);
+              // A transport failure remains observable on the slow retry path and converges when live.
+              timers.splice(0);const beforeTransportRecovery=historyCalls;
+              statuses=[{available:false,enabled:true,phase:'discovery_failed',reason:'discovery_failed',detail:'registry_transport',area_name:'',source_count:0},{...live,area_name:'Office'}];
+              historyResults=[{available:true,area_name:'Office',segments:[{start_epoch_ms:1,end_epoch_ms:2,output:'hold_awake'}],source_lanes:[]}];invalidateAutoSleepData();loadAutoSleepData();await flush();
+              const transportTimer=timers.find(candidate=>!candidate.cancelled);
+              if(!transportTimer||transportTimer.ms!==5000||autoSleepHistoryError)process.exit(17);
+              transportTimer.cancelled=true;transportTimer.fn();await flush();await flush();
+              if(historyCalls!==beforeTransportRecovery+1)process.exit(18);
+              if(!autoSleepHistory)process.exit(19);
+              if(timers.some(timer=>!timer.cancelled))process.exit(20);
+            })().catch(error=>{console.error(error);process.exit(21)});
         """.trimIndent()
         val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
         assertEquals("Configure auto-sleep readiness lifecycle failed:\n$out", 0, code)

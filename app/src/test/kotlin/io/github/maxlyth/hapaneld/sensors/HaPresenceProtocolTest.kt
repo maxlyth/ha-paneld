@@ -121,6 +121,23 @@ class HaPresenceProtocolTest {
         assertEquals(HaPresenceValue.OFF, projection.candidates.single().value)
     }
 
+    @Test fun `malformed unrelated device rows do not abort Area projection`() {
+        val devices = response(JSONArray()
+            .put(device("panel-device", "kitchen", "ha-paneld-aid-abc"))
+            .put(JSONObject().put("area_id", "elsewhere"))
+            .put(JSONObject().put("id", "not.a.registry.id").put("area_id", "elsewhere"))
+            .put(device("motion-device", "kitchen", "motion-id")))
+        val areas = response(JSONArray().put(JSONObject().put("area_id", "kitchen").put("name", "Kitchen")))
+        val entities = JSONObject().put("result", JSONObject().put("entities", JSONArray()
+            .put(JSONObject().put("ei", "binary_sensor.kitchen_motion").put("di", "motion-device").put("pl", "mqtt"))))
+        val states = JSONArray().put(state("binary_sensor.kitchen_motion", "off", "motion"))
+
+        val projection = HaPresenceProtocol.projectArea(devices, areas, entities, states, "abc", "panel")
+
+        assertEquals(listOf("binary_sensor.kitchen_motion"), projection.candidates.map { it.entityId })
+        assertEquals(HaPresenceAuthority.ASSERT_PRESENCE, projection.candidates.single().authority)
+    }
+
     @Test fun `entity area override excludes a device inherited from panel area`() {
         val devices = response(JSONArray()
             .put(device("panel-device", "kitchen", "ha-paneld-aid-abc"))

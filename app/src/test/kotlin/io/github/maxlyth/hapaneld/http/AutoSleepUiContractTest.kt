@@ -78,6 +78,23 @@ class AutoSleepUiContractTest {
                 .all { "\"$it\"" in source } && "scheduleAutoSleepReadiness(" in source,
         )
         assertTrue(
+            "a blank-Area terminal failure must not be mistaken for an Area transition",
+            "function autoSleepAreaTransitioning(value)" in source &&
+                "return !!expected && !!actual && actual !== expected;" in source &&
+                "autoSleepAreaTransitioning(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus)" in statusLoad,
+        )
+        assertTrue(
+            "blank-Area transport failures must remain observable on the slow recovery path",
+            "function autoSleepStatusRetryable(status)" in source &&
+                listOf("registry_transport", "history_transport").all { "detail === \"$it\"" in source } &&
+                "scheduleAutoSleepReadiness(retryAfterFailure);" in statusLoad,
+        )
+        assertTrue(
+            "background readiness must retain a settled summary instead of changing card height",
+            "autoSleepLoading && !autoSleepStatus ? \"Loading…\" : autoSleepSummaryText()" in source &&
+                "if (summary.textContent !== next)" in source,
+        )
+        assertTrue(
             "temporary source and transport races must recover automatically",
             listOf("runtime_unavailable", "sources_changed", "history_transport", "history_unavailable")
                 .all { "\"$it\"" in source } && "retryAutomatically" in source,

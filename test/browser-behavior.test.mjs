@@ -1044,6 +1044,162 @@ browserTest('Auto-sleep requires an assigned Area before OFF can be switched ON'
   assert.ok(prerequisiteCalls >= 2);
 });
 
+browserTest('Auto-sleep blank-Area discovery failure is terminal without cold-chart reflow', async (t) => {
+  let statusCalls = 0;
+  let historyCalls = 0;
+  const terminal = {
+    enabled: true, available: false, phase: 'discovery_failed', reason: 'discovery_failed',
+    detail: 'registry_projection', area_name: '', source_count: 0, discovered_source_count: 0,
+  };
+  const schema = [
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+    { key: 'friendly_name', label: 'Panel name', group: 'System', type: 'STRING', available: true },
+  ];
+  const harness = await startHarness(async (path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { auto_sleep: 'true', friendly_name: 'Panel' }, ha_expose: {}, ha_auth: { configured: true },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/home-dashboards') return json({ items: [], default: {} });
+    if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
+    if (path === '/api/v1/auto-sleep') {
+      statusCalls++;
+      // If a faulty readiness loop starts, retain its Loading state long enough for a frame sample.
+      if (statusCalls > 2) await new Promise((resolve) => setTimeout(resolve, 300));
+      return json(terminal);
+    }
+    if (path === '/api/v1/auto-sleep/history') { historyCalls++; return json({ available: false, detail: 'runtime_unavailable' }); }
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 800 } });
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Office', { exact: true }).waitFor();
+  await page.getByText('Auto-sleep source discovery failed. Check the Home Assistant connection.').waitFor();
+  assert.equal(statusCalls, 2);
+
+  const panel = await page.locator('#auto-sleep-status').elementHandle();
+  const chart = await page.locator('#auto-sleep-chart').elementHandle();
+  const content = await page.locator('.auto-sleep-chart-content').elementHandle();
+  const snapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
+  await page.evaluate(() => {
+    window.__autoSleepColdSamples = [];
+    window.__autoSleepSummaryMutations = 0;
+    new MutationObserver(() => { window.__autoSleepSummaryMutations++; })
+      .observe(document.querySelector('#auto-sleep-summary'), { childList: true, characterData: true, subtree: true });
+    function sample() {
+      const activity = document.querySelector('#auto-sleep-status').getBoundingClientRect();
+      const chartBox = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+      const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+      window.__autoSleepColdSamples.push({ panelHeight: activity.height, chartHeight: chartBox.height, systemY: system.y });
+      window.__autoSleepColdFrame = requestAnimationFrame(sample);
+    }
+    window.__autoSleepColdFrame = requestAnimationFrame(sample);
+  });
+  await page.waitForTimeout(1_600);
+  const observed = await page.evaluate(() => {
+    cancelAnimationFrame(window.__autoSleepColdFrame);
+    const ranges = {};
+    for (const key of ['panelHeight', 'chartHeight', 'systemY']) {
+      const values = window.__autoSleepColdSamples.map((sample) => sample[key]);
+      ranges[key] = Math.max(...values) - Math.min(...values);
+    }
+    return { ranges, summaryMutations: window.__autoSleepSummaryMutations };
+  });
+
+  assert.equal(statusCalls, 2);
+  assert.equal(historyCalls, 0);
+  assert.equal(observed.summaryMutations, 0);
+  assert.ok(Object.values(observed.ranges).every((range) => range <= 0.5), JSON.stringify(observed.ranges));
+  assert.equal(await panel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
+  assert.equal(await chart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
+  assert.equal(await content.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
+  assert.equal(await snapshot.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-snapshot')), true);
+  assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), false);
+  assert.equal(await page.locator('.auto-sleep-empty').textContent(), 'No replay data');
+});
+
+browserTest('Auto-sleep blank-Area transport failure recovers without retry reflow', async (t) => {
+  let statusCalls = 0;
+  let historyCalls = 0;
+  const recoveredStatus = deferred();
+  const transportFailure = {
+    enabled: true, available: false, phase: 'discovery_failed', reason: 'discovery_failed',
+    detail: 'registry_transport', area_name: '', source_count: 0, discovered_source_count: 0,
+  };
+  const schema = [
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+    { key: 'friendly_name', label: 'Panel name', group: 'System', type: 'STRING', available: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { auto_sleep: 'true', friendly_name: 'Panel' }, ha_expose: {}, ha_auth: { configured: true },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/home-dashboards') return json({ items: [], default: {} });
+    if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
+    if (path === '/api/v1/auto-sleep') {
+      statusCalls++;
+      return statusCalls <= 2 ? json(transportFailure) : recoveredStatus.promise;
+    }
+    if (path === '/api/v1/auto-sleep/history') { historyCalls++; return json(autoSleepHistory({ hours: 24 })); }
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 800 } });
+  page.setDefaultTimeout(7_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Office', { exact: true }).waitFor();
+  for (let attempt = 0; attempt < 40 && statusCalls < 2; attempt++) await page.waitForTimeout(25);
+  assert.equal(statusCalls, 2);
+  const settledSummary = await page.locator('#auto-sleep-summary').textContent();
+
+  await page.evaluate(() => {
+    window.__autoSleepTransportSamples = [];
+    window.__autoSleepTransportSummaryMutations = 0;
+    new MutationObserver(() => { window.__autoSleepTransportSummaryMutations++; })
+      .observe(document.querySelector('#auto-sleep-summary'), { childList: true, characterData: true, subtree: true });
+    function sample() {
+      const activity = document.querySelector('#auto-sleep-status').getBoundingClientRect();
+      const chartBox = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+      const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+      window.__autoSleepTransportSamples.push({ panelHeight: activity.height, chartHeight: chartBox.height, systemY: system.y });
+      window.__autoSleepTransportFrame = requestAnimationFrame(sample);
+    }
+    window.__autoSleepTransportFrame = requestAnimationFrame(sample);
+  });
+  for (let attempt = 0; attempt < 120 && statusCalls < 3; attempt++) await page.waitForTimeout(50);
+  assert.equal(statusCalls, 3);
+  const observed = await page.evaluate(() => {
+    cancelAnimationFrame(window.__autoSleepTransportFrame);
+    const ranges = {};
+    for (const key of ['panelHeight', 'chartHeight', 'systemY']) {
+      const values = window.__autoSleepTransportSamples.map((sample) => sample[key]);
+      ranges[key] = Math.max(...values) - Math.min(...values);
+    }
+    return { ranges, summaryMutations: window.__autoSleepTransportSummaryMutations };
+  });
+  assert.equal(await page.locator('#auto-sleep-summary').textContent(), settledSummary);
+  assert.equal(observed.summaryMutations, 0);
+  assert.ok(Object.values(observed.ranges).every((range) => range <= 0.5), JSON.stringify(observed.ranges));
+  assert.equal(historyCalls, 0);
+
+  recoveredStatus.resolve(json({
+    enabled: true, available: true, phase: 'live', reason: 'clear', area_name: 'Office', source_count: 1,
+  }));
+  await page.locator('.auto-sleep-lane.source').waitFor();
+  assert.equal(statusCalls, 3);
+  assert.equal(historyCalls, 1);
+  assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), false);
+});
+
 browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snapshot atomically', async (t) => {
   const sourcePost = deferred();
   const refreshedHistory = deferred();

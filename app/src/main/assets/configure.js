@@ -1384,8 +1384,11 @@
   function updateAutoSleepSummary() {
     var summary = document.getElementById("auto-sleep-summary");
     if (!summary) return;
-    if (autoSleepLoading) { summary.textContent = "Loading…"; return; }
-    summary.textContent = autoSleepSummaryText();
+    // A readiness refresh must not replace a settled, wrapping summary with a much shorter loading
+    // label. Apart from being less informative, that changes the card height on narrow panels. The
+    // loading copy is useful only before the first status response exists.
+    var next = autoSleepLoading && !autoSleepStatus ? "Loading…" : autoSleepSummaryText();
+    if (summary.textContent !== next) summary.textContent = next;
   }
 
   function autoSleepHistoryMessage() {
@@ -1407,6 +1410,15 @@
     return autoSleepAreaMatchesName(value, expected);
   }
 
+  function autoSleepAreaTransitioning(value) {
+    var expected = String(autoSleepAssignedAreaName || "").trim();
+    var actual = value && (value.area_name != null ? value.area_name : value.areaName);
+    actual = String(actual || "").trim();
+    // A differently named Area is a stale-but-valid result while HA registry discovery catches up.
+    // A blank Area is also how terminal failures are reported, so it must not imply endless retry.
+    return !!expected && !!actual && actual !== expected;
+  }
+
   function autoSleepHistoryReady(status) {
     var phase = String(status && status.phase || "").toLowerCase();
     var count = status && (status.source_count != null ? status.source_count : status.sourceCount);
@@ -1418,6 +1430,12 @@
   function autoSleepHistoryPreparing(status) {
     var phase = String(status && status.phase || "").toLowerCase();
     return ["authenticating", "discovering", "learning", "connecting", "synchronizing", "reconnecting"].indexOf(phase) >= 0;
+  }
+
+  function autoSleepStatusRetryable(status) {
+    var reason = String(status && status.reason || "").toLowerCase();
+    var detail = String(status && status.detail || "").toLowerCase();
+    return reason === "request_failed" || detail === "registry_transport" || detail === "history_transport";
   }
 
   function autoSleepHistoryTerminalMessage(status) {
@@ -1767,13 +1785,14 @@
         autoSleepHistoryWaitingMessage = "";
         autoSleepHistoryError = "";
         loadAutoSleepHistory();
-      } else if (!autoSleepAreaMatches(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) || String(autoSleepStatus && autoSleepStatus.reason) === "request_failed") {
+      } else if (autoSleepAreaTransitioning(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) || autoSleepStatusRetryable(autoSleepStatus)) {
+        var retryAfterFailure = autoSleepStatusRetryable(autoSleepStatus);
         autoSleepHistoryWaiting = true;
-        autoSleepHistoryWaitingMessage = !autoSleepAreaMatches(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) ?
+        autoSleepHistoryWaitingMessage = autoSleepAreaTransitioning(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) ?
           "Preparing activity history…" : "Waiting for auto-sleep status…";
         autoSleepHistoryError = "";
         updateAutoSleepHistory();
-        scheduleAutoSleepReadiness(String(autoSleepStatus && autoSleepStatus.reason) === "request_failed");
+        scheduleAutoSleepReadiness(retryAfterFailure);
       } else {
         autoSleepHistoryWaiting = false;
         autoSleepHistoryWaitingMessage = "";

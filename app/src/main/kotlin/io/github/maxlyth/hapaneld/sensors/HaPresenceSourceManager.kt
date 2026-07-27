@@ -227,6 +227,7 @@ internal class HaPresenceSourceManager(
     private class DiscoveryFailure(
         val code: String,
         cause: Throwable,
+        val areaName: String = "",
     ) : Exception(code, cause)
 
     constructor(
@@ -485,11 +486,13 @@ internal class HaPresenceSourceManager(
         } catch (error: Exception) {
             retireLastResolution(run, requested)
             reconcileStreamSources()
-            val code = (error as? DiscoveryFailure)?.code ?: "discovery_failed"
-            Log.w(TAG, "presence discovery failed code=$code type=${error.javaClass.simpleName}")
+            val failure = error as? DiscoveryFailure
+            val code = failure?.code ?: "discovery_failed"
+            val causeType = failure?.cause?.javaClass?.simpleName ?: error.javaClass.simpleName
+            Log.w(TAG, "presence discovery failed code=$code cause=$causeType")
             val phase = if (code == "no_area") HaPresencePhase.NO_AREA
                 else HaPresencePhase.DISCOVERY_FAILED
-            publish(run, HaPresenceAggregate(phase, code))
+            publish(run, HaPresenceAggregate(phase, code, areaName = failure?.areaName.orEmpty()))
         }
     }
 
@@ -509,6 +512,18 @@ internal class HaPresenceSourceManager(
             if (error is HaAuthenticationException) throw error
             throw DiscoveryFailure("registry_transport", error)
         }
+        // Preserve the independently resolvable panel Area in a projection failure. This keeps the
+        // status coherent with the prerequisite endpoint and lets clients distinguish a terminal
+        // failure from a stale result for a previously selected Area.
+        val projectedAreaName = runCatching {
+            HaPresenceProtocol.projectPanelArea(
+                snapshot.devices,
+                snapshot.areas,
+                requested.androidId,
+                requested.panelId,
+                requested.preferredAreaName,
+            ).name
+        }.getOrDefault("")
         val area = try {
             HaPresenceProtocol.projectArea(
                 snapshot.devices,
@@ -525,7 +540,7 @@ internal class HaPresenceSourceManager(
             val code = if (error.message?.contains("no Area", ignoreCase = true) == true) {
                 "no_area"
             } else "registry_projection"
-            throw DiscoveryFailure(code, error)
+            throw DiscoveryFailure(code, error, projectedAreaName)
         }
         val assertingCandidates = area.candidates.filter {
             it.authority == HaPresenceAuthority.ASSERT_PRESENCE
@@ -548,9 +563,9 @@ internal class HaPresenceSourceManager(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: DiscoveryFailure) {
-            throw error
+            throw DiscoveryFailure(error.code, error.cause ?: error, area.panelAreaName)
         } catch (error: Exception) {
-            throw DiscoveryFailure(historyFailureCode(error), error)
+            throw DiscoveryFailure(historyFailureCode(error), error, area.panelAreaName)
         }
         val candidates = assertingCandidates.map { candidate ->
             candidate.copy(evidence = HaPresenceProtocol.evidence(transitions[candidate.entityId].orEmpty()))
