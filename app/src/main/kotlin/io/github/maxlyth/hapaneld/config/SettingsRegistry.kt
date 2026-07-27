@@ -469,8 +469,8 @@ object SettingsRegistry {
             options = LogShipEndpoint.PROTOCOLS,
             aliases = LogShipEndpoint.ALIASES,
             scope = Scope.DEVICE,
-            help = "UDP is what a stock syslog collector listens for on port 514. Pick syslog-tcp only " +
-                "if your collector is explicitly configured for TCP.",
+            help = "TCP is the default because it reports a sink that is refusing or unreachable; UDP " +
+                "cannot, so a wrong setting there fails silently. Port 514 serves both.",
         ),
 
         // ---- Sensors -----------------------------------------------------------------------------

@@ -23,8 +23,17 @@ object LogShipEndpoint {
     /** NDJSON batches POSTed to `http://host:port/`. */
     const val HTTP = "http"
 
-    /** UDP, because the port default is 514 and that is a UDP port on every stock collector. */
-    const val DEFAULT_PROTOCOL = SYSLOG_UDP
+    /**
+     * TCP, chosen for the failure mode rather than the happy path.
+     *
+     * UDP/514 is what a stock collector listens on, which argues for defaulting to it — but the two
+     * wrong-default outcomes are not symmetric. Defaulting to TCP against a UDP-only collector is
+     * refused loudly and the user switches; defaulting to UDP against a TCP-only collector succeeds
+     * locally and every record vanishes, with nothing to notice. TCP also carries whole lines, while
+     * UDP truncates each datagram at [LogShipper.UDP_DATAGRAM_MAX_BYTES], and both parse identically
+     * at the collector. So the default is the transport that tells you when it is wrong.
+     */
+    const val DEFAULT_PROTOCOL = SYSLOG_TCP
 
     val PROTOCOLS = listOf(SYSLOG_UDP, SYSLOG_TCP, HTTP)
 

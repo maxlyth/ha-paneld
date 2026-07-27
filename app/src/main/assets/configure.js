@@ -2200,6 +2200,35 @@
           ]),
           el("div", { class: "fctl" }, [sinkBtn, sinkStatus]),
         ]));
+
+        // Live state, not just the saved setting. Without this, a sink that is refusing or
+        // unreachable looks exactly like one that is working — which is precisely the confusion a
+        // first-time tester hits, and they conclude the feature is broken rather than misconfigured.
+        var liveState = el("span", { class: "muted", text: "…" });
+        card.appendChild(el("div", { class: "frow" }, [
+          el("div", { class: "flabel" }, [
+            el("span", { text: "Current state" }),
+            el("small", { text: "What the panel is doing right now." }),
+          ]),
+          el("div", { class: "fctl" }, [liveState]),
+        ]));
+        (function pollLogShipStatus() {
+          if (!liveState.isConnected) return;   // card was re-rendered; this poller is stale
+          fetch("/api/v1/logship/status", { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (st) {
+              if (!liveState.isConnected) return;
+              liveState.textContent = !st.enabled ? "Off."
+                : !st.configured ? "Enabled, but no sink host is set."
+                : (st.text || "starting…");
+              setTimeout(pollLogShipStatus, 5000);
+            })
+            .catch(function () {
+              if (!liveState.isConnected) return;
+              liveState.textContent = "State unavailable.";
+              setTimeout(pollLogShipStatus, 15000);
+            });
+        })();
       }
       if (!card.parentNode) root.appendChild(card);
       if (retainedAutoSleepPanel && card.contains(retainedAutoSleepPanel)) {

@@ -175,7 +175,7 @@ while [ "${1:-}" ]; do
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
-    --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog-udp (default) | syslog-tcp | http
+    --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog-tcp (default) | syslog-udp | http
     --log-off) LOG_ENABLE=false; shift ;;     # disable log shipping
     --ha-url) HA_URL="$2"; shift 2 ;;         # Home Assistant URL for the built-in WebView renderer
     --ha-token) HA_TOKEN="$2"; HA_TOKEN_SOURCE_COUNT=$((HA_TOKEN_SOURCE_COUNT + 1)); shift 2 ;;     # compatibility: visible in the invoking process argv

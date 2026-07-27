@@ -1628,8 +1628,8 @@ class Config private constructor(
     val logShipHost: String get() = stringPref("log_ship_host")
     val logShipPort: Int get() = intPref("log_ship_port")
     /**
-     * Transport: "syslog-udp" (RFC5426, the default and what a stock collector listens for on 514),
-     * "syslog-tcp" (RFC5424 over a stream) or "http" (NDJSON POST). Normalized on read so a value
+     * Transport: "syslog-tcp" (RFC5424 over a stream, the default because it reports its own failures),
+     * "syslog-udp" (RFC5426, what a stock collector listens for on 514) or "http" (NDJSON POST). Normalized on read so a value
      * stored by an older build — where "syslog" meant TCP — resolves to one of the canonical three.
      */
     val logShipProtocol: String get() = LogShipEndpoint.protocol(stringPref("log_ship_protocol"))

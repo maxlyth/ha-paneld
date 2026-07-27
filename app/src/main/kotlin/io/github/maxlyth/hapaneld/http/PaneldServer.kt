@@ -1442,6 +1442,19 @@ class PaneldServer internal constructor(
                             ContentType.Application.Json,
                         )
                     }
+                    get("/logship/status") {
+                        // Passive read of what the shipper is actually doing, for the Configure card.
+                        // Distinct from probe-log-sink, which transmits: this one only reports, so it
+                        // is safe to poll while a page is open.
+                        val facts = snapStaleOk().facts
+                        val text = facts["Log shipping"].orEmpty()
+                        call.respondText(
+                            "{\"enabled\":${config.logShipEnabled}," +
+                                "\"configured\":${config.logShipActive}," +
+                                "\"text\":${jsonStr(text)}}",
+                            ContentType.Application.Json,
+                        )
+                    }
                     get("/config/probe-broker") {
                         // Pre-flight from the PANEL's network vantage — the only one that matters — so
                         // the wizard can name an unresolvable host or closed port in ~2s instead of
@@ -4066,9 +4079,23 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         keys.mapNotNull { key ->
             // A deliberately overridden area must say so wherever the value is shown — at rest it is
             // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
-            val formatter: ((String) -> String)? =
+            // "Ship logs: true" is worthless when the sink is refusing — enabled-and-failing looked
+            // exactly like enabled-and-working, so a basic misconfiguration was invisible on every
+            // surface. The status string was already being computed into the facts map and then
+            // discarded here; show it instead of the bare flag.
+            val areaFormatter: ((String) -> String)? =
                 if (key == "ha_area" && config.haAreaUserOverride) { raw -> "$raw (local override)" } else null
-            settingRowHtml(key, s.live, caps, hints, formatter)
+            val shipFormatter: ((String) -> String)? =
+                if (key == "log_ship_enabled") { raw ->
+                    if (SettingValue.parseBool(raw) == true) {
+                        s.facts["Log shipping"]?.takeIf { it.isNotBlank() } ?: raw
+                    } else {
+                        raw
+                    }
+                } else {
+                    null
+                }
+            settingRowHtml(key, s.live, caps, hints, areaFormatter ?: shipFormatter)
         }
     }.joinToString("\n")
 

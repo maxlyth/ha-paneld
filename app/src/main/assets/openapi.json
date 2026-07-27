@@ -251,7 +251,7 @@
           "update_channel": { "type": "string", "enum": ["stable", "prerelease"] },
           "tame_vendor_packages": { "type": "string", "description": "space-separated package blocklist" },
           "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
-          "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog-udp", "syslog-tcp", "http"], "description": "The retired value \"syslog\" is still accepted and means syslog-tcp" }
+          "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog-tcp", "syslog-udp", "http"], "description": "Defaults to syslog-tcp; the retired value \"syslog\" is still accepted and also means syslog-tcp" }
         } } } } },
         "responses": { "200": { "description": "No-op or all changed settings saved and applied; JSON clients receive applied/pending/rejected outcome lists and HTML form clients receive the equivalent result page" }, "202": { "description": "Changed settings are durably saved but named hardware application remains pending with bounded automatic retry, or Hardened-mode approval-required before mutation: safety-reducing keep_awake/prevent_idle_dim changes require POWER_CONFIGURATION approval; approve the request on the panel and retry the identical request from the same peer. Relaxed-mode and loopback requests do not require this approval.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object", "required": ["ok", "status", "pending", "message"] }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active, renderer sign-in/Home Assistant source state conflicts, a concurrent config change invalidated the checked request baseline, or remote Hardened power-safety reductions were combined with another privileged policy change that must be saved separately" }, "500": { "description": "Structured saved-partial outcome (JSON or equivalent HTML result page) naming changes that committed and effects that could not be durably admitted" } }
       }
@@ -303,6 +303,10 @@
     "/api/v1/config/probe-broker": {
       "get": { "summary": "Pre-flight a broker URL from the panel's network: DNS resolve + bounded TCP connect", "tags": ["config"],
         "responses": { "200": { "description": "{ok, host, port, resolved?, error?: invalid-url|unresolvable|unreachable}. Read-only; advisory — the wizard offers save-anyway on failure" } } }
+    },
+    "/api/v1/logship/status": {
+      "get": { "summary": "Live log-shipping state for the Configure card: transport, connection state, sent/dropped counts and the last failure reason", "tags": ["status"],
+        "responses": { "200": { "description": "{enabled, configured, text}. Passive — unlike probe-log-sink it transmits nothing, so it is safe to poll while a page is open" } } }
     },
     "/api/v1/config/probe-log-sink": {
       "post": { "summary": "Pre-flight the log sink from the panel's network: DNS resolve, then transmit exactly one marked record in the selected transport's real wire format", "tags": ["config"],

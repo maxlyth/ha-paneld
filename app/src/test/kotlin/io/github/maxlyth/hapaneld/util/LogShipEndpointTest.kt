@@ -8,7 +8,7 @@ import org.junit.Test
 
 class LogShipEndpointTest {
 
-    private fun resolve(host: String, port: Int = 514, protocol: String = SYSLOG_UDP) =
+    private fun resolve(host: String, port: Int = 514, protocol: String = SYSLOG_TCP) =
         LogShipEndpoint.resolve(host, port, protocol)
 
     // ---- protocol normalization -------------------------------------------------------------------
@@ -28,12 +28,13 @@ class LogShipEndpointTest {
         assertEquals(HTTP, LogShipEndpoint.protocol("http"))
     }
 
-    @Test fun blankAndUnknownProtocolsTakeTheUdpDefault() {
-        // 514 is the port default and it is a UDP port on every stock collector.
-        assertEquals(SYSLOG_UDP, LogShipEndpoint.protocol(""))
-        assertEquals(SYSLOG_UDP, LogShipEndpoint.protocol("   "))
-        assertEquals(SYSLOG_UDP, LogShipEndpoint.protocol("carrier-pigeon"))
-        assertEquals(SYSLOG_UDP, LogShipEndpoint.DEFAULT_PROTOCOL)
+    @Test fun blankAndUnknownProtocolsTakeTheTcpDefault() {
+        // TCP is the default because its failures are visible: refused against a UDP-only collector
+        // is recoverable, whereas UDP against a TCP-only collector vanishes with nothing to notice.
+        assertEquals(SYSLOG_TCP, LogShipEndpoint.protocol(""))
+        assertEquals(SYSLOG_TCP, LogShipEndpoint.protocol("   "))
+        assertEquals(SYSLOG_TCP, LogShipEndpoint.protocol("carrier-pigeon"))
+        assertEquals(SYSLOG_TCP, LogShipEndpoint.DEFAULT_PROTOCOL)
     }
 
     @Test fun schemeWordIsShortenedForDisplay() {
@@ -46,7 +47,7 @@ class LogShipEndpointTest {
 
     @Test fun aPlainHostKeepsTheStoredPortAndProtocol() {
         assertEquals(
-            LogShipEndpoint.Endpoint("collector.lan", 514, SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("collector.lan", 514, SYSLOG_TCP),
             resolve("collector.lan"),
         )
     }
@@ -81,7 +82,7 @@ class LogShipEndpointTest {
 
     @Test fun aTrailingPortOverridesTheStoredPort() {
         assertEquals(
-            LogShipEndpoint.Endpoint("collector.lan", 1514, SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("collector.lan", 1514, SYSLOG_TCP),
             resolve("collector.lan:1514"),
         )
         assertEquals(
@@ -91,8 +92,8 @@ class LogShipEndpointTest {
     }
 
     @Test fun ipv6LiteralsKeepTheirColonsAndLoseTheirBrackets() {
-        assertEquals(LogShipEndpoint.Endpoint("::1", 514, SYSLOG_UDP), resolve("[::1]"))
-        assertEquals(LogShipEndpoint.Endpoint("::1", 1514, SYSLOG_UDP), resolve("[::1]:1514"))
+        assertEquals(LogShipEndpoint.Endpoint("::1", 514, SYSLOG_TCP), resolve("[::1]"))
+        assertEquals(LogShipEndpoint.Endpoint("::1", 1514, SYSLOG_TCP), resolve("[::1]:1514"))
         assertEquals(
             LogShipEndpoint.Endpoint("fd31::118:1", 514, SYSLOG_UDP),
             resolve("udp://[fd31::118:1]"),
@@ -120,9 +121,9 @@ class LogShipEndpointTest {
     }
 
     @Test fun ipv4LiteralsAreUntouched() {
-        assertEquals(LogShipEndpoint.Endpoint("172.31.0.118", 514, SYSLOG_UDP), resolve("172.31.0.118"))
+        assertEquals(LogShipEndpoint.Endpoint("172.31.0.118", 514, SYSLOG_TCP), resolve("172.31.0.118"))
         assertEquals(
-            LogShipEndpoint.Endpoint("172.31.0.118", 1514, SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("172.31.0.118", 1514, SYSLOG_TCP),
             resolve("172.31.0.118:1514"),
         )
     }
@@ -132,7 +133,7 @@ class LogShipEndpointTest {
     }
 
     @Test fun aBlankHostStaysBlankSoShippingRemainsInert() {
-        assertEquals(LogShipEndpoint.Endpoint("", 514, SYSLOG_UDP), resolve(""))
+        assertEquals(LogShipEndpoint.Endpoint("", 514, SYSLOG_TCP), resolve(""))
         assertEquals(LogShipEndpoint.Endpoint("", 514, SYSLOG_TCP), resolve("   ", protocol = "syslog"))
         assertEquals(LogShipEndpoint.Endpoint("", 514, SYSLOG_UDP), resolve("udp://"))
     }
@@ -142,7 +143,7 @@ class LogShipEndpointTest {
         // by a transport that only ever posts to "/". Both are kept verbatim so the failure names
         // exactly what was typed instead of a silently rewritten guess.
         assertEquals(
-            LogShipEndpoint.Endpoint("log_collector", 514, SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("log_collector", 514, SYSLOG_TCP),
             resolve("log_collector"),
         )
         assertEquals(
@@ -153,7 +154,7 @@ class LogShipEndpointTest {
 
     @Test fun anOutOfRangePortFallsBackToTheStoredPort() {
         assertEquals(
-            LogShipEndpoint.Endpoint("collector.lan", 514, SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("collector.lan", 514, SYSLOG_TCP),
             resolve("collector.lan:70000"),
         )
     }
