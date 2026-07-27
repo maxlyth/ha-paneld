@@ -154,4 +154,61 @@ class ProximitySourcePolicyTest {
         assertFalse(continuous)
         assertTrue(proximityReportingSparse(false, classified, continuous))
     }
+
+    @Test fun empiricallyContinuousHalDoesNotKeepUsingOnChangeLivenessProbes() {
+        assertFalse(
+            proximityNeedsHalLivenessProbe(
+                proximityGpio = null,
+                onChangeHalLiveness = true,
+                cadenceClassified = true,
+                continuousCadenceConfirmed = true,
+            ),
+        )
+    }
+
+    @Test fun staleDenseHalReentersImmediateLivenessRecovery() {
+        val recovery = proximityCadenceAfterStale()
+
+        assertTrue(recovery.cadenceClassified)
+        assertFalse(recovery.continuousCadenceConfirmed)
+        assertEquals(0, recovery.sampleCount)
+        assertTrue(
+            proximityNeedsHalLivenessProbe(
+                proximityGpio = null,
+                onChangeHalLiveness = true,
+                cadenceClassified = recovery.cadenceClassified,
+                continuousCadenceConfirmed = recovery.continuousCadenceConfirmed,
+            ),
+        )
+    }
+
+    @Test fun quietHalStillUsesLivenessProbes() {
+        assertTrue(
+            proximityNeedsHalLivenessProbe(
+                proximityGpio = null,
+                onChangeHalLiveness = true,
+                cadenceClassified = false,
+                continuousCadenceConfirmed = false,
+            ),
+        )
+        assertTrue(
+            proximityNeedsHalLivenessProbe(
+                proximityGpio = null,
+                onChangeHalLiveness = false,
+                cadenceClassified = true,
+                continuousCadenceConfirmed = false,
+            ),
+        )
+    }
+
+    @Test fun gpioSourceNeverUsesHalLivenessProbes() {
+        assertFalse(
+            proximityNeedsHalLivenessProbe(
+                proximityGpio = 17,
+                onChangeHalLiveness = true,
+                cadenceClassified = true,
+                continuousCadenceConfirmed = false,
+            ),
+        )
+    }
 }

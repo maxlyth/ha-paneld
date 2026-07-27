@@ -46,6 +46,44 @@ internal fun proximityReportingSparse(
  * sustained cadence that can exceed the fleet's one-report-per-second numeric budget. */
 internal fun proximityCadenceWindowIsContinuous(sampleCount: Int): Boolean = sampleCount >= 4
 
+internal data class ProximityCadenceRecovery(
+    val cadenceClassified: Boolean,
+    val continuousCadenceConfirmed: Boolean,
+    val sampleCount: Int,
+)
+
+/** A stale dense stream must leave the healthy cadence state before HAL re-registration can run. */
+internal fun proximityCadenceAfterStale(): ProximityCadenceRecovery = ProximityCadenceRecovery(
+    cadenceClassified = true,
+    continuousCadenceConfirmed = false,
+    sampleCount = 0,
+)
+
+internal fun proximityNeedsHalLivenessProbe(
+    proximityGpio: Int?,
+    onChangeHalLiveness: Boolean,
+    cadenceClassified: Boolean,
+    continuousCadenceConfirmed: Boolean,
+): Boolean = proximityGpio == null && !continuousCadenceConfirmed &&
+    (onChangeHalLiveness || cadenceClassified)
+
+internal enum class EnvironmentalSensorUse {
+    ABSENT,
+    PUBLISH,
+    ACTIVATE_ONLY,
+}
+
+/** TPA10 room climate is published from the CHT8305 helper, but its vendor kernel driver only
+ * refreshes the helper-facing input axes while Android has registered the corresponding sensors. */
+internal fun environmentalSensorUse(
+    hasCht8305: Boolean,
+    sensorPresent: Boolean,
+): EnvironmentalSensorUse = when {
+    !sensorPresent -> EnvironmentalSensorUse.ABSENT
+    hasCht8305 -> EnvironmentalSensorUse.ACTIVATE_ONLY
+    else -> EnvironmentalSensorUse.PUBLISH
+}
+
 /**
  * Reports standard Android environmental sensors and feeds every proximity source through one
  * hardware-neutral learner. Device-native proximity values never become HA state: HA sees only a
@@ -61,8 +99,10 @@ class SensorReporter(
     private val lightSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
     private val proximitySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)
     private val hasCht8305: Boolean = profile.hasCht8305
-    private val tempSensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
-    private val humiditySensor: Sensor? = if (hasCht8305) null else sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
+    private val tempSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_AMBIENT_TEMPERATURE)
+    private val humiditySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_RELATIVE_HUMIDITY)
+    private val tempUse = environmentalSensorUse(hasCht8305, tempSensor != null)
+    private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
     private val proximityGpio: Int? = profile.proximityGpio
     private val proximityPolicy = proximitySourcePolicy(
         proximityGpio,
@@ -102,6 +142,7 @@ class SensorReporter(
         continuousCadenceConfirmed = proximityCadenceWindowIsContinuous(proximitySampleCount)
         proximitySampleCount = 0
         if (continuousCadenceConfirmed) {
+            cancelOnChangeProbe()
             scheduleStaleCheck(PROXIMITY_STALE_MS + 1L)
         } else {
             scheduleOnChangeProbe(ON_CHANGE_PROBE_INTERVAL_MS)
@@ -125,6 +166,13 @@ class SensorReporter(
             return@Runnable
         }
         proximityRuntime?.tick(now, sparseReporting = reportingSparse())?.let { deliverProximity(it, run) }
+        val recovery = proximityCadenceAfterStale()
+        cadenceClassified = recovery.cadenceClassified
+        continuousCadenceConfirmed = recovery.continuousCadenceConfirmed
+        proximitySampleCount = recovery.sampleCount
+        // Healthy dense delivery is watched without perturbing the HAL. A real stall is different:
+        // re-register immediately, then make the resumed callbacks prove their cadence again.
+        scheduleOnChangeProbe(1L)
     }
 
     private val onChangeProbeTimeout = Runnable {
@@ -183,8 +231,8 @@ class SensorReporter(
     fun hasLight() = lightSensor != null
     fun hasProximity() = proximitySensor != null || proximityGpio != null
     fun hasLearnedProximity() = proximityRuntime?.isLearnedSignal() == true
-    fun hasTemperature() = tempSensor != null
-    fun hasHumidity() = humiditySensor != null
+    fun hasTemperature() = tempUse == EnvironmentalSensorUse.PUBLISH
+    fun hasHumidity() = humidityUse == EnvironmentalSensorUse.PUBLISH
 
     fun lightDesc(): String? = lightSensor?.let { "Float · 0–${fmtV(it.maximumRange)} lx" }
 
@@ -247,7 +295,7 @@ class SensorReporter(
         onHumidity: (Float) -> Unit = {},
         onLuxRaw: (Float) -> Unit = {},
     ) {
-        if (!hasLight() && !hasProximity() && !hasTemperature() && !hasHumidity()) return
+        if (!hasLight() && !hasProximity() && tempSensor == null && humiditySensor == null) return
         if (activeRun != null) return
         val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity)
         activeRun = run
@@ -274,6 +322,7 @@ class SensorReporter(
                     }
                     Sensor.TYPE_PROXIMITY -> handleProximity(event.values[0], run)
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
+                        if (tempUse != EnvironmentalSensorUse.PUBLISH) return
                         val value = event.values[0]
                         val now = SystemClock.elapsedRealtime()
                         liveTemp = value
@@ -281,6 +330,7 @@ class SensorReporter(
                         run.temperature(value, now)
                     }
                     Sensor.TYPE_RELATIVE_HUMIDITY -> {
+                        if (humidityUse != EnvironmentalSensorUse.PUBLISH) return
                         val value = event.values[0]
                         val now = SystemClock.elapsedRealtime()
                         liveHumid = value
@@ -336,7 +386,8 @@ class SensorReporter(
         humiditySensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         Log.i(
             TAG,
-            "sensors started (light=${hasLight()} proximity=${hasProximity()} temp=${hasTemperature()} humidity=${hasHumidity()})",
+            "sensors started (light=${hasLight()} proximity=${hasProximity()} " +
+                "temp=$tempUse humidity=$humidityUse)",
         )
     }
 
@@ -400,8 +451,19 @@ class SensorReporter(
         handler.postDelayed(onChangeProbe, delayMs.coerceAtLeast(1L))
     }
 
-    private fun needsHalLivenessProbe(): Boolean = proximityGpio == null &&
-        (proximityPolicy.onChangeHalLiveness || cadenceClassified && !continuousCadenceConfirmed)
+    private fun cancelOnChangeProbe() {
+        sensorHandler?.removeCallbacks(onChangeProbe)
+        sensorHandler?.removeCallbacks(onChangeProbeTimeout)
+        onChangeProbeScheduled = false
+        onChangeProbeAwaiting = false
+    }
+
+    private fun needsHalLivenessProbe(): Boolean = proximityNeedsHalLivenessProbe(
+        proximityGpio = proximityGpio,
+        onChangeHalLiveness = proximityPolicy.onChangeHalLiveness,
+        cadenceClassified = cadenceClassified,
+        continuousCadenceConfirmed = continuousCadenceConfirmed,
+    )
 
     private fun reportingSparse(): Boolean = proximityReportingSparse(
         sparseLearning = proximityPolicy.sparseLearning,
