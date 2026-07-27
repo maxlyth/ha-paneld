@@ -12,6 +12,10 @@
 
 - **Log shipping can now actually reach a standard syslog collector.** Until now the syslog transport only ever spoke TCP, while the port defaulted to 514 — which is a UDP port on essentially every collector. The out-of-the-box configuration therefore could not work: panels reported `connection refused`, and putting `udp://` in the host box made things worse, because the whole string was treated as a hostname and the resulting warning quoted the destination without naming any fault. **Protocol** is now a choice of **syslog-udp** (the new default, and what a stock collector listens for), **syslog-tcp** or **http**. Panels that explicitly selected the old `syslog` value keep TCP and are unaffected.
 
+- **A collector hostname that resolves to both IPv4 and IPv6 now works.** Previously the panel used whichever address its resolver happened to return first; when that was an IPv6 address and the collector was listening on IPv4, nothing ever arrived — and over UDP the panel could not tell, so it reported success while every record vanished. The panel now prefers IPv4 and, on TCP and HTTP, tries every address the name resolves to until one answers. An IPv6-only collector is unaffected.
+
+- **Log shipping is no longer marked experimental.** It has now been verified end to end against a live collector: all three transports deliver both a test record and the real log stream, addressed by hostname.
+
 - **Failures say what went wrong.** A sink that cannot be resolved, refuses the connection, or rejects a batch now reports the actual fault on the info page and in `/diag` instead of repeating the address back at you. Over UDP the status deliberately reads `sending (UDP is unacknowledged)` rather than `connected`, because a connectionless transport cannot tell you the records arrived — a silently discarded stream would otherwise look exactly like a healthy one.
 
 ### Added

@@ -1941,7 +1941,10 @@
   }
 
   // Per-card maturity badges: [text, css-modifier]. Applied to the card heading by render().
-  var CARD_BADGES = { "Logging": ["experimental", "exp"], "Display": ["experimental", "exp"] };
+  // Logging lost its experimental badge on 2026-07-27, when log shipping was finally proven on
+  // hardware: all three transports delivered marked probe records AND real shipped log lines into a
+  // live collector, addressed by hostname. Display keeps its badge — that work is still unvalidated.
+  var CARD_BADGES = { "Display": ["experimental", "exp"] };
   var CARD_NOTES = {
     "Sensors": "Home Assistant reporting",
     "Diagnostics": "Home Assistant reporting"
