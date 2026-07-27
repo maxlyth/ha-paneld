@@ -1,0 +1,766 @@
+package io.github.maxlyth.hapaneld.sensors
+
+import io.github.maxlyth.hapaneld.HaAuthSnapshot
+import io.github.maxlyth.hapaneld.stableOwner
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class HaPresenceSourceManagerTest {
+    @Test fun `prerequisite retries a rejected session provider once`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val forces = mutableListOf<Boolean>()
+        val provider = HaApiSessionProvider { force ->
+            forces += force
+            if (!force) HaApiSession("https://ha.example", null, rejected = true)
+            else HaApiSession("https://ha.example", "token", owner = OWNER)
+        }
+        val discovery = FakePresenceTransport()
+        val owner = exactOwner(dispatcher, FakeExactTransport(FakeExactConnection()), provider)
+        val manager = HaPresenceSourceManager(
+            this, provider, discovery, owner, { true }, dispatcher, ::epochMillis,
+        )
+
+        val result = manager.prerequisite("android-id", "panel")
+
+        assertEquals(listOf(false, true), forces)
+        assertEquals(HaPanelAreaPrerequisitePhase.ASSIGNED, result.phase)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `registry bursts debounce and replace the learned Area`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeExactConnection()
+        val discovery = FakePresenceTransport()
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(connection), aggregates,
+        )
+        manager.configure(request())
+        runCurrent()
+        assertEquals("Room", aggregates.last { it.phase == HaPresencePhase.LIVE }.areaName)
+
+        discovery.areaId = "hall"
+        discovery.areaName = "Hall"
+        repeat(3) { connection.messages.send(HaExactSocketMessage.RegistryChanged) }
+        runCurrent()
+        advanceTimeBy(1_999L)
+        runCurrent()
+        assertEquals(1, discovery.registryCount)
+        advanceTimeBy(1L)
+        runCurrent()
+
+        assertEquals(2, discovery.registryCount)
+        assertEquals("Hall", aggregates.last { it.phase == HaPresencePhase.LIVE }.areaName)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `prerequisite reads only device and Area registries`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport()
+        val exact = FakeExactTransport(FakeExactConnection())
+        val (manager, owner) = manager(dispatcher, discovery, exact, mutableListOf())
+
+        val result = manager.prerequisite("android-id", "panel")
+
+        assertEquals(HaPanelAreaPrerequisitePhase.ASSIGNED, result.phase)
+        assertEquals("Room", result.areaName)
+        assertEquals(0, discovery.registryCount)
+        assertEquals(1, discovery.panelAreaRegistryCount)
+        assertTrue(discovery.historyRequests.isEmpty())
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `prerequisite distinguishes an unassigned panel`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { panelAreaAssigned = false }
+        val exact = FakeExactTransport(FakeExactConnection())
+        val (manager, owner) = manager(dispatcher, discovery, exact, mutableListOf())
+
+        val result = manager.prerequisite("android-id", "panel")
+
+        assertEquals(HaPanelAreaPrerequisitePhase.UNASSIGNED, result.phase)
+        assertFalse(result.eligible)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `aggregate admission rejects stale epoch generation and revision`() {
+        val current = HaPresenceAggregate(
+            controllerEpoch = 7L,
+            managerGeneration = 11L,
+            feedGeneration = 13L,
+            feedRevision = 17L,
+            selectedEntityIds = setOf(ENTITY),
+            hydrated = true,
+        )
+        fun feed(generation: Long, revision: Long) = HaPresenceFeedSnapshot(
+            generation = generation,
+            revision = revision,
+            sourceIds = setOf(ENTITY),
+        )
+
+        assertFalse(current.admits(feed(13L, 18L), epoch = 6L, generation = 11L))
+        assertFalse(current.admits(feed(13L, 18L), epoch = 7L, generation = 10L))
+        assertFalse(current.admits(feed(12L, 99L), epoch = 7L, generation = 11L))
+        assertFalse(current.admits(feed(13L, 17L), epoch = 7L, generation = 11L))
+        assertFalse(current.admits(feed(13L, 16L), epoch = 7L, generation = 11L))
+        assertTrue(current.admits(feed(13L, 18L), epoch = 7L, generation = 11L))
+        assertTrue(current.admits(feed(14L, 0L), epoch = 7L, generation = 11L))
+    }
+
+    @Test fun `aggregate collections reject mutation and isolate constructor inputs`() {
+        val states = linkedMapOf(ENTITY to HaPresenceValue.OFF)
+        val ids = linkedSetOf(ENTITY)
+        val aggregate = HaPresenceAggregate(finalStates = states, selectedEntityIds = ids)
+
+        states[ENTITY] = HaPresenceValue.ON
+        ids += "binary_sensor.late"
+        assertEquals(mapOf(ENTITY to HaPresenceValue.OFF), aggregate.finalStates)
+        assertEquals(setOf(ENTITY), aggregate.selectedEntityIds)
+        assertTrue(runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (aggregate.finalStates as MutableMap<String, HaPresenceValue>)[ENTITY] = HaPresenceValue.ON
+        }.exceptionOrNull() is UnsupportedOperationException)
+        assertTrue(runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (aggregate.selectedEntityIds as MutableSet<String>) += "binary_sensor.late"
+        }.exceptionOrNull() is UnsupportedOperationException)
+    }
+
+    @Test fun `aggregate preserves final OFF with an advanced activity marker`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeExactConnection()
+        val hydration = CompletableDeferred<JSONObject?>()
+        val exact = FakeExactTransport(connection).apply { deferredStates[ENTITY] = hydration }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, FakePresenceTransport(), exact, aggregates)
+
+        manager.configure(request(controllerEpoch = 23L))
+        repeat(2) { runCurrent() }
+        connection.messages.send(HaExactSocketMessage.State(ENTITY, state(ENTITY, "on", 2_000L)))
+        connection.messages.send(HaExactSocketMessage.State(ENTITY, state(ENTITY, "off", 3_000L)))
+        runCurrent()
+        hydration.complete(state(ENTITY, "off", 1_000L))
+        runCurrent()
+
+        val live = aggregates.last { it.phase == HaPresencePhase.LIVE }
+        assertEquals(23L, live.controllerEpoch)
+        assertTrue(live.hydrated)
+        assertEquals(HaPresenceValue.OFF, live.finalStates.getValue(ENTITY))
+        assertEquals(ENTITY, live.activityMarker?.entityId)
+        assertTrue(checkNotNull(live.activityMarker).sequence > 0L)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `unchanged feed snapshot does not republish an aggregate`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val exact = FakeExactTransport(FakeExactConnection()).apply { states[ENTITY] = state(ENTITY, "off") }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, FakePresenceTransport(), exact, aggregates)
+
+        manager.configure(request())
+        runCurrent()
+        val exposed = aggregates.last { it.hydrated }
+        val mutation = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (exposed.finalStates as MutableMap<String, HaPresenceValue>)[ENTITY] = HaPresenceValue.ON
+        }.exceptionOrNull()
+        assertTrue(mutation is UnsupportedOperationException)
+        assertEquals(HaPresenceValue.OFF, manager.latestAggregate().finalStates.getValue(ENTITY))
+        val before = aggregates.size
+        owner.replacePresenceSources(setOf(ENTITY))
+        runCurrent()
+
+        assertEquals(before, aggregates.size)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `refresh and newer controller epoch reject stale feed versions`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val exact = FakeExactTransport(FakeExactConnection()).apply { states[ENTITY] = state(ENTITY, "off") }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, FakePresenceTransport(), exact, aggregates)
+
+        manager.configure(request(controllerEpoch = 41L))
+        runCurrent()
+        val first = manager.latestAggregate()
+        manager.refresh()
+        runCurrent()
+        val refreshed = manager.latestAggregate()
+        assertEquals(41L, refreshed.controllerEpoch)
+        assertTrue(refreshed.managerGeneration > first.managerGeneration)
+        assertEquals(first.feedGeneration, refreshed.feedGeneration)
+        assertEquals(first.feedRevision, refreshed.feedRevision)
+
+        val afterRefresh = aggregates.size
+        manager.acceptFeed(feed(refreshed, revision = refreshed.feedRevision - 1L))
+        manager.acceptFeed(feed(refreshed, revision = refreshed.feedRevision))
+        assertEquals(afterRefresh, aggregates.size)
+
+        manager.configure(request(controllerEpoch = 42L))
+        runCurrent()
+        val newerEpoch = manager.latestAggregate()
+        assertEquals(42L, newerEpoch.controllerEpoch)
+        val afterEpoch = aggregates.size
+        manager.acceptFeed(feed(newerEpoch, revision = newerEpoch.feedRevision - 1L))
+        assertEquals(afterEpoch, aggregates.size)
+
+        manager.acceptFeed(feed(newerEpoch, generation = newerEpoch.feedGeneration + 1L, revision = 0L))
+        assertEquals(newerEpoch.feedGeneration + 1L, manager.latestAggregate().feedGeneration)
+        assertEquals(0L, manager.latestAggregate().feedRevision)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `close racing feed delivery publishes exactly one empty STOPPED terminal`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val exact = FakeExactTransport(FakeExactConnection()).apply { states[ENTITY] = state(ENTITY, "off") }
+        val aggregates = Collections.synchronizedList(mutableListOf<HaPresenceAggregate>())
+        val (manager, owner) = manager(dispatcher, FakePresenceTransport(), exact, aggregates)
+        manager.configure(request())
+        runCurrent()
+        val current = manager.latestAggregate()
+        val next = feed(current, revision = current.feedRevision + 1L, value = HaPresenceValue.ON)
+        val start = CountDownLatch(1)
+        val feeder = thread(start = true) { start.await(); manager.acceptFeed(next) }
+        val closer = thread(start = true) { start.await(); manager.close() }
+
+        start.countDown()
+        feeder.join()
+        closer.join()
+        manager.acceptFeed(feed(current, generation = current.feedGeneration + 1L, revision = 0L))
+
+        val stopped = synchronized(aggregates) { aggregates.filter { it.phase == HaPresencePhase.STOPPED } }
+        assertEquals(1, stopped.size)
+        assertTrue(stopped.single().selectedEntityIds.isEmpty())
+        assertTrue(stopped.single().finalStates.isEmpty())
+        assertFalse(stopped.single().hydrated)
+        assertEquals(HaPresencePhase.STOPPED, manager.latestAggregate().phase)
+        owner.close()
+    }
+
+    @Test fun `nonblocking aggregate offer may reenter without stale delivery`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val exact = FakeExactTransport(FakeExactConnection()).apply { states[ENTITY] = state(ENTITY, "off") }
+        val owner = exactOwner(dispatcher, exact)
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        lateinit var manager: HaPresenceSourceManager
+        manager = HaPresenceSourceManager(
+            this, auth(), FakePresenceTransport(), owner,
+            offerAggregate = { next ->
+                aggregates += next
+                if (next.phase == HaPresencePhase.LIVE) manager.configure(request(enabled = false))
+                true
+            },
+            workerDispatcher = dispatcher,
+            epochMillis = ::epochMillis,
+        )
+
+        manager.configure(request())
+        runCurrent()
+
+        assertEquals(HaPresencePhase.DISABLED, manager.latestAggregate().phase)
+        assertEquals(HaPresencePhase.DISABLED, aggregates.last().phase)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `automatic Area selection admits every history credible source`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport(sourceCount = 300)
+        val exact = FakeExactTransport(FakeExactConnection())
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, discovery, exact, aggregates)
+
+        manager.configure(request())
+        runCurrent()
+        val expected = discovery.entityIds()
+        assertEquals(expected, exact.subscriptions.single())
+        assertEquals(expected, aggregates.last { it.phase == HaPresencePhase.LIVE }.selectedEntityIds)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `panel owned occupancy never enters history or shared stream selection`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { includePanelActivity = true }
+        val exact = FakeExactTransport(FakeExactConnection())
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, discovery, exact, aggregates)
+
+        manager.configure(request())
+        runCurrent()
+
+        assertTrue(discovery.historyEntitySets.isNotEmpty())
+        assertTrue(discovery.historyEntitySets.all { SELF !in it })
+        assertEquals(setOf(ENTITY), exact.subscriptions.single())
+        assertEquals(setOf(ENTITY), aggregates.last { it.phase == HaPresencePhase.LIVE }.selectedEntityIds)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `on-demand history reads only the current selected sources and exact requested range`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport(sourceCount = 3)
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates,
+        )
+        manager.configure(request())
+        runCurrent()
+        discovery.historyRequests.clear()
+
+        val pending = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        val history = pending.await()
+
+        assertEquals(discovery.entityIds(), history.sourceIds)
+        assertEquals(discovery.entityIds(), history.transitions.keys)
+        assertEquals(discovery.entityIds(), history.sourceLabels.keys)
+        assertTrue(history.sourceLabels.values.all { it.startsWith("Motion ") })
+        assertEquals(listOf(Triple(discovery.entityIds(), 10 * 60_000L, 20 * 60_000L)),
+            discovery.historyRequests)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `excluded source stays visible in history but never reaches the live stream`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport(sourceCount = 3)
+        val exclusions = FakeExclusions(mutableSetOf("binary_sensor.motion_2"))
+        val exact = FakeExactTransport(FakeExactConnection(), FakeExactConnection())
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, discovery, exact, aggregates, exclusions)
+
+        manager.configure(request())
+        runCurrent()
+        discovery.historyRequests.clear()
+        val pending = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        val history = pending.await()
+
+        assertEquals(discovery.entityIds() - "binary_sensor.motion_2", exact.subscriptions.single())
+        assertEquals(discovery.entityIds() - "binary_sensor.motion_2", history.sourceIds)
+        assertEquals(discovery.entityIds(), history.discoveredSourceIds)
+        assertEquals(setOf("binary_sensor.motion_2"), history.excludedSourceIds)
+        assertEquals(discovery.entityIds(), history.transitions.keys)
+        assertEquals("Room", history.areaName)
+        assertTrue(history.areaKey.matches(Regex("[a-f0-9]{64}")))
+        assertTrue(history.sourceKeys.values.all { it.matches(Regex("[a-f0-9]{64}")) })
+        assertEquals(HaPresenceSourceUpdate.UPDATED, manager.setSourceIncluded(
+            history.areaKey, history.sourceKeys.getValue("binary_sensor.motion_2"), true,
+        ))
+        assertEquals(HaPresenceSourceUpdate.UPDATED, manager.setSourceIncluded(
+            history.areaKey, history.sourceKeys.getValue("binary_sensor.motion_2"), true,
+        ))
+        runCurrent()
+        assertEquals(discovery.entityIds(), exact.subscriptions.last())
+        assertTrue(exclusions.excluded("room").isEmpty())
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `all suppressed sources remain recoverable and survive discovery list changes`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport(sourceCount = 1)
+        val exclusions = FakeExclusions(mutableSetOf(ENTITY))
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates, exclusions,
+        )
+
+        manager.configure(request())
+        runCurrent()
+        assertEquals(HaPresencePhase.NO_INCLUDED_SOURCES, aggregates.last().phase)
+        val first = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        assertEquals(setOf(ENTITY), first.await().excludedSourceIds)
+
+        discovery.sourceCount = 3
+        manager.refresh()
+        runCurrent()
+        val second = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        val changed = second.await()
+        assertTrue(ENTITY in exclusions.excluded("room"))
+        assertTrue(changed.excludedSourceIds.isEmpty())
+        assertTrue("binary_sensor.motion_2" in changed.sourceIds)
+
+        discovery.sourceCount = 1
+        manager.refresh()
+        runCurrent()
+        val returned = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        assertEquals(setOf(ENTITY), returned.await().excludedSourceIds)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `derived Area helper has no presence authority and is never read or streamed`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { includeSupportingActivity = true }
+        val exact = FakeExactTransport(FakeExactConnection())
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, discovery, exact, aggregates)
+
+        manager.configure(request())
+        runCurrent()
+
+        assertTrue(discovery.historyEntitySets.all { SUPPORTING !in it })
+        assertEquals(setOf(ENTITY), exact.subscriptions.single())
+        assertEquals(setOf(ENTITY), aggregates.last { it.phase == HaPresencePhase.LIVE }.selectedEntityIds)
+        discovery.historyRequests.clear()
+        val pending = async { manager.selectedHistory(10 * 60_000L, 20 * 60_000L) }
+        runCurrent()
+        val history = pending.await()
+        assertEquals(setOf(ENTITY), history.sourceIds)
+        assertEquals(setOf(ENTITY), history.transitions.keys)
+        assertEquals(listOf(Triple(setOf(ENTITY), 10 * 60_000L, 20 * 60_000L)),
+            discovery.historyRequests)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `derived-only Area fails safe before history retrieval`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport(sourceCount = 0).apply { includeSupportingActivity = true }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates,
+        )
+
+        manager.configure(request())
+        runCurrent()
+
+        val terminal = aggregates.last()
+        assertEquals(HaPresencePhase.NO_CREDIBLE_SOURCES, terminal.phase)
+        assertEquals("No device-backed activity source is ready", terminal.detail)
+        assertTrue(discovery.historyEntitySets.isEmpty())
+        assertTrue(terminal.selectedEntityIds.isEmpty())
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `disabled manager owns no discovery stream or timer`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport()
+        val exact = FakeExactTransport(FakeExactConnection())
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(dispatcher, discovery, exact, aggregates)
+
+        manager.configure(request(enabled = false, controllerEpoch = 31L))
+        runCurrent()
+        advanceTimeBy(24L * 60L * 60_000L)
+        runCurrent()
+
+        val disabled = aggregates.last()
+        assertEquals(HaPresencePhase.DISABLED, disabled.phase)
+        assertEquals(31L, disabled.controllerEpoch)
+        assertEquals(0, discovery.registryCount)
+        assertEquals(0, exact.subscriptions.size)
+
+        manager.close()
+        val stopped = aggregates.last()
+        assertEquals(HaPresencePhase.STOPPED, stopped.phase)
+        assertEquals(31L, stopped.controllerEpoch)
+        assertTrue(stopped.managerGeneration > disabled.managerGeneration)
+        assertTrue(stopped.finalStates.isEmpty())
+        owner.close()
+    }
+
+    @Test fun `failed discovery is one shot until explicit refresh`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { registryFailure = true }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection(), FakeExactConnection()), aggregates,
+        )
+
+        manager.configure(request())
+        runCurrent()
+        assertEquals(HaPresencePhase.DISCOVERY_FAILED, aggregates.last().phase)
+        assertEquals("registry_transport", aggregates.last().detail)
+        advanceTimeBy(24L * 60L * 60_000L)
+        runCurrent()
+        assertEquals(1, discovery.registryCount)
+
+        discovery.registryFailure = false
+        manager.refresh()
+        runCurrent()
+        assertEquals(2, discovery.registryCount)
+        assertEquals(HaPresencePhase.LIVE, aggregates.last().phase)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `history shape and volume failures remain distinct`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { malformedHistory = true }
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val (manager, owner) = manager(
+            dispatcher, discovery, FakeExactTransport(FakeExactConnection()), aggregates,
+        )
+
+        manager.configure(request())
+        runCurrent()
+        assertEquals("history_parse", aggregates.last().detail)
+
+        discovery.malformedHistory = false
+        discovery.oversizedHistory = true
+        manager.refresh()
+        runCurrent()
+        assertEquals("history_limit", aggregates.last().detail)
+        manager.close()
+        owner.close()
+    }
+
+    @Test fun `one discovery run performs at most one forced authentication refresh`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val discovery = FakePresenceTransport().apply { registryAuthFailures = Int.MAX_VALUE }
+        val forces = mutableListOf<Boolean>()
+        val session = HaApiSessionProvider { force ->
+            forces += force
+            HaApiSession("https://ha.example", "token", owner = OWNER)
+        }
+        val owner = exactOwner(dispatcher, FakeExactTransport(FakeExactConnection()), session)
+        val aggregates = mutableListOf<HaPresenceAggregate>()
+        val manager = HaPresenceSourceManager(
+            this, session, discovery, owner, aggregates::add, dispatcher, ::epochMillis,
+        )
+
+        manager.configure(request())
+        runCurrent()
+
+        // Discovery owns exactly one ordinary + one forced resolution. The shared registry watcher
+        // independently resolves once because enabled/no-source demand must remain subscribed.
+        assertEquals(listOf(false, true), forces.take(2))
+        assertEquals(false, forces.getOrNull(2))
+        assertEquals(2, discovery.registryCount)
+        assertEquals(HaPresencePhase.AUTH_FAILED, aggregates.last().phase)
+        manager.close()
+        owner.close()
+    }
+
+    private fun kotlinx.coroutines.test.TestScope.manager(
+        dispatcher: CoroutineDispatcher,
+        transport: FakePresenceTransport,
+        exactTransport: FakeExactTransport,
+        aggregates: MutableList<HaPresenceAggregate>,
+        exclusions: HaPresenceExclusions? = null,
+    ): Pair<HaPresenceSourceManager, HaExactEntityStreamOwner> {
+        val sessionProvider = auth()
+        val owner = exactOwner(dispatcher, exactTransport, sessionProvider)
+        return HaPresenceSourceManager(
+            this, sessionProvider, transport, owner, aggregates::add, dispatcher, ::epochMillis,
+            exclusions ?: FakeExclusions(),
+        ) to owner
+    }
+
+    private class FakeExclusions(
+        private val ids: MutableSet<String> = linkedSetOf(),
+    ) : HaPresenceExclusions {
+        override val scope = "ha-instance"
+        override fun excluded(areaId: String): Set<String> = ids.toSet()
+        override fun setIncluded(expectedScope: String, areaId: String, entityId: String, included: Boolean): Boolean {
+            if (included) ids.remove(entityId) else ids.add(entityId)
+            return true
+        }
+    }
+
+    private fun kotlinx.coroutines.test.TestScope.exactOwner(
+        dispatcher: CoroutineDispatcher,
+        transport: FakeExactTransport,
+        sessionProvider: HaApiSessionProvider = auth(),
+    ) = HaExactEntityStreamOwner(
+        scope = this,
+        auth = sessionProvider,
+        transport = transport,
+        workerDispatcher = dispatcher,
+    )
+
+    private fun auth() = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) }
+
+    private fun request(enabled: Boolean = true, controllerEpoch: Long = 1L) = HaPresenceRequest(
+        enabled = enabled,
+        androidId = "android-id",
+        panelId = "panel",
+        controllerEpoch = controllerEpoch,
+    )
+
+    private fun feed(
+        current: HaPresenceAggregate,
+        generation: Long = current.feedGeneration,
+        revision: Long,
+        value: HaPresenceValue = HaPresenceValue.OFF,
+    ) = HaPresenceFeedSnapshot(
+        generation = generation,
+        revision = revision,
+        sourceIds = current.selectedEntityIds,
+        states = current.selectedEntityIds.associateWith { value },
+        hydrated = true,
+        phase = HaExactEntityStreamPhase.LIVE,
+    )
+
+    private class FakeExactConnection : HaExactEntityConnection {
+        val messages = Channel<HaExactSocketMessage>(Channel.UNLIMITED)
+        override suspend fun receive(): HaExactSocketMessage = messages.receive()
+        override suspend fun ping(id: Int) { messages.send(HaExactSocketMessage.Pong(id)) }
+        override suspend fun close() { messages.close() }
+    }
+
+    private class FakeExactTransport(vararg connections: FakeExactConnection) : HaExactEntityStreamTransport {
+        private val connections = ArrayDeque(connections.toList())
+        val states = linkedMapOf<String, JSONObject?>()
+        val deferredStates = linkedMapOf<String, CompletableDeferred<JSONObject?>>()
+        val subscriptions = mutableListOf<Set<String>>()
+
+        override suspend fun subscribe(
+            baseUrl: String,
+            accessToken: String,
+            entityIds: Set<String>,
+        ): HaExactEntityConnection {
+            subscriptions += entityIds.toSet()
+            return connections.removeFirst()
+        }
+
+        override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? =
+            deferredStates[entityId]?.await() ?: states[entityId] ?: state(entityId, "off")
+    }
+
+    private class FakePresenceTransport(var sourceCount: Int = 1) : HaPresenceTransport {
+        var registryCount = 0
+        var panelAreaRegistryCount = 0
+        var panelAreaAssigned = true
+        var areaId = "room"
+        var areaName = "Room"
+        var registryFailure = false
+        var registryAuthFailures = 0
+        var includePanelActivity = false
+        var includeSupportingActivity = false
+        var malformedHistory = false
+        var oversizedHistory = false
+        val historyEntitySets = mutableListOf<Set<String>>()
+        val historyRequests = mutableListOf<Triple<Set<String>, Long, Long>>()
+
+        fun entityIds(): Set<String> = if (sourceCount == 1) setOf(ENTITY)
+            else (1..sourceCount).mapTo(linkedSetOf()) { "binary_sensor.motion_$it" }
+
+        override suspend fun registry(baseUrl: String, accessToken: String): HaPresenceRegistrySnapshot {
+            registryCount++
+            if (registryAuthFailures-- > 0) throw HaAuthenticationException("rejected")
+            if (registryFailure) error("registry unavailable")
+            val devices = JSONArray().put(device("panel-device", "ha-paneld-aid-android-id"))
+            val entities = JSONArray()
+            val states = JSONArray()
+            if (includePanelActivity) {
+                entities.put(JSONObject().put("ei", SELF).put("di", "panel-device").put("pl", "mqtt"))
+                states.put(state(SELF, "off").put("attributes", JSONObject()
+                    .put("device_class", "occupancy").put("friendly_name", "Panel proximity")))
+            }
+            if (includeSupportingActivity) {
+                entities.put(JSONObject().put("ei", SUPPORTING).put("ai", "room").put("pl", "bayesian"))
+                states.put(state(SUPPORTING, "on").put("attributes", JSONObject()
+                    .put("device_class", "occupancy").put("friendly_name", "Room is deserted")))
+            }
+            entityIds().forEachIndexed { index, id ->
+                val deviceId = "motion-device-$index"
+                devices.put(device(deviceId, "motion-$index"))
+                entities.put(JSONObject().put("ei", id).put("di", deviceId).put("pl", "mqtt"))
+                states.put(state(id, "off").put("attributes", JSONObject()
+                    .put("device_class", "motion").put("friendly_name", "Motion $index")))
+            }
+            return HaPresenceRegistrySnapshot(
+                JSONObject().put("result", devices),
+                JSONObject().put("result", JSONArray().put(JSONObject().put("area_id", areaId).put("name", areaName))),
+                JSONObject().put("result", JSONObject().put("entities", entities)),
+                states,
+            )
+        }
+
+        override suspend fun panelAreaRegistry(
+            baseUrl: String,
+            accessToken: String,
+        ): HaPanelAreaRegistrySnapshot {
+            panelAreaRegistryCount++
+            val area = if (panelAreaAssigned) areaId else ""
+            return HaPanelAreaRegistrySnapshot(
+                JSONObject().put("result", JSONArray().put(
+                    JSONObject().put("id", "panel-device").put("area_id", area)
+                        .put("identifiers", JSONArray().put(JSONArray().put("mqtt").put("ha-paneld-aid-android-id"))),
+                )),
+                JSONObject().put("result", JSONArray().put(
+                    JSONObject().put("area_id", areaId).put("name", areaName),
+                )),
+            )
+        }
+
+        override suspend fun history(
+            baseUrl: String,
+            accessToken: String,
+            entityIds: Set<String>,
+            startEpochMs: Long,
+            endEpochMs: Long,
+        ) = JSONArray().apply {
+            historyEntitySets += entityIds.toSet()
+            historyRequests += Triple(entityIds.toSet(), startEpochMs, endEpochMs)
+            if (malformedHistory) {
+                put(JSONObject())
+                return@apply
+            }
+            if (oversizedHistory) {
+                put(JSONArray().apply { repeat(20_001) { put(JSONObject()) } })
+                return@apply
+            }
+            entityIds.forEach { id ->
+                put(JSONArray()
+                    .put(history(id, "off", startEpochMs))
+                    .put(history("", "on", startEpochMs + 60_000L))
+                    .put(history("", "off", minOf(endEpochMs, startEpochMs + 120_000L))))
+            }
+        }
+
+        private fun device(id: String, identifier: String) = JSONObject()
+            .put("id", id).put("area_id", areaId)
+            .put("identifiers", JSONArray().put(JSONArray().put("mqtt").put(identifier)))
+
+        private fun history(entity: String, value: String, at: Long) = JSONObject()
+            .apply { if (entity.isNotBlank()) put("entity_id", entity) }
+            .put("state", value).put("last_changed", java.time.Instant.ofEpochMilli(at).toString())
+    }
+
+    private companion object {
+        const val ENTITY = "binary_sensor.room_motion"
+        const val SELF = "binary_sensor.panel_proximity"
+        const val SUPPORTING = "binary_sensor.room_is_deserted"
+        val OWNER = HaAuthSnapshot("https://ha.example", "access", "refresh", 1L, "client").stableOwner()
+
+        fun epochMillis() = 7L * 24L * 60L * 60_000L
+
+        fun state(entityId: String, value: String, observedAt: Long = 1_000L) = JSONObject()
+            .put("entity_id", entityId)
+            .put("state", value)
+            .put("last_updated", java.time.Instant.ofEpochMilli(observedAt).toString())
+            .put("attributes", JSONObject())
+    }
+}

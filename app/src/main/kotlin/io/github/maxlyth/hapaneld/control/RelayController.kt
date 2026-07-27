@@ -32,7 +32,7 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
 
     @Volatile private var resolvedBase: String? = null
     @Volatile private var resolvedRelayCount: Int? = if (candidateBases.isEmpty()) 0 else null
-    @Volatile private var resolvedLedCount: Int? = if (ledBase == null) 0 else BUTTON_LED_COUNT
+    @Volatile private var resolvedLedCount: Int = if (ledBase == null) 0 else BUTTON_LED_COUNT
 
     /** Resolve immutable sysfs topology once. A failed privileged probe is deliberately not cached:
      * root access can become available after boot. State reads still avoid repeating successful
@@ -127,9 +127,7 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     /** Number of profile-declared button LEDs (0 or 4). Discovery is deliberately read-only: importing
      * a profile must not export GPIOs or change pin directions merely because capabilities are listed. */
     @Synchronized
-    fun ledCount(): Int {
-        return resolvedLedCount ?: 0
-    }
+    fun ledCount(): Int = resolvedLedCount
 
     /** Set button LED [i] (0-based, F1..F4) on/off. */
     @Synchronized

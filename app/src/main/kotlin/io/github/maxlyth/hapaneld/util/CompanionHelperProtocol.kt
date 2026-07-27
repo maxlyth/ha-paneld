@@ -112,7 +112,7 @@ internal object CompanionHelperProtocol {
                 if (!parent.isDirectory && !parent.mkdirs()) {
                     throw IllegalStateException("could not create Companion capture directory")
                 }
-                target.outputStream().use { copyExactly(input, it, bytes) }
+                target.outputStream().use { BoundedStreams.copyExact(input, it, bytes) }
                 captured[path] = target
             }
             if (total != declaredTotal || CompanionRestore.DATABASE_FILE !in captured) {
@@ -162,7 +162,7 @@ internal object CompanionHelperProtocol {
             "READY" -> {
                 try {
                     restoreOrder.forEach { path ->
-                        files[path]?.inputStream()?.use { source -> copyExactly(source, output, files.getValue(path).length()) }
+                        files[path]?.inputStream()?.use { source -> BoundedStreams.copyExact(source, output, files.getValue(path).length()) }
                     }
                     output.flush()
                     shutdownOutput()
@@ -215,15 +215,4 @@ internal object CompanionHelperProtocol {
         }
     }
 
-    private fun copyExactly(input: InputStream, output: OutputStream, expectedBytes: Long) {
-        var remaining = expectedBytes
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (remaining > 0L) {
-            val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-            if (read < 0) throw EOFException("helper stream ended before declared length")
-            if (read == 0) continue
-            output.write(buffer, 0, read)
-            remaining -= read
-        }
-    }
 }

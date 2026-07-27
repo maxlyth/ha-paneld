@@ -43,6 +43,8 @@ class AutoBrightnessUiContractTest {
         assertTrue("missing buckets and DST discontinuities must split lines", "point.minute - previous.minute !== bucketMinutes" in source && "point.minuteOfDay - previous.minuteOfDay !== bucketMinutes" in source)
         assertTrue("chart bitmap must be redrawn after layout changes", "setTimeout(drawAutoBrightnessChart, 100)" in source)
         assertTrue("sensitivity edits must reproject history", "f.key === \"auto_brightness_sensitivity\"" in source)
+        assertTrue("history must echo the sensitivity used for its projection", "put(\"sensitivity\", previewSensitivity)" in service)
+        assertTrue("the chart must identify the sensitivity used for its proposed line", "Sensitivity \" + projectionSensitivity" in source)
         assertTrue("minimum edits must reproject history", "f.key === \"auto_brightness_minimum_percent\"" in source)
         assertTrue("minimum preview must use the server projection", "&minimum_percent=" in source)
         assertTrue("chart must retain the spike envelope", "min_lux" in source && "max_lux" in source)
@@ -58,6 +60,32 @@ class AutoBrightnessUiContractTest {
         assertTrue("disabled or hidden auto-brightness must not schedule chart polling", "values.auto_brightness !== \"true\" || document.hidden" in source)
         assertTrue("hidden Configure pages must stop timer wakes", "document.addEventListener(\"visibilitychange\"" in source && "if (autoBrightRefreshTimer) clearTimeout(autoBrightRefreshTimer)" in source)
         assertTrue("returning to Configure must refresh once", "else if (values.auto_brightness === \"true\")" in source && "loadAutoBrightnessData(false)" in source)
+    }
+
+    @Test fun `adaptive history refresh is source consistent and transition polling is bounded`() {
+        val source = asset("configure.js").readText()
+
+        assertTrue("status must bypass browser caches", "fetch(\"/api/v1/auto-brightness\", { cache: \"no-store\" })" in source)
+        assertTrue("history must bypass browser caches", "minimumSuffix, { cache: \"no-store\" })" in source)
+        assertTrue("status and history must be bound by their opaque source revision", "statusRevision === historyRevision" in source)
+        assertTrue("a matching old pair must not satisfy a newly selected entity", "autoBrightnessStatusMatchesSelection(result[0])" in source && "actual === expected" in source)
+        assertTrue("mismatched history must be replaced instead of painted", "if (!revisionsMatch)" in source && "autoBrightHistory = { points: [] }" in source)
+        assertTrue("source saves must enter the transition before reloading", "beginAutoBrightnessSourceTransition(submittedValues.auto_brightness_ha_entity)" in source)
+        assertTrue("source saves must fence an in-flight old-source response", "if (!preserveCurrentRequest) autoBrightRequest += 1" in source)
+        assertTrue("transition retries must have an explicit finite cap", "AUTO_BRIGHTNESS_TRANSITION_MAX_ATTEMPTS = 10" in source && "autoBrightTransitionAttempts >= AUTO_BRIGHTNESS_TRANSITION_MAX_ATTEMPTS" in source)
+        assertTrue("short transition polling must not replace the normal five-minute cadence", "AUTO_BRIGHTNESS_TRANSITION_POLL_MS = 1000" in source && "if (autoBrightSourceTransition) return" in source)
+        assertTrue("an empty matching partition must eventually leave loading state", "timedOutEmpty = latest == null" in source && "The selected source has no ambient-light samples yet." in source)
+    }
+
+    @Test fun `adaptive chart identifies its source and sample freshness`() {
+        val source = asset("configure.js").readText()
+
+        assertTrue("chart summary must explicitly name its selected source", "Source: \" + autoBrightnessSelectedSource()" in source)
+        assertTrue("freshness must come from the newest persisted epoch minute", "latestEpochMinute" in source && "latest * 60000" in source)
+        assertTrue("freshness must include a local human-readable timestamp", "date.toLocaleString()" in source)
+        assertTrue("freshness must state relative age", "ageMinutes + \" min ago\"" in source && "Math.floor(ageMinutes / 1440) + \" days ago\"" in source)
+        assertTrue("the chart detail must display freshness", "detail += \" · \" + autoBrightnessFreshness()" in source)
+        assertTrue("transition state must be concise and live", "Updating ambient-light source…" in source && "Loading new source history…" in source)
     }
 
     @Test fun `adaptive controls remain usable on narrow panels`() {
@@ -94,7 +122,12 @@ class AutoBrightnessUiContractTest {
             "minimum and sensitivity must be disabled without a source",
             "f.key === \"auto_brightness_minimum_percent\" || f.key === \"auto_brightness_sensitivity\"" in source,
         )
-        assertTrue("learning must be omitted without a source", "if (ambientLightSourceReady()) card.appendChild(autoBrightnessPanel())" in source)
+        assertTrue(
+            "retained learning must survive a temporarily unavailable configured source",
+            "if (values.auto_brightness === \"true\" && ambientLightSourceConfigured()) card.appendChild(autoBrightnessPanel())" in source,
+        )
+        assertTrue("a selected exact HA source remains configured while temporarily unavailable", "auto_brightness_ha_entity || \"\").trim()) return true" in source)
+        assertTrue("temporary source loss must be visible without removing history", "Waiting for ambient light…" in source)
         assertTrue("auto-brightness cannot be enabled without a source", "f.key === \"auto_brightness\" && !ambientLightSourceReady()" in source)
         assertTrue("invalid persisted state must render effectively off", "v === \"true\" && !sourceBlocked ? \"true\" : \"false\"" in source)
         assertTrue("dependent rows must be visibly disabled", "dependencyDisabled ? \" dependency-disabled\"" in source)

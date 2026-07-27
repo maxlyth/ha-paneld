@@ -11,6 +11,10 @@ class ButtonBacklightDiscoveryContractTest {
         File("src/main/kotlin/io/github/maxlyth/hapaneld/MqttBridge.kt"),
         File("app/src/main/kotlin/io/github/maxlyth/hapaneld/MqttBridge.kt"),
     ).first(File::isFile).readText()
+    private val settingsRegistry = listOf(
+        File("src/main/kotlin/io/github/maxlyth/hapaneld/config/SettingsRegistry.kt"),
+        File("app/src/main/kotlin/io/github/maxlyth/hapaneld/config/SettingsRegistry.kt"),
+    ).first(File::isFile).readText()
     private val discovery = mqtt.substring(
         mqtt.indexOf("private fun publishDiscovery("),
         mqtt.indexOf("private fun publishConfig("),
@@ -29,14 +33,15 @@ class ButtonBacklightDiscoveryContractTest {
     }
 
     @Test fun touchIconRemainsLimitedToTheNavbarGestureControl() {
-        assertEquals(1, Regex("mdi:gesture-tap-button").findAll(mqtt).count())
+        assertEquals(1, Regex("mdi:gesture-tap-button").findAll(settingsRegistry).count())
         val navbarStart = discovery.indexOf("// Soft navbar (select)")
         val navbar = discovery.substring(
             navbarStart,
             discovery.indexOf("// Persistent network adb (switch)", navbarStart),
         )
 
-        assertTrue(navbar.contains("\"name\":\"Navbar\""))
-        assertTrue(navbar.contains("\"icon\":\"mdi:gesture-tap-button\""))
+        assertTrue(navbar.contains("registryExposable(\"navbar_mode\")"))
+        assertTrue(settingsRegistry.contains("\"select\", \"navbar\", \"Navbar\""))
+        assertTrue(settingsRegistry.contains("\"icon\":\"mdi:gesture-tap-button\""))
     }
 }

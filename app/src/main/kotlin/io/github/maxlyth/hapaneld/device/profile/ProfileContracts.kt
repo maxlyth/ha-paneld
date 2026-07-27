@@ -82,6 +82,14 @@ data class ProfileDriverDescriptor(
     val kind: ProfileDriverKind,
     val description: String,
     val privileged: Boolean,
+    /**
+     * Root-helper authority this driver demands. This is the single source for the helper-need
+     * decision; [ProfileMetadata.helperAuthorityDemand] is derived from it, so the demand table can
+     * never drift from — or fail to cover — the canonical driver table. Deliberately separate from
+     * [privileged]: a privileged driver may satisfy its access through app `su` or a trusted-host
+     * operation rather than the root helper (see [ProfileHelperAuthorityDemand]).
+     */
+    val helperDemand: ProfileHelperAuthorityDemand,
 )
 
 data class ProfileFieldDescriptor(
@@ -225,13 +233,14 @@ data class ProfileBackup(
                 issues += backupIssue("profiles.revisions", "Profile backup exceeds the aggregate byte limit.")
             }
             val selection = decodeSelection(value.optJSONObject("selection"), "profiles.selection", issues)
+            val activeObj = value.optJSONObject("active")
             val active = when {
                 !value.has("active") || value.isNull("active") -> null
-                value.optJSONObject("active") == null -> {
+                activeObj == null -> {
                     issues += backupIssue("profiles.active", "Active revision must be an object or null.")
                     null
                 }
-                else -> decodeRef(requireNotNull(value.optJSONObject("active")), "profiles.active", issues)
+                else -> decodeRef(activeObj, "profiles.active", issues)
             }
             val lastKnownGood = when {
                 !value.has("last_known_good") || value.isNull("last_known_good") -> null

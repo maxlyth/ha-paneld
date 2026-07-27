@@ -1,20 +1,15 @@
 schema: 2
 id: shelly-wall-display
-version: 2.1.2
+version: 2.1.3
 display_name: Shelly Wall Display (legacy)
-soc_class: MediaTek MT6580
-soc:
-  model: MediaTek MT6580
+soc_class: "Model-dependent (known: MT6580 / SC7731E)"
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/shelly-wall-display.md
   license: Apache-2.0
   maturity: experimental
-  tested_firmware:
-    - WallDisplay 1.2.1
-    - WallDisplay 2.7.1
   limitations:
-    - Per-SKU relay, proximity, Recents, and display details still need live-hardware confirmation.
+    - SoC, relay, proximity, Recents, and display details vary by model and still need live-hardware confirmation.
     - On-board relays are not exposed because no safe supported local control path is known.
 requires:
   min_core_version: 0.9.5-rc1

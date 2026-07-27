@@ -182,6 +182,45 @@ class InteractiveControllerTest {
         assertArrayEquals(byteArrayOf(1, 2, 3), first)
     }
 
+    @Test fun postTapScreenshotCanWaitBehindTheCaptureAlreadyInFlight() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val invocations = AtomicInteger()
+        val root = object : RootShell {
+            override fun available() = true
+            override fun run(cmd: String) = false
+            override fun runOutput(cmd: String): String? = null
+            override fun runBytes(cmd: String): ByteArray? {
+                val invocation = invocations.incrementAndGet()
+                if (invocation == 1) {
+                    entered.countDown()
+                    release.await(2, TimeUnit.SECONDS)
+                }
+                return byteArrayOf(invocation.toByte())
+            }
+            override fun fireAndForget(cmd: String) = false
+        }
+        val controller = InteractiveController(
+            canSu = true,
+            root = root,
+            daemon = Helper(mutableListOf()),
+            accessibility = Accessibility(mutableListOf()),
+            shell = Shell(mutableListOf()),
+        )
+        val first = Thread { controller.screenshot() }.apply { start() }
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+        var waited: RoutedValue<ByteArray>? = null
+        val second = Thread { waited = controller.screenshotWithRoute(2_000) }.apply { start() }
+        Thread.sleep(25)
+        assertTrue("the post-tap capture must wait rather than barge or fail", second.isAlive)
+        release.countDown()
+        first.join(2_000)
+        second.join(2_000)
+        assertEquals(2, invocations.get())
+        assertEquals(PrivilegeRoute.SU, waited?.route)
+        assertArrayEquals(byteArrayOf(2), waited?.value)
+    }
+
     @Test fun backFallsFromPreferredSuToAccessibility() {
         val calls = mutableListOf<String>()
         assertTrue(controller(
@@ -232,6 +271,44 @@ class InteractiveControllerTest {
         assertEquals(listOf("a11y:tap:12:34", "su:input tap 12 34"), calls)
     }
 
+    @Test fun tapReportsTheRouteThatActuallyCompleted() {
+        val calls = mutableListOf<String>()
+        val route = controller(
+            canSu = false,
+            calls = calls,
+            accessibilityResults = listOf(true),
+        ).tapWithRoute(12f, 34f)
+        assertEquals(PrivilegeRoute.ACCESSIBILITY, route)
+        assertEquals(listOf("a11y:tap:12:34"), calls)
+    }
+
+    @Test fun combinedTapUsesExactlyOneSelectedRouteAndNeverFallsThrough() {
+        val calls = mutableListOf<String>()
+        val route = InteractiveController(
+            canSu = false,
+            root = Root(calls, runResults = listOf(true)),
+            daemon = Helper(calls),
+            accessibility = Accessibility(calls, results = listOf(true)),
+            shell = Shell(calls, inputResult = false),
+        ).tapOnceWithRoute(12f, 34f)
+
+        assertNull(route)
+        assertEquals(listOf("shizuku:tap:12:34"), calls)
+    }
+
+    @Test fun combinedTapUsesOneRootCommandAttemptOnRootProfiles() {
+        val calls = mutableListOf<String>()
+        val route = controller(
+            canSu = true,
+            calls = calls,
+            rootRuns = listOf(true),
+            accessibilityResults = listOf(true),
+        ).tapOnceWithRoute(12f, 34f)
+
+        assertEquals(PrivilegeRoute.SU, route)
+        assertEquals(listOf("su:input tap 12 34"), calls)
+    }
+
     @Test fun tapRejectsInvalidCoordinatesBeforeEitherBoundary() {
         listOf(
             Float.NaN to 1f,
@@ -257,6 +334,31 @@ class InteractiveControllerTest {
         ).screenshot()
         assertArrayEquals(png, result)
         assertEquals(listOf("su-bytes:screencap -p", "helper-bytes:SCREENCAP", "shizuku:screenshot"), calls)
+    }
+
+    @Test fun screenshotReportsTheRouteThatProducedBytes() {
+        val calls = mutableListOf<String>()
+        val result = controller(
+            canSu = false,
+            calls = calls,
+            helperBytes = listOf(byteArrayOf(1, 2, 3)),
+        ).screenshotWithRoute()
+        assertEquals(PrivilegeRoute.DAEMON, result?.route)
+        assertArrayEquals(byteArrayOf(1, 2, 3), result?.value)
+    }
+
+    @Test fun combinedScreenshotUsesExactlyOneSelectedRoute() {
+        val calls = mutableListOf<String>()
+        val result = InteractiveController(
+            canSu = false,
+            root = Root(calls, byteResults = listOf(byteArrayOf(9))),
+            daemon = Helper(calls, byteResults = listOf(null)),
+            accessibility = Accessibility(calls),
+            shell = Shell(calls, screenshotBytes = byteArrayOf(8)),
+        ).screenshotOnceWithRoute(0)
+
+        assertNull(result)
+        assertEquals(listOf("helper-bytes:SCREENCAP"), calls)
     }
 
     @Test fun readyShizukuPrecedesSpeculativeSuOnSandboxedProfile() {

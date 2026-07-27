@@ -12,6 +12,10 @@ interface RootShell {
     /** Run [cmd] as root, waiting for completion; true on exit 0. */
     fun run(cmd: String): Boolean
 
+    /** Run exactly one command attempt, waiting at most [timeoutMs]. Implementations must not retry
+     * [cmd] after an ambiguous timeout. The default preserves test/legacy implementations. */
+    fun runSingleAttempt(cmd: String, timeoutMs: Long = 5_000L): Boolean = run(cmd)
+
     /** Run [cmd] as root and return its stdout, or null on failure / no su. */
     fun runOutput(cmd: String): String?
 

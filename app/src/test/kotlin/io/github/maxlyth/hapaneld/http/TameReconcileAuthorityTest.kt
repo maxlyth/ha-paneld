@@ -1,7 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.TameReconcileResult
-import io.github.maxlyth.hapaneld.util.KeyedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -129,14 +129,14 @@ class TameReconcileAuthorityTest {
             },
             stopping = { false },
         )
-        assertEquals(KeyedLatestDispatcher.Admission.ACCEPTED, first.request())
+        assertEquals(LatestDispatcher.Admission.ACCEPTED, first.request())
         assertTrue(entered.await(2, TimeUnit.SECONDS))
         repeat(20) {
-            assertNotEquals(KeyedLatestDispatcher.Admission.REJECTED, first.request())
+            assertNotEquals(LatestDispatcher.Admission.REJECTED, first.request())
         }
         release.countDown()
         assertTrue(first.closeAndJoin(2_000))
-        assertEquals(KeyedLatestDispatcher.Admission.CLOSED, first.request())
+        assertEquals(LatestDispatcher.Admission.CLOSED, first.request())
 
         val startupConverged = CountDownLatch(1)
         val restarted = TameReconcileAuthority(

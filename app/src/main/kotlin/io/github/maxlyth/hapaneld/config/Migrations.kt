@@ -21,6 +21,17 @@ object Migrations {
      */
     val CHAIN: List<Migration> = listOf(
         Migration { values -> values.putIfAbsent("auto_brightness_minimum_percent", "4") },
+        Migration { values ->
+            values.putIfAbsent("auto_sleep", "false")
+        },
+        Migration { values ->
+            // Schema-3 bundles encoded the old implicit defaults. Preserve those when absent; new
+            // schema-4 stores use the safer registry defaults directly.
+            values.putIfAbsent("wake_on_wave", "true")
+            SettingsRegistry.LEGACY_DEFAULT_ON_HA_EXPOSURES.forEach { key ->
+                values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}$key", "true")
+            }
+        },
     )
 
     /**

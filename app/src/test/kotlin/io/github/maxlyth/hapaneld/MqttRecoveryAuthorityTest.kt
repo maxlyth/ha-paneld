@@ -2,7 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectionLease
 import io.github.maxlyth.hapaneld.mqtt.MqttFamilyPreference
-import io.github.maxlyth.hapaneld.util.ConflatedWorker
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -171,10 +171,10 @@ class MqttRecoveryAuthorityTest {
         dispatcher.close()
         val admission = dispatcher.submit(MqttConnectionEvent.Connected(MqttConnectionLease()))
 
-        assertEquals(ConflatedWorker.Admission.CLOSED, admission)
+        assertEquals(LatestDispatcher.Admission.CLOSED, admission)
         assertFalse(mqttAutomaticReconnectAllowed("unreachable", admission))
-        assertFalse(mqttAutomaticReconnectAllowed("auth-failed", ConflatedWorker.Admission.ACCEPTED))
-        assertTrue(mqttAutomaticReconnectAllowed("unreachable", ConflatedWorker.Admission.ACCEPTED))
+        assertFalse(mqttAutomaticReconnectAllowed("auth-failed", LatestDispatcher.Admission.ACCEPTED))
+        assertTrue(mqttAutomaticReconnectAllowed("unreachable", LatestDispatcher.Admission.ACCEPTED))
     }
 
     @Test fun `same-attempt disconnect owns state when its connected event was conflated`() {

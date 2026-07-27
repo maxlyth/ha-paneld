@@ -86,6 +86,24 @@ class AppInstallerTest {
         )
     }
 
+    @Test fun packageManagerRejectionIsDurableWhileOtherOutputStaysRetryable() {
+        // A `pm install` `Failure [...]` line is a durable rejection of THIS artifact — retrying the same
+        // pin cannot help — so it is Rejected; anything else is a transient Retryable. The message
+        // preserves the historical "install failed: <output>" text exactly.
+        assertEquals(
+            InstallOutcome.Rejected("install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"),
+            AppInstaller.installFailure("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"),
+        )
+        assertEquals(
+            InstallOutcome.Retryable("install failed: Shizuku installer unavailable"),
+            AppInstaller.installFailure("Shizuku installer unavailable"),
+        )
+        assertEquals(
+            InstallOutcome.Retryable("install failed: "),
+            AppInstaller.installFailure(""),
+        )
+    }
+
     @Test fun slowProgressCannotExtendTheWholeDownloadDeadline() {
         val remaining = ArrayDeque(listOf(10L, 0L))
         val output = ByteArrayOutputStream()

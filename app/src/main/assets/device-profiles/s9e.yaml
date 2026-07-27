@@ -64,7 +64,7 @@ match:
           values:
             - s9
 platform:
-  # Privilege mode verified on the S9E production image.
+  # Privilege form is inferred from vendor behavior; normal-app access still needs live confirmation.
   su_form: android
   app_can_su: true
   has_recents: true

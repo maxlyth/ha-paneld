@@ -301,6 +301,49 @@ class RuntimeProfileRegistryTest {
         assertEquals(ProfileActivationPhase.APPLYING, registry.status().activation.phase)
     }
 
+    @Test fun `failed invalid pending rollback leaves the staged state atomically intact`() {
+        val missing = ProfileRef("community.example.missing", "a".repeat(64))
+        preferences.put(
+            "selection" to "${missing.id}@${missing.revision}",
+            "activation_phase" to ProfileActivationPhase.PENDING.name,
+            "activation_generation" to 7L,
+            "activation_previous" to "auto",
+            "activation_desired" to "${missing.id}@${missing.revision}",
+            "activation_message" to "Selection staged; restart required.",
+            "catalog_revision" to 41L,
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        preferences.failNextPut()
+
+        val recovered = registry.resolveForStartup()
+
+        assertEquals("generic", recovered.summary.ref.id)
+        assertTrue(recovered.issues.any { "rollback could not be persisted" in it.message })
+        val status = registry.status()
+        assertEquals(41L, status.catalogRevision)
+        assertEquals(ProfileSelection.Pinned(missing), status.selection)
+        assertEquals(ProfileActivationPhase.PENDING, status.activation.phase)
+        assertEquals(7L, status.activation.generation)
+        assertEquals(ProfileSelection.Auto, status.activation.previous)
+        assertEquals(ProfileSelection.Pinned(missing), status.activation.desired)
+    }
+
+    @Test fun `unhealthy rollback preserves its established last known good target`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val first = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        registry.select(ProfileSelection.Pinned(first), registry.status().catalogRevision)
+        assertTrue(registry.markActivationHealthy(registry.resolveForStartup().activationGeneration!!))
+        assertEquals(ProfileSelection.Auto, registry.status().lastKnownGood)
+
+        registry.select(ProfileSelection.Auto, registry.status().catalogRevision)
+        assertEquals("generic", registry.resolveForStartup().summary.ref.id)
+        val recovered = registry.resolveForStartup()
+
+        assertEquals(first, recovered.summary.ref)
+        assertEquals(ProfileSelection.Auto, registry.status().lastKnownGood)
+        assertEquals(ProfileActivationPhase.ROLLED_BACK, registry.status().activation.phase)
+    }
+
     @Test fun `automatic bundled revision change uses health gate and retained rollback snapshot`() {
         val oldRaw = ProfileYaml.serialize(testProfileDocument(id = "vendor.test-panel", version = "1.0.0", facts = facts))
         val newRaw = ProfileYaml.serialize(testProfileDocument(id = "vendor.test-panel", version = "1.0.1", facts = facts))
@@ -390,6 +433,21 @@ class RuntimeProfileRegistryTest {
         assertEquals(ProfileActivationPhase.ROLLED_BACK, registry.status().activation.phase)
         assertTrue(registry.status().activation.message!!.contains("did not stop"))
         assertFalse(registry.abortPendingActivation("too late"))
+    }
+
+    @Test fun `failed teardown abort leaves the pending activation atomically intact`() {
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        val ref = import(registry, ProfileYaml.serialize(testProfileDocument(facts = facts)))
+        registry.select(ProfileSelection.Pinned(ref), registry.status().catalogRevision)
+        val before = registry.status()
+        preferences.failNextPut()
+
+        assertFalse(registry.abortPendingActivation("Critical owner did not stop."))
+
+        val after = registry.status()
+        assertEquals(before.catalogRevision, after.catalogRevision)
+        assertEquals(before.selection, after.selection)
+        assertEquals(before.activation, after.activation)
     }
 
     @Test fun `missing pinned revision in pending state rolls back and cannot be marked healthy`() {
@@ -681,6 +739,50 @@ class RuntimeProfileRegistryTest {
         assertTrue(recovered.issues.any { "incompatible" in it.message })
         assertFalse(registry.list().single { it.ref == ref }.compatible)
         assertTrue(registry.deleteProfile(ref, registry.status().catalogRevision) is ProfileMutation.Success)
+    }
+
+    @Test fun `active invalid recovery clears an unusable last known good target`() {
+        val invalid = restore(incompatibleImportedYaml())
+        val stale = ProfileRef("community.example.stale", "b".repeat(64))
+        preferences.put(
+            "selection" to "${invalid.id}@${invalid.revision}",
+            "last_known_good" to "${stale.id}@${stale.revision}",
+            "activation_phase" to ProfileActivationPhase.ACTIVE.name,
+            "catalog_revision" to 17L,
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+
+        val recovered = registry.resolveForStartup()
+
+        assertEquals("generic", recovered.summary.ref.id)
+        val status = registry.status()
+        assertEquals(18L, status.catalogRevision)
+        assertEquals(ProfileSelection.Auto, status.selection)
+        assertNull(status.lastKnownGood)
+        assertEquals(ProfileActivationPhase.ROLLED_BACK, status.activation.phase)
+    }
+
+    @Test fun `failed active invalid recovery preserves the entire durable state`() {
+        val invalid = restore(incompatibleImportedYaml())
+        val stale = ProfileRef("community.example.stale", "b".repeat(64))
+        preferences.put(
+            "selection" to "${invalid.id}@${invalid.revision}",
+            "last_known_good" to "${stale.id}@${stale.revision}",
+            "activation_phase" to ProfileActivationPhase.ACTIVE.name,
+            "catalog_revision" to 17L,
+        )
+        val registry = registry(mapOf("generic.yaml" to genericYaml()))
+        preferences.failNextPut()
+
+        val recovered = registry.resolveForStartup()
+
+        assertEquals("generic", recovered.summary.ref.id)
+        assertTrue(recovered.issues.any { "recovery could not be persisted" in it.message })
+        val status = registry.status()
+        assertEquals(17L, status.catalogRevision)
+        assertEquals(ProfileSelection.Pinned(invalid), status.selection)
+        assertEquals(ProfileSelection.Pinned(stale), status.lastKnownGood)
+        assertEquals(ProfileActivationPhase.ACTIVE, status.activation.phase)
     }
 
     @Test fun `stored schema 1 pin falls back but remains exportable and deletable`() {

@@ -4,6 +4,7 @@ import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
 import io.github.maxlyth.hapaneld.util.StreamDeadline
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -114,24 +115,24 @@ internal object DeadlineBoundedBody {
             StreamDeadline(timeout, onTimeout)
         },
     ): Long {
-        require(timeoutMs in 1..(Long.MAX_VALUE / NANOS_PER_MILLISECOND))
+        require(timeoutMs in 1..(Long.MAX_VALUE / 1_000_000L))
         val timedOut = AtomicBoolean(false)
-        val deadlineNanos = nanoTime() + timeoutMs * NANOS_PER_MILLISECOND
-        val bounded = DeadlineInputStream(input, deadlineNanos, nanoTime)
+        val budget = MonotonicDeadline(timeoutMs, nanoTime)
+        val bounded = DeadlineInputStream(input, budget)
         val deadline = deadlineFactory(timeoutMs) {
             timedOut.set(true)
             runCatching { input.close() }
         }
         return try {
             val copied = BoundedStreams.copy(bounded, output, maxBytes)
-            if (timedOut.get() || nanoTime() - deadlineNanos >= 0L) throw BodyReceiptTimeout()
+            if (timedOut.get() || budget.remainingMs() <= 0L) throw BodyReceiptTimeout()
             copied
         } catch (error: ByteLimitExceeded) {
             throw error
         } catch (error: BodyReceiptTimeout) {
             throw error
         } catch (error: Exception) {
-            if (timedOut.get() || nanoTime() - deadlineNanos >= 0L) throw BodyReceiptTimeout()
+            if (timedOut.get() || budget.remainingMs() <= 0L) throw BodyReceiptTimeout()
             throw error
         } finally {
             deadline.close()
@@ -154,8 +155,7 @@ internal object DeadlineBoundedBody {
 
     private class DeadlineInputStream(
         source: InputStream,
-        private val deadlineNanos: Long,
-        private val nanoTime: () -> Long,
+        private val budget: MonotonicDeadline,
     ) : FilterInputStream(source) {
         override fun read(): Int {
             checkDeadline()
@@ -168,11 +168,9 @@ internal object DeadlineBoundedBody {
         }
 
         private fun checkDeadline() {
-            if (nanoTime() - deadlineNanos >= 0L) throw BodyReceiptTimeout()
+            if (budget.remainingMs() <= 0L) throw BodyReceiptTimeout()
         }
     }
-
-    private const val NANOS_PER_MILLISECOND = 1_000_000L
 }
 
 /** Shared bounded body admission for every materialized request body on the LAN control plane. */
@@ -552,7 +550,15 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
     }
     var progressResult = "backup cancelled"
     var progressFinished = false
+    var deliveryHandedOff = false
     var artifact: PanelBackup.Artifact? = null
+    val deliveryCleaned = AtomicBoolean(false)
+    fun cleanDelivery() {
+        if (deliveryCleaned.compareAndSet(false, true)) {
+            artifact?.close()
+            delivery.close()
+        }
+    }
     try {
         val built = dependencies.buildBackup(includeCompanion, passphrase)
         artifact = built
@@ -563,8 +569,18 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
             "Content-Disposition",
             "attachment; filename=\"${dependencies.backupFileStem()}-backup.${built.extension}\"",
         )
-        call.respondOutputStream(ContentType.Application.OctetStream) {
-            built.file.inputStream().use { input -> input.copyTo(this) }
+        deliveryHandedOff = true
+        try {
+            call.respondOutputStream(ContentType.Application.OctetStream) {
+                try {
+                    built.file.inputStream().use { input -> input.copyTo(this) }
+                } finally {
+                    cleanDelivery()
+                }
+            }
+        } catch (error: Throwable) {
+            deliveryHandedOff = false
+            throw error
         }
     } catch (_: ByteLimitExceeded) {
         progressResult = "Companion backup is too large"
@@ -583,9 +599,10 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         )
         return
     } finally {
-        artifact?.close()
+        if (!deliveryHandedOff) {
+            cleanDelivery()
+        }
         if (!progressFinished) InstallProgress.finish(progress, progressResult)
-        delivery.close()
     }
 }
 

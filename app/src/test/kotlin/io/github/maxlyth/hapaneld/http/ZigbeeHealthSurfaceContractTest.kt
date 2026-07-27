@@ -44,12 +44,13 @@ class ZigbeeHealthSurfaceContractTest {
         assertTrue(js.contains("fetch(\"/api/v1/radio/join\", { method: \"POST\" })"))
         assertTrue(js.contains("text: \"Request join\""))
         assertTrue(js.contains("request.disabled = !enabled || joined || coolingDown"))
-        assertTrue(js.contains("recomputeDirty();\n        loadRadio();\n        restampConfigWatchBaseline();\n        if (editGeneration"))
+        assertTrue(js.contains("recomputeDirty();\n        loadRadio();\n        restampConfigWatchBaseline();"))
+        assertTrue(js.contains("if (editGeneration !== submittedGeneration)"))
         assertFalse(js.contains("Turn Zigbee off"))
         assertFalse(js.contains("Join request active"))
         assertTrue(js.contains("joinCooldownUntil = Date.now() + 60000"))
         assertTrue(bridge.contains("fun requestZigbeeJoin(): Boolean"))
-        assertTrue(bridge.contains("return admitZigbee(true) != ConflatedWorker.Admission.CLOSED"))
+        assertTrue(bridge.contains("return admitZigbee(true) != LatestDispatcher.Admission.CLOSED"))
         assertTrue("router and join rows must render as one visual subgroup", css.contains("#cfg-zigbee_router + #cfg-zigbee_join{border-top:0;padding-top:0}"))
     }
 

@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.9.6-rc1 - 2026-07-27
+
+The 0.9.6 release of ha-paneld is on track to be the largest to date, and I have been working night and day to get it out the door. Previously, I was careful to list the major changes so that testers could evaluate new features, but this time there are hundreds, and trying to annotate every one has long since stopped being viable.
+
+Previous releases had largely ignored the new-user experience, and features had piled on with little thought about how a new user would navigate setting up a new panel. Over the pre-release cycle, we have evolved from a helper process for the Home Assistant Companion App into a fully fledged dashboard app with many capabilities that I cannot expect a new user to set up without context.
+
+Therefore, the biggest new feature might not be visible to existing users upgrading from an earlier release. I have spent a lot of time resetting panels and iteratively building a first-run configuration workflow that can run directly on a panel or, preferably, from a user's laptop or phone. Choosing to support two very different runtimes did not make this easy, and I am certain there will be holes. I have tried to imagine and test corner cases, but I am sure there are many I have missed. Please report them so that someone else does not have to suffer the same error.
+
+The change list below is therefore acknowledged to be full of omissions. If I have broken something that you relied upon and not listed it, please raise an issue. Here are some of the highlights.
+
+### Added
+
+- **New panels get a guided setup journey** — the panel and browser both expose `/setup`, which leads through connection, dashboard and renderer requirements, Home Assistant sign-in, and the entity-filter choice. A panel that cannot safely render the dashboard because its browser engine is too old receives a clear block and recovery direction instead of a blank or misleading dashboard.
+
+- **Panel screen remote control** — you can now simulate panel taps from the web UI in Relaxed security mode only, for obvious reasons. Click the screenshot in the Dashboard tab to access it. This is useful for navigating dashboard tabs remotely while trying to get full coverage of the entity filter. It is not designed to be a real-time, interactive, multi-touch terminal.
+
+- **Upgrades and backups preserve more recoverable state** — I completely refactored the database schema in 0.9.6 into a more abstract form. Configuration is vaulted before structural database changes, downgrade recovery is surfaced clearly, and panel backups now include portable durable state as well as settings and profiles. Configuration data older than 0.9.5 cannot be upgraded directly, so upgrade to 0.9.5 first if you need to migrate an older installation. On rooted panels, the installer also makes a best-effort protected same-panel database snapshot for manual break-glass recovery before an upgrade; sandboxed panels retain the fail-closed settings export only.
+
+- **Auto sleep using Home Assistant presence devices as well as local activity** — the panel combines touch and proximity activity with selected Home Assistant presence sources, learns suitable delays, and shows the reason for its current decision. You might get a better outcome with an automation written in Home Assistant, but this low-configuration panel-side solution might work for many users once an area and presence sources have been selected. The panel and Home Assistant sensors must share the same Home Assistant area.
+
+- **Use Home Assistant's native dashboard interface** — I discovered during the 0.9.6 work that Home Assistant has a new external-bus interface that covers authentication and dashboard lifecycle capabilities we had previously built ourselves. For future compatibility, I chose to use Home Assistant's native interface where possible. This means the built-in renderer now requires Home Assistant 2026.4.2 or newer.
+
+- **The installer can deliberately start over safely** — `install.sh --reset-config` creates and checks a settings export, asks for typed confirmation, clears the app only after the replacement APK has been authenticated, and then returns the panel to first-run setup. Learned entity, proximity, ambient and revision state is intentionally erased and is not restored by that export. The option is refused for fleet updates.
+
+### Changed
+
+- **Automatic dashboard selection is more useful** — Auto now resolves to ha-paneld's built-in renderer, and the Home dashboard can initially follow the Home Assistant user's configured default. Explicit external-renderer choices remain available for existing setups.
+
+- **Broader entity-filter support** — filtering now understands more dynamic dashboard and card patterns and explains when cards cannot be safely filtered, including compatibility limits for Bubble and Kiosk-style dashboards.
+
+- **More sensible default values** — I have gone over nearly all configuration items and set explicit defaults for new users. Existing installations keep settings that were explicitly saved, but a changed default can affect an installation that was relying on the previous implicit value. Please review your configuration and point out anything missing.
+
+### Fixed
+
+- **The on-panel controls are clearer and more reliable** — vendor packages that firmware disabled can be re-enabled before ha-paneld removes its own tame selection; screen-brightness status distinguishes reduced helper-backed control from genuinely unavailable control; protected Configure labels no longer separate from their approval shields; and screenshot controls are easier to read and operate.
+
+- **Configured panels stay configured after an upgrade or reconnect** — setup banners no longer promise a dashboard step that does not exist, and panels already using entity filtering are not stranded on its setup question.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. If you choose `--reset-config`, keep the verified settings export and expect to complete first-run setup again; it restores configuration, not learned state. Existing installations should continue without manual Home Assistant entity or discovery changes; a complete panel backup remains recommended before any major update.
+
 ## v0.9.5 - 2026-07-20
 
 **ha-paneld is easier to sign into, adapts better to each panel’s environment and recovers more reliably from routine changes.** It also makes sensitive maintenance safer without taking control away from existing installations.

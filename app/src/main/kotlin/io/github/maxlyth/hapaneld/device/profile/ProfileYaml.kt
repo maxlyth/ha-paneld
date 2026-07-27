@@ -46,8 +46,7 @@ internal object ProfileYaml {
     )
 
     fun parse(raw: String): ProfileParseResult {
-        // Encode once: the old parse path allocated the complete UTF-8 document separately for hashing
-        // and the size bound. The byte count also lets feature-cost telemetry avoid a third allocation.
+        // Encoded once and reused for the size bound, hash, and feature-cost byte count.
         val encoded = raw.toByteArray(StandardCharsets.UTF_8)
         val hash = sha256(encoded)
         if (encoded.size > ProfileMetadata.MAX_BYTES) {

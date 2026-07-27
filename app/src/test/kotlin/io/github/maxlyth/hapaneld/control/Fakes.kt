@@ -105,7 +105,8 @@ class FakeMetricSource(
         availableGovernorRootFallbacks += allowRootFallback
         return availableGovernors
     }
-    override fun roomClimate(): String? = null
+    override fun roomClimateDaemon(): String? = null
+    override fun roomClimateShell(): String? = null
 }
 
 /** Fake [Daemon]. [replies] maps an exact command line to its reply; sends are recorded in [sent]. */

@@ -1,0 +1,1 @@
+(()=>{if(window.top&&window.top!==window)return;try{if(!localStorage.getItem('selectedTheme')){localStorage.setItem('selectedTheme', JSON.stringify({dark:true}))}}catch(e){}})();

@@ -61,6 +61,109 @@ class AssetSyntaxTest {
         }
     }
 
+    @Test fun configureAutoSleepHistoryWaitsForReadinessWithoutUserRetry() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const source=fs.readFileSync(process.argv[1],'utf8');
+            function take(name){
+              const start=source.indexOf('function '+name+'(');if(start<0)throw new Error('missing '+name);
+              const open=source.indexOf('{',start);let depth=0,quote='',escaped=false;
+              for(let i=open;i<source.length;i++){
+                const c=source[i];
+                if(quote){if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c===quote)quote='';continue}
+                if(c==='"'||c==="'"||c==='`'){quote=c;continue}
+                if(c==='{')depth++;else if(c==='}'&&--depth===0)return source.slice(start,i+1);
+              }
+              throw new Error('unterminated '+name);
+            }
+            vm.runInThisContext([
+              'autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepHistoryTerminalMessage',
+              'scheduleAutoSleepReadiness','loadAutoSleepHistory','invalidateAutoSleepHistory',
+              'invalidateAutoSleepData','autoSleepDisplayedHours','loadAutoSleepData'
+            ].map(take).join('\n'));
+            global.values={auto_sleep:'true'};
+            global.autoSleepStatus=null;global.autoSleepLoading=false;global.autoSleepRequest=0;
+            global.autoSleepHistory=null;global.autoSleepHistoryLoading=false;global.autoSleepHistoryError='';
+            global.autoSleepHistoryRequest=0;global.autoSleepHistoryHours=6;global.autoSleepHistoryWaiting=false;
+            global.autoSleepHistoryWaitingMessage='';global.autoSleepHistoryReadyTimer=null;
+            global.autoSleepReadinessDelayMs=1000;global.autoSleepHistoryRetryDelayMs=5000;
+            global.updateAutoSleepSummary=()=>{};global.updateAutoSleepHistory=()=>{};
+            const timers=[];let timerId=0;
+            global.setTimeout=(fn,ms)=>{const timer={id:++timerId,fn,ms,cancelled:false};timers.push(timer);return timer.id};
+            global.clearTimeout=id=>{const timer=timers.find(candidate=>candidate.id===id);if(timer)timer.cancelled=true};
+            const preparing={available:false,enabled:true,phase:'learning',reason:'learning',source_count:0};
+            const live={available:true,enabled:true,phase:'live',reason:'source_active',source_count:8};
+            let statuses=Array.from({length:12},()=>preparing).concat([live]);
+            let statusCalls=0,historyCalls=0,historyResults=[],historyResolve=null,readinessDelayMs=0;
+            global.fetch=url=>{
+              if(url==='/api/v1/auto-sleep'){
+                statusCalls++;const body=statuses.shift()||live;
+                if(body&&body.httpStatus)return Promise.resolve({ok:false,status:body.httpStatus});
+                return Promise.resolve({ok:true,json:()=>Promise.resolve(body)});
+              }
+              if(String(url).startsWith('/api/v1/auto-sleep/history?hours=')){
+                historyCalls++;
+                const result=historyResults.shift();
+                if(result&&result.deferred)return new Promise(resolve=>{historyResolve=resolve});
+                if(result&&result.reject)return Promise.reject(result.reject);
+                if(result&&result.status)return Promise.resolve({ok:false,status:result.status});
+                const body=result||{available:true,segments:[{start_epoch_ms:1,end_epoch_ms:2,output:'hold_awake'}],source_lanes:[]};
+                return Promise.resolve({ok:true,json:()=>Promise.resolve(body)});
+              }
+              return Promise.reject(new Error('unexpected fetch '+url));
+            };
+            const flush=()=>new Promise(resolve=>setImmediate(()=>setImmediate(resolve)));
+            (async()=>{
+              loadAutoSleepData();await flush();
+              while(statusCalls<13){
+                const timer=timers.find(candidate=>!candidate.cancelled);if(!timer)process.exit(2);
+                timer.cancelled=true;readinessDelayMs+=timer.ms;timer.fn();await flush();
+                if(historyCalls!==0&&statusCalls<13)process.exit(3);
+                if(autoSleepHistoryError)process.exit(4);
+              }
+              await flush();
+              if(readinessDelayMs<=26000||historyCalls!==1||!autoSleepHistory||autoSleepHistoryWaiting||autoSleepHistoryError||timers.some(timer=>!timer.cancelled))process.exit(5);
+              // A temporary history failure recovers automatically using the slower failure path.
+              timers.splice(0);statuses=[live,live];historyResults=[{available:false,detail:'history_transport'}];
+              const beforeRecovery=historyCalls;invalidateAutoSleepData();loadAutoSleepData();await flush();
+              const recoveryTimer=timers.find(candidate=>!candidate.cancelled);
+              if(!recoveryTimer||recoveryTimer.ms!==5000||historyCalls!==beforeRecovery+1||autoSleepHistoryError)process.exit(6);
+              recoveryTimer.cancelled=true;recoveryTimer.fn();await flush();
+              if(historyCalls!==beforeRecovery+2||!autoSleepHistory||timers.some(timer=>!timer.cancelled))process.exit(7);
+              // Invalidation cancels pending recovery and fences a response already in flight.
+              timers.splice(0);statuses=[live];historyResults=[{available:false,detail:'runtime_unavailable'}];
+              invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(!timers.some(timer=>!timer.cancelled))process.exit(8);
+              invalidateAutoSleepData(true);
+              if(timers.some(timer=>!timer.cancelled))process.exit(9);
+              statuses=[live];historyResults=[{deferred:true}];loadAutoSleepData();await flush();
+              if(!historyResolve)process.exit(10);
+              invalidateAutoSleepData(true);historyResolve({ok:true,json:()=>Promise.resolve({available:true,segments:[],source_lanes:[]})});await flush();
+              if(autoSleepHistory!==null)process.exit(11);
+              // Stable HTTP client errors are terminal and never enter automatic recovery.
+              timers.splice(0);statuses=[live];historyResults=[{status:403}];invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(!autoSleepHistoryError.includes('HTTP 403')||timers.some(timer=>!timer.cancelled))process.exit(12);
+              // A stable status client error is also terminal.
+              timers.splice(0);statuses=[{httpStatus:403}];invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(!autoSleepHistoryError.includes('HTTP 403')||timers.some(timer=>!timer.cancelled))process.exit(13);
+              // A stable failure must be truthful and terminal, not silently polled forever.
+              timers.splice(0);statuses=[{available:false,enabled:true,phase:'no_credible_sources',reason:'no_credible_sources',source_count:0}];
+              invalidateAutoSleepData();
+              loadAutoSleepData();await flush();
+              if(!autoSleepHistoryError.includes('No credible device-backed')||timers.some(timer=>!timer.cancelled))process.exit(14);
+              // Typed parser failure copy must not falsely blame the HA connection.
+              timers.splice(0);statuses=[{available:false,enabled:true,phase:'discovery_failed',reason:'discovery_failed',detail:'history_parse',source_count:0}];
+              invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(!autoSleepHistoryError.includes('activity timestamps')||autoSleepHistoryError.includes('connection')||timers.some(timer=>!timer.cancelled))process.exit(15);
+            })().catch(error=>{console.error(error);process.exit(16)});
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
+        assertEquals("Configure auto-sleep readiness lifecycle failed:\n$out", 0, code)
+    }
+
     @Test fun installLinksRequireGithubHttps() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
@@ -134,8 +237,8 @@ class AssetSyntaxTest {
         assertFalse("screenshot URL must not be copied from DOM text", info.contains("im.src=im.getAttribute('data-src')"))
         assertTrue("hydration must use the server-provided fixed same-origin cached screenshot URL", info.contains("showAndRefreshScreenshot(sc,d.shotCached)"))
         assertTrue("every dashboard visit must request a fresh screenshot", info.contains("url='/api/v1/screenshot.png?t='+Date.now()"))
-        assertTrue("the current screenshot must remain visible until the fresh image loads", info.contains("URL.createObjectURL(fresh.blob)"))
-        assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='/api/v1/screenshot.png?cached='+fresh.id"))
+        assertTrue("the current screenshot must remain visible until the fresh image loads", info.contains("var next=new Image()"))
+        assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='/api/v1/screenshot.png?cached='+id"))
         assertTrue(
             "a cold shell must not refresh until hydration confirms screenshot access",
             info.contains("sc.getAttribute('data-capture-ok')==='1'"),
@@ -194,14 +297,35 @@ class AssetSyntaxTest {
             const issue='<img src=x onerror=alert(1)>';
             global.document={hidden:false,getElementById:k=>ids[k],querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>el()};
             global.setInterval=()=>0;global.confirm=()=>false;global.alert=()=>{};
-            global.fetch=(url)=>Promise.resolve({ok:true,json:()=>Promise.resolve(url.includes('/issues')?{dashboard_issue_count:1,blocking_issue_count:ignoredMode?0:1,ignored_issue_count:ignoredMode?1:0,items:[{blocking:!ignoredMode,ignored:ignoredMode,fingerprint:'0123456789abcdef',view_title:issue,source_locations:[issue],rule_summary:issue,candidate_count:1600,limit:64,reason:issue,recommendation:issue}],dynamic_expressions:[{source_location:issue,literal:issue,fingerprint:'dynamic-1',truncated:true}]}:{state:'active',stream_entity_count:10,stream_mode:'filtered',catalog_count:100,suggested_count:0,last_sync_at:0,db_bytes:0}),text:()=>Promise.resolve('')});
+            global.fetch=(url)=>Promise.resolve({ok:true,json:()=>Promise.resolve(url.includes('/issues')?{dashboard_issue_count:1,blocking_issue_count:ignoredMode?0:1,ignored_issue_count:ignoredMode?1:0,items:[{blocking:!ignoredMode,ignored:ignoredMode,fingerprint:'0123456789abcdef',view_title:issue,source_locations:[issue],rule_summary:issue,candidate_count:1600,limit:64,reason:issue,recommendation:issue}],dynamic_expressions:[{source_location:issue,literal:issue,fingerprint:'dynamic-1',truncated:true}]}:{state:'active',stream_entity_count:10,stream_mode:'filtered',catalog_count:100,suggested_count:0,unresolved_count:2,last_sync_at:0,db_bytes:0}),text:()=>Promise.resolve('')});
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
-            setImmediate(()=>{const row=ids['entity-issues-list'].child,html=row.innerHTML,dynamic=ids['entity-dynamic-list'].child.innerHTML;if(html.includes(issue)||!html.includes('&lt;img src=x onerror=alert(1)&gt;'))process.exit(2);if(ignoredMode){if(ids['entity-issues-summary'].textContent.includes('need a choice')||!ids['entity-issues-summary'].textContent.includes('resolved for activation'))process.exit(3);if(!row.child||row.child.textContent!=='Re-enable safety check')process.exit(4)}else{if(!ids['entity-issues-summary'].textContent.includes('1 entity-filter check'))process.exit(3);if(!row.child||row.child.textContent!=='Ignore potential entities and continue')process.exit(4)}if(dynamic.includes(issue)||!dynamic.includes('&lt;img src=x onerror=alert(1)&gt;'))process.exit(5);if(ids['entity-dynamic'].hidden)process.exit(6)});
+            setImmediate(()=>{const row=ids['entity-issues-list'].child,html=row.innerHTML,dynamic=ids['entity-dynamic-list'].child.innerHTML;if(!ids['entity-status'].innerHTML.includes('2 dynamic expressions not statically resolvable'))process.exit(7);if(html.includes(issue)||!html.includes('&lt;img src=x onerror=alert(1)&gt;'))process.exit(2);if(ignoredMode){if(ids['entity-issues-summary'].textContent.includes('requires review')||!ids['entity-issues-summary'].textContent.includes('previously allowed'))process.exit(3);if(row.className!=='entity-issue allowed'||!row.child||row.child.textContent!=='Re-enable safety check')process.exit(4)}else{if(!ids['entity-issues-summary'].textContent.includes('1 check requires review'))process.exit(3);if(row.className!=='entity-issue blocking'||!html.includes('Automatic updates paused')||!row.child||row.child.textContent!=='Ignore potential entities and continue')process.exit(4)}if(dynamic.includes(issue)||!dynamic.includes('&lt;img src=x onerror=alert(1)&gt;'))process.exit(5);if(ids['entity-dynamic'].hidden)process.exit(6)});
         """.trimIndent()
         for (mode in listOf("blocking", "ignored")) {
             val (code, out) = run(listOf("node", "-e", script, File(dir, "entities.js").absolutePath, mode))
             assertEquals("dashboard issue presentation contract failed ($mode):\n$out", 0, code)
         }
+    }
+
+    @Test fun mixedLimitedSupportAndBlockerRowsKeepDistinctLabelsAndControls() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            function el(){return {dataset:{},className:'',textContent:'',innerHTML:'',checked:false,disabled:false,value:'',children:[],classList:{toggle(){},remove(){}},addEventListener(){},querySelector(){return el()},querySelectorAll(){return []},appendChild(v){this.child=v;this.children.push(v)}}}
+            const ids={};['entity-status','entity-search','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
+            global.document={hidden:false,getElementById:k=>ids[k],querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>el()};
+            global.setInterval=()=>0;global.confirm=()=>false;global.alert=()=>{};
+            const notice={type:'limited_support',blocking:false,ignored:false,fingerprint:'notice-1',severity:'warning',view_title:'Overview',source_locations:['dashboard.views[0].cards[0]'],rule_summary:'Button Card has limited entity discovery support',candidate_count:null,limit:null,reason:'Static IDs are scanned.',recommendation:'Keep dependencies explicit.'};
+            const gap={type:'compatibility_gap',blocking:false,ignorable:false,ignored:false,fingerprint:'gap-1',severity:'warning',view_title:'Overview',source_locations:['dashboard.views[0].cards[0]'],rule_summary:'Button Card uses JavaScript templates',candidate_count:null,limit:null,reason:'Dependencies are hidden.',recommendation:'Keep dependencies explicit.'};
+            const overflow={type:'diagnostic_limit',blocking:true,ignorable:false,ignored:false,fingerprint:'overflow-1',severity:'error',view_title:'Dashboard',source_locations:['dashboard'],rule_summary:'Dashboard has more safety checks than can be reviewed',candidate_count:null,limit:null,reason:'Checks exceed the diagnostic limit.',recommendation:'Simplify the dashboard.'};
+            global.fetch=(url)=>Promise.resolve({ok:true,json:()=>Promise.resolve(url.includes('/issues')?{dashboard_issue_count:3,blocking_issue_count:1,ignored_issue_count:0,items:[overflow,gap,notice],dynamic_expressions:[]}:{state:'blocked',stream_entity_count:10,stream_mode:'filtered',catalog_count:100,suggested_count:0,blocking_issue_count:1,automatic_activation_blocked:true,unresolved_count:0,last_sync_at:0,db_bytes:0}),text:()=>Promise.resolve('')});
+            vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
+            setImmediate(()=>{const rows=ids['entity-issues-list'].children,summary=ids['entity-issues-summary'].textContent;if(rows.length!==3||!summary.includes('1 check requires review'))process.exit(2);const overflowRow=rows[0],gapRow=rows[1],limited=rows[2];if(overflowRow.className!=='entity-issue blocking'||!overflowRow.innerHTML.includes('Automatic updates paused')||overflowRow.child)process.exit(5);if(gapRow.className!=='entity-issue advisory'||!gapRow.innerHTML.includes('Limited coverage')||gapRow.innerHTML.includes('Candidate set')||gapRow.child)process.exit(3);if(limited.className!=='entity-issue advisory'||!limited.innerHTML.includes('Limited coverage')||!limited.innerHTML.includes('Button Card has limited entity discovery support')||limited.innerHTML.includes('Candidate set')||limited.child)process.exit(4)});
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "entities.js").absolutePath))
+        assertEquals("mixed dashboard issue presentation contract failed:\n$out", 0, code)
     }
 
     @Test fun dashboardIssuesEndpointIsDocumented() {
@@ -211,27 +335,29 @@ class AssetSyntaxTest {
         assertTrue(paths.has("/api/v1/dashboard/entities/issues"))
     }
 
-    @Test fun configureSaveRefreshesEntityTabInBothDirections() {
+    @Test fun configureSaveDoesNotReloadTheShellForEntityFiltering() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
         assumeTrue("node not available (skipping)", nodeAvailable())
         val script = """
             const fs=require('fs'),vm=require('vm');
             const initiallyEnabled=process.argv[2]==='true';
-            let reloads=0,posted='';
+            let reloads=0,posted='',navEnabled=true,navNode;
             const made=[];
             function element(tag){
-              const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,
+              const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,parentNode:null,
                 classList:{toggle(){},add(){},remove(){}},
-                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){this.children.push(v);return v},
+                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){v.parentNode=this;this.children.push(v);return v},
+                replaceChild(next,current){next.parentNode=this;this.children=this.children.map(v=>v===current?next:v);navNode=next;navEnabled=next.tag==='a'},
                 scrollIntoView(){}};
               made.push(e);return e;
             }
+            const nav=element('div');navNode=element('a');nav.appendChild(navNode);
             const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','savebar','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
             global.document={
               body:element('body'),
               getElementById:k=>ids[k]||(ids[k]=element(k)),createElement:tag=>element(tag),
-              querySelector:sel=>sel==='.nav a[href^="/entities"]'&&initiallyEnabled?element('a'):null
+              querySelector(sel){if(sel==='.nav a[href^="/entities"]')return navEnabled?navNode:null;if(sel==='.nav span.disabled-tab')return navEnabled?null:navNode;return null}
             };
             global.location={hash:'',reload(){reloads++}};
             global.window=global;
@@ -244,6 +370,8 @@ class AssetSyntaxTest {
               if(url==='/api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
               if(url==='/api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:initiallyEnabled?'true':'false'},ha_expose:{}})});
               if(url==='/api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
+              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='/health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=entity-tab-test')});
               return Promise.reject(new Error('unexpected fetch '+url));
             };
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
@@ -260,7 +388,7 @@ class AssetSyntaxTest {
                 const expected=initiallyEnabled?'false':'true';
                 const params=new URLSearchParams(posted);
                 if(params.get('dashboard_entity_learning')!==expected)process.exit(3);
-                if(reloads!==1)process.exit(4);
+                if(reloads!==0||!navEnabled)process.exit(4);
                 if(params.has('dashboard_package')||params.has('ha_expose_dashboard_package')||params.has('ha_expose_dashboard_entity_learning'))process.exit(5);
                 if(Array.from(params.keys()).length!==1)process.exit(6);
               }));
@@ -270,11 +398,11 @@ class AssetSyntaxTest {
             val (code, out) = run(
                 listOf("node", "-e", script, File(dir, "configure.js").absolutePath, initial.toString()),
             )
-            assertEquals("Configure entity-tab ${if (initial) "disable" else "enable"} transition failed:\n$out", 0, code)
+            assertEquals("Configure entity-filter ${if (initial) "disable" else "enable"} save reloaded the shell:\n$out", 0, code)
         }
     }
 
-    @Test fun configureSavePreservesNewerEditsWhileReconcilingNavAndWatchBaseline() {
+    @Test fun configureSavePreservesNewerEditsAndWatchBaselineWithoutShellReload() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)
         assumeTrue("node not available (skipping)", nodeAvailable())
@@ -291,7 +419,7 @@ class AssetSyntaxTest {
                 scrollIntoView(){}};
               made.push(e);return e;
             }
-            const nav=element('div');navNode=element('span');navNode.className='disabled-tab';nav.appendChild(navNode);
+            const nav=element('div');navNode=element('a');nav.appendChild(navNode);navEnabled=true;
             const ids={};['cfg-groups','cfg-status','cfg-msg','savebtn','savebar','tab-basic','tab-adv'].forEach(k=>ids[k]=element(k));
             const body=element('body');
             global.document={body,title:'Panel · Configure',getElementById:k=>ids[k]||(ids[k]=element(k)),createElement:tag=>element(tag),
@@ -328,7 +456,7 @@ class AssetSyntaxTest {
             }));
         """.trimIndent()
         val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
-        assertEquals("Configure in-flight edit reconciliation failed:\n$out", 0, code)
+        assertEquals("Configure in-flight edit preservation failed:\n$out", 0, code)
     }
 
     @Test fun installOwnedFormsConsumeStructuredOutcomesAndReturnToTheirCards() {

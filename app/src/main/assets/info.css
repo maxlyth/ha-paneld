@@ -95,6 +95,10 @@ canvas{width:100%;display:block;background:#0d0d0d;border:1px solid var(--divide
 .dt th{font-size:.68rem;text-transform:uppercase;letter-spacing:.03em;color:var(--icon);font-weight:600;width:auto;border-bottom:2px solid var(--border)}
 .dt td{color:var(--text-soft);font-weight:400}
 .dt .num{text-align:right;width:32%}
+.top-process-modes{float:right;display:inline-flex;gap:2px;margin-top:-2px}
+.top-process-mode{appearance:none;align-self:auto;padding:2px 7px;border-radius:5px;border:1px solid var(--border-strong);background:var(--input-bg);color:var(--icon);font:inherit;font-size:.68rem;line-height:1.2;letter-spacing:.02em;cursor:pointer}
+.top-process-mode.on{background:#2557a7;border-color:#2557a7;color:#fff}
+.top-process-mode:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #noisyentities th:first-child,#noisyentities td:first-child{width:auto}
 #noisyentities .num{white-space:nowrap}
 #noisyentities .rate{width:68px}
@@ -128,7 +132,8 @@ button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-s
 .pbtn{font-size:.8rem;padding:6px 12px;background:var(--input-bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}
 .pbtn.on{background:#2557a7;border-color:#2557a7;color:#fff}
 .pbtn:disabled{opacity:.4;cursor:not-allowed}   /* capability missing (no a11y / no root) — shown but inert */
-[data-hardened-approval]::after{content:"";display:inline-block;width:.81rem;height:.95rem;margin-left:.42rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72;vertical-align:-.18rem}
+[data-hardened-approval]::after{content:"";display:inline-block;width:.81rem;height:.95rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72;vertical-align:-.18rem}
+.hardened-label-tail{white-space:nowrap}.hardened-label-tail::after{margin-left:.34rem}
 .pbtn[data-hardened-approval]::after{width:.68rem;height:.8rem;margin-left:.34rem;vertical-align:-.14rem}
 .hardened-approval-key{color:var(--dim);font-size:.72rem;line-height:1.4;margin:18px 2px 4px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:.42rem}.hardened-approval-key::before{content:"";display:inline-block;flex:0 0 auto;width:.81rem;height:.95rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72}
 .hardened-approval-key.top{margin:10px 2px 18px;padding:0 0 10px;border-top:0;border-bottom:1px solid var(--border)}
@@ -172,6 +177,24 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:var(--tex
 .shot.failed::before{content:"⚠ screenshot unavailable";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a88;font-size:.85rem}
 @keyframes shot-sheen{0%{background-position:120% 0}100%{background-position:-120% 0}}
 @media (prefers-reduced-motion:reduce){.shot::after{animation:none}}
+/* Screenshot remote-control PoC: preserve the ordinary full-size link as the no-JS/no-dialog fallback.
+   The modal never enlarges beyond the PNG's intrinsic size and yields both axes to a small viewport. */
+.screenshot-dialog{box-sizing:border-box;width:max-content;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);margin:auto;padding:0;
+  color:var(--text);background:var(--card);border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 18px 55px var(--shadow);overflow:hidden}
+.screenshot-dialog::backdrop{background:rgba(0,0,0,.72)}
+.screenshot-dialog-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--divider)}
+.screenshot-dialog-bar h2{margin:0 auto 0 0;text-align:left;font-size:1rem;color:var(--text-bright)}
+.screenshot-dialog-close{flex:0 0 auto}
+.screenshot-dialog-frame{display:flex;align-items:center;justify-content:center;max-width:calc(100vw - 26px);max-height:calc(100vh - 112px);overflow:hidden;background:#000}
+.screenshot-dialog-frame img{display:block;width:auto;height:auto;max-width:calc(100vw - 26px);max-height:calc(100vh - 112px);object-fit:contain;cursor:pointer;user-select:none}
+.screenshot-dialog-frame img.pending{cursor:progress;opacity:.82}
+.screenshot-dialog.view-only .screenshot-dialog-frame img{cursor:default}
+.screenshot-dialog-status{box-sizing:border-box;min-height:2.15rem;margin:0;padding:7px 12px;color:var(--dim);font-size:.78rem;border-top:1px solid var(--divider)}
+.screenshot-dialog-status.error{color:#e07868}
+@media(max-width:480px){
+ .screenshot-dialog{max-width:calc(100vw - 10px);max-height:calc(100vh - 10px)}
+ .screenshot-dialog-frame,.screenshot-dialog-frame img{max-width:calc(100vw - 12px);max-height:calc(100vh - 100px)}
+}
 
 /* ---- multi-page shell (tab bar) ---- */
 .nav{display:flex;gap:2px;flex-wrap:wrap;margin:0 0 16px;border-bottom:1px solid var(--card-border)}
@@ -186,7 +209,7 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:var(--tex
 .entity-policy label{display:block;margin:6px 0}
 .entity-policy p{margin:7px 0 2px}
 .entity-action-result{min-height:1.3em;margin-top:9px}.entity-action-result.ok{color:#45a65a}.entity-action-result.error{color:#d34b42}
-.entity-issues{border-left:4px solid var(--border-strong)}.entity-issues.has-blocking{border-left-color:#e05a48}.entity-issues-list:empty{display:none}.entity-issues-list{display:grid;gap:10px;margin:12px 0}.entity-issue{border:1px solid var(--divider);border-radius:8px;padding:10px 12px;background:var(--input-bg2);overflow-wrap:anywhere}.entity-issue.blocking{border-left:4px solid #e05a48}.entity-issue.ignored{border-left:4px solid #d69b32}.entity-issue-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}.entity-issue-severity{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:10px;background:var(--setup-bg);color:var(--setup-fg);border:1px solid var(--setup-bd)}.entity-issue.blocking .entity-issue-severity{background:var(--crit-bg);color:var(--crit-fg);border-color:var(--crit-bd)}.entity-issue-label,.entity-issue-locations>span{color:var(--accent);font-weight:600}.entity-issue code{white-space:normal;word-break:break-word}.entity-issue p{margin:7px 0 0}.entity-issue-recommendation{color:var(--text-soft)}.entity-issue-toggle{margin-top:10px}
+.entity-issues{border-left:4px solid var(--border-strong)}.entity-issues.has-blocking{border-left-color:#e05a48}.entity-issues-list:empty{display:none}.entity-issues-list{display:grid;gap:10px;margin:12px 0}.entity-issue{border:1px solid var(--divider);border-radius:8px;padding:10px 12px;background:var(--input-bg2);overflow-wrap:anywhere}.entity-issue.blocking{border-left:4px solid #e05a48}.entity-issue.advisory{border-left:4px solid #3d7fd0}.entity-issue.allowed{border-left:4px solid var(--ok-dim)}.entity-issue-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}.entity-issue-severity{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;padding:2px 7px;border-radius:10px;background:var(--info-bg);color:var(--info-fg);border:1px solid var(--info-bd)}.entity-issue.blocking .entity-issue-severity{background:var(--crit-bg);color:var(--crit-fg);border-color:var(--crit-bd)}.entity-issue.allowed .entity-issue-severity{background:var(--vtagrec-bg);color:var(--vtagrec-fg);border-color:var(--ok-dim)}.entity-issue-label,.entity-issue-locations>span{color:var(--accent);font-weight:600}.entity-issue code{white-space:normal;word-break:break-word}.entity-issue p{margin:7px 0 0}.entity-issue-recommendation{color:var(--text-soft)}.entity-issue-toggle{margin-top:10px}
 .entity-dynamic{margin:14px 0 12px;padding-top:12px;border-top:1px solid var(--divider)}.entity-dynamic[hidden]{display:none}.entity-dynamic h3{margin:0 0 6px;color:var(--accent2);font-size:.86rem;text-transform:uppercase;letter-spacing:.04em}.entity-dynamic-list{display:grid;gap:8px;margin-top:10px}.entity-dynamic-expression{border:1px solid var(--divider);border-radius:8px;padding:9px 11px;background:var(--input-bg2);overflow:hidden}.entity-dynamic-expression pre{margin:7px 0 0;padding:8px;border-radius:6px;background:var(--bg);overflow:auto;white-space:pre-wrap;word-break:break-word}.entity-dynamic-expression code{font-size:.82rem}
 @media(max-width:600px){.entity-issue{padding:9px}.entity-issue-locations code{display:block;margin-top:3px}}
 .tablewrap{overflow:hidden;max-width:100%}.entity-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:.85rem}.entity-table th,.entity-table td{padding:8px 10px;border-bottom:1px solid var(--card-border);text-align:left;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.entity-table .col-select{width:34px;padding-left:6px;padding-right:4px}.entity-table .col-entity{width:auto}.entity-table .col-access{width:190px;text-align:center}.entity-table .col-rate{width:185px;text-align:center}.entity-table .col-reason{width:145px}.entity-table .col-last{width:95px}.entity-table .col-override{width:115px}.entity-table code{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.entity-table select{width:100%;max-width:105px}.metric-rank{font-family:inherit;font-variant-numeric:tabular-nums}.rank-low{color:#45a65a}.rank-mid{color:#c58a16}.rank-high{color:#d34b42}.reason-icons{display:none}.reason-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;margin-right:3px;border:1px solid var(--border);border-radius:50%;font-size:.76rem;color:var(--muted)}
@@ -231,7 +254,9 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .frow .flabel small{display:block;color:var(--dim);font-weight:400;font-size:.8em;margin-top:2px}
 .frow .fctl{flex:0 0 auto;display:flex;align-items:center;gap:12px;max-width:50%}
 .frow.dependency-disabled{opacity:.48}
-.frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
+/* Keep native dropdowns aligned with the text fields beside them.  WebView's native select
+   metrics are otherwise shorter than equivalent inputs even when padding and font match. */
+.frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{box-sizing:border-box;height:34px;background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
 .ha-oauth-status{display:block;color:var(--dim);font-size:.9em;margin:5px 0 3px}
 .ha-oauth-status.connected{color:var(--ok-dim);font-weight:700}
 .ha-oauth-status.connected::before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 1px;border-radius:50%;background:var(--ok-dim)}
@@ -272,9 +297,47 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .autobright-legend small{margin-left:auto;color:var(--dim)}
 .autobright-message{min-height:1.2em;margin-top:5px;color:var(--ok-dim);font-size:.74rem}
 .autobright-message.error{color:#d34b42}
+.auto-sleep-prerequisite{margin:-2px 0 8px;padding:0 8px;color:var(--warn);font-size:.72rem;line-height:1.35}
+.auto-sleep-prerequisite.eligible{color:var(--dim)}
+.auto-sleep-history{position:relative;width:100%;min-height:87px;margin:0;box-sizing:border-box}
+.auto-sleep-chart-content,.auto-sleep-chart-snapshot{width:100%;min-height:inherit}
+.auto-sleep-loading-overlay{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:16px;background:rgba(18,22,28,.76);color:var(--text);font-size:.74rem;text-align:center;backdrop-filter:blur(1px)}
+.auto-sleep-loading-overlay[hidden]{display:none}
+.auto-sleep-lane,.auto-sleep-axis{display:grid;grid-template-columns:clamp(92px,26%,168px) minmax(0,1fr);min-width:0}
+.auto-sleep-lane{min-height:31px}
+.auto-sleep-lane.policy{background:rgba(74,158,255,.11)}
+.auto-sleep-label{padding:7px 8px;color:var(--text);font-size:.72rem;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-right:1px solid var(--border)}
+.auto-sleep-lane.source[role="button"]{cursor:pointer}
+.auto-sleep-lane.source[role="button"]:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.auto-sleep-lane.source.suppressed{opacity:.52}
+.auto-sleep-lane.source.updating{cursor:wait}
+.auto-sleep-track{position:relative;min-width:0;overflow:hidden;background:repeating-linear-gradient(90deg,transparent 0 calc(16.666% - 1px),var(--border) calc(16.666% - 1px) 16.666%)}
+.auto-sleep-interval{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:1px;overflow:hidden;color:#fff;font-size:.64rem;line-height:1;white-space:nowrap}
+.auto-sleep-interval.off{background:#68727f;color:#f4f6f8}
+.auto-sleep-lane.policy .auto-sleep-interval.allow_sleep{background:#9aafc2;color:#172533}
+.auto-sleep-interval.on{background:#c89a18;color:#17130a}
+.auto-sleep-interval.hold_awake{background:#287dcc}
+.auto-sleep-interval.unavailable,.auto-sleep-interval.inhibited{background:repeating-linear-gradient(135deg,#a33b3b 0 4px,#5b2626 4px 8px)}
+.auto-sleep-source-scroll{max-height:min(55vh,480px);overflow-y:auto;overscroll-behavior:contain}
+.auto-sleep-axis{height:25px;background:var(--card)}
+.auto-sleep-axis>span{border-right:1px solid var(--border)}
+.auto-sleep-axis-track{position:relative;min-width:0}
+.auto-sleep-axis-track span{position:absolute;top:6px;transform:translateX(-50%);color:var(--dim);font-size:.62rem;white-space:nowrap}
+.auto-sleep-axis-track span:first-child{transform:none}
+.auto-sleep-axis-track span:last-child{transform:translateX(-100%)}
+.auto-sleep-empty{padding:24px 10px;text-align:center;color:var(--dim);font-size:.74rem}
+.auto-sleep-windows{display:flex;gap:3px}
+.auto-sleep-windows .pbtn[aria-pressed="true"]{border-color:#4a9eff;color:#4a9eff;background:rgba(74,158,255,.13)}
+.auto-sleep-legend .detected::before{height:6px;background:#c89a18}
+.auto-sleep-legend .clear::before{height:6px;background:#68727f}
+.auto-sleep-legend .inhibited::before{height:6px;background:repeating-linear-gradient(135deg,#f1bd52 0 2px,transparent 2px 4px)}
 /* Package pickers can have very long option text (label · pkg); cap them to their column so the label
    isn't crushed into many wrapped lines — the select truncates the shown value, the dropdown shows it all. */
 .frow select.pkgsel{min-width:0;max-width:100%;text-overflow:ellipsis}
+/* The Area picker wraps its native select for its HA-owned explanatory note. Constrain that wrapper,
+   not only the select, otherwise a long area name can make the browser-owned popup escape its card. */
+.frow .fctl .ha-area-picker{width:min(260px,100%);min-width:0;max-width:100%}
+.frow .fctl .ha-area-picker select{display:block;width:100%;min-width:0;max-width:100%}
 /* Expose-to-HA toggle: an icon button (no checkbox) drawn with an inline link / broken-link SVG.
    Linked = bright accent (highlight); unlinked = muted grey. Overrides the generic button{} box. */
 .pip{display:inline-flex;align-items:center;justify-content:center;align-self:center;line-height:0;
@@ -304,6 +367,7 @@ body.hdr-hide-brand .hdr .brand{display:none}
     flex:1 1 auto;width:100%;min-width:0;box-sizing:border-box
   }
   .ha-entity-picker{width:100%;min-width:0}
+  .ha-area-picker{width:100%;min-width:0}
   .ha-oauth-actions,.ha-oauth-links{width:100%}
   .ha-oauth-actions .pbtn{flex:1 1 auto;text-align:center}
   .autobright-head{flex-direction:column}
@@ -335,3 +399,120 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .lg-I{color:#cfcfcf}
 .lg-W{color:#f5c451}
 .lg-E,.lg-F{color:#f07868}
+
+/* Guided setup (/setup) — one linear column, deliberately NOT the .cards masonry: a journey has an
+   order, and multi-column layout destroys it. Reuses the theme tokens and the .setup banner family so
+   the wizard inherits dark/light for free. */
+.wiz{max-width:520px;margin:0 auto;padding:4px 0 24px}
+.wiz-step .card{margin:0 0 14px}
+.wiz-step h2{text-transform:none;letter-spacing:0;font-size:1.15rem;color:var(--text)}
+/* The step heading is focused programmatically (tabindex=-1) so screen readers announce each new
+   step, but it is not keyboard-reachable, so its default focus ring is pure visual noise — it made the
+   title bar look like a selected text field on load. Suppress the ring; the announcement remains. */
+.wiz-step h2:focus{outline:none}
+.wiz-lead{color:var(--dim);margin:2px 0 14px}
+/* Wizard selects match the form's field metrics — browser-default select text read as tiny against the
+   1rem inputs on hardware review; proportionate, not dominant, not minuscule. */
+.wiz select{width:100%;font:inherit;font-size:1rem;min-height:42px;padding:8px 10px;margin:6px 0;background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px}
+.wiz-fld{display:block;margin:14px 0}
+.wiz-fld>b{display:block;margin-bottom:5px;font-size:.92rem}
+.wiz-fld>small{display:block;color:var(--dim);margin-top:5px;line-height:1.45}
+.wiz-consequence{color:var(--dim);font-size:.88rem;line-height:1.5;margin:10px 0 0;border-left:3px solid var(--divider);padding-left:10px}
+/* Live entity-id preview: the consequence of the panel-id choice, shown rather than explained. */
+.wiz-preview{margin:8px 0 0;padding:8px 10px;background:var(--input-bg);border:1px solid var(--divider);border-radius:8px;font:.8rem/1.6 ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}
+.wiz-preview b{color:var(--text);font-weight:600}
+/* The one forward affordance on every step: full width, labelled with its consequence. */
+.wiz button.wiz-primary{display:block;width:100%;min-height:46px;font-size:1rem;margin-top:16px}
+/* A pressed save must LOOK pressed: an unstyled disabled state read as "nothing happened" on hardware
+   review, and users re-clicked. */
+.wiz button.wiz-primary:disabled,.wiz button.wiz-secondary:disabled{background:var(--disabled-bg);color:var(--disabled-fg);border-color:var(--divider);cursor:default}
+.wiz button.wiz-secondary{display:block;width:100%;min-height:42px;margin-top:8px;background:transparent;color:var(--accent);border:1px solid var(--border-strong)}
+.wiz-dots{display:flex;gap:14px;justify-content:center;list-style:none;margin:4px 0 14px;padding:0;flex-wrap:wrap}
+.wiz-dots li{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--dim)}
+.wiz-dots li::before{content:"";flex:none;width:.55rem;height:.55rem;border-radius:50%;background:var(--dim);opacity:.35}
+.wiz-dots li.done::before{background:var(--ok-dim);opacity:1}
+.wiz-dots li.current{color:var(--text);font-weight:600}
+.wiz-dots li.current::before{background:#2557a7;opacity:1}
+/* Verification is a STATE of a dot, not its own step — users don't experience waiting as a stage. */
+.wiz-dots li.busy::before{background:#2557a7;opacity:1;animation:wiz-breathe 1.6s ease-in-out infinite}
+/* Async status line. The breathing dot is never the only signal — the TEXT changes as time passes, so
+   reduced-motion and screen-reader users get strictly more information than the dot conveys. */
+.wiz-status{display:flex;align-items:baseline;gap:8px;margin:14px 0 0;min-height:1.4em}
+.wiz-status::before{content:"";flex:none;width:.55rem;height:.55rem;border-radius:50%;background:#2557a7;animation:wiz-breathe 1.6s ease-in-out infinite;align-self:center}
+.wiz-status.ok::before{background:var(--ok-dim);animation:none}
+@keyframes wiz-breathe{0%,100%{opacity:.35}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.wiz-dots li.busy::before,.wiz-status::before{animation:none;opacity:.85}}
+/* The area confirmation that shares the wizard's dashboard page. */
+/* Deterministic bring-up milestones (proof card): real signals, no spinner. */
+.wiz-milestones{margin:12px 0 0;border-left:3px solid var(--divider);padding-left:12px}
+.wiz-milestone{margin:4px 0;color:var(--dim);font-size:.88rem;line-height:1.5}
+.hd-area-label{display:block;margin:16px 0 5px;font-size:.92rem}
+.hd-area-note{display:block;color:var(--dim);margin-top:5px;line-height:1.45}
+/* Sign-in routes: the recommended one first and visually primary, both honest about the account. */
+.wiz-route{border:1px solid var(--divider);border-radius:10px;padding:12px 14px;margin:10px 0}
+.wiz-route.recommended{border-color:#2557a7}
+.wiz-route .wiz-badge{display:inline-block;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:#fff;background:#2557a7;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+.wiz-route p{margin:6px 0;color:var(--dim);font-size:.9rem;line-height:1.5}
+.wiz-escape{text-align:center;margin:6px 0 0}
+.wiz-escape a{color:var(--dim)}
+.wiz details{margin:10px 0 0}
+.wiz details summary{cursor:pointer;color:var(--accent)}
+.wiz details p{color:var(--dim);font-size:.9rem;line-height:1.55}
+@media (max-width:600px){.wiz{padding-left:2px;padding-right:2px}.wiz-dots{gap:10px}}
+/* Commissioning only: an unsaved change on a panel that cannot yet show a dashboard is urgent, because
+   the user may not yet know Save exists. Off the instant setup completes (the body class is a pure
+   function of journey state), so a working panel's save bar never nags. Reduced motion keeps the
+   signal as a persistent outline — only the animation is dropped, never the information. */
+body.commissioning.cfg-dirty #savebtn{animation:wiz-throb 2s ease-in-out infinite}
+@keyframes wiz-throb{0%,100%{box-shadow:0 0 0 0 rgba(37,87,167,.55)}50%{box-shadow:0 0 0 8px rgba(37,87,167,0)}}
+@media (prefers-reduced-motion:reduce){body.commissioning.cfg-dirty #savebtn{animation:none;outline:2px solid #2557a7;outline-offset:3px}}
+/* Completion navigation: the two next-step buttons a new owner actually wants, prominent rather than
+   quiet links. Stacks on a narrow panel. */
+.wiz-cta{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 0}
+.wiz-cta .pbtn{flex:1 1 auto;text-align:center;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+.wiz-cta .pbtn.primary{background:#2557a7;border-color:#2557a7;color:#fff}
+@media (max-width:600px){.wiz-cta .pbtn{flex-basis:100%}}
+/* Entity-filter verdict (setup step 5). The three tones reuse the entity data-rate rank colours already in
+   this file, so a red here means the same thing it means on the Entities tab. Each tone maps onto an existing
+   callout family (--vtagrec/--setup/--crit) rather than introducing a fourth palette. */
+.ef-verdict{margin:14px 0 0;border:1px solid var(--divider);border-radius:10px;overflow:hidden}
+.ef-verdict-head{display:flex;align-items:center;gap:9px;margin:0;padding:10px 12px;
+  border-left:4px solid transparent;transition:background-color .45s ease,border-left-color .45s ease}
+.ef-verdict-head b{font-size:.95rem}
+.ef-dot{flex:none;width:.6rem;height:.6rem;border-radius:50%;transition:background-color .45s ease}
+/* Concrete colours per level, set directly on the elements that show them, rather than routed through a
+   shared --ef-tone/--ef-bg custom property that the transitioned background/border-color then reads.
+   Unregistered custom properties do not themselves animate, and this level class changes WHILE the count
+   climbs, so the indirection puts a value that cannot animate underneath a property that is animating — a
+   pattern worth avoiding outright on the panels' older WebView rather than relying on it resolving. Verified
+   in both themes: red gives #d34b42 with --crit-bg behind it, light and dark. */
+.ef-verdict.green>.ef-verdict-head{background-color:var(--vtagrec-bg);border-left-color:#45a65a}
+.ef-verdict.green>.ef-verdict-head b{color:var(--vtagrec-fg)}
+.ef-verdict.green .ef-dot{background-color:#45a65a}
+.ef-verdict.amber>.ef-verdict-head{background-color:var(--setup-bg);border-left-color:#c58a16}
+.ef-verdict.amber>.ef-verdict-head b{color:var(--setup-fg)}
+.ef-verdict.amber .ef-dot{background-color:#c58a16}
+.ef-verdict.red>.ef-verdict-head{background-color:var(--crit-bg);border-left-color:#d34b42}
+.ef-verdict.red>.ef-verdict-head b{color:var(--crit-fg)}
+.ef-verdict.red .ef-dot{background-color:#d34b42}
+.ef-facts{display:grid;gap:1px;background:var(--divider);border-top:1px solid var(--divider)}
+.ef-fact{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:0;
+  padding:8px 12px;background:var(--card);font-size:.86rem}
+.ef-fact>span{color:var(--dim)}
+.ef-fact>b{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.ef-counting{display:inline-flex;align-items:center;gap:6px;font-weight:400;font-size:.78rem;
+  color:var(--accent2);margin-left:7px}
+.ef-counting[hidden]{display:none}
+.ef-counting::before{content:"";width:.45rem;height:.45rem;border-radius:50%;background:#2557a7;
+  animation:wiz-breathe 1.6s ease-in-out infinite}
+.ef-basis{margin:0;padding:9px 12px;font-size:.8rem;color:var(--dim);background:var(--card);
+  border-top:1px solid var(--divider);line-height:1.5}
+.ef-basis .tag{display:inline-block;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;
+  border-radius:4px;padding:1px 5px;margin-right:6px;border:1px solid currentColor;font-weight:600}
+.ef-basis.measured .tag{color:var(--ok-dim)}
+.ef-basis.estimated .tag,.ef-basis.counting .tag{color:var(--accent2)}
+/* The text carries the state in every case; the dot and the colour transition are reinforcement only. */
+@media (prefers-reduced-motion:reduce){
+  .ef-counting::before{animation:none;opacity:.85}
+  .ef-verdict-head,.ef-dot{transition:none}
+}

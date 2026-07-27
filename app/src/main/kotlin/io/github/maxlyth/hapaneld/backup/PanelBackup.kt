@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.backup
 
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
+import io.github.maxlyth.hapaneld.util.withStagedFiles
 import java.io.Closeable
 import java.io.File
 import java.io.InputStream
@@ -194,37 +195,42 @@ object PanelBackup {
             allowedEntries.any { !validArchiveEntry(it) || it == MANIFEST_ENTRY } ||
             targets.any { it.maxBytes <= 0L }
         ) return false
-        return try {
-            ZipFile(archive).use { zip ->
-                val expected = allowedEntries + MANIFEST_ENTRY
-                val entries = zip.entries()
-                val found = HashMap<String, ZipEntry>(expected.size)
-                var count = 0
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
-                    count += 1
-                    if (count > expected.size ||
-                        count > MAX_ARCHIVE_ENTRIES ||
-                        entry.isDirectory ||
-                        entry.name !in expected ||
-                        found.put(entry.name, entry) != null
-                    ) return@use false
-                }
-                if (found.keys != expected) return@use false
-                for (target in targets) {
-                    val entry = found.getValue(target.entry)
-                    val minimum = if (target.allowEmpty) 0L else 1L
-                    if (entry.size !in minimum..target.maxBytes) return@use false
-                    target.file.outputStream().use { output ->
-                        zip.getInputStream(entry).use { input -> BoundedStreams.copy(input, output, target.maxBytes) }
+        return withStagedFiles { staged ->
+            targets.forEach { staged.stage(it.file) }
+            val ok = try {
+                ZipFile(archive).use { zip ->
+                    val expected = allowedEntries + MANIFEST_ENTRY
+                    val entries = zip.entries()
+                    val found = HashMap<String, ZipEntry>(expected.size)
+                    var count = 0
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        count += 1
+                        if (count > expected.size ||
+                            count > MAX_ARCHIVE_ENTRIES ||
+                            entry.isDirectory ||
+                            entry.name !in expected ||
+                            found.put(entry.name, entry) != null
+                        ) return@use false
                     }
-                    if (target.file.length() !in minimum..target.maxBytes) return@use false
+                    if (found.keys != expected) return@use false
+                    for (target in targets) {
+                        val entry = found.getValue(target.entry)
+                        val minimum = if (target.allowEmpty) 0L else 1L
+                        if (entry.size !in minimum..target.maxBytes) return@use false
+                        target.file.outputStream().use { output ->
+                            zip.getInputStream(entry).use { input -> BoundedStreams.copy(input, output, target.maxBytes) }
+                        }
+                        if (target.file.length() !in minimum..target.maxBytes) return@use false
+                    }
+                    true
                 }
-                true
+            } catch (_: Exception) {
+                false
             }
-        } catch (_: Exception) {
-            false
-        }.also { ok -> if (!ok) targets.forEach { it.file.delete() } }
+            if (ok) staged.commit()
+            ok
+        }
     }
 
     private fun validArchiveEntry(name: String): Boolean =

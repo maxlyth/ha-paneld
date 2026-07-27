@@ -13,7 +13,12 @@ class AutoBrightnessHttpApiTest {
         val api = AutoBrightnessHttpApi.UNAVAILABLE
 
         assertFalse(JSONObject(api.statusJson()).getBoolean("available"))
-        assertEquals(JSONArray().toString(), JSONObject(api.historyJson()).getJSONArray("points").toString())
+        val status = JSONObject(api.statusJson())
+        val history = JSONObject(api.historyJson())
+        assertTrue(status.isNull("sourceRevision"))
+        assertTrue(history.isNull("sourceRevision"))
+        assertTrue(history.isNull("latestEpochMinute"))
+        assertEquals(JSONArray().toString(), history.getJSONArray("points").toString())
         assertEquals(JSONArray().toString(), JSONObject(api.haSourcesJson("", 100)).getJSONArray("items").toString())
         val validation = api.validateHaSource("sensor.room_illuminance")
         assertEquals(503, validation.action.statusCode)

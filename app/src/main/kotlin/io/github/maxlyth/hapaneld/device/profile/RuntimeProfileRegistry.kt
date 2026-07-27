@@ -515,13 +515,9 @@ class RuntimeProfileRegistry internal constructor(
             }
             ProfileActivationPhase.APPLYING -> {
                 val rollback = compatibleRollbackTarget(state.previous)
-                val persisted = preferences.put(
-                    KEY_SELECTION to encode(rollback),
-                    KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
-                    KEY_PREVIOUS to null,
-                    KEY_DESIRED to null,
-                    KEY_MESSAGE to "Previous activation did not report healthy; rolled back.",
-                    KEY_CATALOG_REVISION to catalogRevision() + 1,
+                val persisted = persistRollback(
+                    rollback,
+                    "Previous activation did not report healthy; rolled back.",
                 )
                 val issue = if (persisted) {
                     ProfileIssue(ProfileIssueSeverity.WARNING, "activation", "Previous profile activation was rolled back after an unhealthy restart.")
@@ -613,13 +609,9 @@ class RuntimeProfileRegistry internal constructor(
         val state = readActivation()
         if (state.phase != ProfileActivationPhase.PENDING) return false
         val rollback = state.previous ?: readLastKnownGood() ?: ProfileSelection.Auto
-        return preferences.put(
-            KEY_SELECTION to encode(rollback),
-            KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
-            KEY_PREVIOUS to null,
-            KEY_DESIRED to null,
-            KEY_MESSAGE to message.trim().take(240).ifBlank { "Profile restart was cancelled during teardown." },
-            KEY_CATALOG_REVISION to catalogRevision() + 1,
+        return persistRollback(
+            rollback,
+            message.trim().take(240).ifBlank { "Profile restart was cancelled during teardown." },
         )
     }
 
@@ -779,7 +771,7 @@ class RuntimeProfileRegistry internal constructor(
 
     private fun autoResolve(): SelectionResolution {
         val bundled = entries.values.filter { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly }
-        val generic = bundled.singleOrNull { it.document?.match?.fallback == true && it.compatible }
+        val generic = bundled.singleOrNull { it.isBundledFallback() }
         val bundledMatches = bundled.filter { it.compatible && it.document?.matches(facts) == true }
         val chosenBundled = highestUnique(bundledMatches)
         if (chosenBundled.entry != null) return chosenBundled
@@ -802,9 +794,7 @@ class RuntimeProfileRegistry internal constructor(
 
     private fun resolved(selection: ProfileSelection, generation: Long?, extraIssues: List<ProfileIssue> = emptyList()): ResolvedProfile {
         val resolution = resolveSelection(selection)
-        val entry = resolution.entry ?: entries.values.firstOrNull {
-            it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true
-        }
+        val entry = resolution.entry ?: entries.values.firstOrNull { it.isBundledFallback() }
         if (entry == null) {
             return ResolvedProfile(
                 profile = EmergencyDeviceProfile,
@@ -832,13 +822,9 @@ class RuntimeProfileRegistry internal constructor(
 
     private fun rollbackInvalidPending(state: ProfileActivationState, problems: List<ProfileIssue>): ResolvedProfile {
         val rollback = compatibleRollbackTarget(state.previous)
-        val persisted = preferences.put(
-            KEY_SELECTION to encode(rollback),
-            KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
-            KEY_PREVIOUS to null,
-            KEY_DESIRED to null,
-            KEY_MESSAGE to "Selected profile could not be resolved; rolled back.",
-            KEY_CATALOG_REVISION to catalogRevision() + 1,
+        val persisted = persistRollback(
+            rollback,
+            "Selected profile could not be resolved; rolled back.",
         )
         return resolved(
             rollback,
@@ -859,14 +845,10 @@ class RuntimeProfileRegistry internal constructor(
         val rollback = compatibleRollbackTarget(readLastKnownGood(), excluding = invalid.ref)
         val lkg = readLastKnownGood()
         val keepLkg = lkg?.takeIf { resolveSelection(it).entry != null }
-        val persisted = preferences.put(
-            KEY_SELECTION to encode(rollback),
-            KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
-            KEY_PREVIOUS to null,
-            KEY_DESIRED to null,
-            KEY_LAST_KNOWN_GOOD to keepLkg?.let(::encode),
-            KEY_MESSAGE to "Active profile became incompatible after a core change; restored the last known good selection.",
-            KEY_CATALOG_REVISION to catalogRevision() + 1,
+        val persisted = persistRollback(
+            rollback,
+            "Active profile became incompatible after a core change; restored the last known good selection.",
+            LastKnownGoodRollbackMutation.Set(keepLkg),
         )
         return resolved(
             rollback,
@@ -891,6 +873,31 @@ class RuntimeProfileRegistry internal constructor(
         return candidates.firstOrNull { candidate ->
             (candidate as? ProfileSelection.Pinned)?.ref != excluding && resolveSelection(candidate).entry != null
         } ?: ProfileSelection.Auto
+    }
+
+    /** The rollback transition is one atomic preference commit; callers retain recovery policy and diagnostics. */
+    private fun persistRollback(
+        rollback: ProfileSelection,
+        message: String,
+        lastKnownGood: LastKnownGoodRollbackMutation = LastKnownGoodRollbackMutation.Preserve,
+    ): Boolean {
+        val values = mutableListOf<Pair<String, Any?>>(
+            KEY_SELECTION to encode(rollback),
+            KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
+            KEY_PREVIOUS to null,
+            KEY_DESIRED to null,
+            KEY_MESSAGE to message,
+        )
+        if (lastKnownGood is LastKnownGoodRollbackMutation.Set) {
+            values += KEY_LAST_KNOWN_GOOD to lastKnownGood.selection?.let(::encode)
+        }
+        values += KEY_CATALOG_REVISION to catalogRevision() + 1
+        return preferences.put(*values.toTypedArray())
+    }
+
+    private sealed class LastKnownGoodRollbackMutation {
+        data object Preserve : LastKnownGoodRollbackMutation()
+        data class Set(val selection: ProfileSelection?) : LastKnownGoodRollbackMutation()
     }
 
     private fun summary(entry: StoredProfile, active: Boolean, selected: Boolean): ProfileSummary = ProfileSummary(
@@ -926,9 +933,7 @@ class RuntimeProfileRegistry internal constructor(
         val selection = readSelection()
         val activeSelection = if (activation.phase == ProfileActivationPhase.PENDING) activation.previous ?: ProfileSelection.Auto else selection
         val resolution = resolveSelection(activeSelection)
-        val activeEntry = resolution.entry ?: entries.values.firstOrNull {
-            it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true
-        }
+        val activeEntry = resolution.entry ?: entries.values.firstOrNull { it.isBundledFallback() }
         val requestedRef = resolveSelection(selection).entry?.ref
         val active = activeEntry?.let { summary(it, active = true, selected = it.ref == requestedRef) }
             ?: emergencySummary(active = true)
@@ -965,11 +970,16 @@ class RuntimeProfileRegistry internal constructor(
     }
 
     /**
-     * Foreground startup needs every bundled asset for automatic matching, but imported revisions are
-     * inert unless an administrator pins them. Read only pinned revisions that can participate in the
-     * current activation or its recovery; the rest of the imported catalog is hydrated on first admin use.
+     * Shared catalog-load scaffold: bounded cost accounting, the bundled-asset pass, the missing-generic
+     * fallback guard, and the atomic `entries`/`catalogIssues` publish. [loadExtras] contributes the
+     * store-specific revisions (a startup subset or the full imported/rollback catalog) into the same
+     * working map before it is published; [markHydrated] flags a full reload so [ensureHydrated] no
+     * longer re-reads the imported catalog.
      */
-    private fun loadStartupCatalog() {
+    private fun loadCatalog(
+        markHydrated: Boolean,
+        loadExtras: (loaded: MutableMap<ProfileRef, StoredProfile>, issues: MutableList<ProfileIssue>) -> Unit,
+    ) {
         val cost = FeatureCosts.registry.span(FeatureCostOperation.PROFILE_CATALOG_LOAD)
         val loaded = linkedMapOf<ProfileRef, StoredProfile>()
         val issues = mutableListOf<ProfileIssue>()
@@ -977,46 +987,10 @@ class RuntimeProfileRegistry internal constructor(
             bundledLoader().forEach { (name, raw) ->
                 loadEntry(raw, ProfileOrigin.BUNDLED, "assets/$BUNDLED_DIR/$name", loaded, issues)
             }
-            val activation = readActivation()
-            val required = listOfNotNull(
-                readSelection(),
-                activation.previous,
-                activation.desired,
-                readLastKnownGood(),
-                readActiveRef()?.let { ProfileSelection.Pinned(it) },
-            ).filterIsInstance<ProfileSelection.Pinned>()
-                .mapTo(linkedSetOf()) { it.ref }
-            required.forEach { ref ->
-                if (ref in loaded) return@forEach
-                val imported = importedFile(ref)
-                val rollback = rollbackFile(ref)
-                when {
-                    // Full hydration admits retained bundled rollback snapshots before imports. Preserve
-                    // that precedence if an unexpected duplicate exists in both stores.
-                    rollback.isFile -> loadStartupFile(
-                        rollback,
-                        ref,
-                        ProfileOrigin.BUNDLED,
-                        rollbackOnly = true,
-                        loaded = loaded,
-                        issues = issues,
-                    )
-                    imported.isFile -> loadStartupFile(
-                        imported,
-                        ref,
-                        ProfileOrigin.IMPORTED,
-                        rollbackOnly = false,
-                        loaded = loaded,
-                        issues = issues,
-                    )
-                }
-            }
+            loadExtras(loaded, issues)
             entries = loaded
-            if (loaded.values.none {
-                    it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly &&
-                        it.compatible && it.document?.match?.fallback == true
-                }
-            ) {
+            if (markHydrated) fullyHydrated = true
+            if (loaded.values.none { it.isBundledFallback() }) {
                 issues += ProfileIssue(
                     ProfileIssueSeverity.ERROR,
                     "catalog",
@@ -1033,6 +1007,51 @@ class RuntimeProfileRegistry internal constructor(
                 if (Long.MAX_VALUE - total < size) Long.MAX_VALUE else total + size
             }
             cost.work(units = loaded.size.toLong(), bytes = bytes).close()
+        }
+    }
+
+    private fun StoredProfile.isBundledFallback(): Boolean =
+        origin == ProfileOrigin.BUNDLED && !rollbackOnly && compatible && document?.match?.fallback == true
+
+    /**
+     * Foreground startup needs every bundled asset for automatic matching, but imported revisions are
+     * inert unless an administrator pins them. Read only pinned revisions that can participate in the
+     * current activation or its recovery; the rest of the imported catalog is hydrated on first admin use.
+     */
+    private fun loadStartupCatalog() = loadCatalog(markHydrated = false) { loaded, issues ->
+        val activation = readActivation()
+        val required = listOfNotNull(
+            readSelection(),
+            activation.previous,
+            activation.desired,
+            readLastKnownGood(),
+            readActiveRef()?.let { ProfileSelection.Pinned(it) },
+        ).filterIsInstance<ProfileSelection.Pinned>()
+            .mapTo(linkedSetOf()) { it.ref }
+        required.forEach { ref ->
+            if (ref in loaded) return@forEach
+            val imported = importedFile(ref)
+            val rollback = rollbackFile(ref)
+            when {
+                // Full hydration admits retained bundled rollback snapshots before imports. Preserve
+                // that precedence if an unexpected duplicate exists in both stores.
+                rollback.isFile -> loadStartupFile(
+                    rollback,
+                    ref,
+                    ProfileOrigin.BUNDLED,
+                    rollbackOnly = true,
+                    loaded = loaded,
+                    issues = issues,
+                )
+                imported.isFile -> loadStartupFile(
+                    imported,
+                    ref,
+                    ProfileOrigin.IMPORTED,
+                    rollbackOnly = false,
+                    loaded = loaded,
+                    issues = issues,
+                )
+            }
         }
     }
 
@@ -1055,12 +1074,7 @@ class RuntimeProfileRegistry internal constructor(
         loadEntry(raw, origin, file.path, loaded, issues, expectedRef = expected, rollbackOnly = rollbackOnly)
     }
 
-    private fun reload() {
-        val cost = FeatureCosts.registry.span(FeatureCostOperation.PROFILE_CATALOG_LOAD)
-        val loaded = linkedMapOf<ProfileRef, StoredProfile>()
-        val issues = mutableListOf<ProfileIssue>()
-        try {
-        bundledLoader().forEach { (name, raw) -> loadEntry(raw, ProfileOrigin.BUNDLED, "assets/$BUNDLED_DIR/$name", loaded, issues) }
+    private fun reload() = loadCatalog(markHydrated = true) { loaded, issues ->
         rollbackDir.listFiles().orEmpty().filter { it.isDirectory }.flatMap { directory ->
             directory.listFiles().orEmpty().filter { it.isFile && it.extension == "yaml" }
         }.forEach { file ->
@@ -1115,22 +1129,6 @@ class RuntimeProfileRegistry internal constructor(
                 return@forEach
             }
             loadEntry(raw, ProfileOrigin.IMPORTED, file.path, loaded, issues, expectedRef = expected)
-        }
-        entries = loaded
-        fullyHydrated = true
-        if (loaded.values.none { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.compatible && it.document?.match?.fallback == true }) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing or invalid; the capability-empty emergency profile will be used.")
-        }
-        catalogIssues = issues
-        } catch (error: Throwable) {
-            cost.outcome(FeatureCostOutcome.FAILURE)
-            throw error
-        } finally {
-            val bytes = loaded.values.fold(0L) { total, entry ->
-                val size = entry.sourceBytes.toLong()
-                if (Long.MAX_VALUE - total < size) Long.MAX_VALUE else total + size
-            }
-            cost.work(units = loaded.size.toLong(), bytes = bytes).close()
         }
     }
 

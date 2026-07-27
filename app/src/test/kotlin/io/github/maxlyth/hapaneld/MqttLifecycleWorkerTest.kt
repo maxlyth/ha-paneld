@@ -1,6 +1,6 @@
 package io.github.maxlyth.hapaneld
 
-import io.github.maxlyth.hapaneld.util.ConflatedWorker
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.RetirableMutationGate
 import io.github.maxlyth.hapaneld.util.interruptAndJoin
@@ -66,17 +66,17 @@ class MqttLifecycleWorkerTest {
             },
         )
 
-        assertEquals(ConflatedWorker.Admission.ACCEPTED, dispatcher.submit())
+        assertEquals(LatestDispatcher.Admission.ACCEPTED, dispatcher.submit())
         assertTrue(pauseStarted.await(1, TimeUnit.SECONDS))
-        assertEquals(ConflatedWorker.Admission.ACCEPTED, dispatcher.submit())
-        assertEquals(ConflatedWorker.Admission.COALESCED, dispatcher.submit())
+        assertEquals(LatestDispatcher.Admission.ACCEPTED, dispatcher.submit())
+        assertEquals(LatestDispatcher.Admission.COALESCED, dispatcher.submit())
         assertEquals(1, dispatcher.pendingCount())
         releasePause.countDown()
 
         assertTrue(performed.await(1, TimeUnit.SECONDS))
         assertEquals(1, calls)
         assertTrue(dispatcher.closeAndJoin(1_000))
-        assertEquals(ConflatedWorker.Admission.CLOSED, dispatcher.submit())
+        assertEquals(LatestDispatcher.Admission.CLOSED, dispatcher.submit())
     }
 
     @Test fun interruptIgnoringAuthenticationActionFailsLifecycleDrainProof() {

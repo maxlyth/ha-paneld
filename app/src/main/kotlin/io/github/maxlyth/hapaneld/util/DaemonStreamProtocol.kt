@@ -2,7 +2,6 @@ package io.github.maxlyth.hapaneld.util
 
 import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import java.io.BufferedReader
-import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -23,15 +22,7 @@ internal object DaemonStreamProtocol {
             "ERR" -> DaemonStreamResult.Unsupported
             "READY" -> {
                 openSource().use { source ->
-                    var remaining = expectedBytes
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (remaining > 0L) {
-                        val read = source.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                        if (read < 0) throw EOFException("stream source ended before declared length")
-                        if (read == 0) continue
-                        output.write(buffer, 0, read)
-                        remaining -= read
-                    }
+                    BoundedStreams.copyExact(source, output, expectedBytes)
                     check(source.read() < 0) { "stream source exceeds declared length" }
                 }
                 output.flush()

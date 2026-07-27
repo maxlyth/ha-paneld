@@ -8,7 +8,9 @@
 #include <string.h>
 #include <unistd.h>
 
-long stat_jiffies(const char *buf, char *comm, size_t commsz) {
+int stat_process_metrics(const char *buf, char *comm, size_t commsz,
+                         long *jiffies, long *rss_pages) {
+    if (!jiffies) return -1;
     const char *lp = strchr(buf, '(');
     const char *rp = strrchr(buf, ')');
     if (!lp || !rp || rp < lp) return -1;
@@ -17,20 +19,32 @@ long stat_jiffies(const char *buf, char *comm, size_t commsz) {
         if (L >= commsz) L = commsz - 1;
         memcpy(comm, lp + 1, L); comm[L] = '\0';
     }
-    // Fields after ')': idx0 = state (a char), ... utime = idx11, stime = idx12. Walk tokens as strings
-    // (state isn't numeric) and convert only 11 + 12.
+    // Fields after ')': idx0 = state (a char), utime = idx11, stime = idx12, rss = idx21. Walk tokens
+    // as strings (state isn't numeric) and convert only the fields needed by the CPU/RAM rankings.
     const char *p = rp + 1;
-    long utime = -1, stime = -1;
+    long utime = -1, stime = -1, rss = -1;
     int idx = 0;
     while (*p) {
         while (*p == ' ') p++;
         if (!*p) break;
         if (idx == 11) utime = strtol(p, NULL, 10);
-        else if (idx == 12) { stime = strtol(p, NULL, 10); break; }
+        else if (idx == 12) {
+            stime = strtol(p, NULL, 10);
+            if (!rss_pages) break;
+        }
+        else if (idx == 21) { rss = strtol(p, NULL, 10); break; }
         while (*p && *p != ' ') p++;
         idx++;
     }
-    return (utime >= 0 && stime >= 0) ? utime + stime : -1;
+    if (utime < 0 || stime < 0 || (rss_pages && rss < 0)) return -1;
+    *jiffies = utime + stime;
+    if (rss_pages) *rss_pages = rss;
+    return 0;
+}
+
+long stat_jiffies(const char *buf, char *comm, size_t commsz) {
+    long jiffies = -1;
+    return stat_process_metrics(buf, comm, commsz, &jiffies, NULL) == 0 ? jiffies : -1;
 }
 
 void cmd_perfdump(conn_ctx *ctx, const char *args) {
@@ -84,7 +98,8 @@ void cmd_perfdump(conn_ctx *ctx, const char *args) {
             ssize_t n = read(f, b, sizeof b - 1); close(f);
             if (n <= 0) continue;
             b[n] = '\0';
-            long j = stat_jiffies(b, comm, sizeof comm); if (j < 0) continue;
+            long j, rss_pages;
+            if (stat_process_metrics(b, comm, sizeof comm, &j, &rss_pages) != 0) continue;
             // Full name from cmdline argv0 (comm is truncated to 15 chars, losing the head — "axlyth.hapaneld"
             // not "io.github.maxlyth.hapaneld"); comm is the fallback for kernel threads (empty cmdline) and
             // isolated renderers (cmdline unreadable in the su domain).
@@ -96,7 +111,8 @@ void cmd_perfdump(conn_ctx *ctx, const char *args) {
             if (cn > 0) { cl[cn] = '\0'; snprintf(name, sizeof name, "%s", cl); }  // "%s" stops at argv0's NUL
             else snprintf(name, sizeof name, "%s", comm);
             for (char *t = name; *t; t++) if (*t == '\t') *t = ' ';                // tabs would break parsing
-            snprintf(out, sizeof out, "%s\t%ld\t%s\n", e->d_name, j, name); reply(fd, out);
+            // RSS is appended so older apps still parse pid/jiffies/name exactly as before.
+            snprintf(out, sizeof out, "%s\t%ld\t%s\t%ld\n", e->d_name, j, name, rss_pages); reply(fd, out);
             // Chromium renderer: main-thread comm is the truncated tail of "…SandboxedProcessService0:N"
             // (e.g. "ocessService0:1") — match "cessService". (cmdline has the full name but the su domain
             // can't read an isolated process's cmdline; comm from stat is readable.)

@@ -7,7 +7,6 @@ import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.cyclonedx.bom)
 }
 
@@ -38,10 +37,10 @@ dependencyLocking {
 
 android {
     namespace = "io.github.maxlyth.hapaneld"
-    compileSdk = 35
+    compileSdk = 37
 
-    // Pinned so CI builds the native LED driver deterministically (matches the sdkmanager install
-    // step in .github/workflows/*.yml). 27.0.12077973 is AGP 8.7's default NDK.
+    // Pinned independently of AGP's newer default so CI and local builds continue to produce the
+    // same native helper and LED-driver binaries for the supported ARM32/ARM64 panel fleet.
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
@@ -52,8 +51,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the release line/candidate; publication remains a separate explicit action.
-        versionCode = 340
-        versionName = "0.9.5"
+        versionCode = 490
+        versionName = "0.9.6-rc1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
@@ -112,6 +111,10 @@ android {
 
     buildTypes {
         debug {
+            // A maintainer checkout with the private release key must produce one signer across
+            // debug and release artifacts so either build type can upgrade the managed fleet.
+            // Secretless CI/checkouts retain the committed deterministic debug key fallback.
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             // Keep production ABIs unchanged while allowing the optional Shizuku integration job to
             // install the real app/native library on an x86_64 Android emulator.
             ndk.abiFilters += "x86_64"
@@ -130,10 +133,6 @@ android {
         // HiveMQ + Ktor require Java 8 language features.
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     testOptions {
@@ -201,19 +200,20 @@ dependencies {
     implementation(libs.shizuku.provider)
 
     // QR code for the on-device config URL (pure-Java encoder; no Android transitive deps).
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
     // JVM unit tests (no Android/emulator deps): pure-logic + coroutine serialization regression tests.
     testImplementation(libs.junit)
+    testImplementation(kotlin("test"))
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.ktor.server.test.host)
     // Independent MQTT 5 broker for transport-level composition tests; never packaged in the APK.
     testImplementation(libs.moquette.broker)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")
 }
 
 tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
@@ -232,60 +232,81 @@ tasks.named<CyclonedxDirectTask>("cyclonedxDirectBom") {
 // Compile the CDP relay (helper/cdprelay.c) into assets at build time for the fleet ABIs, using the
 // pinned NDK that's already present in the Docker toolchain image and CI — so the repo ships source,
 // not prebuilt binaries. Extracted + launched at runtime by control/CdpRelay.kt.
-val compileCdpRelay by tasks.registering {
-    val ndkDir = android.ndkDirectory
+val ndkDirectory = androidComponents.sdkComponents.sdkDirectory.map {
+    it.dir("ndk/${android.ndkVersion}")
+}
+val ndkToolchainBin = ndkDirectory.get().asFile.resolve("toolchains/llvm/prebuilt/linux-x86_64/bin")
+
+val compileCdpRelayArm64 = tasks.register<Exec>("compileCdpRelayArm64") {
     val src = rootProject.file("helper/cdprelay.c")
     val policy = rootProject.file("helper/cdprelay_policy.h")
-    val out64 = file("src/main/assets/cdprelay-arm64")
-    val out32 = file("src/main/assets/cdprelay-arm")
+    val output = file("src/main/assets/cdprelay-arm64")
     inputs.files(src, policy)
-    inputs.property("ndk", ndkDir.toString())
-    outputs.files(out64, out32)
-    doLast {
-        val bin = "$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        out64.parentFile.mkdirs()
-        exec { commandLine("$bin/aarch64-linux-android26-clang", "-O2", "-s", "-o", out64.path, src.path) }
-        exec { commandLine("$bin/armv7a-linux-androideabi26-clang", "-O2", "-s", "-o", out32.path, src.path) }
-    }
+    inputs.dir(ndkDirectory)
+    inputs.property("ndkVersion", android.ndkVersion)
+    outputs.file(output)
+    commandLine(ndkToolchainBin.resolve("aarch64-linux-android26-clang"), "-O2", "-s", "-o", output, src)
+}
+
+val compileCdpRelayArm32 = tasks.register<Exec>("compileCdpRelayArm32") {
+    val src = rootProject.file("helper/cdprelay.c")
+    val policy = rootProject.file("helper/cdprelay_policy.h")
+    val output = file("src/main/assets/cdprelay-arm")
+    inputs.files(src, policy)
+    inputs.dir(ndkDirectory)
+    inputs.property("ndkVersion", android.ndkVersion)
+    outputs.file(output)
+    commandLine(ndkToolchainBin.resolve("armv7a-linux-androideabi26-clang"), "-O2", "-s", "-o", output, src)
+}
+
+val compileCdpRelay = tasks.register("compileCdpRelay") {
+    dependsOn(compileCdpRelayArm64, compileCdpRelayArm32)
 }
 
 // Carry the matching root-helper protocol inside the APK as a migration backstop. Provisioning remains
 // the durable installation path; after an in-app self-update, direct-su panels can atomically launch the
 // new helper before exposing helper-versioned features. API 26 matches the app's supported floor.
-val compileBundledRootHelper by tasks.registering {
-    val ndkDir = android.ndkDirectory
-    val sources = rootProject.fileTree("helper/src") { include("*.c") }
-    val out64 = file("src/main/assets/hapaneld-helper-arm64")
-    val out32 = file("src/main/assets/hapaneld-helper-arm")
+val bundledRootHelperSources = rootProject.fileTree("helper/src") { include("*.c") }
+
+val compileBundledRootHelperArm64 = tasks.register<Exec>("compileBundledRootHelperArm64") {
+    val output = file("src/main/assets/hapaneld-helper-arm64")
+    val sourcePaths = bundledRootHelperSources.files.sortedBy(File::getName)
     inputs.files(helperIdentityFiles)
     inputs.file(rootProject.file("helper/source-id.sh"))
+    inputs.dir(ndkDirectory)
     inputs.property("helperBuildId", helperBuildId)
-    inputs.property("ndk", ndkDir.toString())
-    outputs.files(out64, out32)
-    doLast {
-        val bin = "$ndkDir/toolchains/llvm/prebuilt/linux-x86_64/bin"
-        val sourcePaths = sources.files.sortedBy(File::getName).map(File::getPath)
-        out64.parentFile.mkdirs()
-        exec {
-            commandLine(
-                "$bin/aarch64-linux-android26-clang", "-O2", "-s", "-I${rootProject.file("helper/src").path}",
-                "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
-                "-o", out64.path, *sourcePaths.toTypedArray(),
-            )
-        }
-        exec {
-            commandLine(
-                "$bin/armv7a-linux-androideabi26-clang", "-O2", "-s", "-I${rootProject.file("helper/src").path}",
-                "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
-                "-o", out32.path, *sourcePaths.toTypedArray(),
-            )
-        }
-    }
+    inputs.property("ndkVersion", android.ndkVersion)
+    outputs.file(output)
+    commandLine(
+        ndkToolchainBin.resolve("aarch64-linux-android26-clang"), "-O2", "-s", "-I${rootProject.file("helper/src").path}",
+        "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
+        "-o", output, *sourcePaths.toTypedArray(),
+    )
+}
+
+val compileBundledRootHelperArm32 = tasks.register<Exec>("compileBundledRootHelperArm32") {
+    val output = file("src/main/assets/hapaneld-helper-arm")
+    val sourcePaths = bundledRootHelperSources.files.sortedBy(File::getName)
+    inputs.files(helperIdentityFiles)
+    inputs.file(rootProject.file("helper/source-id.sh"))
+    inputs.dir(ndkDirectory)
+    inputs.property("helperBuildId", helperBuildId)
+    inputs.property("ndkVersion", android.ndkVersion)
+    outputs.file(output)
+    commandLine(
+        ndkToolchainBin.resolve("armv7a-linux-androideabi26-clang"), "-O2", "-s", "-I${rootProject.file("helper/src").path}",
+        "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
+        "-o", output, *sourcePaths.toTypedArray(),
+    )
+}
+
+val compileBundledRootHelper = tasks.register("compileBundledRootHelper") {
+    dependsOn(compileBundledRootHelperArm64, compileBundledRootHelperArm32)
 }
 tasks.named("preBuild") { dependsOn(compileCdpRelay, compileBundledRootHelper) }
 
 val helperSocketTestServer = rootProject.file("helper/build/socket-test-server")
-val buildHelperSocketTestServer by tasks.registering(Exec::class) {
+val buildHelperSocketTestServer = tasks.register<Exec>("buildHelperSocketTestServer") {
     workingDir(rootProject.file("helper"))
     commandLine("make", "socket-test-server")
     inputs.files(
@@ -302,5 +323,14 @@ tasks.withType<Test>().configureEach {
     if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
         dependsOn(buildHelperSocketTestServer)
         systemProperty("hapaneld.helper.socketTestServer", helperSocketTestServer.absolutePath)
+    }
+    providers.gradleProperty("autoSleepReplayInput").orNull?.let {
+        systemProperty("hapaneld.autoSleepReplay.input", it)
+        inputs.file(it)
+        inputs.property("autoSleepReplayInputPath", it)
+    }
+    providers.gradleProperty("autoSleepReplayOutput").orNull?.let {
+        systemProperty("hapaneld.autoSleepReplay.output", it)
+        inputs.property("autoSleepReplayOutputPath", it)
     }
 }

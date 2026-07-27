@@ -15,6 +15,132 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun cachedHaVersionIsScopedToTheExactCurrentRendererEndpoint() {
+        val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.example"))
+        val config = Config(prefs.instance)
+
+        assertTrue(config.setHaServerVersionIfOwned("https://ha.example/", "2026.4.2"))
+        assertEquals("2026.4.2", config.cachedHaServerVersion("https://ha.example"))
+        assertNull(config.cachedHaServerVersion("https://other.example"))
+        assertFalse(config.setHaServerVersionIfOwned("https://other.example", "2027.1.0"))
+        assertEquals("2026.4.2", config.cachedHaServerVersion("https://ha.example"))
+    }
+
+    @Test fun generatedPanelIdentityIsPersistedOnce() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertEquals("px30_evb_b818", config.ensurePanelId { "px30_evb_b818" })
+        assertEquals("px30_evb_b818", prefs.values["panel_id"])
+        assertEquals("px30_evb_b818", config.ensurePanelId { "changed_device_name" })
+        assertEquals("px30_evb_b818", prefs.values["panel_id"])
+    }
+
+    @Test fun explicitPanelIdentityIsNeverReplacedByGeneration() {
+        val prefs = fakePreferences(initial = mapOf("panel_id" to "office_panel"))
+        val config = Config(prefs.instance)
+
+        assertEquals("office_panel", config.ensurePanelId { "generated_panel" })
+        assertEquals("office_panel", prefs.values["panel_id"])
+    }
+
+    @Test fun failedGeneratedIdentityCommitStillReturnsTheGeneratedValue() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertEquals("px30_evb_b818", config.ensurePanelId { "px30_evb_b818" })
+        assertFalse(prefs.values.containsKey("panel_id"))
+    }
+
+    @Test fun nativeKioskDefaultsOnAndPersistsExplicitOverrides() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertTrue(config.dashboardNativeKiosk)
+        assertFalse(prefs.values.containsKey("dashboard_native_kiosk"))
+        config.setDashboardNativeKiosk(false)
+        assertFalse(config.dashboardNativeKiosk)
+        assertEquals(false, prefs.values["dashboard_native_kiosk"])
+        config.setDashboardNativeKiosk(true)
+        assertTrue(config.dashboardNativeKiosk)
+        assertEquals(true, prefs.values["dashboard_native_kiosk"])
+    }
+
+    @Test fun autoSleepDefaultsOffAndPersistsBeforeRuntimeRefresh() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertFalse(config.autoSleep)
+
+        assertEquals(AutoSleepWriteResult.COMMITTED, config.setAutoSleep(true))
+        val enabledGeneration = config.autoSleepGeneration
+        assertTrue(Config(prefs.instance).autoSleep)
+        assertEquals(AutoSleepWriteResult.UNCHANGED, config.setAutoSleep(true))
+        assertEquals(null, config.setAutoSleepIf(
+            expected = false, expectedGeneration = enabledGeneration, on = false,
+        ))
+        assertTrue(config.autoSleep)
+        assertEquals(AutoSleepWriteResult.COMMITTED, config.setAutoSleepIf(
+            expected = true, expectedGeneration = enabledGeneration, on = false,
+        ))
+        assertFalse(config.autoSleep)
+        assertTrue(config.autoSleepGeneration > enabledGeneration)
+    }
+
+    @Test fun autoSleepSourceExclusionsPersistByHaInstallationAreaAndEntityId() {
+        val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.example"))
+        val config = Config(prefs.instance)
+
+        assertTrue(config.setAutoSleepSourceIncluded("office", "binary_sensor.office_motion", false))
+        assertEquals(setOf("binary_sensor.office_motion"),
+            Config(prefs.instance).autoSleepExcludedEntityIds("office"))
+        assertTrue(Config(prefs.instance).autoSleepExcludedEntityIds("kitchen").isEmpty())
+
+        assertTrue(config.setAutoSleepSourceIncluded("office", "binary_sensor.office_motion", true))
+        assertTrue(Config(prefs.instance).autoSleepExcludedEntityIds("office").isEmpty())
+    }
+
+    @Test fun autoSleepSourceExclusionsDoNotCrossHomeAssistantInstallations() {
+        val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha-one.example"))
+        val config = Config(prefs.instance)
+        assertTrue(config.setAutoSleepSourceIncluded("office", "binary_sensor.office_motion", false))
+
+        config.setHaConnection("https://ha-two.example", null)
+
+        assertTrue(config.autoSleepExcludedEntityIds("office").isEmpty())
+        assertEquals(
+            null,
+            config.setAutoSleepSourceIncludedIfScope(
+                "origin:https://ha-one.example",
+                "office",
+                "binary_sensor.office_motion",
+                false,
+            ),
+        )
+        assertTrue(config.autoSleepExcludedEntityIds("office").isEmpty())
+    }
+
+    @Test fun autoSleepSourceExclusionsSurviveAsynchronousHaUuidAdoption() {
+        val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.example"))
+        val config = Config(prefs.instance)
+        assertTrue(config.setAutoSleepSourceIncluded("office", "binary_sensor.office_motion", false))
+
+        prefs.instance.edit().putString("dashboard_entity_instance_uuid", "core-uuid").commit()
+
+        assertEquals(setOf("binary_sensor.office_motion"), config.autoSleepExcludedEntityIds("office"))
+        assertTrue(config.setAutoSleepSourceIncluded("office", "binary_sensor.office_motion", true))
+        config.setHaConnection("https://ha-alias.example", null)
+        assertTrue(config.autoSleepExcludedEntityIds("office").isEmpty())
+    }
+
+    @Test fun failedAutoSleepCommitDoesNotChangeTheStoredValue() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertEquals(AutoSleepWriteResult.FAILED, config.setAutoSleep(true))
+        assertFalse(config.autoSleep)
+    }
+
     @Test fun launchScreenVersionAcknowledgementIsExactAndDurable() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)
@@ -282,15 +408,53 @@ class ConfigTransactionTest {
         val config = Config(prefs.instance)
 
         val committed = config.applyBatch {
-            config.setWakeOnWave(false)
+            config.setWakeOnWave(true)
             config.setCompanionUpdateChannel("pre-release")
-            assertTrue(config.wakeOnWave)
+            assertFalse(config.wakeOnWave)
             assertEquals("stable", config.companionUpdateChannel)
         }
 
         assertTrue(committed)
-        assertFalse(config.wakeOnWave)
+        assertTrue(config.wakeOnWave)
         assertEquals("prerelease", config.companionUpdateChannel)
+    }
+
+    @Test fun explicitWakeOnWaveChoicesOverrideTheOptInDefault() {
+        assertTrue(Config(fakePreferences(initial = mapOf("wake_on_wave" to true)).instance).wakeOnWave)
+        assertFalse(Config(fakePreferences(initial = mapOf("wake_on_wave" to false)).instance).wakeOnWave)
+    }
+
+    @Test fun schemaThreeUpgradePreservesImplicitWakeAndHaExposureDefaults() {
+        val prefs = fakePreferences(initial = mapOf("config_schema" to 3))
+        val config = Config(prefs.instance)
+
+        config.migrateLiveStore()
+
+        assertTrue(config.wakeOnWave)
+        SettingsRegistry.LEGACY_DEFAULT_ON_HA_EXPOSURES.forEach { key ->
+            assertTrue(config.haExposed(key, false))
+        }
+        assertEquals(SettingsRegistry.SCHEMA, prefs.values["config_schema"])
+    }
+
+    @Test fun freshStoreReceivesNewOptInDefaultsWhileExplicitLegacyChoicesWin() {
+        val fresh = fakePreferences()
+        val freshConfig = Config(fresh.instance)
+        freshConfig.migrateLiveStore()
+        assertFalse(freshConfig.wakeOnWave)
+        SettingsRegistry.LEGACY_DEFAULT_ON_HA_EXPOSURES.forEach { key ->
+            assertFalse(freshConfig.haExposed(key, false))
+        }
+
+        val explicit = fakePreferences(initial = mapOf(
+            "config_schema" to 3,
+            "wake_on_wave" to false,
+            "ha_expose_auto_sleep" to false,
+        ))
+        val explicitConfig = Config(explicit.instance)
+        explicitConfig.migrateLiveStore()
+        assertFalse(explicitConfig.wakeOnWave)
+        assertFalse(explicitConfig.haExposed("auto_sleep", true))
     }
 
     @Test fun everyWakeOnWaveWriteInvalidatesAlreadyAdmittedGestureWork() {
@@ -1061,6 +1225,36 @@ class ConfigTransactionTest {
         assertTrue(config.dashboardEntityOverrides.isEmpty())
     }
 
+    @Test fun initialEntityActivationLatchSurvivesUntilSuccessButResetCannotRecreateIt() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_learning" to false,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = true, clearApplied = true))
+        assertTrue(config.dashboardEntityInitialActivationPending)
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = false, clearApplied = true))
+        assertTrue("ordinary disable must preserve unfinished first activation", config.dashboardEntityInitialActivationPending)
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = true, clearApplied = true))
+        assertTrue(config.dashboardEntityInitialActivationPending)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/lovelace/kiosk", "url-key",
+        ))
+
+        assertTrue(config.commitDashboardEntityEvidenceReset(clearFilter = true))
+        assertFalse(config.dashboardEntityInitialActivationPending)
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = false, clearApplied = true))
+        assertTrue(config.commitDashboardEntityLearningMode(enabled = true, clearApplied = true))
+        assertFalse("reset history must prevent first-run defaults from returning", config.dashboardEntityInitialActivationPending)
+
+        assertTrue(config.commitDashboardEntitySubscription(true, emptyList(), applied = true))
+        assertFalse(config.dashboardEntityInitialActivationPending)
+    }
+
     @Test fun defaultEvidenceResetPreservesKnownGoodFilter() {
         val prefs = fakePreferences(
             initial = mapOf(
@@ -1325,6 +1519,7 @@ class ConfigTransactionTest {
             appliedOwner = "uuid-key|/lovelace/wall",
             overrides = "+light.one\n-sensor.two",
             overrideOwner = "uuid-key|/lovelace/wall",
+            initialActivationPending = true,
         )
         val editor = config.editor()
         config.stageDashboardEntityBackupState(editor, state)
@@ -1473,6 +1668,37 @@ class ConfigTransactionTest {
             },
         )
         assertTrue(delayedRestart.mqttAnnouncementBoundaryAvailable(identity))
+    }
+
+    @Test fun completedInstallGetsTheVersionedHomeDashboardMigrationAfterV1WasConsumed() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "device_local_setup_questions_migrated_v1" to true,
+                "device_local_setup_identity_confirmed" to true,
+                "device_local_setup_ever_completed" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.migrateSetupQuestionsForExistingInstall()
+
+        assertTrue(config.setupHomeDashboardChosen)
+        assertEquals(true, prefs.values["device_local_setup_home_dashboard_migrated_v2"])
+    }
+
+    @Test fun freshGuidedSetupKeepsTheHomeDashboardQuestionOpen() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "device_local_setup_questions_migrated_v1" to true,
+                "device_local_setup_identity_confirmed" to true,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        config.migrateSetupQuestionsForExistingInstall()
+
+        assertFalse(config.setupHomeDashboardChosen)
+        assertEquals(true, prefs.values["device_local_setup_home_dashboard_migrated_v2"])
     }
 
     private data class FakePreferences(

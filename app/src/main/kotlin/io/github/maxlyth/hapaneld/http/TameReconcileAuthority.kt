@@ -1,7 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.control.TameReconcileResult
-import io.github.maxlyth.hapaneld.util.KeyedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 
 /**
  * The single vendor-taming execution owner. Queue entries are only wake-up signals: every pass reads
@@ -15,10 +15,10 @@ internal class TameReconcileAuthority(
     private val sleep: (Long) -> Unit = Thread::sleep,
     private val onBacklogChanged: (Int) -> Unit = {},
 ) {
-    private val dispatcher = KeyedLatestDispatcher<String, Unit>(
+    private val dispatcher = LatestDispatcher<String, Unit>(
         threadName = "ha-paneld-tame",
         maxPendingKeys = 1,
-    ) consume@{ _, _ ->
+        consume = consume@{ _, _ ->
         reportBacklog()
         try {
             var failureRetries = 0
@@ -44,9 +44,10 @@ internal class TameReconcileAuthority(
         } finally {
             reportBacklog()
         }
-    }
+        },
+    )
 
-    fun request(): KeyedLatestDispatcher.Admission = dispatcher.submit(RECONCILE_KEY, Unit).also {
+    fun request(): LatestDispatcher.Admission = dispatcher.submit(RECONCILE_KEY, Unit).also {
         reportBacklog()
     }
 

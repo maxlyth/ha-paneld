@@ -51,6 +51,53 @@ object AppState {
     }
 
     /**
+     * Writes restored `app_state` rows back through the ordinary per-namespace stores.
+     *
+     * Deliberately not a direct SQL insert: [preferences] caches one store per namespace, so a component
+     * already holding that namespace would keep serving — and later re-persist — its stale in-memory copy
+     * over anything written behind it. Going through the same store keeps a single authority per key.
+     *
+     * The caller decides *which* rows may be written ([StateBackupPolicy]); this only applies them. A row
+     * whose persisted type is unreadable is skipped rather than failing the batch, because losing one
+     * restored key is recoverable and abandoning the whole restore is not. Returns the rows applied.
+     */
+    fun applyRestoredRows(context: Context, rows: List<ConfigVault.StateRow>): Int {
+        var applied = 0
+        rows.groupBy { it.namespace }.forEach { (namespace, namespaceRows) ->
+            val editor = preferences(context, namespace, "").edit()
+            var staged = 0
+            namespaceRows.forEach { row ->
+                val value = runCatching { decodeRestoredValue(row.type, row.valueText) }.getOrNull()
+                    ?: return@forEach
+                when (value) {
+                    is String -> editor.putString(row.key, value)
+                    is Int -> editor.putInt(row.key, value)
+                    is Long -> editor.putLong(row.key, value)
+                    is Float -> editor.putFloat(row.key, value)
+                    is Boolean -> editor.putBoolean(row.key, value)
+                    is Set<*> -> editor.putStringSet(row.key, value.filterIsInstance<String>().toSet())
+                    else -> return@forEach
+                }
+                staged++
+            }
+            if (staged > 0 && editor.commit()) applied += staged
+        }
+        return applied
+    }
+
+    private fun decodeRestoredValue(type: String, text: String?): Any = when (type) {
+        "string" -> text.orEmpty()
+        "int" -> text.orEmpty().toInt()
+        "long" -> text.orEmpty().toLong()
+        "float" -> text.orEmpty().toFloat()
+        "boolean" -> text == "1"
+        "string_set" -> JSONArray(text.orEmpty()).let { json ->
+            buildSet { repeat(json.length()) { add(json.getString(it)) } }
+        }
+        else -> error("unsupported persisted state type $type")
+    }
+
+    /**
      * Wait until every state write admitted before this call is durable. This is used at orderly
      * service teardown and immediately before replacing this APK; it does not close the process-wide
      * writer, so Android may recreate the service in the same process.
@@ -406,19 +453,43 @@ internal class DowngradeCompatibleStatePersistence(
             }
             marker == journalHash -> {
                 if (journal != current) {
-                    check(legacy.replace(current)) { "could not refresh legacy compatibility journal" }
-                    check(metadata.writeHash(stateSnapshotHash(current))) { "could not refresh compatibility marker" }
+                    val currentPayload = current.filterKeys(::isPayloadKey)
+                    val journalPayload = journal.filterKeys(::isPayloadKey)
+                    val journalContainsCurrent = currentPayload.all { (key, value) -> journalPayload[key] == value }
+                    if (journalContainsCurrent && journalPayload.size > currentPayload.size) {
+                        val recovered = journal.toMutableMap().apply {
+                            current.filterKeys { !isPayloadKey(it) }.forEach { (key, value) -> put(key, value) }
+                        }
+                        check(primary.replace(recovered)) { "could not recover truncated SQLite state" }
+                        check(legacy.replace(recovered)) { "could not refresh recovered compatibility journal" }
+                        check(metadata.writeHash(stateSnapshotHash(recovered))) {
+                            "could not mark recovered compatibility journal"
+                        }
+                        recovered
+                    } else {
+                        check(legacy.replace(current)) { "could not refresh legacy compatibility journal" }
+                        check(metadata.writeHash(stateSnapshotHash(current))) { "could not refresh compatibility marker" }
+                        current
+                    }
                 }
-                current
+                else current
             }
             else -> {
-                check(primary.replace(journal)) { "could not import legacy compatibility journal" }
-                check(metadata.writeHash(journalHash)) { "could not mark imported compatibility journal" }
-                journal
+                // Reconcile by merging the mirror onto the SQLite primary, never replacing it outright:
+                // an old build's downgrade edit still wins for shared keys, but a drifted or degraded
+                // mirror can never drop live keys and wipe a panel's configuration.
+                val reconciled = current + journal
+                check(primary.replace(reconciled)) { "could not import legacy compatibility journal" }
+                check(metadata.writeHash(stateSnapshotHash(reconciled))) {
+                    "could not mark imported compatibility journal"
+                }
+                reconciled
             }
         }
         return snapshot
     }
+
+    private fun isPayloadKey(key: String): Boolean = key != "panel_id" && key != "config_schema"
 
     override fun persist(mutation: StateMutation): Boolean {
         val candidate = snapshot.toMutableMap().applyMutation(mutation)
@@ -634,7 +705,7 @@ private class SqliteNamespacePersistence(
                 legacy.all.forEach { (key, value) -> value?.let { putValue(db, key, it, revision) } }
                 db.execSQL(
                     "INSERT INTO app_state_namespace(namespace,imported_at,legacy_name) VALUES(?,?,?)",
-                    arrayOf(namespace, clock(), legacyName),
+                    arrayOf<Any?>(namespace, clock(), legacyName),
                 )
             }
             db.setTransactionSuccessful()
@@ -678,7 +749,7 @@ private class SqliteNamespacePersistence(
     private fun insertRevision(db: SQLiteDatabase, source: String): Long {
         db.execSQL(
             "INSERT INTO app_state_revision(committed_at,namespace,source) VALUES(?,?,?)",
-            arrayOf(clock(), namespace, source),
+            arrayOf<Any?>(clock(), namespace, source),
         )
         return db.rawQuery("SELECT last_insert_rowid()", null).use {
             check(it.moveToFirst())
@@ -692,7 +763,7 @@ private class SqliteNamespacePersistence(
             """INSERT OR REPLACE INTO app_state(
                 namespace,state_key,value_type,value_text,updated_at,revision
             ) VALUES(?,?,?,?,?,?)""",
-            arrayOf(namespace, key, type, text, clock(), revision),
+            arrayOf<Any?>(namespace, key, type, text, clock(), revision),
         )
     }
 
@@ -704,7 +775,7 @@ private class SqliteNamespacePersistence(
                ) AND revision < (
                    SELECT coalesce(max(revision),0)-? FROM app_state_revision WHERE namespace=?
                )""",
-            arrayOf(namespace, namespace, REVISION_RETENTION, namespace),
+            arrayOf<Any?>(namespace, namespace, REVISION_RETENTION, namespace),
         )
     }
 

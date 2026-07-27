@@ -12,6 +12,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -233,6 +234,10 @@ class LogCapture(
                     // block forever on a full pipe while the caller waits for process exit.
                     if (remaining == 0) runCatching { p.destroyForcibly() }
                 }
+            } catch (_: IOException) {
+                // Closing and interrupting a blocked pipe is the normal bounded-cleanup path. In
+                // particular, Android's logcat wrapper may surface that interruption as an
+                // InterruptedIOException; never let a teardown race crash the application process.
             } finally {
                 readerDone.countDown()
             }

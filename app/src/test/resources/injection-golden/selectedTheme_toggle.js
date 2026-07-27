@@ -1,0 +1,1 @@
+(()=>{if(window.top&&window.top!==window)return;try{localStorage.setItem('selectedTheme', JSON.stringify({dark:false}))}catch(e){}})();

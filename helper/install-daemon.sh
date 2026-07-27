@@ -466,6 +466,17 @@ rollback_root_helper() {
           actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
           [ "${actual%% *}" = "$expected" ]
         }
+        wait_for_helper_retirement() {
+          attempt=0
+          while [ "$attempt" -lt 10 ]; do
+            if ! pidof hapaneld-helper >/dev/null 2>&1 && ! pidof hapaneld-ledd >/dev/null 2>&1; then
+              return 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+          done
+          return 1
+        }
         if live_recorded OLD_BIN /system/bin/hapaneld-helper &&
            live_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc &&
            live_recorded LEGACY_BIN /system/bin/hapaneld-ledd &&
@@ -524,6 +535,7 @@ rollback_root_helper() {
         stop hapaneld_ledd 2>/dev/null
         pkill -x hapaneld-helper 2>/dev/null
         pkill -x hapaneld-ledd 2>/dev/null
+        wait_for_helper_retirement || exit 1
         if grep -q ^OLD_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
           rm -f /system/bin/hapaneld-helper
           cp -p /system/bin/hapaneld-helper.hapaneld-manual-recovery /system/bin/hapaneld-helper || exit 1
@@ -564,7 +576,9 @@ rollback_root_helper() {
         fi
         sync || exit 1
         if [ -f /system/bin/hapaneld-helper.hapaneld-manual-recovery ]; then
-          start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+          start hapaneld_helper 2>/dev/null
+          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
           echo ROLLBACK_RESTARTED
         elif [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery ]; then
           /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
@@ -603,6 +617,17 @@ rollback_root_helper() {
             [ ! -e "$live" ]
           fi
         }
+        wait_for_helper_retirement() {
+          attempt=0
+          while [ "$attempt" -lt 10 ]; do
+            if ! pidof hapaneld-helper >/dev/null 2>&1 && ! pidof hapaneld-ledd >/dev/null 2>&1; then
+              return 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+          done
+          return 1
+        }
         hash_is() {
           expected=$1; live=$2
           actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
@@ -638,6 +663,8 @@ rollback_root_helper() {
         ( sha256sum '"$probe_path"' 2>/dev/null || toybox sha256sum '"$probe_path"' 2>/dev/null ) | grep -q ^'"$BIN_SHA256"' || exit 1
         stop hapaneld_helper 2>/dev/null
         pkill -x hapaneld-helper 2>/dev/null
+        pkill -x hapaneld-ledd 2>/dev/null
+        wait_for_helper_retirement || exit 1
         if grep -q ^OLD_BIN=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
           rm -f /data/adb/hapaneld/hapaneld-helper
           cp -p /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery /data/adb/hapaneld/hapaneld-helper || exit 1
@@ -657,7 +684,9 @@ rollback_root_helper() {
           /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
           echo ROLLBACK_RESTARTED
         elif [ -x /system/bin/hapaneld-helper ]; then
-          start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+          start hapaneld_helper 2>/dev/null
+          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
           echo ROLLBACK_RESTARTED
         elif [ -x /system/bin/hapaneld-ledd ]; then
           start hapaneld_ledd 2>/dev/null || ( /system/bin/hapaneld-ledd >/dev/null 2>&1 & )

@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -17,10 +18,11 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
+import io.github.maxlyth.hapaneld.control.PanelTouchObserver
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.JsResult
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
@@ -43,10 +45,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import io.github.maxlyth.hapaneld.control.BottomSwipeDetector
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
+import io.github.maxlyth.hapaneld.dashboard.InjectionScript
 import io.github.maxlyth.hapaneld.dashboard.shouldInstallDashboardTrafficObserver
 import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
@@ -54,10 +59,22 @@ import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
+import io.github.maxlyth.hapaneld.util.localIpv4
+import io.github.maxlyth.hapaneld.util.localIpv6
 import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.NetworkInterface
 import java.util.Collections
+import java.util.LinkedHashMap
 
 internal fun shouldRouteDashboardHomeToAdmin(
     configuredLauncherPackage: String,
@@ -90,9 +107,28 @@ internal fun invalidEntityFilterFailureDisposition(
 
 internal fun deferReadyEntityBootstrapUntilWake(screenAwake: Boolean): Boolean = !screenAwake
 
+internal fun shouldKeepBuiltInRendererScreenOn(preventIdleDim: Boolean): Boolean = preventIdleDim
+
 private data class EntityFilterNativeHold(val error: String, val detail: String)
 
 private class EntityFilterInterceptorUnavailable(cause: Throwable) : RuntimeException(cause)
+
+private class ExternalV2BridgeUnavailable(cause: Throwable) : RuntimeException(cause)
+
+private data class PendingV2Auth(
+    val config: Config,
+    val generation: Long,
+    val session: ExternalBusController.Session,
+    val payload: String,
+    val force: Boolean,
+)
+
+private data class V2BridgeDocument(
+    val config: Config,
+    val generation: Long,
+    val session: ExternalBusController.Session,
+    val filterLease: EntityFilterTelemetry.Lease?,
+)
 
 internal class EntityFilterRetryPolicy(
     private val delaysMs: LongArray = longArrayOf(30_000L, 120_000L, 600_000L),
@@ -113,7 +149,7 @@ internal class EntityFilterRetryPolicy(
 /**
  * Built-in dashboard renderer (experimental): a full-screen WebView onto the configured Home
  * Assistant URL, signed in through the frontend's documented external-auth bridge — the same
- * `?external_auth=1` + `window.externalApp` contract the HA Companion app uses. Requires `ha_url`
+ * `?external_auth=1` + `window.externalAppV2` contract the HA Companion app uses. Requires `ha_url`
  * and `ha_token` (a long-lived access token set at provisioning); with either blank this activity
  * shows nothing useful, so entry points should gate on [Config.haUrl].
  *
@@ -124,6 +160,7 @@ internal class EntityFilterRetryPolicy(
  */
 class DashboardActivity : AppCompatActivity() {
 
+    private lateinit var activityConfig: Config
     private var web: WebView? = null
     private var swipe: SwipeRefreshLayout? = null
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
@@ -135,6 +172,7 @@ class DashboardActivity : AppCompatActivity() {
 
     // --- long-run reliability state (all touched on the main thread only) ---
     private val main = Handler(Looper.getMainLooper())
+    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val rendererGate = RendererGenerationGate()
     private val wakeMediaRecovery = WakeMediaRecoveryGate()
     private val entityFilterRetryPolicy = EntityFilterRetryPolicy()
@@ -147,6 +185,13 @@ class DashboardActivity : AppCompatActivity() {
     // land AFTER onDestroy's removeCallbacksAndMessages and re-arm the self-perpetuating watchdog on a
     // dead activity. Every posted handler checks this first so nothing runs (or re-schedules) post-destroy.
     @Volatile private var destroyed = false
+    private val rendererPowerListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "prevent_idle_dim") {
+            runOnUiThread {
+                if (!destroyed && ::activityConfig.isInitialized) applyRendererScreenPolicy()
+            }
+        }
+    }
     // Stored so onDestroy can clear it by identity — an old instance destroyed after a new one's onCreate
     // must not wipe the new instance's registration (see BuiltinDashboard.clearScreenListener).
     private val screenListener: (Boolean) -> Unit = { awake -> runOnUiThread { onScreenChanged(awake) } }
@@ -174,8 +219,51 @@ class DashboardActivity : AppCompatActivity() {
     private var lastFullLoadAt = 0L
     private var reloadPending = false
     private var screenAwake = true
-    // App→frontend external-bus command ids (navigate etc.); replies echo the id back (logged).
-    private var busId = 0
+    // One bounded owner for typed app→frontend commands and their per-document result correlation.
+    private val externalBus = ExternalBusController()
+    private var externalBusSession: ExternalBusController.Session? = null
+    private var v2BridgeDocument: V2BridgeDocument? = null
+    private var v2ListenerView: WebView? = null
+    private var expectedPageStartUrl: String? = null
+    private val busTimeouts = LinkedHashMap<Int, Runnable>()
+    private var compatibilityJob: Job? = null
+    private var compatibilityCheckingOwner: DashboardV2CompatibilityOwner? = null
+    private var compatibilityReadyUrl: String? = null
+
+    /** Endpoint the on-panel Home Assistant sign-in is currently showing, so a relaunch does not restart it. */
+    private var signInShownForUrl: String? = null
+
+    /** Quiet retries before the sign-in surface declares itself unavailable — its start page is served
+     *  by the panel's own HTTP server, which restarts briefly during config/MQTT reconfigures. */
+    private var signInLoadRetries = 0
+
+    /**
+     * Maintainer rule: every DELIBERATE dashboard restart announces itself on the panel, so an
+     * on-purpose reset can never be mistaken for a crash — otherwise the built-in renderer earns a
+     * reputation for unreliability one report at a time. Native (no WebView dependency), transient,
+     * never blocks the reload, names ha-paneld as the actor, and never shown for genuine crashes:
+     * the distinction is the point. A full-rebuild overlay was tried (round 10) and rejected on
+     * hardware — it vanished with the container the moment the rebuild swapped views and its
+     * full-bleed layout read no better than the toast (maintainer, round 11).
+     */
+    private fun announceDeliberateRestart(reason: String) {
+        runCatching {
+            android.widget.Toast.makeText(
+                this,
+                "ha-paneld is restarting the dashboard — " +
+                    reason.ifBlank { "applying your changes" },
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+    private val compatibilityAttempts = DashboardV2AttemptGate()
+    private val v2Handshake = V2HandshakeGate(V2_MISSING_RELOAD_LIMIT)
+    // V2 callbacks arrive on the UI thread. Keep at most one blocking auth resolution in flight and
+    // one latest request waiting behind it; repeated frontend requests cannot grow coroutine retention.
+    private val authQueue = BoundedAuthQueue<PendingV2Auth>(
+        sameOwner = { left, right -> left.session == right.session },
+        forced = PendingV2Auth::force,
+    )
     // Auth-failure latch. A terminal login-settings rejection (refresh token/client id, repeated
     // auth-invalid from the frontend) must not become an infinite reload loop on an unattended panel —
     // no unchanged retry can repair it. Latch: stop the retry machinery and show a clear on-panel
@@ -201,6 +289,11 @@ class DashboardActivity : AppCompatActivity() {
     private var waitingEstimateMs = 0L
     private var waitingEstimateLearned = false
     private var entityBootstrapBlockedCount = -1
+    private var entityBootstrapHoldSinceMs = 0L
+    private var entityBootstrapMilestoneView: TextView? = null
+    private var entityBootstrapWatchdogFired = false
+    /** Past the give-up deadline the hold presents as a problem (retry/disable buttons) — see the check. */
+    private var entityBootstrapWatchdogGaveUp = false
     private var entityBootstrapProblem: EntityBootstrapProblem? = null
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
@@ -226,15 +319,41 @@ class DashboardActivity : AppCompatActivity() {
             if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
             val config = Config(this@DashboardActivity)
             if (holdForEntityBootstrap(config)) {
+                // The hold is structurally forbidden from being terminal. The enable-time sync has died
+                // silently on hardware more than once, each time leaving a happy spinner over a dead
+                // process until a human intervened. Two deadlines: at 2 minutes fire the same recovery
+                // the manual sync endpoint provides (once); at 4 minutes stop impersonating progress and
+                // show the problem screen, whose retry/disable buttons already exist.
+                val now = SystemClock.elapsedRealtime()
+                if (entityBootstrapHoldSinceMs == 0L) entityBootstrapHoldSinceMs = now
+                val heldMs = now - entityBootstrapHoldSinceMs
+                if (heldMs > BOOTSTRAP_WATCHDOG_RETRY_MS && !entityBootstrapWatchdogFired) {
+                    entityBootstrapWatchdogFired = true
+                    Log.w(TAG, "entity bootstrap held ${heldMs}ms — firing watchdog resync")
+                    EntityLearningRuntime.retryBootstrap()
+                }
+                if (heldMs > BOOTSTRAP_WATCHDOG_PROBLEM_MS && !entityBootstrapWatchdogGaveUp) {
+                    entityBootstrapWatchdogGaveUp = true
+                    showWaitingForEntityBootstrap()
+                    return
+                }
                 val blocking = EntityLearningRuntime.blockingIssueCount()
                 val problem = EntityLearningRuntime.bootstrapProblem()
                 if (blocking != entityBootstrapBlockedCount || problem != entityBootstrapProblem) {
                     showWaitingForEntityBootstrap()
                     return
                 }
+                // Live milestone tick — the count climbing is the trust signal a spinner never was.
+                entityBootstrapMilestoneView?.takeIf { it.isAttachedToWindow }?.let {
+                    val milestone = EntityLearningRuntime.bootstrapMilestone()
+                    if (milestone.isNotBlank() && it.text != milestone) it.text = milestone
+                }
                 main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
                 return
             }
+            entityBootstrapHoldSinceMs = 0L
+            entityBootstrapWatchdogFired = false
+            entityBootstrapWatchdogGaveUp = false
             // A sync may finish after the panel went dark. Do not create a WebView whose timers have no
             // connection callback or dark-settle owner; the next poll after a real wake will build it.
             if (deferReadyEntityBootstrapUntilWake(screenAwake)) {
@@ -247,6 +366,34 @@ class DashboardActivity : AppCompatActivity() {
             buildAndLoad(config)
         }
     }
+    /**
+     * Waits for the setup wizard's entity-filter answer, then builds the renderer.
+     *
+     * Deliberately stays inside this activity rather than handing back to [MainActivity]: finishing here
+     * would be picked up by the kiosk/watchdog return loop and relaunched, which would detect the same hold
+     * and finish again — a churn loop on the never-strand path. Holding a static native screen costs nothing
+     * and cannot loop.
+     */
+    private val entityFilterAnswerCheck = object : Runnable {
+        override fun run() {
+            if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+            val config = Config(this@DashboardActivity)
+            if (entityFilterQuestionPending(
+                    builtinRenderer = true,
+                    haUrl = config.haUrl,
+                    haToken = config.haToken,
+                    haRefreshToken = config.haRefreshToken,
+                    entityFilterAnswered = config.setupEntityFilterAnswered,
+                    setupEverCompleted = config.setupEverCompleted,
+                    entityFilterEnabled = config.dashboardEntityLearningEnabled,
+                )
+            ) {
+                main.postDelayed(this, ENTITY_FILTER_ANSWER_CHECK_MS)
+                return
+            }
+            buildAndLoad(config)
+        }
+    }
     private val entityFilterRetry = Runnable {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || !screenAwake || entityFilterNativeHold == null) return@Runnable
         entityFilterRetryPolicy.recordAttempt()
@@ -256,6 +403,10 @@ class DashboardActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         supportActionBar?.hide()
+        // DashboardActivity can be foregrounded directly by HOME restoration, the admin path, or a
+        // privileged start. Always bootstrap the service here too so the local HTTP/MQTT surface is
+        // alive even when MainActivity was bypassed.
+        PaneldService.start(this)
         val config = Config(this)
         // Android 14's HOME role resolves at package granularity when one package exposes multiple HOME
         // activities: set-home-activity can report success for AdminLauncherActivity yet still resolve
@@ -267,13 +418,25 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         activityOwner = BuiltinDashboard.acquireActivityOwner()
-        if (config.haUrl.isBlank()) {
-            // We're a HOME activity: never finish to a blank home. With no URL to render, hand off to
-            // the admin launcher (also a HOME activity) so the panel is never stranded.
-            Log.w(TAG, "no ha_url configured — opening the admin launcher instead")
-            fallbackToLauncher()
-            return
+        if (!config.builtInRendererReady()) {
+            // A configured URL with no credential is the one not-ready state that can fix itself: the
+            // on-panel Home Assistant sign-in produces the missing token. Bouncing here instead is what
+            // made first-run unfinishable from the panel — the sign-in screen lives past this gate, so
+            // the gate was refusing entry to the only thing that could satisfy it.
+            if (haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)) {
+                Log.i(TAG, "Home Assistant URL set without credentials — continuing to the on-panel sign-in")
+            } else {
+                // We're a HOME activity: never finish to a blank home. With no URL/auth to render, hand off
+                // to ha-paneld's first-run QR/configure surface, not the admin launcher grid. A clean install
+                // must be usable from the physical panel without ADB/debug handholding.
+                Log.w(TAG, "built-in renderer not ready — opening the first-run configure surface instead")
+                fallbackToFirstRunSurface()
+                return
+            }
         }
+        activityConfig = config
+        activityConfig.registerChangeListener(rendererPowerListener)
+        applyRendererScreenPolicy()
         configureEntityFilter(config)
         // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
         // connectivity returns if the frontend isn't connected — registered for the activity's lifetime.
@@ -295,11 +458,17 @@ class DashboardActivity : AppCompatActivity() {
     /** Any touch (the WebView consumes them, but the activity sees them first) resets the idle clock. */
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
         lastTouchAt = SystemClock.elapsedRealtime()
+        if (ev?.actionMasked == MotionEvent.ACTION_DOWN) {
+            PanelTouchObserver.shared(this).noteActivityTouch()
+        }
         return super.dispatchTouchEvent(ev)
     }
 
     override fun onDestroy() {
         destroyed = true
+        compatibilityAttempts.invalidate()
+        activityScope.cancel()
+        if (::activityConfig.isInitialized) activityConfig.unregisterChangeListener(rendererPowerListener)
         wakeMediaRecovery.close()
         rendererGate.close()
         entityFilterLease?.let(EntityFilterTelemetry::stop)
@@ -317,8 +486,16 @@ class DashboardActivity : AppCompatActivity() {
      *  called on a screen-off — without this, an activity destroyed while dark would leave JS timers
      *  frozen for every future WebView in this forever process (a never-blank violation). */
     private fun teardownWeb() {
+        signInShownForUrl = null // the sign-in WebView is going away; a later call must rebuild it
         wakeMediaRecovery.invalidate()
         rendererGate.invalidate()
+        externalBus.invalidate()
+        externalBusSession = null
+        v2BridgeDocument = null
+        authQueue.clear()
+        v2Handshake.reset()
+        expectedPageStartUrl = null
+        clearBusTimeouts()
         main.removeCallbacks(watchdog)
         main.removeCallbacks(darkSettle)
         customView?.let { view -> runCatching { root?.removeView(view) } }
@@ -327,9 +504,9 @@ class DashboardActivity : AppCompatActivity() {
         customViewCallback = null
         web?.let { w ->
             runCatching { w.resumeTimers() }
+            removeV2Listeners(w)
             runCatching { w.loadUrl("about:blank") }
             (w.parent as? ViewGroup)?.removeView(w)
-            runCatching { w.removeJavascriptInterface("externalApp") }
             runCatching { w.destroy() }
         }
         web = null
@@ -340,6 +517,242 @@ class DashboardActivity : AppCompatActivity() {
     private fun rendererCurrent(generation: Long, view: WebView? = null): Boolean =
         !destroyed && BuiltinDashboard.ownsActivity(activityOwner) &&
             rendererGate.owns(generation) && (view == null || web === view)
+
+    private fun bridgeCurrent(generation: Long, session: ExternalBusController.Session): Boolean =
+        rendererCurrent(generation) && externalBus.owns(session)
+
+    /** Rotate the bounded per-document controller before navigation. The listeners themselves stay
+     * attached across ordinary HA reloads/redirects, as in upstream Android; their callback resolves
+     * this current context rather than retaining a replaced document's credentials or session. */
+    private fun beginBusDocument(
+        view: WebView,
+        config: Config,
+        generation: Long,
+    ): ExternalBusController.Session {
+        clearBusTimeouts()
+        authQueue.clear()
+        val session = externalBus.beginDocument(generation, config.dashboardNativeKiosk)
+        externalBusSession = session
+        v2Handshake.begin(session)
+        v2BridgeDocument = V2BridgeDocument(config, generation, session, entityFilterLease)
+        try {
+            if (v2ListenerView !== view) installV2Listeners(view, config)
+        } catch (error: Throwable) {
+            externalBus.invalidate()
+            externalBusSession = null
+            v2BridgeDocument = null
+            throw ExternalV2BridgeUnavailable(error)
+        }
+        return session
+    }
+
+    private fun expectPageStart(url: String) {
+        expectedPageStartUrl = url
+    }
+
+    private fun rotateBusDocument(view: WebView, config: Config, generation: Long): Boolean = try {
+        beginBusDocument(view, config, generation)
+        true
+    } catch (error: ExternalV2BridgeUnavailable) {
+        Log.e(TAG, "secure V2 listener attachment failed", error)
+        showV2CompatibilityScreen(
+            "Secure dashboard bridge unavailable",
+            "Android System WebView could not attach the secure V2 native bridge. Update or repair " +
+                "Android System WebView, then retry.",
+        )
+        false
+    }
+
+    /** Local recovery documents never need credentials or the external bus. */
+    private fun suspendBusDocument(view: WebView) {
+        clearBusTimeouts()
+        authQueue.clear()
+        externalBus.invalidate()
+        externalBusSession = null
+        v2BridgeDocument = null
+        removeV2Listeners(view)
+    }
+
+    private fun removeV2Listeners(view: WebView) {
+        // Explicitly remove the legacy object as well: a V2-only renderer never leaves a V1 interface
+        // installed, including across WebView reuse or a provider restoring internal state.
+        runCatching { view.removeJavascriptInterface("externalApp") }
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        runCatching { WebViewCompat.removeWebMessageListener(view, EXTERNAL_APP_V2) }
+        runCatching { WebViewCompat.removeWebMessageListener(view, HaPaneldV2Protocol.OBJECT_NAME) }
+        if (v2ListenerView === view) v2ListenerView = null
+    }
+
+    private fun installV2Listeners(
+        view: WebView,
+        config: Config,
+    ) {
+        check(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER))
+        val allowedOrigins = dashboardDocumentStartOrigins(config.haUrl)
+        view.removeJavascriptInterface("externalApp")
+        // Installation happens only before an HA navigation, never during an ordinary reload. Remove
+        // defensively so a provider-restored name cannot make add fail or retain an unknown callback.
+        runCatching { WebViewCompat.removeWebMessageListener(view, EXTERNAL_APP_V2) }
+        runCatching { WebViewCompat.removeWebMessageListener(view, HaPaneldV2Protocol.OBJECT_NAME) }
+        WebViewCompat.addWebMessageListener(view, EXTERNAL_APP_V2, allowedOrigins) {
+                callbackView, message, sourceOrigin, isMainFrame, _ ->
+            val document = v2BridgeDocument ?: return@addWebMessageListener
+            if (!v2CallbackCurrent(callbackView, document, sourceOrigin.toString(), isMainFrame)) {
+                return@addWebMessageListener
+            }
+            when (val incoming = ExternalAppV2Protocol.parse(message.data)) {
+                is ExternalAppV2Protocol.Incoming.GetExternalAuth -> {
+                    if (enqueueV2Auth(document, incoming.payload)) markV2Observed(document.session)
+                }
+                is ExternalAppV2Protocol.Incoming.RevokeExternalAuth -> {
+                    val reply = ExternalAuthProtocol.revokeReply(incoming.payload)
+                    if (reply != null) markV2Observed(document.session)
+                    evaluateBridgeReply(reply, document.generation, document.session)
+                }
+                is ExternalAppV2Protocol.Incoming.ExternalBus -> {
+                    val bus = ExternalBusProtocol.parse(incoming.payload)
+                    if (bus !is ExternalBusProtocol.Incoming.Malformed) markV2Observed(document.session)
+                    handleExternalBus(bus, document.generation, document.session)
+                }
+                is ExternalAppV2Protocol.Incoming.Malformed ->
+                    Log.w(TAG, "ignored malformed externalAppV2 envelope (${incoming.reason})")
+                is ExternalAppV2Protocol.Incoming.Unknown -> Unit
+            }
+        }
+        try {
+            WebViewCompat.addWebMessageListener(view, HaPaneldV2Protocol.OBJECT_NAME, allowedOrigins) {
+                    callbackView, message, sourceOrigin, isMainFrame, _ ->
+                val document = v2BridgeDocument ?: return@addWebMessageListener
+                if (!v2CallbackCurrent(callbackView, document, sourceOrigin.toString(), isMainFrame)) {
+                    return@addWebMessageListener
+                }
+                handleHaPaneldV2(
+                    HaPaneldV2Protocol.parse(message.data),
+                    document.config,
+                    document.generation,
+                    document.session,
+                    document.filterLease,
+                )
+            }
+            v2ListenerView = view
+        } catch (error: Throwable) {
+            runCatching { WebViewCompat.removeWebMessageListener(view, EXTERNAL_APP_V2) }
+            throw error
+        }
+    }
+
+    private fun markV2Observed(session: ExternalBusController.Session) {
+        if (!externalBus.owns(session)) return
+        v2Handshake.observe(session)
+    }
+
+    private fun v2CallbackCurrent(
+        callbackView: WebView,
+        document: V2BridgeDocument,
+        sourceOrigin: String?,
+        isMainFrame: Boolean,
+    ): Boolean = v2BridgeDocument === document && isMainFrame &&
+        bridgeCurrent(document.generation, document.session) && web === callbackView &&
+        sameDashboardOrigin(sourceOrigin, callbackView.url)
+
+    private fun enqueueV2Auth(
+        document: V2BridgeDocument,
+        payload: String,
+    ): Boolean {
+        if (v2BridgeDocument !== document || !bridgeCurrent(document.generation, document.session)) return false
+        val force = ExternalAuthProtocol.validAuthRequestForce(payload) ?: return false
+        val request = PendingV2Auth(document.config, document.generation, document.session, payload, force)
+        authQueue.offer(request)?.let(::resolveV2Auth)
+        return true
+    }
+
+    private fun resolveV2Auth(work: BoundedAuthQueue.Work<PendingV2Auth>) {
+        val request = work.request
+        activityScope.launch {
+            try {
+                val result = try {
+                    withContext(Dispatchers.IO) {
+                        DashboardAuth.forConfig(
+                            request.config,
+                            force = request.force,
+                            stillCurrent = { bridgeCurrent(request.generation, request.session) },
+                        )
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    Log.w(TAG, "external auth resolution failed transiently: ${error.javaClass.simpleName}")
+                    DashboardAuth.Result(null)
+                }
+                if (result.rejected && bridgeCurrent(request.generation, request.session)) {
+                    onAuthRejected(request.generation)
+                }
+                evaluateBridgeReply(
+                    ExternalAuthProtocol.authReply(
+                        request.payload,
+                        result.session?.accessToken,
+                        result.session?.expiresInSec ?: 0L,
+                    ),
+                    request.generation,
+                    request.session,
+                )
+            } finally {
+                authQueue.complete(work) { next ->
+                    bridgeCurrent(next.generation, next.session)
+                }?.let(::resolveV2Auth)
+            }
+        }
+    }
+
+    private fun evaluateBridgeReply(
+        script: String?,
+        generation: Long,
+        session: ExternalBusController.Session,
+    ) {
+        if (script != null && bridgeCurrent(generation, session)) web?.evaluateJavascript(script, null)
+    }
+
+    private fun handleHaPaneldV2(
+        incoming: HaPaneldV2Protocol.Incoming,
+        config: Config,
+        generation: Long,
+        session: ExternalBusController.Session,
+        filterLease: EntityFilterTelemetry.Lease?,
+    ) {
+        if (!bridgeCurrent(generation, session)) return
+        when (incoming) {
+            HaPaneldV2Protocol.Incoming.EntityFilterSubscriptionModified -> {
+                val lease = filterLease ?: return
+                if (config.dashboardEntityFilterEnabled) EntityFilterTelemetry.subscriptionModified(lease)
+            }
+            is HaPaneldV2Protocol.Incoming.EntityFilterTrafficMetrics -> {
+                val lease = filterLease ?: return
+                if (incoming.payload.length > 512) return
+                runCatching { EntityFilterProtocol.parseTrafficBatch(incoming.payload) }
+                    .onSuccess { EntityFilterTelemetry.traffic(lease, it) }
+            }
+            is HaPaneldV2Protocol.Incoming.EntityLearningAccesses -> {
+                if (!config.dashboardEntityLearningEnabled) return
+                if (incoming.payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
+                    EntityLearningRuntime.recordAccessBatch(incoming.payload)
+                } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
+            }
+            is HaPaneldV2Protocol.Incoming.EntityLearningMetrics -> {
+                if (!config.dashboardEntityLearningEnabled) return
+                if (incoming.payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
+                    EntityLearningRuntime.recordMetricBatch(incoming.payload)
+                } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
+            }
+            is HaPaneldV2Protocol.Incoming.Malformed ->
+                Log.w(TAG, "ignored malformed haPaneldV2 envelope (${incoming.reason})")
+            is HaPaneldV2Protocol.Incoming.Unknown -> Unit
+        }
+    }
+
+    private fun clearBusTimeouts() {
+        busTimeouts.values.forEach(main::removeCallbacks)
+        busTimeouts.clear()
+    }
 
     private fun entityFilterSignature(config: Config): String {
         val learning = ":learning=${config.dashboardEntityLearningEnabled}"
@@ -459,6 +872,14 @@ class DashboardActivity : AppCompatActivity() {
         main.postDelayed(entityFilterRetry, delay)
     }
 
+    /** Single scheduling authority for the post-reload settle window: cancel any pending settle and
+     *  re-arm it [DARK_SETTLE_MS] out. See [darkSettle] for why a screen-off reload runs live for a
+     *  window before freezing. */
+    private fun scheduleDarkSettle() {
+        main.removeCallbacks(darkSettle)
+        main.postDelayed(darkSettle, DARK_SETTLE_MS)
+    }
+
     /**
      * Screen on/off fan-out. Screen ON → resume rendering + JS timers, and re-arm the handshake watchdog
      * if the frontend isn't connected (recover a page that broke while frozen). Screen OFF → pause
@@ -496,7 +917,7 @@ class DashboardActivity : AppCompatActivity() {
                 reloadPending = false
                 lastFullLoadAt = SystemClock.elapsedRealtime()
                 doReloadNoWatchdog("quiet reload (screen off, due)")
-                main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS)
+                scheduleDarkSettle()
             } else {
                 w.pauseTimers()
             }
@@ -549,13 +970,19 @@ class DashboardActivity : AppCompatActivity() {
     private fun onPeriodicCheck() {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
         if (authLatched) { main.postDelayed(periodicCheck, PERIODIC_CHECK_MS); return }
+        // The memory-ceiling reload measures idle from lastFullLoadAt, which the on-panel sign-in never
+        // sets because it performs no dashboard load. On a panel that has been up for longer than the
+        // interval that reads as "idle for the whole uptime", so the first check would reload — throwing
+        // away a sign-in the user is part-way through, and reintroducing exactly the reload churn this
+        // screen exists to end. Nothing here needs shedding: the sign-in page is a single small form.
+        if (signInShownForUrl != null) { main.postDelayed(periodicCheck, PERIODIC_CHECK_MS); return }
         val idle = SystemClock.elapsedRealtime() - lastFullLoadAt
         when {
             idle < RELOAD_INTERVAL_MS -> {}
             !screenAwake -> {
                 lastFullLoadAt = SystemClock.elapsedRealtime()
                 doReloadNoWatchdog("periodic (screen off, ${idle / 3_600_000}h idle)")
-                main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS)
+                scheduleDarkSettle()
             }
             idle >= RELOAD_HARD_MS -> doReload("periodic hard cap (${idle / 3_600_000}h idle)")
             else -> reloadPending = true // visible now — wait for the next screen-off to reload invisibly
@@ -566,6 +993,9 @@ class DashboardActivity : AppCompatActivity() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched) return
+        // The sign-in form has no accreted memory worth shedding, and reloading it would discard a
+        // part-entered Home Assistant login. Leave it alone; it is short-lived by nature.
+        if (signInShownForUrl != null) return
         // UI_HIDDEN is a routine lifecycle signal, NOT memory pressure — it's delivered on every
         // screen-off (activities stop when the display sleeps), so reacting to it made every screen-off
         // full-reload the frontend, defeating the 6-hour quiet-reload ceiling in onScreenChanged.
@@ -581,7 +1011,7 @@ class DashboardActivity : AppCompatActivity() {
                 reloadPending = false
                 lastFullLoadAt = SystemClock.elapsedRealtime()
                 doReloadNoWatchdog("memory pressure L$level")
-                if (!screenAwake) { main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS) }
+                if (!screenAwake) scheduleDarkSettle()
             }
         }
     }
@@ -592,16 +1022,26 @@ class DashboardActivity : AppCompatActivity() {
             (!screenAwake || !BuiltinDashboard.foreground)) {
             lastFullLoadAt = SystemClock.elapsedRealtime()
             doReloadNoWatchdog("onLowMemory")
-            if (!screenAwake) { main.removeCallbacks(darkSettle); main.postDelayed(darkSettle, DARK_SETTLE_MS) }
+            if (!screenAwake) scheduleDarkSettle()
         }
     }
 
     /** Hand off to ha-paneld's admin launcher and finish — the never-strand fallback for a missing
-     *  WebView, an unconfigured URL, or a crash-looping renderer. */
+     *  WebView or a crash-looping renderer. */
     private fun fallbackToLauncher() {
         runCatching {
             startActivity(Intent(this, AdminLauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure { Log.e(TAG, "admin-launcher fallback failed: ${it.message}") }
+        finish()
+    }
+
+    /** Hand off to MainActivity's wordmark + QR/configure page. This is the required first visible
+     *  surface for a fresh install or cleared configuration; the admin launcher is only for explicit
+     *  panel-admin entry and crash/recovery administration. */
+    private fun fallbackToFirstRunSurface() {
+        runCatching {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { Log.e(TAG, "first-run surface fallback failed: ${it.message}") }
         finish()
     }
 
@@ -627,11 +1067,52 @@ class DashboardActivity : AppCompatActivity() {
             fallbackToLauncher()
             return
         }
-        if (config.haUrl.isBlank()) {
-            // Same never-strand guard as onCreate: the URL was cleared while we were running — a load
-            // would build a scheme-less garbage URL behind an eternal "Reconnecting…" interstitial.
-            Log.w(TAG, "ha_url cleared — opening the admin launcher instead")
-            fallbackToLauncher()
+        if (!config.builtInRendererReady()) {
+            // Same escape as onCreate. This path matters just as much: saving a Home Assistant URL from
+            // the browser relaunches this singleTask activity, so a running panel arrives HERE rather
+            // than in onCreate, and bouncing would undo the save the user just made.
+            if (haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)) {
+                Log.i(TAG, "Home Assistant URL set without credentials — continuing to the on-panel sign-in")
+            } else {
+                // Same never-strand guard as onCreate: the URL was cleared while we were running — a load
+                // would strand the built-in renderer without a usable authenticated route. Return to the
+                // QR/configure surface so the user can repair the panel from a browser.
+                Log.w(TAG, "built-in renderer no longer ready — opening the first-run configure surface instead")
+                fallbackToFirstRunSurface()
+                return
+            }
+        }
+        val normalizedUrl = config.haUrl.trim().trimEnd('/')
+        // Credentials arrived while the on-panel sign-in was showing — typically because the user signed
+        // in from a browser instead, but also provisioning or a token restore. The current WebView is the
+        // bare sign-in page: its client only permits the OAuth navigation and it carries no dashboard
+        // bridge, so the reuse path below would load the dashboard URL into it, HA would find no external
+        // auth and bounce straight back to its own login, and the panel would appear to loop the sign-in
+        // page forever. Tear it down and build the real renderer instead.
+        if (signInShownForUrl != null && !haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)) {
+            Log.i(TAG, "credentials present — leaving the on-panel sign-in for the dashboard")
+            activityConfig = config
+            unlatchAuth("credentials arrived during sign-in")
+            retryPolicy.reset()
+            interstitialShown = false
+            teardownWeb()
+            configureEntityFilter(config)
+            buildAndLoad(config)
+            return
+        }
+        if (compatibilityReadyUrl != null && compatibilityReadyUrl != normalizedUrl) {
+            Log.i(TAG, "Home Assistant endpoint changed — rebuilding and rechecking the V2 renderer")
+            activityConfig = config
+            compatibilityJob?.cancel()
+            compatibilityCheckingOwner = null
+            compatibilityReadyUrl = null
+            compatibilityAttempts.invalidate()
+            unlatchAuth("Home Assistant endpoint change")
+            retryPolicy.reset()
+            interstitialShown = false
+            teardownWeb()
+            configureEntityFilter(config)
+            buildAndLoad(config)
             return
         }
         // The filter endpoint reloads this singleTask activity after committing. Document-start scripts
@@ -640,6 +1121,9 @@ class DashboardActivity : AppCompatActivity() {
         val nextFilterSignature = entityFilterSignature(config)
         if (nextFilterSignature != entityFilterSignature) {
             Log.i(TAG, "entity instrumentation changed — rebuilding dashboard WebView")
+            announceDeliberateRestart(
+                "optimising which entities it uses (it may reload again as the panel learns)",
+            )
             unlatchAuth("entity-filter change")
             retryPolicy.reset()
             interstitialShown = false
@@ -650,14 +1134,19 @@ class DashboardActivity : AppCompatActivity() {
         }
         val nav = BuiltinDashboard.consumeNavPath()
         val reload = BuiltinDashboard.consumeReloadRequest()
+        val reloadReason = BuiltinDashboard.consumeReloadReason()
+        if (reload) announceDeliberateRestart(reloadReason)
         val w = web
         val healthy = w != null && frontendConnected && !authLatched && !interstitialShown
+        if (healthy && !reload) externalBusSession?.let { session ->
+            dispatchBus(externalBus.updateKioskPreference(session, config.dashboardNativeKiosk))
+        }
         if (nav == null && !reload && healthy) return   // foreground-only: page is fine, nothing to do
         if (nav != null && !reload && healthy) {
             // Navigate on a healthy page: an instant bus re-navigate (same as idle-return), not a full
             // page load — the JS bundle + websocket stay live.
             Log.i(TAG, "navigate -> /$nav (bus)")
-            w.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, nav), null)
+            sendBusNavigate(nav)
             return
         }
         unlatchAuth("new load") // a deliberate reload/navigate (or a config change) is the retry consent
@@ -670,16 +1159,23 @@ class DashboardActivity : AppCompatActivity() {
         // no-op on HA). The write must precede loadUrl: localStorage is synchronous and origin-scoped,
         // so the reloaded frontend boots straight into the new scheme.
         applyForceDark(w)
-        val url = ExternalAuthProtocol.dashboardUrl(config.haUrl, nav ?: config.homeDashboard)
+        val targetPath = nav ?: resolvedHomeDashboard(config)
+        val url = ExternalAuthProtocol.dashboardUrl(config.haUrl, targetPath)
         val generation = rendererGeneration
         if (android.os.Build.VERSION.SDK_INT < 29) {
             // The theme write must COMPLETE before the navigation — evaluateJavascript is async (queued
             // to the JS thread), and a loadUrl issued right after can tear the page down first, losing
             // the write. The result callback runs after evaluation, on the UI thread.
             w.evaluateJavascript(ExternalAuthProtocol.selectedThemeJs(Config(this).darkMode, onlyIfAbsent = false)) {
-                if (rendererCurrent(generation, w)) w.loadUrl(url)
+                if (rendererCurrent(generation, w)) {
+                    if (!rotateBusDocument(w, config, generation)) return@evaluateJavascript
+                    expectPageStart(url)
+                    w.loadUrl(url)
+                }
             }
         } else {
+            if (!rotateBusDocument(w, config, generation)) return
+            expectPageStart(url)
             w.loadUrl(url)
         }
         onLoadStarted()
@@ -707,11 +1203,20 @@ class DashboardActivity : AppCompatActivity() {
     private fun onWatchdogTimeout() {
         // Never retry on a dead activity, while frozen (screen off), or latched — all runaway loops.
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || frontendConnected || !screenAwake || authLatched) return
+        val session = externalBusSession
+        if (session != null && v2Handshake.onTimeout(session)) {
+            showV2CompatibilityScreen(
+                "Secure external bridge not detected",
+                "Home Assistant loaded without its required V2 native-host handshake. Confirm Home Assistant " +
+                    "2026.4.2+ and update Android System WebView, then retry.",
+            )
+            return
+        }
         Log.w(TAG, "frontend handshake watchdog fired (no connection-status:connected) — reloading")
         // The reconnect grace expired: this load now owns recovery, so a later connection callback must
         // not revive the pre-timeout wake ticket against the replacement target.
         wakeMediaRecovery.invalidate()
-        reloadTarget()
+        if (!reloadTarget()) return
         lastFullLoadAt = SystemClock.elapsedRealtime()
         BuiltinDashboard.recordRendererReload(lastFullLoadAt) // involuntary: handshake stalled
         BuiltinDashboard.recordLoadStart(lastFullLoadAt)      // warm TTI origin for the recovery load
@@ -721,11 +1226,20 @@ class DashboardActivity : AppCompatActivity() {
 
     /** Fired from the external-bus `connection-status` message: the frontend telling us it connected or
      *  dropped its websocket. Posted onto the main thread, so it can race onDestroy — guard on [destroyed]. */
-    private fun onConnectionStatus(event: String, generation: Long) {
-        if (!rendererCurrent(generation)) return
-        if (event == "connected") {
+    private fun onConnectionStatus(
+        event: ExternalBusProtocol.ConnectionEvent,
+        generation: Long,
+        session: ExternalBusController.Session,
+    ) {
+        if (!bridgeCurrent(generation, session)) return
+        if (event == ExternalBusProtocol.ConnectionEvent.CONNECTED) {
             frontendConnected = true
             BuiltinDashboard.recordConnected(SystemClock.elapsedRealtime()) // TTI: load-start → interactive
+            // First-ever proven render: from here on, an unfinished setup journey is a REPAIR of a panel
+            // that once worked, and the wizard words it that way instead of reading like a factory reset.
+            if (::activityConfig.isInitialized && !activityConfig.setupEverCompleted) {
+                activityConfig.setupEverCompleted = true
+            }
             interstitialShown = false // real page demonstrably loaded
             unlatchAuth("frontend connected") // auth demonstrably works — clear any stale latch + counters
             main.removeCallbacks(watchdog)
@@ -739,22 +1253,27 @@ class DashboardActivity : AppCompatActivity() {
                 web?.clearHistory(); clearedThisLoad = true
                 runCatching { CookieManager.getInstance().flush() }
             }
-            captureDashboardTheme(generation)
+            captureDashboardTheme(generation, session)
             // If we connected while the screen is off (a screen-off memory reload), freeze now — the fresh
             // page is loaded + connected, so there's nothing left to do behind the dark screen.
             if (!screenAwake) { main.removeCallbacks(darkSettle); web?.pauseTimers() }
             Log.i(TAG, "frontend connected")
+            dispatchBus(externalBus.onConnection(session, true))
         } else {
             val wasConnected = frontendConnected
             frontendConnected = false
             // auth-invalid is the frontend saying HA refused its token. One can be a race around a token
             // refresh; several in a row mean the credential is dead — latch instead of reload-looping.
-            if (event == "auth-invalid" && ++authInvalids >= AUTH_INVALID_LATCH) { latchAuthFailure("repeated auth-invalid") ; return }
+            if (event == ExternalBusProtocol.ConnectionEvent.AUTH_INVALID && ++authInvalids >= AUTH_INVALID_LATCH) {
+                latchAuthFailure("repeated auth-invalid")
+                return
+            }
+            externalBus.onConnection(session, false)
             // disconnected: give the frontend's own reconnect a grace window, then reload — but only
             // while awake (a frozen WebView can't reconnect; wake re-arms the handshake watchdog).
             if (screenAwake && !authLatched) {
                 val delay = retryPolicy.connectionFailureDelay(wasConnected)
-                Log.i(TAG, "frontend '$event' — arming retry watchdog in ${delay}ms (wasConnected=$wasConnected)")
+                Log.i(TAG, "frontend '${event.wireValue}' — arming retry watchdog in ${delay}ms (wasConnected=$wasConnected)")
                 armWatchdog(delay)
             }
         }
@@ -762,11 +1281,14 @@ class DashboardActivity : AppCompatActivity() {
 
     /** Remember HA's own per-device theme so the native pre-WebView launch screen matches it on the
      * next boot. The JS returns only true/false/null, avoiding any localStorage contents in logs. */
-    private fun captureDashboardTheme(generation: Long) {
-        if (!rendererCurrent(generation)) return
-        val script = """(function(){try{var t=JSON.parse(localStorage.getItem('selectedTheme')||'null');return t&&typeof t.dark==='boolean'?t.dark:null}catch(e){return null}})()"""
+    private fun captureDashboardTheme(
+        generation: Long,
+        session: ExternalBusController.Session,
+    ) {
+        if (!bridgeCurrent(generation, session)) return
+        val script = """(function(){try{var t=JSON.parse(localStorage.getItem('${InjectionScript.SELECTED_THEME_KEY}')||'null');return t&&typeof t.dark==='boolean'?t.dark:null}catch(e){return null}})()"""
         web?.evaluateJavascript(script) { result ->
-            if (!rendererCurrent(generation)) return@evaluateJavascript
+            if (!bridgeCurrent(generation, session)) return@evaluateJavascript
             when (result) {
                 "true" -> Config(this).setDashboardThemeDark(true)
                 "false" -> Config(this).setDashboardThemeDark(false)
@@ -790,8 +1312,9 @@ class DashboardActivity : AppCompatActivity() {
         BuiltinDashboard.setActivityAuthLatched(activityOwner, true)
         main.removeCallbacks(watchdog)
         Log.e(TAG, "auth latched ($why) — showing fix instructions, no further retries until reload/reconfig")
-        val ip = io.github.maxlyth.hapaneld.control.Diagnostics.ipAddress()
+        val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
         val cfg = if (ip != null) "http://$ip:8888/configure" else "port 8888 of this panel's IP address"
+        web?.let(::suspendBusDocument)
         web?.loadDataWithBaseURL(
             null,
             """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
@@ -830,10 +1353,7 @@ class DashboardActivity : AppCompatActivity() {
             main.removeCallbacks(waitingTick)
             retryPolicy.reset()
             buildAndLoad(Config(this))
-            if (!screenAwake) {
-                main.removeCallbacks(darkSettle)
-                main.postDelayed(darkSettle, DARK_SETTLE_MS)
-            }
+            if (!screenAwake) scheduleDarkSettle()
             return
         }
         if (frontendConnected || !screenAwake) return // frozen page reconnects itself on wake
@@ -860,12 +1380,85 @@ class DashboardActivity : AppCompatActivity() {
         }
         lastLightRefreshAt = now
         val path = runCatching { android.net.Uri.parse(w.url).path }.getOrNull().orEmpty()
-            .ifBlank { Config(this).homeDashboard }
+            .ifBlank { resolvedHomeDashboard(Config(this)) }
         Log.i(TAG, "pull-to-refresh -> light navigate ($path)")
-        w.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, path), null)
+        sendBusNavigate(path)
         // No page-load events fire for a bus navigate — clear the spinner after a short beat.
         val generation = rendererGeneration
         main.postDelayed({ if (rendererCurrent(generation, w)) swipe?.isRefreshing = false }, LIGHT_REFRESH_SPINNER_MS)
+    }
+
+    private fun sendBusNavigate(path: String) {
+        val session = externalBusSession ?: return
+        dispatchBus(externalBus.navigate(session, path))
+    }
+
+    /** The only app→frontend external-bus evaluation site. Commands are produced by the typed
+     * controller, correlated to this document, and given a one-shot timeout callback. */
+    private fun dispatchBus(command: ExternalBusController.Outbound?) {
+        command ?: return
+        if (!externalBus.owns(command.session) || !rendererCurrent(command.session.rendererGeneration)) return
+        val view = web ?: return
+        command.evictedIds.forEach { id -> busTimeouts.remove(id)?.let(main::removeCallbacks) }
+        val timeout = Runnable {
+            busTimeouts.remove(command.id)
+            handleBusCompletion(command.session, externalBus.onTimeout(command.session, command.id))
+        }
+        busTimeouts[command.id] = timeout
+        view.evaluateJavascript(command.script, null)
+        main.postDelayed(timeout, externalBus.commandTimeoutMs)
+    }
+
+    private fun handleBusCompletion(
+        session: ExternalBusController.Session,
+        completion: ExternalBusController.Completion,
+    ) {
+        if (!completion.matched || !externalBus.owns(session)) return
+        completion.id?.let { id -> busTimeouts.remove(id)?.let(main::removeCallbacks) }
+        val kind = when (completion.kind) {
+            is ExternalBusController.CommandKind.Navigate -> "navigate"
+            is ExternalBusController.CommandKind.KioskMode -> "kiosk_mode/set"
+            null -> "unknown"
+        }
+        val error = completion.error?.let { " error=${it.code.orEmpty()}:${it.message.orEmpty()}" }.orEmpty()
+        Log.d(TAG, "bus result command=$kind success=${completion.success}$error")
+        dispatchBus(completion.followUp)
+        if (completion.retryKiosk) {
+            main.postDelayed(
+                { if (externalBus.owns(session)) dispatchBus(externalBus.retryKiosk(session)) },
+                externalBus.kioskRetryDelayMs,
+            )
+        }
+    }
+
+    private fun handleExternalBus(
+        incoming: ExternalBusProtocol.Incoming,
+        generation: Long,
+        session: ExternalBusController.Session,
+    ) {
+        if (!bridgeCurrent(generation, session)) return
+        when (incoming) {
+            is ExternalBusProtocol.Incoming.ConfigGet ->
+                web?.evaluateJavascript(
+                    ExternalBusProtocol.configResult(incoming.id, BuildConfig.VERSION_NAME),
+                    null,
+                )
+            ExternalBusProtocol.Incoming.ConfigScreenShow -> runCatching {
+                startActivity(
+                    Intent(this, ConfigActivity::class.java).putExtra("path", "/configure"),
+                )
+            }
+            is ExternalBusProtocol.Incoming.ConnectionStatus ->
+                onConnectionStatus(incoming.event, generation, session)
+            ExternalBusProtocol.Incoming.FrontendLoaded ->
+                dispatchBus(externalBus.onFrontendLoaded(session))
+            ExternalBusProtocol.Incoming.ThemeUpdate -> captureDashboardTheme(generation, session)
+            is ExternalBusProtocol.Incoming.Result ->
+                handleBusCompletion(session, externalBus.onResult(session, incoming))
+            is ExternalBusProtocol.Incoming.Malformed ->
+                Log.w(TAG, "ignored malformed external-bus message (${incoming.reason})")
+            is ExternalBusProtocol.Incoming.Unknown -> Unit
+        }
     }
 
     /** Idle return-to-home (opt-in): after the configured minutes with no touch, swap the frontend back
@@ -876,13 +1469,18 @@ class DashboardActivity : AppCompatActivity() {
         if (!screenAwake || !frontendConnected || authLatched) return
         val config = Config(this)
         val minutes = config.dashboardIdleReturnMin
-        val home = config.homeDashboard.trim().trim('/')
-        if (minutes <= 0 || home.isEmpty()) return
+        val home = resolvedHomeDashboard(config).trim().trim('/')
+        if (minutes <= 0) return
         if (SystemClock.elapsedRealtime() - lastTouchAt < minutes * 60_000L) return
-        val current = runCatching { android.net.Uri.parse(web?.url).path }.getOrNull().orEmpty().trim('/')
-        if (current == home) return
-        Log.i(TAG, "idle ${minutes}min — returning to home dashboard (/$home)")
-        web?.evaluateJavascript(ExternalAuthProtocol.navigateCommand(++busId, home), null)
+        val current = runCatching { android.net.Uri.parse(web?.url) }.getOrNull()
+        val target = DashboardIdleReturnPolicy.target(
+            currentPath = current?.path.orEmpty(),
+            currentQuery = current?.encodedQuery,
+            currentFragment = current?.fragment,
+            homeDashboard = home,
+        ) ?: return
+        Log.i(TAG, "idle ${minutes}min — returning to home dashboard (/$target)")
+        sendBusNavigate(target)
     }
 
     /** Register once and return whether Android already has a default network. When false, onCreate
@@ -1058,20 +1656,25 @@ class DashboardActivity : AppCompatActivity() {
     /** Re-load the dashboard: a plain reload normally, but a fresh loadUrl of the real dashboard when
      *  the WebView is currently showing the "Reconnecting…" interstitial (reloading THAT would just
      *  re-show the interstitial forever). */
-    private fun reloadTarget() {
-        val w = web ?: return
+    private fun reloadTarget(): Boolean {
+        val w = web ?: return false
+        if (!rotateBusDocument(w, Config(this), rendererGeneration)) return false
         if (interstitialShown) {
             interstitialShown = false
-            w.loadUrl(currentUrl(Config(this)))
+            val target = currentUrl(Config(this))
+            expectPageStart(target)
+            w.loadUrl(target)
         } else {
+            w.url?.let(::expectPageStart)
             w.reload()
         }
+        return true
     }
 
     /** Reload + arm the handshake watchdog (only fires while awake) — for user/health-driven reloads. */
     private fun doReload(reason: String) {
         Log.i(TAG, "reload: $reason")
-        reloadTarget()
+        if (!reloadTarget()) return
         onLoadStarted()
     }
 
@@ -1081,7 +1684,7 @@ class DashboardActivity : AppCompatActivity() {
         Log.i(TAG, "reload: $reason")
         frontendConnected = false
         clearedThisLoad = false
-        reloadTarget()
+        if (!reloadTarget()) return
     }
 
     /** A main-frame load failed (HA down / network out / DNS): replace Android's native gray error page
@@ -1092,6 +1695,7 @@ class DashboardActivity : AppCompatActivity() {
         if (destroyed || authLatched || interstitialShown) return
         interstitialShown = true
         Log.w(TAG, "main-frame load error ($detail) — showing reconnecting page; watchdog retries continue")
+        web?.let(::suspendBusDocument)
         web?.loadDataWithBaseURL(
             null,
             """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
@@ -1109,8 +1713,13 @@ class DashboardActivity : AppCompatActivity() {
     /** The URL to show: a pending navigate path (consumed — one-shot, so crash rebuilds and
      *  interstitial recoveries return to home rather than replaying a stale navigate), else the
      *  configured home dashboard. */
-    private fun currentUrl(config: Config): String =
-        ExternalAuthProtocol.dashboardUrl(config.haUrl, BuiltinDashboard.consumeNavPath() ?: config.homeDashboard)
+    private fun currentUrl(config: Config): String = ExternalAuthProtocol.dashboardUrl(
+        config.haUrl,
+        BuiltinDashboard.consumeNavPath() ?: resolvedHomeDashboard(config),
+    )
+
+    private fun resolvedHomeDashboard(config: Config): String =
+        EntityLearningRuntime.resolvedHomeDashboardPath(config.homeDashboard).ifBlank { "/" }
 
     // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
     // return-loop from an in-process signal instead of a root pidof/dumpsys probe.
@@ -1122,7 +1731,24 @@ class DashboardActivity : AppCompatActivity() {
     // the lifecycle form of dumpsys `topResumedActivity` and flips exactly on that transition.
     // onResume/onPause are the API<29 baseline (older panels lack the callback; their launchers also
     // predate translucent Overview, so resume/pause suffices there).
-    override fun onResume() { super.onResume(); BuiltinDashboard.setActivityForeground(activityOwner, true); applyFullscreen(); applyOverscroll(); applyZoom() }
+    override fun onResume() {
+        super.onResume()
+        BuiltinDashboard.setActivityForeground(activityOwner, true)
+        if (::activityConfig.isInitialized) applyRendererScreenPolicy()
+        applyFullscreen()
+        applyOverscroll()
+        applyZoom()
+    }
+
+    /** The foreground built-in renderer owns its timeout policy directly. This is the standard Android
+     * activity mechanism and does not interfere with explicit ha-paneld screen-off brightness/bl_power. */
+    private fun applyRendererScreenPolicy() {
+        if (shouldKeepBuiltInRendererScreenOn(activityConfig.preventIdleDim)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     /** Android's overscroll stretch (12+) / edge-glow (older) when a drag runs past the top or bottom
      *  of the page. Off by default on a wall panel; the hidden `dashboard_overscroll` API setting turns
@@ -1139,12 +1765,12 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     /**
-     * Edge-to-edge kiosk (issue #25): hide the Android status + navigation bars while the dashboard is
+     * Edge-to-edge dashboard (issue #25): hide the Android status + navigation bars while the dashboard is
      * up. BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE keeps the admin escape — a swipe from a screen edge
      * reveals the bars briefly — so this can never strand anyone. Now that the dashboard is our own
      * activity this is plain app-level immersive (no root, unlike suppressing bars for a foreign
      * renderer). Re-asserted on resume and on regaining window focus, because the system restores bars
-     * after transient reveals and some dialogs. Toggle: Configure → Dashboard → "Fullscreen dashboard".
+     * after transient reveals and some dialogs. Toggle: Configure → Built-in renderer → "Hide Android system bars".
      */
     private fun applyFullscreen() {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -1206,9 +1832,299 @@ class DashboardActivity : AppCompatActivity() {
         if (android.os.Build.VERSION.SDK_INT in 29..32) web?.let { applyForceDark(it) }
     }
 
+    private fun showV2CompatibilityScreen(
+        title: String,
+        detail: String,
+        retryLabel: String? = "Retry",
+    ) {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        if (web != null) teardownWeb()
+        val density = resources.displayMetrics.density
+        val dark = Config(this).dashboardThemeDark ?: true
+        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
+        val body = Color.parseColor(if (dark) "#d7dbe1" else "#20242a")
+        val subtle = Color.parseColor(if (dark) "#9ba1aa" else "#5a6068")
+        val heading = TextView(this).apply {
+            text = title
+            setTextColor(body)
+            textSize = 23f
+            gravity = Gravity.CENTER
+        }
+        val explanation = TextView(this).apply {
+            text = detail
+            setTextColor(subtle)
+            textSize = 15f
+            gravity = Gravity.CENTER
+        }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            retryLabel?.let { label ->
+                addView(Button(this@DashboardActivity).apply {
+                    text = label
+                    setOnClickListener {
+                        compatibilityCheckingOwner = null
+                        compatibilityReadyUrl = null
+                        compatibilityAttempts.invalidate()
+                        v2Handshake.reset()
+                        buildAndLoad(Config(this@DashboardActivity))
+                    }
+                })
+            }
+            addView(Button(this@DashboardActivity).apply {
+                text = "Configure"
+                setOnClickListener {
+                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
+                }
+            })
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding((32 * density).toInt(), (28 * density).toInt(), (32 * density).toInt(), (28 * density).toInt())
+            addView(heading, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ))
+            addView(explanation, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (18 * density).toInt() })
+            addView(actions, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (22 * density).toInt(); gravity = Gravity.CENTER_HORIZONTAL })
+        }
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(bg)
+            addView(content, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER,
+            ))
+        }
+        root = container
+        setContentView(container)
+        Log.w(TAG, "$title: $detail")
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildAndLoad(config: Config) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        // Sign-in is checked FIRST, ahead of the entity-bootstrap hold. The hold derives only from the
+        // learning/filter flags, so on a panel with entity learning enabled and no credential yet it is
+        // entered unconditionally and never left — the bootstrap it waits for needs an authenticated
+        // Home Assistant connection that only the sign-in below can produce. Ordered the other way this
+        // is a second, quieter deadlock sitting directly behind the readiness gate.
+        val url = config.haUrl.trim().trimEnd('/')
+        if (haSignInPending(url, config.haToken, config.haRefreshToken)) {
+            showPhysicalHaSignIn(url)
+            return
+        }
+        // Held until the wizard's entity-filter question is answered. Placed AFTER sign-in (which mints the
+        // credential this hold requires) and BEFORE any WebView is created, because the whole purpose is that
+        // the panel's first render is already the filtered one — loading unfiltered and reloading afterwards
+        // is the slow, laggy first impression this prevents.
+        if (entityFilterQuestionPending(
+                builtinRenderer = true,
+                haUrl = url,
+                haToken = config.haToken,
+                haRefreshToken = config.haRefreshToken,
+                entityFilterAnswered = config.setupEntityFilterAnswered,
+                setupEverCompleted = config.setupEverCompleted,
+                entityFilterEnabled = config.dashboardEntityLearningEnabled,
+            )
+        ) {
+            showWaitingForEntityFilterAnswer()
+            return
+        }
+        if (holdForEntityBootstrap(config) || entityFilterNativeHold != null) {
+            showWaitingForEntityBootstrap()
+            return
+        }
+        val owner = DashboardV2CompatibilityOwner(url, config.haAuthSnapshot().stableOwner())
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            showV2CompatibilityScreen(
+                "Secure dashboard bridge unavailable",
+                "The built-in renderer requires an Android System WebView with WebMessageListener support. " +
+                    "Update or repair Android System WebView, then retry. Other configured renderers are unaffected.",
+            )
+            return
+        }
+        if (compatibilityReadyUrl == url) {
+            buildCompatibleAndLoad(config)
+            return
+        }
+        if (compatibilityCheckingOwner == owner && compatibilityJob?.isActive == true) return
+        compatibilityJob?.cancel()
+        val compatibilityTicket = compatibilityAttempts.start(owner)
+        compatibilityCheckingOwner = owner
+        showV2CompatibilityScreen(
+            "Checking Home Assistant compatibility",
+            "The built-in renderer requires Home Assistant 2026.4.2 or newer and the secure V2 native bridge.",
+            retryLabel = null,
+        )
+        compatibilityJob = activityScope.launch {
+            val result = DashboardV2CompatibilityProbe(
+                config,
+                stillCurrent = {
+                    !destroyed && BuiltinDashboard.ownsActivity(activityOwner) &&
+                        compatibilityAttempts.owns(compatibilityTicket, compatibilityOwner(config))
+                },
+            ).check()
+            val currentConfig = Config(this@DashboardActivity)
+            val currentOwner = compatibilityOwner(currentConfig)
+            if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) ||
+                !compatibilityAttempts.owns(compatibilityTicket, currentOwner)
+            ) return@launch
+            compatibilityCheckingOwner = null
+            when (val admission = DashboardV2Admission.resolve(result, config.cachedHaServerVersion(url))) {
+                is DashboardV2Admission.Compatible -> {
+                    if (admission.live) {
+                        config.setHaServerVersionIfOwned(url, admission.version)
+                    } else {
+                        val detail = (result as DashboardV2ProbeResult.Unavailable).detail
+                        Log.w(TAG, "HA version check unavailable; using previously verified ${admission.version} ($detail)")
+                    }
+                    compatibilityReadyUrl = url
+                    v2Handshake.reset()
+                    buildCompatibleAndLoad(currentConfig)
+                }
+                is DashboardV2Admission.Blocked -> when (val blocked = admission.result) {
+                    is DashboardV2ProbeResult.UnsupportedHa -> {
+                        config.setHaServerVersionIfOwned(url, blocked.version)
+                        showV2CompatibilityScreen(
+                            "Home Assistant upgrade required",
+                            "The built-in renderer requires Home Assistant 2026.4.2 or newer " +
+                                "(detected ${blocked.version}). " +
+                                "Upgrade Home Assistant and retry, or select another renderer.",
+                        )
+                    }
+                    is DashboardV2ProbeResult.Unverifiable -> showV2CompatibilityScreen(
+                        "Home Assistant version unverifiable",
+                        "Home Assistant did not report a recognized stable version" +
+                            blocked.version?.let { " (detected $it)" }.orEmpty() +
+                            ". The V2-only built-in renderer cannot start safely; update Home Assistant and retry.",
+                    )
+                    DashboardV2ProbeResult.AuthenticationFailed -> showV2CompatibilityScreen(
+                        if (config.haToken.isBlank() && config.haRefreshToken.isBlank()) {
+                            "Home Assistant sign-in needed"
+                        } else {
+                            "Home Assistant version check rejected"
+                        },
+                        if (config.haToken.isBlank() && config.haRefreshToken.isBlank()) {
+                            "Connect the panel to Home Assistant in Configure, then retry."
+                        } else {
+                            "The panel could not authenticate the compatibility check. Repair the Home Assistant " +
+                                "connection in Configure, then retry."
+                        },
+                    )
+                    is DashboardV2ProbeResult.Unavailable -> showV2CompatibilityScreen(
+                        "Home Assistant version unavailable",
+                        "The panel could not verify the required Home Assistant 2026.4.2+ version. " +
+                            "Check the connection and retry. ${blocked.detail}",
+                    )
+                    is DashboardV2ProbeResult.Compatible -> error("compatible result cannot be blocked")
+                }
+            }
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showPhysicalHaSignIn(haUrl: String) {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        // Already showing sign-in for this exact URL: keep the live WebView. Every config save relaunches
+        // this activity, and the browser form posts on each save, so rebuilding here would discard a
+        // part-typed Home Assistant password whenever anything else was saved from another device.
+        if (signInShownForUrl == haUrl && web != null) {
+            Log.i(TAG, "on-panel sign-in already showing for this endpoint — keeping the current screen")
+            return
+        }
+        signInShownForUrl = haUrl
+        signInLoadRetries = 0
+        if (web != null) teardownWeb()
+        val generation = rendererGate.open()
+        val view = WebView(this).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.allowContentAccess = false
+            settings.allowFileAccess = false
+            setBackgroundColor(BG_DARK)
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (!rendererCurrent(generation, view)) return true
+                    return !panelHaOAuthNavigationAllowed(haUrl, request.url.toString())
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    if (!rendererCurrent(generation, view) || !isPanelHaOAuthCallback(url)) return
+                    view.evaluateJavascript(
+                        "document.body&&document.body.dataset?document.body.dataset.haOauthStatus:\"\"",
+                    ) { result ->
+                        if (!rendererCurrent(generation, view)) return@evaluateJavascript
+                        if (result?.trim('"') == "success") {
+                            main.postDelayed({
+                                if (rendererCurrent(generation, view)) {
+                                    compatibilityReadyUrl = null
+                                    compatibilityCheckingOwner = null
+                                    compatibilityAttempts.invalidate()
+                                    buildAndLoad(Config(this@DashboardActivity))
+                                }
+                            }, 750L)
+                        }
+                    }
+                }
+
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (!rendererCurrent(generation, view) || !request.isForMainFrame) return
+                    // A main-frame error here is usually TRANSIENT: the sign-in start page is served by
+                    // this panel's own local HTTP server, which restarts briefly during an MQTT or config
+                    // reconfigure — exactly when a first-run user is mid-setup. On hardware review that
+                    // produced a terminal "sign-in unavailable" over a sign-in the user may have been in
+                    // the middle of. Retry quietly first; only a persistent failure earns the verdict.
+                    if (signInLoadRetries < SIGN_IN_LOAD_RETRIES_MAX) {
+                        signInLoadRetries++
+                        Log.i(TAG, "panel sign-in page load failed — retry $signInLoadRetries/$SIGN_IN_LOAD_RETRIES_MAX")
+                        main.postDelayed({
+                            if (rendererCurrent(generation, view) && !destroyed) {
+                                view.loadUrl(panelHaOAuthStartUrl(haUrl))
+                            }
+                        }, SIGN_IN_LOAD_RETRY_MS)
+                        return
+                    }
+                    showV2CompatibilityScreen(
+                        "Home Assistant sign-in unavailable",
+                        "The panel could not load the Home Assistant sign-in page. Check the Home Assistant URL " +
+                            "or use Browser sign-in from Configure.",
+                    )
+                }
+            }
+        }
+        web = view
+        val content = FrameLayout(this).apply {
+            setBackgroundColor(BG_DARK)
+            addView(view, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ))
+        }
+        root = content
+        setContentView(content)
+        view.loadUrl(panelHaOAuthStartUrl(haUrl))
+    }
+
+    private fun compatibilityOwner(config: Config): DashboardV2CompatibilityOwner =
+        DashboardV2CompatibilityOwner(
+            normalizedUrl = config.haUrl.trim().trimEnd('/'),
+            authOwner = config.haAuthSnapshot().stableOwner(),
+        )
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun buildCompatibleAndLoad(config: Config) {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        if (compatibilityReadyUrl != config.haUrl.trim().trimEnd('/')) return
         if (holdForEntityBootstrap(config) || entityFilterNativeHold != null) {
             showWaitingForEntityBootstrap()
             return
@@ -1228,11 +2144,28 @@ class DashboardActivity : AppCompatActivity() {
         // future onShowCustomView would be rejected and fullscreen video would be permanently broken.
         customView = null
         customViewCallback = null
+        val session = externalBus.beginDocument(generation, config.dashboardNativeKiosk)
+        externalBusSession = session
+        v2Handshake.begin(session)
+        authQueue.clear()
+        v2BridgeDocument = V2BridgeDocument(config, generation, session, entityFilterLease)
         val w = try {
             createWebView(config, generation)
         } catch (e: Throwable) {
+            externalBus.invalidate()
+            externalBusSession = null
+            v2BridgeDocument = null
+            v2ListenerView = null
             if (e is EntityFilterInterceptorUnavailable) {
                 showWaitingForEntityBootstrap()
+                return
+            }
+            if (e is ExternalV2BridgeUnavailable) {
+                showV2CompatibilityScreen(
+                    "Secure dashboard bridge unavailable",
+                    "Android System WebView could not install the secure V2 native bridge. Update or repair " +
+                        "Android System WebView, then retry.",
+                )
                 return
             }
             // A missing / updating / broken system WebView (exactly the population WebView-auto-heal
@@ -1271,25 +2204,124 @@ class DashboardActivity : AppCompatActivity() {
         }
         root = container
         setContentView(container)
-        w.loadUrl(currentUrl(config))
+        val target = currentUrl(config)
+        expectPageStart(target)
+        w.loadUrl(target)
         onLoadStarted()
         // buildAndLoad is reached from service-triggered singleTask intents and renderer recovery as
         // well as initial startup. Own dark settling here so no caller can leave a replacement WebView
         // running indefinitely behind a sleeping display while it waits for a connection callback.
-        if (deferReadyEntityBootstrapUntilWake(screenAwake)) {
-            main.removeCallbacks(darkSettle)
-            main.postDelayed(darkSettle, DARK_SETTLE_MS)
-        }
+        if (deferReadyEntityBootstrapUntilWake(screenAwake)) scheduleDarkSettle()
     }
 
     /** Native hold screen used while the learner derives its first minimal subscription. No WebView is
      * created here, making it impossible for an activity/watchdog/HOME race to open the full HA stream. */
+    /**
+     * Answer the filter question from the panel itself, declining the filter.
+     *
+     * Records the same answer the wizard's decline button records, so the two surfaces cannot disagree about
+     * whether the question was asked. Deliberately does NOT enable filtering: someone pressing skip wants a
+     * dashboard now, and silently turning on a feature they were offered and passed over would be worse than
+     * the slow load they accepted.
+     *
+     * Also answers the dashboard question as "follow the account's default" (home_dashboard stays blank):
+     * skip means "stop asking me things and show a dashboard", so leaving the OTHER open question armed
+     * would keep the Set up tab and its banner nagging a panel whose user just declined the wizard.
+     */
+    private fun skipEntityFilterQuestion() {
+        val config = Config(this)
+        config.setupEntityFilterAnswered = true
+        config.setupHomeDashboardChosen = true
+        main.removeCallbacks(entityFilterAnswerCheck)
+        buildAndLoad(config)
+    }
+
+    /**
+     * The pre-render screen shown while the wizard's entity-filter question is open.
+     *
+     * Says what it is waiting for and that the wait is not the panel's fault, because someone walking up to a
+     * panel mid-setup must be able to tell a deliberate pause from a hang. Static by design: no WebView, no
+     * network, nothing to churn — it exists only so the first dashboard the user sees is the filtered one.
+     */
+    private fun showWaitingForEntityFilterAnswer() {
+        main.removeCallbacks(entityBootstrapCheck)
+        main.removeCallbacks(entityFilterAnswerCheck)
+        teardownWeb()
+        val config = Config(this)
+        val density = resources.displayMetrics.density
+        val dark = config.dashboardThemeDark ?: true
+        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
+        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
+        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
+        val primary = Color.parseColor(if (dark) "#03a9f4" else "#0288d1")
+        // The exact page the question is on, so a passer-by does not have to hunt for it. Not a QR: this
+        // screen appears mid-setup when the browser is already open somewhere, so the address is what is
+        // actually useful, and generating a bitmap here would cost a synchronous encode for nothing.
+        val setupUrl = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort, "/setup")
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
+            addView(TextView(this@DashboardActivity).apply {
+                text = "You need to finish the last important questions in your browser to optimise the " +
+                    "performance of your dashboards"
+                setTextColor(body)
+                textSize = 17f
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@DashboardActivity).apply {
+                text = setupUrl
+                setTextColor(primary)
+                textSize = 15f
+                gravity = Gravity.CENTER
+                setPadding(0, (14 * density).toInt(), 0, 0)
+            })
+            // Escape hatch. The hold exists to protect the first impression, not to trap anyone: someone at
+            // the panel with no browser to hand must be able to get a dashboard. Says what it costs, because
+            // skipping is the unfiltered load this screen exists to avoid.
+            addView(Button(this@DashboardActivity).apply {
+                text = "Skip and load the dashboard now"
+                setOnClickListener { skipEntityFilterQuestion() }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = (24 * density).toInt()
+                gravity = Gravity.CENTER_HORIZONTAL
+            })
+            addView(TextView(this@DashboardActivity).apply {
+                text = "Skipping loads every entity Home Assistant has, which is slower on this panel. " +
+                    "You can turn filtering on later under Configure → Dashboard."
+                setTextColor(subtle)
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(0, (10 * density).toInt(), 0, 0)
+            })
+        }
+        setContentView(
+            FrameLayout(this).apply {
+                setBackgroundColor(bg)
+                addView(
+                    content,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                    ).apply { gravity = Gravity.CENTER },
+                )
+            },
+        )
+        main.postDelayed(entityFilterAnswerCheck, ENTITY_FILTER_ANSWER_CHECK_MS)
+    }
+
     private fun showWaitingForEntityBootstrap() {
         main.removeCallbacks(entityBootstrapCheck)
         teardownWeb()
         val filterHold = entityFilterNativeHold
         val blockingIssues = EntityLearningRuntime.blockingIssueCount()
+        val canIgnoreBlockingIssues = blockingIssues > 0 && EntityLearningRuntime.canIgnoreBlockingIssues()
+        // Past the watchdog's give-up deadline a formless hold PRESENTS as a synchronization problem so
+        // the retry/disable buttons appear — the happy spinner must never be terminal.
         val bootstrapProblem = EntityLearningRuntime.bootstrapProblem()
+            ?: if (entityBootstrapWatchdogGaveUp) EntityBootstrapProblem.SYNCHRONIZATION else null
         entityBootstrapBlockedCount = blockingIssues
         entityBootstrapProblem = bootstrapProblem
         val density = resources.displayMetrics.density
@@ -1307,7 +2339,15 @@ class DashboardActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
             if (blockingIssues == 0 && filterHold == null && bootstrapProblem == null) {
-                addView(ProgressBar(this@DashboardActivity).apply { isIndeterminate = true })
+                // Deterministic milestones, not a spinner: nobody trusts the circle (hardware review),
+                // and this text updates with the live scan count on every bootstrap poll tick.
+                entityBootstrapMilestoneView = TextView(this@DashboardActivity).apply {
+                    text = EntityLearningRuntime.bootstrapMilestone()
+                    setTextColor(primary)
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                }
+                addView(entityBootstrapMilestoneView)
             }
             addView(TextView(this@DashboardActivity).apply {
                 text = if (filterHold != null) {
@@ -1327,11 +2367,15 @@ class DashboardActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (20 * density).toInt() })
-            addView(TextView(this@DashboardActivity).apply {
+            val bootstrapHint = TextView(this@DashboardActivity).apply {
                 text = if (filterHold != null) {
                     "${filterHold.detail} Home Assistant has not been opened, preventing an unfiltered entity stream. Retry after updating System WebView, or review entity diagnostics in panel settings."
                 } else if (blockingIssues > 0) {
-                    "The Home Assistant dashboard is not broken. $blockingIssues entity-filter safety ${if (blockingIssues == 1) "check needs" else "checks need"} a choice before the optimized subscription can start."
+                    if (canIgnoreBlockingIssues) {
+                        "The Home Assistant dashboard is not broken. $blockingIssues entity-discovery safety ${if (blockingIssues == 1) "check needs" else "checks need"} a choice before the optimized subscription can start."
+                    } else {
+                        "The Home Assistant dashboard is not broken. Its entity-discovery checks exceed what can be safely reviewed at once. Open entity-discovery settings and simplify the dashboard, or disable the entity filter."
+                    }
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
                     "Home Assistant rejected the dashboard scan. Check this panel's Home Assistant login in Dashboard settings, then retry. Home Assistant remains closed to prevent an unfiltered entity stream."
                 } else if (bootstrapProblem != null) {
@@ -1342,9 +2386,22 @@ class DashboardActivity : AppCompatActivity() {
                 setTextColor(subtle)
                 textSize = 13f
                 gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(
+            }
+            addView(bootstrapHint, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (10 * density).toInt() })
+            if (blockingIssues == 0 && filterHold == null && bootstrapProblem == null) {
+                // The happy wait needs an honesty rung of its own: watched live, a stuck first scan held
+                // this screen for many minutes with no acknowledgement, indistinguishable from a hang.
+                // The sync rerun-latch fixes the known cause; this line is the promise kept if another
+                // slow path appears. Text only — the settings escape below is already on screen.
+                main.postDelayed({
+                    if (!destroyed && bootstrapHint.isAttachedToWindow) {
+                        bootstrapHint.text = "Taking longer than usual — the panel is still working on it. " +
+                            "If this doesn’t finish, the entity filter can be turned off from panel settings."
+                    }
+                }, BOOTSTRAP_HOLD_HONESTY_MS)
+            }
             if (filterHold != null) addView(Button(this@DashboardActivity).apply {
                 text = "Retry optimized dashboard"
                 setOnClickListener { retryEntityFilter(Config(this@DashboardActivity)) }
@@ -1357,6 +2414,11 @@ class DashboardActivity : AppCompatActivity() {
             if (filterHold == null && bootstrapProblem != null) addView(Button(this@DashboardActivity).apply {
                 text = "Retry dashboard scan"
                 setOnClickListener {
+                    // A user-driven retry restores hope: the watchdog clock restarts and the screen
+                    // returns to the progress presentation until the new deadline.
+                    entityBootstrapWatchdogGaveUp = false
+                    entityBootstrapWatchdogFired = false
+                    entityBootstrapHoldSinceMs = SystemClock.elapsedRealtime()
                     if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
                 }
             }, LinearLayout.LayoutParams(
@@ -1366,24 +2428,26 @@ class DashboardActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_HORIZONTAL
             })
             if (filterHold == null && blockingIssues > 0) {
-                addView(Button(this@DashboardActivity).apply {
-                    text = "Ignore flagged entities and continue"
-                    backgroundTintList = ColorStateList.valueOf(primary)
-                    setTextColor(Color.WHITE)
-                    setOnClickListener {
-                        isEnabled = false
-                        text = "Preparing dashboard…"
-                        if (!EntityLearningRuntime.ignoreBlockingIssues()) {
-                            isEnabled = true
-                            text = "Ignore flagged entities and continue"
+                if (canIgnoreBlockingIssues) {
+                    addView(Button(this@DashboardActivity).apply {
+                        text = "Ignore flagged entities and continue"
+                        backgroundTintList = ColorStateList.valueOf(primary)
+                        setTextColor(Color.WHITE)
+                        setOnClickListener {
+                            isEnabled = false
+                            text = "Preparing dashboard…"
+                            if (!EntityLearningRuntime.ignoreBlockingIssues()) {
+                                isEnabled = true
+                                text = "Ignore flagged entities and continue"
+                            }
                         }
-                    }
-                }, LinearLayout.LayoutParams(
-                    recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topMargin = (20 * density).toInt()
-                    gravity = Gravity.CENTER_HORIZONTAL
-                })
+                    }, LinearLayout.LayoutParams(
+                        recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = (20 * density).toInt()
+                        gravity = Gravity.CENTER_HORIZONTAL
+                    })
+                }
                 addView(Button(this@DashboardActivity).apply {
                     text = "Disable entity filter"
                     setOnClickListener {
@@ -1398,7 +2462,7 @@ class DashboardActivity : AppCompatActivity() {
                 })
             }
             addView(Button(this@DashboardActivity).apply {
-                text = if (blockingIssues > 0) "Open entity-filter settings" else "Open panel settings"
+                text = if (blockingIssues > 0) "Open entity-discovery settings" else "Open panel settings"
                 setOnClickListener {
                     val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
                     startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
@@ -1431,7 +2495,10 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun createWebView(config: Config, generation: Long): WebView = WebView(this).apply {
+    private fun createWebView(
+        config: Config,
+        generation: Long,
+    ): WebView = WebView(this).apply {
         val documentStartOrigins = dashboardDocumentStartOrigins(config.haUrl)
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
@@ -1531,7 +2598,12 @@ class DashboardActivity : AppCompatActivity() {
         // The HA frontend relies on cookies (incl. third-party for some integrations).
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-        addJavascriptInterface(ExternalAuthBridge(config, generation, filterLease), "externalApp")
+        try {
+            installV2Listeners(this, config)
+        } catch (error: Throwable) {
+            runCatching { destroy() }
+            throw ExternalV2BridgeUnavailable(error)
+        }
         webChromeClient = dashboardChromeClient(generation)
         webViewClient = object : WebViewClient() {
             // A dead renderer process must not take the app down with it: rebuild the WebView in place
@@ -1548,6 +2620,13 @@ class DashboardActivity : AppCompatActivity() {
                 view.destroy()
                 if (owned) {
                     rendererGate.invalidate()
+                    externalBus.invalidate()
+                    externalBusSession = null
+                    v2BridgeDocument = null
+                    v2ListenerView = null
+                    authQueue.clear()
+                    v2Handshake.reset()
+                    clearBusTimeouts()
                     web = null
                     main.removeCallbacks(watchdog)
                     main.removeCallbacks(darkSettle)
@@ -1569,13 +2648,46 @@ class DashboardActivity : AppCompatActivity() {
             // downgrade and hand its external-auth bridge to cleartext content.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!rendererCurrent(generation, view)) return true
-                return !dashboardNavigationAllowed(config.haUrl, request.url.toString())
+                val allowed = dashboardNavigationAllowed(config.haUrl, request.url.toString())
+                if (allowed && request.isForMainFrame) {
+                    if (!rotateBusDocument(view, config, generation)) return true
+                    expectPageStart(request.url.toString())
+                    onLoadStarted()
+                }
+                return !allowed
+            }
+
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (!rendererCurrent(generation, view)) return
+                val expected = expectedPageStartUrl.also { expectedPageStartUrl = null }
+                if (!dashboardNavigationAllowed(config.haUrl, url)) {
+                    // Native recovery/auth-latch documents are intentionally bridge-free. Their
+                    // loadData navigation also reaches this callback, so never let the redirect
+                    // backstop reattach either V2 object to an opaque/local document.
+                    suspendBusDocument(view)
+                    return
+                }
+                if (expected == url) return
+                // Redirects and renderer-initiated reloads can bypass shouldOverrideUrlLoading. Rotate
+                // only the typed document context here; both listeners were attached before the first
+                // load and remain installed throughout this navigation.
+                runCatching { beginBusDocument(view, config, generation) }
+                    .onSuccess { onLoadStarted() }
+                    .onFailure {
+                        Log.e(TAG, "secure V2 document rotation failed", it)
+                        showV2CompatibilityScreen(
+                            "Secure dashboard bridge unavailable",
+                            "Android System WebView could not retain the secure V2 native bridge. " +
+                                "Update or repair Android System WebView, then retry.",
+                        )
+                    }
             }
 
             // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
             // it never spins forever on a hung reload.
             override fun onPageFinished(view: WebView, url: String) {
                 if (!rendererCurrent(generation, view)) return
+                externalBusSession?.takeIf { bridgeCurrent(generation, it) }?.let(v2Handshake::finish)
                 swipe?.isRefreshing = false
                 // Re-assert the page zoom AFTER load — HA's frontend ships its own <meta viewport
                 // initial-scale=1>, which overrides a scale set before load, so a pre-load setInitialScale
@@ -1670,109 +2782,15 @@ class DashboardActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * The frontend's external-auth JS bridge (V1 contract; the frontend feature-detects
-     * `window.externalApp` and only uses V2 when `externalAppV2` also exists, so V1 alone is
-     * complete). Methods run on the WebView's JS-bridge thread — every reply hops to the main
-     * thread for `evaluateJavascript`. Reply construction is the pure [ExternalAuthProtocol]
-     * so the contract is unit-testable without a WebView.
-     */
-    inner class ExternalAuthBridge(
-        private val config: Config,
-        private val generation: Long,
-        private val filterLease: EntityFilterTelemetry.Lease?,
-    ) {
-
-        @JavascriptInterface
-        fun getExternalAuth(payload: String) {
-            if (!rendererCurrent(generation)) return
-            // Resolve (and lazily refresh) the access token off the main thread — we're already on the
-            // WebView's JS-bridge thread, so the blocking refresh HTTP is fine here. `force` (set by the
-            // frontend after a 401) bypasses the cached token so a rejected token isn't re-handed.
-            val r = DashboardAuth.forConfig(
-                config,
-                force = ExternalAuthProtocol.forceOf(payload),
-                stillCurrent = { rendererCurrent(generation) },
-            )
-            // A terminal rejection feeds the auth latch; transient failures (HA down) don't — the
-            // frontend just re-asks and recovers when HA does.
-            if (r.rejected) runOnUiThread { onAuthRejected(generation) }
-            evaluate(ExternalAuthProtocol.authReply(payload, r.session?.accessToken, r.session?.expiresInSec ?: 0L))
-        }
-
-        @JavascriptInterface
-        fun revokeExternalAuth(payload: String) {
-            if (rendererCurrent(generation)) evaluate(ExternalAuthProtocol.revokeReply(payload))
-        }
-
-        /** Called only by the document-start WebSocket wrapper after it rewrites subscribe_entities. */
-        @JavascriptInterface
-        fun entityFilterSubscriptionModified() {
-            val lease = filterLease ?: return
-            if (rendererCurrent(generation) && config.dashboardEntityFilterEnabled) {
-                EntityFilterTelemetry.subscriptionModified(lease)
-            }
-        }
-
-        /** Fixed-shape, content-free traffic counters from the document-start entity socket observer. */
-        @JavascriptInterface
-        fun entityFilterTrafficMetrics(payload: String) {
-            val lease = filterLease ?: return
-            if (!rendererCurrent(generation) || payload.length > 512) return
-            runCatching { EntityFilterProtocol.parseTrafficBatch(payload) }
-                .onSuccess { EntityFilterTelemetry.traffic(lease, it) }
-        }
-
-        /** Batched dependency evidence from the document-start `hass.states` observer. */
-        @JavascriptInterface
-        fun entityLearningAccesses(payload: String) {
-            if (!rendererCurrent(generation) || !config.dashboardEntityLearningEnabled) return
-            if (payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
-                EntityLearningRuntime.recordAccessBatch(payload)
-            } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
-        }
-
-        @JavascriptInterface
-        fun entityLearningMetrics(payload: String) {
-            if (!rendererCurrent(generation) || !config.dashboardEntityLearningEnabled) return
-            if (payload.length < EntityLearningProtocol.MAX_NATIVE_BRIDGE_PAYLOAD_CHARS) {
-                EntityLearningRuntime.recordMetricBatch(payload)
-            } else FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_BROWSER_OBSERVER)
-        }
-
-        @JavascriptInterface
-        fun externalBus(message: String) {
-            if (!rendererCurrent(generation)) return
-            // Tap on the sidebar's "App Configuration" entry → open our :8888 Configure UI on the panel.
-            if (ExternalAuthProtocol.isConfigScreenShow(message)) {
-                runOnUiThread {
-                    if (!rendererCurrent(generation)) return@runOnUiThread
-                    runCatching {
-                        // No NEW_TASK: launched from this Activity context, ConfigActivity stacks on the
-                        // dashboard's task, so its back/close returns straight to the live dashboard.
-                        startActivity(
-                            Intent(this@DashboardActivity, ConfigActivity::class.java)
-                                .putExtra("path", "/configure"),
-                        )
-                    }
-                }
-            }
-            // Side-channel: a `connection-status` event drives the handshake watchdog (on the main thread).
-            ExternalAuthProtocol.connectionEvent(message)?.let { ev -> runOnUiThread { onConnectionStatus(ev, generation) } }
-            if (ExternalAuthProtocol.isThemeUpdate(message)) runOnUiThread { captureDashboardTheme(generation) }
-            // Command replies (navigate etc.) confirm execution — log-only, but gold when debugging.
-            ExternalAuthProtocol.resultOf(message)?.let { (id, ok) -> Log.d(TAG, "bus result id=$id success=$ok") }
-            evaluate(ExternalAuthProtocol.busReply(message, BuildConfig.VERSION_NAME))
-        }
-
-        private fun evaluate(script: String?) {
-            if (script == null) return
-            runOnUiThread { if (rendererCurrent(generation)) web?.evaluateJavascript(script, null) }
-        }
-    }
-
     companion object {
         private const val TAG = "ha-paneld/dashboard"
+        private const val SIGN_IN_LOAD_RETRIES_MAX = 4
+        private const val SIGN_IN_LOAD_RETRY_MS = 4_000L
+        // Tightened once commit-from-catalog made the happy bootstrap take milliseconds (maintainer,
+        // round-10): the net now assumes seconds are normal and anything past twenty is a fault.
+        private const val BOOTSTRAP_HOLD_HONESTY_MS = 20_000L
+        private const val BOOTSTRAP_WATCHDOG_RETRY_MS = 30_000L
+        private const val BOOTSTRAP_WATCHDOG_PROBLEM_MS = 90_000L
         private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
         private const val RELOAD_INTERVAL_MS = 6 * 60 * 60 * 1000L   // shed WebView memory at a screen-off, ~6h
         private const val RELOAD_HARD_MS = 26 * 60 * 60 * 1000L      // force a visible reload if never idle-dark
@@ -1786,8 +2804,13 @@ class DashboardActivity : AppCompatActivity() {
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch
         private const val DEFAULT_NETWORK_WAIT_MS = 60_000L     // calm first-boot progress until learned
         private const val ENTITY_BOOTSTRAP_CHECK_MS = 1_000L    // missed-relaunch backstop; no network work
+        // Backstop only: answering normally relaunches the renderer from the server. This catches the case
+        // where that relaunch is missed, so the panel still proceeds on its own. Local pref read, no network.
+        private const val ENTITY_FILTER_ANSWER_CHECK_MS = 1_500L
         private const val WAKE_MEDIA_SETTLE_MS = 3_000L         // let resumeTimers/onResume reach the page first
         private const val WAKE_MEDIA_SAMPLE_MS = 6_000L         // tolerate slow camera transport reconstruction
+        private const val V2_MISSING_RELOAD_LIMIT = 2           // live-compatible HA but no V2 envelope after one retry
+        private const val EXTERNAL_APP_V2 = "externalAppV2"
     }
 }
 
@@ -1867,6 +2890,37 @@ private class BottomSwipeFrame(
     }
 }
 
+/** Pure idle-return decision shared by the Android lifecycle path and deterministic JVM tests. */
+internal object DashboardIdleReturnPolicy {
+    /** Return the fragment-free home target when idle navigation is needed; null means already home. */
+    fun target(
+        currentPath: String,
+        currentFragment: String?,
+        homeDashboard: String,
+        currentQuery: String? = null,
+    ): String? {
+        if (homeDashboard.trim().isEmpty()) return null
+        val home = normalizeDashboardTarget(homeDashboard.substringBefore('#'))
+        val homeRoute = home.substringBefore('?').ifEmpty { "/" }
+        val homeQuery = home.substringAfter('?', missingDelimiterValue = "").takeIf { '?' in home }
+        val samePath = normalizeDashboardEntityPath(currentPath) == normalizeDashboardEntityPath(homeRoute)
+        val sameQuery = comparableDashboardQuery(currentQuery) == comparableDashboardQuery(homeQuery)
+        val target = if (home == "") "/" else home
+        return target.takeUnless { samePath && sameQuery && currentFragment.isNullOrEmpty() }
+    }
+}
+
+private fun comparableDashboardQuery(query: String?): String = query.orEmpty().split('&')
+    .filter { it.substringBefore('=') != "external_auth" }
+    .joinToString("&")
+
+/** Normalize only the route portion; query values and fragments are opaque navigation state. */
+internal fun normalizeDashboardTarget(rawTarget: String): String {
+    val raw = rawTarget.trim()
+    val suffixAt = listOf(raw.indexOf('?'), raw.indexOf('#')).filter { it >= 0 }.minOrNull() ?: raw.length
+    return raw.substring(0, suffixAt).trim('/').plus(raw.substring(suffixAt))
+}
+
 /**
  * Pure reply-builders for the HA frontend's external-auth / external-bus JS contract. Null = no
  * reply (never evaluate anything for a payload we don't recognise — callback names in particular
@@ -1875,16 +2929,24 @@ private class BottomSwipeFrame(
  */
 object ExternalAuthProtocol {
 
+    private const val MAX_AUTH_PAYLOAD_CHARS = 4 * 1024
+
     /** Build the dashboard URL: `<haUrl>/<path>?external_auth=1`. [path] is an optional local dashboard
-     *  path (e.g. `my-panel/dash` or `/lovelace/0`); leading/trailing slashes are normalised, blank =
-     *  the HA root. `external_auth=1` tells the frontend to authenticate via our JS bridge. */
+     *  path (e.g. `my-panel/dash` or `/lovelace/0`); leading/trailing route slashes are normalised,
+     *  query/fragment state is preserved, and blank means the HA root. `external_auth=1` tells the
+     *  frontend to authenticate via our JS bridge. */
     fun dashboardUrl(haUrl: String, path: String): String {
         val base = haUrl.trim().trimEnd('/')
-        val p = path.trim().trim('/')
-        if (p.isEmpty()) return "$base/?external_auth=1"
-        // If the path already carries a query string, join with & so external_auth isn't swallowed.
-        val sep = if (p.contains('?')) "&" else "?"
-        return "$base/$p${sep}external_auth=1"
+        val p = normalizeDashboardTarget(path)
+        val fragmentAt = p.indexOf('#').let { if (it >= 0) it else p.length }
+        val resource = p.substring(0, fragmentAt)
+        val fragment = p.substring(fragmentAt)
+        val separator = when {
+            '?' !in resource -> "?"
+            resource.endsWith('?') || resource.endsWith('&') -> ""
+            else -> "&"
+        }
+        return "$base/$resource${separator}external_auth=1$fragment"
     }
 
     /**
@@ -1898,15 +2960,19 @@ object ExternalAuthProtocol {
      * which overrides like the radio does.
      */
     fun selectedThemeJs(dark: Boolean, onlyIfAbsent: Boolean): String {
-        val write = """localStorage.setItem('selectedTheme', JSON.stringify({dark:$dark}))"""
-        val body = if (onlyIfAbsent) "try{if(!localStorage.getItem('selectedTheme')){$write}}catch(e){}"
+        val write = """localStorage.setItem('${InjectionScript.SELECTED_THEME_KEY}', JSON.stringify({dark:$dark}))"""
+        val body = if (onlyIfAbsent) "try{if(!localStorage.getItem('${InjectionScript.SELECTED_THEME_KEY}')){$write}}catch(e){}"
         else "try{$write}catch(e){}"
-        return "(()=>{if(window.top&&window.top!==window)return;$body})();"
+        return "(()=>{${InjectionScript.TOP_FRAME_GUARD}$body})();"
     }
 
-    /** The frontend's `force` flag (set after a 401 to demand a fresh token), false if absent/malformed. */
-    fun forceOf(payload: String): Boolean =
-        runCatching { JSONObject(payload).optBoolean("force", false) }.getOrDefault(false)
+    /** Validate the fixed frontend callback before any token lookup or network refresh is attempted. */
+    fun validAuthRequestForce(payload: String): Boolean? {
+        if (payload.length > MAX_AUTH_PAYLOAD_CHARS) return null
+        val message = runCatching { JSONObject(payload) }.getOrNull() ?: return null
+        if (message.opt("callback") != "externalAuthSetToken") return null
+        return message.optBoolean("force", false)
+    }
 
 
     /** `getExternalAuth` reply: `externalAuthSetToken(true, {access_token, expires_in})`, or a
@@ -1924,42 +2990,6 @@ object ExternalAuthProtocol {
     fun revokeReply(payload: String): String? =
         if (callbackOf(payload) == "externalAuthRevokeToken") "externalAuthRevokeToken(true)" else null
 
-    /** External-bus handler. `config/get` is the one message the frontend BLOCKS on during startup;
-     *  everything else (connection-status, theme-update, haptic, …) is fire-and-forget and must be
-     *  swallowed, not errored, for forward compatibility. Every capability is declared off so the
-     *  frontend never offers phone features (tags, barcode, Assist, downloads) on a panel. */
-    fun busReply(message: String, appVersion: String): String? {
-        val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
-        if (msg.optString("type") != "config/get") return null
-        val result = JSONObject()
-            // true → HA renders an "App Configuration" entry in the sidebar; a tap sends the incoming
-            // `config_screen/show` bus message, which we route to ConfigActivity (the :8888 Configure UI).
-            .put("hasSettingsScreen", true)
-            .put("canWriteTag", false)
-            .put("hasExoPlayer", false)
-            .put("canCommissionMatter", false)
-            .put("canImportThreadCredentials", false)
-            .put("hasAssist", false)
-            .put("hasBarCodeScanner", 0)
-            .put("canSetupImprov", false)
-            .put("downloadFileSupported", false)
-            .put("hasEntityAddTo", false)
-            .put("hasAssistSettings", false)
-            .put("appVersion", appVersion)
-        val reply = JSONObject()
-            .put("id", msg.optInt("id"))
-            .put("type", "result")
-            .put("success", true)
-            .put("result", result)
-        return "externalBus($reply);"
-    }
-
-    /** True if [message] is the frontend's `config_screen/show` command — sent when the user taps the
-     *  "App Configuration" sidebar entry (which we enable via `hasSettingsScreen`). The app opens its
-     *  own config UI in response. */
-    fun isConfigScreenShow(message: String): Boolean =
-        runCatching { JSONObject(message).optString("type") == "config_screen/show" }.getOrDefault(false)
-
     /** Document-start script that forces panel-appropriate HA frontend prefs on this WebView's FIRST
      *  run, then never again: hide the sidebar, keep the websocket alive when idle, no haptics. Values
      *  are `JSON.stringify`'d to match HA's `ha-pref-storage` localStorage format. Self-gated by a
@@ -1967,7 +2997,7 @@ object ExternalAuthProtocol {
      *  and re-applies after a renderer-storage wipe (a fresh first run). */
     fun panelDefaultsJs(): String =
         """(function(){try{
-            if(window.top&&window.top!==window)return;
+            ${InjectionScript.TOP_FRAME_GUARD}
             if(localStorage.getItem('__hapaneld_panel_defaults'))return;
             localStorage.setItem('dockedSidebar',JSON.stringify('always_hidden'));
             localStorage.setItem('suspendWhenHidden',JSON.stringify(false));
@@ -1975,41 +3005,7 @@ object ExternalAuthProtocol {
             localStorage.setItem('__hapaneld_panel_defaults','1');
         }catch(e){}})();"""
 
-    /** If [message] is a `connection-status` external-bus event, its event name ("connected",
-     *  "disconnected", "auth-invalid"); null for any other message. The frontend posts this so the app
-     *  knows when the websocket is up/down — the health signal `onPageFinished` can't give. Tolerates the
-     *  event under `payload.event` or at the top level. */
-    fun connectionEvent(message: String): String? {
-        val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
-        if (msg.optString("type") != "connection-status") return null
-        val ev = msg.optJSONObject("payload")?.optString("event").orEmpty().ifBlank { msg.optString("event") }
-        return ev.takeIf { it in setOf("connected", "disconnected", "auth-invalid") }
-    }
-
-    fun isThemeUpdate(message: String): Boolean =
-        runCatching { JSONObject(message).optString("type") == "theme-update" }.getOrDefault(false)
-
-    /** App→frontend `navigate` command: swap the frontend's view to [path] *inside* the running app —
-     *  no page reload, the JS bundle and websocket stay live (instant, vs several seconds of blank for
-     *  `WebView.reload()`). `options.replace` keeps kiosk history flat. HA ≥ 2025.6. */
-    fun navigateCommand(id: Int, path: String): String {
-        val p = "/" + path.trim().trim('/')
-        val msg = JSONObject()
-            .put("id", id)
-            .put("type", "command")
-            .put("command", "navigate")
-            .put("payload", JSONObject().put("path", p).put("options", JSONObject().put("replace", true)))
-        return "externalBus($msg);"
-    }
-
-    /** If [message] is the frontend's `result` reply to an app-sent command, its (id, success);
-     *  null otherwise. Used to confirm a bus command was actually executed. */
-    fun resultOf(message: String): Pair<Int, Boolean>? {
-        val msg = runCatching { JSONObject(message) }.getOrNull() ?: return null
-        if (msg.optString("type") != "result") return null
-        return msg.optInt("id", -1).takeIf { it >= 0 }?.let { it to msg.optBoolean("success", false) }
-    }
-
     private fun callbackOf(payload: String): String =
-        runCatching { JSONObject(payload).optString("callback") }.getOrDefault("")
+        if (payload.length > MAX_AUTH_PAYLOAD_CHARS) ""
+        else runCatching { JSONObject(payload).optString("callback") }.getOrDefault("")
 }

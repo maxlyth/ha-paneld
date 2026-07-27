@@ -45,8 +45,6 @@ Shelly documents temperature and humidity sensing on the original and X2, and am
 
 **Mode 2 — HA Companion app** (modern / AppStore devices only — Blake, Jenna, Cally, Maverick, Dayna): install HA Companion from the built-in AppStore. The Companion runs in the system WebView and has worked correctly in cases where the built-in browser had rendering issues.
 
-Community guides recommend HACS kiosk-mode to hide the HA sidebar/header for a clean panel look on either mode.
-
 ### HA WebView history
 
 | Firmware | Status |

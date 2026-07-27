@@ -30,7 +30,8 @@ class ServiceProcessBoundaryContractTest {
         ).forEach { heavyweight ->
             assertTrue("foreground promotion must precede $heavyweight", promotion < create.indexOf(heavyweight))
         }
-        assertTrue(create.indexOf("migrateLiveStore()") < create.indexOf("updateForegroundStatus(\"Starting…\")"))
+        assertTrue(create.indexOf("migrateLiveStore()") < create.indexOf("ensurePanelId()"))
+        assertTrue(create.indexOf("ensurePanelId()") < create.indexOf("updateForegroundStatus(\"Starting…\")"))
         assertFalse(start.contains("startForegroundCompat("))
     }
 
@@ -193,8 +194,8 @@ class ServiceProcessBoundaryContractTest {
             "stateConverger.close()",
             "commandDispatcher.close()",
             "authScheduler.shutdownNow()",
-            "zigbeeWorker.close()",
-            "adbReassertWorker.close()",
+            "zigbeeWorker.closeAndJoin(0L)",
+            "adbReassertWorker.closeAndJoin(0L)",
             "reannounceDispatcher.close()",
         ).forEach { step ->
             assertTrue("MQTT retirement signal missing before its first wait: $step",
@@ -277,11 +278,29 @@ class ServiceProcessBoundaryContractTest {
     @Test fun teardownClosesExternalMutationAdmissionBeforeAnyBoundedWaitCanExpire() {
         val source = source("PaneldService.kt")
         val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))
+        val admissions = source.substring(source.indexOf("private fun closeServiceAdmissions()"), source.indexOf("override fun onDestroy()"))
 
+        assertTrue(destroy.contains("closeServiceAdmissions()"))
+        assertTrue(destroy.indexOf("closeServiceAdmissions()") < destroy.indexOf("ensureScreenExitRecovery()"))
+        assertTrue(admissions.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
         listOf("kiosk.closeAdmission()", "navbar.closeAdmission()", "screen.closeAdmission()").forEach { close ->
-            assertTrue("$close missing from synchronous teardown admission", destroy.contains(close))
-            assertTrue(destroy.indexOf(close) < destroy.indexOf("stopMqttWatchdog"))
+            assertTrue("$close missing from synchronous teardown admission", admissions.contains(close))
         }
+    }
+
+    @Test fun helperStagingReconciliationUsesTheSupervisedScopedPeriodicOwner() {
+        val source = source("PaneldService.kt")
+        val reconcile = source.substring(
+            source.indexOf("private fun reconcileHelperInstallStaging()"),
+            source.indexOf("override fun onBind", source.indexOf("private fun reconcileHelperInstallStaging()")),
+        )
+
+        assertTrue(reconcile.contains("scope.periodic("))
+        assertTrue(reconcile.contains("intervalMs = INSTALL_RECONCILE_MS"))
+        assertTrue(reconcile.contains("name = \"helper-install-staging\""))
+        assertTrue(reconcile.contains("helper install staging reconciliation failed"))
+        assertTrue(reconcile.contains("helper install staging: removed="))
+        assertFalse(reconcile.contains("while (isActive)"))
     }
 
     @Test fun failedKioskRecoveryCannotBlockControlPlaneStartup() {
@@ -521,10 +540,12 @@ class ServiceProcessBoundaryContractTest {
         val destroyStart = source.indexOf("override fun onDestroy()")
         val destroy = source.substring(destroyStart, source.indexOf("val screenExitRecovery", destroyStart))
         val requested = source.substring(source.indexOf("private fun requestSafeProcessBoundary("), source.indexOf("private fun finishTeardownAfterExternalStateIsSafe("))
+        val admissions = source.substring(source.indexOf("private fun closeServiceAdmissions()"), destroyStart)
 
-        assertTrue(destroy.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
-        assertTrue(requested.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
-        assertTrue(requested.indexOf("beginAudioTeardown") < requested.indexOf("Thread {"))
+        assertTrue(admissions.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
+        assertTrue(destroy.contains("closeServiceAdmissions()"))
+        assertTrue(requested.contains("closeServiceAdmissions()"))
+        assertTrue(requested.indexOf("closeServiceAdmissions()") < requested.indexOf("Thread {"))
     }
 
     @Test fun everyPaneldProcessBoundaryUsesTheExternalStateGate() {
@@ -546,6 +567,18 @@ class ServiceProcessBoundaryContractTest {
         assertTrue(stop.contains("runOutputIsolatedBounded"))
         assertTrue(stop.contains("timeoutMs = RELAY_STOP_TIMEOUT_MS"))
         assertFalse(stop.contains("Su.run("))
+    }
+
+    @Test fun presenceFeedAndAutoSleepControllerShareTheElapsedRealtimeClock() {
+        val service = source("PaneldService.kt")
+        val owner = service.substring(
+            service.indexOf("haExactEntityStream = HaExactEntityStreamOwner("),
+            service.indexOf("haAmbientLux = HaAmbientLuxSubscriber("),
+        )
+        val controller = source("control/AutoSleepController.kt")
+
+        assertTrue(owner.contains("monotonicMillis = { android.os.SystemClock.elapsedRealtime() }"))
+        assertTrue(controller.contains("elapsedRealtime: () -> Long = SystemClock::elapsedRealtime"))
     }
 
     private fun source(relative: String): String = locate("src/main/kotlin/io/github/maxlyth/hapaneld/$relative").readText()

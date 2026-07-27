@@ -23,10 +23,27 @@ internal class ServiceTeardownBoundary {
     private var finalized = false
     private var completed = true
 
+    // Sticky "am I stopping?" signal, read from many threads on hot paths as a fast self-check. It is
+    // deliberately a lock-free volatile independent of the synchronized decision above (as it was when it
+    // lived on the service): the reads must not take this monitor, and the flag becomes true at exactly
+    // the writer's program point, never as a side effect of a boundary decision.
+    @Volatile private var stopping = false
+
+    /** True once teardown or an explicit process boundary has begun. Set once, never cleared. */
+    val isStopping: Boolean get() = stopping
+
+    /** Latch the sticky stop signal. Idempotent; safe to call from any thread. */
+    fun markStopping() {
+        stopping = true
+    }
+
     @Synchronized
     fun requestExplicitBoundary(): Boolean {
         if (finalized || explicitProcessBoundary) return false
         explicitProcessBoundary = true
+        // Acceptance is itself the beginning of the explicit process boundary. Latch the
+        // lock-free self-check before returning so callers cannot observe a split state.
+        stopping = true
         return true
     }
 

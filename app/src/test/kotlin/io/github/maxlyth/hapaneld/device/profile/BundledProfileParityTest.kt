@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,10 +67,13 @@ class BundledProfileParityTest {
             "Rockchip RK3576 · 4× Arm Cortex-A72 + 4× Arm Cortex-A53 · introduced 2024",
             soc("wf1589t").displayText(),
         )
-        assertEquals("MediaTek MT6580", soc("shelly-wall-display").displayText())
         assertTrue(bundledById.getValue("generic").document.soc == null)
         assertTrue(
-            "aggregate modern Shelly profile must not project Jenna's confirmed SoC onto unknown variants",
+            "aggregate legacy Shelly profile must not project the original model's SoC onto X2",
+            bundledById.getValue("shelly-wall-display").document.soc == null,
+        )
+        assertTrue(
+            "aggregate modern Shelly profile must not project one model's SoC onto other variants",
             bundledById.getValue("shelly-wall-display-v2").document.soc == null,
         )
         bundled.filter { it.document.soc != null }.forEach { source ->
@@ -82,7 +86,10 @@ class BundledProfileParityTest {
             it.document.soc != null || it.document.metadata.links.isNotEmpty()
         }
 
-        assertEquals(EXPECTED_BUNDLED_IDS - "generic", featureBearing.map { it.document.id }.toSet())
+        assertEquals(
+            EXPECTED_BUNDLED_IDS - setOf("generic", "shelly-wall-display", "shelly-wall-display-v2"),
+            featureBearing.map { it.document.id }.toSet(),
+        )
         featureBearing.forEach { source ->
             assertEquals(
                 "${source.document.id} uses schema fields introduced in rc1",
@@ -90,6 +97,19 @@ class BundledProfileParityTest {
                 source.document.requires.minCoreVersion,
             )
         }
+    }
+
+    @Test fun aggregateShellyProfilesDoNotClaimUntestedModelSpecificFacts() {
+        val legacy = bundledById.getValue("shelly-wall-display").document
+        val modern = bundledById.getValue("shelly-wall-display-v2").document
+
+        assertTrue(legacy.metadata.testedFirmware.isEmpty())
+        assertTrue(modern.metadata.testedFirmware.isEmpty())
+        assertNull(legacy.soc)
+        assertNull(modern.soc)
+        assertNull(modern.sensors.proximityTechnology)
+        assertEquals("Ambient light", legacy.sensors.lightTechnology)
+        assertEquals("Ambient light", modern.sensors.lightTechnology)
     }
 
     @Test fun resolverReturnsDataBackedProfilesWithTheExactRawYamlRevision() {
@@ -464,8 +484,8 @@ class BundledProfileParityTest {
             "generic.yaml" to "c95dd07e605c826b092c141c111f5f1181e98f5f4833d426f9f6bebab4ab5eb9",
             "nspanel-pro.yaml" to "86f6b9071e205a073353c57e14346fc4fceba06a16ab021a1b1adcfc863456b1",
             "s9e.yaml" to "b172d795525d055e940930492447ea463a05cc2dfe5aab3b9a247af753cc5d6e",
-            "shelly-wall-display-v2.yaml" to "15d753d25e4752b8d9d5d579929405d2caf82d5b25275fd140fe7b3e7824cf8e",
-            "shelly-wall-display.yaml" to "bb426dcf26767364d80c739909d44e4d17f7afcbfbffd3d29ede265e8a6bad67",
+            "shelly-wall-display-v2.yaml" to "16415916b2cc0841fccee75709f3b10d3b6a431e3532593c53cb0d34a89fcd24",
+            "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
             "smt1019.yaml" to "7e4501901dd2566361163d7a154c992692a54842be4c8fd522b176bae61cda68",
             "tpa10.yaml" to "1aef00dc9ecde07bd2770a09dc40c48f19b6a6a303c5516202a889f005ce0653",
             "wf1589t.yaml" to "ae485996a658e9c87f90fe6e2cd60cef5d7db14a275767aa1c2ba9ba0f08af65",

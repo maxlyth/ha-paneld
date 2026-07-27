@@ -11,54 +11,46 @@ object ProfileMetadata {
     const val MAX_IMPORTED_REVISIONS_PER_ID = 16
     const val MAX_IMPORTED_BYTES = 4 * 1024 * 1024L
 
+    /**
+     * The single canonical driver table. Each descriptor owns its vocabulary (id/kind/description),
+     * its [ProfileDriverDescriptor.privileged] flag, and its root-helper demand. Every other
+     * driver-keyed table is derived from this list rather than re-enumerating the ids, so a driver
+     * cannot exist without a helper-authority demand and the two can never disagree.
+     *
+     * The helper demand is deliberately separate from `privileged`: a privileged driver may satisfy
+     * its access through app `su`, a trusted-host operation, or the root helper, and only the last one
+     * belongs in `access.helper`. The established helper is preferred for `sensor.cht8305-daemon`, but
+     * an exact shell-readable input layout can use the fixed Shizuku reader when the profile declares
+     * that provisioning route ([ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE]).
+     */
     val drivers: List<ProfileDriverDescriptor> = listOf(
-        ProfileDriverDescriptor("access.android-su", ProfileDriverKind.ACCESS, "Android su invocation and runtime fallback", true),
-        ProfileDriverDescriptor("access.toolbox-su", ProfileDriverKind.ACCESS, "Toolbox su invocation and runtime fallback", true),
-        ProfileDriverDescriptor("input.button-backlight", ProfileDriverKind.INPUT, "Helper-backed monochrome button backlight", true),
-        ProfileDriverDescriptor("input.evdev", ProfileDriverKind.INPUT, "Helper-backed Linux input event watcher", true),
-        ProfileDriverDescriptor("led.autodetect", ProfileDriverKind.LED, "Probe built-in LED transports including helper fallback", true),
-        ProfileDriverDescriptor("led.rk3576-ioctl", ProfileDriverKind.LED, "Built-in /dev/ledjni ioctl with helper fallback", true),
-        ProfileDriverDescriptor("led.rk3576-ioctl-daemon", ProfileDriverKind.LED, "Helper-backed /dev/ledjni ioctl protocol", true),
-        ProfileDriverDescriptor("led.sysfs-daemon", ProfileDriverKind.LED, "Helper-backed supported RGB sysfs protocol", true),
-        ProfileDriverDescriptor("radio.siliconlabs-host", ProfileDriverKind.RADIO, "Sonoff Silicon Labs gateway directory", true),
-        ProfileDriverDescriptor("relay.sysfs", ProfileDriverKind.RELAY, "Supported relay sysfs class", true),
-        ProfileDriverDescriptor("relay.gpio-button-led", ProfileDriverKind.RELAY, "Root-backed button LED GPIO block", true),
-        ProfileDriverDescriptor("screen.brightness-zero", ProfileDriverKind.SCREEN, "Application-level brightness-zero screen off", false),
-        ProfileDriverDescriptor("screen.daemon-blpower", ProfileDriverKind.SCREEN, "Helper-backed kernel bl_power screen off", true),
-        ProfileDriverDescriptor("screen.su-blpower", ProfileDriverKind.SCREEN, "su-backed kernel bl_power screen off", true),
-        ProfileDriverDescriptor("sensor.android", ProfileDriverKind.SENSOR, "Android SensorManager light/proximity inputs", false),
-        ProfileDriverDescriptor("sensor.cht8305-daemon", ProfileDriverKind.SENSOR, "Authenticated helper/Shizuku allowlisted room-climate input", true),
-        ProfileDriverDescriptor("sensor.gpio-proximity", ProfileDriverKind.SENSOR, "Root-backed binary proximity GPIO", true),
-        ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true),
+        ProfileDriverDescriptor("access.android-su", ProfileDriverKind.ACCESS, "Android su invocation and runtime fallback", true, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("access.toolbox-su", ProfileDriverKind.ACCESS, "Toolbox su invocation and runtime fallback", true, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("input.button-backlight", ProfileDriverKind.INPUT, "Helper-backed monochrome button backlight", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("input.evdev", ProfileDriverKind.INPUT, "Helper-backed Linux input event watcher", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("led.autodetect", ProfileDriverKind.LED, "Probe built-in LED transports including helper fallback", true, ProfileHelperAuthorityDemand.SANDBOX_FALLBACK),
+        ProfileDriverDescriptor("led.rk3576-ioctl", ProfileDriverKind.LED, "Built-in /dev/ledjni ioctl with helper fallback", true, ProfileHelperAuthorityDemand.SANDBOX_FALLBACK),
+        ProfileDriverDescriptor("led.rk3576-ioctl-daemon", ProfileDriverKind.LED, "Helper-backed /dev/ledjni ioctl protocol", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("led.sysfs-daemon", ProfileDriverKind.LED, "Helper-backed supported RGB sysfs protocol", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("radio.siliconlabs-host", ProfileDriverKind.RADIO, "Sonoff Silicon Labs gateway directory", true, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("relay.sysfs", ProfileDriverKind.RELAY, "Supported relay sysfs class", true, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("relay.gpio-button-led", ProfileDriverKind.RELAY, "Root-backed button LED GPIO block", true, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("screen.brightness-zero", ProfileDriverKind.SCREEN, "Application-level brightness-zero screen off", false, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("screen.daemon-blpower", ProfileDriverKind.SCREEN, "Helper-backed kernel bl_power screen off", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("screen.su-blpower", ProfileDriverKind.SCREEN, "su-backed kernel bl_power screen off", true, ProfileHelperAuthorityDemand.SANDBOX_FALLBACK),
+        ProfileDriverDescriptor("sensor.android", ProfileDriverKind.SENSOR, "Android SensorManager light/proximity inputs", false, ProfileHelperAuthorityDemand.NONE),
+        ProfileDriverDescriptor("sensor.cht8305-daemon", ProfileDriverKind.SENSOR, "Authenticated helper/Shizuku allowlisted room-climate input", true, ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE),
+        ProfileDriverDescriptor("sensor.gpio-proximity", ProfileDriverKind.SENSOR, "Root-backed binary proximity GPIO", true, ProfileHelperAuthorityDemand.REQUIRED),
+        ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true, ProfileHelperAuthorityDemand.NONE),
     )
 
     /**
-     * Root-helper authority demand for each core driver. This is deliberately separate from
-     * [ProfileDriverDescriptor.privileged]: a privileged driver may use app `su`, a trusted-host
-     * operation, or the root helper, and only the last one belongs in `access.helper`.
+     * Root-helper authority demand for each core driver, derived from the single [drivers] table so it
+     * always covers exactly the known drivers and can never drift from their declared demand. See
+     * [ProfileDriverDescriptor.helperDemand].
      */
-    internal val helperAuthorityDemand: Map<String, ProfileHelperAuthorityDemand> = mapOf(
-        "access.android-su" to ProfileHelperAuthorityDemand.NONE,
-        "access.toolbox-su" to ProfileHelperAuthorityDemand.NONE,
-        "input.button-backlight" to ProfileHelperAuthorityDemand.REQUIRED,
-        "input.evdev" to ProfileHelperAuthorityDemand.REQUIRED,
-        "led.autodetect" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
-        "led.rk3576-ioctl" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
-        "led.rk3576-ioctl-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
-        "led.sysfs-daemon" to ProfileHelperAuthorityDemand.REQUIRED,
-        "radio.siliconlabs-host" to ProfileHelperAuthorityDemand.NONE,
-        "relay.sysfs" to ProfileHelperAuthorityDemand.NONE,
-        "relay.gpio-button-led" to ProfileHelperAuthorityDemand.NONE,
-        "screen.brightness-zero" to ProfileHelperAuthorityDemand.NONE,
-        "screen.daemon-blpower" to ProfileHelperAuthorityDemand.REQUIRED,
-        "screen.su-blpower" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
-        "sensor.android" to ProfileHelperAuthorityDemand.NONE,
-        // The established helper is preferred, but an exact shell-readable input layout can use the
-        // fixed Shizuku reader when the profile declares that provisioning route.
-        "sensor.cht8305-daemon" to ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE,
-        "sensor.gpio-proximity" to ProfileHelperAuthorityDemand.REQUIRED,
-        "update.webview" to ProfileHelperAuthorityDemand.NONE,
-    )
+    internal val helperAuthorityDemand: Map<String, ProfileHelperAuthorityDemand> =
+        drivers.associate { it.id to it.helperDemand }
 
     /** Core-owned workflow identifiers selectable by schema 2. Profiles cannot define recipe behavior. */
     val recipes: Set<String> = setOf(
@@ -147,7 +139,7 @@ object ProfileMetadata {
  * to the helper. [SHIZUKU_ALTERNATE] requires the helper unless the profile explicitly includes Shizuku
  * provisioning guidance for the same fixed core operation.
  */
-internal enum class ProfileHelperAuthorityDemand {
+enum class ProfileHelperAuthorityDemand {
     NONE,
     SANDBOX_FALLBACK,
     SHIZUKU_ALTERNATE,

@@ -66,4 +66,74 @@ class DashboardRecoveryPolicyTest {
         assertFalse(first.crashLooping)
         assertEquals(Action.NONE, first.action)
     }
+
+    @Test fun builtinLatchBypassesForeignBudgetAndNeverRequestsALaunch() {
+        val policy = policy()
+        repeat(10) { sample ->
+            val decision = evaluateDashboardRecovery(
+                policy = policy,
+                pkg = SystemController.BUILTIN_DASHBOARD,
+                state = AppState.DEAD,
+                now = sample * 30L,
+                builtinTarget = true,
+            )
+            assertEquals(Action.NONE, decision.action)
+            assertFalse(decision.crashLooping)
+        }
+
+        // The bypass resets rather than consumes the foreign budget.
+        assertEquals(Action.NONE, policy.evaluate("external", AppState.DEAD, 400).action)
+        assertEquals(Action.RELAUNCH_DEAD, policy.evaluate("external", AppState.DEAD, 401).action)
+    }
+
+    @Test fun builtinBackgroundRecoveryResumesFromFreshEvidenceAfterLatchExpiry() {
+        val policy = policy()
+        evaluateDashboardRecovery(
+            policy,
+            SystemController.BUILTIN_DASHBOARD,
+            AppState.DEAD,
+            now = 0,
+            builtinTarget = true,
+        )
+
+        assertEquals(
+            Action.NONE,
+            evaluateDashboardRecovery(
+                policy,
+                SystemController.BUILTIN_DASHBOARD,
+                AppState.BG,
+                now = 100,
+                builtinTarget = true,
+            ).action,
+        )
+        assertEquals(
+            Action.RETURN_FROM_BACKGROUND,
+            evaluateDashboardRecovery(
+                policy,
+                SystemController.BUILTIN_DASHBOARD,
+                AppState.BG,
+                now = 400,
+                builtinTarget = true,
+            ).action,
+        )
+    }
+
+    @Test fun foreignTargetRetainsTheExistingDeadRecoveryTraceThroughTheRouter() {
+        val policy = policy()
+        val decisions = (0L..5L).map { now ->
+            evaluateDashboardRecovery(
+                policy = policy,
+                pkg = "external",
+                state = AppState.DEAD,
+                now = now,
+                builtinTarget = false,
+            )
+        }
+
+        assertEquals(
+            listOf(Action.NONE, Action.RELAUNCH_DEAD, Action.NONE, Action.RELAUNCH_DEAD, Action.NONE, Action.NONE),
+            decisions.map { it.action },
+        )
+        assertTrue(decisions.last().crashLooping)
+    }
 }

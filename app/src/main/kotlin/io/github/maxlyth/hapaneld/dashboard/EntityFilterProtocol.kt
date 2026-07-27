@@ -150,17 +150,13 @@ object EntityFilterProtocol {
         entityIds: Collection<String>,
         documentOrigins: Collection<String> = setOf(origin(haUrl)),
     ): String {
-        val upstream = URI(upstreamWebSocketUrl(haUrl))
-        val targetWsOrigins = JSONArray(documentOrigins.map(::origin).distinct().sorted().map {
-            it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
-        }).toString()
-        val targetWsPath = JSONObject.quote(upstream.rawPath)
+        val (targetWsOrigins, targetWsPath) = InjectionScript.wsTargets(haUrl, documentOrigins)
         val ids = JSONArray(normalize(entityIds)).toString()
         val emptySubscriptionEntityId = JSONObject.quote(EMPTY_SUBSCRIPTION_ENTITY_ID)
         val filterKeys = JSONArray(FILTER_KEYS.sorted()).toString()
         return """
             (()=>{
-              if(window.top&&window.top!==window)return;
+              ${InjectionScript.TOP_FRAME_GUARD}
               const Native=window.WebSocket;
               if(!Native||Native.__haPaneldEntityFilter)return;
               const targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath,entityIds=$ids,emptySubscriptionEntityId=$emptySubscriptionEntityId,filterKeys=$filterKeys;
@@ -178,7 +174,7 @@ object EntityFilterProtocol {
                           if(!filterKeys.some(key=>Object.prototype.hasOwnProperty.call(message,key))){
                             message.entity_ids=entityIds.length?entityIds:[emptySubscriptionEntityId];
                             outgoing=JSON.stringify(message);
-                            try{if(window.externalApp&&typeof window.externalApp.entityFilterSubscriptionModified==='function')window.externalApp.entityFilterSubscriptionModified();}catch(e){}
+                            try{if(window.haPaneldV2&&typeof window.haPaneldV2.postMessage==='function')window.haPaneldV2.postMessage(JSON.stringify({type:'entityFilterSubscriptionModified'}));}catch(e){}
                           }
                         }
                       }catch(e){}
@@ -207,14 +203,10 @@ object EntityFilterProtocol {
         haUrl: String,
         documentOrigins: Collection<String> = setOf(origin(haUrl)),
     ): String {
-        val upstream = URI(upstreamWebSocketUrl(haUrl))
-        val targetWsOrigins = JSONArray(documentOrigins.map(::origin).distinct().sorted().map {
-            it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
-        }).toString()
-        val targetWsPath = JSONObject.quote(upstream.rawPath)
+        val (targetWsOrigins, targetWsPath) = InjectionScript.wsTargets(haUrl, documentOrigins)
         return """
             (()=>{
-              if(window.top&&window.top!==window)return;
+              ${InjectionScript.TOP_FRAME_GUARD}
               if(window.__haPaneldEntityTraffic)return;
               window.__haPaneldEntityTraffic=true;
               const Parent=window.WebSocket,targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath,
@@ -342,7 +334,7 @@ object EntityFilterProtocol {
                 frames=payloadBytes=entityUpdates=hydrationUpdates=observerMs=droppedFrames=stateTaskMs=stateTaskMaxMs=
                   interactionMaxMs=inputDelayMs=interactionProcessingMs=presentationMs=loafCount=blockingMs=
                   loafMaxMs=scriptMs=renderMs=longTaskCount=0;interactionBins.fill(0);
-                try{if(window.externalApp&&typeof window.externalApp.entityFilterTrafficMetrics==='function')window.externalApp.entityFilterTrafficMetrics(payload)}catch(e){}
+                try{if(window.haPaneldV2&&typeof window.haPaneldV2.postMessage==='function')window.haPaneldV2.postMessage(JSON.stringify({type:'entityFilterTrafficMetrics',payload:payload}))}catch(e){}
               },sampleMs);
             })();
         """.trimIndent()

@@ -25,6 +25,8 @@ class HaClientIdSpecTest {
         assertTrue("full backup/export loops must include the expiry registry entry",
             tokenExpiry in SettingsRegistry.settable())
         assertFalse("the understandable LLT fallback remains configurable", longLivedToken!!.hidden)
-        assertTrue(longLivedToken.label.contains("long-lived access token", ignoreCase = true))
+        assertEquals("Long-lived access token", longLivedToken.label)
+        assertFalse("token replacement semantics do not need to clutter the UI helper",
+            longLivedToken.help.contains("blank keeps", ignoreCase = true))
     }
 }

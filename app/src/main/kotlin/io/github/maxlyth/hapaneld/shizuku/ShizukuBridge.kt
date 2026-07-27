@@ -52,7 +52,6 @@ object ShizukuBridge : ShellPrivilege {
         ShizukuScheduledHandle { future.cancel(false) }
     }
     private val reconnects = ShizukuReconnectCoordinator(scheduler)
-    private var stableReset: ShizukuScheduledHandle? = null
 
     private val args: Shizuku.UserServiceArgs
         get() = Shizuku.UserServiceArgs(ComponentName(appContext, ShizukuShellService::class.java))
@@ -66,10 +65,9 @@ object ShizukuBridge : ShellPrivilege {
 
     private val binderReceived = Shizuku.OnBinderReceivedListener { refresh() }
     private val binderDead = Shizuku.OnBinderDeadListener { clearBinding(managerIdleState()) }
-    private val permissionResult = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+    private val permissionResult = Shizuku.OnRequestPermissionResultListener { requestCode, _ ->
         if (requestCode != REQUEST_CODE) return@OnRequestPermissionResultListener
-        if (grantResult == PackageManager.PERMISSION_GRANTED) refresh()
-        else refresh()
+        refresh()
     }
 
     @Synchronized fun initialize(context: Context) {
@@ -206,8 +204,7 @@ object ShizukuBridge : ShellPrivilege {
             val reconnectGeneration = synchronized(this@ShizukuBridge) {
                 if (generation != bindingGeneration || activeConnection !== this) return
                 bindingGeneration++
-                stableReset?.cancel()
-                stableReset = null
+                reconnects.cancelBackoffReset()
                 activeConnection = null
                 remote = null
                 state = nextState
@@ -222,8 +219,7 @@ object ShizukuBridge : ShellPrivilege {
             bindingGeneration++
             remote = null
             state = nextState
-            stableReset?.cancel()
-            stableReset = null
+            reconnects.cancelBackoffReset()
             reconnects.cancel(resetBackoff = true)
             activeConnection.also { activeConnection = null }
         }
@@ -298,18 +294,14 @@ object ShizukuBridge : ShellPrivilege {
     }
 
     private fun scheduleStableBackoffReset(generation: Long) {
-        stableReset?.cancel()
-        stableReset = runCatching {
-            scheduler.schedule(RECONNECT_STABLE_RESET_MS) {
-                synchronized(this) {
-                    if (generation == bindingGeneration && state == ShizukuState.READY) {
-                        reconnects.resetBackoff()
-                    }
-                    stableReset = null
+        val scheduled = reconnects.scheduleBackoffReset(RECONNECT_STABLE_RESET_MS) {
+            synchronized(this) {
+                if (generation == bindingGeneration && state == ShizukuState.READY) {
+                    reconnects.resetBackoff()
                 }
             }
-        }.onFailure { Log.w(TAG, "failed to schedule Shizuku reconnect backoff reset", it) }
-            .getOrNull()
+        }
+        if (!scheduled) Log.w(TAG, "failed to schedule Shizuku reconnect backoff reset")
     }
 
     data class Snapshot(val state: ShizukuState, val ready: Boolean)

@@ -124,6 +124,23 @@ class RendererPreparationCoordinatorTest {
         )
     }
 
+    @Test fun automaticBlankRendererPreparesTheBuiltinDashboard() {
+        var state = RendererPreparationState("", "")
+        val events = mutableListOf<String>()
+        val coordinator = RendererPreparationCoordinator(
+            builtinPackage = "builtin",
+            state = { state },
+            borrow = { events += "borrow"; borrowed },
+            persist = { state = state.copy(haUrl = it.url); true },
+        )
+
+        assertEquals(
+            RendererPreparationCoordinator.Result.PREPARED,
+            coordinator.launchConfigured({ pkg, ready -> events += "ensure:$pkg:$ready" }, { events += "launch:$it" }),
+        )
+        assertEquals(listOf("borrow", "ensure::true", "launch:"), events)
+    }
+
     @Test fun failedPersistLeavesDurableBlankStateForStartupRetry() {
         var state = RendererPreparationState("builtin", "")
         var fail = true
@@ -214,24 +231,24 @@ class RendererPreparationCoordinatorTest {
         assertEquals(listOf("ensure:foreign.renderer:false", "launch:foreign.renderer"), events)
     }
 
-    @Test fun startupWithoutConfiguredRendererOrPendingHandoffDoesNotLaunch() {
-        val state = RendererPreparationState("", "")
+    @Test fun startupAutomaticBuiltinPreparesAndLaunches() {
+        var state = RendererPreparationState("", "")
         val ensured = mutableListOf<Pair<String, Boolean>>()
         var launches = 0
         val coordinator = RendererPreparationCoordinator(
             builtinPackage = "builtin",
             state = { state },
-            borrow = { error("unconfigured renderer must not borrow") },
-            persist = { error("unconfigured renderer must not persist") },
+            borrow = { borrowed },
+            persist = { state = state.copy(haUrl = it.url); true },
         )
 
         assertEquals(
-            RendererPreparationCoordinator.Result.NOT_BUILTIN,
+            RendererPreparationCoordinator.Result.PREPARED,
             coordinator.reconcileStartup({ pkg, ready -> ensured += pkg to ready }, { launches++ }),
         )
 
-        assertEquals(listOf("" to false), ensured)
-        assertEquals(0, launches)
+        assertEquals(listOf("" to true), ensured)
+        assertEquals(1, launches)
     }
 
     @Test fun startupClosingAfterHomeReconciliationDoesNotLaunchReadyRenderer() {

@@ -2,14 +2,13 @@ package io.github.maxlyth.hapaneld
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Pins the built-in renderer's side of the HA frontend external-auth contract: the frontend loads
- * `?external_auth=1`, calls `window.externalApp.getExternalAuth({"callback":"externalAuthSetToken"})`,
+ * `?external_auth=1`, posts a V2 `getExternalAuth` envelope with callback `externalAuthSetToken`,
  * and expects `externalAuthSetToken(true, {"access_token":…,"expires_in":<seconds>})` evaluated back.
  * `config/get` on the external bus is the one message the frontend blocks on during startup.
  */
@@ -45,6 +44,13 @@ class ExternalAuthProtocolTest {
         assertNull(ExternalAuthProtocol.authReply("""{"callback":"alert"}""", "tok", 1800L))
         assertNull(ExternalAuthProtocol.authReply("not json", "tok", 1800L))
         assertNull(ExternalAuthProtocol.authReply("{}", "tok", 1800L))
+        assertNull(ExternalAuthProtocol.validAuthRequestForce("""{"callback":"alert","force":true}"""))
+        assertNull(ExternalAuthProtocol.validAuthRequestForce("x".repeat(4 * 1024 + 1)))
+    }
+
+    @Test fun `valid auth request is admitted before token work`() {
+        assertEquals(false, ExternalAuthProtocol.validAuthRequestForce("""{"callback":"externalAuthSetToken"}"""))
+        assertEquals(true, ExternalAuthProtocol.validAuthRequestForce("""{"callback":"externalAuthSetToken","force":true}"""))
     }
 
     @Test
@@ -60,36 +66,6 @@ class ExternalAuthProtocolTest {
     fun `revoke acks only the expected callback`() {
         assertEquals("externalAuthRevokeToken(true)", ExternalAuthProtocol.revokeReply("""{"callback":"externalAuthRevokeToken"}"""))
         assertNull(ExternalAuthProtocol.revokeReply("""{"callback":"externalAuthSetToken"}"""))
-    }
-
-    // --- externalBus -------------------------------------------------------------------------------
-
-    @Test
-    fun `config-get advertises only the settings screen, every other capability off`() {
-        val js = ExternalAuthProtocol.busReply("""{"id":7,"type":"config/get"}""", "0.9.0-test")!!
-        assertTrue(js.startsWith("externalBus(") && js.endsWith(");"))
-        val reply = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
-        assertEquals(7, reply.getInt("id"))
-        assertEquals("result", reply.getString("type"))
-        assertTrue(reply.getBoolean("success"))
-        val result = reply.getJSONObject("result")
-        assertEquals("0.9.0-test", result.getString("appVersion"))
-        assertEquals(0, result.getInt("hasBarCodeScanner"))
-        // The sidebar "App Configuration" entry (→ config_screen/show → our :8888 config) is the one
-        // capability a panel offers; every phone-only feature stays off.
-        assertTrue("hasSettingsScreen must be on", result.getBoolean("hasSettingsScreen"))
-        for (key in result.keys()) {
-            if (key == "appVersion" || key == "hasBarCodeScanner" || key == "hasSettingsScreen") continue
-            assertFalse("capability $key must be off on a panel", result.getBoolean(key))
-        }
-    }
-
-    @Test
-    fun `config_screen show is recognised, other messages are not`() {
-        assertTrue(ExternalAuthProtocol.isConfigScreenShow("""{"type":"config_screen/show","id":5}"""))
-        assertFalse(ExternalAuthProtocol.isConfigScreenShow("""{"type":"config/get","id":1}"""))
-        assertFalse(ExternalAuthProtocol.isConfigScreenShow("""{"type":"connection-status"}"""))
-        assertFalse(ExternalAuthProtocol.isConfigScreenShow("not json"))
     }
 
     @Test
@@ -117,77 +93,30 @@ class ExternalAuthProtocolTest {
     }
 
     @Test
-    fun `other bus messages are swallowed silently`() {
-        assertNull(ExternalAuthProtocol.busReply("""{"type":"connection-status","payload":{"event":"connected"}}""", "v"))
-        assertNull(ExternalAuthProtocol.busReply("""{"type":"theme-update"}""", "v"))
-        assertNull(ExternalAuthProtocol.busReply("""{"type":"some/future/message"}""", "v"))
-        assertNull(ExternalAuthProtocol.busReply("not json", "v"))
-    }
-
-    // --- connectionEvent (frontend-handshake watchdog signal) ---
-
-    @Test
-    fun `connection-status event extracted from payload or top level`() {
-        assertEquals("connected",
-            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","payload":{"event":"connected"}}"""))
-        assertEquals("disconnected",
-            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","event":"disconnected"}"""))
-        assertEquals("auth-invalid",
-            ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","payload":{"event":"auth-invalid"}}"""))
+    fun `dashboard url inserts external auth before fragments`() {
+        assertEquals(
+            "https://ha/lovelace/0?external_auth=1#kitchen",
+            ExternalAuthProtocol.dashboardUrl("https://ha", "/lovelace/0/#kitchen"),
+        )
+        assertEquals(
+            "https://ha/?external_auth=1#kitchen",
+            ExternalAuthProtocol.dashboardUrl("https://ha", "#kitchen"),
+        )
     }
 
     @Test
-    fun `non connection-status messages yield null`() {
-        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"config/get"}"""))
-        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"theme-update"}"""))
-        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status"}""")) // no event field
-        assertNull(ExternalAuthProtocol.connectionEvent("""{"type":"connection-status","event":"future-state"}"""))
-        assertNull(ExternalAuthProtocol.connectionEvent("not json"))
-    }
-
-    @Test fun `theme update is recognised without treating other bus messages as theme changes`() {
-        assertTrue(ExternalAuthProtocol.isThemeUpdate("""{"type":"theme-update"}"""))
-        assertFalse(ExternalAuthProtocol.isThemeUpdate("""{"type":"connection-status"}"""))
-        assertFalse(ExternalAuthProtocol.isThemeUpdate("not json"))
-    }
-
-    // --- navigateCommand (light refresh / idle return-to-home) ---
-
-    @Test
-    fun `navigate command carries the frontend's exact shape with replace`() {
-        val js = ExternalAuthProtocol.navigateCommand(7, "lovelace/0")
-        assertTrue(js.startsWith("externalBus(") && js.endsWith(");"))
-        val msg = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
-        assertEquals(7, msg.getInt("id"))
-        assertEquals("command", msg.getString("type"))
-        assertEquals("navigate", msg.getString("command"))
-        val payload = msg.getJSONObject("payload")
-        assertEquals("/lovelace/0", payload.getString("path"))
-        assertTrue(payload.getJSONObject("options").getBoolean("replace"))
-    }
-
-    @Test
-    fun `navigate path slashes are normalised`() {
-        fun pathOf(js: String) = JSONObject(js.removePrefix("externalBus(").removeSuffix(");"))
-            .getJSONObject("payload").getString("path")
-        assertEquals("/lovelace/0", pathOf(ExternalAuthProtocol.navigateCommand(1, "/lovelace/0/")))
-        assertEquals("/", pathOf(ExternalAuthProtocol.navigateCommand(1, "")))
-        assertEquals("/", pathOf(ExternalAuthProtocol.navigateCommand(1, "/")))
-    }
-
-    // --- resultOf (bus command replies) ---
-
-    @Test
-    fun `command result replies are parsed`() {
-        assertEquals(7 to true, ExternalAuthProtocol.resultOf("""{"id":7,"type":"result","success":true,"result":null}"""))
-        assertEquals(9 to false, ExternalAuthProtocol.resultOf("""{"id":9,"type":"result","success":false}"""))
-    }
-
-    @Test
-    fun `non-result messages yield null`() {
-        assertNull(ExternalAuthProtocol.resultOf("""{"type":"connection-status","payload":{"event":"connected"}}"""))
-        assertNull(ExternalAuthProtocol.resultOf("""{"type":"result"}""")) // no id
-        assertNull(ExternalAuthProtocol.resultOf("not json"))
+    fun `dashboard url preserves existing query and fragment semantics`() {
+        assertEquals(
+            "https://ha/lovelace/0?theme=dark&return=/&external_auth=1#kitchen?tab=lights",
+            ExternalAuthProtocol.dashboardUrl(
+                "https://ha/",
+                "/lovelace/0/?theme=dark&return=/#kitchen?tab=lights",
+            ),
+        )
+        assertEquals(
+            "https://ha/lovelace/0?external_auth=1#kitchen/",
+            ExternalAuthProtocol.dashboardUrl("https://ha", "/lovelace/0#kitchen/"),
+        )
     }
 
     // --- selectedThemeJs: the HA per-device theme store is the ONLY lever that re-renders HA ---

@@ -4,6 +4,7 @@ import io.github.maxlyth.hapaneld.mqttAcceptsCommand
 import io.github.maxlyth.hapaneld.mqttButtonEventTypes
 import io.github.maxlyth.hapaneld.mqttDiscoveryCleanupMarker
 import io.github.maxlyth.hapaneld.mqttDiscoveryRetain
+import io.github.maxlyth.hapaneld.mqttDeviceSoftwareVersion
 import io.github.maxlyth.hapaneld.mqttIsHaOnline
 import io.github.maxlyth.hapaneld.shouldRepublishDiscoveryAddress
 import org.junit.Assert.assertEquals
@@ -38,23 +39,30 @@ class MqttProtocolPolicyTest {
         assertTrue(mqttDiscoveryRetain(""))
     }
 
-    @Test fun discoveryCleanupMarkerChangesAcrossCoreAndProfileRevisions() {
-        val first = mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa")
+    @Test fun deviceFirmwareVersionIncludesTheInstalledBuildNumber() {
+        assertEquals("0.9.6-rc1 (build 480)", mqttDeviceSoftwareVersion("0.9.6-rc1", 480))
+    }
 
-        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.4", "panel.example@aaa"))
-        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "panel.example@bbb"))
-        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "other.panel@aaa"))
+    @Test fun discoveryCleanupMarkerChangesAcrossCoreAndProfileRevisions() {
+        val first = mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker-a:1883")
+
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.4", "panel.example@aaa", "tcp://broker-a:1883"))
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "panel.example@bbb", "tcp://broker-a:1883"))
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "other.panel@aaa", "tcp://broker-a:1883"))
+        assertTrue(first != mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker-b:1883"))
     }
 
     @Test fun discoveryCleanupMarkerChangesWhenTheEntityShapeChangesAtTheSameVersion() {
         val beforeRetirement = mqttDiscoveryCleanupMarker(
             "0.9.5-rc1",
             "panel.example@aaa",
+            "tcp://broker:1883",
             discoveryShapeRevision = 1,
         )
         val afterRetirement = mqttDiscoveryCleanupMarker(
             "0.9.5-rc1",
             "panel.example@aaa",
+            "tcp://broker:1883",
             discoveryShapeRevision = 2,
         )
 
@@ -63,10 +71,10 @@ class MqttProtocolPolicyTest {
 
     @Test fun discoveryCleanupMarkerIsStableAndAlwaysIncludesTheShapeRevision() {
         assertTrue(
-            mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa") ==
-                mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa"),
+            mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker:1883") ==
+                mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker:1883"),
         )
-        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "") == "0.9.3|d2")
+        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "", "tcp://broker:1883") == "0.9.3|d4|b17:tcp://broker:1883")
     }
 
     @Test fun connectedPanelReannouncesOnlyWhenItsLiveConfigurationAddressChanges() {

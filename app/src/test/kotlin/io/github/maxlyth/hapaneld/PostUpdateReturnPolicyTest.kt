@@ -12,7 +12,7 @@ class PostUpdateReturnPolicyTest {
                 configuredRenderer = SystemController.BUILTIN_DASHBOARD,
                 builtInUrlConfigured = true,
                 dashboardLaunchAvailable = true,
-                dashboardCrashLooping = false,
+                dashboardRecoveryBlocked = false,
             ),
         )
     }
@@ -23,7 +23,7 @@ class PostUpdateReturnPolicyTest {
                 configuredRenderer = SystemController.BUILTIN_DASHBOARD,
                 builtInUrlConfigured = false,
                 dashboardLaunchAvailable = true,
-                dashboardCrashLooping = false,
+                dashboardRecoveryBlocked = false,
             ),
         )
     }
@@ -34,7 +34,7 @@ class PostUpdateReturnPolicyTest {
                 configuredRenderer = "io.homeassistant.companion.android",
                 builtInUrlConfigured = false,
                 dashboardLaunchAvailable = true,
-                dashboardCrashLooping = false,
+                dashboardRecoveryBlocked = false,
             ),
         )
     }

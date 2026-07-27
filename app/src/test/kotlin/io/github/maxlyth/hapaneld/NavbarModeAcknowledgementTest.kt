@@ -2,7 +2,9 @@ package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.control.NavbarModeApplyOutcome
 import io.github.maxlyth.hapaneld.control.NavbarModeApplyStatus
+import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.transactNavbarMode
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import java.util.concurrent.CompletableFuture
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +12,10 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class NavbarModeAcknowledgementTest {
+    @Test fun `Home Assistant select options match navbar actuation modes`() {
+        assertEquals(NavbarController.MODES, SettingsRegistry.spec("navbar_mode")!!.options)
+    }
+
     @Test fun `missing overlay permission performs no physical mutation`() {
         val events = mutableListOf<String>()
 

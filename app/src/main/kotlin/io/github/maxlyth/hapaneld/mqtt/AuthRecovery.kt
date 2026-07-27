@@ -23,6 +23,21 @@ class AuthRecovery(
     private var rejects = 0
     private var attempt = 0
     private var nextRetryMs: Long? = null
+    private var retryGeneration = 0L
+
+    /**
+     * Advances to and returns a fresh retry-currency token, superseding any prior scheduled attempt.
+     * The caller schedules its retry against the returned token and checks [isCurrentRetry] before acting.
+     */
+    @Synchronized fun beginRetry(): Long = ++retryGeneration
+
+    /** True only for the token of the latest [beginRetry]; a superseded (stale) scheduled attempt reads false. */
+    @Synchronized fun isCurrentRetry(token: Long): Boolean = token == retryGeneration
+
+    /** Supersedes any pending scheduled retry without starting a new one (e.g. on retirement). */
+    @Synchronized fun supersedeRetry() {
+        retryGeneration++
+    }
 
     @Synchronized fun configure(identity: String) {
         if (identity == credentials) return
@@ -36,6 +51,7 @@ class AuthRecovery(
     }
 
     @Synchronized fun authenticated(nowMs: Long) {
+        retryGeneration++
         succeededForCredentials = true
         lastSuccessMs = nowMs
         firstRejectMs = null

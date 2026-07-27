@@ -24,7 +24,9 @@ class DiagnosticCacheContractTest {
         assertTrue(server.contains("diagCache.staleWhileRevalidate"))
         assertTrue(server.contains("if (diagCache.peek() == null)"))
         assertTrue(server.contains("snapCache.get()\n            return diagCache.get()"))
-        assertTrue(server.contains("private val suCache = Cached(SU_TTL_MS) { Su.availableIsolated() }"))
+        // su presence is still cached, now owned by Su (no private HTTP-layer suCache duplicate).
+        assertFalse(server.contains("private val suCache"))
+        assertTrue(server.contains("Su.availableCachedIsolated()"))
         assertTrue(server.contains("privilege = management.privilege"))
         val supplier = server.substringAfter("private val diagCache = Cached").substringBefore("/** Call after any write")
         assertTrue(supplier.contains("capabilityRows = management.capabilityRows"))

@@ -19,18 +19,18 @@ class ScreenshotPlaceholderSourceTest {
         assertTrue(!source.contains("the last successful capture stays visible"))
         assertTrue(
             source.contains(
-                """<div class="card" id="shotcard" data-capture-ok="0">${'$'}shotTitle""",
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="0">${'$'}shotTitle""",
             ),
         )
         assertTrue(source.contains("""shotInner(cachedShot)"""))
         assertTrue(
             source.contains(
-                """<div class="card" id="shotcard" data-capture-ok="0" style="display:none">""",
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="0" style="display:none">""",
             ),
         )
         assertTrue(
             source.contains(
-                """<div class="card" id="shotcard" data-capture-ok="1">${'$'}shotTitle""",
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="1">${'$'}shotTitle""",
             ),
         )
     }

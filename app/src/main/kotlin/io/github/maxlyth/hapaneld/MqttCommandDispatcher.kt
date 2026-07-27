@@ -4,6 +4,8 @@ import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.interruptAndJoin
 import java.util.ArrayDeque
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * One bounded, ordered authority for live MQTT/HTTP commands.
@@ -17,11 +19,26 @@ internal class MqttCommandDispatcher(
     private val maxPending: Int = DEFAULT_MAX_PENDING,
     private val maxPendingActions: Int = DEFAULT_MAX_PENDING_ACTIONS,
     private val threadName: String = "mqtt-command-dispatch",
+    private val resultWaitMs: Long = DEFAULT_RESULT_WAIT_MS,
 ) {
     enum class Admission { ACCEPTED, COALESCED, REJECTED, CLOSED }
-    enum class Execution { SUCCEEDED, FAILED, SUPERSEDED, NOT_ADMITTED }
-    data class RunResult(val admission: Admission, val execution: Execution) {
+    enum class Execution { SUCCEEDED, FAILED, PENDING, SUPERSEDED, NOT_ADMITTED }
+    data class RunResult(
+        val admission: Admission,
+        val execution: Execution,
+        private val completion: CompletableFuture<Execution>? = null,
+    ) {
         val executed: Boolean get() = execution == Execution.SUCCEEDED
+
+        /** Observe the terminal result after a bounded caller stopped waiting. Registration is race-safe:
+         * CompletableFuture invokes the observer immediately when completion won before registration. */
+        internal fun observeLateCompletion(observer: (Execution) -> Unit): Boolean {
+            val pendingCompletion = completion.takeIf { execution == Execution.PENDING } ?: return false
+            pendingCompletion.whenComplete { terminal, error ->
+                observer(if (error == null) terminal else Execution.FAILED)
+            }
+            return true
+        }
     }
     data class DrainResult(val cancelled: Int, val drained: Boolean)
 
@@ -40,6 +57,7 @@ internal class MqttCommandDispatcher(
     init {
         require(maxPending > 0)
         require(maxPendingActions in 1..maxPending)
+        require(resultWaitMs > 0)
     }
 
     fun submitLatest(key: String, command: () -> Unit): Admission {
@@ -65,9 +83,16 @@ internal class MqttCommandDispatcher(
         val execution = if (admission == Admission.REJECTED || admission == Admission.CLOSED) {
             Execution.NOT_ADMITTED
         } else {
-            completion.join()
+            try {
+                completion.get(resultWaitMs, TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                Execution.PENDING
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                Execution.PENDING
+            }
         }
-        return RunResult(admission, execution)
+        return RunResult(admission, execution, completion.takeIf { execution == Execution.PENDING })
     }
 
     private fun submit(work: Work): Admission {
@@ -196,5 +221,6 @@ internal class MqttCommandDispatcher(
     companion object {
         internal const val DEFAULT_MAX_PENDING = 32
         internal const val DEFAULT_MAX_PENDING_ACTIONS = 8
+        internal const val DEFAULT_RESULT_WAIT_MS = 1_000L
     }
 }

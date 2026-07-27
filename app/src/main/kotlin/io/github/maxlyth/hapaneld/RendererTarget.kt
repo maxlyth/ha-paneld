@@ -1,0 +1,100 @@
+package io.github.maxlyth.hapaneld
+
+import io.github.maxlyth.hapaneld.util.AndroidInput
+
+/**
+ * The dashboard renderer a configured selection resolves to. Shared by the resolver's policies so the
+ * built-in-versus-foreign distinction has one compiler-visible home instead of being re-derived at each
+ * call site.
+ */
+internal sealed interface RendererTarget {
+    /** ha-paneld's own built-in WebView renderer ([DashboardActivity]). */
+    data object Builtin : RendererTarget
+
+    /** A foreign dashboard app (an HA Companion variant, or a configured third-party renderer). */
+    data class Foreign(val packageName: String) : RendererTarget
+}
+
+/**
+ * The single home for the dashboard renderer-target rules. It keeps three concerns deliberately
+ * distinct and does **not** decide the *actually active* renderer — that stays probe-derived in the
+ * `dashboardState` / built-in-foreground machinery:
+ *
+ *  - [resolveControlPackage] — what `SystemController` acts on. An explicit selection is retained even
+ *    when unavailable; Auto (blank) selects the built-in renderer.
+ *  - [resolveLaunchable] — what the Main/Admin UI can open *now*: built-in needs configured HA
+ *    readiness, a foreign target needs a launch intent, and an unavailable explicit choice never falls
+ *    back silently.
+ *  - [attributionOf] — which package a smoothness sample is charged to, derived from the resolved
+ *    target (built-in maps to the real ha-paneld package). It is not foreground evidence.
+ *
+ * The legacy Companion package set is kept here only for reclaiming a HOME assignment previously made by
+ * an older Auto policy. It is never an automatic dashboard selection.
+ */
+internal object RendererResolver {
+    /** Sentinel `dashboard_package` value selecting the built-in renderer. */
+    const val BUILTIN = "builtin"
+
+    /** Former Auto candidates, retained solely to clean up an old ha-paneld-managed HOME assignment. */
+    val LEGACY_COMPANION_PACKAGES: List<String> = listOf(
+        "io.homeassistant.companion.android.minimal",
+        "io.homeassistant.companion.android",
+    )
+
+    /** Dashboard renderers an older ha-paneld Auto policy may have set as HOME and can safely reclaim. */
+    val LEGACY_COMPANION_PACKAGE_SET: Set<String> = LEGACY_COMPANION_PACKAGES.toSet()
+
+    /** Built-in selection: Auto (blank), the [BUILTIN] sentinel, or the own-package alias tolerated as a
+     *  self-force-stop-safe alias. Shared by control and status projections. */
+    fun isBuiltinSelection(pkg: String, ownPackage: String): Boolean =
+        pkg.isBlank() || pkg == BUILTIN || pkg == ownPackage
+
+    /**
+     * CONTROL resolution — the package string `SystemController` acts on. The [BUILTIN] sentinel and a
+     * structurally valid explicit package pass through unchanged (downstream special-cases built-in); an
+     * invalid non-blank value resolves to none (`""`); blank Auto selects the built-in renderer sentinel.
+     */
+    fun resolveControlPackage(configuredPackage: String, isInstalled: (String) -> Boolean): String {
+        if (configuredPackage.isNotBlank()) {
+            return configuredPackage.takeIf(AndroidInput::isDashboardTarget).orEmpty()
+        }
+        return BUILTIN
+    }
+
+    /**
+     * LAUNCHABLE resolution — what the Main/Admin UI can open now, without silently overriding an
+     * explicit selection. Built-in requires [builtinReady]; a foreign target requires a launch intent
+     * ([isLaunchable]); blank Auto selects the built-in renderer when ready. Only the literal [BUILTIN]
+     * sentinel is treated as built-in here (the own-package alias is a control-side concern).
+     */
+    fun resolveLaunchable(
+        configuredPackage: String,
+        builtinReady: Boolean,
+        isLaunchable: (String) -> Boolean,
+    ): RendererTarget? = when {
+        configuredPackage == BUILTIN -> RendererTarget.Builtin.takeIf { builtinReady }
+        configuredPackage.isNotBlank() ->
+            configuredPackage.takeIf(isLaunchable)?.let(RendererTarget::Foreign)
+        else -> RendererTarget.Builtin.takeIf { builtinReady }
+    }
+
+    /**
+     * The resolved control target as a [RendererTarget]: the [BUILTIN] sentinel → [RendererTarget.Builtin],
+     * none (`""`) → `null`, any other resolved package → [RendererTarget.Foreign]. The service resolves
+     * this once, off the sampling path, and hands the immutable value to diagnostics.
+     */
+    fun resolveControlTarget(configuredPackage: String, isInstalled: (String) -> Boolean): RendererTarget? =
+        when (val ctrl = resolveControlPackage(configuredPackage, isInstalled)) {
+            BUILTIN -> RendererTarget.Builtin
+            "" -> null
+            else -> RendererTarget.Foreign(ctrl)
+        }
+
+    /** Smoothness-attribution package for an already-resolved target: built-in → [ownPackage], a
+     *  foreign target → its package, none → `""`. This is not foreground evidence. */
+    fun attributionOf(target: RendererTarget?, ownPackage: String): String = when (target) {
+        RendererTarget.Builtin -> ownPackage
+        is RendererTarget.Foreign -> target.packageName
+        null -> ""
+    }
+}

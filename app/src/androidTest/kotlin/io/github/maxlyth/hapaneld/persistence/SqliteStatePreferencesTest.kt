@@ -117,6 +117,5 @@ class SqliteStatePreferencesTest {
         context.getSharedPreferences(legacyName, Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences(bridgeName, Context.MODE_PRIVATE).edit().clear().commit()
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 }

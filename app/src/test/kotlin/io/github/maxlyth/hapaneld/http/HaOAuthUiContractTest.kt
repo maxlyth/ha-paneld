@@ -27,12 +27,23 @@ class HaOAuthUiContractTest {
         assertTrue("browser sign-in must follow the HA URL instead of the token fallback", "f.key === \"ha_url\") card.appendChild(haOAuthRow())" in source)
         assertTrue("connection status must remain a one-shot no-store probe", "fetch(\"/api/v1/ha/oauth/status\"" in source && "cache: \"no-store\"" in source)
         assertTrue("the authenticated display name must identify the current connection", "Connected as " in source)
+        assertTrue("unrelated saves must preserve the current identity without another HA probe", "}, haConnectionInputsChanged);" in source && "if (haConnectionChanged) loadHaUserStatus();" in source)
+        assertTrue(
+            "only an explicit refresh or a changed HA identity may discard connection state",
+            "forceHaUserStatusRefresh === true ||" in source && "load(null, true);" in source,
+        )
+        assertTrue(
+            "HA connection edits must clear the previous identity before probing",
+            Regex("""if \(haConnectionChanged\) \{\s*haUserStatus = \{ phase: "unknown" };""")
+                .containsMatchIn(source),
+        )
+        assertTrue("server-observed HA provenance changes must also refresh identity", "previousHaConfigured !== (haAuth.configured === true)" in source && "previousHaOauth !== (haAuth.oauth === true)" in source)
         assertTrue("the connected identity must receive prominent styling", "haUserStatus.phase === \"connected\"" in source && "classList.toggle(\"connected\"" in source)
         assertTrue("the connected identity must be visibly bold and successful", ".ha-oauth-status.connected{color:var(--ok-dim);font-weight:700}" in asset("info.css").readText())
         assertTrue("the connected identity must have a restrained success dot", ".ha-oauth-status.connected::before" in asset("info.css").readText() && "background:var(--ok-dim)" in asset("info.css").readText())
         assertTrue("the connected identity must precede the explanatory instructions", source.indexOf("haOauthStatus,") < source.indexOf("Sign in from this computer."))
         assertTrue("every Configure rerender must restore connected identity styling", "haOauthStatus = el(\"div\"" in source && "renderHaConnectionStatus();" in source.substringAfter("haOauthStatus = el(\"div\"").substringBefore("var openLink"))
-        assertTrue("the token must be described as an advanced fallback", "Long-lived access token (advanced fallback)" in projectFile("app/src/main/kotlin/io/github/maxlyth/hapaneld/config/SettingsRegistry.kt").readText())
+        assertTrue("the token must retain a clear user-facing label", "label = \"Long-lived access token\"" in projectFile("app/src/main/kotlin/io/github/maxlyth/hapaneld/config/SettingsRegistry.kt").readText())
     }
 
     @Test fun `OAuth callback is one-use no-store and never a Hardened action`() {

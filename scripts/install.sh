@@ -60,6 +60,9 @@ show_usage() {
   echo "--prerelease) are rejected so the authenticated provisioner stays paired with its release."
   echo "Use --mqtt-pass-file, --ha-token-file, or --ha-pass-file for credentials. The older literal"
   echo "flags remain compatible but expose their value in the original shell command and process list."
+  echo
+  echo "--reset-config erases the panel's existing ha-paneld configuration and starts guided setup"
+  echo "from scratch. It backs the configuration up first and asks for confirmation before erasing."
 }
 while [ "$#" -gt 0 ]; do case "$1" in
   --prerelease|--pre)
@@ -97,7 +100,7 @@ while [ "$#" -gt 0 ]; do case "$1" in
           PROVISION_ARGS+=("$1" "$2")
           shift 2
           ;;
-        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin)
+        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin|--reset-config)
           PROVISION_ARGS+=("$1")
           shift
           ;;

@@ -106,6 +106,8 @@ class ProfileUiSourceTest {
 
     @Test
     fun profileReferencesAreSeparateVisibleDestinationSafeLinks() {
+        assertTrue("Values declared by this panel's" in server)
+        assertFalse("if one looks wrong, that's where to correct it" in server)
         assertTrue("id=\"profile-links\"" in server)
         assertTrue("aria-label=\"Profile references\"" in server)
         assertTrue("function renderProfileLinks(summary)" in script)

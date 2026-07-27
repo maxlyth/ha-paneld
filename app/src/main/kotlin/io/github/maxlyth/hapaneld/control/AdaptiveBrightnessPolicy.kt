@@ -539,7 +539,7 @@ internal class AdaptiveBrightnessPolicy {
         val normalizedSensitivity = sensitivity.coerceIn(0, 100)
         if (normalizedSensitivity != cachedSensitivity) {
             cachedSensitivity = normalizedSensitivity
-            cachedGain = 2.0.pow((normalizedSensitivity - 50) / 50.0)
+            cachedGain = adaptiveSensitivityGain(normalizedSensitivity)
         }
         val gain = cachedGain
         val effectiveLog = if (mode == AdaptiveModelMode.COLD_START) smoothedDirectLog else {
@@ -580,6 +580,12 @@ internal data class AdaptiveChartPoint(
     val proposedBrightness: Int,
 )
 
+/** Neutral at 50, baseline-only at 0, and up to double residual response at 100. */
+internal fun adaptiveSensitivityGain(sensitivity: Int): Double {
+    val bounded = sensitivity.coerceIn(0, 100)
+    return if (bounded <= 50) bounded / 50.0 else 2.0.pow((bounded - 50) / 50.0)
+}
+
 internal object AdaptiveChartProjection {
     /** At most 2,016 five-minute points for a seven-day window. */
     fun fiveMinute(
@@ -597,7 +603,7 @@ internal object AdaptiveChartProjection {
                 val observed = bucket.sumOf { it.luxIntegral } / coverage
                 val expectedLog = expectedLogLux(minute * AMBIENT_MINUTE_MS)
                 val expected = exp(expectedLog) - 1.0
-                val gain = 2.0.pow((sensitivity.coerceIn(0, 100) - 50) / 50.0)
+                val gain = adaptiveSensitivityGain(sensitivity)
                 val projectedLux = exp((expectedLog + gain * (ln1p(observed) - expectedLog)).coerceAtLeast(0.0)) - 1.0
                 AdaptiveChartPoint(
                     epochMinute = minute,

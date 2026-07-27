@@ -167,11 +167,9 @@ static int get_overlay(const char *pkg, char *out, size_t outsz) {
     char output[2048];
     if (!command_ok(sysexec_capture_argv("/system/bin/appops", argv, output, sizeof output))) return -1;
     char mode[16] = "";
-    char line[256];
     char *save = NULL;
     for (char *cursor = strtok_r(output, "\r\n", &save); cursor; cursor = strtok_r(NULL, "\r\n", &save)) {
-        snprintf(line, sizeof line, "%s", cursor);
-        char *op = strstr(line, "SYSTEM_ALERT_WINDOW");
+        char *op = strstr(cursor, "SYSTEM_ALERT_WINDOW");
         if (!op) continue;
         char *colon = strchr(op, ':');
         if (!colon) continue;
@@ -218,11 +216,9 @@ static int app_state(const char *pkg, char *out, size_t outsz) {
     if (!command_ok(sysexec_capture_argv("/system/bin/dumpsys", window_argv, output, sizeof output))) return -1;
     char needle[160];
     snprintf(needle, sizeof needle, "%s/", pkg);
-    char line[512];
     char *save = NULL;
     for (char *cursor = strtok_r(output, "\r\n", &save); cursor; cursor = strtok_r(NULL, "\r\n", &save)) {
-        snprintf(line, sizeof line, "%s", cursor);
-        if (strstr(line, "mCurrentFocus") && strstr(line, needle)) { fg = 1; break; }
+        if (strstr(cursor, "mCurrentFocus") && strstr(cursor, needle)) { fg = 1; break; }
     }
     snprintf(out, outsz, "%s", fg ? "FG" : "BG");
     return 0;

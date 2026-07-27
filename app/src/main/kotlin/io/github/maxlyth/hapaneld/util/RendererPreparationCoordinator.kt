@@ -98,8 +98,8 @@ class RendererPreparationCoordinator(
     }
 
     /**
-     * Retry interrupted preparation at startup, then foreground an explicitly configured ready renderer.
-     * A blank built-in renderer remains on its safe fallback until connection settings can be borrowed.
+     * Retry interrupted preparation at startup, then foreground a ready automatic/explicit renderer.
+     * An automatic built-in renderer remains on its safe fallback until connection settings can be borrowed.
      */
     fun reconcileStartup(
         ensureHome: (dashboardPackage: String, builtinReady: Boolean) -> Unit,
@@ -111,9 +111,8 @@ class RendererPreparationCoordinator(
         ensureHome(current.dashboardPackage, current.haUrl.isNotBlank())
         if (closing) return@resultTransaction Result.CLOSED
         val blankBuiltinWithoutLogin = result == Result.NO_BORROWABLE_LOGIN &&
-            current.dashboardPackage == builtinPackage && current.haUrl.isBlank()
-        val configuredRendererReady = current.dashboardPackage.isNotBlank() &&
-            (current.dashboardPackage != builtinPackage || current.haUrl.isNotBlank())
+            isBuiltinRenderer(current.dashboardPackage) && current.haUrl.isBlank()
+        val configuredRendererReady = !isBuiltinRenderer(current.dashboardPackage) || current.haUrl.isNotBlank()
         if (!closing && !blankBuiltinWithoutLogin && (configuredRendererReady || current.launchPending)) {
             launchHome(current.dashboardPackage)
             return@resultTransaction completePendingLaunch(result)
@@ -124,25 +123,28 @@ class RendererPreparationCoordinator(
     private fun prepareLocked(): Result {
         if (closing) return Result.CLOSED
         val before = state()
-        if (before.dashboardPackage != builtinPackage) return Result.NOT_BUILTIN
+        if (!isBuiltinRenderer(before.dashboardPackage)) return Result.NOT_BUILTIN
         if (before.haUrl.isNotBlank()) return Result.ALREADY_READY
 
         val borrowed = borrow() ?: return Result.NO_BORROWABLE_LOGIN
         if (closing) return Result.CLOSED
         val current = state()
-        if (current.dashboardPackage != builtinPackage || current.haUrl.isNotBlank()) {
+        if (!isBuiltinRenderer(current.dashboardPackage) || current.haUrl.isNotBlank()) {
             return Result.SUPERSEDED
         }
         if (!persist(borrowed)) return Result.PERSIST_FAILED
         if (closing) return Result.CLOSED
 
         val after = state()
-        return if (after.dashboardPackage == builtinPackage && after.haUrl.isNotBlank()) {
+        return if (isBuiltinRenderer(after.dashboardPackage) && after.haUrl.isNotBlank()) {
             Result.PREPARED
         } else {
             Result.PERSIST_FAILED
         }
     }
+
+    private fun isBuiltinRenderer(dashboardPackage: String): Boolean =
+        dashboardPackage.isBlank() || dashboardPackage == builtinPackage
 
     private fun completePendingLaunch(result: Result): Result =
         if (state().launchPending && !completeLaunch()) Result.PERSIST_FAILED else result

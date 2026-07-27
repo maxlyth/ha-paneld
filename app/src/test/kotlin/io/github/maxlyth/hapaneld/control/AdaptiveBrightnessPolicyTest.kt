@@ -102,6 +102,25 @@ class AdaptiveBrightnessPolicyTest {
         assertFalse(normal.brighterThanExpected)
     }
 
+    @Test fun sensitivityZeroUsesBaselineWhileNeutralAndHighRemainProgressive() {
+        assertEquals(0.0, adaptiveSensitivityGain(0), 0.0)
+        assertEquals(0.5, adaptiveSensitivityGain(25), 0.0)
+        assertEquals(1.0, adaptiveSensitivityGain(50), 0.0)
+        assertEquals(2.0, adaptiveSensitivityGain(100), 0.0)
+        assertEquals(0.0, adaptiveSensitivityGain(-1), 0.0)
+        assertEquals(2.0, adaptiveSensitivityGain(101), 0.0)
+
+        val row = historyRow(NOW / AMBIENT_MINUTE_MS, 25.0)
+        fun projected(sensitivity: Int) = AdaptiveChartProjection.fiveMinute(
+            rows = listOf(row),
+            sensitivity = sensitivity,
+            expectedLogLux = { ln1p(100.0) },
+        ).single().proposedBrightness
+
+        assertTrue(projected(0) > projected(50))
+        assertTrue(projected(50) > projected(100))
+    }
+
     @Test fun qualifyingFastRiseAdmitsAfterTwoSecondsThenReleases() {
         val history = repeatedHistory(expectedLux = 10.0, days = 4)
         val policy = AdaptiveBrightnessPolicy()

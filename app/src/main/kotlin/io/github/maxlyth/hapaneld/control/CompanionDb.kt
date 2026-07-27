@@ -77,12 +77,39 @@ object CompanionDb {
     fun needsRepair(r: ServerRow): Boolean = isBlank(r.internalUrl) && !isBlank(r.externalUrl)
 
     /** Whether the internal-URL health warning applies: only when the Companion is the app that will
-     *  actually render the dashboard — an explicitly configured Companion `dashboard_package`, or a
-     *  blank one (auto-detect prefers the Companion when installed). With the built-in renderer or
+     *  actually render the dashboard — an explicitly configured Companion `dashboard_package`. With the
+     *  automatic built-in renderer or
      *  another explicit dashboard app a blank `internal_url` can't blank the panel (the built-in
      *  renderer's login borrow already falls back to `external_url`), so the warning stays quiet. */
     fun warningApplies(dashboardPackage: String): Boolean =
-        dashboardPackage.isBlank() || dashboardPackage in CompanionInstaller.SUPPORTED_PACKAGES
+        dashboardPackage in CompanionInstaller.SUPPORTED_PACKAGES
+
+    /** Which internal-URL warning (if any) the render surfaces should show, given the active dashboard
+     *  package, the last servers observation and whether a privileged re-read is possible. */
+    internal sealed interface Warning {
+        /** [affected] rows have a blank internal URL — offer the repair. */
+        data class NeedsRepair(val affected: Int) : Warning
+
+        /** The servers table couldn't be inspected but a privileged retry exists. */
+        object ProbeFailed : Warning
+    }
+
+    /** Pure decision shared by the status endpoint and the dashboard/Install banner: the two surfaces
+     *  render this with different copy, but they must agree on WHICH warning applies (the selection was
+     *  previously copy-pasted into both). Returns null when no companion warning is warranted. */
+    internal fun warning(
+        dashboardPackage: String,
+        observation: ServerObservation?,
+        directSuReady: Boolean,
+    ): Warning? {
+        if (!warningApplies(dashboardPackage)) return null
+        val status = observation?.status ?: return null
+        return when {
+            status.needsRepair -> Warning.NeedsRepair(status.affected)
+            !observation.probeSucceeded && directSuReady -> Warning.ProbeFailed
+            else -> null
+        }
+    }
 
     /** Parse the `id US internal US external` lines emitted by [DUMP_SQL]. Tolerant of blank lines and
      *  short rows (a missing trailing field → ""). A line with no id is skipped. */

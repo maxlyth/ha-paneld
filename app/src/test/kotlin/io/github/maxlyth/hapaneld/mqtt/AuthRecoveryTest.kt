@@ -57,6 +57,36 @@ class AuthRecoveryTest {
         assertEquals(5L, s.lastSuccessMs)
     }
 
+    @Test fun `each retry supersedes the prior scheduled attempt`() {
+        val r = AuthRecovery(jitter = { base, _ -> base })
+        val first = r.beginRetry()
+        assertEquals(true, r.isCurrentRetry(first))
+        val second = r.beginRetry()
+        assertEquals(false, r.isCurrentRetry(first))
+        assertEquals(true, r.isCurrentRetry(second))
+    }
+
+    @Test fun `successful authentication supersedes any pending scheduled retry`() {
+        val r = AuthRecovery(jitter = { base, _ -> base })
+        val token = r.beginRetry()
+        r.authenticated(0)
+        assertEquals(false, r.isCurrentRetry(token))
+    }
+
+    @Test fun `retirement supersede discards the pending scheduled retry`() {
+        val r = AuthRecovery(jitter = { base, _ -> base })
+        val token = r.beginRetry()
+        r.supersedeRetry()
+        assertEquals(false, r.isCurrentRetry(token))
+    }
+
+    @Test fun `configure leaves retry currency untouched`() {
+        val r = AuthRecovery(jitter = { base, _ -> base })
+        val token = r.beginRetry()
+        r.configure("changed")
+        assertEquals(true, r.isCurrentRetry(token))
+    }
+
     @Test fun `credential change resets backoff and prior-valid classification`() {
         val r = AuthRecovery(jitter = { base, _ -> base })
         r.configure("old")

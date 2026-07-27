@@ -1,0 +1,20 @@
+package io.github.maxlyth.hapaneld.mqtt
+
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class RoomClimateExposureDefaultContractTest {
+    private val bridge = File("src/main/kotlin/io/github/maxlyth/hapaneld/MqttBridge.kt").readText()
+
+    @Test fun diagnosticAndRoomClimateRuntimeUsesRegistryExposureDefaults() {
+        assertEquals(
+            2,
+            Regex("requireNotNull\\(SettingsRegistry\\.spec\\(key\\)\\)\\.haExposedByDefault")
+                .findAll(bridge)
+                .count(),
+        )
+        assertTrue("config.haExposed(key, exposedByDefault)" in bridge)
+    }
+}

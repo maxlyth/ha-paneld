@@ -56,29 +56,58 @@ class EntityLearningManager(
     private val effectGeneration = AtomicLong(0)
     private val telemetryWriteBarrier = EntityTelemetryWriteBarrier(effectGeneration::get)
     @Volatile private var syncJob: Job? = null
+
+    /** Set when [syncNow] found a run already active; consumed on that run's NORMAL completion. */
+    private var syncRerunReason: String? = null
     @Volatile private var promotionJob: Job? = null
     @Volatile private var bootstrapBlockingIssues = 0
     @Volatile private var resetBootstrapPending = false
     @Volatile private var dynamicExpressionsJson = "[]"
+    @Volatile private var frontendDefaultPanel: String? = null
     private var promotionWindowStart = 0L
     private var promotionsInWindow = 0
-    private val telemetryPending = EntityTelemetryAccumulator(MAX_TELEMETRY_IDS)
     private val telemetryStoreGate = EntityTelemetryStoreGate()
-    private val telemetryWorkerLock = Any()
-    private var telemetryWorkerActive = false
-    private var telemetryClosed = false
-    @Volatile private var telemetryJob: Job? = null
+    // Entity access/metric telemetry and dashboard performance history each own a single-owner drain
+    // worker via the shared EntityTelemetryPipeline. Each keeps its own accumulator, cadence and
+    // flush body; the pipeline owns the accumulator plus the worker-lifecycle contract they used to
+    // hand-roll separately (launch-if-idle, respawn-while-pending, close cancels).
+    private val telemetryPipeline = EntityTelemetryPipeline(
+        scope = scope,
+        accumulator = EntityTelemetryAccumulator(MAX_TELEMETRY_IDS),
+        hasPending = { it.size() > 0 },
+        drain = ::drainTelemetry,
+    )
+    private val telemetryPending: EntityTelemetryAccumulator get() = telemetryPipeline.accumulator
     private val performanceHistorySink = DashboardPerformanceHistorySink(::admitDashboardPerformance)
-    private val performanceWorkerLock = Any()
-    private val performancePending = DashboardPerformanceAccumulator(MAX_PERFORMANCE_PENDING)
-    private var performanceWorkerActive = false
-    private var performanceClosed = false
-    @Volatile private var performanceJob: Job? = null
+    private val performancePipeline = EntityTelemetryPipeline(
+        scope = scope,
+        accumulator = DashboardPerformanceAccumulator(MAX_PERFORMANCE_PENDING),
+        hasPending = { it.isNotEmpty() },
+        drain = ::drainDashboardPerformance,
+    )
+    private val performancePending: DashboardPerformanceAccumulator get() = performancePipeline.accumulator
     @Volatile private var performanceSummaryAt = 0L
     @Volatile private var performanceSummary = "[]"
     @Volatile private var performanceSummaryTarget = ""
     @Volatile private var initialized = false
     @Volatile private var closed = false
+
+    // Live catalog-scan progress, for the setup wizard's entity-filter question. Deliberately not persisted
+    // and not part of the catalog snapshot: it is a fact about a scan in flight, worthless a second later.
+    @Volatile private var scanCounting = false
+    @Volatile private var scanCountedRows = 0
+
+    /** Entities counted so far by a scan in flight, or null when no scan is running. */
+    fun scanProgress(): Int? = if (scanCounting) scanCountedRows else null
+
+    /**
+     * Entities Home Assistant reported in the last completed scan, or null before there has been one.
+     * Distinct from [scanProgress]: this is a settled total the setup wizard may recommend against, while a
+     * scan in flight is a partial figure it must label as still counting.
+     */
+    fun catalogCount(): Int? = runCatching {
+        store.snapshot(instance(), dashboardPath()).catalogCount.takeIf { it > 0 }
+    }.getOrNull()
     private var periodicJob: Job? = null
 
     fun start() {
@@ -105,12 +134,14 @@ class EntityLearningManager(
                 snapshot.lastSyncAt,
                 resolverMigration,
                 resetBootstrapPending,
+                snapshot.analyzerPolicyVersion < DashboardConfigurationLint.ANALYZER_POLICY_VERSION,
             )) {
-            syncNow(if (resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP) {
-                "default-resolver-upgrade"
-            } else {
-                "startup"
-            })
+            val reason = when {
+                resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP -> "default-resolver-upgrade"
+                snapshot.analyzerPolicyVersion < DashboardConfigurationLint.ANALYZER_POLICY_VERSION -> "analyzer-policy-upgrade"
+                else -> "startup"
+            }
+            syncNow(reason)
         }
         true
     }
@@ -166,27 +197,16 @@ class EntityLearningManager(
             effectGeneration.incrementAndGet()
             promotionJob?.cancel()
             promotionJob = null
-            syncJob?.cancel()
-            syncJob = null
+            syncJob = supersedeEntityLearningSync(syncJob) { syncRerunReason = null }
         }
-        synchronized(telemetryWorkerLock) {
-            telemetryClosed = true
-            telemetryWorkerActive = false
-            telemetryJob?.cancel()
-            telemetryJob = null
-            val dropped = telemetryPending.discard()
+        telemetryPipeline.close { pending ->
+            val dropped = pending.discard()
             if (dropped > 0) {
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, dropped.toLong())
             }
             FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, 0)
         }
-        val pendingPerformance = synchronized(performanceWorkerLock) {
-            performanceClosed = true
-            performanceWorkerActive = false
-            performanceJob?.cancel()
-            performanceJob = null
-            performancePending.drain()
-        }
+        val pendingPerformance = performancePipeline.close { it.drain() }
         if (pendingPerformance.isNotEmpty()) {
             telemetryStoreGate.withStore { store.recordDashboardPerformance(pendingPerformance) }
         }
@@ -208,36 +228,23 @@ class EntityLearningManager(
             entityCount = filter.second,
             batch = batch,
         )
-        synchronized(performanceWorkerLock) {
-            if (performanceClosed) return
-            if (performancePending.add(sample) != null) {
-                Log.w(TAG, "dashboard performance queue full; dropped oldest minute aggregate")
-            }
-            if (!performanceWorkerActive) {
-                performanceWorkerActive = true
-                performanceJob = scope.launch(Dispatchers.IO) { drainDashboardPerformance() }
-            }
-        }
+        performancePipeline.admit(
+            onOpen = { pending ->
+                if (pending.add(sample) != null) {
+                    Log.w(TAG, "dashboard performance queue full; dropped oldest minute aggregate")
+                }
+            },
+            onClosed = {},
+        )
     }
 
     private suspend fun drainDashboardPerformance() {
-        try {
-            delay(PERFORMANCE_FLUSH_MS)
-            flushDashboardPerformance()
-        } finally {
-            synchronized(performanceWorkerLock) {
-                performanceWorkerActive = false
-                performanceJob = null
-                if (!performanceClosed && performancePending.isNotEmpty()) {
-                    performanceWorkerActive = true
-                    performanceJob = scope.launch(Dispatchers.IO) { drainDashboardPerformance() }
-                }
-            }
-        }
+        delay(PERFORMANCE_FLUSH_MS)
+        flushDashboardPerformance()
     }
 
     private fun flushDashboardPerformance() {
-        val pending = synchronized(performanceWorkerLock) { performancePending.drain() }
+        val pending = performancePipeline.withLock { it.drain() }
         if (pending.isEmpty()) return
         runCatching {
             telemetryStoreGate.withStore { store.recordDashboardPerformance(pending) }
@@ -318,6 +325,26 @@ class EntityLearningManager(
                     "enable"
                 })
             }
+            // COMMIT-FROM-CATALOG: with a settled catalog for the current target, apply the subscription
+            // NOW, synchronously — no network in the hold path. Every wizard panel arrives here with a
+            // fresh catalog (the count step just displayed it), yet the enable-time sync has died
+            // silently twice on hardware — worst on the newlyInitialized path above, which calls no sync
+            // at all and trusts a startup sync that skips when a persisted catalog exists: full catalog,
+            // zero applied ids, eternal "Preparing" hold. A store read and a commit close the class; the
+            // scheduled/background sync refreshes afterwards as usual.
+            if (!config.dashboardEntityLearningApplied && catalogCount() != null) {
+                runCatching {
+                    val active = desiredIds(System.currentTimeMillis())
+                    if (active.isNotEmpty()) {
+                        check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
+                            "commit-from-catalog failed to persist"
+                        }
+                        Log.i(TAG, "entity learning: applied ${active.size} ids from the settled catalog at enable")
+                    } else {
+                        Log.i(TAG, "entity learning: settled catalog yields no active ids yet; awaiting sync")
+                    }
+                }.onFailure { Log.w(TAG, "entity learning: commit-from-catalog at enable failed", it) }
+            }
             // Always notify the renderer. A populated set rebuilds with its observer; an empty fresh
             // bootstrap tears down any pre-existing unfiltered WebView and waits on the native bootstrap
             // screen until synchronization commits the first narrow set.
@@ -360,12 +387,24 @@ class EntityLearningManager(
 
     fun syncNow(reason: String = "manual"): Boolean = synchronized(this) {
         ensureInitialized()
-        if (syncJob?.isActive == true) return@synchronized false
+        if (syncJob?.isActive == true) {
+            // A rerun latch, never a silent drop. The enable-time bootstrap once no-opped here against a
+            // still-running count scan — which, having started with learning OFF, commits no applied
+            // subscription — and the panel sat on its "Preparing" hold until the hourly loop: a de facto
+            // hang, watched live on hardware. A busy scanner means "go again when this one finishes",
+            // because the active run may be operating under superseded intent.
+            syncRerunReason = reason
+            return@synchronized false
+        }
         val requestGeneration = effectGeneration.get()
+        // Lifecycle forensics: this sync has died silently twice on hardware (no scan, no commit, no
+        // log). Every launch and outcome names itself, at INFO, so the next death is attributable.
+        Log.i(TAG, "entity catalog sync launched ($reason)")
         syncJob = scope.launch {
             syncMutex.withLock {
                 val fallbackInstance = instance(); val fallbackPath = dashboardPath()
                 runCatching { withEntityLearningDeadline(SYNC_TIMEOUT_MS) { synchronize() } }
+                    .onSuccess { Log.i(TAG, "entity catalog sync completed ($reason)") }
                     .onFailure {
                         if (it is CancellationException && it !is TimeoutCancellationException) return@onFailure
                         Log.w(TAG, "entity catalog sync failed ($reason): ${it.message}")
@@ -381,6 +420,17 @@ class EntityLearningManager(
                             store.markStatus(fallbackInstance, fallbackPath, "degraded", it.message ?: it.javaClass.simpleName)
                         }
                     }
+            }
+        }.also { job ->
+            job.invokeOnCompletion { cause ->
+                // Normal completion only: a CANCELLED sync (shutdown, target swap) must not resurrect
+                // itself. Runs after the job is no longer active, so the recursive call proceeds.
+                if (cause == null) {
+                    val rerun = synchronized(this@EntityLearningManager) {
+                        syncRerunReason.also { syncRerunReason = null }
+                    }
+                    if (rerun != null) syncNow(rerun)
+                }
             }
         }
         true
@@ -436,30 +486,51 @@ class EntityLearningManager(
             scanCost.close()
         }
         val expanded = expandTargets(snapshot.baseUrl, snapshot.authToken, scan.targets)
-        val catalogIds = states.asSequence().map { it.entityId }.toHashSet()
+        val catalogIds = states.asSequence().map { it.entityId.lowercase() }.toHashSet()
         val friendlyNames = states.asSequence().filter { it.friendlyName.isNotBlank() }
             .associate { it.entityId.lowercase() to it.friendlyName }
-        val lint = DashboardConfigurationLint.analyze(ws.configJson, catalogIds, ws.metadata, friendlyNames)
-        val ignoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath)
-        val ignoredSelectorBudget = lint.issues.any {
-            it.type == DashboardConfigurationLint.IssueType.SELECTOR_BUDGET && it.fingerprint in ignoredFingerprints
+        val lint = DashboardConfigurationLint.analyze(
+            ws.configJson,
+            catalogIds,
+            ws.metadata,
+            friendlyNames,
+            areaRegistryEntities = ws.areaRegistryEntities,
+            registryMetadataComplete = ws.registryMetadataComplete,
+        )
+        val rawIssues = lint.issues.map(DashboardConfigurationLint.Issue::toJson)
+        val bootstrap = snapshot.forceBootstrap || shouldBootstrapEntityLearning(
+            learningEnabled = snapshot.learningEnabled,
+            applied = snapshot.applied,
+            configuredIds = snapshot.filterIds,
+        )
+        // A clean installation must reach its dashboard without a hidden acknowledgement workflow.
+        // Persist ordinary, explicitly ignorable compatibility findings as ignored on the first
+        // successful bootstrap; they remain visible in Entities and can be re-enabled there. Hard
+        // diagnostic/resource fences are never ignorable and therefore still hold the renderer.
+        val defaultIgnoredFingerprints = defaultIgnoredIssueFingerprints(
+            initialActivationPending = snapshot.initialActivationPending,
+            bootstrap = bootstrap,
+            issues = rawIssues,
+        )
+        val ignoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath) +
+            defaultIgnoredFingerprints
+        val lintIds = effectiveLintEntityIds(lint, ignoredFingerprints)
+        // Context-free literals still require a live-catalog match to discard entity-shaped prose.
+        // Server-expanded targets and registry-backed linter results are authoritative structural
+        // evidence and may intentionally name an entity whose state is temporarily absent.
+        val derived = deriveStaticEntityIds(scan.entityIds, catalogIds, expanded, lintIds)
+        require(derived.size <= EntityFilterProtocol.MAX_ENTITY_IDS) {
+            "derived entity set exceeds ${EntityFilterProtocol.MAX_ENTITY_IDS} IDs"
         }
-        val lintIds = if (ignoredSelectorBudget) emptySet() else lint.safeEntityIds
-        val derived = (scan.entityIds + expanded + lintIds).filterTo(sortedSetOf()) { it in catalogIds }
         syncWork += derived.size
         val effectiveIssuesJson = EntityCatalogIssuePersistence.applyIgnores(
-            JSONArray(lint.issues.map(DashboardConfigurationLint.Issue::toJson)), ignoredFingerprints,
+            JSONArray(rawIssues), ignoredFingerprints,
         )
         val effectiveIssues = JSONArray(effectiveIssuesJson).let { array ->
             (0 until array.length()).mapNotNull(array::optJSONObject)
         }
         val effectiveBlocking = effectiveIssues.any { it.optBoolean("blocking", false) }
         val now = System.currentTimeMillis()
-        val bootstrap = snapshot.forceBootstrap || shouldBootstrapEntityLearning(
-            learningEnabled = snapshot.learningEnabled,
-            applied = snapshot.applied,
-            configuredIds = snapshot.filterIds,
-        )
         val decision = automaticSyncDecision(
             learningEnabled = snapshot.learningEnabled,
             applied = snapshot.applied,
@@ -476,15 +547,23 @@ class EntityLearningManager(
             },
             commitSync = {
                 store.commitSync(
-                    snapshot.instanceKey, snapshot.dashboardPath, states, ws.metadata, ws.configJson, derived, scan.unresolved,
-                    when (decision) {
+                    instance = snapshot.instanceKey,
+                    path = snapshot.dashboardPath,
+                    states = states,
+                    metadata = ws.metadata,
+                    configJson = ws.configJson,
+                    configHash = lint.dashboardRevision,
+                    derived = derived,
+                    unresolved = scan.unresolved,
+                    status = when (decision) {
                         AutomaticSyncDecision.BLOCKED -> "blocked"
                         AutomaticSyncDecision.APPLY -> "active"
                         AutomaticSyncDecision.BOOTSTRAP -> "learning"
                         AutomaticSyncDecision.OBSERVE -> "observing"
                     },
-                    now,
+                    now = now,
                     issues = effectiveIssues,
+                    defaultIgnoredFingerprints = defaultIgnoredFingerprints,
                 )
             },
             applyStoredOverrides = {
@@ -563,61 +642,46 @@ class EntityLearningManager(
         metrics: Map<String, Pair<Long, Long>> = emptyMap(),
     ) {
         val target = EntityTelemetryTarget(effectGeneration.get(), instance(), dashboardPath())
-        synchronized(telemetryWorkerLock) {
-            if (telemetryClosed) {
+        telemetryPipeline.admit(
+            onOpen = { pending ->
+                val admission = pending.admit(target, accessed, missing, metrics)
+                if (admission.coalesced > 0) {
+                    FeatureCosts.registry.recordCoalesced(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.coalesced)
+                }
+                if (admission.dropped > 0) {
+                    FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.dropped)
+                }
+                FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.backlog)
+            },
+            onClosed = {
                 FeatureCosts.registry.recordDropped(
                     FeatureCostOperation.ENTITY_TELEMETRY_FLUSH,
                     (accessed.keys + missing + metrics.keys).size.toLong(),
                 )
-                return
-            }
-            val admission = telemetryPending.admit(target, accessed, missing, metrics)
-            if (admission.coalesced > 0) {
-                FeatureCosts.registry.recordCoalesced(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.coalesced)
-            }
-            if (admission.dropped > 0) {
-                FeatureCosts.registry.recordDropped(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.dropped)
-            }
-            FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, admission.backlog)
-            if (!telemetryWorkerActive) {
-                telemetryWorkerActive = true
-                telemetryJob = scope.launch(Dispatchers.IO) { drainTelemetry() }
-            }
-        }
+            },
+        )
     }
 
     private suspend fun drainTelemetry() {
-        try {
-            while (true) {
-                val batch = telemetryPending.drain() ?: synchronized(telemetryWorkerLock) {
-                    // Serialize the empty observation with admission. If a producer arrived after drain(),
-                    // it sees the worker active; re-check before relinquishing ownership.
-                    telemetryPending.drain()
-                } ?: return
-                FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, telemetryPending.size())
-                val flush = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH)
-                    .work(units = batch.uniqueIds.toLong())
-                try {
-                    flushTelemetry(batch)
-                } catch (error: CancellationException) {
-                    flush.outcome(FeatureCostOutcome.CANCELLED)
-                    throw error
-                } catch (error: Exception) {
-                    flush.outcome(FeatureCostOutcome.FAILURE)
-                    Log.w(TAG, "entity telemetry flush failed: ${error.message}")
-                } finally {
-                    flush.close()
-                }
-            }
-        } finally {
-            synchronized(telemetryWorkerLock) {
-                telemetryWorkerActive = false
-                telemetryJob = null
-                val hasPending = !telemetryClosed && telemetryPending.size() > 0
-                if (hasPending) {
-                    telemetryWorkerActive = true
-                    telemetryJob = scope.launch(Dispatchers.IO) { drainTelemetry() }
-                }
+        while (true) {
+            val batch = telemetryPending.drain() ?: telemetryPipeline.withLock {
+                // Serialize the empty observation with admission. If a producer arrived after drain(),
+                // it sees the worker active; re-check before relinquishing ownership.
+                it.drain()
+            } ?: return
+            FeatureCosts.registry.setBacklog(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH, telemetryPending.size())
+            val flush = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_TELEMETRY_FLUSH)
+                .work(units = batch.uniqueIds.toLong())
+            try {
+                flushTelemetry(batch)
+            } catch (error: CancellationException) {
+                flush.outcome(FeatureCostOutcome.CANCELLED)
+                throw error
+            } catch (error: Exception) {
+                flush.outcome(FeatureCostOutcome.FAILURE)
+                Log.w(TAG, "entity telemetry flush failed: ${error.message}")
+            } finally {
+                flush.close()
             }
         }
     }
@@ -693,38 +757,47 @@ class EntityLearningManager(
         }
     }
 
-    private fun queuePromotion(snapshot: EntityLearningPromotionSnapshot) = synchronized(this) {
-        if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return
-        if (promotionJob?.isActive == true) return
-        promotionJob = scope.launch {
-            delay(PROMOTION_DEBOUNCE_MS)
-            if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@launch
-            val now = System.currentTimeMillis()
-            if (now - promotionWindowStart > PROMOTION_WINDOW_MS) {
-                promotionWindowStart = now; promotionsInWindow = 0
-            }
-            if (promotionsInWindow >= MAX_PROMOTIONS) {
-                store.markStatus(
-                    snapshot.instanceKey, snapshot.dashboardPath,
-                    "degraded", "runtime dependencies queued; synchronize manually",
-                )
-                return@launch
-            }
-            val active = withContext(Dispatchers.IO) {
-                desiredIds(
-                    now, snapshot.instanceKey, snapshot.dashboardPath,
-                    includeStatic = snapshot.autoStatic,
-                    includeRuntime = snapshot.autoRuntime,
-                )
-            }
-            synchronized(this@EntityLearningManager) {
-                if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@synchronized
-                if (active != snapshot.filterIds && active.isNotEmpty()) {
-                    check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
-                        "failed to commit runtime entity promotion"
+    private fun queuePromotion(snapshot: EntityLearningPromotionSnapshot) {
+        synchronized(this) {
+            if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return
+            // Trailing-edge coalescing: a newer snapshot SUPERSEDES a pending one and restarts the wait,
+            // so promotions batch until the telemetry quiets down. The old leading-edge admit (drop
+            // anything while a job is pending) plus a 2-second debounce meant the very first filtered
+            // page load — which itself generates the known-missing telemetry — produced two promotions
+            // seventeen seconds apart, each a full WebView teardown the user watched with no explanation
+            // (hardware review: "reloaded at least 5 times"). One later, fuller promotion beats two
+            // visible resets; promotions are background optimization and are never urgent.
+            promotionJob?.cancel()
+            promotionJob = scope.launch {
+                delay(PROMOTION_DEBOUNCE_MS)
+                if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@launch
+                val now = System.currentTimeMillis()
+                if (now - promotionWindowStart > PROMOTION_WINDOW_MS) {
+                    promotionWindowStart = now; promotionsInWindow = 0
+                }
+                if (promotionsInWindow >= MAX_PROMOTIONS) {
+                    store.markStatus(
+                        snapshot.instanceKey, snapshot.dashboardPath,
+                        "degraded", "runtime dependencies queued; synchronize manually",
+                    )
+                    return@launch
+                }
+                val active = withContext(Dispatchers.IO) {
+                    desiredIds(
+                        now, snapshot.instanceKey, snapshot.dashboardPath,
+                        includeStatic = snapshot.autoStatic,
+                        includeRuntime = snapshot.autoRuntime,
+                    )
+                }
+                synchronized(this@EntityLearningManager) {
+                    if (!snapshot.isEligible(effectGeneration.get(), currentEffectState(), bootstrapBlockingIssues)) return@synchronized
+                    if (active != snapshot.filterIds && active.isNotEmpty()) {
+                        check(config.commitDashboardEntitySubscription(true, active, applied = true)) {
+                            "failed to commit runtime entity promotion"
+                        }
+                        promotionsInWindow++
+                        onFilterChanged()
                     }
-                    promotionsInWindow++
-                    onFilterChanged()
                 }
             }
         }
@@ -863,6 +936,12 @@ class EntityLearningManager(
             val applied = config.dashboardEntityLearningApplied
             val autoStatic = config.dashboardEntityAutoStatic
             val autoRuntime = config.dashboardEntityAutoRuntime
+            val visibleIssues = visibleDashboardIssues(
+                store.issuesJson(currentInstance, currentPath),
+                showAdvisories = !autoRuntime,
+            )
+            val visibleIssueJson = visibleIssues.toString()
+            val visibleIssueCounts = EntityCatalogIssuePersistence.counts(visibleIssueJson)
             val held = shouldHoldRendererForEntityBootstrap(learningEnabled, filtered)
             val desired = desiredIds(
                 System.currentTimeMillis(), currentInstance, currentPath,
@@ -891,9 +970,9 @@ class EntityLearningManager(
                 .put("stream_change_required", s.blockingIssueCount == 0 && preview.streamChange)
                 .put("activation_required", !applied)
                 .put("apply_required", s.blockingIssueCount == 0 && (preview.streamChange || !applied))
-                .put("dashboard_issue_count", s.issueCount)
-                .put("blocking_issue_count", s.blockingIssueCount)
-                .put("ignored_issue_count", s.ignoredIssueCount)
+                .put("dashboard_issue_count", visibleIssueCounts.first)
+                .put("blocking_issue_count", visibleIssueCounts.second)
+                .put("ignored_issue_count", EntityCatalogIssuePersistence.ignoredCount(visibleIssueJson))
                 .put("automatic_activation_blocked", s.blockingIssueCount > 0)
                 .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
                 .put("stream_entity_count", when { held -> 0; filtered -> filterIds.size; else -> s.catalogCount })
@@ -911,14 +990,11 @@ class EntityLearningManager(
 
     fun issuesJson(): String {
         ensureInitialized()
-        val s = store.snapshot(instance(), dashboardPath())
-        return JSONObject()
-            .put("items", JSONArray(store.issuesJson(instance(), dashboardPath())))
-            .put("dashboard_issue_count", s.issueCount)
-            .put("blocking_issue_count", s.blockingIssueCount)
-            .put("ignored_issue_count", s.ignoredIssueCount)
-            .put("dynamic_expressions", JSONArray(dynamicExpressionsJson))
-            .toString()
+        return visibleDashboardIssuesJson(
+            storedIssuesJson = store.issuesJson(instance(), dashboardPath()),
+            showAdvisories = !config.dashboardEntityAutoRuntime,
+            dynamicExpressionsJson = dynamicExpressionsJson,
+        )
     }
 
     /** Cheap cached evidence for the shared app database; does not start entity synchronization. */
@@ -942,19 +1018,20 @@ class EntityLearningManager(
         ensureInitialized()
         val targetInstance = instance()
         val targetPath = dashboardPath()
-        val issues = JSONArray(store.issuesJson(targetInstance, targetPath))
-        val fingerprints = (0 until issues.length()).mapNotNull { index ->
-            issues.optJSONObject(index)?.takeIf { it.optBoolean("blocking", false) }
-                ?.optString("fingerprint")?.takeIf(String::isNotBlank)
-        }
-        if (fingerprints.isEmpty()) return false
+        val selection = blockingIssueSelection(store.issuesJson(targetInstance, targetPath))
+        if (!selection.allIgnorable) return false
         invalidateEffects()
         val now = System.currentTimeMillis()
-        check(fingerprints.all { store.setIssueIgnored(targetInstance, targetPath, it, true, now) }) {
+        check(selection.fingerprints.all { store.setIssueIgnored(targetInstance, targetPath, it, true, now) }) {
             "dashboard issues changed while applying overrides"
         }
         bootstrapBlockingIssues = store.snapshot(targetInstance, targetPath).blockingIssueCount
         return syncNow("ignore-blocking-issues")
+    }
+
+    @Synchronized fun canIgnoreAllBlockingIssues(): Boolean {
+        ensureInitialized()
+        return blockingIssueSelection(store.issuesJson(instance(), dashboardPath())).allIgnorable
     }
 
     private fun encodeDynamicExpressions(expressions: List<EntityLearningProtocol.DynamicExpression>): String =
@@ -1080,11 +1157,190 @@ class EntityLearningManager(
             effectGeneration.incrementAndGet()
             promotionJob?.cancel()
             promotionJob = null
+            frontendDefaultPanel = null
             if (cancelSync) {
-                syncJob = supersedeEntityLearningSync(syncJob)
+                syncJob = supersedeEntityLearningSync(syncJob) { syncRerunReason = null }
             }
         }
     }
+
+    /** Return HA's configured default dashboard path for an empty/blank `homeDashboard` entry. */
+    fun resolvedHomeDashboardPath(homeDashboard: String): String =
+        if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
+            val known = frontendDefaultPanel.orEmpty().ifBlank { null } ?: return ""
+            EntityLearningProtocol.dashboardUrlPath(homeDashboard, known)
+        } else {
+            homeDashboard
+        }
+
+    /** The dashboard list plus the account's server-side default, from one WebSocket session. */
+    data class HomeDashboardCatalog(
+        val items: List<EntityLearningProtocol.HomeDashboardChoice> = emptyList(),
+        val default: EntityLearningProtocol.HomeDashboardDefault = EntityLearningProtocol.HomeDashboardDefault(),
+    )
+
+    /** Fetch dashboards visible to the signed-in HA user without starting an entity scan. */
+    suspend fun homeDashboardChoices(): List<EntityLearningProtocol.HomeDashboardChoice> =
+        homeDashboardCatalog().items
+
+    /**
+     * Fetch, in one authenticated session and without starting an entity scan: the built-in panel
+     * dashboards (`get_panels`), the user-created dashboards (`lovelace/dashboards/list`), and the
+     * account's server-side default dashboard (`frontend/get_user_data` → `frontend/get_system_data`,
+     * where Home Assistant ≥ 2025.12 persists the profile picker's choice). Failures reduce to an empty
+     * catalog — the caller must treat that as "could not ask", never as "no dashboards".
+     */
+    suspend fun homeDashboardCatalog(): HomeDashboardCatalog = withContext(Dispatchers.IO) {
+        val base = config.haUrl.trim().trimEnd('/')
+        if (base.isBlank()) return@withContext HomeDashboardCatalog()
+        val auth = DashboardAuth.forConfig(config)
+        val token = auth.session?.accessToken ?: return@withContext HomeDashboardCatalog()
+        runCatching {
+            var catalog = HomeDashboardCatalog()
+            withHaSocket(base, token) { request ->
+                val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
+                val isAdmin = user?.optBoolean("is_admin") == true || user?.optBoolean("is_owner") == true
+                val panels = runCatching {
+                    request(JSONObject().put("type", "get_panels")).optJSONObject("result")
+                }.getOrNull()
+                val dashboards = request(JSONObject().put("type", "lovelace/dashboards/list"))
+                    .optJSONArray("result") ?: JSONArray()
+                // Same user → system fallback order the scan path uses; each read is individually
+                // best-effort because an older core may not know these commands.
+                val userDefault = runCatching {
+                    request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
+                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
+                }.getOrNull()
+                val systemDefault = if (userDefault.isNullOrBlank()) runCatching {
+                    request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
+                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
+                }.getOrNull() else null
+                catalog = HomeDashboardCatalog(
+                    items = EntityLearningProtocol.panelDashboardChoices(panels, isAdmin) +
+                        EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin),
+                    default = EntityLearningProtocol.homeDashboardDefault(userDefault, systemDefault),
+                )
+            }
+            catalog
+        }.getOrDefault(HomeDashboardCatalog())
+    }
+
+    /** The area registry, this panel's device row, and what the signed-in account may do about it. */
+    data class HaAreaCatalog(
+        /** Credential/endpoint owner actually used for this read; callers reject stale catalogs. */
+        val ownerKey: String = "",
+        val queried: Boolean = false,
+        val admin: Boolean = false,
+        val areas: List<io.github.maxlyth.hapaneld.http.HaAreaProtocol.HaArea> = emptyList(),
+        val device: io.github.maxlyth.hapaneld.http.HaAreaProtocol.PanelDeviceArea =
+            io.github.maxlyth.hapaneld.http.HaAreaProtocol.PanelDeviceArea(),
+        /** The signed-in account's LOGIN name (admin sessions only: `config/auth/list` is the sole API
+         *  that exposes it, and it is admin-gated). Blank when unavailable. The wizard prefills the MQTT
+         *  username with it — the Mosquitto add-on authenticates against HA users. */
+        val haUsername: String = "",
+    )
+
+    /**
+     * Read the area registry and this panel's device row in one authenticated session — registry LISTS
+     * are readable by any user; only writes need an admin. `queried=false` means "could not ask Home
+     * Assistant", which callers must keep distinct from "device has no area".
+     */
+    suspend fun haAreaCatalog(androidId: String, panelId: String): HaAreaCatalog = withContext(Dispatchers.IO) {
+        val ownerKey = credentialFingerprint()
+        val base = config.haUrl.trim().trimEnd('/')
+        if (base.isBlank()) return@withContext HaAreaCatalog(ownerKey = ownerKey)
+        val auth = DashboardAuth.forConfig(config)
+        val token = auth.session?.accessToken ?: return@withContext HaAreaCatalog(ownerKey = ownerKey)
+        runCatching {
+            var catalog = HaAreaCatalog()
+            withHaSocket(base, token) { request ->
+                val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
+                val isAdmin = user?.optBoolean("is_admin") == true || user?.optBoolean("is_owner") == true
+                val areas = io.github.maxlyth.hapaneld.http.HaAreaProtocol.areas(
+                    request(JSONObject().put("type", "config/area_registry/list")),
+                )
+                val device = io.github.maxlyth.hapaneld.http.HaAreaProtocol.panelDeviceArea(
+                    request(JSONObject().put("type", "config/device_registry/list")),
+                    areas,
+                    androidId,
+                    panelId,
+                )
+                // Login shortname, best-effort: only config/auth/list carries it and only admins may
+                // call it (verified against core source — auth/current_user has display name only).
+                val haUsername = if (isAdmin) runCatching {
+                    val userId = user?.optString("id").orEmpty()
+                    val rows = request(JSONObject().put("type", "config/auth/list")).optJSONArray("result")
+                    (0 until (rows?.length() ?: 0)).asSequence()
+                        .mapNotNull { rows?.optJSONObject(it) }
+                        .firstOrNull { it.optString("id") == userId }
+                        ?.optString("username")?.takeUnless { it.isNullOrBlank() || it == "null" }
+                        .orEmpty()
+                }.getOrDefault("") else ""
+                catalog = HaAreaCatalog(
+                    ownerKey = ownerKey, queried = true, admin = isAdmin, areas = areas,
+                    device = device, haUsername = haUsername,
+                )
+            }
+            catalog
+        }.getOrDefault(HaAreaCatalog(ownerKey = ownerKey))
+    }
+
+    /** Non-secret digest identifying the HA endpoint and credential generation used by area operations. */
+    fun haAreaOwnerKey(): String = credentialFingerprint()
+
+    /**
+     * Admin write-back of the requested area: resolve the name (creating the area when it does not
+     * exist), then move this panel's device. Returns true only when the device ends up in the requested
+     * area. Every failure is non-fatal — the caller's reconciliation rule owns the consequences.
+     */
+    suspend fun applyRequestedArea(
+        androidId: String,
+        panelId: String,
+        areaName: String,
+        expectedOwnerKey: String? = null,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            val requested = areaName.trim()
+            if (requested.isBlank()) return@withContext false
+            if (expectedOwnerKey != null && credentialFingerprint() != expectedOwnerKey) return@withContext false
+            val base = config.haUrl.trim().trimEnd('/')
+            if (base.isBlank()) return@withContext false
+            val auth = DashboardAuth.forConfig(config)
+            val token = auth.session?.accessToken ?: return@withContext false
+            runCatching {
+                var moved = false
+                withHaSocket(base, token) { request ->
+                    val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
+                    val isAdmin = user?.optBoolean("is_admin") == true || user?.optBoolean("is_owner") == true
+                    if (!isAdmin) return@withHaSocket
+                    val areas = io.github.maxlyth.hapaneld.http.HaAreaProtocol.areas(
+                        request(JSONObject().put("type", "config/area_registry/list")),
+                    )
+                    val device = io.github.maxlyth.hapaneld.http.HaAreaProtocol.panelDeviceArea(
+                        request(JSONObject().put("type", "config/device_registry/list")),
+                        areas,
+                        androidId,
+                        panelId,
+                    )
+                    if (!device.found || device.deviceId.isBlank()) return@withHaSocket
+                    if (device.areaName.equals(requested, ignoreCase = true)) { moved = true; return@withHaSocket }
+                    if (expectedOwnerKey != null && credentialFingerprint() != expectedOwnerKey) return@withHaSocket
+                    val areaId = io.github.maxlyth.hapaneld.http.HaAreaProtocol.resolveAreaId(areas, requested)
+                        ?: request(
+                            JSONObject().put("type", "config/area_registry/create").put("name", requested),
+                        ).optJSONObject("result")?.optString("area_id")?.trim().takeUnless { it.isNullOrBlank() }
+                        ?: return@withHaSocket
+                    if (expectedOwnerKey != null && credentialFingerprint() != expectedOwnerKey) return@withHaSocket
+                    val updated = request(
+                        JSONObject().put("type", "config/device_registry/update")
+                            .put("device_id", device.deviceId)
+                            .put("area_id", areaId),
+                    )
+                    moved = updated.optJSONObject("result") != null
+                }
+                moved
+            }.getOrDefault(false)
+        }
 
     private fun credentialFingerprint(): String = EntityLearningProtocol.hash(
         listOf(
@@ -1110,6 +1366,7 @@ class EntityLearningManager(
         autoRuntime = config.dashboardEntityAutoRuntime,
         overrides = config.dashboardEntityOverrides,
         forceBootstrap = resetBootstrapPending,
+        initialActivationPending = config.dashboardEntityInitialActivationPending,
     )
 
     private suspend fun captureAuthenticatedTarget(): AuthenticatedTarget {
@@ -1182,7 +1439,12 @@ class EntityLearningManager(
         val credentialFingerprint: String,
     )
 
-    private data class WsSnapshot(val configJson: String, val metadata: Map<String, String>)
+    private data class WsSnapshot(
+        val configJson: String,
+        val metadata: Map<String, String>,
+        val areaRegistryEntities: Map<String, Set<String>>,
+        val registryMetadataComplete: Boolean,
+    )
 
     private suspend fun fetchStates(base: String, token: String): List<EntityCatalogStore.StateRow> =
         runInterruptible(Dispatchers.IO) {
@@ -1198,13 +1460,18 @@ class EntityLearningManager(
                 val limits = HaStatesReadLimits()
                 if (c.contentLengthLong > limits.maxBytes) throw ByteLimitExceeded(limits.maxBytes)
                 val counted = CountingInputStream(c.inputStream)
-                readHaStates(counted, limits).also {
+                scanCountedRows = 0
+                scanCounting = true
+                readHaStates(counted, limits, onProgress = { scanCountedRows = it }).also {
                     cost.work(units = it.size.toLong(), bytes = counted.bytesRead)
                 }
             } catch (failure: Throwable) {
                 cost.outcome(failure.featureCostOutcome())
                 throw failure
             } finally {
+                // Clear on every exit, success or failure: a stuck "still counting" would leave the wizard
+                // waiting for a number that is never coming, which is worse than showing none.
+                scanCounting = false
                 cost.close()
                 c.disconnect()
             }
@@ -1230,49 +1497,9 @@ class EntityLearningManager(
     private suspend fun fetchDashboardAndRegistry(base: String, token: String, homeDashboard: String): WsSnapshot {
         var configJson: String? = null
         val metadata = mutableMapOf<String, String>()
+        var areaRegistryEntities: Map<String, Set<String>> = emptyMap()
+        var registryMetadataComplete = false
         withHaSocket(base, token) { request ->
-            val registry = request(JSONObject().put("type", "config/entity_registry/list_for_display"))
-            val root = registry.optJSONObject("result")
-            val entries = root?.optJSONArray("entities") ?: registry.optJSONArray("result") ?: JSONArray()
-            for (i in 0 until entries.length()) entries.optJSONObject(i)?.let { e ->
-                e.optString("ei").takeIf { it.isNotBlank() }?.let { metadata[it] = e.toString() }
-            }
-            // Floor and label selectors inherit through entity -> device -> area in Home Assistant.
-            // list_for_display is intentionally compact and does not carry that complete ancestry, so
-            // enrich its rows before linting; otherwise a floor selector could incorrectly look empty
-            // and be accepted as a safe zero-entity subscription.
-            val areas = runCatching { request(JSONObject().put("type", "config/area_registry/list")) }.getOrNull()
-                ?.optJSONArray("result") ?: JSONArray()
-            val devices = runCatching { request(JSONObject().put("type", "config/device_registry/list")) }.getOrNull()
-                ?.optJSONArray("result") ?: JSONArray()
-            val areaRows = mutableMapOf<String, JSONObject>()
-            for (i in 0 until areas.length()) areas.optJSONObject(i)?.let { row ->
-                row.optString("area_id").ifBlank { row.optString("id") }.takeIf(String::isNotBlank)?.let { areaRows[it] = row }
-            }
-            val deviceRows = mutableMapOf<String, JSONObject>()
-            for (i in 0 until devices.length()) devices.optJSONObject(i)?.let { row ->
-                row.optString("id").ifBlank { row.optString("device_id") }.takeIf(String::isNotBlank)?.let { deviceRows[it] = row }
-            }
-            fun labels(row: JSONObject?, vararg keys: String): Set<String> = keys.flatMapTo(sortedSetOf()) { key ->
-                when (val value = row?.opt(key)) {
-                    is JSONArray -> (0 until value.length()).mapNotNull { value.optString(it).takeIf(String::isNotBlank) }
-                    is String -> listOf(value).filter(String::isNotBlank)
-                    else -> emptyList()
-                }
-            }
-            metadata.replaceAll { _, raw ->
-                val entity = JSONObject(raw)
-                val device = deviceRows[entity.optString("di").ifBlank { entity.optString("device_id") }]
-                val areaId = entity.optString("ai").ifBlank { entity.optString("area_id") }
-                    .ifBlank { device?.optString("area_id").orEmpty() }
-                val area = areaRows[areaId]
-                if (areaId.isNotBlank()) entity.put("ai", areaId)
-                area?.optString("floor_id")?.takeIf(String::isNotBlank)?.let { entity.put("fi", it) }
-                val inheritedLabels = labels(entity, "lb", "labels", "label_ids") +
-                    labels(device, "labels", "label_ids") + labels(area, "labels", "label_ids")
-                if (inheritedLabels.isNotEmpty()) entity.put("lb", JSONArray(inheritedLabels.sorted()))
-                entity.toString()
-            }
             val defaultPanel = if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
                 val userDefault = runCatching {
                     request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
@@ -1282,19 +1509,48 @@ class EntityLearningManager(
                     request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
                         .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
                 }.getOrNull() else null
-                EntityLearningProtocol.frontendDefaultPanel(userDefault, systemDefault)
+                EntityLearningProtocol.frontendDefaultPanel(userDefault, systemDefault).also {
+                    frontendDefaultPanel = it
+                }
             } else null
             val urlPath = EntityLearningProtocol.dashboardUrlPath(homeDashboard, defaultPanel)
             val command = JSONObject().put("type", "lovelace/config")
             if (urlPath.isNotBlank()) command.put("url_path", urlPath)
             val response = request(command)
-            val result = response.opt("result")
-            configJson = when (result) {
-                is JSONObject -> result.toString()
-                else -> null
-            }
+            configJson = (response.opt("result") as? JSONObject)?.toString()
+            val dashboard = configJson ?: error("dashboard configuration unavailable")
+            val requirements = DashboardConfigurationLint.registryRequirements(dashboard)
+            // Fetch only the ancestry the stored dashboard can consume. The dashboard comes first:
+            // ordinary HA saves therefore establish referenced registry objects before this later,
+            // still-eventual snapshot, and dashboards without registry-backed cards pay no registry cost.
+            val registry = if (requirements.entities) runCatching {
+                request(JSONObject().put("type", "config/entity_registry/list_for_display"))
+            }.getOrNull() else null
+            val areaResponse = if (requirements.areas) runCatching {
+                request(JSONObject().put("type", "config/area_registry/list"))
+            }.getOrNull() else null
+            val deviceResponse = if (requirements.devices) runCatching {
+                request(JSONObject().put("type", "config/device_registry/list"))
+            }.getOrNull() else null
+            val floorResponse = if (requirements.floors) runCatching {
+                request(JSONObject().put("type", "config/floor_registry/list"))
+            }.getOrNull() else null
+            val labelResponse = if (requirements.labels) runCatching {
+                request(JSONObject().put("type", "config/label_registry/list"))
+            }.getOrNull() else null
+            val projection = projectDashboardRegistries(
+                registry, areaResponse, deviceResponse, floorResponse, labelResponse, requirements,
+            )
+            metadata.putAll(projection.metadata)
+            areaRegistryEntities = projection.areaRegistryEntities
+            registryMetadataComplete = projection.complete
         }
-        return WsSnapshot(configJson ?: error("dashboard configuration unavailable"), metadata)
+        return WsSnapshot(
+            configJson ?: error("dashboard configuration unavailable"),
+            metadata,
+            areaRegistryEntities,
+            registryMetadataComplete,
+        )
     }
 
     private suspend fun expandTargets(base: String, token: String, targets: List<String>): Set<String> {
@@ -1309,7 +1565,13 @@ class EntityLearningManager(
                     request(JSONObject().put("type", "extract_from_target").put("target", JSONObject(target)).put("expand_group", true))
                 }.getOrNull() ?: continue
                 val entities = response.optJSONObject("result")?.optJSONArray("referenced_entities") ?: continue
-                for (i in 0 until entities.length()) entities.optString(i).takeIf { it.isNotBlank() }?.let(out::add)
+                for (i in 0 until entities.length()) {
+                    val id = entities.optString(i).lowercase()
+                    if (id.matches(ENTITY_ID_PATTERN)) out += id
+                    require(out.size <= EntityFilterProtocol.MAX_ENTITY_IDS) {
+                        "expanded target set exceeds ${EntityFilterProtocol.MAX_ENTITY_IDS} IDs"
+                    }
+                }
             }
         }
         return out
@@ -1373,17 +1635,196 @@ class EntityLearningManager(
         private const val MAX_WS_FRAME = 32L * 1024 * 1024
         private const val HOURLY_CHECK_MS = 60L * 60_000
         private const val DAILY_SYNC_MS = 24L * HOURLY_CHECK_MS
-        private const val PROMOTION_DEBOUNCE_MS = 2_000L
+        // Long enough for the first filtered load's own telemetry to finish arriving (it is what
+        // triggers promotion in the first place); with trailing-edge coalescing in queuePromotion this
+        // trades two visible dashboard rebuilds for one fuller one. Promotions are never urgent.
+        private const val PROMOTION_DEBOUNCE_MS = 20_000L
         private const val PROMOTION_WINDOW_MS = 10L * 60_000
         private const val MAX_PROMOTIONS = 2
         private const val MAX_DYNAMIC_EXPRESSIONS = 128
         private const val MAX_TELEMETRY_IDS = EntityFilterProtocol.MAX_ENTITY_IDS
         private const val PERFORMANCE_SUMMARY_CACHE_MS = 10_000L
+        private val ENTITY_ID_PATTERN = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
         private const val UNCONFIGURED_INSTANCE = "unconfigured"
 
         private fun normalizedOrigin(raw: String): String = EntityFilterProtocol.origin(raw)
     }
 }
+
+internal fun visibleDashboardIssuesJson(
+    storedIssuesJson: String,
+    showAdvisories: Boolean,
+    dynamicExpressionsJson: String = "[]",
+): String {
+    val visible = visibleDashboardIssues(storedIssuesJson, showAdvisories)
+    val visibleJson = visible.toString()
+    val counts = EntityCatalogIssuePersistence.counts(visibleJson)
+    return JSONObject()
+        .put("items", visible)
+        .put("dashboard_issue_count", counts.first)
+        .put("blocking_issue_count", counts.second)
+        .put("ignored_issue_count", EntityCatalogIssuePersistence.ignoredCount(visibleJson))
+        .put("dynamic_expressions", JSONArray(dynamicExpressionsJson))
+        .toString()
+}
+
+internal fun visibleDashboardIssues(storedIssuesJson: String, showAdvisories: Boolean): JSONArray {
+    val stored = JSONArray(EntityCatalogIssuePersistence.boundExistingJson(storedIssuesJson))
+    return JSONArray().apply {
+        for (index in 0 until stored.length()) {
+            val issue = stored.optJSONObject(index) ?: continue
+            val safetyFinding = issue.optBoolean("would_block", issue.optBoolean("blocking", false))
+            if (showAdvisories || safetyFinding) put(issue)
+        }
+    }
+}
+
+internal data class DashboardRegistryProjection(
+    val metadata: Map<String, String>,
+    val areaRegistryEntities: Map<String, Set<String>>,
+    val complete: Boolean,
+)
+
+/** Validate and enrich the registry snapshot used by registry-backed dashboard selectors. */
+internal fun projectDashboardRegistries(
+    entityResponse: JSONObject?,
+    areaResponse: JSONObject?,
+    deviceResponse: JSONObject?,
+    floorResponse: JSONObject?,
+    labelResponse: JSONObject?,
+    requirements: DashboardConfigurationLint.RegistryRequirements =
+        DashboardConfigurationLint.RegistryRequirements(
+            entities = true,
+            areas = true,
+            devices = true,
+            floors = true,
+            labels = true,
+        ),
+): DashboardRegistryProjection {
+    val metadata = mutableMapOf<String, String>()
+    var complete = true
+    val entries = if (requirements.entities) {
+        entityResponse?.optJSONObject("result")?.optJSONArray("entities")
+            ?: entityResponse?.optJSONArray("result")
+    } else null
+    if (requirements.entities && entries == null) complete = false
+    val entityRows = entries ?: JSONArray()
+    for (i in 0 until entityRows.length()) {
+        val row = entityRows.optJSONObject(i)
+        val id = row?.let { it.optString("ei").ifBlank { it.optString("entity_id") } }?.lowercase()
+        if (row == null || id == null || !id.matches(PROJECTED_ENTITY_ID)) complete = false
+        else if (metadata.put(id, row.toString()) != null) complete = false
+    }
+
+    val areas = if (requirements.areas) areaResponse?.optJSONArray("result") else null
+    val devices = if (requirements.devices) deviceResponse?.optJSONArray("result") else null
+    val floors = if (requirements.floors) floorResponse?.optJSONArray("result") else null
+    val labels = if (requirements.labels) labelResponse?.optJSONArray("result") else null
+
+    fun rows(
+        required: Boolean,
+        array: JSONArray?,
+        requireName: Boolean,
+        vararg idKeys: String,
+    ): Map<String, JSONObject> {
+        if (!required) return emptyMap()
+        if (array == null) {
+            complete = false
+            return emptyMap()
+        }
+        val out = mutableMapOf<String, JSONObject>()
+        for (i in 0 until array.length()) {
+            val row = array.optJSONObject(i)
+            val id = row?.let { objectValue ->
+                idKeys.firstNotNullOfOrNull { key -> objectValue.optString(key).takeIf(String::isNotBlank) }
+            }?.lowercase()
+            val name = row?.opt("name") as? String
+            if (row == null || id == null || !id.matches(PROJECTED_REGISTRY_ID) || requireName &&
+                (name.isNullOrBlank() || name.length > PROJECTED_REGISTRY_NAME_MAX || name.any(Char::isISOControl))
+            ) {
+                complete = false
+            } else if (out.put(id, row) != null) complete = false
+        }
+        return out
+    }
+
+    val areaRows = rows(requirements.areas, areas, true, "area_id", "id")
+    val deviceRows = rows(requirements.devices, devices, false, "id", "device_id")
+    val floorRows = rows(requirements.floors, floors, true, "floor_id", "id")
+    val labelRows = rows(requirements.labels, labels, true, "label_id", "id")
+
+    fun labelIds(row: JSONObject?, vararg keys: String): Set<String> = buildSet {
+        for (key in keys) {
+            if (row == null || !row.has(key)) continue
+            val value = row.opt(key)
+            if (value is JSONArray) {
+                for (index in 0 until value.length()) {
+                    val id = (value.opt(index) as? String)?.lowercase()
+                    if (id == null || !id.matches(PROJECTED_REGISTRY_ID)) complete = false else add(id)
+                }
+            } else if (value is String) {
+                val id = value.lowercase()
+                if (!id.matches(PROJECTED_REGISTRY_ID)) complete = false else add(id)
+            } else {
+                complete = false
+            }
+        }
+    }
+
+    metadata.replaceAll { _, raw ->
+        val entity = JSONObject(raw)
+        val deviceId = entity.optString("di").ifBlank { entity.optString("device_id") }.lowercase()
+        val device = if (requirements.devices) deviceRows[deviceId] else null
+        if (requirements.devices && deviceId.isNotBlank() && device == null) complete = false
+        val area = if (requirements.areas) {
+            val areaId = entity.optString("ai").ifBlank { entity.optString("area_id") }
+                .ifBlank { device?.optString("area_id").orEmpty() }.lowercase()
+            val row = areaRows[areaId]
+            if (areaId.isNotBlank() && row == null) complete = false
+            if (areaId.isNotBlank()) entity.put("ai", areaId)
+            row?.optString("name")?.takeIf(String::isNotBlank)?.let { entity.put("an", it) }
+            row
+        } else null
+        if (requirements.floors) {
+            val floorId = area?.optString("floor_id").orEmpty().lowercase()
+            val floor = floorRows[floorId]
+            if (floorId.isNotBlank() && floor == null) complete = false
+            if (floorId.isNotBlank()) entity.put("fi", floorId)
+            floor?.optString("name")?.takeIf(String::isNotBlank)?.let { entity.put("fn", it) }
+        }
+        if (requirements.labels) {
+            val inheritedLabels = labelIds(entity, "lb", "labels", "label_ids") +
+                labelIds(device, "labels", "label_ids")
+            if (inheritedLabels.isNotEmpty()) entity.put("lb", JSONArray(inheritedLabels.sorted()))
+            val labelNames = inheritedLabels.mapNotNullTo(sortedSetOf()) { labelId ->
+                val label = labelRows[labelId]
+                if (label == null) complete = false
+                label?.optString("name")?.takeIf(String::isNotBlank)
+            }
+            if (labelNames.isNotEmpty()) entity.put("ln", JSONArray(labelNames))
+        }
+        entity.toString()
+    }
+    val areaRegistryEntities = if (requirements.areas) areaRows.mapValues { (_, area) ->
+        setOf("temperature_entity_id", "humidity_entity_id").mapNotNullTo(sortedSetOf()) { key ->
+            val raw = area.optString(key).lowercase()
+            if (raw.isNotBlank() && !raw.matches(PROJECTED_ENTITY_ID)) complete = false
+            raw.takeIf { it.matches(PROJECTED_ENTITY_ID) }
+        }
+    } else emptyMap()
+    return DashboardRegistryProjection(metadata, areaRegistryEntities, complete)
+}
+
+private val PROJECTED_ENTITY_ID = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
+private val PROJECTED_REGISTRY_ID = Regex("^[a-z0-9_-]+$")
+private const val PROJECTED_REGISTRY_NAME_MAX = 1_024
+
+/**
+ * Rows between progress reports while streaming `/api/states`. Coarse on purpose: the wizard polls every two
+ * seconds and eases between the samples it receives, so a finer stride would cost work without the user
+ * seeing anything the tween does not already give them.
+ */
+internal const val HA_STATES_PROGRESS_STRIDE = 25
 
 internal data class HaStatesReadLimits(
     val maxBytes: Long = 64L * 1024 * 1024,
@@ -1417,10 +1858,17 @@ private fun Throwable.featureCostOutcome(): FeatureCostOutcome =
 
 /** Parse only the state projection needed by the learner while retaining hard transport-independent
  * bounds. The monotonic clock seam keeps elapsed-time enforcement deterministic in unit tests. */
+/**
+ * @param onProgress called with the running row count as the response streams, every
+ *   [HA_STATES_PROGRESS_STRIDE] rows, so the setup wizard can show the count climbing while the user reads
+ *   the entity-filter question instead of watching an unexplained pause. Reported counts only ever rise and
+ *   never exceed what has actually been parsed, so a partial figure is honest rather than an estimate.
+ */
 internal fun readHaStates(
     input: InputStream,
     limits: HaStatesReadLimits = HaStatesReadLimits(),
     nanoTime: () -> Long = System::nanoTime,
+    onProgress: (Int) -> Unit = {},
 ): List<EntityCatalogStore.StateRow> {
     val bounded = DeadlineBoundedInputStream(input, limits.maxBytes, limits.deadlineMs, nanoTime)
     return StreamingJsonReader(InputStreamReader(bounded, Charsets.UTF_8)).use { reader ->
@@ -1442,8 +1890,10 @@ internal fun readHaStates(
                 }
                 reader.endObject()
                 validateHaStateRow(entityId, state, rows, limits, friendlyName)?.let(::add)
+                if (rows % HA_STATES_PROGRESS_STRIDE == 0) onProgress(rows)
             }
             reader.endArray()
+            onProgress(rows)
             reader.requireEndDocument()
         }
     }
@@ -1757,6 +2207,7 @@ internal data class EntityLearningEffectState(
     val autoRuntime: Boolean,
     val overrides: Map<String, String>,
     val forceBootstrap: Boolean,
+    val initialActivationPending: Boolean = false,
 )
 
 internal data class EntityLearningSyncSnapshot(
@@ -1775,6 +2226,7 @@ internal data class EntityLearningSyncSnapshot(
     val autoRuntime get() = state.autoRuntime
     val overrides get() = state.overrides
     val forceBootstrap get() = state.forceBootstrap
+    val initialActivationPending get() = state.initialActivationPending
 
     fun matchesCurrent(currentGeneration: Long, currentState: EntityLearningEffectState): Boolean =
         generation == currentGeneration && state == currentState
@@ -1805,7 +2257,8 @@ internal suspend fun <T> withEntityLearningDeadline(
 
 /** Effect-changing operations own a replacement generation; the prior scan must release the mutex
  * before a replacement can run and must no longer occupy the admission slot. */
-internal fun supersedeEntityLearningSync(current: Job?): Job? {
+internal fun supersedeEntityLearningSync(current: Job?, clearQueuedRerun: () -> Unit = {}): Job? {
+    clearQueuedRerun()
     current?.cancel()
     return null
 }
@@ -2029,8 +2482,10 @@ internal fun shouldSyncEntityLearningOnStartup(
     lastSyncAt: Long,
     resolverMigration: DashboardEntityDefaultResolverMigration,
     forceBootstrap: Boolean = false,
+    analyzerPolicyStale: Boolean = false,
 ): Boolean = learningEnabled && resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED &&
-    (forceBootstrap || resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
+    (forceBootstrap || analyzerPolicyStale ||
+        resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
 internal fun shouldBootstrapEntityLearning(
@@ -2038,6 +2493,39 @@ internal fun shouldBootstrapEntityLearning(
     applied: Boolean,
     configuredIds: Collection<String>,
 ): Boolean = learningEnabled && !applied && configuredIds.isEmpty()
+
+/** First-run compatibility defaults are durable choices, not a blanket weakening of later scans. */
+internal fun defaultIgnoredIssueFingerprints(
+    initialActivationPending: Boolean,
+    bootstrap: Boolean,
+    issues: Collection<JSONObject>,
+): Set<String> {
+    if (!initialActivationPending || !bootstrap) return emptySet()
+    return issues.asSequence()
+        .filter(EntityCatalogIssuePersistence::canIgnore)
+        .mapNotNull { it.optString("fingerprint").takeIf(String::isNotBlank) }
+        .toSet()
+}
+
+/** Ignoring a saturated selector means omitting its complete linter projection, never a partial set. */
+internal fun effectiveLintEntityIds(
+    lint: DashboardConfigurationLint.Result,
+    ignoredFingerprints: Set<String>,
+): Set<String> = if (lint.issues.any {
+        it.type == DashboardConfigurationLint.IssueType.SELECTOR_BUDGET && it.fingerprint in ignoredFingerprints
+    }) emptySet() else lint.safeEntityIds
+
+/** Merge only independent bounded evidence after the linter projection has applied its safety policy. */
+internal fun deriveStaticEntityIds(
+    scannedEntityIds: Collection<String>,
+    catalogIds: Set<String>,
+    expandedTargets: Collection<String>,
+    lintEntityIds: Collection<String>,
+): java.util.SortedSet<String> = sortedSetOf<String>().apply {
+    addAll(scannedEntityIds.filter(catalogIds::contains))
+    addAll(expandedTargets)
+    addAll(lintEntityIds)
+}
 
 internal enum class AutomaticSyncDecision { BLOCKED, OBSERVE, APPLY, BOOTSTRAP }
 
@@ -2100,9 +2588,42 @@ object EntityLearningRuntime {
     fun bootstrapProblem(): EntityBootstrapProblem? = current?.bootstrapProblem()
     /** Explicit user retry only. syncNow rejects the request while an existing scan is active. */
     fun retryBootstrap(): Boolean = current?.syncNow("dashboard-retry") ?: false
+
+    /** Live bring-up milestones for the panel's hold screen — real signals, never a bare spinner. */
+    fun bootstrapMilestone(): String {
+        val manager = current ?: return ""
+        val scanned = manager.scanProgress()
+        if (scanned != null) return "Step 1 of 3 · Reading your entities — $scanned so far"
+        val catalog = manager.catalogCount() ?: return "Step 1 of 3 · Reading your entities…"
+        return "Step 2 of 3 · Building the filtered set from $catalog entities"
+    }
+    fun resolvedHomeDashboardPath(homeDashboard: String): String =
+        current?.resolvedHomeDashboardPath(homeDashboard) ?: homeDashboard
+    fun canIgnoreBlockingIssues(): Boolean = current?.canIgnoreAllBlockingIssues() ?: false
     fun ignoreBlockingIssues(): Boolean = current?.ignoreAllBlockingIssues() ?: false
     fun disableAutomaticFilter(): Boolean = current?.setEnabled(false) ?: false
 }
+
+internal data class BlockingIssueSelection(val fingerprints: List<String>, val allIgnorable: Boolean)
+
+/** One atomic preflight for every surface that offers the bulk-ignore action. */
+internal fun blockingIssueSelection(rawIssues: String): BlockingIssueSelection = runCatching {
+    val issues = JSONArray(rawIssues)
+    val fingerprints = mutableListOf<String>()
+    var sawBlocking = false
+    var allIgnorable = true
+    for (index in 0 until issues.length()) {
+        val issue = issues.optJSONObject(index)?.takeIf { it.optBoolean("blocking", false) } ?: continue
+        sawBlocking = true
+        val fingerprint = issue.optString("fingerprint").takeIf(String::isNotBlank)
+        if (!EntityCatalogIssuePersistence.canIgnore(issue) || fingerprint == null) {
+            allIgnorable = false
+        } else {
+            fingerprints += fingerprint
+        }
+    }
+    BlockingIssueSelection(fingerprints, sawBlocking && allIgnorable)
+}.getOrDefault(BlockingIssueSelection(emptyList(), false))
 
 enum class EntityBootstrapProblem { AUTHENTICATION, SYNCHRONIZATION }
 

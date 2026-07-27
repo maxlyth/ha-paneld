@@ -450,7 +450,7 @@ class AndroidZigbeeGatewayHealthSource(
         val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
         return current.mapNotNull { (pid, jiffies) ->
             val processDelta = previous[pid]?.let { jiffies - it }?.takeIf { it >= 0L } ?: return@mapNotNull null
-            pid to requireNotNull(gatewayCpuFromJiffyDelta(processDelta, totalDelta, cores))
+            pid to gatewayCpuFromJiffyDelta(processDelta, totalDelta, cores)!!
         }.toMap()
     }
 }
@@ -487,6 +487,9 @@ class ZigbeeHealthMonitor(
             executor.execute {
                 if (generation.get() != runGeneration) return@execute
                 containmentAttempted = false
+                // A user-driven retry must sample immediately, whatever the slow-sample backoff says.
+                slowSampleSkips = 0
+                consecutiveSlowSamples = 0
                 policy.resetGrace(nowMs())
                 transition(current.copy(state = ZigbeeHealthState.STARTING, containment = ZigbeeContainmentResult.NONE), true)
             }
@@ -506,7 +509,20 @@ class ZigbeeHealthMonitor(
 
     internal fun sample() = sample(null)
 
+    /** Scheduled sampling backs off while the root shell is degraded: on affected hardware the runaway
+     *  zgateway condition made every observation ride a 5s su timeout, and the resulting storm starved
+     *  the su lane for everything else (MQTT retire fences included) while producing no new signal.
+     *  A slow sample quarters the effective rate; consecutive slow samples reduce it 8×. An explicit
+     *  retry or direct test call ([sample] with no generation) never skips. */
+    @Volatile private var slowSampleSkips = 0
+    @Volatile private var consecutiveSlowSamples = 0
+
     private fun sample(runGeneration: Long?) {
+        if (runGeneration != null && slowSampleSkips > 0) {
+            slowSampleSkips--
+            return
+        }
+        val sampleStartedAtMs = nowMs()
         fun isCurrentRun(): Boolean = runGeneration == null || generation.get() == runGeneration
         val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE)
         var outcome = FeatureCostOutcome.SUCCESS
@@ -573,6 +589,15 @@ class ZigbeeHealthMonitor(
                 transition(current.copy(state = ZigbeeHealthState.UNKNOWN, observedAtMs = nowMs()), true)
             }
         } finally {
+            if (runGeneration != null) {
+                if (nowMs() - sampleStartedAtMs >= SLOW_SAMPLE_MS) {
+                    consecutiveSlowSamples++
+                    slowSampleSkips = if (consecutiveSlowSamples >= 2) 7 else 3
+                } else {
+                    consecutiveSlowSamples = 0
+                    slowSampleSkips = 0
+                }
+            }
             FeatureCosts.registry.finishSynchronous(
                 FeatureCostOperation.ZIGBEE_HEALTH_SAMPLE,
                 started,
@@ -610,6 +635,9 @@ class ZigbeeHealthMonitor(
 
     companion object {
         const val SAMPLE_INTERVAL_MS = 60_000L
+
+        /** A sample this slow rode a root-shell timeout; see the backoff note on [sample]. */
+        const val SLOW_SAMPLE_MS = 4_000L
         const val HEARTBEAT_MS = 15 * 60_000L
         const val STOP_JOIN_MS = 2_000L
         private const val TAG = "ha-paneld/zigbee-health"

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,5 +37,45 @@ class BackupUiContractTest {
             script.indexOf("window.doBackup"),
             script.indexOf("// Pick a bundle"),
         ))
+    }
+
+    /**
+     * A panel with no HA Companion installed must not mention it at all — no include-login checkbox, no
+     * "needs the current helper" note, and nothing about it in the bundle description or restore warning.
+     */
+    @Test fun theBackupCardIsSilentAboutTheCompanionWhenItIsNotInstalled() {
+        listOf(true, false).forEach { helper ->
+            val copy = backupCompanionCopy(installed = false, helper = helper)
+            assertEquals(BackupCompanionCopy("", "", ""), copy)
+            listOf(copy.row, copy.restoreWarning, copy.bundleSuffix).forEach { text ->
+                assertTrue("must not name the Companion (helper=$helper): $text", "Companion" !in text)
+            }
+        }
+    }
+
+    @Test fun theCompanionLoginIsOfferedOnlyWithBothTheAppAndTheHelper() {
+        val offered = backupCompanionCopy(installed = true, helper = true)
+        assertTrue("the include-login checkbox belongs here", """id="bk-comp"""" in offered.row)
+        assertTrue(offered.restoreWarning.isNotEmpty() && offered.bundleSuffix.isNotEmpty())
+
+        // Installed but the helper is stale: explain why, and do not promise it in the bundle or warning.
+        val explained = backupCompanionCopy(installed = true, helper = false)
+        assertTrue("must explain the helper requirement", "needs the current ha-paneld helper" in explained.row)
+        assertTrue("must not offer the checkbox", """id="bk-comp"""" !in explained.row)
+        assertEquals("", explained.restoreWarning)
+        assertEquals("", explained.bundleSuffix)
+    }
+
+    /** The card must gate on the app being installed, not only on helper capability. */
+    @Test fun theCardIsRenderedWithTheInstalledStateNotJustHelperCapability() {
+        assertTrue(
+            "backupCardHtml must receive the installed check",
+            "backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null)" in serverSource,
+        )
+    }
+
+    /** The browser already tolerates an absent checkbox; keep it that way. */
+    @Test fun theBrowserTreatsAnAbsentCompanionCheckboxAsOff() {
+        assertTrue("include_companion must be null-safe", "comp && comp.checked" in script)
     }
 }

@@ -1,7 +1,9 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
+import io.github.maxlyth.hapaneld.http.HA_OAUTH_CALLBACK_PATH
 import java.net.URI
+import java.net.URLEncoder
 
 /**
  * Owns callbacks from one replaceable WebView generation. Opening or invalidating a generation makes
@@ -183,6 +185,82 @@ internal fun dashboardNavigationAllowed(configuredUrl: String, candidateUrl: Str
         (configured.port < 0 && candidate.port < 0) ||
             (configured.port >= 0 && configured.port == candidate.port)
     }
+}.getOrDefault(false)
+
+/**
+ * A Home Assistant URL is configured but no credential is: the built-in renderer cannot render yet, but
+ * it CAN run the on-panel sign-in that produces the missing credential.
+ *
+ * Deliberately a sibling of `Config.builtInRendererReady()` rather than a relaxation of it. That
+ * predicate means "can render right now" and is load-bearing for `MainActivity`, `LaunchScreenPolicy` and
+ * `PostUpdateReturnPolicy`; widening it would let the launcher hand off to a renderer with no credential
+ * and strand the panel. This is strictly narrower — every state that stranded before still strands — and
+ * it exists so the one state that can make progress on its own is allowed to.
+ *
+ * Without it the panel deadlocks on first run: saving a URL relaunches DashboardActivity, the readiness
+ * gate rejects it for want of a token, and it bounces to the QR screen — while the only screen that can
+ * obtain that token lives behind the same gate. The user sees repeated reloads and never a login.
+ */
+internal fun haSignInPending(haUrl: String, haToken: String, haRefreshToken: String): Boolean =
+    haUrl.isNotBlank() && haToken.isBlank() && haRefreshToken.isBlank()
+
+/**
+ * Whether the built-in renderer must hold its first load until the entity-filter question is answered.
+ *
+ * A first load against an unfiltered Home Assistant is slow and laggy on a weak panel — measured at 94% p95
+ * renderer CPU and touch responses ~60% slower on a Cortex-A35 panel against 3,769 entities — and it is the
+ * first thing a new owner ever sees. Loading it and then offering to fix it inverts the order that matters:
+ * the bad impression has already been made. So the panel waits on its existing pre-render surface, which is
+ * a screen it is already showing safely, rather than loading something it will immediately have to reload.
+ *
+ * Narrow on purpose, and only ever a delay:
+ *  - it applies to the built-in renderer alone, since a foreign renderer's subscription is not ours to narrow;
+ *  - it requires a credential, so it can never mask the sign-in states [haSignInPending] handles;
+ *  - it ends on an explicit answer, either way, so declining still gets a dashboard.
+ *
+ * A panel that was already configured before this question existed reports answered, so an upgrade never
+ * stops rendering — the hold is for panels being set up, not for panels already working.
+ */
+internal fun entityFilterQuestionPending(
+    builtinRenderer: Boolean,
+    haUrl: String,
+    haToken: String,
+    haRefreshToken: String,
+    entityFilterAnswered: Boolean,
+    setupEverCompleted: Boolean = false,
+    entityFilterEnabled: Boolean = false,
+): Boolean = builtinRenderer &&
+    // The filter being ON is self-evident proof the question is moot: it cannot be true on a fresh panel
+    // (the setting defaults off) and it is true on every panel that has ever been through this. Derived at
+    // the moment of the check rather than trusted from a flag written once at startup — which is what failed.
+    // Three fleet panels were found stranded on the hold screen with the filter already enabled, because the
+    // one-shot migration below had run at a moment when the configuration read back blank and so recorded
+    // "not a pre-existing install". A durable fact about the panel beats a flag captured at one instant.
+    !entityFilterEnabled &&
+    // A panel that has ALREADY finished setup is never held, whatever the answer flag says. The flag is new,
+    // so it defaults false on every panel that upgrades — and without this an upgrade stops a working panel
+    // from showing its dashboard to ask a question it was never asked before. Found exactly that way, on two
+    // configured panels, by the synthetic canary. Holding a first render is protecting a first impression;
+    // holding a panel that already had one is a regression, and an optimisation question never justifies it.
+    !setupEverCompleted &&
+    !entityFilterAnswered &&
+    haUrl.isNotBlank() &&
+    (haToken.isNotBlank() || haRefreshToken.isNotBlank())
+
+internal fun panelHaOAuthStartUrl(haUrl: String): String =
+    "http://127.0.0.1:8888/api/v1/ha/oauth/panel-start?ha_url=${URLEncoder.encode(haUrl.trim().trimEnd('/'), "UTF-8")}"
+
+internal fun panelHaOAuthNavigationAllowed(configuredUrl: String, candidateUrl: String): Boolean =
+    dashboardNavigationAllowed(configuredUrl, candidateUrl) || isPanelHaOAuthCallback(candidateUrl)
+
+internal fun isPanelHaOAuthCallback(candidateUrl: String): Boolean = runCatching {
+    val uri = URI(candidateUrl.trim())
+    val scheme = uri.scheme?.lowercase() ?: return@runCatching false
+    val host = uri.host?.lowercase() ?: return@runCatching false
+    scheme == "http" &&
+        host in setOf("127.0.0.1", "localhost") &&
+        (uri.port == -1 || uri.port == 8888) &&
+        uri.path == HA_OAUTH_CALLBACK_PATH
 }.getOrDefault(false)
 
 /**

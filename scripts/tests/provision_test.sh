@@ -118,6 +118,12 @@ run_provision() {
   MOCK_HA_LOGIN="${MOCK_HA_LOGIN:-ok}" \
   MOCK_HA_TOKEN="${MOCK_HA_TOKEN:-ok}" \
   MOCK_PLAN="${MOCK_PLAN:-ok}" \
+  MOCK_SETUP="${MOCK_SETUP:-complete}" \
+  MOCK_PM_CLEAR="${MOCK_PM_CLEAR:-ok}" \
+  MOCK_DATA_CAPACITY="${MOCK_DATA_CAPACITY:-valid}" \
+  MOCK_DATA_AVAIL_KB="${MOCK_DATA_AVAIL_KB:-1048576}" \
+  MOCK_DB_SNAPSHOT="${MOCK_DB_SNAPSHOT:-ok}" \
+  MOCK_DB_SIDECARS="${MOCK_DB_SIDECARS:-present}" \
   MOCK_WEBVIEW_VERSION="${MOCK_WEBVIEW_VERSION:-150.0.0.0}" \
   MOCK_GH_FAIL="${MOCK_GH_FAIL:-0}" \
   MOCK_GITHUB_API="${MOCK_GITHUB_API:-fail}" \
@@ -154,11 +160,14 @@ run_provision() {
   MOCK_HELPER_CAPABILITY="${MOCK_HELPER_CAPABILITY:-ok}" \
   MOCK_ROLLBACK_PING="${MOCK_ROLLBACK_PING:-ok}" \
   MOCK_ROLLBACK_RESULT="${MOCK_ROLLBACK_RESULT:-ok}" \
+  MOCK_ROLLBACK_RETIREMENT="${MOCK_ROLLBACK_RETIREMENT:-ok}" \
   MOCK_HELPER_BUILD_ID="${MOCK_HELPER_BUILD_ID}" \
   MOCK_HELPER_BUILD_ID_MATCH="${MOCK_HELPER_BUILD_ID_MATCH:-ok}" \
   MOCK_RELEASE_PROVISION_BUILD_ID="${MOCK_RELEASE_PROVISION_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
   MOCK_APK_INSTALL="${MOCK_APK_INSTALL:-ok}" \
   MOCK_APK_QUERY="${MOCK_APK_QUERY:-ok}" \
+  HAPANELD_SKIP_AUTO_EXPORT="${HAPANELD_SKIP_AUTO_EXPORT:-1}" \
+  HAPANELD_CONFIG_BACKUP_DIR="${HAPANELD_CONFIG_BACKUP_DIR:-$TMP/auto-backups}" \
   MOCK_MANUAL_STALE="${MOCK_MANUAL_STALE:-0}" \
   MOCK_STALE_TRANSACTION_KIND="${MOCK_STALE_TRANSACTION_KIND:-system}" \
   MOCK_ACTIVE_TRANSACTION="${MOCK_ACTIVE_TRANSACTION:-0}" \
@@ -359,6 +368,32 @@ for export_case in malformed-approval unexpected-2xx; do
   assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "$export_case backup response stops before APK install"
   if [ ! -e "$REJECTED_EXPORT" ]; then pass "$export_case response is not retained as a backup"; else fail_test "$export_case response is not retained as a backup"; fi
 done
+
+# The emergency upgrade guard is opt-out only for the transaction tests above. A normal existing-panel
+# install must create a unique persistent export before any helper or APK mutation and fail closed if
+# that export cannot be obtained.
+rm -rf "$TMP/auto-backups"
+HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "ordinary upgrade creates an automatic config backup"
+auto_backup_count="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
+if [ "$auto_backup_count" = 1 ]; then pass "automatic upgrade backup is unique and persistent"; else fail_test "automatic upgrade backup is unique and persistent"; fi
+auto_backup="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.json' | head -1)"
+if [ -n "$auto_backup" ] && [ -s "$auto_backup" ] && [ "$(stat -c '%a' "$auto_backup")" = 600 ]; then
+  pass "automatic upgrade backup is non-empty and owner-only"
+else
+  fail_test "automatic upgrade backup is non-empty and owner-only"
+fi
+export_line="$(grep -n '/api/v1/config/export?include_secrets=1' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+install_line="$(grep -n '^adb .* install' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$export_line" ] && [ -n "$install_line" ] && [ "$export_line" -lt "$install_line" ]; then
+  pass "automatic config backup precedes APK mutation"
+else
+  fail_test "automatic config backup precedes APK mutation"
+fi
+
+MOCK_EXPORT=fail HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --apk "$APK"
+assert_failure "automatic backup failure blocks an upgrade"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "automatic backup failure stops before APK mutation"
 
 SYMLINK_TARGET="$TMP/symlink-target.json"
 SYMLINK_EXPORT="$TMP/symlink-backup.json"
@@ -768,6 +803,18 @@ else
   fail_test "failed provisioner rollback verification retains its durable recovery state"
 fi
 assert_not_contains 'finalize-rollback-system' "$MOCK_CALL_LOG" "unverified rollback never reaches destructive finalization"
+rm -f "$TMP/active-helper-transaction"
+
+MOCK_HELPER_CAPABILITY=fail MOCK_ROLLBACK_RETIREMENT=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "unterminated prior helper leaves rollback unverified"
+assert_contains 'rollback could not be verified' "retirement timeout does not claim restoration"
+if [ -f "$TMP/active-helper-transaction" ]; then
+  pass "retirement timeout retains durable recovery state"
+else
+  fail_test "retirement timeout retains durable recovery state"
+fi
+assert_not_contains 'finalize-rollback-system' "$MOCK_CALL_LOG" "retirement timeout never finalizes rollback"
 rm -f "$TMP/active-helper-transaction"
 
 HAPANELD_HELPER_PROBE= MOCK_HELPER_CAPABILITY=fail \
@@ -1721,11 +1768,164 @@ assert_contains '(--ha-token.*require.*--ha-url|require.*--ha-url)' "token witho
 
 run_provision "$MOCK_TARGET" --builtin --ha-url https://ha.test
 assert_failure "built-in renderer with a server URL but no credentials returns nonzero"
-assert_contains 'printed Browser sign-in URL' "credentialless built-in setup directs the normal browser OAuth path"
+assert_contains 'printed guided-setup URL' "credentialless built-in setup directs the normal browser sign-in path"
+
+# ── Closing guidance: the installer renders the panel's own setup journey ────────────────────────
+# The rule these pin: the next step named at the end of a run must be the one the panel itself is
+# waiting for. The previous contract printed the Home Assistant OAuth deep link on every run that
+# had not completed OAuth — including a brand-new panel, where that link cannot work at all because
+# the sign-in endpoint refuses the request until an ha_url exists.
+MOCK_SETUP=identity run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "fresh install completes and hands over to guided setup"
+assert_contains 'Next: confirm this panel.s name.*/setup' "a fresh panel is sent to guided setup, not to a sign-in it cannot complete"
+assert_not_contains 'cfg-ha-oauth' "$LAST_OUTPUT" "a fresh panel is never offered the Home Assistant sign-in deep link"
+assert_contains 'installed and verified' "an unfinished panel is not reported as fully provisioned"
+assert_contains 'tap Set up' "guided setup names the on-panel route as well as the browser one"
+
+MOCK_SETUP=ha_credentials run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel awaiting Home Assistant sign-in completes provisioning"
+assert_contains 'Next: sign in to Home Assistant.*/setup' "the sign-in step is named only once the panel is actually ready for it"
+
+MOCK_SETUP=mqtt_auth_failed run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel with a rejecting broker completes provisioning"
+assert_contains 'Next: get MQTT connected' "a rejecting broker is named as the next step"
+assert_contains 'rejected these credentials' "the broker failure explains itself rather than printing a state token"
+
+MOCK_SETUP=in_flight run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel mid-connect completes provisioning"
+assert_contains 'Nothing to do yet' "work in progress is reported as progress, never as a fault to fix"
+assert_not_contains 'Next: ' "$LAST_OUTPUT" "an in-flight stage does not issue an instruction"
+
+MOCK_SETUP=repair run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a previously working panel completes provisioning"
+assert_contains 'This panel needs attention' "a re-armed journey reads as repair, not as a first run"
+
+MOCK_SETUP=unknown_stage run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an unrecognised journey stage completes provisioning"
+assert_contains 'Next: finish guided setup.*/setup' "a stage this script does not know still yields correct generic guidance"
+assert_not_contains 'opaque_token' "$LAST_OUTPUT" "an unrecognised stage never leaks a machine token into user-facing output"
+
+MOCK_SETUP=complete run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a fully configured panel completes provisioning"
+assert_contains 'provisioned and verified' "a finished panel is reported as provisioned"
+assert_not_contains 'Next: ' "$LAST_OUTPUT" "a finished panel is given no next step"
+
+# ── Panel storage headroom ──────────────────────────────────────────────────────────────────────
+# ha-paneld.db is the canonical store and the pre-upgrade snapshot stages a full copy of it, so an
+# upgrade needs room for two copies. Failing that up front beats failing part-way through a write to
+# the store itself.
+MOCK_DATA_AVAIL_KB=1024 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an upgrade onto a full data partition returns nonzero"
+assert_contains 'too little free storage' "insufficient panel storage is named before anything is installed"
+assert_contains 'room for two copies' "the storage requirement explains why twice the database is needed"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "insufficient storage stops before any APK install"
+
+# Not observable is not the same as insufficient: an unreadable df must not block an install.
+MOCK_DATA_CAPACITY=wrapped run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an unreadable df does not block an upgrade"
+assert_contains 'could not read /data capacity' "an unreadable df says so rather than guessing a number"
 
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "fresh install completes before interactive Home Assistant sign-in"
-assert_contains 'Next: connect Home Assistant in your browser.*configure#cfg-ha-oauth' "fresh install prints the browser OAuth entry point"
+assert_success "an upgrade with adequate storage succeeds"
+assert_contains 'panel storage: .*free on /data' "adequate storage is reported"
+
+# ── Data-store snapshot ─────────────────────────────────────────────────────────────────────────
+# The settings export is not a recovery point: configuration, the entity catalog, proximity and
+# ambient history and the revision ring all live in ha-paneld.db. Until this existed, nothing in the
+# toolchain held a copy of that file, so the uninstall-based recovery the script itself recommends
+# destroyed it irrecoverably.
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an upgrade with a root route succeeds"
+assert_log_contains 'adb .*pull .*hapaneld-db-snapshot.*ha-paneld\.db ' "the upgrade snapshot copies the canonical data store"
+assert_log_contains 'adb .*pull .*ha-paneld\.db-wal ' "the snapshot also copies the write-ahead log"
+assert_log_contains 'adb .*pull .*ha-paneld\.db-shm ' "the snapshot also copies the shared-memory sidecar"
+assert_contains 'data-store snapshot' "the snapshot reports where it wrote the database"
+assert_log_contains 'rm -rf /data/local/tmp/\.hapaneld-db-snapshot' "the on-panel staging copy is removed again"
+# The label is the whole safety story for this artefact: the panel's own backup deliberately omits a
+# raw database because restoring one across versions or onto another panel is the known hazard. These
+# files are same-panel, same-version, manual-restore-only, and must say so where someone finds them.
+assert_log_contains 'adb .*pull .*break-glass\.db$' "the snapshot is named break-glass on disk, not as an ordinary backup"
+assert_contains 'restored by hand only' "the snapshot states that nothing restores it automatically"
+assert_contains 'Install → Backup .hpb is the supported restore path' "the snapshot points at the supported restore route instead"
+
+# A cleanly checkpointed database has no sidecars. That is a complete backup, not a failed one.
+MOCK_DB_SIDECARS=absent run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an upgrade succeeds when the database has no sidecar files"
+assert_contains 'data-store snapshot' "a sidecar-free database still produces a snapshot"
+assert_contains 'with 0 sidecar file\(s\)' "a sidecar-free database reports a complete main-file-only snapshot"
+
+# Best-effort by design: a panel with no root route cannot do this, and must not fail because of it.
+MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an upgrade on a panel with no root route still succeeds"
+assert_contains 'no root route, so only settings could be saved' "a sandboxed panel is told what was and was not saved"
+assert_not_contains 'adb .*pull .*hapaneld-db-snapshot' "$MOCK_CALL_LOG" "a panel with no root route is never asked to stage its database"
+
+MOCK_DB_SNAPSHOT=stage_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a failed database staging does not fail the upgrade"
+assert_contains 'could not be staged' "a failed staging says so without claiming a backup"
+
+MOCK_DB_SNAPSHOT=pull_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a failed database copy does not fail the upgrade"
+assert_contains 'could not be copied' "a failed copy never reports a snapshot that does not exist"
+
+MOCK_DB_SNAPSHOT=wal_pull_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a partial sidecar copy does not fail the upgrade"
+assert_contains 'could not be copied' "a missing staged WAL rejects the whole snapshot instead of claiming success"
+assert_not_contains 'with [0-9]+ sidecar file' "$LAST_OUTPUT" "a partial SQLite file set is never reported as recoverable"
+
+# ── --reset-config ──────────────────────────────────────────────────────────────────────────────
+# A clean install must reach a genuine FIRST RUN, not a repair. Everything here exists to make the
+# erase deliberate, recoverable, and impossible to trigger by accident or in bulk.
+run_provision "$MOCK_TARGET" --verify --reset-config
+assert_failure "--reset-config with --verify returns nonzero"
+assert_contains '(read-only|never changes)' "a read-only run refuses to combine with an erase"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a rejected reset never reaches the package manager"
+
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config --restore "$RESTORE"
+assert_failure "--reset-config with --restore returns nonzero"
+assert_contains 'opposite intents' "erase-then-import names the contradiction"
+
+HAPANELD_RESET_CONFIRM=no run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_failure "an unconfirmed reset returns nonzero"
+assert_contains 'was not confirmed' "an unconfirmed reset says so"
+assert_contains 'Nothing was erased' "an unconfirmed reset states that the panel is untouched"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "an unconfirmed reset never reaches the package manager"
+
+# --force skips a version comparison; it must not stand in for authorising a wipe.
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config --force
+assert_failure "--force does not authorise an unconfirmed reset"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "--force never reaches the package manager on its own"
+
+HAPANELD_RESET_CONFIRM=RESET MOCK_SETUP=identity run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_success "a confirmed reset completes"
+assert_log_contains 'adb .*pm clear io.github.maxlyth.hapaneld' "a confirmed reset erases the app's stored state"
+assert_contains 'configuration erased' "a confirmed reset reports what it did"
+assert_contains 'Next: confirm this panel.s name' "a reset panel lands in guided setup, not in repair"
+
+# The backup is the whole safety story: it must exist and be non-empty BEFORE anything is erased.
+MOCK_EXPORT=fail HAPANELD_RESET_CONFIRM=RESET run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_failure "a reset without a usable backup returns nonzero"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a reset without a usable backup never reaches the package manager"
+
+HAPANELD_RESET_CONFIRM=RESET MOCK_PM_CLEAR=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_failure "a failed erase returns nonzero"
+assert_contains 'could not erase the panel configuration' "a failed erase names what went wrong"
+
+# Bulk erase is not offered: fleet workers run with stdin closed, so a single exported confirmation
+# would otherwise wipe every panel at once.
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-reset-output.txt"
+bash "$UPDATE_FLEET" --reset-config -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet updates refuse a bulk configuration erase"
+assert_contains 'not available for fleet updates' "the fleet refusal names the safe alternative"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused fleet erase never reaches any panel"
+
+# Builds older than the setup endpoint keep working guidance, derived from config alone.
+MOCK_SETUP=missing run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel without the setup endpoint completes provisioning"
+assert_contains 'Next: configure this panel in your browser.*/configure' "a pre-wizard panel is still given a next step"
+assert_not_contains 'cfg-ha-oauth' "$LAST_OUTPUT" "a pre-wizard panel with no server URL is not offered the sign-in deep link"
 
 MOCK_ADB_STATE=unauthorized run_provision "$MOCK_TARGET" --verify
 assert_failure "unauthorized adb returns nonzero"
@@ -2216,6 +2416,7 @@ run_generated_installer_with_real_provisioner() {
   env -u 'BASH_FUNC_curl%%' \
     PATH="$ADVANCED_FIXTURES:/usr/bin:/bin" \
     ADVANCED_PROVISION_SOURCE="$PROVISION" \
+    MOCK_CURL_DIRECT=1 \
     MOCK_CALL_LOG="$MOCK_CALL_LOG" \
       bash "$RELEASE_INSTALLER" "$@" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -2415,6 +2616,28 @@ if grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PR
 else
   fail_test "first-time system helper install verifies init start before direct fallback"
 fi
+
+# `start` is successful even when Android init has not loaded the restored service. Every rollback
+# route that can restore /system/bin/hapaneld-helper must therefore probe the helper and launch it
+# directly if init did not create a process. The root transaction bodies are intentionally executed
+# only on a panel, so this source-contract check keeps all three provisioner routes covered in CI.
+assert_rollback_restart_probe() {
+  local function_name="$1" body expected
+  body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
+  expected=$'start hapaneld_helper 2>/dev/null\n    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||\n      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )'
+  if grep -Fq 'start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &' <<<"$body"; then
+    fail_test "$function_name does not trust init start success during rollback"
+  elif [[ "$body" == *"$expected"* ]] &&
+       [[ "$body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n  wait_for_helper_retirement || return 1'* ]]; then
+    pass "$function_name probes the restored helper before direct rollback fallback"
+  else
+    fail_test "$function_name probes the restored helper before direct rollback fallback"
+  fi
+}
+assert_rollback_restart_probe rollback_system
+assert_rollback_restart_probe rollback_systemless
+assert_rollback_restart_probe rollback_hybrid
+
 commit_fn_line="$(grep -n '^commit_system() {' "$PROVISION" | head -1 | cut -d: -f1)"
 commit_marker_line="$(awk -v after="$commit_fn_line" 'NR > after && /rm -f "\$marker" \|\| return 1/{print NR; exit}' "$PROVISION")"
 commit_target_line="$(grep -n '\[ "$(classify_system)" = TARGET \] || return 1' "$PROVISION" | head -1 | cut -d: -f1)"

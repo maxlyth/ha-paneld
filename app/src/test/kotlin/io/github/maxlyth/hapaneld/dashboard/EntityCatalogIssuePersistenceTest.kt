@@ -39,7 +39,59 @@ class EntityCatalogIssuePersistenceTest {
             EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP,
             persisted.getJSONObject(0).getJSONArray("sources").length(),
         )
-        assertEquals(64 to 32, EntityCatalogIssuePersistence.counts(persisted.toString()))
+        assertEquals(64 to 37, EntityCatalogIssuePersistence.counts(persisted.toString()))
+    }
+
+    @Test fun advisoriesCannotEvictBlockingIssuesFromBoundedPayload() {
+        val issues = List(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS) { index ->
+            JSONObject()
+                .put("fingerprint", "advisory-$index")
+                .put("type", "limited_support")
+                .put("blocking", false)
+                .put("severity", "warning")
+        } + JSONObject()
+            .put("fingerprint", "late-blocker")
+            .put("type", "unbounded_selector")
+            .put("blocking", true)
+            .put("severity", "error")
+
+        val persisted = JSONArray(EntityCatalogIssuePersistence.boundedJson(issues))
+
+        assertEquals(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS, persisted.length())
+        assertTrue((0 until persisted.length()).any {
+            persisted.getJSONObject(it).optString("fingerprint") == "late-blocker"
+        })
+        assertEquals(
+            EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS to 1,
+            EntityCatalogIssuePersistence.counts(persisted.toString()),
+        )
+    }
+
+    @Test fun nonblockingAdvisoryCannotBeIgnored() {
+        val fingerprint = "advisory-fingerprint"
+        val raw = JSONArray().put(
+            JSONObject()
+                .put("fingerprint", fingerprint)
+                .put("type", "limited_support")
+                .put("blocking", false)
+                .put("would_block", false)
+                .put("severity", "warning"),
+        )
+
+        val effective = EntityCatalogIssuePersistence.applyIgnores(raw, setOf(fingerprint))
+        val issue = JSONArray(effective).getJSONObject(0)
+
+        assertFalse(issue.getBoolean("ignored"))
+        assertFalse(issue.getBoolean("blocking"))
+        assertEquals("warning", issue.getString("severity"))
+        assertEquals(1 to 0, EntityCatalogIssuePersistence.counts(effective))
+        assertEquals(0, EntityCatalogIssuePersistence.ignoredCount(effective))
+        assertFalse(EntityCatalogIssuePersistence.canIgnore(issue))
+
+        val blocker = JSONObject().put("blocking", false).put("would_block", true)
+        assertTrue(EntityCatalogIssuePersistence.canIgnore(blocker))
+        blocker.put("ignorable", false)
+        assertFalse(EntityCatalogIssuePersistence.canIgnore(blocker))
     }
 
     @Test fun payloadAndIndividualValuesAreBounded() {

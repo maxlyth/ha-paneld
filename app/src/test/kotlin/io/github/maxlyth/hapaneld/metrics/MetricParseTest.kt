@@ -71,10 +71,44 @@ class MetricParseTest {
         assertEquals(listOf("0.5", "0.4", "0.3"), MetricParse.loadavg3("0.5 0.4 0.3 1/234 5678"))
     }
 
+    // --- statFieldsAfterComm: the ONE per-PID /proc stat slicer (absorbs the union of the edges the old
+    // inline sampleTop / sampleRender / childJiffiesOf parsers handled) --------------------------------
+
+    // pid (comm) state ppid pgrp sid tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime ...
+    // fields after comm, index: state=0 ... utime=11 stime=12 cutime=13 cstime=14
+    private fun statLine(comm: String, utime: Long = 100, stime: Long = 40, cutime: Long = 300, cstime: Long = 60) =
+        "1234 ($comm) S 1 1234 0 0 -1 1077936448 2500 800 3 0 $utime $stime $cutime $cstime 20 0 30 0 100 900000 500"
+
+    @Test fun statFieldsAfterCommMapsUtimeStimeCutimeCstime() {
+        val rest = MetricParse.statFieldsAfterComm(statLine("hapaneld", 100, 40, 300, 60))!!
+        assertEquals("S", rest[0])                    // state = stat field 3
+        assertEquals(100L, rest[11].toLong())         // utime = field 14
+        assertEquals(40L, rest[12].toLong())          // stime = field 15
+        assertEquals(300L, rest[13].toLong())         // cutime = field 16
+        assertEquals(60L, rest[14].toLong())          // cstime = field 17
+    }
+
+    @Test fun statFieldsAfterCommSplitsOnLastParenSoParensInCommDoNotShiftFields() {
+        // comm contains ") " and "(" — the kernel allows this; splitting on the FIRST ')' would corrupt
+        // every field. The last ')' keeps utime/stime/cutime/cstime aligned.
+        val rest = MetricParse.statFieldsAfterComm(statLine("evil) 9 9 9 (x", 10, 2, 7, 5))!!
+        assertEquals("S", rest[0])
+        assertEquals(10L, rest[11].toLong())
+        assertEquals(2L, rest[12].toLong())
+        assertEquals(7L, rest[13].toLong())
+        assertEquals(5L, rest[14].toLong())
+    }
+
+    @Test fun statFieldsAfterCommNullsWhenNoClosingParenOrNothingFollows() {
+        assertNull(MetricParse.statFieldsAfterComm("garbage"))          // no ')'
+        assertNull(MetricParse.statFieldsAfterComm("1234 (x)"))         // ')' at end → nothing follows
+        assertEquals(listOf("S", "1"), MetricParse.statFieldsAfterComm("1234 (x) S 1")) // truncated but sliced
+    }
+
     @Test fun parsePerfDumpParsesEverySection() {
         val raw = "@STAT\ncpu 100 0 100 800 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0\n" +
             "@LOAD 0.5 0.4 0.3 1/2 3\n@TEMP 42000\n@GPU 45@800000000Hz\n" +
-            "@PROC\n1234\t500\tmyproc\n9\tbad\n" +
+            "@PROC\n1234\t500\tmyproc\t321\n4321\t250\told-helper\n9\tbad\n" +
             "@REND\n1234\t250\n@END\ntrailing-ignored\n"
         val d = MetricParse.parsePerfDump(raw)
         assertEquals(2, d.stat.size)
@@ -82,7 +116,13 @@ class MetricParseTest {
         assertEquals(listOf("0.5", "0.4", "0.3"), d.loadavg)
         assertEquals(42000L, d.tempMilli)
         assertEquals("45@800000000Hz", d.gpuRaw)
-        assertEquals(listOf(Triple(1234, 500L, "myproc")), d.proc)  // the malformed "9\tbad" row is dropped
+        assertEquals(
+            listOf(
+                ProcessMetric(1234, 500L, "myproc", 321L),
+                ProcessMetric(4321, 250L, "old-helper", null),
+            ),
+            d.proc,
+        ) // the malformed "9\tbad" row is dropped; old three-column helpers remain valid
         assertEquals(mapOf(1234 to 250L), d.rend)
         assertEquals(42.0, MetricParse.dumpTempC(d.tempMilli)!!, 0.0001)
     }

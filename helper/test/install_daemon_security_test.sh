@@ -152,6 +152,20 @@ grep -Fq 'live_state=TARGET' <<<"$rollback_systemless_body"
 grep -Fq 'echo ROLLBACK_UNKNOWN' <<<"$rollback_systemless_body"
 ! grep -Fq 'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1' <<<"$rollback_system_body"
 ! grep -Fq 'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1' <<<"$rollback_systemless_body"
+# Android init reports success for an unknown service, so both rollback branches that restore a
+# /system helper must probe it before falling back to a direct launch. Keep this limited to the
+# rollback body: the installer has separate first-install restart coverage above.
+rollback_restart_sequence=$'start hapaneld_helper 2>/dev/null\n          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||\n            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )'
+if [[ "$rollback_system_body" == *"$rollback_restart_sequence"* ]] && \
+   [[ "$rollback_systemless_body" == *"$rollback_restart_sequence"* ]] && \
+   [[ "$rollback_system_body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n        wait_for_helper_retirement || exit 1'* ]] && \
+   [[ "$rollback_systemless_body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n        wait_for_helper_retirement || exit 1'* ]] && \
+   ! grep -Fq 'start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' <<<"$rollback_body"; then
+  :
+else
+  echo "rollback restart paths do not verify init before direct fallback" >&2
+  exit 1
+fi
 assert_text_order "$rollback_body" \
   'wait_for_helper_reply PING OK "$install_kind" "$probe_path"' \
   'finalize_root_helper_rollback "$install_kind" "$transaction_id" "$target_build" "$target_helper"'

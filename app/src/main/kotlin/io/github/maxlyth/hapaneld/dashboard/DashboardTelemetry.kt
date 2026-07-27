@@ -201,9 +201,7 @@ object DashboardTelemetry {
         return sorted[(ceil(sorted.size * fraction).toInt() - 1).coerceIn(0, sorted.lastIndex)]
     }
 
-    private fun microsToMs(value: Long): Double = value / 1000.0
-    private fun saturatedAdd(left: Long, right: Long): Long =
-        if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+    private fun microsToMs(value: Long): Double = trafficMicrosToMs(value)
 
     private fun monotonicElapsedMs(): Long = System.nanoTime() / 1_000_000L
 
@@ -238,8 +236,8 @@ object DashboardTelemetry {
             batch.scriptMicros, batch.renderMicros, batch.longTaskCount,
         )
 
-        fun rate(value: Long): Double = value * 1000.0 / sampleMs.coerceAtLeast(1L)
-        fun microsPerSecond(value: Long): Double = value.toDouble() / sampleMs.coerceAtLeast(1L)
+        fun rate(value: Long): Double = trafficRatePerSec(value, sampleMs)
+        fun microsPerSecond(value: Long): Double = trafficMicrosPerSecond(value, sampleMs)
     }
 
     private val INTERACTION_UPPER_MS = doubleArrayOf(16.0, 50.0, 100.0, 200.0, 300.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0)

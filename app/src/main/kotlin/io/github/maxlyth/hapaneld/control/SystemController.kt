@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.control
 
 import android.os.SystemClock
 import android.util.Log
+import io.github.maxlyth.hapaneld.RendererResolver
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.SystemEnv
@@ -52,14 +53,28 @@ class SystemController(
         }
     }
 
+    /** The single foreground-launch mechanism behind the builtin/launcher/admin/home paths: start
+     * [component] via [privilegedStart] and, only when that fails outright, fall back to a direct
+     * (pre-BAL) start — then log the resolved target under [label]. A BLOCKED (helper BUSY) result
+     * deliberately does NOT fall back: the daemon owns that safety boundary. */
+    private fun launchComponent(component: String, label: String) {
+        if (privilegedStart(component) == PrivilegedStartResult.FAILED) env.directStart(component)
+        Log.i(TAG, "$label -> $component")
+    }
+
     /** True when [pkg] selects ha-paneld's own built-in WebView renderer rather than a foreign app.
      *  Our own package name is treated as the sentinel too: some callers resolve the renderer to a real
      *  package (e.g. for perf attribution), and letting it fall through to the foreign-app paths would
      *  `am force-stop` ha-paneld itself — killing the service, MQTT and the web UI. */
-    private fun isBuiltin(pkg: String) = pkg == BUILTIN_DASHBOARD || pkg == env.ownPackage
+    private fun isBuiltin(pkg: String) = isBuiltinSelection(pkg, env.ownPackage)
+
+    /** Renderer-kind query for recovery policy routing. Resolution stays here so the watchdog cannot
+     *  drift from launch/state handling for blank or own-package aliases. */
+    internal fun isBuiltinDashboardTarget(dashboardPkg: String): Boolean =
+        isBuiltin(resolveDashboard(dashboardPkg))
 
     /** Bring the built-in DashboardActivity up (or, if already running, to the foreground — a singleTask
-     *  relaunch reaches onNewIntent, which only reloads when [BuiltinDashboard.requestReload] was set).
+     *  relaunch reaches onNewIntent, which only reloads when [BuiltinDashboard.requestExplicitReload] was set).
      *  Refuses while the renderer is crash-latched so the kiosk/watchdog return loops can't churn a
      *  crash-looping WebView; an explicit reload clears the latch first and always proceeds. */
     private fun startBuiltin() {
@@ -67,24 +82,20 @@ class SystemController(
             Log.w(TAG, "builtin renderer crash-latched — refusing automatic relaunch (explicit reload clears it)")
             return
         }
-        val comp = "${env.ownPackage}/.DashboardActivity"
-        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
-        Log.i(TAG, "builtin dashboard -> $comp")
+        launchComponent("${env.ownPackage}/.DashboardActivity", "builtin dashboard")
     }
 
-    /** Configured dashboard pkg, else the installed HA Companion (this is an HA project). The sentinel
-     *  [BUILTIN_DASHBOARD] passes through unchanged (it's non-blank) — downstream methods special-case it.
-     *  Public so the config UI can show what a blank ("auto") dashboard_package actually resolved to. */
-    fun resolveDashboard(pkg: String): String {
-        if (pkg.isNotBlank()) return pkg.takeIf(AndroidInput::isDashboardTarget).orEmpty()
-        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
-            if (env.isInstalled(p)) return p
-        }
-        return ""
+    /** Configured dashboard package, or the automatic built-in renderer for a blank selection. The
+     * sentinel [BUILTIN_DASHBOARD] passes through unchanged. A corrupt non-blank stored value remains
+     * invalid rather than being mistaken for Auto and crossing a privileged launch boundary. */
+    fun resolveDashboard(pkg: String): String = when {
+        pkg.isNotBlank() && !AndroidInput.isDashboardTarget(pkg) -> INVALID_DASHBOARD
+        else -> RendererResolver.resolveControlPackage(pkg, env::isInstalled)
     }
 
-    /** Force-stop the dashboard and relaunch it. */
-    fun reloadDashboard(dashboardPkg: String) {
+    /** Force-stop the dashboard and relaunch it. [reason], when given, is announced on the panel first
+     *  so a deliberate reset can never be mistaken for a crash. */
+    fun reloadDashboard(dashboardPkg: String, reason: String = "") {
         val pkg = resolveDashboard(dashboardPkg)
         if (CompanionDataOperationGate.blocks(pkg)) {
             Log.i(TAG, "dashboard reload suppressed while Companion data operation owns $pkg")
@@ -93,8 +104,7 @@ class SystemController(
         // Built-in renderer: an explicit reload clears any crash latch (deliberate retry consent), flags
         // the relaunch as reload-intent, and reaches onNewIntent → fresh page load.
         if (isBuiltin(pkg)) {
-            BuiltinDashboard.clearRendererLatch()
-            BuiltinDashboard.requestReload()
+            BuiltinDashboard.requestExplicitReload(reason)
             startBuiltin()
             return
         }
@@ -139,9 +149,7 @@ class SystemController(
             launchAdminLauncher()
             return
         }
-        val comp = ri.component
-        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
-        Log.i(TAG, "launcher -> $comp")
+        launchComponent(ri.component, "launcher")
     }
 
     /** The launcher package [launchLauncher] would land on for [configuredPkg] (query-only) — lets
@@ -161,7 +169,7 @@ class SystemController(
         // those obstructs the dashboard instead of giving the user an app drawer.
         val notALauncher = { p: String ->
             p == env.ownPackage || p == "com.android.settings" ||
-                p == "io.homeassistant.companion.android" || p == "io.homeassistant.companion.android.minimal" ||
+                p in RendererResolver.LEGACY_COMPANION_PACKAGE_SET ||
                 p in VENDOR_PSEUDO_LAUNCHERS
         }
         return when {
@@ -181,9 +189,7 @@ class SystemController(
      * component, so it works even when no other launcher is installed.
      */
     fun launchAdminLauncher() {
-        val comp = adminLauncherActivity().component
-        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
-        Log.i(TAG, "admin launcher -> $comp")
+        launchComponent(adminLauncherActivity().component, "admin launcher")
     }
 
     /** True when Launcher app explicitly selects ha-paneld's panel-admin app drawer. */
@@ -240,16 +246,17 @@ class SystemController(
         admittedRoute: PrivilegeRoute? = null,
     ): Boolean {
         if (!AndroidInput.isComponent(component)) return false
-        if (admittedRoute != null) return when (admittedRoute) {
-            PrivilegeRoute.DAEMON -> daemon.send("SETHOME $component") == "OK"
-            PrivilegeRoute.SU -> root.run("cmd package set-home-activity $component")
-            PrivilegeRoute.SHIZUKU,
-            PrivilegeRoute.ACCESSIBILITY -> false
-        }
-        return ShortOperationRouter.effect(
+        // The ordered DAEMON→SU route definitions live once; the admitted-route path runs exactly the
+        // one admitted attempt (never falling through to another transport), while the automatic path
+        // tries them in order via the shared router.
+        val attempts = arrayOf(
             EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("SETHOME $component") == "OK" },
             EffectAttempt(PrivilegeRoute.SU) { root.run("cmd package set-home-activity $component") },
-        ) != null
+        )
+        if (admittedRoute != null) {
+            return attempts.firstOrNull { it.route == admittedRoute }?.execute() ?: false
+        }
+        return ShortOperationRouter.effect(*attempts) != null
     }
 
     /**
@@ -306,8 +313,7 @@ class SystemController(
         if (isBuiltin(pkg)) { startBuiltin(); return }
         val comp = if (pkg.isNotBlank()) env.launchComponent(pkg) else env.defaultHome()?.component
         if (comp == null) { Log.w(TAG, "home: no target resolved"); return }
-        if (privilegedStart(comp) == PrivilegedStartResult.FAILED) env.directStart(comp)
-        Log.i(TAG, "home -> $comp")
+        launchComponent(comp, "home")
     }
 
     /**
@@ -322,8 +328,8 @@ class SystemController(
         // Built-in renderer lives in our always-running process: a direct lifecycle flag gives FG
         // (resumed) / BG (paused or not yet created) with no root/daemon probe — BG lets the kiosk/
         // watchdog return-loops recreate it via launchHome. Crash-latched (renderer crash-looping,
-        // relaunch budget spent) reports DEAD: the kiosk loop ignores DEAD, and the watchdog's existing
-        // crash-loop backoff + health warning take over instead of a 1.2s relaunch churn.
+        // relaunch budget spent) reports DEAD: the kiosk loop ignores DEAD, while the watchdog bypasses
+        // its foreign-app crash budget and projects this built-in latch directly into health.
         if (isBuiltin(pkg)) return when {
             BuiltinDashboard.rendererLatched(SystemClock.elapsedRealtime()) -> AppState.DEAD
             builtinForeground() -> AppState.FG
@@ -365,16 +371,20 @@ class SystemController(
         private const val TAG = "ha-paneld/system"
 
         /** Sentinel `dashboard_package` value selecting ha-paneld's own built-in WebView renderer
-         *  ([io.github.maxlyth.hapaneld.DashboardActivity]) instead of a foreign dashboard app. */
-        const val BUILTIN_DASHBOARD = "builtin"
+         *  ([io.github.maxlyth.hapaneld.DashboardActivity]) instead of a foreign dashboard app.
+         *  Aliases [RendererResolver.BUILTIN] — the one home for the sentinel. */
+        const val BUILTIN_DASHBOARD = RendererResolver.BUILTIN
+        private const val INVALID_DASHBOARD = "<invalid-dashboard>"
+
+        /** Canonical pure renderer-kind predicate shared by control and status projections. */
+        internal fun isBuiltinSelection(pkg: String, ownPackage: String): Boolean =
+            RendererResolver.isBuiltinSelection(pkg, ownPackage)
 
         /** Dashboard renderers ha-paneld itself may have set as the default home ([ensureDashboardHome])
          *  — [ensureBuiltinHome] is allowed to reclaim HOME from these when switching to the built-in
-         *  renderer; anything else as home is a deliberate third-party launcher and is left alone. */
-        internal val KNOWN_RENDERER_HOMES = setOf(
-            "io.homeassistant.companion.android.minimal",
-            "io.homeassistant.companion.android",
-        )
+         *  renderer; anything else as home is a deliberate third-party launcher and is left alone.
+         *  The one Auto-candidate order lives in [RendererResolver]. */
+        internal val KNOWN_RENDERER_HOMES = RendererResolver.LEGACY_COMPANION_PACKAGE_SET
 
         // Vendor kiosk apps that register CATEGORY_HOME but aren't real launchers — the navbar Launcher
         // button must never land on them (they obstruct the dashboard). eWeLink's control panel on

@@ -18,10 +18,10 @@ internal class HelperInstallTransaction(
     private val timeoutMs: Long = INSTALL_TIMEOUT_MS,
     private val staging: HelperInstallStaging = HelperInstallStaging.shared,
 ) {
-    fun install(apk: File, stagingDir: File): String {
+    fun install(apk: File, stagingDir: File): InstallOutcome {
         if (!apk.isFile || apk.length() <= 0L) {
             apk.delete()
-            return "install failed: invalid APK input"
+            return InstallOutcome.Retryable("install failed: invalid APK input")
         }
         when (val streamed = daemon.sendFile("INSTALLSTREAM ${apk.length()}", apk, timeoutMs)) {
             is DaemonStreamResult.Reply -> {
@@ -30,17 +30,17 @@ internal class HelperInstallTransaction(
             }
             DaemonStreamResult.NotSubmitted -> {
                 apk.delete()
-                return "install failed: daemon unreachable"
+                return InstallOutcome.Retryable("install failed: daemon unreachable")
             }
             DaemonStreamResult.Indeterminate -> {
                 apk.delete()
-                return "install outcome unknown: streamed input released"
+                return InstallOutcome.Retryable("install outcome unknown: streamed input released")
             }
             DaemonStreamResult.Unsupported -> Unit
         }
 
         val owned = staging.claim(apk, stagingDir)
-            ?: return "install failed: could not claim helper staging"
+            ?: return InstallOutcome.Retryable("install failed: could not claim helper staging")
         return when (val result = daemon.sendLong("INSTALL ${owned.absolutePath}", timeoutMs)) {
             is DaemonLongResult.Reply -> {
                 staging.release(owned, delete = true)
@@ -48,22 +48,23 @@ internal class HelperInstallTransaction(
             }
             DaemonLongResult.NotSubmitted -> {
                 staging.release(owned, delete = true)
-                "install failed: daemon unreachable"
+                InstallOutcome.Retryable("install failed: daemon unreachable")
             }
             DaemonLongResult.Indeterminate -> {
                 staging.release(owned, delete = false)
-                "install outcome unknown: helper staging retained for safety"
+                InstallOutcome.Retryable("install outcome unknown: helper staging retained for safety")
             }
         }
     }
 
-    /** Preserve retryable helper admission/staging failures instead of collapsing them into the durable
-     * package-manager rejection used by WebView's same-pin loop guard. */
-    private fun daemonInstallReply(reply: String): String = when (reply.trim()) {
-        "OK" -> "OK"
-        "BUSY" -> "install failed: daemon busy"
-        "STREAMERR" -> "install failed: daemon stream staging failed"
-        else -> "install failed: daemon install failed"
+    /** Preserve retryable helper admission/staging failures ([InstallOutcome.Retryable]) instead of
+     * collapsing them into the durable package-manager rejection ([InstallOutcome.Rejected]) used by
+     * WebView's same-pin loop guard. */
+    private fun daemonInstallReply(reply: String): InstallOutcome = when (reply.trim()) {
+        "OK" -> InstallOutcome.Succeeded
+        "BUSY" -> InstallOutcome.Retryable("install failed: daemon busy")
+        "STREAMERR" -> InstallOutcome.Retryable("install failed: daemon stream staging failed")
+        else -> InstallOutcome.Rejected("install failed: daemon install failed")
     }
 
     companion object {

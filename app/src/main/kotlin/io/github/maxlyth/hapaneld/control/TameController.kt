@@ -11,6 +11,7 @@ import io.github.maxlyth.hapaneld.device.TameCandidate
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.commitWithDurableVisibility
 import io.github.maxlyth.hapaneld.util.AndroidInput
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
@@ -363,6 +364,15 @@ class TameController(
         return restored
     }
 
+    /**
+     * Re-enable a package which may have been disabled outside ha-paneld's own tame blocklist. Firmware
+     * images often ship diagnostic/vendor applications disabled already; they have no ownership marker to
+     * restore, but the Vendor packages picker still needs its Re-enable action to be real and reversible.
+     * The caller has already completed the same privileged-operation authorization as an owned untame.
+     */
+    fun reenable(pkg: String): Boolean =
+        privileged("ENABLE $pkg", "pm enable $pkg")
+
     /** Exact pre-mutation app-op observation; query failure refuses mutation rather than inventing state. */
     private fun observeOverlayMode(pkg: String): String? {
         val helperMode = HelperClient.send("OVERLAY $pkg")?.let(TameStatePolicy::overlayMode)
@@ -438,10 +448,7 @@ class TameController(
 
         // The HA Companion dashboard apps — never offered as tame candidates (this is an HA project; the
         // dashboard is the whole point). Excluded from enumeration/suggestions, not the brick-guard.
-        private val HA_PACKAGES = setOf(
-            "io.homeassistant.companion.android",
-            "io.homeassistant.companion.android.minimal",
-        )
+        private val HA_PACKAGES = CompanionInstaller.SUPPORTED_PACKAGES
 
         fun isCritical(pkg: String): Boolean = TamePackagePolicy.isCritical(pkg)
     }

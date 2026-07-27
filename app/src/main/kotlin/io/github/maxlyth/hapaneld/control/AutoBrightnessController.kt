@@ -32,6 +32,12 @@ internal data class AutoBrightnessRuntimeStatus(
     val mode: AdaptiveModelMode?,
     val brighterThanExpected: Boolean,
     val manualPreference: ManualBrightnessPreferenceSnapshot,
+    val sourceRevision: String,
+)
+
+internal data class AutoBrightnessChartSnapshot(
+    val sourceRevision: String,
+    val points: List<AdaptiveChartPoint>,
 )
 
 /** Service-owned adaptive brightness loop. Sensor and HA callbacks only replace the latest level. */
@@ -106,12 +112,15 @@ internal class AutoBrightnessController(
         }
     }
 
-    /** Native selected-entity input. The subscriber owns entity validation and connection liveness. */
+    /**
+     * Native selected-entity lux input. The subscriber is the single availability authority and always
+     * reports the source LIVE before delivering a sample, so this only records the value; availability
+     * is owned by [setHaSourceAvailable].
+     */
     @Synchronized fun submitHaLux(lux: Double) {
         if (!config.autoBrightness) return
         if (lux.isFinite() && lux in 0.0..MAX_LUX) {
             latestHaLux = lux
-            haAvailable = true
             refreshSourceIdentity()
             if (config.autoBrightness && activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT && meaningfulChange(lux)) {
                 latestHaChangeElapsed = elapsedRealtimeMs()
@@ -235,6 +244,10 @@ internal class AutoBrightnessController(
 
     /** Reconcile through current preference authority after physical wake or a policy change. */
     @Synchronized fun reapplyLatest() {
+        // Rebind the retained partition even while automatic actuation is disabled. This is a
+        // one-shot source/config transition, not background collection, and prevents a Configure
+        // read from pairing the newly selected source with the previous source's cached rows.
+        reconcileHistorySource()
         if (!config.autoBrightness) {
             evaluationFuture?.cancel(false)
             evaluationFuture = null
@@ -244,12 +257,11 @@ internal class AutoBrightnessController(
             enabledLastTick = false
             return
         }
-        refreshSourceIdentity()
         requestEvaluationLocked(0L, force = true)
     }
 
     @Synchronized fun status(): AutoBrightnessRuntimeStatus {
-        refreshSourceIdentity()
+        reconcileHistorySource()
         val automatic = lastAutomaticTarget.takeIf { it >= 0 }
         val manual = preference.snapshot(
             automaticTarget = automatic ?: BrightnessController.MIN_VISIBLE,
@@ -268,6 +280,7 @@ internal class AutoBrightnessController(
             mode = lastResult?.mode,
             brighterThanExpected = lastResult?.brighterThanExpected == true,
             manualPreference = manual,
+            sourceRevision = activeSourceRevision(),
         )
     }
 
@@ -275,7 +288,13 @@ internal class AutoBrightnessController(
     @Synchronized internal fun chartPoints(
         sensitivity: Int = config.autoBrightnessSensitivity,
         minimumPercent: Int = config.autoBrightnessMinimumPercent,
-    ): List<AdaptiveChartPoint> {
+    ): List<AdaptiveChartPoint> = chartSnapshot(sensitivity, minimumPercent).points
+
+    @Synchronized internal fun chartSnapshot(
+        sensitivity: Int = config.autoBrightnessSensitivity,
+        minimumPercent: Int = config.autoBrightnessMinimumPercent,
+    ): AutoBrightnessChartSnapshot {
+        reconcileHistorySource()
         val rows = history.history()
         val fallback = rows.lastOrNull()?.meanLux?.let(::ln1p) ?: 0.0
         if (chartLookup == null || rows !== chartRowsIdentity || chartZoneId != zone.id || chartLocation != location) {
@@ -285,12 +304,15 @@ internal class AutoBrightnessController(
             chartLocation = location
         }
         val lookup = checkNotNull(chartLookup)
-        return AdaptiveChartProjection.fiveMinute(
-            rows = rows,
-            sensitivity = sensitivity,
-            brightnessRange = lookup.brightnessRange,
-            minimumBrightness = AdaptiveLuxCurve.percentToBrightness(minimumPercent),
-            expectedLogLux = lookup::expectedLogLux,
+        return AutoBrightnessChartSnapshot(
+            sourceRevision = activeSourceRevision(),
+            points = AdaptiveChartProjection.fiveMinute(
+                rows = rows,
+                sensitivity = sensitivity,
+                brightnessRange = lookup.brightnessRange,
+                minimumBrightness = AdaptiveLuxCurve.percentToBrightness(minimumPercent),
+                expectedLogLux = lookup::expectedLogLux,
+            ),
         )
     }
     internal fun solarLocation(): SolarLocation? = location
@@ -347,11 +369,7 @@ internal class AutoBrightnessController(
             return MIN_EVALUATION_INTERVAL_MS - (nowElapsed - lastTickElapsed)
         }
         lastTickElapsed = nowElapsed
-        if (refreshSourceIdentity() || activeSourceKey != history.currentSourceId() || locationContext != history.currentContextId()) {
-            resetTransientPolicy(clearPreference = true)
-            baselineCache.invalidate()
-            configureHistorySource()
-        }
+        reconcileHistorySource()
         val available = activeSourceAvailable()
         val lux = activeLux()
         if (!available || !lux.isFinite()) return null
@@ -420,6 +438,19 @@ internal class AutoBrightnessController(
 
     private fun configureHistorySource() = history.configure(locationContext, activeSourceId())
 
+    /** Replace the cache identity on the caller's synchronized path, before any status/history read
+     * or selection response can expose the new source alongside the previous partition's rows. */
+    private fun reconcileHistorySource(): Boolean {
+        val changed = refreshSourceIdentity() || activeSourceKey != history.currentSourceId() ||
+            locationContext != history.currentContextId()
+        if (changed) {
+            resetTransientPolicy(clearPreference = true)
+            baselineCache.invalidate()
+            configureHistorySource()
+        }
+        return changed
+    }
+
     /** Re-hash only when the configured HA identity changes, never on the evaluation path. */
     private fun refreshSourceIdentity(): Boolean {
         val entity = config.autoBrightnessHaEntity.trim()
@@ -438,6 +469,7 @@ internal class AutoBrightnessController(
     }
 
     private fun activeSourceId(): String = activeSourceKey
+    private fun activeSourceRevision(): String = hash("$locationContext|$activeSourceKey")
     private fun activeLux(): Double =
         if (activeSourceKind == AmbientLuxSourceKind.HOME_ASSISTANT) latestHaLux else latestPanelLux
     private fun activeSourceAvailable(): Boolean =

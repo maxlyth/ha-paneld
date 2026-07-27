@@ -36,6 +36,7 @@ class FleetScopeSpecTest {
                 "keep_awake",
                 "dashboard_entity_learning",
                 "dashboard_fullscreen",
+                "dashboard_native_kiosk",
                 "dashboard_overscroll",
                 "dashboard_idle_return_min",
                 "ha_url",
@@ -52,6 +53,7 @@ class FleetScopeSpecTest {
         val deviceLocal = listOf(
             "mqtt_user",
             "mqtt_password",
+            "auto_sleep",
             "auto_brightness_minimum_percent",
             "auto_brightness_sensitivity",
             "auto_brightness_ha_entity",

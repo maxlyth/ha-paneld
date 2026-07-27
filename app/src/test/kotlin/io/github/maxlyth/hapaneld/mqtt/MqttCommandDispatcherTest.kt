@@ -1,6 +1,10 @@
 package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.MqttCommandDispatcher
+import io.github.maxlyth.hapaneld.LiveSettingApplyResult
+import io.github.maxlyth.hapaneld.LiveSettingAuthority
+import io.github.maxlyth.hapaneld.LiveSettingRequestOutcome
+import io.github.maxlyth.hapaneld.liveSettingApplication
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import java.util.Collections
@@ -130,6 +134,296 @@ class MqttCommandDispatcherTest {
         } finally {
             assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
             caller.shutdownNow()
+        }
+    }
+
+    @Test fun blockedWorkerDefersUnrelatedSynchronousSettingsWithoutBreakingOrder() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val finished = CountDownLatch(2)
+        val applied = Collections.synchronizedList(mutableListOf<String>())
+        val dispatcher = MqttCommandDispatcher(
+            threadName = "mqtt-http-deferred-test",
+            resultWaitMs = 50,
+        )
+        try {
+            dispatcher.submitAction {
+                entered.countDown()
+                assertTrue(release.await(5, TimeUnit.SECONDS))
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+
+            val home = dispatcher.runLatestResult("http:home_dashboard") {
+                applied += "home"
+                finished.countDown()
+            }
+            val watchdog = dispatcher.runLatestResult("http:watchdog_enabled") {
+                applied += "watchdog"
+                finished.countDown()
+            }
+
+            assertEquals(MqttCommandDispatcher.Execution.PENDING, home.execution)
+            assertEquals(MqttCommandDispatcher.Execution.PENDING, watchdog.execution)
+            release.countDown()
+            assertTrue(finished.await(5, TimeUnit.SECONDS))
+            assertEquals(listOf("home", "watchdog"), applied)
+        } finally {
+            release.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun lateSuccessClearsOnlyItsMatchingDurableGeneration() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val dispatcher = MqttCommandDispatcher(threadName = "late-success-authority", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            val outcome = authority.applyOrQueueOutcomeObserved("screen", "ON", "OFF") { _, value, _ ->
+                liveSettingApplication(dispatcher.runLatestResult("http:screen") {
+                    entered.countDown()
+                    assertTrue(release.await(5, TimeUnit.SECONDS))
+                    assertEquals("ON", value)
+                })
+            }
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals(LiveSettingRequestOutcome.DEFERRED, outcome)
+            assertEquals(mapOf("screen" to "ON"), authority.pendingSnapshot())
+            release.countDown()
+            awaitPending(authority, emptyMap())
+        } finally {
+            release.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun lateFailureRemainsDurableAndBecomesReplayable() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val dispatcher = MqttCommandDispatcher(threadName = "late-failure-authority", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            assertEquals(
+                LiveSettingRequestOutcome.DEFERRED,
+                authority.applyOrQueueOutcomeObserved("screen", "ON", "OFF") { _, _, _ ->
+                    liveSettingApplication(dispatcher.runLatestResult("http:screen") {
+                        entered.countDown()
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                        error("controller failed late")
+                    })
+                },
+            )
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            release.countDown()
+            // The contract under test is durability: the late failure must BECOME replayable. The earlier
+            // awaitPending(pending == {screen=ON}) barrier was vacuous — that state holds from the moment
+            // the apply deferred — so a single replayKeys call raced the worker's late-completion cleanup:
+            // if it observed the key still in-flight it skipped its whole body, a scheduling coin-flip that
+            // failed deterministically on loaded hosts. (awaitDrained is no help mid-test: it is an
+            // interrupt-and-join shutdown drain.) So replay until it takes; the loop is the barrier.
+            val replayDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (authority.pendingSnapshot().isNotEmpty() && System.nanoTime() < replayDeadline) {
+                authority.replayKeys(setOf("screen")) { _, _, _, _ -> LiveSettingApplyResult.APPLIED }
+                if (authority.pendingSnapshot().isNotEmpty()) Thread.sleep(5)
+            }
+            assertTrue(authority.pendingSnapshot().isEmpty())
+        } finally {
+            release.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun timedOutSameKeyIsSupersededAndOnlyNewerGenerationClears() {
+        val blockerEntered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val applied = Collections.synchronizedList(mutableListOf<String>())
+        val dispatcher = MqttCommandDispatcher(threadName = "same-key-authority", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            dispatcher.submitAction {
+                blockerEntered.countDown()
+                assertTrue(release.await(5, TimeUnit.SECONDS))
+            }
+            assertTrue(blockerEntered.await(5, TimeUnit.SECONDS))
+            fun apply(value: String) = authority.applyOrQueueOutcomeObserved("screen", value, "OFF") { _, queued, _ ->
+                liveSettingApplication(dispatcher.runLatestResult("http:screen") { applied += queued })
+            }
+            assertEquals(LiveSettingRequestOutcome.DEFERRED, apply("ON"))
+            assertEquals(LiveSettingRequestOutcome.DEFERRED, apply("OFF"))
+            assertEquals(mapOf("screen" to "OFF"), authority.pendingSnapshot())
+            release.countDown()
+            awaitPending(authority, emptyMap())
+            assertEquals(listOf("OFF"), applied)
+        } finally {
+            release.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun inFlightHttpGenerationIsNotReplayedBehindNewerMqttCommand() {
+        val httpEntered = CountDownLatch(1)
+        val releaseHttp = CountDownLatch(1)
+        val finished = CountDownLatch(2)
+        val applied = Collections.synchronizedList(mutableListOf<String>())
+        val dispatcher = MqttCommandDispatcher(threadName = "http-mqtt-order-authority", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            assertEquals(
+                LiveSettingRequestOutcome.DEFERRED,
+                authority.applyOrQueueOutcomeObserved("screen", "HTTP-OLD", "OFF") { _, value, _ ->
+                    liveSettingApplication(dispatcher.runLatestResult("http:screen") {
+                        httpEntered.countDown()
+                        assertTrue(releaseHttp.await(5, TimeUnit.SECONDS))
+                        applied += value
+                        finished.countDown()
+                    })
+                },
+            )
+            assertTrue(httpEntered.await(5, TimeUnit.SECONDS))
+            dispatcher.submitLatest("mqtt:screen") {
+                applied += "MQTT-NEW"
+                finished.countDown()
+            }
+            authority.replayKeysObserved(setOf("screen")) { _, _, _, _ ->
+                error("in-flight generation must not be replayed")
+            }
+            releaseHttp.countDown()
+            assertTrue(finished.await(5, TimeUnit.SECONDS))
+            awaitPending(authority, emptyMap())
+            assertEquals(listOf("HTTP-OLD", "MQTT-NEW"), applied)
+        } finally {
+            releaseHttp.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun lateHttpFailureCannotReplayAfterNewerExternalMqttTruth() {
+        val httpEntered = CountDownLatch(1)
+        val releaseHttp = CountDownLatch(1)
+        val mqttFinished = CountDownLatch(1)
+        val applied = Collections.synchronizedList(mutableListOf<String>())
+        val dispatcher = MqttCommandDispatcher(threadName = "failed-http-newer-mqtt", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            assertEquals(
+                LiveSettingRequestOutcome.DEFERRED,
+                authority.applyOrQueueOutcomeObserved("screen", "HTTP-OLD", "OFF") { _, _, _ ->
+                    liveSettingApplication(dispatcher.runLatestResult("http:screen") {
+                        httpEntered.countDown()
+                        assertTrue(releaseHttp.await(5, TimeUnit.SECONDS))
+                        error("old HTTP actuation failed")
+                    })
+                },
+            )
+            assertTrue(httpEntered.await(5, TimeUnit.SECONDS))
+            dispatcher.submitLatest("mqtt:screen") {
+                applied += "MQTT-NEW"
+                assertTrue(authority.discard("screen"))
+                mqttFinished.countDown()
+            }
+            releaseHttp.countDown()
+            assertTrue(mqttFinished.await(5, TimeUnit.SECONDS))
+            awaitPending(authority, emptyMap())
+            authority.replayKeys(setOf("screen")) { _, _, _, _ ->
+                error("superseded HTTP generation replayed")
+            }
+            assertEquals(listOf("MQTT-NEW"), applied)
+        } finally {
+            releaseHttp.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun identicalValueAbaUsesGenerationIdentityAcrossLateSuccess() {
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondEntered = CountDownLatch(1)
+        val releaseSecond = CountDownLatch(1)
+        val dispatcher = MqttCommandDispatcher(threadName = "equal-value-aba", resultWaitMs = 30)
+        val authority = LiveSettingAuthority(setOf("screen"))
+        try {
+            fun save(block: () -> Unit) = authority.applyOrQueueOutcomeObserved("screen", "ON", "OFF") { _, _, _ ->
+                liveSettingApplication(dispatcher.runLatestResult("http:screen", command = block))
+            }
+            assertEquals(LiveSettingRequestOutcome.DEFERRED, save {
+                firstEntered.countDown()
+                assertTrue(releaseFirst.await(5, TimeUnit.SECONDS))
+            })
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS))
+            val firstGeneration = authority.pendingGenerationSnapshot().getValue("screen")
+
+            assertEquals(LiveSettingRequestOutcome.DEFERRED, save {
+                secondEntered.countDown()
+                assertTrue(releaseSecond.await(5, TimeUnit.SECONDS))
+            })
+            val secondGeneration = authority.pendingGenerationSnapshot().getValue("screen")
+            assertFalse(firstGeneration == secondGeneration)
+
+            releaseFirst.countDown()
+            assertTrue(secondEntered.await(5, TimeUnit.SECONDS))
+            assertEquals(mapOf("screen" to "ON"), authority.pendingSnapshot())
+            assertEquals(secondGeneration, authority.pendingGenerationSnapshot().getValue("screen"))
+            releaseSecond.countDown()
+            awaitPending(authority, emptyMap())
+        } finally {
+            releaseFirst.countDown()
+            releaseSecond.countDown()
+            assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        }
+    }
+
+    @Test fun dispatcherInterruptionRetainsGenerationAcrossAuthorityRecreation() {
+        val blockerEntered = CountDownLatch(1)
+        val releaseBlocker = CountDownLatch(1)
+        val journal = TestJournal()
+        val dispatcher = MqttCommandDispatcher(threadName = "interrupted-generation", resultWaitMs = 30)
+        val first = LiveSettingAuthority(setOf("screen"), journal)
+        dispatcher.submitAction {
+            blockerEntered.countDown()
+            while (releaseBlocker.count > 0) {
+                try {
+                    releaseBlocker.await(20, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    // Keep the active blocker alive until the test releases it; close still cancels queued work.
+                }
+            }
+        }
+        assertTrue(blockerEntered.await(5, TimeUnit.SECONDS))
+        assertEquals(
+            LiveSettingRequestOutcome.DEFERRED,
+            first.applyOrQueueOutcomeObserved("screen", "ON", "OFF") { _, _, _ ->
+                liveSettingApplication(dispatcher.runLatestResult("http:screen") {
+                    error("cancelled queued command ran")
+                })
+            },
+        )
+        val generation = first.pendingGenerationSnapshot().getValue("screen")
+        dispatcher.close()
+        releaseBlocker.countDown()
+        assertTrue(dispatcher.awaitDrained(MonotonicDeadline(5_000)))
+
+        val replacement = LiveSettingAuthority(setOf("screen"), journal)
+        assertEquals(generation, replacement.pendingGenerationSnapshot().getValue("screen"))
+        replacement.replayKeys(setOf("screen")) { _, _, _, _ -> LiveSettingApplyResult.APPLIED }
+        assertTrue(replacement.pendingSnapshot().isEmpty())
+    }
+
+    private fun awaitPending(authority: LiveSettingAuthority, expected: Map<String, String>) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (authority.pendingSnapshot() != expected && System.nanoTime() < deadline) Thread.yield()
+        assertEquals(expected, authority.pendingSnapshot())
+    }
+
+    private class TestJournal : LiveSettingAuthority.Journal {
+        private val values = linkedMapOf<String, LiveSettingAuthority.Pending>()
+        override fun load(): Map<String, LiveSettingAuthority.Pending> = values.toMap()
+        override fun put(key: String, value: LiveSettingAuthority.Pending): Boolean {
+            values[key] = value
+            return true
+        }
+        override fun remove(key: String): Boolean {
+            values.remove(key)
+            return true
         }
     }
 

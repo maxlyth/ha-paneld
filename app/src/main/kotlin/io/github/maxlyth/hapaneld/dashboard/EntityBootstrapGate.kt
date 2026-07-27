@@ -13,8 +13,18 @@ internal fun shouldHoldRendererForEntityBootstrap(
 ): Boolean = learningEnabled && !filterEnabled
 
 /** A learner may continue synchronizing while another renderer is selected, but its completion must not
- * launch the built-in activity unless that activity is still the configured renderer. */
+ * launch the built-in activity unless that activity is still the effective renderer. The caller resolves
+ * Auto before this comparison so the automatic built-in renderer is treated consistently.
+ *
+ * While the wizard's entity-filter question is still OPEN on a first run (never answered, setup never
+ * completed), a filter change must not reload either: the renderer is deliberately held on the question
+ * screen, and the answer route performs the one release itself. Without this the wizard's enable click
+ * produced two back-to-back relaunches — the config commit's reload and the answer's launch, 350 ms
+ * apart on hardware — the first flashes of what the observer then counted as a reload storm. */
 internal fun shouldReloadBuiltinAfterEntityFilterChange(
-    dashboardPackage: String,
+    effectiveDashboardPackage: String,
     builtinPackage: String,
-): Boolean = dashboardPackage == builtinPackage
+    setupEntityFilterAnswered: Boolean = true,
+    setupEverCompleted: Boolean = true,
+): Boolean = effectiveDashboardPackage == builtinPackage &&
+    (setupEntityFilterAnswered || setupEverCompleted)

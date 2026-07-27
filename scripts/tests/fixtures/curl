@@ -215,6 +215,12 @@ JSON
       printf 'Detected panel: Test Panel\nProvisioning guidance: no required changes\n'
     fi
     ;;
+  */api/v1/config/export?include_secrets=1)
+    [ -n "$output_file" ] || exit 2
+    printf '{"kind":"ha-paneld-config","schema":3,"exported_at":"test","exported_by":"panel.test","values":{"panel_id":"panel.test"}}\n' > "$output_file"
+    if [ "${MOCK_CURL_DIRECT:-0}" = 1 ] && [ -n "$write_format" ]; then printf '200'; fi
+    exit 0
+    ;;
   */api/v1/diag)
     if [ "${MOCK_VERIFY:-ok}" = "transient" ]; then
       attempts="${MOCK_STATE_DIR:?}/diag-attempts"
@@ -249,6 +255,35 @@ JSON
     else
       printf '{"panel_id":"test-panel","mqtt_broker":""}\n'
     fi
+    ;;
+  */api/v1/setup)
+    # The panel's own setup journey. `missing` models a build older than the endpoint, which must
+    # send the provisioner down its legacy guidance path rather than leaving it silent.
+    case "${MOCK_SETUP:-complete}" in
+      missing) exit 22 ;;
+      complete)
+        printf '{"complete":true,"repair":false,"next":null,"panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"}]}\n'
+        ;;
+      identity)
+        printf '{"complete":false,"repair":false,"next":"identity","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"blocked","blocking":true,"detail":"test-panel"},{"stage":"mqtt_broker","status":"blocked","blocking":false,"detail":""}]}\n'
+        ;;
+      ha_credentials)
+        printf '{"complete":false,"repair":false,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"},{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n'
+        ;;
+      mqtt_auth_failed)
+        printf '{"complete":false,"repair":false,"next":"mqtt_connection","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"mqtt_broker","status":"satisfied","blocking":false,"detail":"tcp://broker.test:1883"},{"stage":"mqtt_connection","status":"blocked","blocking":false,"detail":"auth-failed"}]}\n'
+        ;;
+      in_flight)
+        printf '{"complete":false,"repair":false,"next":"render_proof","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"render_proof","status":"in_flight","blocking":true,"detail":"awaiting_frontend"}]}\n'
+        ;;
+      repair)
+        printf '{"complete":false,"repair":true,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n'
+        ;;
+      unknown_stage)
+        printf '{"complete":false,"repair":false,"next":"future_stage","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"future_stage","status":"blocked","blocking":true,"detail":"opaque_token"}]}\n'
+        ;;
+      *) exit 22 ;;
+    esac
     ;;
   */api/v1/tame)
     printf '{"ok":true}\n'

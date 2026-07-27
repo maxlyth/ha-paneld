@@ -232,6 +232,59 @@ class ShizukuPolicyTest {
         assertTrue(coordinator.schedule(2) {})
     }
 
+    @Test fun stableBackoffResetReschedulesAfterStableReadyPeriod() {
+        val scheduler = FakeScheduler()
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L, 100L))
+
+        // Drive backoff to the cap.
+        assertTrue(coordinator.schedule(1) {})
+        scheduler.run(0)
+        assertTrue(coordinator.schedule(2) {})
+        assertEquals(100L, scheduler.tasks[1].delayMs)
+        scheduler.run(1)
+
+        // A stable READY period resets the backoff via the coordinator-owned handle.
+        assertTrue(coordinator.scheduleBackoffReset(30_000L) { coordinator.resetBackoff() })
+        assertEquals(30_000L, scheduler.tasks[2].delayMs)
+        scheduler.run(2)
+
+        assertTrue(coordinator.schedule(3) {})
+        assertEquals(50L, scheduler.tasks[3].delayMs)
+    }
+
+    @Test fun cancelledStableBackoffResetLeavesBackoffAtTheCap() {
+        val scheduler = FakeScheduler()
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L, 100L))
+
+        assertTrue(coordinator.schedule(1) {})
+        scheduler.run(0)
+        assertTrue(coordinator.schedule(2) {})
+        assertEquals(100L, scheduler.tasks[1].delayMs)
+        scheduler.run(1)
+
+        assertTrue(coordinator.scheduleBackoffReset(30_000L) { coordinator.resetBackoff() })
+        coordinator.cancelBackoffReset()
+        scheduler.run(2)
+
+        assertTrue(coordinator.schedule(3) {})
+        assertEquals(100L, scheduler.tasks[3].delayMs)
+    }
+
+    @Test fun reschedulingStableBackoffResetCancelsThePriorHandle() {
+        val scheduler = FakeScheduler()
+        val coordinator = ShizukuReconnectCoordinator(scheduler, longArrayOf(50L, 100L))
+        val resets = AtomicInteger()
+
+        assertTrue(coordinator.schedule(1) {})
+        scheduler.run(0)
+
+        assertTrue(coordinator.scheduleBackoffReset(30_000L) { resets.incrementAndGet() })
+        assertTrue(coordinator.scheduleBackoffReset(30_000L) { resets.incrementAndGet() })
+        scheduler.run(1)
+        scheduler.run(2)
+        assertEquals(1, resets.get())
+    }
+
     @Test fun rejectedBindingMutationCrossesCallbackBarrierThenLeavesMain() {
         val callbackQueue = mutableListOf<Runnable>()
         val workerQueue = mutableListOf<Runnable>()

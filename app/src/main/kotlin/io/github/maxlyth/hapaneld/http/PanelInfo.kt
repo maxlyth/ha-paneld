@@ -15,6 +15,7 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
 import android.webkit.WebView
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -83,7 +84,7 @@ object PanelInfo {
     private fun ram(context: Context): String = try {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        "${gib(mi.totalMem)} total · ${gib(mi.availMem)} free"
+        "${formatDisplayBytes(mi.totalMem)} total · ${formatDisplayBytes(mi.availMem)} free"
     } catch (e: Throwable) {
         "?"
     }
@@ -114,12 +115,11 @@ object PanelInfo {
         null
     }
 
-    private fun gib(bytes: Long): String = "%.1f GiB".format(bytes / 1024.0 / 1024.0 / 1024.0)
-
-    internal fun formatIecBytes(bytes: Long): String {
+    /** Familiar user-facing labels; thresholds retain the existing 1024-based scaling. */
+    internal fun formatDisplayBytes(bytes: Long): String {
         val bounded = bytes.coerceAtLeast(0L)
         if (bounded < 1024L) return "$bounded B"
-        val units = arrayOf("KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
+        val units = arrayOf("KB", "MB", "GB", "TB", "PB", "EB")
         var value = bounded.toDouble()
         var unit = -1
         do {
@@ -130,8 +130,8 @@ object PanelInfo {
     }
 
     internal fun databaseSummary(usage: EntityCatalogStore.DatabaseUsage): String = buildList {
-        add("${formatIecBytes(usage.usedBytes)} used")
-        if (usage.diskBytes > 0L) add("${formatIecBytes(usage.diskBytes)} on disk")
+        add("${formatDisplayBytes(usage.usedBytes)} used")
+        if (usage.diskBytes > 0L) add("${formatDisplayBytes(usage.diskBytes)} on disk")
         if (usage.schemaVersion > 0) add("schema ${usage.schemaVersion}")
     }.joinToString(" · ")
 
@@ -271,36 +271,28 @@ object PanelInfo {
     }
 
     private fun companion(context: Context): String {
-        for (id in COMPANION_IDS) {
+        for (id in CompanionInstaller.SUPPORTED_PACKAGES) {
             try {
                 val pi = context.packageManager.getPackageInfo(id, 0)
                 return "${pi.versionName} ($id)"
             } catch (e: PackageManager.NameNotFoundException) {
-                // try next variant
             }
         }
         return "not installed"
     }
 
-    private val COMPANION_IDS = listOf(
-        "io.homeassistant.companion.android",
-        "io.homeassistant.companion.android.minimal",
-    )
-
-    /** Package id of Fully Kiosk Browser — a dashboard renderer some users prefer over the Companion. */
-    const val FULLY_KIOSK = "de.ozerov.fully"
-
-    /** Dashboard renderers that will actually draw on this panel: HA Companion (either variant), Fully
-     *  Kiosk, the built-in renderer (only when it is BOTH selected — `dashboard_package=builtin` — AND
-     *  configured with an `ha_url`; an `ha_url` alone doesn't render anything), and any explicitly
-     *  configured dashboard package. Empty ⇒ nothing will draw a dashboard (ha-paneld itself still runs
-     *  fine). Drives the soft "no dashboard app" health notice, so a mere `ha_url` must not suppress it. */
+    /** Dashboard renderers that will actually draw on this panel: the built-in renderer when selected by
+     *  Auto or explicitly, and any explicitly configured dashboard package. Empty ⇒ nothing will draw a
+     *  dashboard (ha-paneld itself still runs fine). */
     fun dashboardRenderers(context: Context, dashboardPackage: String, haUrl: String = ""): List<String> {
         val out = mutableListOf<String>()
-        if (COMPANION_IDS.any { installed(context, it) }) out += "HA Companion"
-        if (installed(context, FULLY_KIOSK)) out += "Fully Kiosk"
-        if (dashboardPackage == SystemController.BUILTIN_DASHBOARD && haUrl.isNotBlank()) out += "Built-in renderer"
-        if (dashboardPackage.isNotBlank() && installed(context, dashboardPackage)) out += dashboardPackage
+        if ((dashboardPackage.isBlank() || dashboardPackage == SystemController.BUILTIN_DASHBOARD) && haUrl.isNotBlank()) {
+            out += "Built-in renderer"
+        }
+        if (dashboardPackage.isNotBlank() &&
+            dashboardPackage != SystemController.BUILTIN_DASHBOARD &&
+            installed(context, dashboardPackage)
+        ) out += dashboardPackage
         return out
     }
 

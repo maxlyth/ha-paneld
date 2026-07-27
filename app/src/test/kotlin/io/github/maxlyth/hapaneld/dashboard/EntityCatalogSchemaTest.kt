@@ -7,35 +7,116 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityCatalogSchemaTest {
-    @Test fun schemaUpgradePlanIsSequentialAndComplete() {
-        val plan = EntityCatalogSchema.plan(1, EntityCatalogSchema.CURRENT_VERSION)
-        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), plan.map { it.from })
-        assertEquals(EntityCatalogSchema.CURRENT_VERSION, plan.last().to)
-        assertTrue(plan.first().sql.single().contains("sync_generation"))
-        assertTrue(plan[1].sql.any { it.contains("rate_window_start") })
-        assertTrue(plan[2].sql.any { it.contains("minute_rollup") })
-        assertTrue(plan[3].sql.single().contains("issues_json"))
-        assertTrue(plan[4].sql.single().contains("dashboard_issue_ignore"))
-        assertTrue(plan[5].sql.contains("DROP TABLE IF EXISTS hourly"))
-        assertTrue(plan[5].sql.any { it.contains("span_start") })
-        assertTrue(plan[6].sql.any { it.contains("dashboard_performance") })
-        assertTrue(plan[7].sql.any { it.contains("app_state") })
-        assertTrue(plan[8].sql.any { it.contains("proximity_model") })
-        assertTrue(plan[8].sql.any { it.contains("proximity_rollup") })
-        assertTrue(plan.last().sql.any { it.contains("ambient_lux_minute") })
+    /** Version-agnostic: a bump should not need this test edited, only a new step added. */
+    @Test fun schemaUpgradePlanIsSequentialAndCompleteFromTheSupportedFloor() {
+        val floor = EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION
+        val current = EntityCatalogSchema.CURRENT_VERSION
+        val plan = EntityCatalogSchema.plan(floor, current)
+
+        assertEquals("every version from the floor must have a step", (floor until current).toList(), plan.map { it.from })
+        assertEquals(current, plan.last().to)
+        assertTrue("steps must be contiguous", plan.zipWithNext().all { (a, b) -> a.to == b.from })
+        assertTrue("every step must do something", plan.all { it.sql.isNotEmpty() || it.transform != null })
     }
 
     @Test fun sameVersionIsANoOpAndDowngradeIsRejected() {
-        assertTrue(EntityCatalogSchema.plan(11, 11).isEmpty())
-        assertTrue(runCatching { EntityCatalogSchema.plan(11, 10) }.isFailure)
-        assertTrue(runCatching { EntityCatalogSchema.plan(1, 12) }.isFailure)
+        val current = EntityCatalogSchema.CURRENT_VERSION
+        assertTrue(EntityCatalogSchema.plan(current, current).isEmpty())
+        assertTrue("a downgrade has no plan", runCatching { EntityCatalogSchema.plan(current, current - 1) }.isFailure)
+        assertTrue(
+            "a target beyond the newest step has no plan",
+            runCatching { EntityCatalogSchema.plan(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, current + 1) }.isFailure,
+        )
     }
 
-    @Test fun ambientHistoryFollowsRatherThanReusesTheProximitySchemaVersion() {
-        val ambientOnly = EntityCatalogSchema.plan(10, 11)
-        assertEquals(1, ambientOnly.size)
-        assertTrue(ambientOnly.single().sql.any { it.contains("ambient_lux_minute") })
-        assertFalse(ambientOnly.single().sql.any { it.contains("proximity_model") })
+    /**
+     * A step may break compatibility — the forward chain handles renames and drops on upgrade, which is
+     * the common direction — but it may not do so *silently*, because the chain cannot run backwards.
+     * So a non-additive step must say it is one.
+     */
+    @Test fun noMigrationStepBreaksCompatibilityWithoutDeclaringIt() {
+        val plan = EntityCatalogSchema.plan(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, EntityCatalogSchema.CURRENT_VERSION)
+        val undeclared = plan.filterNot { it.breaksCompatibility }.flatMap { step ->
+            SchemaAdditivePolicy.violations(step.sql).map { "step ${step.from}->${step.to} $it" }
+        }
+        assertEquals("a non-additive step must set breaksCompatibility", emptyList<String>(), undeclared)
+    }
+
+    /**
+     * And declaring it is not free: an older build meeting that structure will not find what it expects,
+     * so the compatible baseline has to move past the break. Otherwise the downgrade tolerance would
+     * still claim these versions are interchangeable when they are not.
+     */
+    @Test fun aDeclaredBreakMovesTheCompatibleBaselinePastIt() {
+        val plan = EntityCatalogSchema.plan(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, EntityCatalogSchema.CURRENT_VERSION)
+        plan.filter { it.breaksCompatibility }.forEach { step ->
+            assertTrue(
+                "step ${step.from}->${step.to} breaks compatibility, so MINIMUM_COMPATIBLE_VERSION must be " +
+                    "at least ${step.to} (is ${EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION})",
+                EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION >= step.to,
+            )
+        }
+    }
+
+    /** A step that claims a break must actually contain one, or the declaration is noise. */
+    @Test fun aDeclaredBreakIsAnActualBreak() {
+        EntityCatalogSchema.plan(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, EntityCatalogSchema.CURRENT_VERSION)
+            .filter { it.breaksCompatibility }
+            .forEach { step ->
+                assertTrue(
+                    "step ${step.from}->${step.to} declares a break but is additive",
+                    SchemaAdditivePolicy.violations(step.sql).isNotEmpty(),
+                )
+            }
+    }
+
+    @Test fun theAdditivePolicyRejectsEachUnsafeShape() {
+        // Removals and retypes break an older build that still reads them.
+        assertTrue(SchemaAdditivePolicy.violations("DROP TABLE dashboard_entity_traffic_minute").isNotEmpty())
+        assertTrue(SchemaAdditivePolicy.violations("ALTER TABLE dashboard DROP COLUMN issues_json").isNotEmpty())
+        assertTrue(SchemaAdditivePolicy.violations("ALTER TABLE dashboard RENAME TO board").isNotEmpty())
+        assertTrue(SchemaAdditivePolicy.violations("ALTER TABLE dashboard RENAME COLUMN path TO route").isNotEmpty())
+        // The silent one: an older build's inserts omit the column and cannot satisfy the constraint.
+        assertTrue(
+            SchemaAdditivePolicy.violations("ALTER TABLE dashboard ADD COLUMN owner TEXT NOT NULL").isNotEmpty(),
+        )
+        // Case and whitespace must not be an escape hatch.
+        assertTrue(SchemaAdditivePolicy.violations("drop   table   entity").isNotEmpty())
+    }
+
+    @Test fun theAdditivePolicyAcceptsSafeChanges() {
+        assertTrue(
+            SchemaAdditivePolicy.violations("ALTER TABLE dashboard ADD COLUMN owner TEXT NOT NULL DEFAULT ''").isEmpty(),
+        )
+        assertTrue(SchemaAdditivePolicy.violations("ALTER TABLE dashboard ADD COLUMN owner TEXT").isEmpty())
+        assertTrue(SchemaAdditivePolicy.violations("CREATE TABLE metric_meta(metadata_id INTEGER PRIMARY KEY)").isEmpty())
+        assertTrue(SchemaAdditivePolicy.violations("CREATE INDEX ix_metric_meta_id ON metric_meta(metadata_id)").isEmpty())
+    }
+
+    /**
+     * Structures older than public v0.9.5 must be rejected here rather than half-migrated. They are
+     * handled before the database is opened, because a throw inside onUpgrade aborts the open and takes
+     * configuration down with it.
+     */
+    @Test fun versionsBelowTheSupportedFloorAreRejected() {
+        assertEquals(11, EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION)
+        for (stale in 1 until EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION) {
+            assertTrue(
+                "schema $stale is below the floor and must not produce a plan",
+                runCatching { EntityCatalogSchema.plan(stale, EntityCatalogSchema.CURRENT_VERSION) }.isFailure,
+            )
+        }
+    }
+
+    @Test fun analyzerPolicyRevisionStartsStaleAndIsStampedOnlyBySuccessfulSync() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityCatalogStore.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityCatalogStore.kt"),
+        ).first(File::isFile).readText()
+
+        assertTrue(source.contains("analyzer_policy_version INTEGER NOT NULL DEFAULT 0"))
+        assertTrue(source.contains("issues_json=?,analyzer_policy_version=?,sync_generation=sync_generation+1"))
+        assertTrue(source.contains("DashboardConfigurationLint.ANALYZER_POLICY_VERSION"))
     }
 
     @Test fun retiredHourlyRollupCannotReturnToTheWritePath() {
@@ -47,5 +128,23 @@ class EntityCatalogSchemaTest {
         assertFalse(source.contains("CREATE TABLE hourly"))
         assertFalse(source.contains("INTO hourly"))
         assertFalse(source.contains("UPDATE hourly"))
+    }
+
+    @Test fun footprintCountsOnlyTheDatabaseAndKnownSqliteSidecars() {
+        val directory = File.createTempFile("catalog-footprint", "").let { probe ->
+            probe.delete()
+            probe.also { it.mkdirs() }
+        }
+        try {
+            val database = File(directory, EntityCatalogStore.DATABASE_NAME).apply { writeBytes(ByteArray(11)) }
+            File(database.path + "-wal").writeBytes(ByteArray(13))
+            File(database.path + "-shm").writeBytes(ByteArray(17))
+            File(database.path + "-journal").writeBytes(ByteArray(19))
+            File(database.path + "-backup").writeBytes(ByteArray(23))
+
+            assertEquals(60L, EntityCatalogStore.knownDatabaseFootprint(database))
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 }

@@ -7,6 +7,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.SystemClock
+import io.github.maxlyth.hapaneld.util.Cached
 
 internal data class WifiDiagnosticSnapshot(
     val ssid: String? = null,
@@ -89,38 +90,22 @@ internal class WifiDiagnosticAdmissionTracker {
 }
 
 internal class WifiDiagnosticCache(
-    private val nowMs: () -> Long = SystemClock::elapsedRealtime,
+    nowMs: () -> Long = SystemClock::elapsedRealtime,
 ) {
-    private var directCachedAtMs = Long.MIN_VALUE
-    private var directCached = WifiDiagnosticSnapshot()
-    private var shellCachedAtMs = Long.MIN_VALUE
-    private var shellCached = WifiDiagnosticSnapshot()
+    private val directCache = Cached(CACHE_MS, nowMs) { WifiDiagnosticSnapshot() }
+    private val shellCache = Cached(CACHE_MS, nowMs) { WifiDiagnosticSnapshot() }
 
-    @Synchronized
     fun snapshot(
         demand: WifiDiagnosticDemand,
         directReader: () -> WifiDiagnosticSnapshot,
         privilegedReader: () -> WifiDiagnosticSnapshot,
     ): WifiDiagnosticSnapshot {
-        val now = nowMs()
-        val direct = if (
-            directCachedAtMs != Long.MIN_VALUE && now - directCachedAtMs in 0 until CACHE_MS
-        ) {
-            directCached
-        } else {
-            runCatching(directReader).getOrDefault(WifiDiagnosticSnapshot()).also {
-                directCached = it
-                directCachedAtMs = now
-            }
+        val direct = directCache.getWithSupplier {
+            runCatching(directReader).getOrDefault(WifiDiagnosticSnapshot())
         }
         val shell = if (needsPrivilegedWifiStatus(direct, demand)) {
-            if (shellCachedAtMs != Long.MIN_VALUE && now - shellCachedAtMs in 0 until CACHE_MS) {
-                shellCached
-            } else {
-                runCatching(privilegedReader).getOrDefault(WifiDiagnosticSnapshot()).also {
-                    shellCached = it
-                    shellCachedAtMs = now
-                }
+            shellCache.getWithSupplier {
+                runCatching(privilegedReader).getOrDefault(WifiDiagnosticSnapshot())
             }
         } else {
             WifiDiagnosticSnapshot()
@@ -132,12 +117,9 @@ internal class WifiDiagnosticCache(
         )
     }
 
-    @Synchronized
     fun invalidate() {
-        directCachedAtMs = Long.MIN_VALUE
-        directCached = WifiDiagnosticSnapshot()
-        shellCachedAtMs = Long.MIN_VALUE
-        shellCached = WifiDiagnosticSnapshot()
+        directCache.invalidate()
+        shellCache.invalidate()
     }
 
     private companion object {

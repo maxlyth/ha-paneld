@@ -323,6 +323,16 @@ static void test_stat_jiffies(void) {
 
     // malformed: no parens -> -1.
     CHECK(stat_jiffies("garbage with no parens", NULL, 0) == -1, "stat_jiffies rejects no-paren\n");
+
+    long process_jiffies = -1, rss_pages = -1;
+    const char *full = "8 (resident proc) S 1 2 3 4 5 6 7 8 9 10 100 200 0 0 20 0 1 0 999 123456 777\n";
+    CHECK(stat_process_metrics(full, comm, sizeof comm, &process_jiffies, &rss_pages) == 0,
+          "stat_process_metrics accepts a complete process stat\n");
+    CHECK(process_jiffies == 300, "stat_process_metrics sums CPU jiffies (got %ld)\n", process_jiffies);
+    CHECK(rss_pages == 777, "stat_process_metrics extracts RSS pages (got %ld)\n", rss_pages);
+    CHECK(strcmp(comm, "resident proc") == 0, "stat_process_metrics extracts comm (got '%s')\n", comm);
+    CHECK(stat_process_metrics(s, comm, sizeof comm, &process_jiffies, &rss_pages) == -1,
+          "stat_process_metrics rejects a stat line truncated before RSS\n");
 }
 
 static void test_dispatch_exact_match(void) {

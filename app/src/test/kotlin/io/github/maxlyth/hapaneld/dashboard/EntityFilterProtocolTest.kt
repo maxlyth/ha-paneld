@@ -154,7 +154,7 @@ class EntityFilterProtocolTest {
 
         assertTrue(script.contains("targetWsOrigins=[\"ws://ha.example\",\"wss://ha.example\"]"))
         assertTrue(script.contains("targetWsPath=\"/prefix/api/websocket\""))
-        assertTrue(script.contains("entityFilterTrafficMetrics(payload)"))
+        assertTrue(script.contains("type:'entityFilterTrafficMetrics',payload:payload"))
         assertTrue(script.contains("frames=0,payloadBytes=0,entityUpdates=0"))
         assertTrue(script.contains("PerformanceObserver"))
         assertTrue(script.contains("message.event.r"))
@@ -174,10 +174,10 @@ class EntityFilterProtocolTest {
             const intervals=[];global.setInterval=(fn,ms)=>{intervals.push([fn,ms]);return intervals.length;};
             global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage&&this.port1.onmessage()};};
             let payload=null,modified=0;
-            global.externalApp={
-              entityFilterSubscriptionModified(){modified++;},
-              entityFilterTrafficMetrics(value){payload=value;}
-            };
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw);
+              if(message.type==='entityFilterSubscriptionModified')modified++;
+              if(message.type==='entityFilterTrafficMetrics')payload=message.payload;
+            }};
             function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];this.listeners={};}
             Native.prototype.send=function(data){this.sent.push(data);};
             Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
@@ -221,7 +221,7 @@ class EntityFilterProtocolTest {
             let clock=0;global.performance={now(){clock+=0.1;return clock;}};
             let flush=null,payload=null;global.setInterval=(fn)=>{flush=fn;};
             global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage&&this.port1.onmessage()};};
-            global.externalApp={entityFilterTrafficMetrics(value){payload=value;}};
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw);if(message.type==='entityFilterTrafficMetrics')payload=message.payload;}};
             function Native(){this.listeners={};}
             Native.prototype.send=function(){};
             Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
@@ -254,7 +254,7 @@ class EntityFilterProtocolTest {
             global.MessageChannel=function(){this.port1={onmessage:null};this.port2={postMessage:()=>this.port1.onmessage()};};
             const observers={};global.PerformanceObserver=function(cb){this.observe=o=>{observers[o.type]=cb};};
             global.PerformanceObserver.supportedEntryTypes=['event','long-animation-frame'];
-            global.externalApp={entityFilterTrafficMetrics(value){payload=value;}};
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw);if(message.type==='entityFilterTrafficMetrics')payload=message.payload;}};
             function Native(){this.listeners={};}Native.prototype.send=function(){};
             Native.prototype.addEventListener=function(kind,fn){this.listeners[kind]=fn;};
             Native.CONNECTING=0;Native.OPEN=1;Native.CLOSING=2;Native.CLOSED=3;global.WebSocket=Native;
@@ -309,7 +309,7 @@ class EntityFilterProtocolTest {
             global.window=globalThis;
             global.location={href:'https://ha.example/dashboard'};
             let modified=0;
-            global.externalApp={entityFilterSubscriptionModified(){modified++;}};
+            global.haPaneldV2={postMessage(raw){if(JSON.parse(raw).type==='entityFilterSubscriptionModified')modified++;}};
             function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];}
             Native.prototype.send=function(data){this.sent.push(data);};
             Native.CONNECTING=0;Native.OPEN=1;Native.CLOSING=2;Native.CLOSED=3;

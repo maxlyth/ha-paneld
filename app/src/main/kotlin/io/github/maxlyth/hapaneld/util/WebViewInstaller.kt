@@ -24,6 +24,21 @@ object WebViewInstaller {
     const val WEBVIEW_PKG = "com.android.webview"
     private const val TAG = "ha-paneld/webview"
 
+    /**
+     * The result of a [heal] attempt. [status] is the exact human-readable message shown in the UI /
+     * InstallProgress; callers switch on the variant rather than re-parsing it.
+     */
+    sealed interface HealResult {
+        val status: String
+        /** A no-op decision (no recommendation, engine already fine, or the pin is not newer). */
+        data class NoAction(override val status: String) : HealResult
+        /** The recommended WebView was installed and the dashboard should be reactivated. */
+        data class Installed(override val status: String) : HealResult
+        /** The install was attempted but failed. [terminal] = a durable rejection (retrying the same pin
+         *  cannot help), as opposed to a transient failure that a later tick may clear. */
+        data class Failed(override val status: String, val terminal: Boolean) : HealResult
+    }
+
     /** What [heal] should do — a pure decision so the gating logic is unit-testable without a device. */
     sealed class Decision {
         /** No known-good build for this panel → leave the WebView alone. */
@@ -70,32 +85,34 @@ object WebViewInstaller {
     /** Whether an auto-update result is durable evidence that retrying the same pin cannot help. Network,
      *  staging, storage, and temporarily unavailable privilege failures remain retryable on the next tick;
      *  successful/no-op decisions and package-manager rejection of a provider swap are terminal until the
-     *  profile pin changes or the user explicitly retries. */
-    internal fun shouldRecordAutoAttempt(result: String): Boolean =
-        result.startsWith("OK") ||
-            result.startsWith("already current") ||
-            result.startsWith("up to date") ||
-            result.startsWith("no known-good") ||
-            result.startsWith("refused") ||
-            result == "install failed: daemon install failed" ||
-            result.startsWith("install failed: Failure [")
+     *  profile pin changes or the user explicitly retries. The terminal-vs-retryable classification is the
+     *  producer's ([InstallOutcome]), carried on [HealResult.Failed.terminal]. */
+    internal fun shouldRecordAutoAttempt(result: HealResult): Boolean = when (result) {
+        is HealResult.Failed -> result.terminal
+        is HealResult.NoAction, is HealResult.Installed -> true
+    }
 
-    /** Heal the WebView per [decide]. Returns a short human status; "OK: …" on a successful install.
-     *  [autoUpdate] = the scheduled update-to-pin path (advance a working engine to a newer pin). */
-    suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): String =
+    /** Heal the WebView per [decide], returning a typed [HealResult] whose [HealResult.status] is a short
+     *  human status ("OK: …" on a successful install). [autoUpdate] = the scheduled update-to-pin path
+     *  (advance a working engine to a newer pin). */
+    suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): HealResult =
         when (val d = decide(profile.recommendedWebView, engineMajor, PanelHealth.MIN_CHROMIUM, force, autoUpdate)) {
-            is Decision.NoRecommendation -> "no known-good WebView for this panel"
-            is Decision.UpToDate -> "up to date (Chromium ${d.engineMajor ?: "?"})"
-            is Decision.NotNewer -> "already current (${d.version})"
+            is Decision.NoRecommendation -> HealResult.NoAction("no known-good WebView for this panel")
+            is Decision.UpToDate -> HealResult.NoAction("up to date (Chromium ${d.engineMajor ?: "?"})")
+            is Decision.NotNewer -> HealResult.NoAction("already current (${d.version})")
             is Decision.Install -> {
                 Log.i(TAG, "healing WebView → ${d.spec.version} (engine major was $engineMajor)")
-                val r = AppInstaller.install(
+                when (val outcome = AppInstaller.install(
                     context,
                     d.spec.url,
                     AppInstaller.Pin(WEBVIEW_PKG, d.spec.certSha256, d.spec.apkSha256),
                     allowShizuku = false,
-                )
-                if (r == "OK") "OK: installed WebView ${d.spec.version} — reloading the dashboard" else r
+                )) {
+                    InstallOutcome.Succeeded ->
+                        HealResult.Installed("OK: installed WebView ${d.spec.version} — reloading the dashboard")
+                    is InstallOutcome.Rejected -> HealResult.Failed(outcome.message, terminal = true)
+                    is InstallOutcome.Retryable -> HealResult.Failed(outcome.message, terminal = false)
+                }
             }
         }
 }

@@ -53,11 +53,10 @@ internal fun proximityCadenceWindowIsContinuous(sampleCount: Int): Boolean = sam
  */
 class SensorReporter(
     context: Context,
-    config: Config,
+    private val config: Config,
     private val profile: DeviceProfile,
 ) {
     private val appContext = context.applicationContext
-    private val config = config
     private val sm = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val lightSensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_LIGHT)
     private val proximitySensor: Sensor? = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY)

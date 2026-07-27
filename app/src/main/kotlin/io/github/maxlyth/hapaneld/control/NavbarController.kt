@@ -30,7 +30,8 @@ import io.github.maxlyth.hapaneld.R
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
-import io.github.maxlyth.hapaneld.util.BoundedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
+import io.github.maxlyth.hapaneld.util.submit
 import io.github.maxlyth.hapaneld.util.DurableRecoveryMarker
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -68,7 +69,7 @@ class NavbarController(
     private val brightness: BrightnessController,
     private val launcherPkg: () -> String,
     // Dashboard selection shared by the foreground-only Dashboard action and the force-stop+relaunch
-    // Reload action (blank => auto-detect the HA Companion; see [SystemController.resolveDashboard]).
+    // Reload action (blank => the automatic built-in renderer; see [SystemController.resolveDashboard]).
     private val dashboardPkg: () -> String,
     // Back/Recents and tap route preference; live failure falls through (see NavActions).
     private val appCanSu: Boolean,
@@ -119,7 +120,7 @@ class NavbarController(
     )
     private data class NavWork(val generation: Long, val action: () -> Unit, val finish: () -> Unit)
 
-    private val modeDispatcher = BoundedLatestDispatcher<ModeWork>(
+    private val modeDispatcher = LatestDispatcher.singleSlot<ModeWork>(
         threadName = "navbar-mode",
         consume = ::consumeModeWork,
         onDiscard = { work ->
@@ -131,7 +132,7 @@ class NavbarController(
             )
         },
     )
-    private val navDispatcher = BoundedLatestDispatcher<NavWork>(
+    private val navDispatcher = LatestDispatcher.singleSlot<NavWork>(
         threadName = "navbar-action",
         consume = ::consumeNavWork,
         onDiscard = { it.finish() },
@@ -185,11 +186,11 @@ class NavbarController(
             when {
                 closed -> {
                     completion.complete(NavbarModeApplyOutcome(previous, NavbarModeApplyStatus.CLOSED))
-                    BoundedLatestDispatcher.Admission.CLOSED
+                    LatestDispatcher.Admission.CLOSED
                 }
                 mode != expected -> {
                     completion.complete(NavbarModeApplyOutcome(previous, NavbarModeApplyStatus.SUPERSEDED))
-                    BoundedLatestDispatcher.Admission.COALESCED
+                    LatestDispatcher.Admission.COALESCED
                 }
                 else -> {
                     generation += 1
@@ -209,7 +210,7 @@ class NavbarController(
         val admission = synchronized(lifecycleLock) {
             if (closed) {
                 completion?.complete(NavbarModeApplyOutcome(mode, NavbarModeApplyStatus.CLOSED))
-                return@synchronized BoundedLatestDispatcher.Admission.CLOSED
+                return@synchronized LatestDispatcher.Admission.CLOSED
             }
             generation += 1
             this.mode = mode
@@ -442,7 +443,7 @@ class NavbarController(
         }
         if (work == null) {
             finish()
-            recordAdmission(FeatureCostOperation.NAVBAR_ACTION, BoundedLatestDispatcher.Admission.CLOSED, 0)
+            recordAdmission(FeatureCostOperation.NAVBAR_ACTION, LatestDispatcher.Admission.CLOSED, 0)
             return
         }
         val admission = navDispatcher.submit(work)
@@ -451,14 +452,15 @@ class NavbarController(
 
     private fun recordAdmission(
         operation: FeatureCostOperation,
-        admission: BoundedLatestDispatcher.Admission,
+        admission: LatestDispatcher.Admission,
         backlog: Int,
     ) {
         when (admission) {
-            BoundedLatestDispatcher.Admission.ACCEPTED -> Unit
-            BoundedLatestDispatcher.Admission.COALESCED ->
+            LatestDispatcher.Admission.ACCEPTED -> Unit
+            LatestDispatcher.Admission.COALESCED ->
                 FeatureCosts.registry.recordCoalesced(operation)
-            BoundedLatestDispatcher.Admission.CLOSED ->
+            LatestDispatcher.Admission.REJECTED, // unreachable for a single slot; dropped if it ever occurred
+            LatestDispatcher.Admission.CLOSED ->
                 FeatureCosts.registry.recordDropped(operation)
         }
         FeatureCosts.registry.setBacklog(operation, backlog)
@@ -942,8 +944,7 @@ class NavbarController(
 
     // --- permission ---
 
-    private fun canDraw(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+    private fun canDraw(): Boolean = Settings.canDrawOverlays(context)
 
     /** Grant `SYSTEM_ALERT_WINDOW` via root appops if it isn't already held (panels have no UI flow). */
     private fun ensureOverlayPermission(): Boolean {
@@ -1025,14 +1026,7 @@ class NavbarController(
         removeStrip()
     }
 
-    private fun overlayType(): Int =
-        // minSdk 26 == O, so always the unprivileged overlay type; guard kept for clarity.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
+    private fun overlayType(): Int = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
     private fun dp(v: Int): Int = (v * context.resources.displayMetrics.density).toInt()
 

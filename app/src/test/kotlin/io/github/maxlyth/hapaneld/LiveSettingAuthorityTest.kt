@@ -1,11 +1,220 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.mqtt.StateConverger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class LiveSettingAuthorityTest {
+    @Test fun `request outcome distinguishes applied deferred failed pending and rejected`() {
+        listOf(
+            LiveSettingApplyResult.APPLIED to LiveSettingRequestOutcome.APPLIED,
+            LiveSettingApplyResult.DEFERRED to LiveSettingRequestOutcome.DEFERRED,
+            LiveSettingApplyResult.FAILED to LiveSettingRequestOutcome.FAILED_PENDING,
+        ).forEach { (applyResult, expected) ->
+            val authority = LiveSettingAuthority(setOf("touch_sound"))
+            assertEquals(
+                expected,
+                authority.applyOrQueueOutcome("touch_sound", "true", "false") { _, _, _ -> applyResult },
+            )
+            assertEquals(expected.pending, authority.pendingSnapshot().isNotEmpty())
+        }
+        assertEquals(
+            LiveSettingRequestOutcome.REJECTED,
+            LiveSettingAuthority(emptySet()).applyOrQueueOutcome("touch_sound", "true", "false") { _, _, _ ->
+                LiveSettingApplyResult.APPLIED
+            },
+        )
+    }
+
+    @Test fun `failed hardware apply keeps desired durable and retained actual until replay converges`() {
+        val authority = LiveSettingAuthority(setOf("touch_sound"))
+        var desired = "false"
+        var actual = "false"
+        var retained = "OFF"
+
+        val first = authority.applyOrQueueOutcome("touch_sound", "true", desired) { _, value, previous ->
+            durableLiveSettingApply(
+                previousValue = previous.orEmpty(),
+                transient = false,
+                persist = { desired = value; true },
+                apply = { LiveSettingApplyResult.FAILED },
+            )
+        }
+
+        assertEquals(LiveSettingRequestOutcome.FAILED_PENDING, first)
+        assertEquals("true", desired)
+        assertEquals("false", actual)
+        assertEquals("OFF", retained)
+        assertEquals(mapOf("touch_sound" to "true"), authority.pendingSnapshot())
+
+        authority.replay { _, value, previous ->
+            durableLiveSettingApply(
+                previousValue = previous.orEmpty(),
+                transient = false,
+                persist = { desired = value; true },
+                apply = {
+                    actual = value
+                    retained = if (value == "true") "ON" else "OFF"
+                    LiveSettingApplyResult.APPLIED
+                },
+            )
+        }
+
+        assertEquals("true", desired)
+        assertEquals("true", actual)
+        assertEquals("ON", retained)
+        assertTrue(authority.pendingSnapshot().isEmpty())
+    }
+
+    @Test fun `applied hardware remains reported pending when durable journal cleanup fails`() {
+        val journal = FakeJournal().apply { removesSucceed = false }
+        val authority = LiveSettingAuthority(setOf("touch_sound"), journal)
+
+        val outcome = authority.applyOrQueueOutcome("touch_sound", "true", "false") { _, _, _ ->
+            LiveSettingApplyResult.APPLIED
+        }
+
+        assertEquals(LiveSettingRequestOutcome.FAILED_PENDING, outcome)
+        assertEquals(mapOf("touch_sound" to "true"), authority.pendingSnapshot())
+    }
+
+    @Test fun `persisted desired and retained actual converge only after successful replay`() {
+        data class Publication(val payload: String, val retain: Boolean, val done: (Boolean) -> Unit)
+        val publications = mutableListOf<Publication>()
+        var actual = false
+        val converger = StateConverger(
+            sender = { _, payload, retain, done -> publications += Publication(payload, retain, done) },
+            schedule = { it() },
+        )
+        converger.register(StateConverger.Channel(
+            "touch_sound",
+            "touch/state",
+            observe = { StateConverger.Observation.Known(if (actual) "ON" else "OFF") },
+        ))
+        converger.reconcile("touch_sound")
+        publications.last().done(true)
+
+        val journal = FakeJournal()
+        val authority = LiveSettingAuthority(setOf("touch_sound"), journal)
+        assertEquals(
+            LiveSettingRequestOutcome.FAILED_PENDING,
+            authority.applyOrQueueOutcome("touch_sound", "true", "false") { _, _, _ ->
+                LiveSettingApplyResult.FAILED
+            },
+        )
+        converger.reconcile("touch_sound", force = true)
+        publications.last().done(true)
+        assertEquals("OFF", publications.last().payload)
+        assertTrue(publications.last().retain)
+        assertEquals("true", journal.values.getValue("touch_sound").value)
+
+        authority.replayKeys(setOf("touch_sound")) { _, _, _, _ -> LiveSettingApplyResult.FAILED }
+        assertEquals(mapOf("touch_sound" to "true"), authority.pendingSnapshot())
+        authority.replayKeys(setOf("touch_sound")) { _, _, _, _ ->
+            actual = true
+            converger.reconcile("touch_sound", force = true)
+            LiveSettingApplyResult.APPLIED
+        }
+        publications.last().done(true)
+
+        assertEquals("ON", publications.last().payload)
+        assertTrue(publications.last().retain)
+        assertTrue(authority.pendingSnapshot().isEmpty())
+        assertTrue(journal.values.isEmpty())
+    }
+
+    @Test fun `replay callback holds no authority lock so discard cannot deadlock`() {
+        val authority = LiveSettingAuthority(setOf("auto_sleep"))
+        authority.applyOrQueueIf(
+            "auto_sleep", "false", "true", fence = 2L, expected = { true },
+        ) { _, _, _ -> LiveSettingApplyResult.DEFERRED }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val replay = thread {
+            authority.replay { _, _, _, _ ->
+                entered.countDown()
+                release.await(2, TimeUnit.SECONDS)
+                LiveSettingApplyResult.APPLIED
+            }
+        }
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+        val discard = thread { authority.discard("auto_sleep") }
+        discard.join(1_000L)
+        assertFalse("discard blocked behind replay callback", discard.isAlive)
+        release.countDown()
+        replay.join(1_000L)
+
+        assertFalse(replay.isAlive)
+        assertTrue(authority.pendingSnapshot().isEmpty())
+    }
+
+    @Test fun `same key applies serialize in accepted order`() {
+        val authority = LiveSettingAuthority(setOf("auto_sleep"))
+        val firstEntered = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val applied = mutableListOf<String>()
+        val first = thread {
+            authority.applyOrQueue("auto_sleep", "false") { _, value ->
+                synchronized(applied) { applied += value }
+                firstEntered.countDown()
+                releaseFirst.await(2, TimeUnit.SECONDS)
+                LiveSettingApplyResult.APPLIED
+            }
+        }
+        assertTrue(firstEntered.await(2, TimeUnit.SECONDS))
+
+        val second = thread {
+            authority.applyOrQueue("auto_sleep", "true") { _, value ->
+                synchronized(applied) { applied += value }
+                LiveSettingApplyResult.APPLIED
+            }
+        }
+        second.join(200L)
+        assertTrue("new same-key apply did not wait for the admitted apply", second.isAlive)
+
+        releaseFirst.countDown()
+        first.join(1_000L)
+        second.join(1_000L)
+        assertFalse(first.isAlive)
+        assertFalse(second.isAlive)
+        assertEquals(listOf("false", "true"), synchronized(applied) { applied.toList() })
+        assertTrue(authority.pendingSnapshot().isEmpty())
+    }
+
+    @Test fun `replay skips a snapshot superseded before its key is admitted`() {
+        val authority = LiveSettingAuthority(setOf("blocker", "target"))
+        authority.applyOrQueue("blocker", "old") { _, _ -> LiveSettingApplyResult.DEFERRED }
+        authority.applyOrQueue("target", "old") { _, _ -> LiveSettingApplyResult.DEFERRED }
+        val blockerEntered = CountDownLatch(1)
+        val releaseBlocker = CountDownLatch(1)
+        val replayed = mutableListOf<Pair<String, String>>()
+        val replay = thread {
+            authority.replay { key, value ->
+                synchronized(replayed) { replayed += key to value }
+                if (key == "blocker") {
+                    blockerEntered.countDown()
+                    releaseBlocker.await(2, TimeUnit.SECONDS)
+                }
+                LiveSettingApplyResult.APPLIED
+            }
+        }
+        assertTrue(blockerEntered.await(2, TimeUnit.SECONDS))
+
+        assertTrue(authority.applyOrQueue("target", "new") { _, _ -> LiveSettingApplyResult.DEFERRED })
+        releaseBlocker.countDown()
+        replay.join(1_000L)
+
+        assertFalse(replay.isAlive)
+        assertEquals(listOf("blocker" to "old"), synchronized(replayed) { replayed.toList() })
+        assertEquals(mapOf("target" to "new"), authority.pendingSnapshot())
+    }
+
     private class FakeJournal : LiveSettingAuthority.Journal {
         val values = linkedMapOf<String, LiveSettingAuthority.Pending>()
         var writesSucceed = true
@@ -74,7 +283,8 @@ class LiveSettingAuthorityTest {
         val journal = FakeJournal()
         val first = LiveSettingAuthority(setOf("brightness_bias"), journal)
         assertTrue(first.applyOrQueue("brightness_bias", "35") { _, _ -> LiveSettingApplyResult.DEFERRED })
-        assertEquals(mapOf("brightness_bias" to LiveSettingAuthority.Pending("35", null)), journal.values)
+        assertEquals("35", journal.values.getValue("brightness_bias").value)
+        assertTrue(journal.values.getValue("brightness_bias").generation.isNotBlank())
 
         val replacement = LiveSettingAuthority(setOf("brightness_bias"), journal)
         val replayed = mutableListOf<Pair<String, String>>()
@@ -106,7 +316,8 @@ class LiveSettingAuthorityTest {
             LiveSettingApplyResult.FAILED
         })
 
-        assertEquals(mapOf("brightness_bias" to LiveSettingAuthority.Pending("18", null)), journal.values)
+        assertEquals("18", journal.values.getValue("brightness_bias").value)
+        assertTrue(journal.values.getValue("brightness_bias").generation.isNotBlank())
         assertEquals(mapOf("brightness_bias" to "18"), authority.pendingSnapshot())
     }
 
@@ -136,10 +347,9 @@ class LiveSettingAuthorityTest {
             LiveSettingApplyResult.FAILED
         })
 
-        assertEquals(
-            mapOf("navbar_mode" to LiveSettingAuthority.Pending("Always on", "Off")),
-            journal.values,
-        )
+        assertEquals("Always on", journal.values.getValue("navbar_mode").value)
+        assertEquals("Off", journal.values.getValue("navbar_mode").previousValue)
+        assertTrue(journal.values.getValue("navbar_mode").generation.isNotBlank())
         assertEquals(mapOf("navbar_mode" to "Always on"), authority.pendingSnapshot())
         assertEquals(mapOf("navbar_mode" to "Off"), authority.pendingPreviousSnapshot())
     }
@@ -192,6 +402,25 @@ class LiveSettingAuthorityTest {
         }
 
         assertEquals("stable", replayPrevious)
+    }
+
+    @Test fun `durable safety fence survives authority recreation`() {
+        val journal = FakeJournal()
+        val first = LiveSettingAuthority(setOf("auto_sleep"), journal)
+        assertTrue(first.applyOrQueueIf(
+            "auto_sleep", "false", "true", fence = 42L, expected = { true },
+        ) { _, _, _ -> LiveSettingApplyResult.DEFERRED })
+        assertEquals(42L, journal.values.getValue("auto_sleep").fence)
+
+        val replacement = LiveSettingAuthority(setOf("auto_sleep"), journal)
+        var replayFence: Long? = null
+        replacement.replay { _, _, _, fence ->
+            replayFence = fence
+            LiveSettingApplyResult.APPLIED
+        }
+
+        assertEquals(42L, replayFence)
+        assertTrue(replacement.pendingSnapshot().isEmpty())
     }
 }
 

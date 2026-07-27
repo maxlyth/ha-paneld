@@ -48,6 +48,16 @@ class RendererConfigEffectsTest {
         assertTrue(effects.relaunchBuiltin)
     }
 
+    @Test fun nativeKioskChangeNeedsForegroundRelaunchWithoutReload() {
+        val effects = RendererConfigEffects.between(
+            previous = mapOf("dashboard_native_kiosk" to "false"),
+            accepted = mapOf("dashboard_native_kiosk" to "true"),
+        )
+
+        assertFalse(effects.reloadBuiltin)
+        assertTrue(effects.relaunchBuiltin)
+    }
+
     @Test fun importedExplicitAccessTokenReloadsWhenItDropsAnOldRefreshSession() {
         val effects = RendererConfigEffects.between(
             previous = mapOf("ha_token" to "same-access", "ha_refresh_token" to "old-refresh"),
@@ -80,5 +90,16 @@ class RendererConfigEffectsTest {
         assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_token_expiry" to "200")))
         assertTrue(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_client_id" to "new-client")))
         assertFalse(RendererConfigEffects.credentialsChanged(previous, mapOf("ha_url" to "http://ha:8123/")))
+    }
+
+    @Test fun aHomeDashboardChangeReloadsTheBuiltInRenderer() {
+        // Editing the home dashboard used to update config without navigating the renderer, so it looked
+        // like nothing happened. A home change now reloads the built-in renderer onto the new path.
+        val effects = RendererConfigEffects.between(
+            mapOf("home_dashboard" to "/lovelace/0"),
+            mapOf("home_dashboard" to "/kiosk/wall"),
+        )
+        assertTrue(effects.reloadBuiltin)
+        assertFalse(effects.dashboardChanged)
     }
 }

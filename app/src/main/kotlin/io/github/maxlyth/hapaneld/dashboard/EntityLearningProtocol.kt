@@ -2,11 +2,33 @@ package io.github.maxlyth.hapaneld.dashboard
 
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URI
 import java.security.MessageDigest
 
 /** Pure dashboard-analysis and document-start helpers for automatic entity learning. */
 object EntityLearningProtocol {
+    /**
+     * A dashboard the authenticated Home Assistant user can choose as this panel's home.
+     *
+     * @param icon the dashboard's own `mdi:*` icon name, or blank when none is set — the picker renders
+     *   Home Assistant's fallback (`mdi:view-dashboard`) client-side, mirroring HA's own picker.
+     * @param group `"panel"` for Home Assistant's built-in panel dashboards (Home, Energy, …) or
+     *   `"dashboard"` for user-created Lovelace dashboards — HA's picker presents them as separate groups.
+     */
+    data class HomeDashboardChoice(
+        val path: String,
+        val title: String,
+        val icon: String = "",
+        val group: String = "dashboard",
+    )
+
+    /**
+     * What the signed-in account's default dashboard resolves to, read scan-independently in the same
+     * WebSocket session as the dashboard list. `explicit` is true only when the user profile or the
+     * system carries a real `default_panel` — when false, "follow the account default" falls to Home
+     * Assistant's own fallback panel, and setup should recommend nominating a specific dashboard instead.
+     */
+    data class HomeDashboardDefault(val explicit: Boolean = false, val path: String = "")
+
     data class BrowserObserverCosts(
         val frames: Long,
         val entities: Long,
@@ -44,7 +66,6 @@ object EntityLearningProtocol {
         /** Canonical HA targets suitable for `extract_from_target`. */
         val targets: List<String>,
         val unresolved: List<String>,
-        val selectors: List<Selector> = emptyList(),
         val dynamicExpressions: List<DynamicExpression> = emptyList(),
     )
 
@@ -61,24 +82,12 @@ object EntityLearningProtocol {
             .put("fingerprint", fingerprint)
     }
 
-    data class Selector(
-        val exclude: Boolean,
-        val domains: Set<String> = emptySet(),
-        val entityGlobs: Set<String> = emptySet(),
-        val areas: Set<String> = emptySet(),
-        val labels: Set<String> = emptySet(),
-        val source: String = "dashboard:auto-entities-selector",
-    )
-
-    data class SelectorResolution(val entityIds: Set<String>, val unresolved: List<String>)
-
     /** Scan every nested dashboard value. False-positive entity-like strings are removed against the catalog later. */
     fun scanDashboard(configJson: String): ScanResult {
         val root = JSONObject(configJson)
         val ids = linkedSetOf<String>()
         val targets = linkedSetOf<String>()
         val unresolved = linkedSetOf<String>()
-        val selectors = mutableListOf<Selector>()
         val dynamicExpressions = linkedMapOf<String, DynamicExpression>()
 
         fun recordDynamicExpression(value: String, path: String) {
@@ -101,39 +110,6 @@ object EntityLearningProtocol {
                     inspectDynamicExpressions(value.opt(index), "$path[$index]")
                 }
                 is String -> recordDynamicExpression(value, path)
-            }
-        }
-
-        fun strings(value: Any?): Set<String> = when (value) {
-            is String -> setOf(value.lowercase())
-            is JSONArray -> (0 until value.length()).mapNotNull { value.optString(it).takeIf(String::isNotBlank)?.lowercase() }.toSet()
-            else -> emptySet()
-        }
-
-        fun selector(rule: JSONObject, exclude: Boolean, source: String): Selector = Selector(
-            exclude = exclude,
-            domains = strings(rule.opt("domain")),
-            entityGlobs = strings(rule.opt("entity_id")),
-            areas = strings(rule.opt("area")) + strings(rule.opt("area_id")),
-            labels = strings(rule.opt("label")) + strings(rule.opt("label_id")),
-            source = source,
-        )
-
-        fun autoEntityRules(card: JSONObject, path: String) {
-            val filter = card.optJSONObject("filter") ?: return
-            for ((name, excluded) in listOf("include" to false, "exclude" to true)) {
-                val value = filter.opt(name)
-                val rules = when (value) {
-                    is JSONArray -> (0 until value.length()).mapNotNull(value::optJSONObject)
-                    is JSONObject -> listOf(value)
-                    else -> emptyList()
-                }
-                for ((index, rule) in rules.withIndex()) {
-                    val parsed = selector(rule, excluded, "$path:auto-entities-$name[$index]")
-                    if (parsed.domains.isEmpty() && parsed.entityGlobs.isEmpty() && parsed.areas.isEmpty() && parsed.labels.isEmpty()) {
-                        unresolved += "$path:auto-entities-$name"
-                    } else selectors += parsed
-                }
             }
         }
 
@@ -168,12 +144,33 @@ object EntityLearningProtocol {
                 is JSONObject -> {
                     val type = value.optString("type")
                     if (type == "custom:auto-entities") {
-                        autoEntityRules(value, path)
                         // Selector filters are not walked for ordinary literal IDs, but their dynamic
-                        // expressions are still valuable configuration evidence.
-                        value.opt("filter")?.let { inspectDynamicExpressions(it, "$path.filter") }
+                        // expressions are still valuable configuration evidence. Selector admission
+                        // and diagnostics belong exclusively to DashboardConfigurationLint.
+                        value.opt("filter")?.let { filterValue ->
+                            inspectDynamicExpressions(filterValue, "$path.filter")
+                            // Include criteria remain selector-owned so an entity pattern is not
+                            // mistaken for a concrete dependency. Per-entity options are ordinary
+                            // child configuration, though, and can contain action targets or helper
+                            // entities which must remain available when the generated row is used.
+                            when (val include = (filterValue as? JSONObject)?.opt("include")) {
+                                is JSONObject -> when {
+                                    include.has("type") -> walk(include, "$path.filter.include")
+                                    include.has("options") -> walk(include.opt("options"), "$path.filter.include.options")
+                                }
+                                is JSONArray -> for (index in 0 until include.length()) {
+                                    include.optJSONObject(index)?.let { rule ->
+                                        when {
+                                            rule.has("type") -> walk(rule, "$path.filter.include[$index]")
+                                            rule.has("options") ->
+                                                walk(rule.opt("options"), "$path.filter.include[$index].options")
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    val before = ids.size + targets.size + selectors.size
+                    val before = ids.size + targets.size
                     val target = JSONObject()
                     for (key in TARGET_KEYS) if (value.has(key)) {
                         val (accepted, rejected) = targetValues(key, value.opt(key))
@@ -199,7 +196,9 @@ object EntityLearningProtocol {
                         type == "custom:auto-entities" && it == "filter"
                     }
                     for (key in keys) walk(value.opt(key), "$path.$key")
-                    if (type.startsWith("custom:") && before == ids.size + targets.size + selectors.size) {
+                    if (type.startsWith("custom:") && type != "custom:auto-entities" &&
+                        before == ids.size + targets.size
+                    ) {
                         unresolved += "$path:$type"
                     }
                 }
@@ -216,61 +215,13 @@ object EntityLearningProtocol {
         }
         walk(root, "dashboard")
         return ScanResult(
-            ids,
-            targets.toList(),
-            unresolved.toList(),
-            selectors,
-            dynamicExpressions.values.sortedWith(compareBy({ it.sourceLocation }, { it.fingerprint })),
+            entityIds = ids,
+            targets = targets.toList(),
+            unresolved = unresolved.toList(),
+            dynamicExpressions = dynamicExpressions.values.sortedWith(compareBy({ it.sourceLocation }, { it.fingerprint })),
         )
     }
 
-    fun resolveSelectors(
-        selectors: List<Selector>,
-        catalog: Collection<String>,
-        metadata: Map<String, String>,
-    ): SelectorResolution {
-        if (selectors.isEmpty()) return SelectorResolution(emptySet(), emptyList())
-        fun glob(pattern: String): Regex = Regex(buildString {
-                append('^')
-                for (ch in pattern) append(when (ch) { '*' -> ".*"; '?' -> "."; else -> Regex.escape(ch.toString()) })
-                append('$')
-            })
-        data class Meta(val area: String, val labels: Set<String>)
-        data class CompiledSelector(val source: Selector, val entityGlobs: List<Regex>)
-        val parsedMetadata = mutableMapOf<String, Meta>()
-        fun metadataFor(id: String): Meta = parsedMetadata.getOrPut(id) {
-            val meta = metadata[id]?.let { runCatching { JSONObject(it) }.getOrNull() }
-            Meta(meta?.optString("ai")?.lowercase().orEmpty(), meta?.optJSONArray("lb")?.let { a ->
-                (0 until a.length()).map(a::optString).map(String::lowercase).toSet()
-            }.orEmpty())
-        }
-        val compiled = selectors.map { CompiledSelector(it, it.entityGlobs.map(::glob)) }
-        fun matches(selector: CompiledSelector, id: String): Boolean {
-            val source = selector.source
-            return (source.domains.isEmpty() || id.substringBefore('.') in source.domains) &&
-                (selector.entityGlobs.isEmpty() || selector.entityGlobs.any { it.matches(id) }) &&
-                (source.areas.isEmpty() || metadataFor(id).area in source.areas) &&
-                (source.labels.isEmpty() || metadataFor(id).labels.any(source.labels::contains))
-        }
-        val included = linkedSetOf<String>()
-        val unresolved = mutableListOf<String>()
-        for (selector in compiled.filterNot { it.source.exclude }) {
-            val matched = catalog.filterTo(sortedSetOf()) { matches(selector, it) }
-            when {
-                matched.size > SELECTOR_ENTITY_LIMIT -> unresolved +=
-                    "${selector.source.source}:broad-selector(${matched.size}>$SELECTOR_ENTITY_LIMIT)"
-                (included + matched).size > SELECTOR_TOTAL_BUDGET -> unresolved +=
-                    "${selector.source.source}:selector-budget(${included.size}+${matched.size}>$SELECTOR_TOTAL_BUDGET)"
-                else -> included += matched
-            }
-        }
-        val excluded = compiled.filter { it.source.exclude }.flatMap { s -> catalog.filter { matches(s, it) } }.toSet()
-        included.removeAll(excluded)
-        return SelectorResolution(included, unresolved)
-    }
-
-    internal const val SELECTOR_ENTITY_LIMIT = 64
-    internal const val SELECTOR_TOTAL_BUDGET = 128
     internal const val MAX_DYNAMIC_EXPRESSION_LENGTH = 2048
 
     /**
@@ -308,6 +259,72 @@ object EntityLearningProtocol {
         return sanitizedDefaultPanelPath(defaultPanel)
     }
 
+    /**
+     * Preserve Home Assistant's dashboard ordering while reducing its WebSocket response to safe local paths.
+     * `lovelace/dashboards/list` does not itself hide administrator-only dashboards, so that policy is applied
+     * here using the authenticated user's role.
+     */
+    fun homeDashboardChoices(dashboards: JSONArray, isAdmin: Boolean): List<HomeDashboardChoice> {
+        val choices = mutableListOf<HomeDashboardChoice>()
+        val seenPaths = mutableSetOf<String>()
+        for (index in 0 until dashboards.length()) {
+            val dashboard = dashboards.optJSONObject(index) ?: continue
+            if (dashboard.optBoolean("require_admin") && !isAdmin) continue
+            val urlPath = dashboard.optString("url_path").trim().trim('/')
+            if (urlPath.isNotBlank() && !DASHBOARD_PATH_SEGMENT.matches(urlPath)) continue
+            val path = if (urlPath.isBlank() || urlPath == "lovelace") "/lovelace" else "/$urlPath"
+            if (!seenPaths.add(path)) continue
+            val title = dashboard.optString("title").trim().ifBlank {
+                if (path == "/lovelace") "Home" else path.removePrefix("/")
+            }
+            choices += HomeDashboardChoice(path, title, sanitizedIconName(dashboard.optString("icon")))
+        }
+        return choices
+    }
+
+    /**
+     * Home Assistant's built-in panel dashboards (Home, Light, Security, …) in the frontend's own fixed
+     * presentation order, reduced from the `get_panels` result. HA's dashboard picker lists these as their
+     * own group ahead of user-created dashboards; they are panels, not Lovelace dashboards, so
+     * `lovelace/dashboards/list` never returns them. Icons and titles are data-driven from the panel
+     * registration — only the client-side fallback icon is hardcoded, mirroring HA.
+     */
+    fun panelDashboardChoices(panels: JSONObject?, isAdmin: Boolean): List<HomeDashboardChoice> {
+        if (panels == null) return emptyList()
+        return PANEL_DASHBOARD_ORDER.mapNotNull { key ->
+            val panel = panels.optJSONObject(key) ?: return@mapNotNull null
+            if (panel.optBoolean("require_admin") && !isAdmin) return@mapNotNull null
+            val title = panel.optString("title").trim().ifBlank {
+                key.replaceFirstChar { it.uppercase() }
+            }
+            HomeDashboardChoice("/$key", title, sanitizedIconName(panel.optString("icon")), group = "panel")
+        }
+    }
+
+    /**
+     * Reduce the account's server-side default-panel reads (`frontend/get_user_data` then
+     * `frontend/get_system_data`, both key `core`, field `default_panel`) to what setup needs: whether a
+     * real default EXISTS, and the legal path it names. A malformed value is treated as absent rather than
+     * passed through — the picker must only ever preselect a value it could itself have offered.
+     */
+    fun homeDashboardDefault(userDefault: String?, systemDefault: String?): HomeDashboardDefault {
+        val raw = userDefault?.trim().orEmpty().ifBlank { systemDefault?.trim().orEmpty() }
+        if (raw.isBlank()) return HomeDashboardDefault()
+        val segment = raw.substringBefore('?').substringBefore('#').trim('/').substringBefore('/')
+        if (segment == "null" || !DASHBOARD_PATH_SEGMENT.matches(segment)) return HomeDashboardDefault()
+        return HomeDashboardDefault(explicit = true, path = "/$segment")
+    }
+
+    /** Accept only well-formed `mdi:` icon names; anything else renders as the client-side fallback. */
+    private fun sanitizedIconName(icon: String?): String {
+        val value = icon?.trim().orEmpty()
+        return if (MDI_ICON_NAME.matches(value)) value else ""
+    }
+
+    /** HA frontend `PANEL_DASHBOARDS` order (ha-config-lovelace-dashboards): fixed, not sidebar order. */
+    private val PANEL_DASHBOARD_ORDER = listOf("home", "light", "security", "climate", "energy", "maintenance")
+    private val MDI_ICON_NAME = Regex("^mdi:[a-z0-9-]+$")
+
     private fun sanitizedDefaultPanelPath(defaultPanel: String?): String {
         val value = defaultPanel?.trim().orEmpty()
         if (value.isBlank() || value.startsWith("//") || '\\' in value || URL_SCHEME.containsMatchIn(value)) return ""
@@ -340,11 +357,7 @@ object EntityLearningProtocol {
         documentOrigins: Collection<String> = setOf(EntityFilterProtocol.origin(haUrl)),
         featureCostsEnabled: Boolean = true,
     ): String {
-        val upstream = URI(EntityFilterProtocol.upstreamWebSocketUrl(haUrl))
-        val targetWsOrigins = JSONArray(documentOrigins.map(EntityFilterProtocol::origin).distinct().sorted().map {
-            it.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
-        }).toString()
-        val targetWsPath = JSONObject.quote(upstream.rawPath)
+        val (targetWsOrigins, targetWsPath) = InjectionScript.wsTargets(haUrl, documentOrigins)
         val observerSetup = if (featureCostsEnabled) """
           const now=()=>window.performance&&typeof window.performance.now==='function'?window.performance.now():0;
           let observerFrames=0,observerEntities=0,observerFrameChars=0,observerParseMs=0,observerStringifyMs=0,
@@ -377,7 +390,7 @@ object EntityLearningProtocol {
         } else ""
         return """
         (()=>{
-          if(window.top&&window.top!==window)return;
+          ${InjectionScript.TOP_FRAME_GUARD}
           if(window.__haPaneldEntityLearning)return;
           window.__haPaneldEntityLearning=true;
           const wrapped=new WeakSet(),id=/^[a-z0-9_]+\.[a-z0-9_]+$/;
@@ -405,18 +418,18 @@ object EntityLearningProtocol {
             const accessed={};seen.forEach((count,entityId)=>accessed[entityId]=count);
             const payload=JSON.stringify({accessed:accessed,missing:Array.from(missing)}),discarded=seen.size+missing.size;
             seen.clear();missing.clear();
-            if(payload.length<maxBridgeChars){try{window.externalApp&&window.externalApp.entityLearningAccesses(payload)}catch(e){}}
-            ${if (featureCostsEnabled) "else observerDropped=sat(observerDropped,discarded);" else ""}
+            if(payload.length<maxBridgeChars){try{window.haPaneldV2&&window.haPaneldV2.postMessage(JSON.stringify({type:'entityLearningAccesses',payload:JSON.parse(payload)}))}catch(e){}}
+            ${if (featureCostsEnabled) "else observerDropped=sat(observerDropped,discarded);" else "// Cost tracking disabled."}
           }
           setInterval(flush,2000);
           setInterval(()=>{
             if(!metrics.size$observerMetricGuard)return;
             const out={},discarded=metrics.size;metrics.forEach((v,k)=>out[k]=v);metrics.clear();
-            $observerEnvelope
+            ${observerEnvelope.ifEmpty { "// Cost envelope disabled." }}
             const payload=JSON.stringify(out);
-            $observerReset
-            if(payload.length<maxBridgeChars){try{window.externalApp&&window.externalApp.entityLearningMetrics(payload)}catch(e){}}
-            $oversizedPayloadDrop
+            ${observerReset.ifEmpty { "// Cost counters disabled." }}
+            if(payload.length<maxBridgeChars){try{window.haPaneldV2&&window.haPaneldV2.postMessage(JSON.stringify({type:'entityLearningMetrics',payload:JSON.parse(payload)}))}catch(e){}}
+            ${oversizedPayloadDrop.ifEmpty { "// Cost drop tracking disabled." }}
           },5000);
           const Parent=window.WebSocket,targetWsOrigins=$targetWsOrigins,targetWsPath=$targetWsPath;
           function LearningWebSocket(url,protocols){
@@ -483,8 +496,6 @@ object EntityLearningProtocol {
         }.toSet()
         return accessed to missing
     }
-
-    fun parseMetricBatch(text: String): Map<String, Pair<Long, Long>> = parseMetricEnvelope(text).metrics
 
     fun parseMetricEnvelope(text: String): MetricEnvelope {
         val obj = JSONObject(text)

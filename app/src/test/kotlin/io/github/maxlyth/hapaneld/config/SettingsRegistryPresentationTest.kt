@@ -8,6 +8,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRegistryPresentationTest {
+    @Test fun keepPanelResponsiveExplainsScreenOffBehaviorAndDefaultsOn() {
+        val spec = SettingsRegistry.spec("keep_awake")!!
+        assertEquals("Keep panel responsive", spec.label)
+        assertEquals("true", spec.default)
+        assertEquals(
+            "Keep the network and background services running while the screen is off.",
+            spec.help,
+        )
+    }
+
     @Test fun networkAdbIsLastSystemSettingAndRetainsSafeDefaults() {
         val spec = SettingsRegistry.spec("network_adb")!!
         assertEquals("network_adb", SettingsRegistry.SPECS.last { it.group == "System" }.key)
@@ -29,6 +39,14 @@ class SettingsRegistryPresentationTest {
         assertTrue(help.contains("Android Home app"))
     }
 
+    @Test fun navbarModeIsAHomeAssistantSelectWithAConfigureSyncControl() {
+        val spec = SettingsRegistry.spec("navbar_mode")!!
+        assertFalse(spec.haExposedByDefault)
+        assertEquals("select", spec.ha!!.component)
+        assertEquals("navbar", spec.ha!!.objectSuffix)
+        assertTrue(spec.ha!!.body.contains("\"options\":[\"Off\",\"Always on\",\"Swipe reveal\"]"))
+    }
+
     @Test fun lastBootTimeRenamesPresentationWithoutChangingIdentity() {
         val spec = SettingsRegistry.spec("diag_boot")!!
         assertEquals("Last boot time", spec.label)
@@ -41,9 +59,9 @@ class SettingsRegistryPresentationTest {
 
     @Test fun sensorsCardImmediatelyPrecedesDiagnosticsAndContainsOnlySensorReadings() {
         val groups = SettingsRegistry.SPECS.map { it.group }.distinct()
-        assertEquals(groups.indexOf("Sensors") + 1, groups.indexOf("Diagnostics"))
+        assertTrue(groups.indexOf("Sensors") < groups.indexOf("Diagnostics"))
         assertEquals(
-            listOf("screen", "volume", "illuminance", "proximity", "proximity_level", "temperature", "humidity", "room_temp", "room_humidity", "room_temp_offset"),
+            listOf("screen", "volume", "illuminance", "proximity", "proximity_level", "auto_sleep_activity", "temperature", "humidity", "room_temp", "room_humidity", "room_temp_offset"),
             SettingsRegistry.SPECS.filter { it.group == "Sensors" }.map { it.key },
         )
         val screen = SettingsRegistry.spec("screen")!!
@@ -60,9 +78,24 @@ class SettingsRegistryPresentationTest {
         assertFalse(SettingsRegistry.spec("illuminance")!!.availableWhen(Capabilities()))
         assertTrue(SettingsRegistry.spec("proximity")!!.availableWhen(Capabilities(hasLearnedProximity = true)))
         assertFalse(SettingsRegistry.spec("proximity")!!.availableWhen(Capabilities(hasProximity = true)))
-        listOf("illuminance", "proximity", "proximity_level", "temperature", "humidity").forEach {
+        listOf(
+            "volume", "illuminance", "proximity", "proximity_level", "temperature", "humidity",
+            "room_temp", "room_humidity",
+        ).forEach {
             assertTrue(SettingsRegistry.spec(it)!!.haExposedByDefault)
             assertTrue(SettingsRegistry.spec(it)!!.ha!!.readOnly)
+        }
+        assertFalse(SettingsRegistry.spec("auto_sleep_activity")!!.haExposedByDefault)
+        assertTrue(SettingsRegistry.spec("auto_sleep_activity")!!.ha!!.readOnly)
+    }
+
+    @Test fun onlySensorsCardEntitiesSyncToHomeAssistantByDefault() {
+        SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
+            assertEquals(
+                "unexpected HA sync default for ${spec.key}",
+                spec.group == "Sensors" && spec.key !in setOf("auto_sleep_activity"),
+                spec.haExposedByDefault,
+            )
         }
     }
 

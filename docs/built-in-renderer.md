@@ -7,7 +7,7 @@ Since 0.9, ha-paneld can render the Home Assistant dashboard itself, in its own 
 
 ## What it is
 
-A WebView inside ha-paneld pointed at your dashboard, authenticated with the frontend's documented `?external_auth=1` contract — the same interface the HA Companion uses. It is integrated with ha-paneld's own machinery rather than treated as a black box: the watchdog and kiosk lock know when the dashboard is actually connected, memory is bounded over long uptimes, and page-level failures are recovered on the panel.
+A WebView inside ha-paneld pointed at your dashboard, authenticated with the frontend's documented `?external_auth=1` contract — the same interface the HA Companion uses. It is integrated with ha-paneld's own machinery rather than treated as a black box: the watchdog knows when the dashboard is actually connected, memory is bounded over long uptimes, and page-level failures are recovered on the panel.
 
 Engineered for weeks-long unattended uptime:
 
@@ -17,13 +17,24 @@ Engineered for weeks-long unattended uptime:
 - Renderer crashes are contained and rate-limited — a reliably-crashing page falls back to the admin launcher rather than churning all night.
 - Terminally rejected login settings latch and show Browser sign-in instructions on the panel instead of retrying forever.
 
-Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, an edge-to-edge fullscreen mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted). On panels using ha-paneld's software navigation bar, **Dashboard** brings the configured renderer to the foreground without reloading it; **Reload** remains a separate recovery action.
+Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, optional **Hide Android system bars** mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted). On panels using ha-paneld's software navigation bar, **Dashboard** brings the configured renderer to the foreground without reloading it; **Reload** remains a separate recovery action.
 
-The renderer sizes the dashboard the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its layout; the **Dashboard zoom** setting adjusts it (100% = the Companion default). It also adds an **App Configuration** entry to the Home Assistant sidebar that opens this panel's configuration page, and on first run it hides the sidebar and keeps the connection alive while idle — sensible defaults for a wall panel that you can still change afterwards.
+The renderer sizes the dashboard the same way the Home Assistant Companion app does, so a panel switched over from the Companion keeps its layout; the **Dashboard zoom** setting adjusts it (100% = the Companion default). It also adds an **App Configuration** entry to the Home Assistant sidebar that opens this panel's configuration page, and on first run it sets the docked sidebar to hidden and keeps the connection alive while idle — sensible defaults for a wall panel that you can still change afterwards. The sidebar can still be opened; the separate **Hide Home Assistant navigation (native)** option below asks the frontend to remove its navigation while native kiosk mode is active.
+
+## Requirements and compatibility
+
+Starting with ha-paneld 0.9.6, the built-in renderer requires both:
+
+- **Home Assistant 2026.4.2 or newer**; and
+- an Android System WebView that supports the secure WebMessage listener used by Home Assistant's native-host interface.
+
+ha-paneld checks the WebView first and verifies Home Assistant compatibility before it allows the dashboard to load. If the panel shows **Home Assistant upgrade required** or **Secure dashboard bridge unavailable**, update the named component and select **Retry**. The built-in renderer does not fall back to the older, less isolated bridge. Another renderer may help when Home Assistant itself cannot be upgraded. Companion uses the same system WebView, however, so it cannot bypass an obsolete WebView on the panel.
 
 ## Turning it on
 
-Open the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. The authorization happens in the administrator's browser, so credentials do not need to be typed on the panel. Once connected, select **Built-in renderer** as the Dashboard app.
+On a new or reset panel, open `http://<panel>:8888/setup` from a laptop or phone, or select **Set up** on the panel itself. The guided journey chooses the renderer, signs in to Home Assistant, selects the Home dashboard or the account default, and asks about the entity filter before the first dashboard load. The authorization happens in the administrator's browser, so credentials do not need to be typed on the panel.
+
+On an existing panel, open the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**, then select **Built-in renderer** as the Dashboard app.
 
 Existing rooted installations that already imported a signed-in Companion session remain supported as a compatibility path. New installations should use Browser sign-in.
 
@@ -39,6 +50,18 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 The password never reaches the panel — the login happens on your machine and the panel holds a revocable refresh token. A long-lived access token works too: `--ha-token-file ha-token.txt` instead of `--ha-user/--ha-pass-file`. See [Provisioning and fleet updates](provisioning.md) for securely creating credential files and the trusted-LAN transport boundary. Literal `--ha-pass` and `--ha-token` values remain compatibility options, but expose the value in the original shell command and process list.
 
 For automated provisioning, a token or username/password flow remains available as an advanced fallback. Interactive installations should use Browser sign-in.
+
+## Dashboard appearance versus Android lock
+
+Advanced Configure exposes three controls that affect different layers. They are intentionally independent:
+
+| Configure option | What it changes | What it does **not** change |
+|---|---|---|
+| **Hide Home Assistant navigation (native)** (on by default) | After Home Assistant connects, asks its native frontend to hide its navigation. Built-in renderer only. | Does not lock Android, hide Android system bars, or inject or modify dashboard CSS. If Home Assistant rejects or does not support the command, the dashboard is left unchanged. |
+| **Hide Android system bars** (on by default) | Hides Android's status and navigation bars for an edge-to-edge dashboard. Swipe from an edge to reveal them. Built-in renderer only. | Does not prevent someone leaving the app and does not hide Home Assistant's own menus/navigation. |
+| **Lock Android to dashboard (experimental)** (off by default) | With root, hides Android system bars and returns to the selected dashboard within about three seconds when another app or Recents opens. This is a casual-use deterrent, not an adversarial security boundary. | Does not change the Home Assistant dashboard appearance. It has no effect without root. Reboot provides a 60-second unlocked recovery window, then the saved lock is reasserted. |
+
+For a cleaner dashboard, start with **Hide Home Assistant navigation (native)** and/or **Hide Android system bars**. Enable **Lock Android to dashboard** only when discouraging casual escape from the app is required and you have tested the documented release routes: Configure, the Home Assistant switch, adb, seven rapid taps in the top-left corner, or the unlocked window after reboot.
 
 ## Experimental entity filter
 

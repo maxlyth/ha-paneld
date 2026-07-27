@@ -279,6 +279,22 @@ class DashboardRecoveryTest {
         assertFalse(dashboardNavigationAllowed("not a url", "https://ha.example/lovelace/0"))
     }
 
+    @Test fun `physical panel oauth navigation admits only HA and local callback`() {
+        assertTrue(panelHaOAuthNavigationAllowed("https://ha.example", "https://ha.example/auth/authorize?state=s"))
+        assertTrue(panelHaOAuthNavigationAllowed("https://ha.example", "http://127.0.0.1:8888/api/v1/ha/oauth/callback?state=s&code=c"))
+        assertTrue(panelHaOAuthNavigationAllowed("https://ha.example", "http://localhost:8888/api/v1/ha/oauth/callback?state=s&code=c"))
+        assertFalse(panelHaOAuthNavigationAllowed("https://ha.example", "http://ha.example/lovelace/0"))
+        assertFalse(panelHaOAuthNavigationAllowed("https://ha.example", "http://127.0.0.1:8888/configure"))
+        assertFalse(panelHaOAuthNavigationAllowed("https://ha.example", "http://other.example:8888/api/v1/ha/oauth/callback?state=s"))
+    }
+
+    @Test fun `physical panel oauth start url targets local control surface`() {
+        assertEquals(
+            "http://127.0.0.1:8888/api/v1/ha/oauth/panel-start?ha_url=https%3A%2F%2Fha.example%3A8123",
+            panelHaOAuthStartUrl("https://ha.example:8123/"),
+        )
+    }
+
     @Test fun `document start origins mirror allowed scheme upgrades without broadening authority`() {
         assertEquals(setOf("https://ha.example"), dashboardDocumentStartOrigins("https://HA.EXAMPLE/lovelace"))
         assertEquals(

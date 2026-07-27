@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,12 +29,25 @@ class EntityLearningProtocolTest {
             learningEnabled = true,
             lastSyncAt = 1234L,
             resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            analyzerPolicyStale = true,
+        ))
+        assertFalse(shouldSyncEntityLearningOnStartup(
+            learningEnabled = false,
+            lastSyncAt = 1234L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            analyzerPolicyStale = true,
+        ))
+        assertTrue(shouldSyncEntityLearningOnStartup(
+            learningEnabled = true,
+            lastSyncAt = 1234L,
+            resolverMigration = DashboardEntityDefaultResolverMigration.NOT_NEEDED,
             forceBootstrap = true,
         ))
         assertFalse(shouldSyncEntityLearningOnStartup(
             learningEnabled = true,
             lastSyncAt = 0L,
             resolverMigration = DashboardEntityDefaultResolverMigration.PERSIST_FAILED,
+            analyzerPolicyStale = true,
         ))
     }
 
@@ -41,6 +56,83 @@ class EntityLearningProtocolTest {
         assertFalse(shouldBootstrapEntityLearning(learningEnabled = true, applied = false, configuredIds = listOf("light.kitchen")))
         assertFalse(shouldBootstrapEntityLearning(learningEnabled = true, applied = true, configuredIds = emptyList()))
         assertFalse(shouldBootstrapEntityLearning(learningEnabled = false, applied = false, configuredIds = emptyList()))
+    }
+
+    @Test fun firstBootstrapDefaultsOnlyIgnorableCompatibilityFindingsToIgnored() {
+        val ordinary = org.json.JSONObject()
+            .put("blocking", true)
+            .put("ignorable", true)
+            .put("fingerprint", "0123456789abcdef")
+        val hardFence = org.json.JSONObject()
+            .put("blocking", true)
+            .put("ignorable", false)
+            .put("fingerprint", "fedcba9876543210")
+        assertEquals(
+            setOf("0123456789abcdef"),
+            defaultIgnoredIssueFingerprints(initialActivationPending = true, bootstrap = true, issues = listOf(ordinary, hardFence)),
+        )
+        assertTrue(defaultIgnoredIssueFingerprints(false, true, listOf(ordinary)).isEmpty())
+        assertTrue(defaultIgnoredIssueFingerprints(true, false, listOf(ordinary)).isEmpty())
+
+        val firstRunEffective = org.json.JSONArray(EntityCatalogIssuePersistence.applyIgnores(
+            org.json.JSONArray(listOf(ordinary, hardFence)),
+            setOf("0123456789abcdef"),
+        ))
+        val effectiveByFingerprint = (0 until firstRunEffective.length())
+            .map(firstRunEffective::getJSONObject)
+            .associateBy { it.getString("fingerprint") }
+        assertFalse(effectiveByFingerprint.getValue("0123456789abcdef").getBoolean("blocking"))
+        assertTrue(effectiveByFingerprint.getValue("0123456789abcdef").getBoolean("ignored"))
+        assertTrue(effectiveByFingerprint.getValue("fedcba9876543210").getBoolean("blocking"))
+        assertEquals(
+            AutomaticSyncDecision.BLOCKED,
+            automaticSyncDecision(true, applied = false, configuredIds = emptyList(), blockingIssues = true),
+        )
+
+        val ordinaryOnly = org.json.JSONArray(EntityCatalogIssuePersistence.applyIgnores(
+            org.json.JSONArray(listOf(ordinary)),
+            setOf("0123456789abcdef"),
+        ))
+        assertFalse(ordinaryOnly.getJSONObject(0).getBoolean("blocking"))
+        assertEquals(
+            AutomaticSyncDecision.BOOTSTRAP,
+            automaticSyncDecision(true, applied = false, configuredIds = emptyList(), blockingIssues = false),
+        )
+    }
+
+    @Test fun defaultIgnoredSelectorBudgetDropsOnlyTheLinterProjection() {
+        val fingerprint = "0123456789abcdef"
+        val selectorBudget = DashboardConfigurationLint.Issue(
+            type = DashboardConfigurationLint.IssueType.SELECTOR_BUDGET,
+            viewTitle = "Overview",
+            viewPath = "overview",
+            cardTitle = null,
+            sourceLocations = listOf("cards[0]"),
+            ruleSummary = "selector budget",
+            candidateCount = 200,
+            limit = DashboardConfigurationLint.SELECTOR_TOTAL_LIMIT,
+            reason = "too many candidates",
+            recommendation = "narrow the selector",
+            fingerprint = fingerprint,
+        )
+        val lint = DashboardConfigurationLint.Result(
+            safeEntityIds = setOf("light.partial_selector_result"),
+            issues = listOf(selectorBudget),
+            dashboardRevision = "revision",
+        )
+
+        val lintIds = effectiveLintEntityIds(lint, setOf(fingerprint))
+        assertTrue(lintIds.isEmpty())
+        assertEquals(
+            sortedSetOf("light.direct", "sensor.expanded"),
+            deriveStaticEntityIds(
+                scannedEntityIds = listOf("light.direct", "sensor.not_in_catalog"),
+                catalogIds = setOf("light.direct"),
+                expandedTargets = setOf("sensor.expanded"),
+                lintEntityIds = lintIds,
+            ),
+        )
+        assertEquals(lint.safeEntityIds, effectiveLintEntityIds(lint, emptySet()))
     }
 
     @Test fun blockingDashboardRejectsWholeAutomaticSetAndDisabledScanOnlyObserves() {
@@ -137,6 +229,158 @@ class EntityLearningProtocolTest {
         assertTrue(scan.unresolved.any { it.contains("dynamic-template") })
     }
 
+    @Test fun mushroomCardsUseGenericEntityTargetAndConditionalChipScanning() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"custom:mushroom-light-card","entity":"light.kitchen",
+                "tap_action":{"action":"perform-action","target":{
+                  "entity_id":"script.evening_scene","device_id":"device_123",
+                  "area_id":"living_room","floor_id":"ground_floor","label_id":"wall_panel"
+                }}},
+              {"type":"custom:mushroom-chips-card","chips":[
+                {"type":"entity","entity":"sensor.room_temperature"},
+                {"type":"conditional","conditions":[
+                  {"condition":"state","entity":"binary_sensor.window_open","state":"on"}
+                ],"chip":{"type":"light","entity":"light.desk"}}
+              ]}
+            ]}]}""",
+        )
+
+        assertEquals(
+            setOf(
+                "light.kitchen",
+                "script.evening_scene",
+                "sensor.room_temperature",
+                "binary_sensor.window_open",
+                "light.desk",
+            ),
+            scan.entityIds,
+        )
+        assertTrue(scan.targets.single().contains("device_id"))
+        assertTrue(scan.targets.single().contains("area_id"))
+        assertTrue(scan.targets.single().contains("floor_id"))
+        assertTrue(scan.targets.single().contains("label_id"))
+        assertTrue(scan.unresolved.none { it.contains("mushroom") })
+    }
+
+    @Test fun bubbleStaticSchemaUsesGenericScanningAcrossSubButtonsPopupsAndNumberedFields() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{
+              "type":"custom:bubble-card","card_type":"pop-up","entity":"light.popup_header",
+              "trigger_entity":"binary_sensor.popup_motion",
+              "trigger":{"condition":"state","entity":"binary_sensor.popup_allowed","state":"on"},
+              "open_action":{"action":"perform-action","target":{
+                "entity_id":"script.popup_open","area_id":"living_room"
+              }},
+              "sub_button":{
+                "main":[{"entity":"sensor.bubble_main_sub"}],
+                "bottom":[
+                  {"entity":"sensor.bubble_bottom_sub"},
+                  {"group":[{"entity":"input_boolean.bubble_group_member"}]}
+                ]
+              },
+              "cards":[
+                {"type":"custom:bubble-card","card_type":"button","entity":"switch.popup_child"},
+                {"type":"custom:bubble-card","card_type":"calendar","entities":[
+                  {"entity":"calendar.household"},{"entity":"calendar.birthdays"}
+                ]},
+                {"type":"custom:bubble-card","card_type":"horizontal-buttons-stack",
+                  "1_entity":"light.living_room","1_pir_sensor":"binary_sensor.living_room_motion"}
+              ]
+            }]}]}""",
+        )
+
+        assertEquals(
+            setOf(
+                "light.popup_header",
+                "binary_sensor.popup_motion",
+                "binary_sensor.popup_allowed",
+                "script.popup_open",
+                "sensor.bubble_main_sub",
+                "sensor.bubble_bottom_sub",
+                "input_boolean.bubble_group_member",
+                "switch.popup_child",
+                "calendar.household",
+                "calendar.birthdays",
+                "light.living_room",
+                "binary_sensor.living_room_motion",
+            ),
+            scan.entityIds,
+        )
+        assertEquals(1, scan.targets.size)
+        assertTrue(scan.targets.single().contains("area_id"))
+        assertTrue(scan.unresolved.none { it.contains("custom:bubble-card") })
+    }
+
+    @Test fun mushroomTemplateCardUsesExplicitContextDependenciesAndLiteralJinjaScanning() {
+        val template = "{{ states('sensor.jinja_literal') }}"
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{
+              "type":"custom:mushroom-template-card",
+              "entity":"light.reading_lamp",
+              "area":"living_room",
+              "entity_id":["sensor.template_update","binary_sensor.template_gate"],
+              "secondary":${org.json.JSONObject.quote(template)}
+            }]}]}""",
+        )
+
+        assertTrue(scan.entityIds.containsAll(setOf("light.reading_lamp", "sensor.template_update", "binary_sensor.template_gate")))
+        assertTrue(scan.targets.isEmpty())
+        assertEquals(template, scan.dynamicExpressions.single().literal)
+        assertTrue(scan.unresolved.none { it.contains("mushroom-template-card") })
+    }
+
+    @Test fun cardModAndModCardKeepUnderlyingCardsAndLiteralTemplatesVisibleToGenericScan() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"custom:mushroom-entity-card","entity":"switch.wall_display",
+                "card_mod":{"style":"ha-card { color: {{ states('sensor.card_mod_color') }}; }"}},
+              {"type":"custom:mod-card",
+                "card_mod":{"style":"ha-card { opacity: {{ states('sensor.mod_card_opacity') }}; }"},
+                "card":{"type":"custom:mushroom-entity-card","entity":"climate.room",
+                  "tap_action":{"action":"perform-action","target":{"entity_id":"script.climate_preset"}}}}
+            ]}]}""",
+        )
+
+        assertTrue(scan.entityIds.containsAll(setOf("switch.wall_display", "climate.room", "script.climate_preset")))
+        assertTrue(scan.targets.isEmpty())
+        assertEquals(2, scan.dynamicExpressions.size)
+        assertTrue(scan.unresolved.none { it.contains("custom:mod-card") || it.contains("mushroom-entity-card") })
+    }
+
+    @Test fun builtInEntityFilterCollectsFiniteCandidatesConditionsAndNestedCardReferences() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{
+              "type":"entity-filter",
+              "entities":[
+                "light.kitchen",
+                {"entity":"sensor.office_temperature","name":"Office temperature"}
+              ],
+              "conditions":[
+                {"condition":"state","entity":"binary_sensor.office_window","state":"on"},
+                {"condition":"numeric_state","entity":"sensor.office_humidity",
+                  "above":"input_number.minimum_humidity","below":"sensor.maximum_humidity"}
+              ],
+              "card":{"type":"entities","entities":["input_boolean.filter_override"]}
+            }]}]}""",
+        )
+
+        assertEquals(
+            setOf(
+                "light.kitchen",
+                "sensor.office_temperature",
+                "binary_sensor.office_window",
+                "sensor.office_humidity",
+                "input_number.minimum_humidity",
+                "sensor.maximum_humidity",
+                "input_boolean.filter_override",
+            ),
+            scan.entityIds,
+        )
+        assertTrue(scan.targets.isEmpty())
+        assertTrue(scan.unresolved.isEmpty())
+    }
+
     @Test fun dashboardScannerReturnsStructuredDynamicExpressionsWithVerbatimLiterals() {
         val literal = "[[[ return hass.states['sensor.room'].state; ]]]"
         val scan = EntityLearningProtocol.scanDashboard(
@@ -181,6 +425,14 @@ class EntityLearningProtocolTest {
             "dashboard.views[0].cards[0].filter.include[0].entity_id",
             scan.dynamicExpressions.single().sourceLocation,
         )
+        assertTrue(scan.unresolved.none { it.contains("custom:auto-entities") })
+        val lint = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"entity_id":${org.json.JSONObject.quote(literal)}}]}}]}]}""",
+            listOf("sensor.sample"),
+            emptyMap(),
+        )
+        assertTrue(lint.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, lint.issues.single().type)
     }
 
     @Test fun dynamicExpressionsAreDeterministicallyOrderedBySource() {
@@ -211,7 +463,7 @@ class EntityLearningProtocolTest {
         )
         assertEquals(mapOf("light.a" to 1L), access.first)
         assertEquals(setOf("sensor.b"), access.second)
-        assertEquals(mapOf("sensor.b" to (3L to 120L)), EntityLearningProtocol.parseMetricBatch("""{"sensor.b":[3,120],"bad":[9,9]}"""))
+        assertEquals(mapOf("sensor.b" to (3L to 120L)), EntityLearningProtocol.parseMetricEnvelope("""{"sensor.b":[3,120],"bad":[9,9]}""").metrics)
     }
 
     @Test fun accessBatchPreservesLookupCountsAndAcceptsPrototypeArrays() {
@@ -266,6 +518,94 @@ class EntityLearningProtocolTest {
         )
     }
 
+    @Test fun homeDashboardChoicesPreserveHaOrderAndHideAdminOnlyDashboards() {
+        val dashboards = JSONArray("""
+            [
+              {"url_path":"lovelace","title":"Home"},
+              {"url_path":"office","title":"Office"},
+              {"url_path":"admin","title":"Admin","require_admin":true},
+              {"url_path":"office","title":"Duplicate"},
+              {"url_path":"https://invalid","title":"Invalid"}
+            ]
+        """.trimIndent())
+
+        assertEquals(
+            listOf(
+                EntityLearningProtocol.HomeDashboardChoice("/lovelace", "Home"),
+                EntityLearningProtocol.HomeDashboardChoice("/office", "Office"),
+            ),
+            EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin = false),
+        )
+        assertEquals(
+            listOf("/lovelace", "/office", "/admin"),
+            EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin = true).map { it.path },
+        )
+    }
+
+    @Test fun homeDashboardChoicesCarrySanitizedIconsForThePicker() {
+        // The picker renders each dashboard's own mdi icon like HA does; a malformed icon value must reduce
+        // to blank (client falls back to mdi:view-dashboard) rather than reach innerHTML.
+        val dashboards = JSONArray("""
+            [
+              {"url_path":"office","title":"Office","icon":"mdi:sofa"},
+              {"url_path":"garden","title":"Garden","icon":"<script>alert(1)</script>"},
+              {"url_path":"plain","title":"Plain"}
+            ]
+        """.trimIndent())
+        assertEquals(
+            listOf("mdi:sofa", "", ""),
+            EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin = true).map { it.icon },
+        )
+    }
+
+    @Test fun panelDashboardChoicesFollowHaFixedOrderAndRespectAdminGating() {
+        // HA's picker lists the built-in panel dashboards in the frontend's fixed PANEL_DASHBOARDS order
+        // (home, light, security, climate, energy, maintenance), not registration or sidebar order, and
+        // only those that actually exist on this installation.
+        val panels = JSONObject("""
+            {
+              "energy": {"url_path":"energy","title":"Energy","icon":"mdi:lightning-bolt"},
+              "home": {"url_path":"home","icon":"mdi:home"},
+              "maintenance": {"url_path":"maintenance","title":"Maintenance","icon":"mdi:wrench-clock","require_admin":true},
+              "lovelace": {"url_path":"lovelace","title":"Overview"}
+            }
+        """.trimIndent())
+        val nonAdmin = EntityLearningProtocol.panelDashboardChoices(panels, isAdmin = false)
+        assertEquals(listOf("/home", "/energy"), nonAdmin.map { it.path })
+        // A blank panel title falls back to the capitalized key; groups mark these as the panel section.
+        assertEquals(listOf("Home", "Energy"), nonAdmin.map { it.title })
+        assertEquals(listOf("panel", "panel"), nonAdmin.map { it.group })
+        assertEquals(
+            listOf("/home", "/energy", "/maintenance"),
+            EntityLearningProtocol.panelDashboardChoices(panels, isAdmin = true).map { it.path },
+        )
+        assertEquals(emptyList<EntityLearningProtocol.HomeDashboardChoice>(),
+            EntityLearningProtocol.panelDashboardChoices(null, isAdmin = true))
+    }
+
+    @Test fun homeDashboardDefaultReportsWhetherARealServerSideDefaultExists() {
+        // Since HA 2025.12 the default dashboard is per-user server data (user overrides system). Setup
+        // demotes "follow the account's default" when neither layer names one, because the effective
+        // default is then HA's own fallback — rarely what a wall panel should show.
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardDefault(explicit = true, path = "/energy"),
+            EntityLearningProtocol.homeDashboardDefault("energy", null),
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardDefault(explicit = true, path = "/office"),
+            EntityLearningProtocol.homeDashboardDefault("", "office"),
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardDefault(),
+            EntityLearningProtocol.homeDashboardDefault(null, null),
+        )
+        // Malformed values are treated as absent — the picker may only preselect what it could offer.
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardDefault(),
+            EntityLearningProtocol.homeDashboardDefault("https://evil", "  "),
+        )
+    }
+
     @Test fun missingInvalidOrOrdinaryFrontendDefaultFallsBackToLovelace() {
         val invalidDefaults = listOf(
             null,
@@ -303,54 +643,62 @@ class EntityLearningProtocolTest {
         assertTrue(script.contains("wss://ha.example"))
     }
 
-    @Test fun autoEntitiesSelectorsResolveDomainsGlobsAreasAndExclusions() {
-        val scan = EntityLearningProtocol.scanDashboard(
-            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"sensor","area":"office"},{"entity_id":"light.kitchen*"}],"exclude":[{"entity_id":"sensor.office_noisy"}]}}]}]}""",
-        )
-        val metadata = mapOf(
-            "sensor.office_temp" to """{"ai":"office"}""",
-            "sensor.office_noisy" to """{"ai":"office"}""",
-            "sensor.kitchen_temp" to """{"ai":"kitchen"}""",
-            "light.kitchen_ceiling" to "{}",
-        )
-        assertEquals(
-            setOf("sensor.office_temp", "light.kitchen_ceiling"),
-            EntityLearningProtocol.resolveSelectors(scan.selectors, metadata.keys, metadata).entityIds,
-        )
-    }
-
     @Test fun autoEntitiesExcludeIdsAreNotCollectedAsOrdinaryStaticReferences() {
         val scan = EntityLearningProtocol.scanDashboard(
             """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"light"}],"exclude":[{"entity_id":"light.hidden"}]}}]}]}""",
         )
         assertFalse("light.hidden" in scan.entityIds)
+        assertTrue(scan.unresolved.none { it.contains("custom:auto-entities") })
     }
 
-    @Test fun broadSelectorIsOmittedWholeAndReportedAsUnresolved() {
+    @Test fun autoEntitiesIncludeOptionsContributeDependenciesWithoutPromotingSelectorCriteria() {
         val scan = EntityLearningProtocol.scanDashboard(
-            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[{"domain":"sensor"}]}}]}]}""",
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{
+              "include":[{"entity_id":"light.visible","options":{"tap_action":{
+                "action":"more-info","entity":"script.include_helper"
+              }}}],
+              "exclude":[{"entity_id":"light.hidden"}]
+            }}]}]}""",
         )
-        val catalog = (1..(EntityLearningProtocol.SELECTOR_ENTITY_LIMIT + 1)).map { "sensor.sample_$it" }
-        val resolution = EntityLearningProtocol.resolveSelectors(scan.selectors, catalog, emptyMap())
-        assertTrue(resolution.entityIds.isEmpty())
-        assertTrue(resolution.unresolved.single().contains("broad-selector"))
-        assertTrue(resolution.unresolved.single().contains((EntityLearningProtocol.SELECTOR_ENTITY_LIMIT + 1).toString()))
+
+        assertEquals(setOf("script.include_helper"), scan.entityIds)
+        assertFalse("light.visible" in scan.entityIds)
+        assertFalse("light.hidden" in scan.entityIds)
+        assertTrue(scan.unresolved.none { it.contains("custom:auto-entities") })
     }
 
-    @Test fun selectorBudgetOmitsWholeLaterSelectorDeterministically() {
+    @Test fun autoEntitiesTypedIncludesAreScannedAsDirectCardConfiguration() {
         val scan = EntityLearningProtocol.scanDashboard(
             """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
-              {"domain":"sensor"},{"domain":"light"},{"domain":"switch"}
+              {"type":"entity","entity":"sensor.direct_row","tap_action":{"target":{"entity_id":"script.helper"}}}
             ]}}]}]}""",
         )
-        val perDomain = 50
-        val catalog = listOf("sensor", "light", "switch").flatMap { domain ->
-            (1..perDomain).map { "$domain.sample_$it" }
-        }
-        val resolution = EntityLearningProtocol.resolveSelectors(scan.selectors, catalog, emptyMap())
-        assertEquals(100, resolution.entityIds.size)
-        assertTrue(resolution.entityIds.none { it.startsWith("switch.") })
-        assertTrue(resolution.unresolved.single().contains("selector-budget"))
+
+        assertEquals(setOf("sensor.direct_row", "script.helper"), scan.entityIds)
+        assertTrue(scan.unresolved.none { it.contains("custom:auto-entities") })
+    }
+
+    @Test fun thirdPartySelectorGrammarsRemainExplicitlyUnresolved() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[
+              {"type":"custom:battery-state-card","filter":{"include":[{"name":"entity_id","value":"sensor.*"}]}},
+              {"type":"custom:flex-table-card","entities":{"include":"sensor.*"}}
+            ]}]}""",
+        )
+
+        assertTrue(scan.unresolved.any { it.contains("custom:battery-state-card") })
+        assertTrue(scan.unresolved.any { it.contains("custom:flex-table-card") })
+    }
+
+    @Test fun unknownWrapperAroundKnownAutoEntitiesRemainsUnresolved() {
+        val scan = EntityLearningProtocol.scanDashboard(
+            """{"views":[{"cards":[{"type":"custom:mystery-wrapper","cards":[
+              {"type":"custom:auto-entities","filter":{"include":[{"domain":"light"}]}}
+            ]}]}]}""",
+        )
+
+        assertTrue(scan.unresolved.any { it.contains("custom:mystery-wrapper") })
+        assertTrue(scan.unresolved.none { it.contains("custom:auto-entities") })
     }
 
     @Test fun regexAndTemplateTargetsAreObservedAsDynamicNotSentToHomeAssistant() {

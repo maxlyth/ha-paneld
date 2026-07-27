@@ -81,7 +81,6 @@ class HaSiteMetadataClientTest {
             if (rejectOnce && calls == 1) throw HaAuthenticationException("expired")
             return JSONObject().put("latitude", 10.123).put("longitude", 20.456).put("time_zone", "UTC")
         }
-        override suspend fun subscribe(baseUrl: String, accessToken: String, entityId: String): HaTriggerConnection = error("unused")
         override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? = error("unused")
         override suspend fun states(baseUrl: String, accessToken: String): JSONArray = error("unused")
     }

@@ -161,6 +161,10 @@ data class SettingSpec(
     // discovery gate for every HA-publishable setting (those with `ha`, plus the discovery-pass entities
     // like navbar that carry no `ha` block here). A per-panel expose pip can still override it either way.
     val haExposedByDefault: Boolean = false,
+    // The setting's desired value is persisted and then routed through the shared MQTT-equivalent
+    // side-effect path. This keeps HTTP config, bundle/restore, and MQTT command admission on one
+    // declared set instead of independently maintained key lists.
+    val liveApply: Boolean = false,
     val transient: Boolean = false,          // accepted + routed to a controller but never persisted
     // Omit from the generated Configure form (an API-only setting): still readable via GET /config,
     // settable via POST /config, and carried in config bundles — just never rendered as a form field.
@@ -171,3 +175,13 @@ data class SettingSpec(
     /** True for publish-only sensor entities that have no settable value. */
     val readOnly: Boolean get() = ha?.readOnly == true
 }
+
+// Typed coercions of a spec's canonical [SettingSpec.default] string. This makes the spec the single
+// authority for each key's default: the raw config API and the typed Config accessors both resolve a
+// default through these, so no call site re-declares a literal that could drift from the spec. The
+// coercion is deliberately the same permissive form the raw config path has always used (canonical
+// defaults like "true"/"100"/"0" round-trip exactly).
+fun SettingSpec.defaultBool(): Boolean = default.toBoolean()
+fun SettingSpec.defaultInt(): Int = default.toIntOrNull() ?: 0
+fun SettingSpec.defaultLong(): Long = default.toLongOrNull() ?: 0L
+fun SettingSpec.defaultFloat(): Float = default.toFloatOrNull() ?: 0f

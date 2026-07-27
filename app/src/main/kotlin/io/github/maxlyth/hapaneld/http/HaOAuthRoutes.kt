@@ -11,6 +11,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
+import io.ktor.server.response.respondRedirect
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -38,6 +39,10 @@ internal data class HaOAuthRouteDependencies(
     val exchange: suspend (attempt: HaOAuthAttempt, code: String) -> HaLink.AuthorizationCodeExchange,
     val complete: suspend (attempt: HaOAuthAttempt, tokens: HaLink.OAuthTokens) -> HaOAuthCompletion,
     val status: suspend () -> HaCurrentUserStatus = { HaCurrentUserStatus.NotConfigured },
+    /** Where a completed sign-in should send the browser: the setup wizard while setup is unfinished,
+     *  otherwise Configure. Without it the callback dead-ends on a static "Back to Configure" page and
+     *  a guided-setup user is stranded there instead of returning to their next step. */
+    val successReturnPath: () -> String = { "/configure#cfg-ha_url" },
 )
 
 /** Browser OAuth transport. Mount beneath the guarded `/api/v1` route; credential persistence and
@@ -93,6 +98,31 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                 """{"ok":true,"authorization_url":${Json.str(started.authorizationUrl)}}""",
                 ContentType.Application.Json,
             )
+        }
+
+        get("/panel-start") {
+            call.noStoreHaOAuth()
+            val rawUrl = call.request.queryParameters["ha_url"].orEmpty()
+            val spec = requireNotNull(SettingsRegistry.spec("ha_url"))
+            val haUrl = when (val validation = SettingValue.validate(spec, rawUrl)) {
+                is Validation.Ok -> validation.normalized.takeIf(String::isNotBlank)
+                is Validation.Bad -> null
+            }
+            if (haUrl == null) {
+                call.respondText("Enter a valid Home Assistant URL first.", ContentType.Text.Plain, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val panelOrigin = panelHttpOrigin(call.request.headers[HttpHeaders.Host], dependencies.panelPort)
+            if (panelOrigin == null) {
+                call.respondText(
+                    "Open this sign-in through the panel's local HTTP endpoint.",
+                    ContentType.Text.Plain,
+                    HttpStatusCode.BadRequest,
+                )
+                return@get
+            }
+            val started = dependencies.start(haUrl, panelOrigin)
+            call.respondRedirect(started.authorizationUrl)
         }
 
         get("/callback") {
@@ -165,7 +195,11 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                     val ambient = if (completion.ambientWarning) {
                         " Home Assistant is configured, but the selected ambient-light source needs attention."
                     } else ""
-                    call.respondHaOAuthPage(true, "Home Assistant is configured.$reload$ambient")
+                    call.respondHaOAuthPage(
+                        true,
+                        "Home Assistant is configured.$reload$ambient",
+                        returnPath = dependencies.successReturnPath(),
+                    )
                 }
             }
         }
@@ -181,15 +215,28 @@ internal fun ApplicationCall.noStoreHaOAuth() {
     }
 }
 
-private suspend fun ApplicationCall.respondHaOAuthPage(success: Boolean, message: String) {
+private suspend fun ApplicationCall.respondHaOAuthPage(
+    success: Boolean,
+    message: String,
+    returnPath: String = "/configure#cfg-ha_url",
+) {
     val heading = if (success) "Home Assistant configured" else "Home Assistant sign-in not completed"
     val status = if (success) "success" else "failure"
+    // On success the browser is sent onward automatically: the wizard tab navigated here during
+    // sign-in, so a still-open tab to broadcast to no longer exists — this fresh page IS the return
+    // path. A short pause lets the user read the confirmation first. A failure keeps a manual link only,
+    // since auto-forwarding an error would hide it. The path is a server-chosen constant, safe to inline.
+    val safeReturn = escapeHaOAuthHtml(returnPath)
+    val link = if (success) "Continue" else "Back to Configure"
+    val forward = if (success) {
+        """setTimeout(function(){location.assign("$safeReturn");},1400);"""
+    } else ""
     respondText(
         """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHaOAuthHtml(heading)}</title>
 <link rel="stylesheet" href="/info.css"></head><body><div class="wrap"><div class="card">
-<h1>${escapeHaOAuthHtml(heading)}</h1><p>${escapeHaOAuthHtml(message)}</p><p><a class="pbtn" href="/configure#cfg-ha_url">Back to Configure</a></p>
-</div></div><script>history.replaceState(null,"","$HA_OAUTH_CALLBACK_PATH");if("BroadcastChannel" in window){var c=new BroadcastChannel("ha-paneld-ha-oauth");c.postMessage({status:"$status"});}</script>
+<h1>${escapeHaOAuthHtml(heading)}</h1><p>${escapeHaOAuthHtml(message)}</p><p><a class="pbtn" href="$safeReturn">$link</a></p>
+</div></div><script>document.body.dataset.haOauthStatus="$status";history.replaceState(null,"","$HA_OAUTH_CALLBACK_PATH");if("BroadcastChannel" in window){var c=new BroadcastChannel("ha-paneld-ha-oauth");c.postMessage({status:"$status"});}$forward</script>
 </body></html>""",
         ContentType.Text.Html,
         if (success) HttpStatusCode.OK else HttpStatusCode.BadRequest,

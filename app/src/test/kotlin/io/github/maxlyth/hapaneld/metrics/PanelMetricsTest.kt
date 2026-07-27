@@ -28,11 +28,13 @@ class PanelMetricsTest {
         var ip: String? = null
         var selinux: String? = null
         var dump: String? = null
-        var room: String? = null
+        var roomDaemon: String? = null      // raw CHT8305 helper reply
+        var roomShell: String? = null       // raw Shizuku shell-UID reply
 
         var statCalls = 0
         var dumpCalls = 0
-        var roomCalls = 0
+        var roomDaemonCalls = 0
+        var roomShellCalls = 0
 
         override fun perfDump(): String? { dumpCalls++; return dump }
         override fun statText(): String? { statCalls++; return stat }
@@ -46,7 +48,8 @@ class PanelMetricsTest {
         override fun selinuxEnforce(): String? = selinux
         override fun cpuGovernor(allowRootFallback: Boolean): String? = null
         override fun cpuAvailableGovernors(allowRootFallback: Boolean): String? = null
-        override fun roomClimate(): String? { roomCalls++; return room }
+        override fun roomClimateDaemon(): String? { roomDaemonCalls++; return roomDaemon }
+        override fun roomClimateShell(): String? { roomShellCalls++; return roomShell }
     }
 
     private var now = 0L
@@ -65,7 +68,7 @@ class PanelMetricsTest {
     }
 
     @Test fun roomClimateParsesAndCoalescesWithinTheFreshnessWindow() {
-        val src = FakeSource().apply { room = "T=2820 H=3400" }
+        val src = FakeSource().apply { roomDaemon = "T=2820 H=3400" }
         val r = reader(src, freshMs = 1500L)
         val a = r.roomClimate(now)!!
         assertEquals(28.20, a.tempC, 0.0001)
@@ -73,15 +76,55 @@ class PanelMetricsTest {
         // A second read within freshMs (the temp + humidity sensors on one heartbeat) reuses the value —
         // one daemon round-trip, not two.
         r.roomClimate(now + 100)
-        assertEquals("temp+humidity coalesce onto one CHT8305 read", 1, src.roomCalls)
+        assertEquals("temp+humidity coalesce onto one CHT8305 read", 1, src.roomDaemonCalls)
         // Past the window, it reads again.
         r.roomClimate(now + 2000)
-        assertEquals(2, src.roomCalls)
+        assertEquals(2, src.roomDaemonCalls)
     }
 
     @Test fun roomClimateIsNullWhenTheDaemonHasNoChip() {
-        val src = FakeSource().apply { room = null }   // daemon replies ERR → source returns null
+        val src = FakeSource().apply { roomDaemon = null; roomShell = null }  // no authority reads → null
         assertNull(reader(src).roomClimate(now))
+    }
+
+    // --- the helper→Shizuku ladder, re-homed from OsMetricSourceTest onto the Resolvable that now owns it --
+
+    @Test fun roomClimateEstablishedHelperWinsWithoutConsultingShizuku() {
+        val src = FakeSource().apply { roomDaemon = "T=2384 H=5895"; roomShell = "T=9999 H=9999" }
+        val v = reader(src).roomClimate(now)!!
+        assertEquals(23.84, v.tempC, 0.0001)
+        assertEquals(58.95, v.humidityPct, 0.0001)
+        assertEquals("Shizuku is not consulted while the helper reads", 0, src.roomShellCalls)
+    }
+
+    @Test fun roomClimateUnavailableHelperFallsBackToShizuku() {
+        val src = FakeSource().apply { roomDaemon = "ERR"; roomShell = "T=2384 H=5895" }
+        val v = reader(src).roomClimate(now)!!
+        assertEquals(23.84, v.tempC, 0.0001)
+        assertEquals("the helper is tried first before the Shizuku fallback", 1, src.roomDaemonCalls)
+
+        // The helper is retried once on the next fresh read, but the failed helper is not probed twice.
+        now += 1
+        reader(src).roomClimate(now)
+        assertEquals("one helper probe per priority-ordered read", 2, src.roomDaemonCalls)
+    }
+
+    @Test fun roomClimateHelperRecoveryRetakesPriority() {
+        val src = FakeSource().apply { roomDaemon = "ERR"; roomShell = "T=2384 H=5895" }
+        val r = reader(src)
+        assertEquals(23.84, r.roomClimate(now)!!.tempC, 0.0001)
+        src.roomDaemon = "T=2820 H=3400"
+        now += 1
+        val recovered = r.roomClimate(now)!!
+        assertEquals("a recovered helper regains priority over Shizuku", 28.20, recovered.tempC, 0.0001)
+        assertEquals(2, src.roomDaemonCalls)
+        assertEquals("Shizuku is not consulted after helper recovery", 1, src.roomShellCalls)
+    }
+
+    @Test fun roomClimateMalformedHelperReplyDoesNotMaskAValidShizukuReading() {
+        val src = FakeSource().apply { roomDaemon = "T=oops H=5895"; roomShell = "T=2384 H=5895" }
+        val v = reader(src).roomClimate(now)!!
+        assertEquals(23.84, v.tempC, 0.0001)
     }
 
     @Test fun resolvesDirectOnceAndDoesNotReprobeOnSuccessfulReads() {
@@ -152,25 +195,25 @@ class PanelMetricsTest {
     }
 
     @Test fun wallClockRollbackExpiresSnapshotAndRoomCaches() {
-        val src = healthyDirect().apply { room = "T=2820 H=3400" }
+        val src = healthyDirect().apply { roomDaemon = "T=2820 H=3400" }
         val r = reader(src, freshMs = 1500L)
         now = 10_000
         r.systemSnapshot()
         r.roomClimate()
         assertEquals(1, src.statCalls)
-        assertEquals(1, src.roomCalls)
+        assertEquals(1, src.roomDaemonCalls)
 
         now = 10_500
         r.systemSnapshot()
         r.roomClimate()
         assertEquals("forward time inside the window remains cached", 1, src.statCalls)
-        assertEquals(1, src.roomCalls)
+        assertEquals(1, src.roomDaemonCalls)
 
         now = 9_000
         assertEquals(9_000L, r.systemSnapshot().ts)
         r.roomClimate()
         assertEquals("rollback is an expiry boundary", 2, src.statCalls)
-        assertEquals(2, src.roomCalls)
+        assertEquals(2, src.roomDaemonCalls)
     }
 
     @Test fun wallClockRollbackRetriesAnUnavailableSourceImmediately() {
@@ -232,5 +275,22 @@ class PanelMetricsTest {
         val keys = snap.toSamples().map { it.key }.toSet()
         // Nothing available → no records for cpu / mem / temp / gpu.
         assertTrue(keys.none { it == MetricRegistry.CPU.key || it == MetricRegistry.SOC_TEMP.key || it == MetricRegistry.GPU_LOAD.key })
+    }
+
+    // --- boot time (relocated from the deleted Diagnostics facade) ------------------------------------
+
+    @Test fun bootTimeIsWallMinusElapsedFormattedIsoUtc() {
+        var wall = 1_700_003_600_000L                  // 2023-11-14T23:13:20Z wall clock
+        val r = PanelMetrics(FakeSource(), clock = { wall }, elapsedRealtime = { 3_600_000L })
+        // boot = wall (1_700_003_600_000) − 1h elapsed (3_600_000) = 1_700_000_000_000 → 2023-11-14T22:13:20Z
+        assertEquals("2023-11-14T22:13:20Z", r.bootTime())
+    }
+
+    @Test fun bootTimeIsConstantOnceComputed() {
+        var wall = 1_700_003_600_000L
+        val r = PanelMetrics(FakeSource(), clock = { wall }, elapsedRealtime = { 3_600_000L })
+        val first = r.bootTime()
+        wall += 10_000_000L                            // wall clock advances after the first read
+        assertEquals("boot time is a constant timestamp, computed once", first, r.bootTime())
     }
 }

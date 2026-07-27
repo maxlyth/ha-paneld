@@ -33,12 +33,20 @@ class EntityResetUiContractTest {
         assertTrue(handler.indexOf("confirm('") < handler.indexOf("mutationRequest(claim,'/api/v1/dashboard/entities/reset'"))
         assertTrue(handler.contains("JSON.stringify({confirm:true,clear_filter:false})"))
         assertFalse(handler.contains("clear_filter:true"))
-        assertTrue(handler.contains("entity-filter safety ignore decisions"))
+        assertTrue(handler.contains("entity-discovery safety ignore decisions"))
         assertTrue(handler.contains("resultMessage='Reset failed: '"))
         assertTrue(handler.contains("resultKind='ok'"))
         assertTrue(handler.contains("Promise.all([loadStatus(),loadIssues(),resetAll()])"))
         assertTrue(handler.contains("current live subscription remains in place until that scan succeeds"))
         assertTrue(handler.contains("replacement scan did not start"))
+    }
+
+    @Test fun `policy changes refresh runtime coverage advisories`() {
+        val handler = script.substringAfter("async function savePolicy()")
+            .substringBefore("autoStatic.addEventListener")
+
+        assertTrue(handler.contains("Promise.all([loadStatus(),loadIssues(),resetAll()])"))
+        assertTrue(script.contains("issue.type==='runtime_coverage'"))
     }
 
     @Test fun `openapi exposes the stronger clear filter reset option`() {

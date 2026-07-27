@@ -8,9 +8,9 @@ internal object PostUpdateReturnPolicy {
         configuredRenderer: String,
         builtInUrlConfigured: Boolean,
         dashboardLaunchAvailable: Boolean,
-        dashboardCrashLooping: Boolean,
+        dashboardRecoveryBlocked: Boolean,
     ): Boolean {
-        if (!dashboardLaunchAvailable || dashboardCrashLooping) return false
+        if (!dashboardLaunchAvailable || dashboardRecoveryBlocked) return false
         return if (configuredRenderer == SystemController.BUILTIN_DASHBOARD) {
             // The native renderer talks directly to HA and its own activity holds until any entity-filter
             // preparation is complete. MQTT is optional and must not strand these panels on the launcher.

@@ -53,7 +53,7 @@ class HelperInstallTransactionTest {
         val directory = temporary.newFolder("invalid-staging")
         val daemon = LongDaemon(DaemonLongResult.Reply("OK"), streamResult = DaemonStreamResult.Reply("OK"))
 
-        assertEquals("install failed: invalid APK input", HelperInstallTransaction(daemon).install(empty, directory))
+        assertEquals(InstallOutcome.Retryable("install failed: invalid APK input"), HelperInstallTransaction(daemon).install(empty, directory))
         assertFalse(empty.exists())
         assertTrue(daemon.streamCalls.isEmpty())
         assertTrue(daemon.calls.isEmpty())
@@ -73,18 +73,18 @@ class HelperInstallTransactionTest {
             },
         )
 
-        assertEquals("OK", HelperInstallTransaction(daemon).install(source, directory))
+        assertEquals(InstallOutcome.Succeeded, HelperInstallTransaction(daemon).install(source, directory))
         assertFalse(source.exists())
         assertTrue(directory.listFiles().orEmpty().isEmpty())
         assertTrue(daemon.calls.isEmpty())
     }
 
     @Test fun streamTerminalFailureAndDefiniteNonSubmissionReleaseInput() {
-        listOf(
-            DaemonStreamResult.Reply("ERR") to "install failed: daemon install failed",
-            DaemonStreamResult.Reply("BUSY") to "install failed: daemon busy",
-            DaemonStreamResult.Reply("STREAMERR") to "install failed: daemon stream staging failed",
-            DaemonStreamResult.NotSubmitted to "install failed: daemon unreachable",
+        listOf<Pair<DaemonStreamResult, InstallOutcome>>(
+            DaemonStreamResult.Reply("ERR") to InstallOutcome.Rejected("install failed: daemon install failed"),
+            DaemonStreamResult.Reply("BUSY") to InstallOutcome.Retryable("install failed: daemon busy"),
+            DaemonStreamResult.Reply("STREAMERR") to InstallOutcome.Retryable("install failed: daemon stream staging failed"),
+            DaemonStreamResult.NotSubmitted to InstallOutcome.Retryable("install failed: daemon unreachable"),
         ).forEachIndexed { index, (streamResult, expected) ->
             val source = apk("stream-failed-$index.apk", byteArrayOf(index.toByte(), 7))
             val directory = temporary.newFolder("stream-failed-staging-$index")
@@ -106,7 +106,7 @@ class HelperInstallTransactionTest {
         )
 
         assertEquals(
-            "install outcome unknown: streamed input released",
+            InstallOutcome.Retryable("install outcome unknown: streamed input released"),
             HelperInstallTransaction(daemon).install(source, directory),
         )
         assertFalse(source.exists())
@@ -125,14 +125,14 @@ class HelperInstallTransactionTest {
             assertEquals(180_000L, timeout)
         }
 
-        assertEquals("OK", HelperInstallTransaction(daemon).install(source, staging))
+        assertEquals(InstallOutcome.Succeeded, HelperInstallTransaction(daemon).install(source, staging))
         assertTrue(staging.listFiles().orEmpty().isEmpty())
     }
 
     @Test fun terminalFailureAndDefiniteNonSubmissionReleaseStaging() {
-        listOf(
-            DaemonLongResult.Reply("ERR") to "install failed: daemon install failed",
-            DaemonLongResult.NotSubmitted to "install failed: daemon unreachable",
+        listOf<Pair<DaemonLongResult, InstallOutcome>>(
+            DaemonLongResult.Reply("ERR") to InstallOutcome.Rejected("install failed: daemon install failed"),
+            DaemonLongResult.NotSubmitted to InstallOutcome.Retryable("install failed: daemon unreachable"),
         ).forEachIndexed { index, (daemonResult, expected) ->
             val source = apk("failed-$index.apk", byteArrayOf(index.toByte(), 7))
             val staging = temporary.newFolder("failed-staging-$index")
@@ -151,7 +151,7 @@ class HelperInstallTransactionTest {
         val transaction = HelperInstallTransaction(daemon)
 
         assertEquals(
-            "install outcome unknown: helper staging retained for safety",
+            InstallOutcome.Retryable("install outcome unknown: helper staging retained for safety"),
             transaction.install(firstSource, staging),
         )
         val retained = staging.listFiles().orEmpty().single()
@@ -159,7 +159,7 @@ class HelperInstallTransactionTest {
 
         daemon.result = DaemonLongResult.NotSubmitted
         val secondSource = apk("second.apk", byteArrayOf(2, 2, 2))
-        assertEquals("install failed: daemon unreachable", transaction.install(secondSource, staging))
+        assertEquals(InstallOutcome.Retryable("install failed: daemon unreachable"), transaction.install(secondSource, staging))
         val secondPath = daemon.calls.last().first.substringAfter("INSTALL ")
 
         assertNotEquals(retained.absolutePath, secondPath)
@@ -184,7 +184,7 @@ class HelperInstallTransactionTest {
         val daemon = LongDaemon(DaemonLongResult.Reply("OK"))
 
         assertEquals(
-            "install failed: could not claim helper staging",
+            InstallOutcome.Retryable("install failed: could not claim helper staging"),
             HelperInstallTransaction(daemon).install(source, notDirectory),
         )
         assertFalse(source.exists())
@@ -202,7 +202,7 @@ class HelperInstallTransactionTest {
             assertTrue(daemon.shortCalls.isEmpty())
         })
 
-        assertEquals("OK", HelperInstallTransaction(daemon, staging = staging).install(source, directory))
+        assertEquals(InstallOutcome.Succeeded, HelperInstallTransaction(daemon, staging = staging).install(source, directory))
     }
 
     @Test fun indeterminateInputIsRemovedOnlyAfterHelperAuthorisesLockedCleanup() {
@@ -219,7 +219,7 @@ class HelperInstallTransactionTest {
         )
 
         assertEquals(
-            "install outcome unknown: helper staging retained for safety",
+            InstallOutcome.Retryable("install outcome unknown: helper staging retained for safety"),
             HelperInstallTransaction(daemon, staging = staging).install(source, directory),
         )
         assertEquals(1, directory.listFiles().orEmpty().size)

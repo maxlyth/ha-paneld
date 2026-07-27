@@ -32,17 +32,17 @@ class PanelInfoDisplayTest {
         assertNull(PanelInfo.physicalDisplaySize(1920, 1200, 0))
     }
 
-    @Test fun databaseSizesUseAdaptiveIecUnits() {
-        assertEquals("0 B", PanelInfo.formatIecBytes(0))
-        assertEquals("1023 B", PanelInfo.formatIecBytes(1023))
-        assertEquals("1.0 KiB", PanelInfo.formatIecBytes(1024))
-        assertEquals("1.5 MiB", PanelInfo.formatIecBytes(1_572_864))
-        assertEquals("2.0 GiB", PanelInfo.formatIecBytes(2_147_483_648))
+    @Test fun databaseSizesUseFamiliarAdaptiveUnits() {
+        assertEquals("0 B", PanelInfo.formatDisplayBytes(0))
+        assertEquals("1023 B", PanelInfo.formatDisplayBytes(1023))
+        assertEquals("1.0 KB", PanelInfo.formatDisplayBytes(1024))
+        assertEquals("1.5 MB", PanelInfo.formatDisplayBytes(1_572_864))
+        assertEquals("2.0 GB", PanelInfo.formatDisplayBytes(2_147_483_648))
     }
 
     @Test fun databaseSummaryDistinguishesLiveDataFromDiskFootprint() {
         assertEquals(
-            "1.5 MiB used · 2.0 MiB on disk · schema 11",
+            "1.5 MB used · 2.0 MB on disk · schema 11",
             PanelInfo.databaseSummary(EntityCatalogStore.DatabaseUsage(1_572_864, 2_097_152, 11)),
         )
     }

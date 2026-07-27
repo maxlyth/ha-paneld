@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -8,11 +9,6 @@ import java.util.concurrent.atomic.AtomicReference
  * relative no-follow I/O because an external launcher cannot be prevented by an app-process flag.
  */
 internal object CompanionDataOperationGate {
-    private val companionPackages = setOf(
-        "io.homeassistant.companion.android.minimal",
-        "io.homeassistant.companion.android",
-    )
-
     class Lease internal constructor(private val packageName: String) : AutoCloseable {
         override fun close() {
             active.compareAndSet(packageName, null)
@@ -33,5 +29,5 @@ internal object CompanionDataOperationGate {
     /** Implicit VIEW intents can fall back from one Companion variant to the other/system default. */
     fun blocksImplicitNavigation(): Boolean = active.get() != null
 
-    fun isCompanionPackage(packageName: String): Boolean = packageName in companionPackages
+    fun isCompanionPackage(packageName: String): Boolean = packageName in CompanionInstaller.SUPPORTED_PACKAGES
 }

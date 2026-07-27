@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.content.Context
 import android.content.ContentResolver
 import android.content.SharedPreferences
+import android.content.res.Resources
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -12,10 +13,18 @@ import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.config.defaultBool
+import io.github.maxlyth.hapaneld.config.defaultFloat
+import io.github.maxlyth.hapaneld.config.defaultInt
+import io.github.maxlyth.hapaneld.config.defaultLong
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.persistence.AppState
+import io.github.maxlyth.hapaneld.persistence.DurableVisibilityPreferences
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.SystemProps
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
@@ -25,6 +34,8 @@ internal data class MqttCredentialsSnapshot(
     val password: String,
 )
 
+internal enum class AutoSleepWriteResult { UNCHANGED, COMMITTED, FAILED }
+
 internal data class HaAuthSnapshot(
     val url: String,
     val accessToken: String,
@@ -33,6 +44,21 @@ internal data class HaAuthSnapshot(
     val clientId: String,
 )
 
+/** Resolve the fresh-install software-navbar default from Android and vendor visibility signals.
+ * Some PX30 firmware hardcodes Android's generic `config_showNavigationBar` to true even though the
+ * vendor navbar is suppressed; the vendor property is authoritative when present. */
+internal fun defaultNavbarMode(
+    androidResourceShowsNavbar: Boolean?,
+    vendorShowsNavbar: String?,
+    profileId: String? = null,
+): String {
+    when (vendorShowsNavbar?.trim()?.lowercase(Locale.ROOT)) {
+        "false", "0", "no", "off" -> return "Swipe reveal"
+        "true", "1", "yes", "on" -> return "Off"
+    }
+    if (profileId in setOf("nspanel-pro")) return "Swipe reveal"
+    return if (androidResourceShowsNavbar == false) "Swipe reveal" else "Off"
+}
 /** Credential ownership that remains stable while a refresh token rotates its current access token. */
 internal data class HaAuthOwner(
     val url: String,
@@ -67,6 +93,7 @@ internal data class DashboardEntityBackupState(
     val appliedOwner: String,
     val overrides: String,
     val overrideOwner: String,
+    val initialActivationPending: Boolean,
 )
 
 /** One-time migration input for the adaptive proximity learner. */
@@ -85,6 +112,7 @@ class Config private constructor(
     private val prefs: SharedPreferences,
     private val contentResolver: ContentResolver?,
     private val calibrationPrefs: SharedPreferences,
+    private val resources: Resources?,
 ) {
     enum class SecurityMode { RELAXED, HARDENED }
 
@@ -95,14 +123,24 @@ class Config private constructor(
         AppState.preferences(context, "config", "ha-paneld"),
         context.applicationContext.contentResolver,
         AppState.preferences(context, "profile-calibration", PROFILE_CALIBRATION_PREFS),
+        context.applicationContext.resources,
     )
 
     /** JVM-test seam; identity defaults that consult Android settings require the production constructor. */
-    internal constructor(prefs: SharedPreferences) : this(prefs, null, prefs)
+    internal constructor(prefs: SharedPreferences) : this(prefs, null, prefs, null)
 
     /** JVM-test seam that keeps configuration and non-transferable sensor calibration separate. */
     internal constructor(prefs: SharedPreferences, calibrationPrefs: SharedPreferences) :
-        this(prefs, null, calibrationPrefs)
+        this(prefs, null, calibrationPrefs, null)
+
+    /** Activity-scoped observation of live settings without exposing the persistence implementation. */
+    internal fun registerChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    internal fun unregisterChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
+    }
 
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
@@ -124,10 +162,155 @@ class Config private constructor(
 
     val hardenedSecurityEnabled: Boolean get() = securityMode == SecurityMode.HARDENED
 
+    /**
+     * Whether the user has explicitly accepted this panel's identity during setup.
+     *
+     * Needed because `panel_id` is never blank — it auto-derives on first read — so its value cannot
+     * distinguish "the user chose this" from "nobody has looked at it yet". That distinction matters: the
+     * id names every entity this panel publishes to Home Assistant, and changing it later renames all of
+     * them, so setup asks once and records the answer rather than inferring consent from a generated
+     * default.
+     *
+     * Deliberately an internal pref rather than a [SettingSpec]: it is setup's own state, not a user
+     * setting, so it has no place on the Configure form, in a config bundle or as a Home Assistant entity.
+     */
+    var setupIdentityConfirmed: Boolean
+        get() = prefs.getBoolean(SETUP_IDENTITY_CONFIRMED_PREF, false)
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putBoolean(SETUP_IDENTITY_CONFIRMED_PREF, value).commit()
+            Unit
+        }
+
+    /**
+     * One-shot upgrade migration: a panel that was already configured before the entity-filter question
+     * existed counts as having answered it.
+     *
+     * Without this, introducing the question strands the entire installed base. The flag defaults false, the
+     * built-in renderer holds its first load until it is answered, and `setupEverCompleted` is itself new — so
+     * an upgraded panel would stop showing its dashboard, and could not even earn the completion stamp that
+     * would release it, because earning it requires the render that is being held. A canary deployed to two
+     * configured panels reproduced exactly that.
+     *
+     * It runs on every start until it actually finds evidence, and only then records itself as done. The
+     * earlier version ran exactly once and marked itself complete even when the configuration read back
+     * blank — which happened on real hardware — leaving a configured panel permanently on the first-run path
+     * with no second chance. Retrying is the safer failure: the worst case is that a panel restarted midway
+     * through setup skips the question and renders unfiltered, which is recoverable from the Configure tab,
+     * whereas the other direction leaves a working panel showing a setup screen instead of its dashboard.
+     *
+     * This is a convenience, not the safety net. The hold predicate independently exempts a panel whose
+     * filter is already enabled, so a failure here can no longer strand anything.
+     */
+    fun migrateSetupQuestionsForExistingInstall() = synchronized(CONFIG_LOCK) {
+        if (!prefs.getBoolean(SETUP_QUESTION_MIGRATION_PREF, false)) {
+            // Guided setup OWNS this panel once the identity step has been confirmed — that flag is written by
+            // the wizard and nothing else, so its presence proves any config found here was written BY the
+            // journey in progress, not by a pre-existing install. Without this gate the retry below read the
+            // wizard's own broker save as upgrade evidence on the first mid-journey service restart and
+            // durably stamped every question answered: the panel rendered unfiltered, the journey reported
+            // complete, and the sign-in return dumped the user to Configure with two questions never asked
+            // (second hardware walk, 2026-07-26). Migration is DONE for such a panel: the wizard records the
+            // real answers itself.
+            if (setupIdentityConfirmed) {
+                prefs.edit().putBoolean(SETUP_QUESTION_MIGRATION_PREF, true).commit()
+            } else if (configuredBeforeSetupQuestionTracking()) {
+                prefs.edit()
+                    .putBoolean(SETUP_QUESTION_MIGRATION_PREF, true)
+                    .putBoolean(SETUP_ENTITY_FILTER_ANSWERED_PREF, true)
+                    // Also record that setup was reached before, so the wizard frames a later re-arm as a
+                    // repair ("nothing has been reset") rather than replaying a first run at this panel.
+                    .putBoolean(SETUP_EVER_COMPLETED_PREF, true)
+                    .commit()
+                Log.i(TAG, "setup migration: pre-existing install, entity-filter question marked answered")
+            }
+        }
+
+        migrateHomeDashboardQuestionForExistingInstall()
+    }
+
+    /**
+     * Versioned independently from the original entity-filter migration because that v1 marker is already
+     * durable on the installed base. Reusing it made the newly introduced dashboard answer unreachable on
+     * upgrade and sent completed panels back to the blocking HOME_DASHBOARD step.
+     */
+    private fun migrateHomeDashboardQuestionForExistingInstall() {
+        if (prefs.getBoolean(SETUP_HOME_DASHBOARD_MIGRATION_PREF, false)) return
+
+        val preExisting = setupEverCompleted || (!setupIdentityConfirmed && configuredBeforeSetupQuestionTracking())
+        if (!preExisting && !setupIdentityConfirmed) return
+
+        prefs.edit()
+            .putBoolean(SETUP_HOME_DASHBOARD_MIGRATION_PREF, true)
+            .apply {
+                if (preExisting) putBoolean(SETUP_HOME_DASHBOARD_CHOSEN_PREF, true)
+            }
+            .commit()
+        if (preExisting) Log.i(TAG, "setup migration: pre-existing install, home-dashboard question marked answered")
+    }
+
+    private fun configuredBeforeSetupQuestionTracking(): Boolean =
+        dashboardEntityLearningEnabled || mqttBroker.isNotBlank() || haUrl.isNotBlank()
+
+    /**
+     * Whether the user has answered setup's entity-filter question — either way.
+     *
+     * Turning the filter ON is visible in `dashboard_entity_learning`, but a deliberate "no thanks" is
+     * indistinguishable from never having been asked. Since the built-in renderer is held back from its
+     * first load until this question is answered, inferring the answer from the filter setting would leave
+     * anyone who declined stuck on the question forever, with a panel that never renders. So, like
+     * [setupIdentityConfirmed], the answer is recorded rather than inferred. Internal setup state.
+     */
+    var setupEntityFilterAnswered: Boolean
+        get() = prefs.getBoolean(SETUP_ENTITY_FILTER_ANSWERED_PREF, false)
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putBoolean(SETUP_ENTITY_FILTER_ANSWERED_PREF, value).commit()
+            Unit
+        }
+
+    /**
+     * Whether the user has chosen which dashboard this panel shows — including choosing to follow the
+     * signed-in account's default. That choice leaves `home_dashboard` blank, which is indistinguishable
+     * from never having been asked, so like [setupEntityFilterAnswered] the answer is recorded rather than
+     * inferred. Internal setup state.
+     */
+    var setupHomeDashboardChosen: Boolean
+        get() = prefs.getBoolean(SETUP_HOME_DASHBOARD_CHOSEN_PREF, false)
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putBoolean(SETUP_HOME_DASHBOARD_CHOSEN_PREF, value).commit()
+            Unit
+        }
+
+    /**
+     * A human's "yes, the dashboard is on the panel" — recorded as the configuration fingerprint it was
+     * given against, because for a foreign renderer a render can only be attested, never observed. A
+     * mismatch against the current fingerprint means the panel has not been shown to work as configured
+     * NOW, so the journey re-arms; blank means never attested. Internal setup state, like the flag above.
+     */
+    /**
+     * Whether this panel has EVER finished setup — the bit that separates "repair" from "first run".
+     * A later broken broker or revoked token re-arms the journey, and the wizard must then read as a
+     * repair of a configured panel, never as a factory reset: the difference between "one thing needs
+     * attention" and a user believing everything they built is gone. Stamped by the two completion
+     * proofs (frontend-connected, human attestation) and never cleared by re-arming.
+     */
+    var setupEverCompleted: Boolean
+        get() = prefs.getBoolean(SETUP_EVER_COMPLETED_PREF, false)
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putBoolean(SETUP_EVER_COMPLETED_PREF, value).commit()
+            Unit
+        }
+
+    var setupRenderAttestation: String
+        get() = prefs.getString(SETUP_RENDER_ATTESTED_PREF, "") ?: ""
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putString(SETUP_RENDER_ATTESTED_PREF, value).commit()
+            Unit
+        }
+
     /** Empty => MQTT disabled. e.g. "tcp://192.168.1.10:1883". */
-    val mqttBroker: String get() = prefs.getString("mqtt_broker", "")!!
-    val mqttUser: String get() = prefs.getString("mqtt_user", "")!!
-    val mqttPassword: String get() = prefs.getString("mqtt_password", "")!!
+    val mqttBroker: String get() = stringPref("mqtt_broker")
+    val mqttUser: String get() = stringPref("mqtt_user")
+    val mqttPassword: String get() = stringPref("mqtt_password")
 
     /** One immutable durable-state generation for connection setup; consumers must not combine
      * three independent getters across a concurrent credential commit. */
@@ -186,14 +369,23 @@ class Config private constructor(
         prefs.edit().remove(MQTT_ANNOUNCEMENT_BOUNDARY_PREF).commit()
     }
 
-    /** Stable per-panel id used in entity_ids / MQTT topics. Defaults to a slug of the device name,
-     *  but the SoC model is identical across a fleet (e.g. `px30_evb`), so when no real device name
-     *  is set we append a short stable per-device suffix to avoid collisions out of the box. */
+    /** Stable per-panel id used in entity_ids / MQTT topics. A fresh install persists its generated
+     *  identity before the service constructs MQTT or mDNS, so a later Android device-name change cannot
+     *  silently rename the panel. The fallback remains for callers that run before service startup. */
     val panelId: String
         get() = prefs.getString("panel_id", null) ?: defaultPanelId()
 
-    /** True when [panelId] is the auto-derived default (no explicit panel_id set yet). */
-    val panelIdIsDefault: Boolean get() = prefs.getString("panel_id", null).isNullOrBlank()
+    /** Materialize the valid generated identity once. Explicit identities always win, and a failed
+     *  durable write leaves the same generated fallback available without claiming it is missing. */
+    internal fun ensurePanelId(defaultValue: () -> String = ::defaultPanelId): String = synchronized(CONFIG_LOCK) {
+        prefs.getString("panel_id", null)?.takeIf { it.isNotBlank() }?.let { return@synchronized it }
+        val generated = defaultValue().takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("generated panel id is blank")
+        if (!prefs.edit().putString("panel_id", generated).commit()) {
+            Log.w(TAG, "could not persist generated panel id; retaining runtime fallback")
+        }
+        generated
+    }
 
     private fun defaultPanelId(): String {
         val resolver = requireNotNull(contentResolver) { "Android settings unavailable" }
@@ -246,18 +438,18 @@ class Config private constructor(
     }
 
     /** Synchronous variant for writes that must survive an immediate reboot. Still composes into a batch. */
-    private fun editCommit(block: SharedPreferences.Editor.() -> Unit) {
+    private fun editCommit(block: SharedPreferences.Editor.() -> Unit): Boolean =
         synchronized(CONFIG_LOCK) {
             val b = batchEditor
             if (b != null && batchThread === Thread.currentThread()) {
                 b.block()
+                true
             } else {
                 val e = prefs.edit()
                 e.block()
                 e.commit()
             }
         }
-    }
 
     /** Persist a new panel id (used by the HTTP config page). */
     fun setPanelId(id: String) {
@@ -408,8 +600,8 @@ class Config private constructor(
         }
     }
 
-    /** App package whose force-stop+relaunch is the dashboard "reload". Empty => reload disabled. */
-    val dashboardPackage: String get() = prefs.getString("dashboard_package", "")!!
+    /** Dashboard renderer selection. Empty means the automatic built-in renderer. */
+    val dashboardPackage: String get() = stringPref("dashboard_package")
     fun setDashboardPackage(pkg: String) {
         require(AndroidInput.isDashboardTarget(pkg)) { "invalid dashboard package" }
         val changed = pkg != dashboardPackage
@@ -429,32 +621,54 @@ class Config private constructor(
 
     /** Home Assistant base URL for the built-in dashboard renderer, e.g. "http://homeassistant.local:8123".
      *  Empty => the built-in renderer is unavailable (external renderers unaffected). */
-    val haUrl: String get() = prefs.getString("ha_url", "")!!
+    val haUrl: String get() = stringPref("ha_url")
+
+    /** The built-in renderer is only ready once the URL and an actual auth route exist. */
+    internal fun builtInRendererReady(): Boolean =
+        haUrl.isNotBlank() && (haToken.isNotBlank() || haRefreshToken.isNotBlank())
+
+    /** Last authoritative HA server version observed for this exact renderer endpoint. This is only a
+     * transient-outage fallback for the V2 compatibility preflight; a successful probe always wins. */
+    internal fun cachedHaServerVersion(url: String): String? {
+        val owner = url.trim().trimEnd('/')
+        return prefs.getString("dashboard_ha_version_owner", null)
+            ?.takeIf { it == owner }
+            ?.let { prefs.getString("dashboard_ha_version", null) }
+    }
+
+    internal fun setHaServerVersionIfOwned(url: String, version: String): Boolean = synchronized(CONFIG_LOCK) {
+        val owner = url.trim().trimEnd('/')
+        if (haUrl.trim().trimEnd('/') != owner) return@synchronized false
+        prefs.edit()
+            .putString("dashboard_ha_version_owner", owner)
+            .putString("dashboard_ha_version", version.take(64))
+            .commit()
+    }
 
     /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. Either a
      *  long-lived access token (set once at provisioning) OR the current short-lived access token kept
      *  fresh from [haRefreshToken]. Never typed on the panel. */
-    val haToken: String get() = prefs.getString("ha_token", "")!!
+    val haToken: String get() = stringPref("ha_token")
 
     /** OAuth refresh token (from a provisioning login). When set, [haToken] is a short-lived access
      *  token the app refreshes on demand — so no 10-year token lives on the panel. Blank => [haToken] is
      *  treated as a static long-lived token that never needs refreshing. */
-    val haRefreshToken: String get() = prefs.getString("ha_refresh_token", "")!!
+    val haRefreshToken: String get() = stringPref("ha_refresh_token")
 
     /** Epoch-seconds expiry of the current [haToken] (refresh model only). 0 => unknown → refresh now. */
-    val haTokenExpiry: Long get() = prefs.getLong("ha_token_expiry", 0L)
+    val haTokenExpiry: Long get() = longPref("ha_token_expiry")
 
     /** Dark mode for panels WITHOUT a system dark/light setting (Android 9-; default true — wall panels
      *  live in dark rooms): themes ha-paneld's own native activities (DayNight) and sets the built-in
      *  renderer's dashboard default. Android 10+ panels follow the OS setting instead (the Display-card
      *  toggle is hidden there); the `:8888` web UI always follows the viewing browser's preference. */
-    val darkMode: Boolean get() = prefs.getBoolean("dark_mode", true)
+    val darkMode: Boolean get() = boolPref("dark_mode")
     fun setDarkMode(v: Boolean) = edit { putBoolean("dark_mode", v) }
 
     /** OAuth client_id to use when refreshing [haToken]. Blank => the HA origin (`<ha_url>/`, what the
      *  frontend uses). Set it to match the client the refresh token was issued for — e.g.
      *  `https://home-assistant.io/android` to reuse an HA Companion refresh token. */
-    val haClientId: String get() = prefs.getString("ha_client_id", "")!!
+    val haClientId: String get() = stringPref("ha_client_id")
 
     /** One immutable durable-state generation for renderer authentication and refresh. */
     internal fun haAuthSnapshot(): HaAuthSnapshot = synchronized(CONFIG_LOCK) {
@@ -488,11 +702,6 @@ class Config private constructor(
             stageDashboardEntityHaUrlChange(this, normalized)
             if (token != null) putString("ha_token", token)
         }
-    }
-
-    /** Persist a refreshed access token + its expiry (called by the on-demand refresh in the renderer). */
-    fun setHaRefreshedToken(access: String, expiryEpochSec: Long) {
-        edit { putString("ha_token", access); putLong("ha_token_expiry", expiryEpochSec) }
     }
 
     /** Persist a refresh result only while the complete auth generation used to obtain it is still
@@ -536,7 +745,7 @@ class Config private constructor(
     }
 
     /** Launcher package the Launcher button brings forward. Empty => auto-pick a non-default home. */
-    val launcherPackage: String get() = prefs.getString("launcher_package", "")!!
+    val launcherPackage: String get() = stringPref("launcher_package")
     fun setLauncherPackage(pkg: String) {
         edit { putString("launcher_package", pkg) }
     }
@@ -550,10 +759,10 @@ class Config private constructor(
      * Critical system packages are refused regardless (see [control.TameController] + the daemon backstop).
      */
     val tameVendorPackages: List<String>
-        get() = prefs.getString("tame_vendor_packages", "")!!
+        get() = stringPref("tame_vendor_packages")
             .split(Regex("[\\s,]+")).map { it.trim() }.filter { it.isNotEmpty() }
     /** Raw user-set value (whitespace/comma-separated) — for the Configure form's input value. */
-    val tameVendorPackagesRaw: String get() = prefs.getString("tame_vendor_packages", "")!!
+    val tameVendorPackagesRaw: String get() = stringPref("tame_vendor_packages")
     fun setTameVendorPackages(raw: String) {
         edit { putString("tame_vendor_packages", raw.trim()) }
     }
@@ -576,18 +785,144 @@ class Config private constructor(
     }
 
     // Wake locally after the learner confirms a deliberate far-to-near-to-far gesture.
-    // Default on where a proximity sensor exists; the HA switch can disable it (e.g. a hallway panel).
-    val wakeOnWave: Boolean get() = prefs.getBoolean("wake_on_wave", true)
+    // Opt-in where a proximity sensor exists; touch-to-wake remains available until explicitly enabled.
+    val wakeOnWave: Boolean get() = boolPref("wake_on_wave")
     val wakeOnWaveGeneration: Long get() = wakeOnWaveEpoch.get()
     fun setWakeOnWave(on: Boolean) {
         edit { putBoolean("wake_on_wave", on) }
         wakeOnWaveEpoch.incrementAndGet()
     }
 
+    /** Opt-in activity policy. Physical screen light state and explicit manual screen commands remain
+     * separate authorities; this flag only admits the automatic policy runtime. */
+    val autoSleep: Boolean get() = boolPref("auto_sleep")
+    internal val autoSleepGeneration: Long get() = synchronized(CONFIG_LOCK) {
+        prefs.getLong(AUTO_SLEEP_GENERATION_PREF, 0L)
+    }
+    internal fun setAutoSleep(on: Boolean): AutoSleepWriteResult = synchronized(CONFIG_LOCK) {
+        if (boolPref("auto_sleep") == on) return@synchronized AutoSleepWriteResult.UNCHANGED
+        // MQTT immediately asks the runtime to refresh, so durability must precede that refresh.
+        val generation = nextAutoSleepGenerationLocked()
+        if (prefs.edit().putBoolean("auto_sleep", on)
+                .putLong(AUTO_SLEEP_GENERATION_PREF, generation).commit()
+        ) AutoSleepWriteResult.COMMITTED
+        else AutoSleepWriteResult.FAILED
+    }
+
+    /** Null means a newer setting value superseded this compare-and-set request. */
+    internal fun setAutoSleepIf(
+        expected: Boolean,
+        expectedGeneration: Long,
+        on: Boolean,
+    ): AutoSleepWriteResult? = synchronized(CONFIG_LOCK) {
+        if (boolPref("auto_sleep") != expected ||
+            prefs.getLong(AUTO_SLEEP_GENERATION_PREF, 0L) != expectedGeneration
+        ) return@synchronized null
+        setAutoSleep(on)
+    }
+
+    private fun nextAutoSleepGenerationLocked(): Long =
+        (prefs.getLong(AUTO_SLEEP_GENERATION_PREF, 0L) + 1L).coerceAtLeast(1L)
+
+    /** Durable expert exclusions for automatic Area-source discovery. They deliberately remain
+     * outside SettingsRegistry: entity ids are installation-specific runtime inputs, not fleet
+     * settings or Home Assistant entities. Area dashboard_entity is never used to prune this memory. */
+    internal fun autoSleepExcludedEntityIds(areaId: String): Set<String> = synchronized(CONFIG_LOCK) {
+        val area = normalizeAutoSleepAreaId(areaId)
+        if (area.isBlank()) emptySet() else {
+            val all = readAutoSleepExclusions()
+            autoSleepExclusionScopes().flatMapTo(linkedSetOf()) { scope -> all[scope]?.get(area).orEmpty() }
+        }
+    }
+
+    internal fun setAutoSleepSourceIncluded(areaId: String, entityId: String, included: Boolean): Boolean =
+        synchronized(CONFIG_LOCK) {
+            val scopes = autoSleepExclusionScopes()
+            val scope = scopes.firstOrNull().orEmpty()
+            val area = normalizeAutoSleepAreaId(areaId)
+            val entity = normalizeAutoSleepEntityId(entityId)
+            if (scope.isBlank() || area.isBlank() || entity.isBlank()) return@synchronized false
+            val all = readAutoSleepExclusions().mapValuesTo(linkedMapOf()) { (_, areas) ->
+                areas.mapValuesTo(linkedMapOf()) { (_, ids) -> ids.toMutableSet() }
+            }
+            val merged = scopes.flatMapTo(linkedSetOf()) { storedScope -> all[storedScope]?.get(area).orEmpty() }
+            if (included) merged.remove(entity) else merged.add(entity)
+            // UUID adoption is asynchronous. Collapse the URL fallback into the stable namespace on
+            // the first later mutation so an old exclusion cannot reappear after being included.
+            scopes.forEach { storedScope ->
+                all[storedScope]?.remove(area)
+                if (all[storedScope]?.isEmpty() == true) all.remove(storedScope)
+            }
+            val areas = all.getOrPut(scope) { linkedMapOf() }
+            if (merged.isNotEmpty()) areas[area] = merged
+            if (areas.isEmpty()) all.remove(scope)
+            val encoded = JSONObject().apply {
+                all.toSortedMap().forEach { (storedScope, storedAreas) ->
+                    put(storedScope, JSONObject().apply {
+                        storedAreas.toSortedMap().forEach { (storedArea, storedIds) ->
+                            put(storedArea, JSONArray(storedIds.toSortedSet().toList()))
+                        }
+                    })
+                }
+            }.toString()
+            if (encoded.toByteArray(Charsets.UTF_8).size > MAX_AUTO_SLEEP_EXCLUSIONS_BYTES) {
+                return@synchronized false
+            }
+            (prefs as? DurableVisibilityPreferences)?.commitWithDurableVisibility {
+                putString(AUTO_SLEEP_EXCLUSIONS_PREF, encoded)
+            } ?: prefs.edit().putString(AUTO_SLEEP_EXCLUSIONS_PREF, encoded).commit()
+        }
+
+    /** Null means the opaque key belonged to a different HA installation by commit time. */
+    internal fun setAutoSleepSourceIncludedIfScope(
+        expectedScope: String,
+        areaId: String,
+        entityId: String,
+        included: Boolean,
+    ): Boolean? = synchronized(CONFIG_LOCK) {
+        if (expectedScope.isBlank() || autoSleepExclusionScope() != expectedScope) null
+        else setAutoSleepSourceIncluded(areaId, entityId, included)
+    }
+
+    internal fun autoSleepExclusionScope(): String {
+        return autoSleepExclusionScopes().firstOrNull().orEmpty()
+    }
+
+    private fun autoSleepExclusionScopes(): List<String> {
+        val stable = dashboardEntityInstanceUuid.trim().lowercase(Locale.ROOT)
+            .takeIf(String::isNotBlank)?.let { "uuid:$it" }
+        val origin = canonicalHaOrigin(haUrl)?.lowercase(Locale.ROOT)?.let { "origin:$it" }
+        return listOfNotNull(stable, origin).distinct()
+    }
+
+    private fun readAutoSleepExclusions(): Map<String, Map<String, Set<String>>> {
+        val raw = prefs.getString(AUTO_SLEEP_EXCLUSIONS_PREF, "").orEmpty()
+        if (raw.isBlank() || raw.toByteArray(Charsets.UTF_8).size > MAX_AUTO_SLEEP_EXCLUSIONS_BYTES) return emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            root.keys().asSequence().associateWith { scope ->
+                val areas = root.getJSONObject(scope)
+                areas.keys().asSequence().mapNotNull { rawArea ->
+                    val area = normalizeAutoSleepAreaId(rawArea).takeIf(String::isNotBlank) ?: return@mapNotNull null
+                    val values = areas.getJSONArray(rawArea)
+                    area to (0 until values.length()).mapNotNullTo(linkedSetOf()) { index ->
+                        normalizeAutoSleepEntityId(values.optString(index)).takeIf(String::isNotBlank)
+                    }
+                }.toMap()
+            }
+        }.onFailure { Log.w(TAG, "ignoring malformed auto-sleep source exclusions") }.getOrDefault(emptyMap())
+    }
+
+    private fun normalizeAutoSleepAreaId(raw: String): String = raw.trim().lowercase(Locale.ROOT)
+        .takeIf { it.length <= 255 && it.matches(Regex("[a-z0-9_-]+")) }.orEmpty()
+
+    private fun normalizeAutoSleepEntityId(raw: String): String = raw.trim().lowercase(Locale.ROOT)
+        .takeIf { it.length <= 255 && it.matches(Regex("binary_sensor\\.[a-z0-9_]+")) }.orEmpty()
+
     // Prevent the vendor firmware idle-dimming the backlight at the screen-off timeout (it drops the
     // hardware backlight to ~1% after the timeout even while the OS keeps the screen on). On by default —
     // these are mains-powered wall panels; turn it off to restore the firmware's own dimming behaviour.
-    val preventIdleDim: Boolean get() = prefs.getBoolean("prevent_idle_dim", true)
+    val preventIdleDim: Boolean get() = boolPref("prevent_idle_dim")
     fun setPreventIdleDim(on: Boolean) {
         edit { putBoolean("prevent_idle_dim", on) }
     }
@@ -595,21 +930,22 @@ class Config private constructor(
     // Hold a partial wakelock so the SoC + network never suspend (screen still free to sleep). ON by
     // default: a mains wall panel must never Doze into an unreachable state where the MQTT reactor +
     // keepalive freeze and the broker connection dies half-open. Toggle off only for a battery panel.
-    val keepAwake: Boolean get() = prefs.getBoolean("keep_awake", true)
+    val keepAwake: Boolean get() = boolPref("keep_awake")
     fun setKeepAwake(on: Boolean) {
         edit { putBoolean("keep_awake", on) }
     }
 
     // App watchdog: poll the dashboard app and self-heal it — relaunch if its process dies, and return
     // to it if it's been backgrounded too long. Opt-in (off by default): a stock panel never auto-acts.
-    val watchdogEnabled: Boolean get() = prefs.getBoolean("watchdog_enabled", false)
+    val watchdogEnabled: Boolean get() = boolPref("watchdog_enabled")
     fun setWatchdogEnabled(on: Boolean) {
         edit { putBoolean("watchdog_enabled", on) }
     }
 
-    // Experimental kiosk lock: suppress + disable the system nav (HOME/RECENT/shade) so a non-admin can't
-    // accidentally leave the dashboard. Runtime-only + many escapes (see KioskController); off by default.
-    val kioskLock: Boolean get() = prefs.getBoolean("kiosk_lock", false)
+    // Experimental Android dashboard lock: hide system bars and return from other apps/Recents so a casual
+    // user does not remain away from the dashboard. Persisted, off by default, with recovery routes and a
+    // startup escape window before enforcement is reasserted (see KioskController and PaneldService).
+    val kioskLock: Boolean get() = boolPref("kiosk_lock")
     fun setKioskLock(on: Boolean) {
         edit { putBoolean("kiosk_lock", on) }
     }
@@ -638,29 +974,28 @@ class Config private constructor(
     // 2026.6.5-minimal crash-loops on Android 8.1/PX30 — a missing android.car class — blanking the
     // dashboard fleet-wide when auto-update was on). Opt in per panel (provision --companion-auto or the
     // MQTT switch); a per-profile known-good version pin is the planned safer gate.
-    val companionAutoUpdate: Boolean get() = prefs.getBoolean("companion_auto_update", false)
+    val companionAutoUpdate: Boolean get() = boolPref("companion_auto_update")
     fun setCompanionAutoUpdate(on: Boolean) {
         edit { putBoolean("companion_auto_update", on) }
     }
     /** Release channel the Companion auto-updater follows — mirrors [updateChannel] for ha-paneld. */
-    val companionUpdateChannel: String get() = prefs.getString("companion_update_channel", "stable") ?: "stable"
+    val companionUpdateChannel: String get() = stringPref("companion_update_channel")
     fun setCompanionUpdateChannel(ch: String) {
         val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
         edit { putString("companion_update_channel", v) }
     }
 
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
-    // the selected [updateChannel] (root; no Play Store on these panels). **Default OFF** — silent
-    // auto-pull from the release repo is a supply-chain risk if control of the repo were ever lost, so it
-    // is strictly opt-in (the pinned-signer check in AppInstaller mitigates a repo-only compromise, but
-    // off-by-default is the safer stance the user chose, 2026-07-01). When a user DOES enable it, it never
+    // the selected [updateChannel] (root/Shizuku verified-install route; no Play Store on these panels).
+    // Default ON only where the runtime exposes verified app install; the Configure schema hides it and
+    // PaneldService rechecks capability before any automatic install on unsupported panels. It never
     // auto-DOWNGRADES: running a pre-release while on the stable channel simply waits ("suspended") until
     // stable catches up; the one deliberate move off an rc is an explicit channel switch pre-release→stable.
-    val selfUpdate: Boolean get() = prefs.getBoolean("self_update", false)
+    val selfUpdate: Boolean get() = boolPref("self_update")
     fun setSelfUpdate(on: Boolean) {
         edit { putBoolean("self_update", on) }
     }
-    val updateChannel: String get() = prefs.getString("update_channel", "stable") ?: "stable"
+    val updateChannel: String get() = stringPref("update_channel")
     fun setUpdateChannel(ch: String) {
         val v = if (ch.trim().lowercase().startsWith("pre")) "prerelease" else "stable"
         edit { putString("update_channel", v) }
@@ -671,7 +1006,7 @@ class Config private constructor(
     // too-old auto-heal installs, but proactively rather than only when the engine is broken. **Default
     // OFF**: a provider swap binds per-process (needs a restart) and is more invasive than an app update,
     // and the pin is advanced deliberately by the maintainer (there is no clean upstream feed to chase).
-    val webViewAutoUpdate: Boolean get() = prefs.getBoolean("webview_auto_update", false)
+    val webViewAutoUpdate: Boolean get() = boolPref("webview_auto_update")
     fun setWebViewAutoUpdate(on: Boolean) {
         // commit() (not apply()): the natural workflow is "enable, then reboot to let it run", and an
         // async write can be lost if the reboot lands before it flushes to disk.
@@ -706,7 +1041,36 @@ class Config private constructor(
     // Per-panel intended "home" dashboard path (e.g. "/lovelace/0"). When set, a reload keeps the hard
     // restart but re-navigates HERE once the frontend is back up, instead of leaving the Companion on its
     // user-default view. Empty = keep current behaviour (cold-start to the Companion default).
-    val homeDashboard: String get() = prefs.getString("home_dashboard", "")!!
+    /**
+     * The panel's REQUESTED Home Assistant area, by name. Home Assistant's value is canonical over
+     * ADOPTED values, but a person's explicit choice is a deliberate local override that adoption must
+     * not undo — the maintainer's Hall panel sits in an HA area with no motion entities, so its area is
+     * deliberately set to a neighbouring room for auto-sleep sources (2026-07-26). [haAreaUserOverride]
+     * records which kind of value this is. Setter is a plain pref write on purpose — adoption must not
+     * re-trigger the write-back side effect.
+     */
+    var haArea: String
+        get() = stringPref("ha_area")
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putString("ha_area", value.trim()).commit()
+            Unit
+        }
+
+    /**
+     * True while [haArea] holds a value a PERSON chose, as opposed to one adopted from Home Assistant.
+     * Set when a user saves a non-blank area, cleared when they save blank ("follow Home Assistant") and
+     * when Home Assistant comes to agree — an override that matches HA is no longer overriding anything.
+     * Without this bit the two kinds of value are indistinguishable, and the convergence pass reverted
+     * every deliberate divergence seconds after it was saved (hardware report, 2026-07-26).
+     */
+    var haAreaUserOverride: Boolean
+        get() = prefs.getBoolean(HA_AREA_USER_OVERRIDE_PREF, false)
+        set(value) = synchronized(CONFIG_LOCK) {
+            prefs.edit().putBoolean(HA_AREA_USER_OVERRIDE_PREF, value).commit()
+            Unit
+        }
+
+    val homeDashboard: String get() = stringPref("home_dashboard")
     fun setHomeDashboard(p: String) {
         edit {
             val normalized = p.trim()
@@ -723,22 +1087,27 @@ class Config private constructor(
     }
 
     /** Built-in renderer: minutes of no touch before it navigates back to [homeDashboard] (0 = off). */
-    val dashboardIdleReturnMin: Int get() = prefs.getInt("dashboard_idle_return_min", 0)
+    val dashboardIdleReturnMin: Int get() = intPref("dashboard_idle_return_min")
 
     /** Built-in renderer: hide the system status + navigation bars (immersive edge-to-edge kiosk).
      *  Swipe-from-edge still transiently reveals them, so an admin is never locked out. */
-    val dashboardFullscreen: Boolean get() = prefs.getBoolean("dashboard_fullscreen", true)
+    val dashboardFullscreen: Boolean get() = boolPref("dashboard_fullscreen")
     fun setDashboardFullscreen(on: Boolean) { edit { putBoolean("dashboard_fullscreen", on) } }
     fun setDashboardIdleReturnMin(min: Int) { edit { putInt("dashboard_idle_return_min", min) } }
 
+    /** Ask Home Assistant's own frontend to enter its native kiosk mode. This is independent of
+     * Android fullscreen/dashboard lock and does not inject CSS into the dashboard. */
+    val dashboardNativeKiosk: Boolean get() = boolPref("dashboard_native_kiosk")
+    fun setDashboardNativeKiosk(on: Boolean) { edit { putBoolean("dashboard_native_kiosk", on) } }
+
     /** Built-in renderer: allow Android's overscroll stretch/glow past the top or bottom of the page.
      *  Off by default (a wall panel rarely scrolls; the bounce looks out of place). API-only setting. */
-    val dashboardOverscroll: Boolean get() = prefs.getBoolean("dashboard_overscroll", false)
+    val dashboardOverscroll: Boolean get() = boolPref("dashboard_overscroll")
     fun setDashboardOverscroll(on: Boolean) { edit { putBoolean("dashboard_overscroll", on) } }
 
     /** Built-in renderer: dashboard page zoom %. 100 matches the HA Companion's default sizing (which
      *  scales the page by device density), so a switched-over panel keeps its layout. */
-    val dashboardZoom: Int get() = prefs.getInt("dashboard_zoom", 100)
+    val dashboardZoom: Int get() = intPref("dashboard_zoom")
     fun setDashboardZoom(pct: Int) { edit { putInt("dashboard_zoom", pct) } }
 
     /**
@@ -775,6 +1144,7 @@ class Config private constructor(
             appliedOwner = string("dashboard_entity_applied_instance"),
             overrides = string("dashboard_entity_overrides"),
             overrideOwner = string("dashboard_entity_override_instance"),
+            initialActivationPending = all[DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY] as? Boolean ?: false,
         )
     }
 
@@ -794,6 +1164,7 @@ class Config private constructor(
             .putString("dashboard_entity_applied_instance", state.appliedOwner)
             .putString("dashboard_entity_overrides", state.overrides)
             .putString("dashboard_entity_override_instance", state.overrideOwner)
+            .putBoolean(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY, state.initialActivationPending)
     }
 
     /** The evidence namespace currently selected for the configured HA endpoint. A URL-derived key is
@@ -907,15 +1278,15 @@ class Config private constructor(
 
     /** Productized learner request. Distinct from runtime filter-active so first sync can fail open. */
     val dashboardEntityLearningEnabled: Boolean
-        get() = prefs.getBoolean("dashboard_entity_learning", false)
+        get() = boolPref("dashboard_entity_learning")
     fun setDashboardEntityLearningEnabled(enabled: Boolean) { edit { putBoolean("dashboard_entity_learning", enabled) } }
 
     /** Which evidence sources may automatically change the live subscription. Evidence is still
      * collected when either switch is off so the Entities tab can present it for manual pinning. */
     val dashboardEntityAutoStatic: Boolean
-        get() = prefs.getBoolean("dashboard_entity_auto_static", true)
+        get() = boolPref("dashboard_entity_auto_static")
     val dashboardEntityAutoRuntime: Boolean
-        get() = prefs.getBoolean("dashboard_entity_auto_runtime", true)
+        get() = boolPref("dashboard_entity_auto_runtime")
     fun setDashboardEntityAutoPolicy(staticRefs: Boolean, runtimeRefs: Boolean): Boolean = applyBatch {
         edit {
             putBoolean("dashboard_entity_auto_static", staticRefs)
@@ -981,9 +1352,12 @@ class Config private constructor(
      * disabling turns interception off but keeps that list for a later re-enable. */
     fun commitDashboardEntityLearningMode(enabled: Boolean, clearApplied: Boolean): Boolean {
         val restorePreservedFilter = enabled && dashboardEntityFilterIds.isNotEmpty()
+        val firstOptIn = enabled && !dashboardEntityLearningEnabled && rawDashboardEntityFilterIds.isEmpty() &&
+            prefs.getString("dashboard_entity_applied_instance", "").isNullOrBlank()
         return applyBatch {
             edit {
                 putBoolean("dashboard_entity_learning", enabled)
+                if (firstOptIn) putBoolean(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY, true)
                 if (clearApplied) {
                     putBoolean("dashboard_entity_learning_applied", false)
                     putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
@@ -1003,13 +1377,15 @@ class Config private constructor(
     /** True after a fresh installation has safely bootstrapped or an observed set was explicitly applied. */
     val dashboardEntityLearningApplied: Boolean
         get() = entityStateOwnedByCurrent("dashboard_entity_applied_instance") &&
-            prefs.getBoolean("dashboard_entity_learning_applied", false)
+            boolPref("dashboard_entity_learning_applied")
     fun setDashboardEntityLearningApplied(applied: Boolean) {
         edit {
             putBoolean("dashboard_entity_learning_applied", applied)
             putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
         }
     }
+    internal val dashboardEntityInitialActivationPending: Boolean
+        get() = prefs.getBoolean(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY, false)
     fun commitDashboardEntityLearningApplied(applied: Boolean): Boolean = applyBatch {
         setDashboardEntityLearningApplied(applied)
     }
@@ -1017,7 +1393,7 @@ class Config private constructor(
     /** Backup-safe expert overrides; the derived catalog and metrics remain rebuildable SQLite state. */
     val dashboardEntityOverrides: Map<String, String>
         get() = if (!entityStateOwnedByCurrent("dashboard_entity_override_instance")) emptyMap() else
-            prefs.getString("dashboard_entity_overrides", "").orEmpty().lineSequence().mapNotNull { line ->
+            stringPref("dashboard_entity_overrides").lineSequence().mapNotNull { line ->
             val marker = line.firstOrNull() ?: return@mapNotNull null
             val id = line.drop(1).trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
             when (marker) { '+' -> id to "pinned"; '-' -> id to "forced_exclude"; else -> null }
@@ -1062,6 +1438,7 @@ class Config private constructor(
             putBoolean("dashboard_entity_learning_applied", applied)
             putString("dashboard_entity_filter_instance", dashboardEntityTargetKey)
             putString("dashboard_entity_applied_instance", dashboardEntityTargetKey)
+            if (applied) remove(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY)
         } }
     }
 
@@ -1075,6 +1452,7 @@ class Config private constructor(
             putString("dashboard_entity_override_instance", target)
             putBoolean("dashboard_entity_learning_applied", false)
             putString("dashboard_entity_applied_instance", target)
+            remove(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY)
             if (clearFilter) {
                 putString("dashboard_entity_filter_ids", "")
                 putBoolean("dashboard_entity_filter_enabled", false)
@@ -1094,6 +1472,7 @@ class Config private constructor(
             putString("dashboard_entity_applied_instance", state.appliedOwner)
             putString("dashboard_entity_overrides", state.overrides)
             putString("dashboard_entity_override_instance", state.overrideOwner)
+            putBoolean(DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY, state.initialActivationPending)
         } }
 
     /** Commit a promotion policy and any resulting live subscription as one durable preference change.
@@ -1167,7 +1546,21 @@ class Config private constructor(
     // Soft on-screen navigation bar mode: "Off" | "Always on" | "Swipe reveal" (NavbarController.MODES).
     // Default Off — panels with a working native navbar (or no need for one) are untouched; the user
     // opts a panel in via the HA select. Persisted so the bar is restored on boot.
-    val navbarMode: String get() = prefs.getString("navbar_mode", "Off")!!
+    val navbarMode: String
+        get() = prefs.getString("navbar_mode", null) ?: defaultNavbarMode()
+
+    private fun defaultNavbarMode(): String {
+        val res = resources
+        val id = res?.getIdentifier("config_showNavigationBar", "bool", "android") ?: 0
+        val resourceShowsNavbar = id.takeIf { it != 0 }?.let {
+            runCatching { res?.getBoolean(it) }.getOrNull()
+        }
+        return defaultNavbarMode(
+            resourceShowsNavbar,
+            SystemProps.get("persist.smatek.show.navigationbar"),
+            profile?.id,
+        )
+    }
     fun setNavbarMode(mode: String) {
         edit { putString("navbar_mode", mode) }
     }
@@ -1181,10 +1574,7 @@ class Config private constructor(
 
     // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
     // Default off — existing panels already have their own volume state; only opt in deliberately.
-    val silenceBootChime: Boolean get() = prefs.getBoolean(
-        "silence_boot_chime",
-        SettingsRegistry.DEFAULT_SILENCE_BOOT_CHIME,
-    )
+    val silenceBootChime: Boolean get() = boolPref("silence_boot_chime")
     fun setSilenceBootChime(on: Boolean) { edit { putBoolean("silence_boot_chime", on) } }
 
     /** Last measured DashboardActivity-start → Android default-network wait. Used only to make the
@@ -1209,12 +1599,12 @@ class Config private constructor(
     // with an EMPTY host — a stock panel ships nothing until deliberately configured. LAN-only by intent;
     // lines are redacted (tokens/passwords/URL secrets) before they leave the device. No on-panel UI:
     // set via the HTTP /config endpoint (provision.sh --log-* flags). See logship/LogShipper.
-    val logShipEnabled: Boolean get() = prefs.getBoolean("log_ship_enabled", false)
+    val logShipEnabled: Boolean get() = boolPref("log_ship_enabled")
     /** Sink host (the log collector to ship to). Empty => shipping stays inert regardless of the flag. */
-    val logShipHost: String get() = prefs.getString("log_ship_host", "")!!
-    val logShipPort: Int get() = prefs.getInt("log_ship_port", 514)
+    val logShipHost: String get() = stringPref("log_ship_host")
+    val logShipPort: Int get() = intPref("log_ship_port")
     /** Transport: "syslog" (TCP, RFC5424) or "http" (NDJSON POST). */
-    val logShipProtocol: String get() = prefs.getString("log_ship_protocol", "syslog")!!
+    val logShipProtocol: String get() = stringPref("log_ship_protocol")
     /** True only when shipping is enabled AND a sink host is configured. */
     val logShipActive: Boolean get() = logShipEnabled && logShipHost.isNotBlank()
     fun setLogShipping(enabled: Boolean, host: String, port: Int, protocol: String) {
@@ -1239,28 +1629,28 @@ class Config private constructor(
     // Optional on-panel auto-brightness engine (see control/AutoBrightnessController). Default OFF →
     // ha-paneld stays a pure brightness actuator; HA drives the screen. When ON, the engine maps a lux
     // stream (panel ALS where present, else HA-fed) to the backlight.
-    val autoBrightness: Boolean get() = prefs.getBoolean("auto_brightness", false)
+    val autoBrightness: Boolean get() = boolPref("auto_brightness")
     fun setAutoBrightness(on: Boolean) {
         edit { putBoolean("auto_brightness", on) }
     }
 
-    /** Strength of deviations from the learned ambient-light baseline; 50 is the neutral response. */
+    /** Strength of deviations from the learned ambient-light baseline; 50 is the balanced response. */
     val autoBrightnessSensitivity: Int
-        get() = prefs.getInt("auto_brightness_sensitivity", 50).coerceIn(0, 100)
+        get() = intPref("auto_brightness_sensitivity").coerceIn(0, 100)
     fun setAutoBrightnessSensitivity(value: Int) {
         edit { putInt("auto_brightness_sensitivity", value.coerceIn(0, 100)) }
     }
 
     /** Lowest automatic target in user-facing percent; the actuator's visible floor remains absolute. */
     val autoBrightnessMinimumPercent: Int
-        get() = prefs.getInt("auto_brightness_minimum_percent", 4).coerceIn(4, 95)
+        get() = intPref("auto_brightness_minimum_percent").coerceIn(4, 95)
     fun setAutoBrightnessMinimumPercent(value: Int) {
         edit { putInt("auto_brightness_minimum_percent", value.coerceIn(4, 95)) }
     }
 
     /** Exact HA illuminance entity selected instead of the local ALS; blank uses the panel sensor. */
     val autoBrightnessHaEntity: String
-        get() = prefs.getString("auto_brightness_ha_entity", "").orEmpty()
+        get() = stringPref("auto_brightness_ha_entity")
     fun setAutoBrightnessHaEntity(entityId: String) {
         edit { putString("auto_brightness_ha_entity", entityId.trim()) }
     }
@@ -1303,8 +1693,8 @@ class Config private constructor(
     }
 
     /** Raw user-set values (empty if unset) — for the Configure form's input value. */
-    val manufacturerRaw: String get() = prefs.getString("manufacturer", "")!!
-    val modelRaw: String get() = prefs.getString("model", "")!!
+    val manufacturerRaw: String get() = stringPref("manufacturer")
+    val modelRaw: String get() = stringPref("model")
 
     /** Resolved HA device-card manufacturer: user value → profile default → inferred from Build. */
     val manufacturer: String
@@ -1388,7 +1778,7 @@ class Config private constructor(
      *  the profile or the API can move it independently, and a future schema migration writing the config
      *  default (0) can't wipe the profile baseline. */
     val roomTempOffsetC: Float
-        get() = (profile?.roomTempOffsetC ?: 0f) + prefs.getFloat("room_temp_offset", 0f)
+        get() = (profile?.roomTempOffsetC ?: 0f) + floatPref("room_temp_offset")
 
     /** Persist the user's `room_temp_offset` trim (°C), clamped to the registry range. Uses [edit] so it
      *  composes with the /config POST batch — without this the key had a [SettingSpec] and rendered a form
@@ -1421,11 +1811,7 @@ class Config private constructor(
 
     /** Last requested button-backlight level (0=off, 1..255=on, -1=never commanded/readable). */
     var lastButtonBacklight: Int
-        get() = if (profile?.hasButtonBacklight == true) {
-            prefs.getInt(buttonBacklightKey(profile!!), -1)
-        } else {
-            -1
-        }
+        get() = profile?.takeIf { it.hasButtonBacklight }?.let { prefs.getInt(buttonBacklightKey(it), -1) } ?: -1
         set(v) {
             profile?.takeIf { it.hasButtonBacklight }?.let {
                 prefs.edit().putInt(
@@ -1446,13 +1832,29 @@ class Config private constructor(
     // import all go through one typed path instead of ~35 bespoke getters. Typed convenience getters
     // above remain for callers; they read the same durable keys.
 
+    // The [SettingsRegistry] SettingSpec is the SOLE authority for every registry-backed key's default:
+    // the typed convenience accessors above read their default through these helpers rather than each
+    // re-declaring a literal that must be kept coherent with the spec by hand. A key with no spec is a
+    // programming error (surfaces at test time), never a silent fallback to some other literal.
+    private fun specOf(key: String): SettingSpec =
+        SettingsRegistry.spec(key) ?: error("no SettingSpec registered for '$key'")
+
+    private fun boolPref(key: String): Boolean = prefs.getBoolean(key, specOf(key).defaultBool())
+    private fun intPref(key: String): Int = prefs.getInt(key, specOf(key).defaultInt())
+    private fun longPref(key: String): Long = prefs.getLong(key, specOf(key).defaultLong())
+    private fun floatPref(key: String): Float = prefs.getFloat(key, specOf(key).defaultFloat())
+    private fun stringPref(key: String): String = prefs.getString(key, specOf(key).default) ?: specOf(key).default
+
     /** Current raw string value for a registry key (the spec default if unset). */
     fun getRaw(spec: SettingSpec): String = when (spec.type) {
-        SettingType.BOOL -> prefs.getBoolean(spec.key, spec.default.toBoolean()).toString()
-        SettingType.INT -> prefs.getInt(spec.key, spec.default.toIntOrNull() ?: 0).toString()
-        SettingType.LONG -> prefs.getLong(spec.key, spec.default.toLongOrNull() ?: 0L).toString()
-        SettingType.FLOAT -> prefs.getFloat(spec.key, spec.default.toFloatOrNull() ?: 0f).toString()
-        else -> prefs.getString(spec.key, spec.default) ?: spec.default
+        SettingType.BOOL -> prefs.getBoolean(spec.key, spec.defaultBool()).toString()
+        SettingType.INT -> prefs.getInt(spec.key, spec.defaultInt()).toString()
+        SettingType.LONG -> prefs.getLong(spec.key, spec.defaultLong()).toString()
+        SettingType.FLOAT -> prefs.getFloat(spec.key, spec.defaultFloat()).toString()
+        else -> when (spec.key) {
+            "navbar_mode" -> navbarMode
+            else -> prefs.getString(spec.key, spec.default) ?: spec.default
+        }
     }
 
     /** Stage a typed write into [editor] (no commit) — used by the transactional bundle import. */
@@ -1471,9 +1873,11 @@ class Config private constructor(
     internal fun commitRaw(spec: SettingSpec, normalized: String): Boolean = synchronized(CONFIG_LOCK) {
         if (spec.transient || spec.readOnly) return false
         val value = (SettingValue.validate(spec, normalized) as? Validation.Ok)?.normalized ?: return false
+        val autoSleepChanged = spec.key == "auto_sleep" && boolPref("auto_sleep") != value.toBoolean()
         val committed = prefs.edit().also { editor ->
             if (spec.key == "home_dashboard") stageHomeDashboard(editor, value, homeDashboard)
             else stage(editor, spec, value)
+            if (autoSleepChanged) editor.putLong(AUTO_SLEEP_GENERATION_PREF, nextAutoSleepGenerationLocked())
         }.commit()
         if (committed && spec.key == "wake_on_wave") wakeOnWaveEpoch.incrementAndGet()
         committed
@@ -1514,14 +1918,26 @@ class Config private constructor(
             val next = migrated[spec.key] ?: continue
             if (next != current[spec.key]) stage(ed, spec, next)
         }
+        // A schema-3 live store may have relied on the old true fallbacks without ever materializing
+        // them. Preserve that upgrade behavior, while fresh schema-1 stores receive schema-4 defaults.
+        if (from == 3) {
+            if (!prefs.contains("wake_on_wave")) ed.putBoolean("wake_on_wave", true)
+            SettingsRegistry.LEGACY_DEFAULT_ON_HA_EXPOSURES.forEach { key ->
+                val exposureKey = "${SettingsRegistry.HA_EXPOSE_PREFIX}$key"
+                if (!prefs.contains(exposureKey)) ed.putBoolean(exposureKey, true)
+            }
+        }
         ed.putInt("config_schema", SettingsRegistry.SCHEMA)
         ed.commit()
         Log.i(TAG, "migrated live config store: schema $from -> ${SettingsRegistry.SCHEMA}")
     }
 
     /** Whether an HA-capable setting is currently exposed to Home Assistant (per-panel override). */
-    fun haExposed(key: String, default: Boolean = true): Boolean = prefs.getBoolean("ha_expose_$key", default)
-    fun setHaExposed(key: String, on: Boolean) { edit { putBoolean("ha_expose_$key", on) } }
+    fun haExposed(key: String, default: Boolean): Boolean =
+        prefs.getBoolean("${SettingsRegistry.HA_EXPOSE_PREFIX}$key", default)
+    fun setHaExposed(key: String, on: Boolean) {
+        edit { putBoolean("${SettingsRegistry.HA_EXPOSE_PREFIX}$key", on) }
+    }
 
     private fun slug(s: String): String =
         s.lowercase(Locale.ROOT)
@@ -1530,15 +1946,26 @@ class Config private constructor(
             .ifEmpty { "ha_paneld_panel" }
 
     companion object {
+        private const val TAG = "ha-paneld/config"
         /** Every Config wrapper addresses one process-wide SQLite namespace, so transaction ownership
          * must be process-wide as well. */
         private val CONFIG_LOCK = Any()
-        private const val TAG = "ha-paneld/config"
         private const val SECURITY_MODE_PREF = "device_local_hardened_security"
+        private const val SETUP_IDENTITY_CONFIRMED_PREF = "device_local_setup_identity_confirmed"
+        private const val SETUP_ENTITY_FILTER_ANSWERED_PREF = "device_local_setup_entity_filter_answered"
+        private const val SETUP_HOME_DASHBOARD_CHOSEN_PREF = "device_local_setup_home_dashboard_chosen"
+        private const val SETUP_QUESTION_MIGRATION_PREF = "device_local_setup_questions_migrated_v1"
+        private const val SETUP_HOME_DASHBOARD_MIGRATION_PREF = "device_local_setup_home_dashboard_migrated_v2"
+        private const val HA_AREA_USER_OVERRIDE_PREF = "device_local_ha_area_user_override"
+        private const val SETUP_RENDER_ATTESTED_PREF = "device_local_setup_render_attested"
+        private const val SETUP_EVER_COMPLETED_PREF = "device_local_setup_ever_completed"
         private const val MQTT_FAMILY_BROKER_PREF = "device_local_mqtt_family_broker"
         private const val MQTT_FAMILY_IPV4_PREF = "device_local_mqtt_family_ipv4"
         private const val MQTT_ANNOUNCEMENT_BOUNDARY_PREF =
             "device_local_mqtt_announcement_boundary_consumed"
+        private const val AUTO_SLEEP_EXCLUSIONS_PREF = "auto_sleep_source_exclusions_v1"
+        private const val AUTO_SLEEP_GENERATION_PREF = "auto_sleep_generation_v1"
+        private const val MAX_AUTO_SLEEP_EXCLUSIONS_BYTES = 256 * 1024
         private const val LAST_LAUNCH_SCREEN_VERSION_PREF =
             "device_local_last_launch_screen_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
@@ -1547,6 +1974,8 @@ class Config private constructor(
             "dashboard_entity_default_resolver_target"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_PENDING_KEY =
             "dashboard_entity_default_resolver_pending"
+        private const val DASHBOARD_ENTITY_INITIAL_ACTIVATION_PENDING_KEY =
+            "dashboard_entity_initial_activation_pending"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION = 1
         private const val PROXIMITY_PROFILE_MIGRATED = "proximity_profile_calibration_migrated"
         internal const val PROFILE_CALIBRATION_PREFS = "ha-paneld-profile-calibration"

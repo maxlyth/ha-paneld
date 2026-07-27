@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.control
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.BoundedLaunchGate
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.runBoundedLaunch
@@ -76,11 +77,11 @@ object Su : RootShell {
     private const val TAG = "ha-paneld/su"
     private const val SENTINEL = "__hapaneld_done__"
     private const val CMD_TIMEOUT_MS = 5000L
+    private const val AVAILABILITY_TTL_MS = 60_000L
 
     // A successful dialect is sticky. NONE_LAST_PROBE records diagnostics only; it must not suppress
     // later one-shot probes because root-manager readiness can change during the process lifetime.
-    @Volatile
-    private var form: Int = SuFormPolicy.UNPROBED
+    private val formState = SuFormState()
 
     private var shell: ShellHandle? = null
     private val execFailureCache = SuExecFailureCache()
@@ -103,11 +104,37 @@ object Su : RootShell {
         else -> arrayOf("su", "0", "sh")
     }
 
+    /**
+     * Try each candidate su dialect until [attempt] returns an accepted non-null result; the caller
+     * defines acceptance, and streamed stdin intentionally accepts a completed non-zero process as
+     * dialect proof. The winning dialect becomes sticky. If every candidate fails and none was ever
+     * proven, record the negative probe so the persistent shell stops trying (a later one-shot still
+     * re-probes). Null when no dialect works. This is the one home for the sticky-form and exhaustion
+     * invariant that the one-shot entry points previously re-implemented inline.
+     */
+    private fun <T : Any> overForms(attempt: (Int) -> T?): T? {
+        SuFormPolicy.firstAccepted(formState.current(), attempt)
+            ?.let { formState.recordSuccess(it.form); return it.value }
+        formState.recordExhaustion()
+        return null
+    }
+
     /** Run [cmd] as root, waiting for completion. Returns true on exit 0. */
     @Synchronized
     override fun run(cmd: String): Boolean {
         piped(cmd)?.let { return it.second == 0 }
         return oneShotRun(cmd)
+    }
+
+    /** Resolve the harmless su dialect first, then execute the side-effecting command exactly once. */
+    @Synchronized
+    override fun runSingleAttempt(cmd: String, timeoutMs: Long): Boolean {
+        if (!formState.working()) {
+            oneShotRun("true")
+            if (!formState.working()) return false
+        }
+        val form = formState.current()
+        return runBounded("run-single", argvOneShot(form, cmd), timeoutMs) { it.waitFor() } == 0
     }
 
     /** Run [cmd] as root and return its stdout, or null if no su form works / it exits non-zero. */
@@ -121,7 +148,7 @@ object Su : RootShell {
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
     override fun fireAndForget(cmd: String): Boolean {
         if (execFailureCache.shouldSkipExec()) return false
-        val forms = SuFormPolicy.candidates(form)
+        val forms = formState.candidates()
         for (f in forms) {
             try {
                 Runtime.getRuntime().exec(argvOneShot(f, cmd))
@@ -139,42 +166,29 @@ object Su : RootShell {
      *  Null on failure / no su. */
     override fun runBytes(cmd: String): ByteArray? = runBytesBounded(cmd, Long.MAX_VALUE - 1L)
 
-    override fun runBytesBounded(cmd: String, maxBytes: Long): ByteArray? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val bytes = runBounded("bytes", argvOneShot(f, cmd)) { p ->
-                // binary-safe; drain before waitFor to avoid a full pipe deadlock. The bounded reader
-                // probes one byte beyond the ceiling, then runBounded kills the producer on overflow.
-                val b = BoundedStreams.readBytes(p.inputStream, maxBytes)
-                if (p.waitFor() == 0) b else null
-            }
-            if (bytes != null) { form = f; return bytes }
+    override fun runBytesBounded(cmd: String, maxBytes: Long): ByteArray? = overForms { f ->
+        runBounded("bytes", argvOneShot(f, cmd)) { p ->
+            // binary-safe; drain before waitFor to avoid a full pipe deadlock. The bounded reader
+            // probes one byte beyond the ceiling, then runBounded kills the producer on overflow.
+            val b = BoundedStreams.readBytes(p.inputStream, maxBytes)
+            if (p.waitFor() == 0) b else null
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return null
     }
 
     /** Stream binary stdout directly to [target] under a hard byte ceiling. This is for larger root
      * artifacts such as Companion databases where a ByteArray would double peak heap before staging.
      * A failed/non-zero/oversized command leaves no partial file. */
     fun runToFileBounded(cmd: String, target: File, maxBytes: Long, timeoutMs: Long = 30_000L): Long? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val written = runBounded("file", argvOneShot(f, cmd), timeoutMs) { p ->
+        val written = overForms { f ->
+            runBounded("file", argvOneShot(f, cmd), timeoutMs) { p ->
                 val count = target.outputStream().use { output ->
                     BoundedStreams.copy(p.inputStream, output, maxBytes)
                 }
                 if (p.waitFor() == 0) count else null
-            }
-            if (written != null) {
-                form = f
-                return written
-            }
-            target.delete()
+            }.also { if (it == null) target.delete() }   // a failed dialect leaves no partial file
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        target.delete()
-        return null
+        if (written == null) target.delete()
+        return written
     }
 
     /** One-shot, bounded text command for diagnostics. Unlike [runOutput], this never waits behind the
@@ -182,17 +196,17 @@ object Su : RootShell {
      * navbar/screen/hardware command. Both possible `su` dialects share one [timeoutMs] deadline. */
     override fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long): String? {
         val deadline = MonotonicDeadline(timeoutMs)
-        val selected = SuFormPolicy.firstSuccessfulWithin(form, deadline) { candidate, sharedDeadline ->
+        val selected = SuFormPolicy.firstSuccessfulWithin(formState.current(), deadline) { candidate, sharedDeadline ->
             runBounded("isolated-out", argvOneShot(candidate, cmd), sharedDeadline) { p ->
                 val bytes = BoundedStreams.readBytes(p.inputStream, maxBytes)
                 if (p.waitFor() == 0) String(bytes, Charsets.UTF_8) else null
             }
         }
         if (selected != null) {
-            form = selected.form
+            formState.recordSuccess(selected.form)
             return selected.value
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
+        formState.recordExhaustion()
         return null
     }
 
@@ -201,12 +215,27 @@ object Su : RootShell {
 
     override fun available(): Boolean = run("true")
 
+    // Every render-time root gate and privileged-route observation share one bounded, single-flight
+    // probe here rather than each layer (formerly the HTTP server) wrapping [availableIsolated] in its
+    // own TTL cache. The bounded window avoids repeated expensive probes while allowing readiness changes
+    // to be observed; isolated so the probe never waits behind the synchronized persistent control shell.
+    private val availabilityCache = newAvailabilityCache()
+
+    internal fun newAvailabilityCache(
+        ttlMs: Long = AVAILABILITY_TTL_MS,
+        nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
+        probe: () -> Boolean = ::availableIsolated,
+    ): Cached<Boolean> = Cached(ttlMs, nowMs, probe)
+
+    /** Cached [availableIsolated]: at most one root probe per TTL window, single-flight across callers. */
+    fun availableCachedIsolated(): Boolean = availabilityCache.get()
+
     // --- persistent shell ---
 
     /** Send [cmd] through the persistent root shell; returns (stdout, exitCode), or null if the shell
      *  path is unavailable/broke — the caller then falls back to a one-shot exec. */
     private fun piped(cmd: String): Pair<String, Int>? {
-        if (form == SuFormPolicy.NONE_LAST_PROBE) return null
+        if (formState.current() == SuFormPolicy.NONE_LAST_PROBE) return null
         val sh = ensureShell() ?: return null
         return try {
             sh.io.submit(Callable { transact(sh, cmd) }).get(CMD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -238,12 +267,12 @@ object Su : RootShell {
     private fun ensureShell(): ShellHandle? {
         shell?.let { if (it.process.isAlive) return it }
         closeShell()
-        if (!SuFormPolicy.working(form)) {
+        if (!formState.working()) {
             oneShotRun("true")              // probe + cache a working form, or record a negative probe
-            if (!SuFormPolicy.working(form)) return null
+            if (!formState.working()) return null
         }
         return try {
-            val p = Runtime.getRuntime().exec(argvShell(form))
+            val p = Runtime.getRuntime().exec(argvShell(formState.current()))
             drainStderr(p)
             ShellHandle(
                 process = p,
@@ -323,33 +352,22 @@ object Su : RootShell {
             }
         }
 
-    private fun oneShotRun(cmd: String): Boolean {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            if (runBounded("run", argvOneShot(f, cmd)) { it.waitFor() } == 0) { form = f; return true }
-        }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return false
-    }
+    private fun oneShotRun(cmd: String): Boolean =
+        overForms { f -> runBounded("run", argvOneShot(f, cmd)) { it.waitFor() }?.takeIf { it == 0 } } != null
 
     /** Long-running one-shot su [cmd] (exit 0 → true), bounded to [timeoutMs]. Always a one-shot — a
      *  minutes-long op (e.g. staging + installing a large APK) must NOT occupy the shared persistent
      *  shell, whose sentinel protocol is bounded to the short [CMD_TIMEOUT_MS]. */
-    fun runLong(cmd: String, timeoutMs: Long): Boolean {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            if (runBounded("run-long", argvOneShot(f, cmd), timeoutMs) { it.waitFor() } == 0) { form = f; return true }
-        }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return false
-    }
+    fun runLong(cmd: String, timeoutMs: Long): Boolean =
+        overForms { f ->
+            runBounded("run-long", argvOneShot(f, cmd), timeoutMs) { it.waitFor() }?.takeIf { it == 0 }
+        } != null
 
     private data class StdinResult(val stdout: String, val exitCode: Int)
 
-    private fun runWithStdinLongResult(cmd: String, input: java.io.File, timeoutMs: Long): StdinResult? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val out = runBounded("stdin-long", argvOneShot(f, cmd), timeoutMs) { p ->
+    private fun runWithStdinLongResult(cmd: String, input: java.io.File, timeoutMs: Long): StdinResult? =
+        overForms { f ->
+            runBounded("stdin-long", argvOneShot(f, cmd), timeoutMs) { p ->
                 val feeder = Thread {
                     runCatching { p.outputStream.use { os -> input.inputStream().use { it.copyTo(os) } } }
                 }.apply { isDaemon = true; start() }
@@ -357,11 +375,7 @@ object Su : RootShell {
                 feeder.join(timeoutMs)
                 StdinResult(text, p.waitFor())
             }
-            if (out != null) { form = f; return out }
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return null
-    }
 
     /** Long one-shot command with streamed stdin. Returns stdout even when the child exits non-zero. */
     fun runWithStdinLong(cmd: String, input: java.io.File, timeoutMs: Long): String? =
@@ -372,29 +386,17 @@ object Su : RootShell {
         runWithStdinLongResult(cmd, input, timeoutMs)?.takeIf { it.exitCode == 0 }?.stdout
 
     /** Long-running one-shot su [cmd] returning stdout (null on non-zero/failure), bounded to [timeoutMs]. */
-    fun runOutputLong(cmd: String, timeoutMs: Long): String? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val out = runBounded("out-long", argvOneShot(f, cmd), timeoutMs) { p ->
-                val text = p.inputStream.bufferedReader().readText()
-                if (p.waitFor() == 0) text else null
-            }
-            if (out != null) { form = f; return out }
+    fun runOutputLong(cmd: String, timeoutMs: Long): String? = overForms { f ->
+        runBounded("out-long", argvOneShot(f, cmd), timeoutMs) { p ->
+            val text = p.inputStream.bufferedReader().readText()
+            if (p.waitFor() == 0) text else null
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return null
     }
 
-    private fun oneShotOutput(cmd: String): String? {
-        val forms = SuFormPolicy.candidates(form)
-        for (f in forms) {
-            val out = runBounded("out", argvOneShot(f, cmd)) { p ->
-                val text = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
-                if (p.waitFor() == 0) text else null
-            }
-            if (out != null) { form = f; return out }
+    private fun oneShotOutput(cmd: String): String? = overForms { f ->
+        runBounded("out", argvOneShot(f, cmd)) { p ->
+            val text = p.inputStream.bufferedReader().readText() // read before waitFor (avoid deadlock)
+            if (p.waitFor() == 0) text else null
         }
-        if (form == SuFormPolicy.UNPROBED) form = SuFormPolicy.NONE_LAST_PROBE
-        return null
     }
 }

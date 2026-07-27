@@ -27,6 +27,8 @@ class ActiveGetAdmissionContractTest {
         assertRouteGatesBefore("/perf", "PerfReader.touch()")
         assertRouteGatesBefore("/perf/history", "call.request.queryParameters")
         assertRouteGatesBefore("/perf/history", "entityLearning.performanceHistoryJson(hours)")
+        assertRouteGatesBefore("/auto-sleep/history", "call.request.queryParameters")
+        assertRouteGatesBefore("/auto-sleep/history", "autoSleepHttpApi.historyJson(hours)")
         assertRouteGatesBefore("/screenshot.png", "interactive.screenshot()")
         assertRouteGatesBefore("/tame/suggest", "PerfReader.touch()")
 

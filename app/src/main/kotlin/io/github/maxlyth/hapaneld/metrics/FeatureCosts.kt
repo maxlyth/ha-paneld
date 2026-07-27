@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.metrics
 
 import io.github.maxlyth.hapaneld.BuildConfig
+import io.github.maxlyth.hapaneld.util.Cached
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicInteger
@@ -509,36 +510,24 @@ class FeatureCostRegistry internal constructor(
 object FeatureCosts {
     val registry = FeatureCostRegistry(enabled = BuildConfig.FEATURE_COSTS_ENABLED)
     private const val PROJECTION_CACHE_NANOS = 1_000_000_000L
-    private val projectionLock = Any()
-    @Volatile private var cachedAtNanos = Long.MIN_VALUE
-    @Volatile private var cachedJson: String? = null
+    private val projectionCache = Cached(PROJECTION_CACHE_NANOS, System::nanoTime) {
+        val started = System.nanoTime()
+        registry.json().also { projection ->
+            registry.recordSynchronousElapsed(
+                FeatureCostOperation.PERF_FEATURE_COST_PROJECTION,
+                System.nanoTime() - started,
+                projection.length.toLong(),
+            )
+        }
+    }
 
     fun beginEpoch() {
         registry.beginEpoch()
-        cachedJson = null
+        projectionCache.invalidate()
     }
 
     fun json(): String {
         if (!registry.recordingEnabled) return registry.json()
-        val now = System.nanoTime()
-        cachedJson?.takeIf { now >= cachedAtNanos && now - cachedAtNanos < PROJECTION_CACHE_NANOS }
-            ?.let { return it }
-        return synchronized(projectionLock) {
-            val lockedNow = System.nanoTime()
-            cachedJson?.takeIf {
-                lockedNow >= cachedAtNanos && lockedNow - cachedAtNanos < PROJECTION_CACHE_NANOS
-            } ?: run {
-                val started = System.nanoTime()
-                registry.json().also { projection ->
-                    registry.recordSynchronousElapsed(
-                        FeatureCostOperation.PERF_FEATURE_COST_PROJECTION,
-                        System.nanoTime() - started,
-                        projection.length.toLong(),
-                    )
-                    cachedAtNanos = lockedNow
-                    cachedJson = projection
-                }
-            }
-        }
+        return projectionCache.get()
     }
 }

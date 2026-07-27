@@ -1,12 +1,17 @@
 package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.util.Json
+import org.json.JSONException
+import org.json.JSONObject
+import org.json.JSONTokener
 
 /**
  * A versioned, self-describing config document for export / import / revision snapshots.
- * Pure: serialize/parse operate on a flat `Map<String,String>` of values so this runs on the JVM
- * test classpath. The Android edge may instead parse inbound JSON with `org.json` and hand the map
- * to [fromValues]; [parse] is provided so a snapshot written by [serialize] round-trips losslessly.
+ * [serialize] hand-builds compact JSON with sorted `values` keys and a fixed top-level field order
+ * so its output is stable and diffable — and byte-exact, because callers hash it (revision digests).
+ * [parse] reads that shape back with `org.json`; it is deliberately strict (string-typed `kind` /
+ * `exported_at` / `exported_by`, a numeric `schema`, and a `values` object of strings) so a snapshot
+ * written by [serialize] round-trips losslessly and any other type — or trailing input — yields null.
  */
 data class ConfigBundle(
     val kind: String,
@@ -43,94 +48,53 @@ data class ConfigBundle(
             exportedBy: String = "",
         ) = ConfigBundle(kind, schema, exportedAt, exportedBy, values)
 
-        /** Minimal tolerant parser for the shape produced by [serialize]. Returns null on malformed input. */
+        /**
+         * Parse the shape produced by [serialize] with `org.json`. Returns null on any malformed input.
+         * Strict where [serialize] is: `kind` / `exported_at` / `exported_by` must be JSON strings (absent
+         * defaults to ""), `schema` a JSON number (absent defaults to 0), and `values` a JSON object whose
+         * every value is a string; a wrong type — or trailing input after the object — makes the parse fail.
+         * Unknown top-level keys are ignored.
+         */
         fun parse(json: String): ConfigBundle? = runCatching {
-            val p = JsonReader(json)
-            p.expect('{')
-            var kind = ""; var schema = 0; var at = ""; var by = ""
-            var values: Map<String, String> = emptyMap()
-            while (true) {
-                val key = p.readString(); p.expect(':')
-                when (key) {
-                    "kind" -> kind = p.readString()
-                    "schema" -> schema = p.readNumber().toInt()
-                    "exported_at" -> at = p.readString()
-                    "exported_by" -> by = p.readString()
-                    "values" -> values = p.readStringMap()
-                    else -> p.skipValue()
+            val tokener = JSONTokener(json)
+            val obj = tokener.nextValue() as JSONObject
+            // Reject trailing input: nextClean() skips whitespace and returns NUL only at end-of-input.
+            if (tokener.nextClean().code != 0) throw JSONException("trailing input")
+
+            val values = LinkedHashMap<String, String>()
+            if (obj.has("values")) {
+                val vo = obj.get("values")
+                if (vo !is JSONObject) throw JSONException("values is not an object")
+                for (k in vo.keys()) {
+                    val v = vo.get(k)
+                    if (v !is String) throw JSONException("values[$k] is not a string")
+                    values[k] = v
                 }
-                if (!p.commaOrEnd('}')) break
             }
-            p.requireEnd()
-            ConfigBundle(kind, schema, at, by, values)
+            ConfigBundle(
+                kind = str(obj, "kind"),
+                schema = if (obj.has("schema")) num(obj, "schema") else 0,
+                exportedAt = str(obj, "exported_at"),
+                exportedBy = str(obj, "exported_by"),
+                values = values,
+            )
         }.getOrNull()
 
-        private fun esc(s: String): String = Json.esc(s)
-    }
+        /** Present-and-string → the value; absent → ""; present-and-other-type → throws (parse fails). */
+        private fun str(obj: JSONObject, key: String): String {
+            if (!obj.has(key)) return ""
+            val v = obj.get(key)
+            if (v !is String) throw JSONException("$key is not a string")
+            return v
+        }
 
-    /** Tiny recursive-descent reader for the limited JSON this module emits (strings, ints, flat maps). */
-    private class JsonReader(private val s: String) {
-        private var i = 0
-        private fun ws() { while (i < s.length && s[i].isWhitespace()) i++ }
-        fun expect(c: Char) { ws(); require(i < s.length && s[i] == c) { "expected $c" }; i++ }
-        fun commaOrEnd(end: Char): Boolean {
-            ws()
-            return when {
-                i < s.length && s[i] == ',' -> { i++; true }
-                i < s.length && s[i] == end -> { i++; false }
-                else -> throw IllegalStateException("expected , or $end")
-            }
+        /** Present-and-number → its Int value (truncating); present-and-other-type → throws (parse fails). */
+        private fun num(obj: JSONObject, key: String): Int {
+            val v = obj.get(key)
+            if (v !is Number) throw JSONException("$key is not a number")
+            return v.toInt()
         }
-        fun readString(): String {
-            ws(); require(i < s.length && s[i] == '"') { "expected string at $i" }; i++
-            val sb = StringBuilder()
-            while (i < s.length) {
-                val c = s[i++]
-                when (c) {
-                    '"' -> return sb.toString()
-                    '\\' -> {
-                        val e = s[i++]
-                        when (e) {
-                            '"' -> sb.append('"')
-                            '\\' -> sb.append('\\')
-                            '/' -> sb.append('/')
-                            'n' -> sb.append('\n')
-                            'r' -> sb.append('\r')
-                            't' -> sb.append('\t')
-                            'b' -> sb.append('\b')
-                            'f' -> sb.append('')
-                            'u' -> { sb.append(s.substring(i, i + 4).toInt(16).toChar()); i += 4 }
-                            else -> sb.append(e)
-                        }
-                    }
-                    else -> sb.append(c)
-                }
-            }
-            throw IllegalStateException("unterminated string")
-        }
-        fun readNumber(): Double {
-            ws(); val start = i
-            while (i < s.length && (s[i].isDigit() || s[i] in "+-.eE")) i++
-            return s.substring(start, i).toDouble()
-        }
-        fun readStringMap(): Map<String, String> {
-            val m = LinkedHashMap<String, String>()
-            expect('{'); ws()
-            if (i < s.length && s[i] == '}') { i++; return m }
-            while (true) {
-                val k = readString(); expect(':'); m[k] = readString()
-                if (!commaOrEnd('}')) break
-            }
-            return m
-        }
-        fun requireEnd() { ws(); require(i == s.length) { "trailing input" } }
-        fun skipValue() {
-            ws()
-            when {
-                i < s.length && s[i] == '"' -> readString()
-                i < s.length && s[i] == '{' -> readStringMap()
-                else -> readNumber()
-            }
-        }
+
+        private fun esc(s: String): String = Json.esc(s)
     }
 }

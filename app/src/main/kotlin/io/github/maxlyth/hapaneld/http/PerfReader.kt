@@ -1,10 +1,13 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.RendererResolver
+import io.github.maxlyth.hapaneld.RendererTarget
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.DashboardTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
+import io.github.maxlyth.hapaneld.metrics.MetricParse
 import io.github.maxlyth.hapaneld.metrics.MetricRegistry
 import io.github.maxlyth.hapaneld.metrics.MetricSample
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
@@ -29,7 +32,7 @@ import org.json.JSONObject
  * `GET /perf` returns the latest values **plus** the history — the chart is populated immediately on page
  * load and the series survives page reloads (cleared when the service-owned sampler stops).
  *
- * The heavy per-process metrics that only this page needs — top-5 by CPU and dashboard render jank — stay
+ * The heavy per-process metrics that only this page needs — top-5 by CPU/RAM and dashboard render jank — stay
  * PerfReader-local (their deltas + su cadence are not shared with Diagnostics). On sandbox panels those
  * come free from the shared reader's PERFDUMP (exposed as [io.github.maxlyth.hapaneld.metrics.Snapshot.dump]),
  * so no second dump is fetched; on rooted panels they're separate `su` calls spread across ticks.
@@ -38,6 +41,11 @@ import org.json.JSONObject
  * ("<load>@<freq>Hz"); absent on panels without it.
  */
 object PerfReader {
+    private data class RendererIdentity(
+        val target: RendererTarget? = null,
+        val ownPackage: String = "",
+    )
+
     private const val MAX = 120          // ~4 min at 2s
     private const val INTERVAL_MS = 2000L
     private const val ACTIVE_MS = 30_000L // sample only within this window of the last page view
@@ -54,17 +62,18 @@ object PerfReader {
     @Volatile private var latestFields = EMPTY_FIELDS
     @Volatile private var latestCpu: Int? = null
 
-    // Top-5 processes by CPU (from `dumpsys cpuinfo`) — needs root, so probed once and sampled on a
-    // slower cadence than the 2s chart. Lets a user confirm the dashboard app dominates and spot
-    // parasite processes (e.g. a leftover vendor gateway). "null" when no root / unavailable.
+    // Top-5 process rankings reuse one /proc snapshot on a slower cadence than the 2s chart. CPU is the
+    // existing interval delta; RAM is current resident footprint (RSS, including shared pages).
+    // "null" means the privileged snapshot or (for RAM) the helper's appended RSS field is unavailable.
     @Volatile private var topJson = "null"
-    // Dashboard rendering jank from `dumpsys gfxinfo <pkg>` (root). Quick "is there a problem" signal;
-    // the deeper "why" is the 1-click DevTools relay. Target reuses the dashboard_package config.
-    @Volatile var dashboardPkg: String = ""
-    // True while the active dashboard renderer is the built-in WebView (set by the service alongside
-    // [dashboardPkg]). Gates the `builtin` block below: TTI + reload self-measurement only exists for
-    // the built-in renderer (the Companion is a foreign app and can't self-report).
-    @Volatile var builtinActive = false
+    @Volatile private var topRamJson = "null"
+    // The active dashboard renderer identity, an immutable snapshot the service resolves off the sampling
+    // path (no PackageManager here) and installs under generation admission / updates at the applied-
+    // config boundary / clears on stop. One value carries both the gfxinfo/label attribution package
+    // ([RendererResolver.attributionOf], built-in → our own package) AND whether the renderer is the
+    // built-in WebView (gates the TTI + reload self-measurement, which a foreign Companion can't report).
+    // Captured exactly once per diagnostic operation so a projection can't straddle a reconfigure.
+    @Volatile private var rendererIdentity = RendererIdentity()
     @Volatile private var renderJson = "null"
     private val stutterHist = ArrayDeque<Int>()   // CrRendererMain %-of-one-core per render window
     private var prevRenderJiffies = HashMap<Int, Long>() // renderer pid -> CrRendererMain utime+stime
@@ -90,9 +99,16 @@ object PerfReader {
     /** Mark the perf page as being viewed; sampling stays live for [ACTIVE_MS] after the last call. */
     fun touch() { lastAccessAt = android.os.SystemClock.elapsedRealtime() }
 
-    /** Start one owned sampling generation on [scope]. */
-    fun start(scope: CoroutineScope) = startOwned(
+    /** Start one owned sampling generation on [scope], installing the initial renderer-target snapshot
+     *  ([ownPackage] + [initialTarget]) atomically inside generation admission. */
+    internal fun start(
+        scope: CoroutineScope,
+        ownPackage: String = "",
+        initialTarget: RendererTarget? = null,
+    ) = startOwned(
         scope = scope,
+        ownPackage = ownPackage,
+        initialTarget = initialTarget,
         rootAvailable = { Su.availableIsolated() },
         elapsedRealtime = { android.os.SystemClock.elapsedRealtime() },
         pause = { delay(it) },
@@ -103,7 +119,17 @@ object PerfReader {
         rootAvailable: () -> Boolean,
         elapsedRealtime: () -> Long,
         pause: suspend (Long) -> Unit,
-    ) = startOwned(scope, rootAvailable, elapsedRealtime, pause)
+        ownPackage: String = "",
+        initialTarget: RendererTarget? = null,
+    ) = startOwned(scope, ownPackage, initialTarget, rootAvailable, elapsedRealtime, pause)
+
+    /** Update the renderer-target snapshot at the applied-configuration boundary. Generation-guarded so a
+     *  call before start or after stop is a no-op — a dead/rejected generation can never publish. */
+    internal fun updateRendererTarget(target: RendererTarget?) {
+        synchronized(lifecycleLock) {
+            if (generation != 0L) rendererIdentity = rendererIdentity.copy(target = target)
+        }
+    }
 
     internal fun touchForTest(atMs: Long) {
         lastAccessAt = atMs
@@ -111,6 +137,8 @@ object PerfReader {
 
     private fun startOwned(
         scope: CoroutineScope,
+        ownPackage: String,
+        initialTarget: RendererTarget?,
         rootAvailable: () -> Boolean,
         elapsedRealtime: () -> Long,
         pause: suspend (Long) -> Unit,
@@ -118,7 +146,12 @@ object PerfReader {
         val runGeneration = synchronized(lifecycleLock) {
             if (generation != 0L) return
             resetStateLocked()
-            (++nextGeneration).also { generation = it }
+            (++nextGeneration).also {
+                generation = it
+                // Install the identity snapshot as part of admission, so a rejected duplicate start
+                // (the early return above) can never install one.
+                rendererIdentity = RendererIdentity(initialTarget, ownPackage)
+            }
         }
         val candidate = scope.launch {
             var rootProbed = false
@@ -165,12 +198,14 @@ object PerfReader {
         lastAccessAt = 0L
         rootOk = false
         tickCount = 0
+        rendererIdentity = RendererIdentity()
         resetLocalBaselines()
         synchronized(lock) {
             sink.clear()
             latestFields = EMPTY_FIELDS
             latestCpu = null
             topJson = "null"
+            topRamJson = "null"
             renderJson = "null"
             stutterHist.clear()
         }
@@ -179,6 +214,8 @@ object PerfReader {
     private fun isCurrent(candidate: Long): Boolean = generation == candidate
 
     internal fun lifecycleGeneration(): Long = generation
+
+    internal fun rendererTargetForTest(): RendererTarget? = rendererIdentity.target
 
     private inline fun <T : Any> ifCurrent(candidate: Long, action: () -> T): T? =
         synchronized(lifecycleLock) { if (generation == candidate) action() else null }
@@ -197,27 +234,31 @@ object PerfReader {
 
     /** Latest sample + history FIFO + top-5 procs + render jank, as JSON, for `GET /perf`. */
     fun json(): String {
+        // Capture the renderer identity exactly once for this operation so the builtin-gated blocks below
+        // can't observe two different configurations mid-render.
+        val identity = rendererIdentity
+        val builtin = identity.target is RendererTarget.Builtin
         val sampled = synchronized(lock) {
-            """{"enabled":$enabled,$latestFields,"top":$topJson,"render":$renderJson,"builtin":${builtinJson()},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
+            """{"enabled":$enabled,$latestFields,"top":$topJson,"topRam":$topRamJson,"render":$renderJson,"builtin":${builtinJson(builtin)},"network":${networkJson()},"entityFilter":${EntityFilterTelemetry.json()},"hist":{"cpu":${histInts(CPU_KEY)},"ram":${histInts(RAM_KEY)},"gpu":${histInts(GPU_KEY)}}}"""
         }
         // Dashboard diagnostics allocate JSON. Keep the projection outside the sampler lock so
         // diagnostics readers cannot delay history publication on low-end panels. Feature costs are
         // intentionally available only through /perf/costs; the regularly polled Info payload must not
         // serialize and transfer the full engineering operation table on every refresh.
-        return sampled.dropLast(1) + ""","dashboard":${dashboardJson()}}"""
+        return sampled.dropLast(1) + ""","dashboard":${dashboardJson(builtin)}}"""
     }
 
-    private fun dashboardJson(): String {
+    private fun dashboardJson(builtin: Boolean): String {
         val (filterActive, entityCount) = EntityFilterTelemetry.dashboardFilterState()
         val rendererPct = synchronized(lock) {
             runCatching { JSONObject(renderJson).optDouble("mainPct").takeUnless(Double::isNaN) }.getOrNull()
         }
-        val reloads = if (builtinActive) {
+        val reloads = if (builtin) {
             BuiltinDashboard.rendererPerf(android.os.SystemClock.elapsedRealtime()).reloads24h
         } else 0
         val top = runCatching { JSONArray(EntityLearningRuntime.performanceSummaryJson()) }.getOrDefault(JSONArray())
         return DashboardTelemetry.json(
-            builtinActive = builtinActive,
+            builtinActive = builtin,
             filterActive = filterActive,
             entityCount = entityCount,
             reloads24h = reloads,
@@ -236,8 +277,8 @@ object PerfReader {
 
     /** Built-in renderer responsiveness (time-to-interactive + 24h involuntary-reload count) for the perf
      *  card, or `null` when the active renderer isn't the built-in WebView. -1 fields = not yet captured. */
-    private fun builtinJson(): String {
-        if (!builtinActive) return "null"
+    private fun builtinJson(builtin: Boolean): String {
+        if (!builtin) return "null"
         val p = BuiltinDashboard.rendererPerf(android.os.SystemClock.elapsedRealtime())
         return """{"ttiColdMs":${p.coldTtiMs},"ttiWarmMedianMs":${p.warmTtiMedianMs},"reloads24h":${p.reloads24h}}"""
     }
@@ -251,6 +292,31 @@ object PerfReader {
     }
 
     /**
+     * Advance the per-renderer jiffy-delta baseline from the current CrRendererMain jiffies and return the
+     * busiest main-thread %-of-one-core over the interval, or -1.0 when there's no prior baseline / no
+     * renderer (first sample or nothing running). Shared by the direct-su [sampleRender] and the daemon
+     * [sampleRenderDump] consumers — same delta shape, each keeping its OWN sampling cadence. The caller
+     * holds the generation guard, so mutating [prevRenderJiffies]/[prevRenderAt] here is safe.
+     */
+    private fun advanceRenderDelta(cur: Map<Int, Long>, now: Long): Double {
+        var mainPct = -1.0
+        for ((pid, j) in cur) {
+            val prev = prevRenderJiffies[pid]
+            if (prev != null && prevRenderAt > 0L) {
+                val dt = (now - prevRenderAt) / 1000.0
+                if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p }
+            }
+        }
+        prevRenderJiffies = HashMap(cur)
+        prevRenderAt = now
+        return mainPct
+    }
+
+    /** The single "no Chromium renderer" render payload (first sample or nothing running). Read under
+     *  [lock] by the caller, since [stutterHist] is shared state. */
+    private fun noRendererJson(): String = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}"
+
+    /**
      * Dashboard responsiveness. PRIMARY = the WebView renderer's main-thread CPU (`CrRendererMain`,
      * via /proc/<renderer>/task/<tid>/stat) as %-of-one-core: this is the thread the HA frontend
      * processes the WebSocket state firehose on, so it saturates (~100%) when event handling falls
@@ -259,6 +325,7 @@ object PerfReader {
      * video/animation, e.g. a camera card). Needs root. HZ assumed 100 (Android default).
      */
     private fun sampleRender(runGeneration: Long) {
+        val identity = rendererIdentity
         // Primary: busiest CrRendererMain %-of-one-core across WebView renderer processes (covers a
         // Companion *or* a browser dashboard). One su call emits "<pid> <stat>" per renderer main thread.
         // Shell `read` builtins instead of a `cat` per thread: the old form forked ~2 processes per
@@ -268,34 +335,20 @@ object PerfReader {
             "if [ \"\$c\" = CrRendererMain ]; then IFS= read -r s < \$t/stat 2>/dev/null && echo \"\$pid \$s\"; fi; done; done; true"
         val out = rootDiagnostic(cmd, 2L * 1024L * 1024L)
         val now = android.os.SystemClock.elapsedRealtime()
-        val cur = HashMap<Int, Long>()
-        var mainPct = -1.0
         val parsed = HashMap<Int, Long>()
         if (out != null) for (line in out.lineSequence()) {
             val sp = line.indexOf(' ')
             if (sp <= 0) continue
             val pid = line.substring(0, sp).trim().toIntOrNull() ?: continue
-            val rest = line.substring(sp + 1).substringAfter(") ", "").split(' ') // after comm: state(0)..utime(11),stime(12)
+            val rest = MetricParse.statFieldsAfterComm(line.substring(sp + 1)) ?: continue // utime=11,stime=12
             val ut = rest.getOrNull(11)?.toLongOrNull() ?: continue
             val st = rest.getOrNull(12)?.toLongOrNull() ?: 0
-            val j = ut + st
-            parsed[pid] = j
+            parsed[pid] = ut + st
         }
-        ifCurrent(runGeneration) {
-            cur.putAll(parsed)
-            for ((pid, j) in cur) {
-                val prev = prevRenderJiffies[pid]
-                if (prev != null && prevRenderAt > 0L) {
-                    val dt = (now - prevRenderAt) / 1000.0
-                    if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p }
-                }
-            }
-            prevRenderJiffies = cur
-            prevRenderAt = now
-        } ?: return
+        val mainPct = ifCurrent(runGeneration) { advanceRenderDelta(parsed, now) } ?: return
         if (mainPct < 0) { // first sample, or no Chromium renderer running
             ifCurrent(runGeneration) {
-                synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+                synchronized(lock) { renderJson = noRendererJson() }
             }
             return
         }
@@ -304,7 +357,8 @@ object PerfReader {
 
         // Secondary: gfxinfo jank (rendering load — only meaningful with video/animation). Optional.
         var jankFields = ""
-        val pkg = dashboardPkg.takeIf(AndroidInput::isPackage).orEmpty()
+        val pkg = RendererResolver.attributionOf(identity.target, identity.ownPackage)
+            .takeIf(AndroidInput::isPackage).orEmpty()
         if (pkg.isNotEmpty()) {
             val g = rootDiagnostic(
                 "dumpsys gfxinfo $pkg; dumpsys gfxinfo $pkg reset >/dev/null 2>&1; true",
@@ -347,19 +401,49 @@ object PerfReader {
         val total = cpuLine.trim().split(Regex("\\s+")).drop(1).mapNotNull { it.toLongOrNull() }.sum()
 
         val cur = HashMap<Int, Long>()
+        val rssPages = HashMap<Int, Long>()
         val comm = HashMap<Int, String>()
         for (line in parts[1].lineSequence()) {
             val lp = line.indexOf('('); val rp = line.lastIndexOf(')')
             if (lp <= 0 || rp < lp) continue
             val pid = line.substring(0, lp).trim().toIntOrNull() ?: continue
-            val rest = line.substring(rp + 2).split(' ') // rest[0]=state(field3); utime=field14=rest[11], stime=rest[12]
+            val rest = MetricParse.statFieldsAfterComm(line) ?: continue // utime=rest[11], stime=rest[12]
             val utime = rest.getOrNull(11)?.toLongOrNull() ?: continue
             val stime = rest.getOrNull(12)?.toLongOrNull() ?: continue
             cur[pid] = utime + stime
+            rest.getOrNull(21)?.toLongOrNull()?.takeIf { it >= 0L }?.let { rssPages[pid] = it }
             comm[pid] = line.substring(lp + 1, rp)
         }
-        publishTop(runGeneration, cur, comm, total, resolveFullNames = true)
+        publishTop(runGeneration, cur, rssPages, comm, total, resolveFullNames = true)
     }
+
+    internal fun rankCpuProcesses(
+        current: Map<Int, Long>,
+        previous: Map<Int, Long>,
+        limit: Int = 5,
+    ): List<Pair<Int, Long>> = current.entries
+        .mapNotNull { (pid, jiffies) -> previous[pid]?.let { pid to (jiffies - it) } }
+        .filter { it.second > 0L }
+        .sortedWith(compareByDescending<Pair<Int, Long>> { it.second }.thenBy { it.first })
+        .take(limit)
+
+    internal fun rankRamProcesses(rssPages: Map<Int, Long>, limit: Int = 5): List<Pair<Int, Long>> =
+        rssPages.entries
+            .filter { it.value > 0L }
+            .sortedWith(compareByDescending<Map.Entry<Int, Long>> { it.value }.thenBy { it.key })
+            .take(limit)
+            .map { it.key to it.value }
+
+    /** Familiar UI units with one decimal, while retaining the kernel's exact page count internally. */
+    internal fun rssMb(pages: Long, pageSizeBytes: Long): Double =
+        Math.round(
+            pages.coerceAtLeast(0L).toDouble() * pageSizeBytes.coerceAtLeast(1L).toDouble() * 10.0 /
+                (1024.0 * 1024.0),
+        ) / 10.0
+
+    private fun pageSizeBytes(): Long = runCatching {
+        android.system.Os.sysconf(android.system.OsConstants._SC_PAGESIZE)
+    }.getOrNull()?.takeIf { it > 0L } ?: 4096L
 
     /**
      * Rank + publish the top-5. ha-paneld ranks like any other process — with the built-in renderer the
@@ -373,53 +457,67 @@ object PerfReader {
     private fun publishTop(
         runGeneration: Long,
         cur: Map<Int, Long>,
+        rssPages: Map<Int, Long>,
         comm: Map<Int, String>,
         total: Long,
         resolveFullNames: Boolean,
     ) {
+        val identity = rendererIdentity
         val myPid = android.os.Process.myPid()
         val kidsNow = runCatching { java.io.File("/proc/self/stat").readText() }.getOrNull()?.let { childJiffiesOf(it) }
         var dTotal = 0L
-        var ranked = emptyList<Pair<Int, Long>>()
+        var cpuRanked = emptyList<Pair<Int, Long>>()
+        var ramRanked = emptyList<Pair<Int, Long>>()
         var probePct: Double? = null
         var missing = emptyList<Int>()
         ifCurrent(runGeneration) {
             dTotal = total - prevTopTotal
-            ranked = if (prevTopTotal != 0L && dTotal > 0) {
-                cur.entries.mapNotNull { (pid, j) -> prevProc[pid]?.let { pid to (j - it) } }
-                    .filter { it.second > 0 }.sortedByDescending { it.second }.take(5)
-            } else emptyList()
+            cpuRanked = if (prevTopTotal != 0L && dTotal > 0) rankCpuProcesses(cur, prevProc) else emptyList()
+            ramRanked = rankRamProcesses(rssPages)
             probePct = if (kidsNow != null && prevSelf > 0L && dTotal > 0) {
                 Math.round((kidsNow - prevSelf) * 1000.0 / dTotal) / 10.0
             } else null
             prevTopTotal = total
             prevProc = HashMap(cur)
             kidsNow?.let { prevSelf = it }
-            if (resolveFullNames) missing = ranked.map { it.first }.filter { it !in nameCache }
+            if (resolveFullNames) {
+                missing = (cpuRanked.asSequence() + ramRanked.asSequence())
+                    .map { it.first }.distinct().filter { it !in nameCache }.toList()
+            }
         } ?: return
 
-        if (ranked.isEmpty() && probePct == null) return
         // Full cmdlines only for ranked pids we haven't resolved before — usually zero extra su calls.
         val resolvedNames = if (missing.isEmpty()) emptyMap() else fullNames(missing)
         ifCurrent(runGeneration) {
             resolvedNames.forEach { (pid, name) -> nameCache[pid] = name }
-            val rows = ranked.map { (pid, delta) ->
-                val pct = Math.round(delta * 1000.0 / dTotal) / 10.0
+            val attributionPkg = RendererResolver.attributionOf(identity.target, identity.ownPackage)
+            fun processName(pid: Int): String {
                 var name = trimProcName((nameCache[pid] ?: comm[pid] ?: pid.toString()).replace("\\", "").replace("\"", ""))
-                if (pid == myPid) name = if (dashboardPkg == name) "built-in dashboard (ha-paneld)" else "$name (this app)"
-                """{"name":"$name","cpu":$pct}"""
+                if (pid == myPid) name = if (attributionPkg == name) "built-in dashboard (ha-paneld)" else "$name (this app)"
+                return name
+            }
+            val cpuRows = cpuRanked.map { (pid, delta) ->
+                val pct = Math.round(delta * 1000.0 / dTotal) / 10.0
+                """{"name":"${processName(pid)}","cpu":$pct}"""
             }.toMutableList()
-            probePct?.let { rows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
-            synchronized(lock) { topJson = rows.joinToString(",", "[", "]") }
+            probePct?.let { cpuRows += """{"name":"sampling probes (su/dumpsys)","cpu":$it,"self":true}""" }
+            val pageBytes = pageSizeBytes()
+            val ramRows = ramRanked.map { (pid, pages) ->
+                """{"name":"${processName(pid)}","ramMb":${rssMb(pages, pageBytes)}}"""
+            }
+            synchronized(lock) {
+                if (cpuRows.isNotEmpty()) topJson = cpuRows.joinToString(",", "[", "]")
+                // Unlike CPU deltas, RSS can disappear when an older helper replaces a newer one. Clear
+                // the prior ranking immediately rather than presenting stale memory data as current.
+                topRamJson = if (ramRows.isEmpty()) "null" else ramRows.joinToString(",", "[", "]")
+            }
         }
     }
 
     /** Reaped-children jiffies (cutime+cstime) from a `/proc/self/stat` line — the measurement probes
      *  this process spawns and reaps. Null on a malformed line. */
     internal fun childJiffiesOf(statLine: String): Long? {
-        val rp = statLine.lastIndexOf(')')
-        if (rp < 0 || rp + 2 > statLine.length) return null
-        val rest = statLine.substring(rp + 2).split(' ')
+        val rest = MetricParse.statFieldsAfterComm(statLine) ?: return null
         rest.getOrNull(12)?.toLongOrNull() ?: return null // require a well-formed line through stime
         val cu = rest.getOrNull(13)?.toLongOrNull() ?: return null
         val cs = rest.getOrNull(14)?.toLongOrNull() ?: return null
@@ -470,34 +568,28 @@ object PerfReader {
 
     // --- daemon-sourced top/render (sandbox panels), from the shared reader's PERFDUMP ---------------
 
-    /** Top-5 by CPU from the daemon's process table (comm only — truncated to 16 chars, no cmdline). */
+    /** Top-5 by CPU/RAM from the daemon's process table (name is supplied by the helper). */
     private fun sampleTopDump(runGeneration: Long, dump: PerfDump) {
         val total = dump.stat.firstOrNull()?.sum() ?: return       // "cpu" aggregate line
         val cur = HashMap<Int, Long>()
+        val rssPages = HashMap<Int, Long>()
         val comm = HashMap<Int, String>()
-        for ((pid, j, c) in dump.proc) { cur[pid] = j; comm[pid] = c }
-        publishTop(runGeneration, cur, comm, total, resolveFullNames = false)
+        for (process in dump.proc) {
+            cur[process.pid] = process.jiffies
+            process.rssPages?.let { rssPages[process.pid] = it }
+            comm[process.pid] = process.name
+        }
+        publishTop(runGeneration, cur, rssPages, comm, total, resolveFullNames = false)
     }
 
     /** Dashboard responsiveness from the daemon's CrRendererMain thread jiffies (primary metric; the
      *  gfxinfo secondary needs dumpsys/su, so it's omitted on sandbox panels). */
     private fun sampleRenderDump(runGeneration: Long, dump: PerfDump) {
         val now = android.os.SystemClock.elapsedRealtime()
-        var mainPct = -1.0
-        ifCurrent(runGeneration) {
-            for ((pid, j) in dump.rend) {
-                val prev = prevRenderJiffies[pid]
-                if (prev != null && prevRenderAt > 0L) {
-                    val dt = (now - prevRenderAt) / 1000.0
-                    if (dt > 0) { val p = (j - prev) / dt; if (p > mainPct) mainPct = p }
-                }
-            }
-            prevRenderJiffies = HashMap(dump.rend)
-            prevRenderAt = now
-        } ?: return
+        val mainPct = ifCurrent(runGeneration) { advanceRenderDelta(dump.rend, now) } ?: return
         if (mainPct < 0) {
             ifCurrent(runGeneration) {
-                synchronized(lock) { renderJson = "{\"status\":\"no-renderer\",\"hist\":${stutterHist.toList()}}" }
+                synchronized(lock) { renderJson = noRendererJson() }
             }
             return
         }

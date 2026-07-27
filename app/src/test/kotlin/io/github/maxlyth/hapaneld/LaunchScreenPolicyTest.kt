@@ -67,15 +67,9 @@ class LaunchScreenPolicyTest {
         assertFalse(decision.rememberVersionShown)
     }
 
-    @Test fun externalTargetResolutionHonoursExplicitPackageBeforeAutoDetection() {
+    @Test fun externalTargetResolutionHonoursExplicitPackageAndKeepsAutoBuiltin() {
         assertEquals(listOf("com.example.renderer"), externalRendererCandidates("com.example.renderer"))
-        assertEquals(
-            listOf(
-                "io.homeassistant.companion.android.minimal",
-                "io.homeassistant.companion.android",
-            ),
-            externalRendererCandidates(""),
-        )
+        assertTrue(externalRendererCandidates("").isEmpty())
         assertTrue(externalRendererCandidates(SystemController.BUILTIN_DASHBOARD).isEmpty())
     }
 
@@ -115,14 +109,13 @@ class LaunchScreenPolicyTest {
             ),
             currentVersionCode = VERSION,
             lastShownVersionCode = null,
-            nowMs = 2_000L,
             minimumReturnDelayMs = 250L,
             maximumReturnWindowMs = 90_000L,
         )
 
         assertFalse(plan.explicitAdminEntry)
         assertEquals(VERSION, plan.pendingVersionCode)
-        assertEquals(90_000L, plan.autoReturnDeadlineMs)
+        assertEquals(88_000L, plan.autoReturnRemainingMs)
         assertEquals(6_000L, plan.autoReturnDelayMs)
     }
 
@@ -138,13 +131,12 @@ class LaunchScreenPolicyTest {
             ),
             currentVersionCode = VERSION,
             lastShownVersionCode = VERSION,
-            nowMs = 3_000L,
             minimumReturnDelayMs = 250L,
             maximumReturnWindowMs = 90_000L,
         )
 
         assertNull(plan.pendingVersionCode)
-        assertEquals(90_000L, plan.autoReturnDeadlineMs)
+        assertEquals(87_000L, plan.autoReturnRemainingMs)
         assertEquals(5_000L, plan.autoReturnDelayMs)
     }
 
@@ -158,14 +150,13 @@ class LaunchScreenPolicyTest {
             ),
             currentVersionCode = VERSION,
             lastShownVersionCode = VERSION,
-            nowMs = 3_000L,
             minimumReturnDelayMs = 250L,
             maximumReturnWindowMs = 90_000L,
         )
 
         assertTrue(plan.explicitAdminEntry)
         assertNull(plan.pendingVersionCode)
-        assertNull(plan.autoReturnDeadlineMs)
+        assertNull(plan.autoReturnRemainingMs)
         assertNull(plan.autoReturnDelayMs)
     }
 
@@ -179,13 +170,41 @@ class LaunchScreenPolicyTest {
             ),
             currentVersionCode = VERSION,
             lastShownVersionCode = VERSION,
-            nowMs = 100L,
             minimumReturnDelayMs = 250L,
             maximumReturnWindowMs = 90_000L,
         )
 
-        assertEquals(90_100L, plan.autoReturnDeadlineMs)
+        assertEquals(90_000L, plan.autoReturnRemainingMs)
         assertEquals(8_000L, plan.autoReturnDelayMs)
+    }
+
+    @Test fun slowStartupDoesNotConsumeVisibleIntroDwellTime() {
+        val prepared = prepareVisibleAutoReturn(
+            restoredRemainingMs = null,
+            restoredDelayMs = null,
+            defaultWindowMs = 90_000L,
+            defaultFirstDelayMs = 8_000L,
+        )
+        assertEquals(PreparedVisibleAutoReturn(90_000L, 8_000L), prepared)
+
+        // Simulate an old panel taking seven seconds between preparing the view and drawing it.
+        val armed = armVisibleAutoReturn(requireNotNull(prepared), firstDrawAtMs = 8_000L)
+        assertEquals(98_000L, armed.deadlineMs)
+        assertEquals(16_000L, armed.firstAttemptMs)
+    }
+
+    @Test fun restoredReturnKeepsItsRemainingVisibleWindow() {
+        val prepared = prepareVisibleAutoReturn(
+            restoredRemainingMs = 60_000L,
+            restoredDelayMs = 6_000L,
+            defaultWindowMs = 90_000L,
+            defaultFirstDelayMs = 8_000L,
+        )
+        assertEquals(PreparedVisibleAutoReturn(60_000L, 6_000L), prepared)
+
+        val armed = armVisibleAutoReturn(requireNotNull(prepared), firstDrawAtMs = 12_000L)
+        assertEquals(72_000L, armed.deadlineMs)
+        assertEquals(18_000L, armed.firstAttemptMs)
     }
 
     private fun decide(
@@ -201,7 +220,7 @@ class LaunchScreenPolicyTest {
         configuredRenderer = renderer,
         builtInUrlConfigured = builtInUrlConfigured,
         dashboardLaunchAvailable = launchAvailable,
-        dashboardCrashLooping = crashLooping,
+        dashboardRecoveryBlocked = crashLooping,
         currentVersionCode = VERSION,
         lastShownVersionCode = lastShown,
         explicitAdminEntry = explicitAdmin,

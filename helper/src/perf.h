@@ -14,4 +14,9 @@ void cmd_perfdump(conn_ctx *ctx, const char *args);  // PERFDUMP
 // comm (the text in the parens) into [comm] when non-NULL. Returns -1 on a malformed buffer.
 long stat_jiffies(const char *buf, char *comm, size_t commsz);
 
+// CPU jiffies and resident pages from one process stat line. Returns 0 on success, -1 on malformed
+// input. rss_pages is field 24 and may be zero; it may be null when only CPU jiffies are needed.
+int stat_process_metrics(const char *buf, char *comm, size_t commsz,
+                         long *jiffies, long *rss_pages);
+
 #endif

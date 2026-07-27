@@ -16,8 +16,8 @@ It also replaces fragmented vendor software with one free, open-source way to op
 It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/ui-hero-light.png">
-  <img src="docs/img/ui-hero-dark.png" alt="ha-paneld Dashboard showing live panel state, performance and display controls">
+  <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
+  <img src="docs/img/hero-dark.png" alt="ha-paneld Dashboard showing live panel state, performance and display controls">
 </picture>
 
 **One control surface for every panel.** See live state, tune behaviour, manage software, keep the dashboard lean and diagnose problems without hunting through vendor apps or per-device configuration.
@@ -63,7 +63,7 @@ The same one-line installer also supports non-interactive single-panel provision
 > **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
 
 > [!IMPORTANT]
-> **First-run gotcha — update the panel's system WebView.** Even modern panels can ship with a WebView/Chromium far too old to render a current Home Assistant dashboard, leaving either the built-in renderer or the HA Companion app blank or broken. See [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel.
+> **First-run gotcha — check Home Assistant and the panel's system WebView.** Starting with ha-paneld 0.9.6, the built-in renderer requires Home Assistant 2026.4.2+ and a WebView with its secure native-host message interface. Even modern panels can ship with a WebView/Chromium far too old to render a current dashboard. See [Built-in renderer requirements and controls](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel. Another renderer may help when Home Assistant itself cannot be upgraded, but Companion uses the same system WebView and cannot bypass an obsolete WebView on the panel.
 
 > [!NOTE]
 > The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need Assist or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
@@ -84,16 +84,16 @@ For the dashboard itself there are **two supported paths**. The built-in rendere
 
 ## Why not Fully Kiosk?
 
-[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a capable general-purpose kiosk browser and a common choice for Home Assistant wall panels. ha-paneld offers a free, open-source stack built specifically for Home Assistant panels: its built-in renderer, entity filtering and panel-hardware controls work together in one app, without a per-device licence.
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a closed-source, commercial general-purpose kiosk browser. Running it alongside ha-paneld creates overlapping ownership of kiosk lifecycle, screen control and remote administration, with two separate configuration surfaces. Consider that operational conflict when choosing a renderer.
 
 <details>
 <summary>The three friction points in full</summary>
 
 - **Not free, not open source.** Fully Kiosk is closed-source commercial software. The free tier is limited and nags; the parts people actually want for a panel — the remote-admin REST/MQTT API, motion/screensaver controls, no watermark — need the paid **Plus** licence, **per device**. That cuts against HA's and ha-paneld's free, open, local-first ethos.
-- **Entity filtering is integrated with the renderer.** ha-paneld can learn which entities its dashboard uses and reduce the state stream before it reaches the panel. A separate browser can still be the better fit when its particular kiosk or screensaver features are required.
+- **Entity filtering is integrated with the renderer.** ha-paneld can learn which entities its dashboard uses and reduce the state stream before it reaches the panel. A separate browser cannot participate in that renderer pipeline.
 - **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each unit is a bespoke setup. ha-paneld is config-as-code: MQTT auto-discovery, uniform entities across every panel, and one `update-fleet.sh` to roll them together.
 
-If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular screensaver) are load-bearing for you, keep using it.
+For the simplest ownership model, choose one panel stack: ha-paneld's built-in renderer for its integrated panel features, Home Assistant Companion when Assist or native notifications are required, or a separately managed renderer when its tradeoffs fit your deployment.
 </details>
 
 ## Why not FreeKiosk?
@@ -110,15 +110,15 @@ If Fully Kiosk's specific extras (e.g. its kiosk lockdown or its particular scre
 | Hardware-button events | `event.<panel>_button` (a11y key capture) |
 | Ambient light / proximity | `sensor.<panel>_illuminance`, learned `binary_sensor.<panel>_proximity` + fleet-normalized `sensor.<panel>_proximity_level` (0 far–100 near) — see [Adaptive proximity and wake on wave](docs/adaptive-proximity.md) |
 | Adaptive brightness | Optional seven-day learning from the panel light sensor or one selected Home Assistant illuminance entity — see [Adaptive brightness](docs/adaptive-brightness.md) |
-| Launcher / Home Assistant (bring a launcher or the HA dashboard forward) | `button.<panel>_launcher`, `button.<panel>_home` |
 | URL navigate | `text.<panel>_navigate` |
 | Reload dashboard / reboot | `button.<panel>_reload`, `button.<panel>_reboot` |
 | TTS / announce audio | `POST /play` + `number.<panel>_volume` (HA has no MQTT media_player platform) — server-side TTS recipe in [docs/tts.md](docs/tts.md) |
+| Dashboard screenshot / remote tap | View and refresh the panel screenshot from the Dashboard tab; in Relaxed mode, click it to send a pixel tap and receive a fresh screenshot |
 | Panel info + config web page | `GET /` (the device "Visit" link) |
 
 Every panel uses the same MQTT naming and control contracts, while discovery publishes only entities supported by its active profile and live capabilities. Home Assistant still picks them up with no YAML. The full entity reference, the HTTP contract on `:8888`, and how pairing works are in **[docs/api.md](docs/api.md)** (or browse it live at `http://<panel>:8888/api`).
 
-The default **Relaxed mode** keeps that API simple on a trusted home network. Panels on a network shared with less-trusted clients can opt into [Hardened mode](docs/security-mode.md). Hardened mode requires physical access to the panel: high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. It is enabled locally per panel and is not copied by backup, restore or fleet provisioning.
+The default **Relaxed mode** keeps that API simple on a trusted home network. Panels on a network shared with less-trusted clients can opt into [Hardened mode](docs/security-mode.md). Hardened mode requires physical access to the panel: high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. The dashboard screenshot remains viewable, but remote taps are disabled rather than becoming remotely approvable. Hardened mode is enabled locally per panel and is not copied by backup, restore or fleet provisioning.
 
 ## What needs root — and what doesn't
 
@@ -132,7 +132,7 @@ A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted pan
 
 **Still needs direct root (`su`) or ha-paneld's root helper:** true screen-off (backlight hard-off), RGB LED and relay control where the hardware requires it, vendor-app taming, reboot and CPU governor.
 
-**Still needs direct root (`su`) inside ha-paneld:** kiosk lock, full system logs, and the legacy Companion-session import compatibility path. Full backups can include and restore an existing Companion login through either direct root or the current authenticated root helper.
+**Still needs direct root (`su`) inside ha-paneld:** **Lock Android to dashboard**, full system logs, and the legacy Companion-session import compatibility path. Full backups can include and restore an existing Companion login through either direct root or the current authenticated root helper.
 
 ## Supported hardware
 
@@ -143,15 +143,18 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 | Sonoff NSPanel Pro / Pro 120 | Rockchip PX30 / rk3326-S | 8.1 (API 27) | arm64-v8a | toolbox `su` |
 | Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
 | Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
-| ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no root; RGB LED firmware-locked (ioctl denied) — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
+| ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no app-accessible root on reported stock firmware, so RGB LED control is unavailable there; the authenticated root helper supports it when that route is available — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
 | ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary OEM/generic-market wall panel** — app-direct RGB LED and light/proximity; climate is optional enhanced capability, while relay and root/unlock paths remain under characterisation ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
-| Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager) |
-| Shelly Wall Display / X2 | MT6580 / SC7731E (model-dependent) | 7.0 / 8.1 | armeabi-v7a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
+| Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager); experimental profile assumes normal-app `su`, pending live confirmation |
+| Shelly Wall Display (original) | MT6580 | 7.0 | armeabi-v7a | Android version is below ha-paneld's minimum, so the app cannot run on the stock software |
+| Shelly Wall Display X2 | SC7731E | 8.1 | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path |
 | Shelly Wall Display X1i / X2i / XL | RK3326-S / RK3566 (model-dependent) | 11 (API 30) | arm64-v8a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
 
 ## Status & roadmap
 
 **Latest release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
+
+**Release candidate — 0.9.6-rc1 (under test):** guided setup now takes a new panel through its remaining connection and dashboard choices, while presence-aware auto sleep combines local activity with selected Home Assistant presence sources. The Dashboard tab can remotely tap a panel in Relaxed mode, upgrades preserve more recoverable configuration, and `--reset-config` can safely return a panel to first-run setup after making a checked settings export. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
 
 **Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 

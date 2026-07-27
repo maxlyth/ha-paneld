@@ -279,6 +279,48 @@ class AppStateConcurrencyTest {
         }
     }
 
+    @Test fun driftedMirrorNeverWipesLiveConfig() {
+        val fullConfig: Map<String, Any> = linkedMapOf(
+            "panel_id" to "kitchen",
+            "ha_url" to "https://ha.example",
+            "dashboard_package" to "builtin",
+        )
+        val primary = ImportingPersistence(fullConfig)
+        val legacy = RecordingLegacyMirror(linkedMapOf("panel_id" to "kitchen"))
+        val metadata = RecordingBridgeMetadata().also {
+            it.writeHash(stateSnapshotHash(fullConfig))
+        }
+
+        val snapshot = DowngradeCompatibleStatePersistence(primary, legacy, metadata).initialize()
+
+        assertEquals("https://ha.example", snapshot["ha_url"])
+        assertEquals("builtin", snapshot["dashboard_package"])
+        assertEquals("kitchen", snapshot["panel_id"])
+        assertEquals(fullConfig, primary.snapshot())
+    }
+
+    @Test fun matchingLegacyMarkerRecoversRicherLegacySnapshot() {
+        val legacy: Map<String, Any> = linkedMapOf(
+            "panel_id" to "old-panel-id",
+            "ha_url" to "https://ha.example",
+            "mqtt_broker" to "tcp://mqtt.example:1883",
+        )
+        val primary = ImportingPersistence(
+            mapOf("panel_id" to "current-panel-id", "config_schema" to 3),
+        )
+        val mirror = RecordingLegacyMirror(legacy)
+        val metadata = RecordingBridgeMetadata().also { it.writeHash(stateSnapshotHash(legacy)) }
+
+        val snapshot = DowngradeCompatibleStatePersistence(primary, mirror, metadata).initialize()
+
+        assertEquals("https://ha.example", snapshot["ha_url"])
+        assertEquals("tcp://mqtt.example:1883", snapshot["mqtt_broker"])
+        assertEquals("current-panel-id", snapshot["panel_id"])
+        assertEquals(3, snapshot["config_schema"])
+        assertEquals(snapshot, primary.snapshot())
+        assertEquals(snapshot, mirror.snapshot())
+    }
+
     @Test fun firstPublicUpgradeWithEqualStatesEstablishesNormalMarker() {
         val state = mapOf("dashboard_url" to "https://public-093.example")
         val legacy = RecordingLegacyMirror(state)

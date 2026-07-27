@@ -95,18 +95,34 @@ object BuiltinDashboard {
     // snap-back no longer blanks the dashboard with a full reload.
     @Volatile private var reloadRequested = false
 
-    fun requestReload() { reloadRequested = true }
+    @Volatile private var reloadReason = ""
+
+    /** Deliberate user retry: atomically restore the renderer budget and make the next intent reload.
+     *  [reason] is shown natively on the panel before the reset (maintainer rule: every deliberate
+     *  dashboard restart announces itself, or on-purpose resets read as crashes and the built-in
+     *  renderer earns a reputation for unreliability one report at a time). */
+    @Synchronized
+    fun requestExplicitReload(reason: String = "") {
+        rendererLatchedUntil = 0L
+        rebuilds = 0
+        rebuildWindowStart = 0L
+        reloadRequested = true
+        reloadReason = reason
+    }
 
     @Synchronized fun consumeReloadRequest(): Boolean = reloadRequested.also { reloadRequested = false }
+
+    @Synchronized fun consumeReloadReason(): String = reloadReason.also { reloadReason = "" }
 
     // --- renderer crash-loop budget + latch (process-global, NOT per-activity-instance) ---
     //
     // The budget must outlive the activity: a crash fallback finishes the activity, the kiosk/watchdog
     // return loop relaunches a fresh instance, and a per-instance counter resets — an infinite
     // fallback/relaunch churn with no backoff. Held here so every instance shares one budget, and when
-    // it's exhausted the renderer LATCHES: [SystemController.dashboardState] reports DEAD (engaging the
-    // watchdog's existing crash-loop backoff + health warning) and startBuiltin refuses automatic
-    // relaunches until the latch expires. An explicit reload (MQTT/`:8888`/navbar) clears the latch —
+    // it's exhausted the renderer LATCHES: [SystemController.dashboardState] reports DEAD so automatic
+    // recovery loops stand down, and startBuiltin refuses automatic relaunches until the latch expires.
+    // Health reads this latch directly rather than feeding it through the foreign-app crash budget. An
+    // explicit reload (MQTT/`:8888`/navbar) clears the latch —
     // deliberate user action is always honoured. Time params are caller-supplied elapsed-realtime
     // millis so this object stays pure Kotlin (JVM-unit-testable).
     private var rebuilds = 0
@@ -164,6 +180,15 @@ object BuiltinDashboard {
      *  window (diffed against the launch origin); later connects are warm (diffed against the pending
      *  load-start, consumed so a duplicate `connected` can't double-count). Out-of-range gaps are dropped. */
     @Synchronized fun recordConnected(nowMs: Long) {
+        // Setup's proof that a dashboard actually rendered. Home Assistant's own frontend reporting
+        // `connected` means the WebView was built, its bundle executed and its websocket authenticated —
+        // the strongest evidence available without inspecting pixels. It is NOT proof that a Lovelace card
+        // painted (a broken dashboard config could still show an error view), so callers must describe it
+        // as "Home Assistant is rendering in the panel", not "your dashboard looks right".
+        // Recorded unconditionally, ahead of the TTI bookkeeping below, which deliberately drops bare
+        // reconnects that have no pending load to diff against.
+        frontendEverConnected = true
+        lastFrontendConnectedAtMs = nowMs
         if (!coldCaptured && firstLoadStartAt >= 0) {
             coldCaptured = true
             lastLoadStartAt = -1                     // the cold load is consumed — a later bare reconnect (no
@@ -218,7 +243,21 @@ object BuiltinDashboard {
     @Synchronized fun resetRendererPerf() {
         firstLoadStartAt = -1L; lastLoadStartAt = -1L; coldTtiMs = -1L; coldCaptured = false
         warmTti.clear(); reloadStamps.clear(); reloadsTotal = 0L
+        frontendEverConnected = false; lastFrontendConnectedAtMs = -1L
     }
+
+    /**
+     * Whether Home Assistant's frontend has ever reported itself connected inside the panel's WebView —
+     * setup's evidence that the built-in renderer genuinely reached a dashboard rather than merely being
+     * configured to. Process-global and deliberately not persisted: a fresh process must re-earn it, and
+     * setup binds it to a configuration fingerprint so a moved broker or revoked token voids it.
+     */
+    @Volatile var frontendEverConnected = false
+        private set
+
+    /** When [frontendEverConnected] was last set, or -1. */
+    @Volatile var lastFrontendConnectedAtMs = -1L
+        private set
 
     // Screen-state fan-out to the live renderer. A 24/7 dashboard WebView keeps churning CPU (websocket
     // state, animations, JS timers) behind a dark screen, so when the panel screen goes off/on we tell

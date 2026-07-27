@@ -22,11 +22,7 @@ Set an MQTT broker on the Configure page and supported entities appear in Home A
 | `binary_sensor.<panel>_proximity` | Learned near/far occupancy state. It remains unavailable until the local model is trustworthy. |
 | `sensor.<panel>_proximity_level` | Normalized proximity from `0` for the learned far baseline to `100` for the learned near reference. |
 | `sensor.<panel>_zigbee_gateway_health` | Bounded gateway health and redacted diagnostic attributes on Zigbee-capable panels. |
-| `button.<panel>_back` | Android Back navigation action. |
-| `button.<panel>_recents` | Android Recents navigation action when the active control route supports it. |
 | `button.<panel>_reload` | Reloads the built-in renderer in process or restarts the selected foreign renderer. |
-| `button.<panel>_home` | Brings the configured dashboard renderer to the foreground. |
-| `button.<panel>_launcher` / `admin_launcher` | Brings the selected launcher or ha-paneld admin launcher to the foreground without changing Android's default home app. |
 | `button.<panel>_reboot` | Reboots through an available privileged route. |
 
 Registry-backed configuration, performance and diagnostic entities are published only when exposed. The panel and Companion update buttons are always published. `GET /api/v1/config/schema` reports which settings are Home Assistant-capable, and `GET /api/v1/config` reports their current `ha_expose` state.
@@ -38,6 +34,7 @@ Discovery payloads and current states are republished after MQTT reconnects and 
 | Path | Purpose |
 |---|---|
 | `/` | Panel status, capabilities, diagnostics and current dashboard preview. This is the Home Assistant device's `configuration_url`. |
+| `/setup` | Guided first-run and reset journey for identity, connection, renderer, Home dashboard and entity-filter choices. |
 | `/configure` | MQTT, renderer and panel behavior settings. |
 | `/profiles` | Device-profile selection, inspection and YAML authoring. |
 | `/entities` | Built-in renderer entity learning, policy and overrides. |
@@ -67,11 +64,13 @@ This table is a maintained overview rather than a replacement for OpenAPI. The e
 |---|---|
 | `/api/v1/health`, `/api/v1/info`, `/api/v1/status`, `/api/v1/sensors`, `/api/v1/radio` | Liveness, panel identity, health findings, capabilities and bounded sensor or gateway state. |
 | `/api/v1/config`, `/api/v1/config/schema`, `/api/v1/config/export`, `/api/v1/config/import`, `/api/v1/config/revisions` | Partial configuration, registry metadata, portable bundles and on-panel revision restore. Secret-bearing export, import and restore operations follow the Hardened-mode approval contract. |
+| `/api/v1/config/home-dashboards`, `/api/v1/config/ha-area`, `/api/v1/config/probe-broker` | Home dashboard and area choices plus a read-only MQTT broker preflight used by guided setup and Configure. |
+| `GET /api/v1/setup`, `POST /api/v1/setup/identity`, `POST /api/v1/setup/home-dashboard`, `POST /api/v1/setup/entity-filter`, `POST /api/v1/setup/attest` | Current guided-setup state and answer recording. Dashboard, connection and filter values are still written through the normal configuration contract. |
 | `/api/v1/ha/oauth/start`, `/api/v1/ha/oauth/callback`, `/api/v1/ha/oauth/status` | Short-lived administrator-browser Home Assistant sign-in. The panel exchanges and stores credentials server-side; the browser receives no tokens. |
 | `/api/v1/profiles` | Lists immutable bundled and local profile revisions and their activation state. Subroutes provide schema and driver catalogues, templates, passive device drafts, validation, comparison, import, activation, rollback and deletion. |
 | `/api/v1/provisioning/plan` and `/api/v1/provisioning/plan.txt` | Read-only, profile-driven provisioning guidance combined with live panel observations. |
 | `/api/v1/backup`, `/api/v1/restore`, `/api/v1/install/*`, `/api/v1/uninstall`, `/api/v1/updates/ignore`, `/api/v1/webview/heal`, `/api/v1/companion/repair-url` | Backup, restore, component and APK installation, update state and maintenance. Long-running operations report through `/api/v1/install/status` and share one destructive-operation lane. |
-| `/api/v1/action`, `/api/v1/input` | Bounded navigation, launcher, volume, reboot and pixel-tap control. Hardened mode disables non-loopback remote input rather than approving it remotely. |
+| `/api/v1/action`, `/api/v1/input` | Bounded navigation, launcher, volume, reboot and pixel-tap control. A completed tap with `capture=true` returns a fresh PNG screenshot. Hardened mode disables non-loopback remote input rather than approving it remotely. |
 | `/api/v1/auto-brightness` | Current adaptive-brightness state, seven-day history, Home Assistant illuminance-source discovery and live-validated selection, learned-history reset and manual-pause resume. |
 | `/api/v1/proximity` | Learned proximity state plus guided teach, non-actuating test and confirmed relearn operations. Retired manual threshold operations return `410 Gone`. |
 | `/api/v1/dashboard/entity-filter` and `/api/v1/dashboard/entities/*` | Built-in renderer filter state, learned entity catalogue, synchronization, policy, overrides, issue decisions, export, activation and confirmed reset. |

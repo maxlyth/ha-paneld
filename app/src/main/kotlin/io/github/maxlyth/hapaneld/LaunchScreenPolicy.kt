@@ -22,8 +22,39 @@ internal data class SavedLaunchIntroState(
 internal data class RestoredLaunchIntroPlan(
     val explicitAdminEntry: Boolean,
     val pendingVersionCode: Long?,
-    val autoReturnDeadlineMs: Long?,
+    val autoReturnRemainingMs: Long?,
     val autoReturnDelayMs: Long?,
+)
+
+/** A return window measured from the first rendered intro frame, not from Activity startup. */
+internal data class PreparedVisibleAutoReturn(
+    val remainingMs: Long,
+    val firstDelayMs: Long,
+)
+
+internal data class ArmedVisibleAutoReturn(
+    val deadlineMs: Long,
+    val firstAttemptMs: Long,
+)
+
+internal fun prepareVisibleAutoReturn(
+    restoredRemainingMs: Long?,
+    restoredDelayMs: Long?,
+    defaultWindowMs: Long,
+    defaultFirstDelayMs: Long,
+): PreparedVisibleAutoReturn? {
+    val remaining = restoredRemainingMs?.coerceIn(0L, defaultWindowMs) ?: defaultWindowMs
+    val firstDelay = restoredDelayMs ?: defaultFirstDelayMs
+    if (remaining <= 0L || firstDelay < 0L || firstDelay > remaining) return null
+    return PreparedVisibleAutoReturn(remaining, firstDelay)
+}
+
+internal fun armVisibleAutoReturn(
+    prepared: PreparedVisibleAutoReturn,
+    firstDrawAtMs: Long,
+): ArmedVisibleAutoReturn = ArmedVisibleAutoReturn(
+    deadlineMs = firstDrawAtMs + prepared.remainingMs,
+    firstAttemptMs = firstDrawAtMs + prepared.firstDelayMs,
 )
 
 /** Restore a visible intro without re-running destination policy or resetting its return window. */
@@ -31,7 +62,6 @@ internal fun restoreLaunchIntro(
     saved: SavedLaunchIntroState,
     currentVersionCode: Long,
     lastShownVersionCode: Long?,
-    nowMs: Long,
     minimumReturnDelayMs: Long,
     maximumReturnWindowMs: Long,
 ): RestoredLaunchIntroPlan {
@@ -52,7 +82,7 @@ internal fun restoreLaunchIntro(
     return RestoredLaunchIntroPlan(
         explicitAdminEntry = false,
         pendingVersionCode = pendingVersion,
-        autoReturnDeadlineMs = remaining?.takeIf { delay != null }?.let { nowMs + it },
+        autoReturnRemainingMs = remaining?.takeIf { delay != null },
         autoReturnDelayMs = delay,
     )
 }
@@ -64,7 +94,7 @@ internal object LaunchScreenPolicy {
         configuredRenderer: String,
         builtInUrlConfigured: Boolean,
         dashboardLaunchAvailable: Boolean,
-        dashboardCrashLooping: Boolean,
+        dashboardRecoveryBlocked: Boolean,
         currentVersionCode: Long,
         lastShownVersionCode: Long?,
         explicitAdminEntry: Boolean,
@@ -74,7 +104,7 @@ internal object LaunchScreenPolicy {
                 configuredRenderer = configuredRenderer,
                 builtInUrlConfigured = builtInUrlConfigured,
                 dashboardLaunchAvailable = dashboardLaunchAvailable,
-                dashboardCrashLooping = dashboardCrashLooping,
+                dashboardRecoveryBlocked = dashboardRecoveryBlocked,
             )
         ) {
             return LaunchScreenDecision(LaunchDestination.INTRO)
@@ -91,14 +121,11 @@ internal object LaunchScreenPolicy {
     }
 }
 
-/** Exact configured external renderer, or Companion auto-detection order when configuration is blank. */
+/** Exact configured external renderer. Automatic selection is the built-in renderer. */
 internal fun externalRendererCandidates(configuredRenderer: String): List<String> = when {
     configuredRenderer == SystemController.BUILTIN_DASHBOARD -> emptyList()
     configuredRenderer.isNotBlank() -> listOf(configuredRenderer)
-    else -> listOf(
-        "io.homeassistant.companion.android.minimal",
-        "io.homeassistant.companion.android",
-    )
+    else -> emptyList()
 }
 
 /** Pure admission gate for the asynchronous first-draw acknowledgement. */

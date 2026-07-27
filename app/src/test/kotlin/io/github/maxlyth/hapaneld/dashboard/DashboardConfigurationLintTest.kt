@@ -1,12 +1,22 @@
 package io.github.maxlyth.hapaneld.dashboard
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DashboardConfigurationLintTest {
+    @Test fun warningIssueTypesAreNeverBlocking() {
+        val warnings = DashboardConfigurationLint.IssueType.entries.filter { it.severity == "warning" }
+
+        assertTrue(warnings.isNotEmpty())
+        assertTrue(warnings.all { !it.blocking && !it.ignorable })
+    }
+
     @Test
     fun slashRegexSafetyRejectsBacktrackingConstructsButKeepsCommonEntityPatterns() {
         assertTrue(DashboardConfigurationLint.isSafeEntitySelectorRegex("^sensor\\..*_temperature$"))
@@ -34,7 +44,9 @@ class DashboardConfigurationLintTest {
             "sensor.study" to """{"ai":"study"}""",
         )
 
-        val result = DashboardConfigurationLint.analyze(config, catalog, metadata)
+        val result = DashboardConfigurationLint.analyze(
+            config, catalog, metadata, registryMetadataComplete = true,
+        )
 
         assertEquals(setOf("light.study_main"), result.safeEntityIds)
         assertFalse(result.blocking)
@@ -59,7 +71,9 @@ class DashboardConfigurationLintTest {
             "switch.priority" to """{"lb":["important"]}""",
         )
 
-        val result = DashboardConfigurationLint.analyze(config, catalog, metadata)
+        val result = DashboardConfigurationLint.analyze(
+            config, catalog, metadata, registryMetadataComplete = true,
+        )
 
         assertEquals(catalog.dropLast(1).toSet(), result.safeEntityIds)
         assertTrue(result.issues.isEmpty())
@@ -77,6 +91,28 @@ class DashboardConfigurationLintTest {
         assertTrue(result.safeEntityIds.isEmpty())
         assertEquals(DashboardConfigurationLint.IssueType.BROAD_SELECTOR, result.issues.single().type)
         assertEquals(65, result.issues.single().candidateCount)
+    }
+
+    @Test fun nestedMissingAndMalformedIncludesAreOwnedAndBlockedBySelectorLint() {
+        val config = """{"views":[{"cards":[{"type":"vertical-stack","cards":[
+          {"type":"custom:auto-entities","filter":{"include":[{"entity_id":"sensor.visible"}]}},
+          {"type":"custom:auto-entities","filter":{"exclude":[{"entity_id":"sensor.hidden"}]}},
+          {"type":"custom:auto-entities","filter":{"include":[{}]}}
+        ]}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(config, listOf("sensor.visible", "sensor.hidden"), emptyMap())
+
+        assertTrue(result.blocking)
+        assertEquals(setOf("sensor.visible"), result.safeEntityIds)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.type == DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR })
+        assertEquals(
+            listOf(
+                "dashboard.views[0].cards[0].cards[1]",
+                "dashboard.views[0].cards[0].cards[2]",
+            ),
+            result.issues.flatMap { it.sourceLocations }.sorted(),
+        )
     }
 
     @Test fun friendlyNameRegexBoundsCommonAlarmSelectorsBeforeApplyingDynamicStateRules() {
@@ -157,6 +193,1039 @@ class DashboardConfigurationLintTest {
         assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, issue.type)
         assertNull(issue.cardTitle)
         assertFalse(issue.toJson().toString().contains(secretMarker))
+    }
+
+    @Test fun cardLevelTemplateBlocksEvenWhenIncludeRulesAreOtherwiseBounded() {
+        val secretMarker = "private_template_marker"
+        val config = """{"views":[{"title":"Overview","cards":[{
+          "type":"custom:auto-entities","title":"Bounded-looking selector",
+          "filter":{
+            "template":"{{ states.sensor | selectattr('entity_id', 'contains', '$secretMarker') | map(attribute='entity_id') | list }}",
+            "include":[{"entity_id":"sensor.explicit"}]
+          }
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("sensor.explicit", "sensor.dynamic_result"),
+            emptyMap(),
+        )
+
+        assertTrue(result.blocking)
+        assertEquals(setOf("sensor.explicit"), result.safeEntityIds)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+        assertEquals(listOf("dashboard.views[0].cards[0]"), result.issues.single().sourceLocations)
+        assertFalse(result.issues.single().toJson().toString().contains(secretMarker))
+    }
+
+    @Test fun areaCardIncludesDirectAndDeviceInheritedMembersWithoutFloorOrLabelWidening() {
+        val config = """{"views":[{"cards":[{"type":"area","area":"study"}]}]}"""
+        val catalog = listOf(
+            "light.direct_member",
+            "switch.device_inherited_member",
+            "sensor.same_floor_only",
+            "binary_sensor.same_label_only",
+            "cover.unrelated",
+        )
+        val metadata = mapOf(
+            "light.direct_member" to """{"ai":"study","fi":"upper","lb":["lighting"]}""",
+            "switch.device_inherited_member" to """{"ai":"study","fi":"upper"}""",
+            "sensor.same_floor_only" to """{"ai":"hall","fi":"upper"}""",
+            "binary_sensor.same_label_only" to """{"ai":"entry","fi":"ground","lb":["study"]}""",
+            "cover.unrelated" to """{"ai":"garage","fi":"ground"}""",
+        )
+
+        val result = DashboardConfigurationLint.analyze(
+            config, catalog, metadata, registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("light.direct_member", "switch.device_inherited_member"), result.safeEntityIds)
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun structuredDisplayNameSourcesAreNotEntitySelectors() {
+        listOf("area", "device", "entity", "floor").forEach { nameSource ->
+            val config = """{"views":[{"cards":[{
+              "type":"media-control",
+              "entity":"media_player.office_musicassistant",
+              "name":{"type":"$nameSource"}
+            }]}]}"""
+
+            val result = DashboardConfigurationLint.analyze(
+                config,
+                listOf("media_player.office_musicassistant"),
+                emptyMap(),
+                registryMetadataComplete = false,
+            )
+
+            assertFalse(nameSource, result.blocking)
+            assertTrue(nameSource, result.issues.isEmpty())
+            assertTrue(nameSource, result.safeEntityIds.isEmpty())
+            assertEquals(
+                nameSource,
+                DashboardConfigurationLint.RegistryRequirements(),
+                DashboardConfigurationLint.registryRequirements(config),
+            )
+            assertEquals(
+                nameSource,
+                setOf("media_player.office_musicassistant"),
+                EntityLearningProtocol.scanDashboard(config).entityIds,
+            )
+        }
+    }
+
+    @Test fun compositeDisplayNameIsNotTraversedAsCardConfiguration() {
+        val config = """{"views":[{"cards":[{
+          "type":"media-control",
+          "entity":"media_player.office_musicassistant",
+          "name":[{"type":"text","text":"Office"},{"type":"area"},{"type":"device"},{"type":"entity"},{"type":"floor"}]
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("media_player.office_musicassistant"),
+            emptyMap(),
+            registryMetadataComplete = false,
+        )
+
+        assertTrue(result.issues.isEmpty())
+        assertFalse(DashboardConfigurationLint.registryRequirements(config).any)
+        assertEquals(
+            setOf("media_player.office_musicassistant"),
+            EntityLearningProtocol.scanDashboard(config).entityIds,
+        )
+    }
+
+    @Test fun genuineNestedAreaCardStillRequiresAStaticAreaId() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"vertical-stack","cards":[{"type":"area"}]}]}]}""",
+            emptyList(),
+            emptyMap(),
+            registryMetadataComplete = false,
+        )
+
+        assertTrue(result.blocking)
+        assertEquals("Area card has no static area ID", result.issues.single().ruleSummary)
+        assertEquals(
+            listOf("dashboard.views[0].cards[0].cards[0]"),
+            result.issues.single().sourceLocations,
+        )
+    }
+
+    @Test fun customFieldNamedNameStillTraversesItsNestedCard() {
+        val config = """{"views":[{"cards":[{
+          "type":"custom:button-card",
+          "entity":"media_player.office_musicassistant",
+          "custom_fields":{"name":{"card":{"type":"area","area":"office"}}}
+        }]}]}"""
+        val metadata = mapOf("media_player.office_musicassistant" to """{"ai":"office"}""")
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("media_player.office_musicassistant"),
+            metadata,
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("media_player.office_musicassistant"), result.safeEntityIds)
+        assertEquals(
+            DashboardConfigurationLint.RegistryRequirements(entities = true, areas = true, devices = true),
+            DashboardConfigurationLint.registryRequirements(config),
+        )
+    }
+
+    @Test fun areaCardIncludesExternalTemperatureAndHumidityOverridesFromAreaRegistryProjection() {
+        val config = """{"views":[{"cards":[{"type":"area","area":"study"}]}]}"""
+        val catalog = listOf(
+            "light.study",
+            "sensor.remote_temperature",
+            "sensor.remote_humidity",
+            "sensor.unrelated",
+        )
+        val metadata = mapOf(
+            "light.study" to """{"ai":"study"}""",
+            "sensor.remote_temperature" to """{"ai":"utility"}""",
+            "sensor.remote_humidity" to """{"ai":"utility"}""",
+            "sensor.unrelated" to """{"ai":"utility"}""",
+        )
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            catalog,
+            metadata,
+            areaRegistryEntities = mapOf(
+                "study" to setOf("sensor.remote_temperature", "sensor.remote_humidity"),
+            ),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(
+            setOf("light.study", "sensor.remote_temperature", "sensor.remote_humidity"),
+            result.safeEntityIds,
+        )
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun areaCardRetainsRegistryBackedMembersThatAreTemporarilyStateless() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"area","area":"study"}]}]}""",
+            catalog = listOf("light.live_member"),
+            metadataJson = mapOf(
+                "light.live_member" to """{"ai":"study"}""",
+                "switch.stateless_member" to """{"ai":"study"}""",
+            ),
+            areaRegistryEntities = mapOf("study" to setOf("sensor.stateless_temperature")),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(
+            setOf("light.live_member", "switch.stateless_member", "sensor.stateless_temperature"),
+            result.safeEntityIds,
+        )
+        assertFalse(result.blocking)
+    }
+
+    @Test fun areaCardBlocksWhenRegistryMetadataIsIncomplete() {
+        val config = """{"views":[{"cards":[{"type":"area","area":"study"}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("light.study"),
+            mapOf("light.study" to """{"ai":"study"}"""),
+            registryMetadataComplete = false,
+        )
+
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+        assertEquals(listOf("dashboard.views[0].cards[0]"), result.issues.single().sourceLocations)
+    }
+
+    @Test fun areaCardAcceptsExactlyPerSelectorLimitAndBlocksOneMore() {
+        fun analyze(count: Int): DashboardConfigurationLint.Result {
+            val catalog = entities("sensor", count)
+            val metadata = catalog.associateWith { """{"ai":"study"}""" }
+            return DashboardConfigurationLint.analyze(
+                """{"views":[{"cards":[{"type":"area","area":"study"}]}]}""",
+                catalog,
+                metadata,
+                registryMetadataComplete = true,
+            )
+        }
+
+        val atLimit = analyze(DashboardConfigurationLint.SELECTOR_ENTITY_LIMIT)
+        assertEquals(DashboardConfigurationLint.SELECTOR_ENTITY_LIMIT, atLimit.safeEntityIds.size)
+        assertTrue(atLimit.issues.isEmpty())
+
+        val overLimit = analyze(DashboardConfigurationLint.SELECTOR_ENTITY_LIMIT + 1)
+        assertTrue(overLimit.safeEntityIds.isEmpty())
+        assertEquals(DashboardConfigurationLint.IssueType.BROAD_SELECTOR, overLimit.issues.single().type)
+        assertEquals(DashboardConfigurationLint.SELECTOR_ENTITY_LIMIT + 1, overLimit.issues.single().candidateCount)
+    }
+
+    @Test fun mapShowAllBlocksEvenWhenCurrentCatalogIsTiny() {
+        val config = """{"views":[{"cards":[{
+          "type":"map","show_all":true,"entities":["person.resident"]
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config, listOf("person.resident"), emptyMap(), registryMetadataComplete = true,
+        )
+
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+        assertEquals(listOf("dashboard.views[0].cards[0]"), result.issues.single().sourceLocations)
+    }
+
+    @Test fun mapWithNonemptyGeoLocationSourcesBlocks() {
+        val config = """{"views":[{"cards":[{
+          "type":"map","show_all":false,"geo_location_sources":["nws"],
+          "entities":["person.resident"]
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config, listOf("person.resident"), emptyMap(), registryMetadataComplete = true,
+        )
+
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+    }
+
+    @Test fun mapWithExplicitDeviceTrackerAndEmptyGeoLocationSourcesNeedsNoSelectorExpansion() {
+        val config = """{"views":[{"cards":[{
+          "type":"map","show_all":false,"geo_location_sources":[],
+          "entities":["device_tracker.phone"]
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("device_tracker.phone", "zone.home"),
+            emptyMap(),
+        )
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun mapWithPersonRetainsAllZonesNeededByFutureInZonesLocations() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"map","entities":["person.resident"]
+            }]}]}""",
+            listOf("person.resident", "zone.home", "zone.work", "sensor.unrelated"),
+            emptyMap(),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("zone.home", "zone.work"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun mapWithPersonBlocksWhenZoneRegistryProjectionIsIncomplete() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"map","entities":["person.resident"]}]}]}""",
+            listOf("person.resident", "zone.home"),
+            emptyMap(),
+            registryMetadataComplete = false,
+        )
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertTrue(result.blocking)
+        assertEquals("Map person locations require complete zone registry metadata", result.issues.single().ruleSummary)
+    }
+
+    @Test fun autoEntitiesInjectsBoundedPeopleIntoChildMapAndIncludesStatelessZones() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:auto-entities",
+              "filter":{"include":[{"entity_id":"person.resident"}]},
+              "card":{"type":"map"}
+            }]}]}""",
+            listOf("person.resident", "zone.home"),
+            mapOf("zone.work" to "{}"),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("person.resident", "zone.home", "zone.work"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun entityFilterPropagatesItsConfiguredPeopleIntoChildMap() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"entity-filter","entities":["person.resident"],"card":{"type":"map"}
+            }]}]}""",
+            listOf("person.resident", "zone.home"),
+            emptyMap(),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("zone.home"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun entityFilterCarriesOuterAutoEntitiesPeopleIntoChildMap() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:auto-entities",
+              "filter":{"include":[{"entity_id":"person.first"}]},
+              "card":{"type":"entity-filter","entities":["sensor.second"],"card":{"type":"map"}}
+            }]}]}""",
+            listOf("person.first", "sensor.second", "zone.home"),
+            emptyMap(),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("person.first", "zone.home"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesStaticOptionsEntityOverridePropagatesIntoChildMap() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:auto-entities",
+              "filter":{"include":[{"entity_id":"sensor.source","options":{"entity":"person.override"}}]},
+              "card":{"type":"map"}
+            }]}]}""",
+            listOf("sensor.source", "person.override", "zone.home"),
+            emptyMap(),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("sensor.source", "zone.home"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesNonEntityCardParameterDoesNotInjectRowsIntoMap() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:auto-entities","card_param":"cards",
+              "filter":{"include":[{"entity_id":"person.resident"}]},
+              "card":{"type":"map"}
+            }]}]}""",
+            listOf("person.resident", "zone.home"),
+            emptyMap(),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("person.resident"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun rootAndViewStrategiesBothBlockStaticActivation() {
+        val config = """{
+          "strategy":{"type":"custom:root-strategy"},
+          "views":[{
+            "title":"Generated view","path":"generated",
+            "strategy":{"type":"custom:view-strategy"}
+          }]
+        }"""
+
+        val result = DashboardConfigurationLint.analyze(config, emptyList(), emptyMap())
+
+        assertTrue(result.blocking)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.type == DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR })
+        assertEquals(
+            listOf("dashboard.strategy", "dashboard.views[0].strategy"),
+            result.issues.flatMap { it.sourceLocations }.sorted(),
+        )
+    }
+
+    @Test fun autoEntitiesRegistrySelectorsMatchExactIdsAndDisplayNames() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"area":"Living Room"},{"floor":"Upstairs"},{"label":"Needs Attention"}
+        ]}}]}]}"""
+        val catalog = listOf("light.living", "sensor.upstairs", "switch.attention", "sensor.other")
+        val metadata = mapOf(
+            "light.living" to """{"ai":"living_room","an":"Living Room"}""",
+            "sensor.upstairs" to """{"fi":"upstairs","fn":"Upstairs"}""",
+            "switch.attention" to """{"lb":["needs_attention"],"ln":["Needs Attention"]}""",
+        )
+
+        val result = DashboardConfigurationLint.analyze(
+            config, catalog, metadata, registryMetadataComplete = true,
+        )
+
+        assertEquals(catalog.dropLast(1).toSet(), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesRegistrySelectorsRetainMatchingEntitiesAbsentFromStateCatalog() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"area":"study"}
+            ]}}]}]}""",
+            catalog = listOf("light.live"),
+            metadataJson = mapOf(
+                "light.live" to """{"ai":"study"}""",
+                "switch.temporarily_stateless" to """{"ai":"study"}""",
+            ),
+            registryMetadataComplete = true,
+        )
+
+        assertEquals(setOf("light.live", "switch.temporarily_stateless"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesRegistrySelectorsBlockWhenRegistryProjectionIsIncomplete() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"domain":"light","area":"Living Room"}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("light.living", "light.kitchen"),
+            mapOf("light.living" to """{"ai":"living_room","an":"Living Room"}"""),
+            registryMetadataComplete = false,
+        )
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+    }
+
+    @Test fun autoEntitiesTypedIncludesAreNotMisreadAsSelectors() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"type":"section","label":"Living Room"}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(config, emptyList(), emptyMap())
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesStaticBuiltInTypedEntityRowRemainsProvable() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"type":"entity","entity":"sensor.explicit"}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(config, listOf("sensor.explicit"), emptyMap())
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesCustomOrDynamicTypedRowsBlockStaticActivation() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"type":"custom:template-entity-row","entity":"sensor.explicit"},
+          {"type":"entity","entity":"sensor.${'$'}{dynamic}"}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(config, listOf("sensor.explicit"), emptyMap())
+
+        assertTrue(result.blocking)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.ruleSummary.contains("typed row") })
+        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+    }
+
+    @Test fun autoEntitiesCustomOrDynamicFilteredOptionsBlockStaticActivation() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"entity_id":"sensor.first","options":{"type":"custom:template-entity-row"}},
+          {"entity_id":"sensor.second","options":{"name":"${'$'}{dynamic}"}}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config, listOf("sensor.first", "sensor.second"), emptyMap(),
+        )
+
+        assertEquals(setOf("sensor.first", "sensor.second"), result.safeEntityIds)
+        assertTrue(result.blocking)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.ruleSummary.contains("options") })
+        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+    }
+
+    @Test fun autoEntitiesCustomOrDynamicSeedRowsBlockStaticActivation() {
+        val config = """{"views":[{"cards":[{
+          "type":"custom:auto-entities",
+          "entities":[
+            {"type":"custom:template-entity-row","entity":"sensor.first"},
+            {"type":"entity","entity":"sensor.second","name":"${'$'}{dynamic}"}
+          ],
+          "filter":{"include":[{"entity_id":"sensor.third"}]},
+          "card":{"type":"entities"}
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config, listOf("sensor.first", "sensor.second", "sensor.third"), emptyMap(),
+        )
+
+        assertEquals(setOf("sensor.third"), result.safeEntityIds)
+        assertTrue(result.blocking)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.ruleSummary.contains("seed row") })
+        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+    }
+
+    @Test fun registryRequirementsAreCapabilityScopedToDashboardStructure() {
+        val plain = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"entities","entities":["sensor.room"]}]}]}""",
+        )
+        assertFalse(plain.any)
+
+        val presentationRow = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"type":"section","label":"Presentation only"}
+            ]}}]}]}""",
+        )
+        assertFalse(presentationRow.any)
+
+        val map = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"map","entities":["person.resident"]}]}]}""",
+        )
+        assertEquals(
+            DashboardConfigurationLint.RegistryRequirements(entities = true),
+            map,
+        )
+
+        val area = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"area","area":"study"}]}]}""",
+        )
+        assertEquals(
+            DashboardConfigurationLint.RegistryRequirements(entities = true, areas = true, devices = true),
+            area,
+        )
+
+        val floorAndLabel = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"floor":"upper"},{"label":"important"},{"type":"section","label":"Presentation only"}
+            ]}}]}]}""",
+        )
+        assertEquals(
+            DashboardConfigurationLint.RegistryRequirements(
+                entities = true, areas = true, devices = true, floors = true, labels = true,
+            ),
+            floorAndLabel,
+        )
+
+        val registryExclude = DashboardConfigurationLint.registryRequirements(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{
+              "include":[{"domain":"light"}],"exclude":[{"area":"utility"}]
+            }}]}]}""",
+        )
+        assertEquals(
+            DashboardConfigurationLint.RegistryRequirements(entities = true, areas = true, devices = true),
+            registryExclude,
+        )
+    }
+
+    @Test fun autoEntitiesEvalJsOptionsBlockActivationEvenWithBoundedCandidates() {
+        val config = """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+          {"domain":"sensor","options":{"eval_js":true,"entity":"${'$'}{state}"}}
+        ]}}]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(config, listOf("sensor.source"), emptyMap())
+
+        assertEquals(setOf("sensor.source"), result.safeEntityIds)
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, result.issues.single().type)
+    }
+
+    @Test fun upstreamWildcardDotSemanticsAreConservativeForAutoEntities() {
+        val auto = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"entity_id":"sensor.foo*"}
+            ]}}]}]}""",
+            listOf("sensor.foo_one", "sensorxfoo.two", "light.foo"),
+            emptyMap(),
+        )
+        assertEquals(setOf("sensor.foo_one", "sensorxfoo.two"), auto.safeEntityIds)
+        assertFalse(auto.blocking)
+
+        val autoExclude = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{
+              "include":[{"entity_id":"*.*"}],"exclude":[{"entity_id":"sensor.foo*"}]
+            }}]}]}""",
+            listOf("sensor.foo_one", "sensorxfoo.two", "light.foo"),
+            emptyMap(),
+        )
+        assertEquals(setOf("light.foo"), autoExclude.safeEntityIds)
+        assertFalse(autoExclude.blocking)
+
+    }
+
+    @Test fun autoEntitiesFriendlyNameWildcardPreservesUpstreamDotSemantics() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"name":"Kitchen.Temp*"}
+            ]}}]}]}""",
+            listOf("sensor.kitchen", "sensor.other"),
+            emptyMap(),
+            friendlyNames = mapOf(
+                "sensor.kitchen" to "Kitchen Temp sensor",
+                "sensor.other" to "Other sensor",
+            ),
+        )
+
+        assertEquals(setOf("sensor.kitchen"), result.safeEntityIds)
+        assertFalse(result.blocking)
+    }
+
+    @Test fun autoEntitiesQuestionMarkPatternIsRejectedInsteadOfInventingWildcardSemantics() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{"type":"custom:auto-entities","filter":{"include":[
+              {"entity_id":"sensor.foo?"}
+            ]}}]}]}""",
+            listOf("sensor.fooa"),
+            emptyMap(),
+        )
+
+        assertTrue(result.safeEntityIds.isEmpty())
+        assertTrue(result.blocking)
+    }
+
+    @Test fun knownTemplateCardsEmitNamedNoticesEvenWhenLiteralDependenciesHideGenericWarnings() {
+        val config = """{"views":[{"title":"Templates","path":"templates","cards":[
+          {"type":"custom:streamline-card","template":"room","entity":"sensor.streamline"},
+          {"type":"custom:decluttering-card","template":"room","entity":"sensor.decluttering"},
+          {"type":"custom:button-card","entity":"sensor.button","triggers_update":["sensor.watcher"]}
+        ]}]}"""
+
+        val scan = EntityLearningProtocol.scanDashboard(config)
+        assertEquals(
+            setOf("sensor.streamline", "sensor.decluttering", "sensor.button", "sensor.watcher"),
+            scan.entityIds,
+        )
+        assertTrue(scan.unresolved.none { unresolved ->
+            listOf("custom:streamline-card", "custom:decluttering-card", "custom:button-card")
+                .any(unresolved::contains)
+        })
+
+        val result = DashboardConfigurationLint.analyze(config, scan.entityIds, emptyMap())
+        val notices = result.issues.filter { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT }
+
+        assertEquals(1, notices.size)
+        assertEquals(
+            setOf("Button Card has limited entity discovery support"),
+            notices.mapTo(mutableSetOf(), DashboardConfigurationLint.Issue::ruleSummary),
+        )
+        assertTrue(notices.all { !it.blocking && it.severity == "warning" && it.limit == null })
+        assertTrue(notices.all { it.toJson().isNull("candidate_count") && it.toJson().isNull("limit") })
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP })
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.RUNTIME_COVERAGE })
+        assertTrue(result.issues.all { !it.blocking && it.severity == "warning" })
+        assertFalse(result.blocking)
+    }
+
+    @Test fun streamlineEmitsOneDashboardWideRuntimeCoverageNotice() {
+        val config = """{"views":[
+          {"title":"Main","path":"main","cards":[
+            {"type":"custom:streamline-card","template":"room","entity":"sensor.first"},
+            {"type":"custom:streamline-card","template":"room","entity":"sensor.second"}
+          ]},
+          {"title":"Popup","path":"popup","cards":[
+            {"type":"custom:streamline-card","template":"details","entity":"sensor.third"}
+          ]}
+        ]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            setOf("sensor.first", "sensor.second", "sensor.third"),
+            emptyMap(),
+        )
+        val notice = result.issues.single()
+
+        assertEquals(DashboardConfigurationLint.IssueType.RUNTIME_COVERAGE, notice.type)
+        assertFalse(notice.blocking)
+        assertFalse(notice.ignorable)
+        assertEquals("Dashboard", notice.viewTitle)
+        assertEquals("dashboard", notice.viewPath)
+        assertEquals("Streamline entity discovery depends on dashboard coverage", notice.ruleSummary)
+        assertTrue(notice.reason.contains("direct hass.states dependencies are learned automatically"))
+        assertTrue(notice.reason.contains("may remain incomplete"))
+        assertTrue(notice.recommendation.isEmpty())
+        assertEquals(
+            listOf(
+                "dashboard.views[0].cards[0]",
+                "dashboard.views[0].cards[1]",
+                "dashboard.views[1].cards[0]",
+            ),
+            notice.sourceLocations,
+        )
+    }
+
+    @Test fun bubbleCardEmitsOneDashboardWideRuntimeCoverageNotice() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[
+              {"path":"main","cards":[
+                {"type":"custom:bubble-card","entity":"light.one"},
+                {"type":"custom:bubble-card","entity":"light.two"}
+              ]},
+              {"path":"popup","cards":[
+                {"type":"custom:bubble-card","entity":"light.three"}
+              ]}
+            ]}""",
+            listOf("light.one", "light.two", "light.three"),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        val notice = result.issues.single()
+        assertEquals(DashboardConfigurationLint.IssueType.RUNTIME_COVERAGE, notice.type)
+        assertFalse(notice.ignorable)
+        assertEquals("Dashboard", notice.viewTitle)
+        assertEquals("dashboard", notice.viewPath)
+        assertEquals("Bubble Card entity discovery depends on dashboard coverage", notice.ruleSummary)
+        assertTrue(notice.reason.contains("learned automatically"))
+        assertTrue(notice.reason.contains("may remain incomplete"))
+        assertTrue(notice.recommendation.isEmpty())
+        assertEquals(
+            listOf(
+                "dashboard.views[0].cards[0]",
+                "dashboard.views[0].cards[1]",
+                "dashboard.views[1].cards[0]",
+            ),
+            notice.sourceLocations,
+        )
+    }
+
+    @Test fun bubbleCardInlineLiteralsRemainStaticallyDetected() {
+        val config = """{"views":[{"cards":[{
+              "type":"custom:bubble-card","entity":"light.main",
+              "styles":"${'$'}{hass.states['sensor.hidden'].state}",
+              "modules":["room-accent"]
+            }]}]}"""
+        val scan = EntityLearningProtocol.scanDashboard(config)
+        val result = DashboardConfigurationLint.analyze(config, scan.entityIds, emptyMap())
+
+        assertFalse(result.blocking)
+        assertEquals(setOf("light.main", "sensor.hidden"), scan.entityIds)
+        val gap = result.issues.single { it.type == DashboardConfigurationLint.IssueType.RUNTIME_COVERAGE }
+        assertEquals("Bubble Card entity discovery depends on dashboard coverage", gap.ruleSummary)
+    }
+
+    @Test fun kioskModeStaticAndServerTemplatesNeedNoCompatibilityIssue() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"kiosk_mode":{
+              "hide_header":true,
+              "hide_sidebar":"{{ is_state('input_boolean.server_toggle', 'on') }}"
+            },"views":[]}""",
+            listOf("input_boolean.server_toggle"),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        assertTrue(result.issues.isEmpty())
+    }
+
+    @Test fun kioskModeClientJavascriptIsAdvisoryEvenForLiteralDependencies() {
+        val config = """{"kiosk_mode":{
+          "hide_header":"[[[ return is_state('input_boolean.panel_mode', 'on') && states(\"sensor.temperature\") > 20; ]]]",
+          "hide_sidebar":"[[[ return !user_is_admin; ]]]"
+        },"views":[]}"""
+        val scan = EntityLearningProtocol.scanDashboard(config)
+        val result = DashboardConfigurationLint.analyze(config, scan.entityIds, emptyMap())
+
+        assertEquals(setOf("input_boolean.panel_mode", "sensor.temperature"), scan.entityIds)
+        assertFalse(result.blocking)
+        val limited = result.issues.single { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT }
+        assertTrue(limited.ruleSummary.contains("HACS Kiosk Mode"))
+        val gap = result.issues.single { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP }
+        assertEquals("HACS Kiosk Mode configuration", gap.cardTitle)
+        assertTrue(gap.ruleSummary.contains("unknown entity dependencies"))
+        assertTrue(gap.recommendation.contains("automatic entity filtering"))
+        assertTrue(gap.recommendation.contains("native kiosk command"))
+    }
+
+    @Test fun kioskModeComputedAndEnumeratedClientDependenciesAreAdvisory() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"kiosk_mode":{
+              "hide_header":"[[[ const id = refs.entity_id; return states(id) === 'on'; ]]]",
+              "hide_sidebar":"[[[ return Object.values(states.sensor).some((entity) => entity.state === 'on'); ]]]"
+            },"views":[]}""",
+            emptyList(),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT })
+        val gap = result.issues.single { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP }
+        assertTrue(gap.ruleSummary.contains("HACS Kiosk Mode"))
+        assertTrue(gap.ruleSummary.contains("unknown entity dependencies"))
+    }
+
+    @Test fun kioskModeJavaScriptAliasesRemainVisibleButNonblocking() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"kiosk_mode":{"hide_header":"[[[ const read = states; return read(refs.entity_id); ]]]"},"views":[]}""",
+            emptyList(), emptyMap(),
+        )
+        assertFalse(result.blocking)
+        assertTrue(result.issues.any { it.ruleSummary.contains("HACS Kiosk Mode") })
+    }
+
+    @Test fun opaqueCardApprovalFingerprintChangesWithDashboardDependencies() {
+        fun analyze(config: String) = DashboardConfigurationLint.analyze(config, emptyList(), emptyMap())
+        fun DashboardConfigurationLint.Result.gap() = issues.single {
+            it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP
+        }
+
+        val beforeConfig =
+            """{"decluttering_templates":{"room":{"card":{"entity":"sensor.before"}}},"views":[{"cards":[{"type":"custom:decluttering-card","template":"room"}]}]}"""
+        val beforeResult = analyze(beforeConfig)
+        val before = beforeResult.gap()
+        val after = analyze(
+            """{"decluttering_templates":{"room":{"card":{"entity":"sensor.after"}}},"views":[{"cards":[{"type":"custom:decluttering-card","template":"room"}]}]}""",
+        ).gap()
+        val reordered = analyze(
+            """{"views":[{"cards":[{"template":"room","type":"custom:decluttering-card"}]}],"decluttering_templates":{"room":{"card":{"entity":"sensor.before"}}}}""",
+        ).gap()
+
+        assertNotEquals(before.fingerprint, after.fingerprint)
+        assertEquals(before.fingerprint, reordered.fingerprint)
+        assertEquals(
+            EntityLearningProtocol.hash(EntityLearningProtocol.canonical(JSONObject(beforeConfig))),
+            beforeResult.dashboardRevision,
+        )
+        val effective = EntityCatalogIssuePersistence.applyIgnores(
+            JSONArray().put(after.toJson()),
+            setOf(before.fingerprint),
+        )
+        assertFalse(JSONArray(effective).getJSONObject(0).getBoolean("blocking"))
+    }
+
+    @Test fun repeatedLimitedSupportCardsAreGroupedByIntegrationAndView() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[
+              {"path":"first","cards":[
+                {"type":"custom:button-card","entity":"sensor.one"},
+                {"type":"custom:button-card","entity":"sensor.two"}
+              ]},
+              {"path":"second","cards":[{"type":"custom:button-card","entity":"sensor.three"}]}
+            ]}""",
+            listOf("sensor.one", "sensor.two", "sensor.three"),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        assertEquals(2, result.issues.size)
+        assertTrue(result.issues.all { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT })
+        assertEquals(
+            listOf("dashboard.views[0].cards[0]", "dashboard.views[0].cards[1]"),
+            result.issues.single { it.viewPath == "first" }.sourceLocations,
+        )
+        assertEquals(
+            listOf("dashboard.views[1].cards[0]"),
+            result.issues.single { it.viewPath == "second" }.sourceLocations,
+        )
+    }
+
+    @Test fun compatibilityDiagnosticsAreBoundedBeforePersistenceWithoutCreatingBlockers() {
+        val repeatedCards = (0 until 20).joinToString(",") { index ->
+            """{"type":"custom:button-card","entity":"sensor.$index"}"""
+        }
+        val repeated = DashboardConfigurationLint.analyze(
+            """{"views":[{"path":"repeated","cards":[$repeatedCards]}]}""",
+            (0 until 20).map { "sensor.$it" },
+            emptyMap(),
+        )
+        assertEquals(
+            EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP,
+            repeated.issues.single().sourceLocations.size,
+        )
+
+        val views = (0 until 70).joinToString(",") { index ->
+            val opaque = if (index == 69) ",{\"type\":\"custom:decluttering-card\",\"template\":\"room\"}" else ""
+            """{"path":"view-$index","cards":[{"type":"custom:button-card","entity":"sensor.$index"}$opaque]}"""
+        }
+        val saturated = DashboardConfigurationLint.analyze(
+            """{"views":[$views]}""",
+            (0 until 70).map { "sensor.$it" },
+            emptyMap(),
+        )
+        assertEquals(
+            EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS,
+            saturated.issues.count { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT },
+        )
+        assertFalse(saturated.issues.any {
+            it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP
+        })
+        assertFalse(saturated.blocking)
+    }
+
+    @Test fun blockingDiagnosticOverflowCannotBeIgnored() {
+        val views = (0..EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS).joinToString(",") { index ->
+            """{"path":"blocked-$index","cards":[{"type":"custom:auto-entities","filter":{"template":"template-$index"}}]}"""
+        }
+        val result = DashboardConfigurationLint.analyze("""{"views":[$views]}""", emptyList(), emptyMap())
+        val overflow = result.issues.single {
+            it.type == DashboardConfigurationLint.IssueType.DIAGNOSTIC_LIMIT
+        }
+        val ordinary = result.issues.filter {
+            it.type == DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR
+        }
+
+        assertEquals(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS, ordinary.size)
+        assertTrue(overflow.blocking)
+        assertFalse(overflow.ignorable)
+        val effective = EntityCatalogIssuePersistence.applyIgnores(
+            JSONArray(result.issues.map(DashboardConfigurationLint.Issue::toJson)),
+            ordinary.mapTo(mutableSetOf(), DashboardConfigurationLint.Issue::fingerprint),
+        )
+        val retained = JSONArray(effective)
+        val retainedOverflow = (0 until retained.length()).map(retained::getJSONObject).single {
+            it.optString("type") == DashboardConfigurationLint.IssueType.DIAGNOSTIC_LIMIT.wireName
+        }
+        assertTrue(retainedOverflow.getBoolean("blocking"))
+        assertFalse(retainedOverflow.getBoolean("ignored"))
+        assertFalse(EntityCatalogIssuePersistence.canIgnore(retainedOverflow))
+    }
+
+    @Test fun buttonCardDynamicFeaturesWarnSeparatelyFromNamedLimitedSupportNotice() {
+        val risky = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.primary","template":"shared",
+              "triggers_update":"all","group_expand":true,
+              "styles":{"name":"[[[ return states['sensor.hidden'].state; ]]]"}
+            }]}]}""",
+            listOf("sensor.primary", "sensor.hidden"),
+            emptyMap(),
+        )
+
+        assertFalse(risky.blocking)
+        assertEquals(2, risky.issues.size)
+        assertEquals(1, risky.issues.count { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT })
+        val gap = risky.issues.single { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP }
+        assertTrue(gap.ruleSummary.contains("config template inheritance"))
+        assertTrue(gap.ruleSummary.contains("JavaScript templates"))
+        assertTrue(gap.ruleSummary.contains("group expansion"))
+        assertTrue(gap.ruleSummary.contains("triggers_update: all"))
+
+        val explicit = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.primary",
+              "triggers_update":["sensor.watcher"]
+            }]}]}""",
+            listOf("sensor.primary", "sensor.watcher"),
+            emptyMap(),
+        )
+        assertFalse(explicit.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.LIMITED_SUPPORT, explicit.issues.single().type)
+
+        val malformedUppercase = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.primary","triggers_update":"ALL"
+            }]}]}""",
+            listOf("sensor.primary"),
+            emptyMap(),
+        )
+        assertFalse(malformedUppercase.blocking)
+    }
+
+    @Test fun nestedButtonCardJavaScriptIsAttributedOnlyToTheNestedCard() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.outer","custom_fields":{"nested":{"card":{
+                "type":"custom:button-card","entity":"sensor.inner",
+                "name":"[[[[ return states['sensor.hidden'].state; ]]]]"
+              }}}
+            }]}]}""",
+            listOf("sensor.outer", "sensor.inner", "sensor.hidden"),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        assertEquals(2, result.issues.size)
+        val notice = result.issues.single { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT }
+        assertEquals(2, notice.sourceLocations.size)
+        val gap = result.issues.single { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP }
+        assertEquals(listOf("dashboard.views[0].cards[0].custom_fields.nested.card"), gap.sourceLocations)
+        assertTrue(gap.limit == null && gap.toJson().isNull("candidate_count") && gap.toJson().isNull("limit"))
+    }
+
+    @Test fun typedButtonCardVariableDoesNotHideForceEvaluatedJavaScript() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.primary","variables":{"bootstrap":{
+                "type":"metadata","force_eval":true,
+                "value":"[[[ return states[window.dynamicEntity].state; ]]]"
+              }}
+            }]}]}""",
+            listOf("sensor.primary"),
+            emptyMap(),
+        )
+
+        assertFalse(result.blocking)
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT })
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP })
+    }
+
+    @Test fun arbitraryButtonCardJavaScriptRemainsVisibleButNonblocking() {
+        val result = DashboardConfigurationLint.analyze(
+            """{"views":[{"cards":[{
+              "type":"custom:button-card","entity":"sensor.primary",
+              "name":"[[[ return entity.state; ]]]"
+            }]}]}""",
+            listOf("sensor.primary"),
+            emptyMap(),
+        )
+
+        // A JavaScript program is not a bounded dependency declaration. Recognizing a few apparently
+        // harmless expressions would create an open-ended parser contract and unsafe false negatives.
+        assertFalse(result.blocking)
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.LIMITED_SUPPORT })
+        assertEquals(1, result.issues.count { it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP })
     }
 
     @Test fun broadRepeatedRulesAreGroupedPerViewWithEverySourceLocation() {

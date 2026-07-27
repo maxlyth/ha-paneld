@@ -17,7 +17,9 @@ class CompanionBackupCheckpointTest {
         val install = source.substring(source.indexOf("private fun installBody"), source.indexOf("private fun installWarning"))
         val restore = source.substring(source.indexOf("private suspend fun handleRestore"), source.indexOf("private fun planCompanionArchive"))
         assertTrue(install.contains("val companionHelper = companionHelperCache.get()"))
-        assertTrue(install.contains("backupCardHtml(companionHelper)"))
+        // The helper capability stays the gate for the Companion login. The card also takes whether the
+        // app is installed at all, so match the leading argument rather than the whole signature.
+        assertTrue(install.contains("backupCardHtml(companionHelper"))
         assertFalse(install.contains("backupCardHtml(su)"))
         assertTrue(restore.contains("ensureCompanionHelper()"))
         assertFalse(restore.contains("Companion restore needs su"))
@@ -36,7 +38,7 @@ class CompanionBackupCheckpointTest {
         val refusal = capture.indexOf(
             "throw CompanionBackupUnavailable(\"Companion login database could not be checkpointed safely\")",
         )
-        val gate = capture.indexOf("CompanionDataOperationGate.acquire")
+        val gate = capture.indexOf("CompanionDataLease.acquireArmed")
         val relaunchFinally = capture.indexOf("finally {", validation)
         assertTrue(gate >= 0)
         assertTrue(helper > gate)

@@ -344,4 +344,34 @@ class ServiceBoundaryRunnerTest {
             pool.shutdownNow()
         }
     }
+
+    @Test fun stickyStopSignalDefaultsFalse() {
+        assertFalse(ServiceTeardownBoundary().isStopping)
+    }
+
+    @Test fun markStoppingLatchesTheSignalAndIsIdempotent() {
+        val boundary = ServiceTeardownBoundary()
+        boundary.markStopping()
+        assertTrue(boundary.isStopping)
+        boundary.markStopping()
+        assertTrue(boundary.isStopping)
+    }
+
+    @Test fun explicitBoundaryLatchesStopSignalImmediately() {
+        // Accepting an explicit boundary latches the stop signal immediately, and it stays set across
+        // the boundary's finalization. Ordinary teardown still calls markStopping() independently.
+        val boundary = ServiceTeardownBoundary()
+        assertTrue(boundary.requestExplicitBoundary())
+        assertTrue(boundary.isStopping)
+
+        runServiceBoundary(
+            boundary = boundary,
+            completed = false,
+            prepare = {},
+            prove = { ServiceBoundaryProof(externalStateSafe = true, forceFreshProcess = false) },
+            pauseBeforeRetry = {},
+            finish = {},
+        )
+        assertTrue(boundary.isStopping)
+    }
 }

@@ -57,13 +57,15 @@ class HaAmbientLuxSubscriberTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val transport = FakeTransport(FakeConnection()).apply { rejectStates = 1 }
         val forces = mutableListOf<Boolean>()
+        val auth = HaApiSessionProvider { force ->
+            forces += force
+            HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
+        }
         val subscriber = HaAmbientLuxSubscriber(
             scope = this,
-            auth = HaApiSessionProvider { force ->
-                forces += force
-                HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
-            },
+            auth = auth,
             transport = transport,
+            streamOwner = owner(dispatcher, auth, transport),
             onSample = {},
             onStatus = {},
             onCandidates = {},
@@ -80,13 +82,15 @@ class HaAmbientLuxSubscriberTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val transport = FakeTransport(FakeConnection()).apply { rejectHistoryCall = 3 }
         val forces = mutableListOf<Boolean>()
+        val auth = HaApiSessionProvider { force ->
+            forces += force
+            HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
+        }
         val subscriber = HaAmbientLuxSubscriber(
             scope = this,
-            auth = HaApiSessionProvider { force ->
-                forces += force
-                HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
-            },
+            auth = auth,
             transport = transport,
+            streamOwner = owner(dispatcher, auth, transport),
             onSample = {},
             onStatus = {},
             onCandidates = {},
@@ -133,6 +137,11 @@ class HaAmbientLuxSubscriberTest {
             scope = this,
             auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) },
             transport = transport,
+            streamOwner = owner(
+                dispatcher,
+                HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) },
+                transport,
+            ),
             onSample = {},
             onStatus = {},
             onCandidates = {},
@@ -183,6 +192,11 @@ class HaAmbientLuxSubscriberTest {
             scope = this,
             auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token") },
             transport = transport,
+            streamOwner = owner(
+                dispatcher,
+                HaApiSessionProvider { HaApiSession("https://ha.example", "token") },
+                transport,
+            ),
             onSample = {},
             onStatus = {},
             onCandidates = {},
@@ -214,7 +228,7 @@ class HaAmbientLuxSubscriberTest {
 
         subscriber.setSource(ENTITY)
         repeat(2) { runCurrent() }
-        connection.messages.send(HaSocketMessage.State(state("50", "2026-07-17T10:00:02Z")))
+        connection.messages.send(HaExactSocketMessage.State(state("50", "2026-07-17T10:00:02Z")))
         runCurrent()
         transport.stateResult.complete(state("10", "2026-07-17T10:00:00Z"))
         runCurrent()
@@ -226,25 +240,71 @@ class HaAmbientLuxSubscriberTest {
         subscriber.close()
     }
 
+    @Test fun `every accepted sample is preceded by a live availability status`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection).apply { stateResult = CompletableDeferred() }
+        val events = mutableListOf<String>()
+        val auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) }
+        val subscriber = HaAmbientLuxSubscriber(
+            scope = this,
+            auth = auth,
+            transport = transport,
+            streamOwner = owner(dispatcher, auth, transport),
+            onSample = { events += "sample:${it.lux}" },
+            onStatus = { events += "status:${it.phase}" },
+            onCandidates = {},
+            workerDispatcher = dispatcher,
+        )
+
+        subscriber.setSource(ENTITY)
+        repeat(2) { runCurrent() }
+        transport.stateResult.complete(state("10", "2026-07-17T10:00:00Z"))
+        runCurrent()
+        connection.messages.send(HaExactSocketMessage.State(state("50", "2026-07-17T10:00:02Z")))
+        runCurrent()
+
+        // The subscriber is the single availability authority: no sample is ever observed before a
+        // LIVE status marks the source available.
+        events.forEachIndexed { index, event ->
+            if (event.startsWith("sample:")) {
+                assertTrue(
+                    "sample at index $index must directly follow a LIVE status but events were $events",
+                    index > 0 && events[index - 1] == "status:${HaAmbientSourcePhase.LIVE}",
+                )
+            }
+        }
+        assertTrue(events.contains("sample:10.0"))
+        assertTrue(events.contains("sample:50.0"))
+        assertEquals(HaAmbientSourcePhase.LIVE, subscriber.latestStatus().phase)
+        subscriber.close()
+    }
+
     @Test fun `authentication rejection forces one refreshed DashboardAuth session before reconnect`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val connection = FakeConnection()
         val transport = FakeTransport(connection).apply { rejectSubscriptions = 1 }
         val forces = mutableListOf<Boolean>()
+        val statuses = mutableListOf<HaAmbientSourceStatus>()
         val auth = HaApiSessionProvider { force ->
             forces += force
-            HaApiSession("https://ha.example", "token-${forces.size}")
+            HaApiSession("https://ha.example", "token-${forces.size}", owner = OWNER)
         }
         val subscriber = HaAmbientLuxSubscriber(
             scope = this,
             auth = auth,
             transport = transport,
+            streamOwner = owner(
+                dispatcher,
+                auth,
+                transport,
+                reconnectBaseMs = 10,
+                reconnectMaxMs = 10,
+            ),
             onSample = {},
-            onStatus = {},
+            onStatus = statuses::add,
             onCandidates = {},
             workerDispatcher = dispatcher,
-            reconnectBaseMs = 10,
-            reconnectMaxMs = 10,
         )
 
         subscriber.setSource(ENTITY)
@@ -257,6 +317,7 @@ class HaAmbientLuxSubscriberTest {
         assertEquals(listOf(false, true), forces)
         assertEquals(2, transport.subscribeCount)
         assertEquals(HaAmbientSourcePhase.LIVE, subscriber.latestStatus().phase)
+        assertEquals(1, statuses.count { it.phase == HaAmbientSourcePhase.LIVE })
         subscriber.close()
     }
 
@@ -272,7 +333,7 @@ class HaAmbientLuxSubscriberTest {
         subscriber.setSource(ENTITY)
         repeat(2) { runCurrent() }
         assertEquals(HaAmbientSourcePhase.SOURCE_MISSING, subscriber.latestStatus().phase)
-        connection.messages.send(HaSocketMessage.State(state("7", "2026-07-17T10:00:00Z")))
+        connection.messages.send(HaExactSocketMessage.State(state("7", "2026-07-17T10:00:00Z")))
         runCurrent()
 
         assertEquals(listOf(7.0), samples.map(HaAmbientLuxSample::lux))
@@ -285,18 +346,24 @@ class HaAmbientLuxSubscriberTest {
         val first = FakeConnection(autoPong = false)
         val second = FakeConnection(autoPong = true)
         val transport = FakeTransport(first, second)
+        val auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) }
         val subscriber = HaAmbientLuxSubscriber(
             scope = this,
-            auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token") },
+            auth = auth,
             transport = transport,
+            streamOwner = owner(
+                dispatcher,
+                auth,
+                transport,
+                livenessIntervalMs = 100,
+                pongTimeoutMs = 50,
+                reconnectBaseMs = 10,
+                reconnectMaxMs = 10,
+            ),
             onSample = {},
             onStatus = {},
             onCandidates = {},
             workerDispatcher = dispatcher,
-            livenessIntervalMs = 100,
-            pongTimeoutMs = 50,
-            reconnectBaseMs = 10,
-            reconnectMaxMs = 10,
         )
 
         subscriber.setSource(ENTITY)
@@ -317,28 +384,53 @@ class HaAmbientLuxSubscriberTest {
         transport: FakeTransport,
         samples: MutableList<HaAmbientLuxSample>,
         statuses: MutableList<HaAmbientSourceStatus>,
-    ) = HaAmbientLuxSubscriber(
+    ): HaAmbientLuxSubscriber {
+        val auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) }
+        return HaAmbientLuxSubscriber(
+            scope = this,
+            auth = auth,
+            transport = transport,
+            streamOwner = owner(dispatcher, auth, transport),
+            onSample = samples::add,
+            onStatus = statuses::add,
+            onCandidates = {},
+            workerDispatcher = dispatcher,
+        )
+    }
+
+    private fun kotlinx.coroutines.test.TestScope.owner(
+        dispatcher: CoroutineDispatcher,
+        auth: HaApiSessionProvider,
+        transport: FakeTransport,
+        livenessIntervalMs: Long = 45_000L,
+        pongTimeoutMs: Long = 15_000L,
+        reconnectBaseMs: Long = 1_000L,
+        reconnectMaxMs: Long = 60_000L,
+    ) = HaExactEntityStreamOwner(
         scope = this,
-        auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token", owner = OWNER) },
+        auth = auth,
         transport = transport,
-        onSample = samples::add,
-        onStatus = statuses::add,
-        onCandidates = {},
         workerDispatcher = dispatcher,
+        livenessIntervalMs = livenessIntervalMs,
+        pongTimeoutMs = pongTimeoutMs,
+        reconnectBaseMs = reconnectBaseMs,
+        reconnectMaxMs = reconnectMaxMs,
     )
 
-    private class FakeConnection(private val autoPong: Boolean = true) : HaTriggerConnection {
-        val messages = Channel<HaSocketMessage>(Channel.UNLIMITED)
-        override suspend fun receive(): HaSocketMessage = messages.receive()
+    private class FakeConnection(private val autoPong: Boolean = true) : HaExactEntityConnection {
+        val messages = Channel<HaExactSocketMessage>(Channel.UNLIMITED)
+        override suspend fun receive(): HaExactSocketMessage = messages.receive()
         override suspend fun ping(id: Int) {
-            if (autoPong) messages.send(HaSocketMessage.Pong(id))
+            if (autoPong) messages.send(HaExactSocketMessage.Pong(id))
         }
         override suspend fun close() {
             messages.close()
         }
     }
 
-    private class FakeTransport(vararg connections: FakeConnection) : HaAmbientTransport {
+    private class FakeTransport(vararg connections: FakeConnection) :
+        HaAmbientTransport,
+        HaExactEntityStreamTransport {
         private val connections = ArrayDeque(connections.toList())
         var rejectSubscriptions = 0
         var subscribeCount = 0
@@ -352,7 +444,7 @@ class HaAmbientLuxSubscriberTest {
         var stateResult: CompletableDeferred<JSONObject?> =
             CompletableDeferred(state("1", "2026-07-17T09:00:00Z"))
 
-        override suspend fun subscribe(baseUrl: String, accessToken: String, entityId: String): HaTriggerConnection {
+        override suspend fun subscribe(baseUrl: String, accessToken: String, entityIds: Set<String>): HaExactEntityConnection {
             subscribeCount++
             if (rejectSubscriptions-- > 0) throw HaAuthenticationException("rejected")
             return connections.removeFirst()

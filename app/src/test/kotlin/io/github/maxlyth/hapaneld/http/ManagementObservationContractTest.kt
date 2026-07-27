@@ -21,7 +21,7 @@ class ManagementObservationContractTest {
             server.indexOf("private val diagCache"),
         )
 
-        assertEquals(1, Regex("suCache\\.get\\(\\)").findAll(routes).count())
+        assertEquals(1, Regex("Su\\.availableCachedIsolated\\(\\)").findAll(routes).count())
         assertEquals(1, Regex("HelperClient::available").findAll(routes).count())
         assertEquals(1, Regex("ShizukuBridge::snapshot").findAll(routes).count())
         assertEquals(1, Regex("privilegeObservation\\(\\)").findAll(snapshot).count())
@@ -106,9 +106,11 @@ class ManagementObservationContractTest {
         assertTrue(service.contains("PanelInfo.databaseSummary(entityLearning.databaseUsage())"))
         assertTrue(service.contains("\"App database\""))
         assertTrue(service.contains("\"Hardened · high-impact remote actions need physical on-panel approval\""))
-        assertTrue(service.contains("\"Kiosk lock\" to if (config.kioskLock) \"on\" else \"off\""))
+        assertTrue(service.contains("\"Android dashboard lock\" to if (config.kioskLock) \"on\" else \"off\""))
+        assertTrue(service.contains("\"Prevent idle dim\" to preventIdleDimDiagnostic"))
         assertTrue(server.contains("\"MQTT state\", \"State convergence\", \"App database\", \"Security mode\", \"Audio playback\""))
         assertTrue(diagnostic.substring(diagnostic.indexOf("private val PUBLIC_PANEL_FACTS")).contains("\"App database\""))
+        assertTrue(diagnostic.substring(diagnostic.indexOf("private val PUBLIC_PANEL_FACTS")).contains("\"Prevent idle dim\""))
     }
 
     @Test fun mqttCapabilityRecoveryRetainsPositiveStickyZigbeeBackoff() {
@@ -200,15 +202,21 @@ class ManagementObservationContractTest {
 
     @Test fun companionWarningsRemainScopedToACompanionRenderer() {
         val server = source("http/PaneldServer.kt")
+        val companionDb = source("control/CompanionDb.kt")
         val status = server.substring(server.indexOf("private fun statusJson()"), server.indexOf("private fun statusWarning"))
         val adHoc = server.substring(server.indexOf("private fun adHocWarnings("), server.indexOf("// Built-in renderer zoomed"))
 
+        // Both surfaces route the companion internal-URL decision through the one shared, scope-guarded
+        // authority instead of each re-deciding renderer scope + repair/probe selection inline.
         listOf(status, adHoc).forEach { warnings ->
-            val scope = warnings.indexOf("if (CompanionDb.warningApplies(config.dashboardPackage))")
-            assertTrue(scope >= 0)
-            assertTrue(warnings.indexOf("needsRepair", startIndex = scope) > scope)
-            assertTrue(warnings.indexOf("!companion.probeSucceeded", startIndex = scope) > scope)
+            assertTrue(warnings.contains("CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)"))
+            assertFalse(warnings.contains("CompanionDb.warningApplies(config.dashboardPackage)"))
         }
+        // The renderer scope + repair/probe selection live exactly once, in that shared decision.
+        val warning = companionDb.substring(companionDb.indexOf("internal fun warning("))
+        assertTrue(warning.contains("if (!warningApplies(dashboardPackage)) return null"))
+        assertTrue(warning.contains("status.needsRepair -> Warning.NeedsRepair(status.affected)"))
+        assertTrue(warning.contains("!observation.probeSucceeded && directSuReady -> Warning.ProbeFailed"))
     }
 
     @Test fun passivePageRenderingNeverStartsColdHardwareProbes() {

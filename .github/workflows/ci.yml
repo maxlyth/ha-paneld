@@ -82,16 +82,51 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
 
-      - name: Install NDK + CMake
-        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+      - name: Install Android build toolchain
+        run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-provider: basic
 
-      - name: Test, lint, and build debug APK
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Test, lint, and build APKs
+        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease --stacktrace
+
+      - name: Verify supported Android and ABI floors
+        run: |
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          debug_apk=app/build/outputs/apk/debug/app-debug.apk
+          release_apk=app/build/outputs/apk/release/app-release-unsigned.apk
+          for apk in "$debug_apk" "$release_apk"; do
+            badging="$($build_tools/aapt dump badging "$apk")"
+            grep -Fq "compileSdkVersion='37'" <<<"$badging"
+            grep -Fq "sdkVersion:'26'" <<<"$badging"
+            grep -Fq "targetSdkVersion:'35'" <<<"$badging"
+          done
+          release_files="$(unzip -Z1 "$release_apk")"
+          grep -Fxq 'lib/arm64-v8a/libhapaneld_led.so' <<<"$release_files"
+          grep -Fxq 'lib/armeabi-v7a/libhapaneld_led.so' <<<"$release_files"
+          grep -Fxq 'assets/hapaneld-helper-arm64' <<<"$release_files"
+          grep -Fxq 'assets/hapaneld-helper-arm' <<<"$release_files"
+          grep -Fxq 'assets/cdprelay-arm64' <<<"$release_files"
+          grep -Fxq 'assets/cdprelay-arm' <<<"$release_files"
+          if grep -Fq 'lib/x86_64/' <<<"$release_files"; then
+            echo 'Release APK unexpectedly contains emulator-only x86_64 native code.' >&2
+            exit 1
+          fi
+          readelf="$ANDROID_HOME/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          # Standard NDK note: "Android\0" followed by little-endian API level 26.
+          for binary in \
+            app/src/main/assets/hapaneld-helper-arm \
+            app/src/main/assets/hapaneld-helper-arm64 \
+            app/src/main/assets/cdprelay-arm \
+            app/src/main/assets/cdprelay-arm64 \
+            app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib/armeabi-v7a/libhapaneld_led.so \
+            app/build/intermediates/stripped_native_libs/release/stripReleaseDebugSymbols/out/lib/arm64-v8a/libhapaneld_led.so; do
+            android_note="$($readelf --hex-dump=.note.android.ident "$binary")"
+            grep -Fq '6f696400 1a000000' <<<"$android_note"
+          done
 
       - name: Upload debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

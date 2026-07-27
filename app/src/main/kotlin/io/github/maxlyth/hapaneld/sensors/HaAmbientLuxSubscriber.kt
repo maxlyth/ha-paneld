@@ -1,7 +1,6 @@
 package io.github.maxlyth.hapaneld.sensors
 
 import android.util.Log
-import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import kotlinx.coroutines.CancellationException
@@ -9,20 +8,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.selects.select
 import org.json.JSONArray
 import org.json.JSONObject
-import java.time.Instant
-import java.time.format.DateTimeParseException
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
@@ -80,72 +69,55 @@ data class HaAmbientSourceStatus(
 )
 
 /**
- * Streams one exact Home Assistant illuminance entity without subscribing to the state firehose.
- * Lifecycle methods are non-blocking and may be called from Android's main thread; auth, REST and
- * WebSocket work run on [workerDispatcher]. Callbacks run on the supplied [scope].
+ * Adapts one exact Home Assistant entity stream into ambient-light samples while retaining bounded
+ * candidate, validation and history reads. Socket/reconnect/liveness ownership lives exclusively in
+ * [streamOwner]; lifecycle methods remain non-blocking and safe to call from Android's main thread.
  */
 class HaAmbientLuxSubscriber internal constructor(
     private val scope: CoroutineScope,
     private val auth: HaApiSessionProvider,
     private val transport: HaAmbientTransport,
+    private val streamOwner: HaExactEntityStreamOwner,
     private val onSample: (HaAmbientLuxSample) -> Unit,
-    private val onStatus: (HaAmbientSourceStatus) -> Unit,
-    private val onCandidates: (HaAmbientCandidateProjection) -> Unit,
+    private val onStatus: (HaAmbientSourceStatus) -> Unit = {},
+    private val onCandidates: (HaAmbientCandidateProjection) -> Unit = {},
     private val workerDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val epochMillis: () -> Long = System::currentTimeMillis,
-    private val livenessIntervalMs: Long = DEFAULT_LIVENESS_INTERVAL_MS,
-    private val pongTimeoutMs: Long = DEFAULT_PONG_TIMEOUT_MS,
-    private val reconnectBaseMs: Long = DEFAULT_RECONNECT_BASE_MS,
-    private val reconnectMaxMs: Long = DEFAULT_RECONNECT_MAX_MS,
 ) : AutoCloseable {
-
-    constructor(
-        scope: CoroutineScope,
-        config: Config,
-        onSample: (HaAmbientLuxSample) -> Unit,
-        onStatus: (HaAmbientSourceStatus) -> Unit = {},
-        onCandidates: (HaAmbientCandidateProjection) -> Unit = {},
-    ) : this(
-        scope = scope,
-        auth = DashboardHaApiSessionProvider(config),
-        transport = KtorHaAmbientTransport(),
-        onSample = onSample,
-        onStatus = onStatus,
-        onCandidates = onCandidates,
-    )
-
-    private val generation = AtomicLong()
     private val candidateGeneration = AtomicLong()
     private val lock = Any()
     @Volatile private var sourceEntityId: String? = null
     @Volatile private var stopped = false
-    @Volatile private var sourceJob: Job? = null
     @Volatile private var candidateJob: Job? = null
     @Volatile private var status = HaAmbientSourceStatus()
     @Volatile private var candidates = HaAmbientCandidateProjection()
+    @Volatile private var sampleGate: HaLuxSampleGate? = null
+    private val streamObserver = object : HaExactEntityStreamObserver {
+        override fun onStatus(status: HaExactEntityStreamStatus) = acceptStreamStatus(status)
+        override fun onUpdate(update: HaExactEntityUpdate) = acceptStreamUpdate(update)
+    }
+
+    init {
+        streamOwner.bindAmbient(streamObserver)
+    }
 
     fun latestStatus(): HaAmbientSourceStatus = status
 
     fun latestCandidates(): HaAmbientCandidateProjection = candidates
     fun candidateRefreshInFlight(): Boolean = candidateJob?.isActive == true
 
-    /** Blank/null disables the HA source. A replacement cancels the old socket generation first. */
+    /** Blank/null disables the shared exact-entity stream generation. */
     fun setSource(entityId: String?) {
         val normalized = entityId?.trim()?.takeIf(String::isNotEmpty)?.also(::validateEntityId)
         synchronized(lock) {
             check(!stopped) { "subscriber is closed" }
-            if (normalized == sourceEntityId && sourceJob?.isActive == true) return
-            sourceJob?.cancel()
-            sourceEntityId = normalized
-            val run = generation.incrementAndGet()
-            if (normalized == null) {
-                publishStatus(run, HaAmbientSourceStatus(phase = HaAmbientSourcePhase.DISABLED))
-                sourceJob = null
-            } else {
-                sourceJob = scope.launch {
-                    runSource(run, normalized)
+            if (normalized != sourceEntityId) {
+                sourceEntityId = normalized
+                sampleGate = normalized?.let { expected ->
+                    HaLuxSampleGate(expected, epochMillis, ::emitSample)
                 }
             }
+            streamOwner.replaceAmbientSource(normalized)
         }
     }
 
@@ -195,10 +167,10 @@ class HaAmbientLuxSubscriber internal constructor(
     internal suspend fun validateSource(entityId: String): HaAmbientSourceValidation {
         validateEntityId(entityId)
         return try {
-            val (state, owner) = try {
-                readSourceState(entityId, forceAuth = false)
-            } catch (_: HaAuthenticationException) {
-                readSourceState(entityId, forceAuth = true)
+            val (state, owner) = authRetryOnce { session ->
+                withContext(workerDispatcher) {
+                    transport.state(session.baseUrl, checkNotNull(session.accessToken), entityId)
+                } to session.owner
             }
             when {
                 state == null -> HaAmbientSourceValidation.Rejected(
@@ -240,17 +212,17 @@ class HaAmbientLuxSubscriber internal constructor(
         validateEntityId(entityId)
         val endEpochMs = epochMillis() / HISTORY_MINUTE_MS * HISTORY_MINUTE_MS
         val startEpochMs = endEpochMs - HISTORY_WINDOW_MS
-        var session = resolveSession(force = false)
-        val minutes = try {
-            loadHistoryChunks(session, entityId, startEpochMs, endEpochMs)
-        } catch (_: HaAuthenticationException) {
-            session = resolveSession(force = true)
-            loadHistoryChunks(session, entityId, startEpochMs, endEpochMs)
+        val (minutes, baseUrl, ownerOrNull) = authRetryOnce { session ->
+            Triple(
+                loadHistoryChunks(session, entityId, startEpochMs, endEpochMs),
+                session.baseUrl.trim().trimEnd('/'),
+                session.owner,
+            )
         }
-        val owner = session.owner ?: throw HaProtocolException("Home Assistant credentials changed during history retrieval")
+        val owner = ownerOrNull ?: throw HaProtocolException("Home Assistant credentials changed during history retrieval")
         return HaAmbientHistorySeed(
             entityId = entityId,
-            baseUrl = session.baseUrl.trim().trimEnd('/'),
+            baseUrl = baseUrl,
             authOwner = owner,
             minutes = minutes,
         )
@@ -290,13 +262,13 @@ class HaAmbientLuxSubscriber internal constructor(
         synchronized(lock) {
             if (stopped) return
             stopped = true
-            generation.incrementAndGet()
             candidateGeneration.incrementAndGet()
-            sourceJob?.cancel()
             candidateJob?.cancel()
-            sourceJob = null
             candidateJob = null
             sourceEntityId = null
+            sampleGate = null
+            streamOwner.unbindAmbient(streamObserver)
+            streamOwner.replaceAmbientSource(null)
             val final = status.copy(
                 entityId = null,
                 phase = HaAmbientSourcePhase.STOPPED,
@@ -310,166 +282,23 @@ class HaAmbientLuxSubscriber internal constructor(
     }
 
     private suspend fun discoverCandidates(): List<HaAmbientLuxCandidate> {
-        var session = resolveSession(force = false)
-        val states = try {
-            transport.states(session.baseUrl, checkNotNull(session.accessToken))
-        } catch (rejected: HaAuthenticationException) {
-            session = resolveSession(force = true)
+        val states = authRetryOnce { session ->
             transport.states(session.baseUrl, checkNotNull(session.accessToken))
         }
         return HaAmbientLuxProtocol.candidates(states)
     }
 
-    private suspend fun readSourceState(entityId: String, forceAuth: Boolean): Pair<JSONObject?, HaAuthOwner?> {
-        val session = resolveSession(forceAuth)
-        val state = withContext(workerDispatcher) {
-            transport.state(session.baseUrl, checkNotNull(session.accessToken), entityId)
-        }
-        return state to session.owner
-    }
-
-    private suspend fun runSource(run: Long, entityId: String) {
-        var attempt = 0
-        var forceAuth = false
-        while (scope.isActive && current(run, entityId)) {
-            var connection: HaTriggerConnection? = null
-            try {
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.AUTHENTICATING, attempt = attempt))
-                val session = resolveSession(forceAuth)
-                forceAuth = false
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.CONNECTING, attempt = attempt))
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SUBSCRIBING, attempt = attempt))
-                connection = withContext(workerDispatcher) {
-                    transport.subscribe(session.baseUrl, checkNotNull(session.accessToken), entityId)
-                }
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SYNCHRONIZING, attempt = attempt))
-                runConnected(run, entityId, session, connection)
-                throw HaProtocolException("Home Assistant stream closed")
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (rejected: HaAuthenticationException) {
-                forceAuth = true
-                attempt++
-                publishStatus(
-                    run,
-                    statusFor(entityId, HaAmbientSourcePhase.AUTH_FAILED, safeDetail(rejected, "Home Assistant authentication failed"), attempt),
-                )
-            } catch (error: Throwable) {
-                attempt++
-                publishStatus(
-                    run,
-                    statusFor(entityId, HaAmbientSourcePhase.RECONNECTING, safeDetail(error, "Home Assistant stream unavailable"), attempt),
-                )
-            } finally {
-                withContext(NonCancellable + workerDispatcher) { runCatching { connection?.close() } }
-            }
-            if (!current(run, entityId)) return
-            delay(reconnectDelay(attempt))
-        }
-    }
-
-    private suspend fun runConnected(
-        run: Long,
-        entityId: String,
-        session: HaApiSession,
-        connection: HaTriggerConnection,
-    ) = coroutineScope {
-        val gate = HaLuxSampleGate(entityId, epochMillis) { sample ->
-            if (current(run, entityId)) emitSample(sample)
-        }
-        val buffered = ArrayList<HaSocketMessage>()
-        val messages = Channel<HaSocketMessage>(STREAM_BUFFER_CAPACITY)
-        val reader = launch(workerDispatcher) {
-            while (isActive) messages.send(connection.receive())
-        }
-        val initial = async(workerDispatcher) {
-            transport.state(session.baseUrl, checkNotNull(session.accessToken), entityId)
-        }
-        var initialState: JSONObject? = null
-        while (true) {
-            val hydrated = select {
-                initial.onAwait {
-                    initialState = it
-                    true
-                }
-                messages.onReceive { message ->
-                    if (message is HaSocketMessage.State || message == HaSocketMessage.SourceMissing) {
-                        if (buffered.size == STREAM_BUFFER_CAPACITY) buffered.removeAt(0)
-                        buffered += message
-                    }
-                    false
-                }
-            }
-            if (hydrated) break
-        }
-        val hydratedState = initialState
-        if (hydratedState == null) {
-            publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SOURCE_MISSING, "Entity is not currently available"))
-        } else {
-            if (!gate.accept(hydratedState, HaAmbientSampleOrigin.REST_INITIAL) &&
-                !HaAmbientLuxProtocol.hasUsableLux(hydratedState, entityId)
-            ) {
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SOURCE_UNAVAILABLE, "Entity does not currently have a numeric lux value"))
-            } else {
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.LIVE))
-            }
-        }
-        buffered.forEach { message -> applyStreamMessage(message, gate, run, entityId) }
-
-        var pingId = FIRST_PING_ID
-        try {
-            while (isActive && current(run, entityId)) {
-                val message = withTimeoutOrNull(livenessIntervalMs) { messages.receive() }
-                if (message != null) {
-                    applyStreamMessage(message, gate, run, entityId)
-                    continue
-                }
-
-                val expectedPong = pingId++
-                connection.ping(expectedPong)
-                val alive = awaitPong(messages, gate, expectedPong, run, entityId)
-                if (!alive) throw HaProtocolException("Home Assistant stream liveness check timed out")
-            }
-        } finally {
-            reader.cancel()
-            messages.close()
-        }
-    }
-
-    private suspend fun awaitPong(
-        messages: Channel<HaSocketMessage>,
-        gate: HaLuxSampleGate,
-        expectedPong: Int,
-        run: Long,
-        entityId: String,
-    ): Boolean {
-        return withTimeoutOrNull(pongTimeoutMs) {
-            while (current(run, entityId)) {
-                when (val message = messages.receive()) {
-                    is HaSocketMessage.Pong -> if (message.id == expectedPong) return@withTimeoutOrNull true
-                    else -> applyStreamMessage(message, gate, run, entityId)
-                }
-            }
-            false
-        } ?: false
-    }
-
-    private fun applyStreamMessage(
-        message: HaSocketMessage,
-        gate: HaLuxSampleGate,
-        run: Long,
-        entityId: String,
-    ) {
-        when (message) {
-            is HaSocketMessage.State -> when {
-                gate.accept(message.json, HaAmbientSampleOrigin.WEBSOCKET) ->
-                    publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.LIVE))
-                !HaAmbientLuxProtocol.hasUsableLux(message.json, entityId) ->
-                    publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SOURCE_UNAVAILABLE, "Entity does not currently have a numeric lux value"))
-            }
-            HaSocketMessage.SourceMissing ->
-                publishStatus(run, statusFor(entityId, HaAmbientSourcePhase.SOURCE_MISSING, "Entity is not currently available"))
-            else -> Unit
+    /**
+     * Shared exact-entity read failure policy: resolve the refresh-safe session once, run [op], and on
+     * a single rejected access token force one refreshed session through the same owner and retry. A
+     * second rejection propagates so callers can classify it.
+     */
+    private suspend fun <T> authRetryOnce(op: suspend (HaApiSession) -> T): T {
+        val session = resolveSession(force = false)
+        return try {
+            op(session)
+        } catch (_: HaAuthenticationException) {
+            op(resolveSession(force = true))
         }
     }
 
@@ -483,19 +312,82 @@ class HaAmbientLuxSubscriber internal constructor(
         }
     }
 
+    /**
+     * The subscriber is the single availability authority for the HA lux source. A usable sample means
+     * the source is LIVE, so publish that status before delivering the sample: a consumer can never
+     * observe a sample before the source has been reported available (status-before-sample ordering).
+     */
     private fun emitSample(sample: HaAmbientLuxSample) {
-        status = status.copy(lastSampleAtEpochMs = sample.receivedAtEpochMs)
+        if (stopped || sample.entityId != sourceEntityId) return
+        val live = statusFor(sample.entityId, HaAmbientSourcePhase.LIVE)
+            .copy(lastSampleAtEpochMs = sample.receivedAtEpochMs)
+        status = live
+        safeCallback { onStatus(live) }
         safeCallback { onSample(sample) }
     }
 
-    private fun publishStatus(run: Long, next: HaAmbientSourceStatus) {
-        if (run != generation.get() || stopped) return
+    private fun publishStatus(next: HaAmbientSourceStatus) {
+        if (stopped || next.entityId != null && next.entityId != sourceEntityId) return
         val withLastSample = next.copy(
             lastSampleAtEpochMs = if (status.entityId == next.entityId) status.lastSampleAtEpochMs
             else next.lastSampleAtEpochMs,
         )
         status = withLastSample
         safeCallback { onStatus(withLastSample) }
+    }
+
+    private fun acceptStreamStatus(next: HaExactEntityStreamStatus) {
+        if (next.consumer != HaExactEntityConsumer.AMBIENT_LUX) return
+        val phase = when (next.phase) {
+            HaExactEntityStreamPhase.DISABLED -> HaAmbientSourcePhase.DISABLED
+            HaExactEntityStreamPhase.AUTHENTICATING -> HaAmbientSourcePhase.AUTHENTICATING
+            HaExactEntityStreamPhase.CONNECTING -> HaAmbientSourcePhase.CONNECTING
+            HaExactEntityStreamPhase.SUBSCRIBING -> HaAmbientSourcePhase.SUBSCRIBING
+            HaExactEntityStreamPhase.SYNCHRONIZING -> {
+                next.entityId?.let { expected -> sampleGate = HaLuxSampleGate(expected, epochMillis, ::emitSample) }
+                HaAmbientSourcePhase.SYNCHRONIZING
+            }
+            HaExactEntityStreamPhase.LIVE -> {
+                if (status.entityId == next.entityId &&
+                    (status.phase == HaAmbientSourcePhase.LIVE ||
+                        status.phase == HaAmbientSourcePhase.SOURCE_MISSING ||
+                        status.phase == HaAmbientSourcePhase.SOURCE_UNAVAILABLE)
+                ) return
+                HaAmbientSourcePhase.LIVE
+            }
+            HaExactEntityStreamPhase.AUTH_FAILED -> HaAmbientSourcePhase.AUTH_FAILED
+            HaExactEntityStreamPhase.RECONNECTING -> HaAmbientSourcePhase.RECONNECTING
+            HaExactEntityStreamPhase.STOPPED -> HaAmbientSourcePhase.STOPPED
+        }
+        publishStatus(statusFor(next.entityId.orEmpty(), phase, next.detail, next.reconnectAttempt).copy(
+            entityId = next.entityId,
+        ))
+    }
+
+    private fun acceptStreamUpdate(update: HaExactEntityUpdate) {
+        if (stopped || update.entityId != sourceEntityId) return
+        when (update) {
+            is HaExactEntityUpdate.State -> {
+                val gate = sampleGate ?: return
+                val origin = if (update.initial) HaAmbientSampleOrigin.REST_INITIAL else HaAmbientSampleOrigin.WEBSOCKET
+                // An accepted sample publishes LIVE via emitSample (status-before-sample). Only an
+                // update that carries no usable lux flips the source to unavailable here.
+                if (!gate.accept(update.json, origin) &&
+                    !HaAmbientLuxProtocol.hasUsableLux(update.json, update.entityId)
+                ) {
+                    publishStatus(statusFor(
+                        update.entityId,
+                        HaAmbientSourcePhase.SOURCE_UNAVAILABLE,
+                        "Entity does not currently have a numeric lux value",
+                    ))
+                }
+            }
+            is HaExactEntityUpdate.Missing -> publishStatus(statusFor(
+                update.entityId,
+                HaAmbientSourcePhase.SOURCE_MISSING,
+                "Entity is not currently available",
+            ))
+        }
     }
 
     private fun statusFor(
@@ -511,15 +403,6 @@ class HaAmbientLuxSubscriber internal constructor(
         attempt,
     )
 
-    private fun current(run: Long, entityId: String): Boolean =
-        !stopped && generation.get() == run && sourceEntityId == entityId
-
-    private fun reconnectDelay(attempt: Int): Long {
-        val shift = (attempt - 1).coerceIn(0, 20)
-        val scaled = reconnectBaseMs * (1L shl shift)
-        return scaled.coerceAtMost(reconnectMaxMs)
-    }
-
     private fun safeDetail(error: Throwable, fallback: String): String =
         error.message?.replace(Regex("[\\r\\n\\t]+"), " ")?.trim()?.take(MAX_DETAIL_CHARS)
             ?.takeIf(String::isNotBlank) ?: fallback
@@ -531,12 +414,6 @@ class HaAmbientLuxSubscriber internal constructor(
     private companion object {
         const val TAG = "HaAmbientLux"
         const val MAX_DETAIL_CHARS = 240
-        const val STREAM_BUFFER_CAPACITY = 256
-        const val FIRST_PING_ID = 10
-        const val DEFAULT_LIVENESS_INTERVAL_MS = 45_000L
-        const val DEFAULT_PONG_TIMEOUT_MS = 15_000L
-        const val DEFAULT_RECONNECT_BASE_MS = 1_000L
-        const val DEFAULT_RECONNECT_MAX_MS = 60_000L
         const val CANDIDATE_TTL_MS = 10L * 60_000L
         const val CANDIDATE_ERROR_TTL_MS = 60_000L
         const val HISTORY_MINUTE_MS = 60_000L
@@ -603,12 +480,7 @@ internal object HaAmbientLuxProtocol {
 
     private fun timestamp(state: JSONObject): Long? {
         val raw = state.optString("last_updated").ifBlank { state.optString("last_changed") }
-        if (raw.isBlank()) return null
-        return try {
-            Instant.parse(raw).toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            null
-        }
+        return parseHaTimestampEpochMs(raw)
     }
 
     private fun finiteNonNegative(raw: String): Double? =
@@ -618,61 +490,6 @@ internal object HaAmbientLuxProtocol {
     private const val MAX_FRIENDLY_NAME_CHARS = 256
     private const val MAX_UNIT_CHARS = 32
     private const val MAX_LUX = 10_000_000.0
-}
-
-/** Expands HA's permission-aware exact-entity diff stream into ordinary state objects. */
-internal class HaCompressedEntityProjection(private val entityId: String) {
-    private var state: JSONObject? = null
-
-    fun apply(event: JSONObject): HaSocketMessage {
-        event.optJSONObject("a")?.optJSONObject(entityId)?.let { added ->
-            state = JSONObject()
-                .put("entity_id", entityId)
-                .put("state", added.optString("s"))
-                .put("attributes", added.optJSONObject("a") ?: JSONObject())
-                .also { applyTimes(it, added) }
-            return HaSocketMessage.State(JSONObject(checkNotNull(state).toString()))
-        }
-        val removed = event.optJSONArray("r")
-        if (removed != null && (0 until removed.length()).any { removed.optString(it) == entityId }) {
-            state = null
-            return HaSocketMessage.SourceMissing
-        }
-        val changed = event.optJSONObject("c")?.optJSONObject(entityId) ?: return HaSocketMessage.Other
-        val current = state ?: return HaSocketMessage.Other
-        changed.optJSONObject("+")?.let { additions ->
-            if (additions.has("s")) current.put("state", additions.optString("s"))
-            val addedAttributes = additions.optJSONObject("a")
-            if (addedAttributes != null) {
-                val attributes = current.optJSONObject("attributes") ?: JSONObject().also { current.put("attributes", it) }
-                val keys = addedAttributes.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    attributes.put(key, addedAttributes.get(key))
-                }
-            }
-            applyTimes(current, additions)
-        }
-        changed.optJSONObject("-")?.optJSONArray("a")?.let { removedAttributes ->
-            val attributes = current.optJSONObject("attributes") ?: JSONObject()
-            for (index in 0 until removedAttributes.length()) attributes.remove(removedAttributes.optString(index))
-        }
-        return HaSocketMessage.State(JSONObject(current.toString()))
-    }
-
-    private fun applyTimes(target: JSONObject, compressed: JSONObject) {
-        if (compressed.has("lc")) {
-            val changed = epochSeconds(compressed.optDouble("lc", Double.NaN)) ?: return
-            target.put("last_changed", changed)
-            target.put("last_updated", changed)
-        }
-        if (compressed.has("lu")) {
-            epochSeconds(compressed.optDouble("lu", Double.NaN))?.let { target.put("last_updated", it) }
-        }
-    }
-
-    private fun epochSeconds(value: Double): String? = value.takeIf(Double::isFinite)
-        ?.let { Instant.ofEpochMilli((it * 1_000.0).toLong()).toString() }
 }
 
 internal class HaLuxSampleGate(

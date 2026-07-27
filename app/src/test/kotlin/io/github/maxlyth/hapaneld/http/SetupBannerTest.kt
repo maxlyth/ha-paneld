@@ -2,17 +2,42 @@ package io.github.maxlyth.hapaneld.http
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SetupBannerTest {
     @Test fun connectedAndConfigured_noNeeds() {
-        assertTrue(SetupBanner.needs("mqtt.example · connected", brokerConfigured = true, panelIdDefault = false).isEmpty())
+        assertTrue(SetupBanner.needs("mqtt.example · connected", brokerConfigured = true).isEmpty())
     }
 
     /** Regression: a CONFIGURED broker that is merely mid-(re)connect must NOT be reported as missing. */
     @Test fun configuredButConnecting_noBrokerNeed() {
-        assertTrue(SetupBanner.needs("host · connecting…", brokerConfigured = true, panelIdDefault = false).isEmpty())
+        assertTrue(SetupBanner.needs("host · connecting…", brokerConfigured = true).isEmpty())
+    }
+
+    @Test fun configuredButConnecting_reportsVerificationProgress() {
+        val progress = SetupBanner.progress("host · connecting…", brokerConfigured = true, dashboardStepPending = true)
+        assertEquals(
+            "MQTT settings saved — verifying the broker connection. This can take a short while after saving. The dashboard setup step appears next.",
+            progress,
+        )
+    }
+
+    @Test fun authRetrying_isVerificationProgressNotFailedSetup() {
+        assertTrue(SetupBanner.needs("host · auth retrying…", brokerConfigured = true).isEmpty())
+        assertEquals(
+            "MQTT settings saved — verifying the broker connection. This can take a short while after saving. The dashboard setup step appears next.",
+            SetupBanner.progress("host · auth retrying…", brokerConfigured = true, dashboardStepPending = true),
+        )
+    }
+
+    @Test fun connectedAnnouncing_reportsDiscoveryProgress() {
+        assertTrue(SetupBanner.needs("host · connected, announcing…", brokerConfigured = true).isEmpty())
+        assertEquals(
+            "MQTT connected — publishing Home Assistant discovery. The dashboard setup step appears next.",
+            SetupBanner.progress("host · connected, announcing…", brokerConfigured = true, dashboardStepPending = true),
+        )
     }
 
     /**
@@ -20,30 +45,104 @@ class SetupBannerTest {
      * transient/blank ("disabled"); with a broker CONFIGURED that must not surface "needs the MQTT broker".
      */
     @Test fun configuredButBlankStatus_doesNotClaimMissingBroker() {
-        val needs = SetupBanner.needs("disabled", brokerConfigured = true, panelIdDefault = false)
+        val needs = SetupBanner.needs("disabled", brokerConfigured = true)
         assertFalse("must not falsely claim the broker is missing", needs.contains("the MQTT broker"))
         assertTrue(needs.isEmpty())
     }
 
     @Test fun unconfiguredAndBlank_needsBroker() {
-        assertEquals(listOf("the MQTT broker"), SetupBanner.needs("disabled", brokerConfigured = false, panelIdDefault = false))
+        assertEquals(listOf("MQTT configuration"), SetupBanner.needs("disabled", brokerConfigured = false))
     }
 
     @Test fun authRejected_needsCredentials() {
         assertEquals(
             listOf("valid MQTT credentials (the broker rejected them)"),
-            SetupBanner.needs("host · reachable, auth rejected — check username/password", brokerConfigured = true, panelIdDefault = false),
+            SetupBanner.needs(
+                "host · reachable, auth rejected — check username/password",
+                brokerConfigured = true,
+                mqttUserConfigured = true,
+            ),
+        )
+    }
+
+    @Test fun authRejectedWithoutUserConfigured_needsCredentialsWithoutBrokerDiagnosis() {
+        assertEquals(
+            listOf("valid MQTT credentials"),
+            SetupBanner.needs(
+                "host · reachable, auth rejected — check username/password",
+                brokerConfigured = true,
+                mqttUserConfigured = false,
+            ),
         )
     }
 
     @Test fun unreachable_needsReachableBroker() {
         assertEquals(
             listOf("a reachable MQTT broker"),
-            SetupBanner.needs("host · unreachable", brokerConfigured = true, panelIdDefault = false),
+            SetupBanner.needs("host · unreachable", brokerConfigured = true),
         )
     }
 
-    @Test fun defaultPanelId_isListed() {
-        assertEquals(listOf("a panel id"), SetupBanner.needs("host · connected", brokerConfigured = true, panelIdDefault = true))
+    @Test fun invalidBrokerUrl_needsValidUrl() {
+        assertEquals(
+            listOf("a valid MQTT broker URL"),
+            SetupBanner.needs("host · invalid or unsupported broker URL", brokerConfigured = true),
+        )
+    }
+
+    @Test fun generatedPanelIdentity_isNotListedAsMissing() {
+        assertFalse(SetupBanner.needs("host · connected", brokerConfigured = true).contains("a panel id"))
+    }
+
+    /**
+     * Reported from a configured panel straight after upgrading to versionCode 464: the Dashboard tab
+     * said "MQTT connected — publishing Home Assistant discovery. The dashboard setup step appears next." on a
+     * panel whose dashboard was already configured and persisted through the upgrade.
+     *
+     * Every MQTT (re)connect re-announces discovery, including the one after an ordinary app update, so the
+     * promise fired for a step that did not exist and would never arrive. The state is still worth explaining
+     * — MQTT genuinely is not connected yet — so only the promise is dropped.
+     */
+    @Test fun aConfiguredPanelIsNeverPromisedADashboardStepItHasAlreadyDone() {
+        listOf("host · connected, announcing…", "host · connecting…", "host · auth retrying…").forEach { status ->
+            val progress = SetupBanner.progress(status, brokerConfigured = true, dashboardStepPending = false)
+            assertNotNull("the MQTT state itself must still be explained: $status", progress)
+            assertFalse(
+                "must not promise a dashboard step on a configured panel: $status",
+                progress!!.contains("dashboard setup step"),
+            )
+        }
+        assertEquals(
+            "MQTT connected — publishing Home Assistant discovery.",
+            SetupBanner.progress("host · connected, announcing…", brokerConfigured = true, dashboardStepPending = false),
+        )
+        // Default is the safe one: callers that do not know must not invent the promise.
+        assertEquals(
+            SetupBanner.progress("host · connected, announcing…", brokerConfigured = true, dashboardStepPending = false),
+            SetupBanner.progress("host · connected, announcing…", brokerConfigured = true),
+        )
+    }
+
+    @Test fun bothBannerSurfacesDeriveThePromiseFromTheJourneyNotFromTheRawSetting() {
+        // One helper feeds the Dashboard tab and the Configure tab so they cannot drift, and it reads the
+        // journey's RENDERER stage — a blocked renderer (uninstalled foreign app, or an engine too old to
+        // render) is genuinely still outstanding and must keep the promise.
+        val server = java.io.File(
+            listOf(
+                "src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt",
+                "app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt",
+            ).first { java.io.File(it).isFile },
+        ).readText()
+        assertEquals(
+            "both banner surfaces must pass the journey-derived flag",
+            2,
+            Regex("""SetupBanner\.progress\(mqtt, config\.mqttBroker\.isNotBlank\(\), dashboardSetupStepPending\(\)\)""")
+                .findAll(server).count(),
+        )
+        assertTrue(
+            server.contains(
+                "SetupJourney.evaluate(setupJourneyInputs()).step(SetupJourney.Stage.RENDERER).status !=",
+            ),
+        )
     }
 }

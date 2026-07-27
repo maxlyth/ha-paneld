@@ -48,6 +48,9 @@ class MdnsAdvertiser(
     @Volatile private var resolver: ThreadPoolExecutor? = null
     private val browseGeneration = AtomicLong()
     private val retirement = AtomicReference<CompletableFuture<Boolean>?>()
+    // The LAN address JmDNS is actually bound to. A panel's IPv4 arrives asynchronously (DHCP) and can
+    // change later, so [start] compares this against the live address before keeping an advertisement.
+    @Volatile private var boundIp: String? = null
 
     private fun newResolver() = ThreadPoolExecutor(
         RESOLVE_WORKERS, RESOLVE_WORKERS, 0L, TimeUnit.MILLISECONDS,
@@ -111,10 +114,29 @@ class MdnsAdvertiser(
         if (existing == null || newHasName || !oldHasName) peerMap[p.panelId] = p
     }
 
-    /** Blocking network setup — call off the main thread. */
-    fun start() {
+    /**
+     * Blocking network setup — call off the main thread.
+     *
+     * Safe to call after network changes: an already healthy advertisement is left alone, while a
+     * changed LAN address is rebound. This deliberately does not add a periodic recovery policy; the
+     * network callback is the bounded, relevant trigger for a DHCP-start or address-change failure.
+     */
+    fun start(lanIp: String? = localIpv4()) {
         ownerGate.runIfOpen(Unit) start@{
-            if (jmdns != null) return@start
+            if (lanIp == null) {
+                // ha-paneld can start before DHCP completes. Advertising loopback is worse than waiting:
+                // peers cannot reach it and JmDNS joins multicast on `lo`, not the LAN interface.
+                Log.i(TAG, "mDNS advertise deferred — no LAN IPv4 yet")
+                return@start
+            }
+            if (jmdns != null || lock != null) {
+                if (!mdnsRebindRequired(boundIp, lanIp, browsing)) return@start
+                Log.i(TAG, "mDNS address changed or advertiser stopped (bound=$boundIp lan=$lanIp); rebinding")
+                if (!stopResources(MonotonicDeadline(OWNER_STOP_MS))) return@start
+                // A teardown that could not drain still owns its socket. A later network event can retry;
+                // never stack a second responder on top of it.
+                if (jmdns != null) return@start
+            }
             if (resolver?.isShutdown != false) resolver = newResolver()
             try {
                 val wifi = context.applicationContext
@@ -123,7 +145,7 @@ class MdnsAdvertiser(
                     setReferenceCounted(true)
                     acquire()
                 }
-                val addr = localAddress()
+                val addr = InetAddress.getByName(lanIp)
                 val dns = JmDNS.create(addr, runtimePanelId)
                 val props = mapOf(
                     "ver" to Config.VERSION,
@@ -142,6 +164,7 @@ class MdnsAdvertiser(
                     props,
                 )
                 jmdns = dns
+                boundIp = lanIp
                 dns.registerService(info)
                 // Start the persistent peer browse (powers the header switcher) — begins querying immediately
                 // and keeps the roster fresh in the background, so a UI read is instant + complete.
@@ -186,6 +209,13 @@ class MdnsAdvertiser(
     /** Stop the current advertisement while still allowing a later network-recovery restart. */
     fun stop() = ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
 
+    /** Advertiser state for the operator-visible status warning. Never throws. */
+    fun health(): MdnsHealth = MdnsHealth(
+        advertising = jmdns != null && browsing,
+        boundIp = boundIp,
+        lanIp = localIpv4(),
+    )
+
     /** Permanently close this runtime generation so a late recovery callback cannot resurrect it. */
     internal fun retire(deadline: MonotonicDeadline): CompletableFuture<Boolean> {
         ownerGate.closeAdmission()
@@ -219,15 +249,21 @@ class MdnsAdvertiser(
         // Do not dismantle JmDNS underneath an admitted list/resolve call. The terminal retirement fence
         // is already installed; a failed drain selects the process boundary instead of a successor.
         if (!complete || deadline.remainingMs() <= 0L) return false
-        runCatching { jmdns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
-            .onFailure { complete = false }
-        peerMap.clear()
-        runCatching { jmdns?.unregisterAllServices() }.onFailure { complete = false }
-        runCatching { jmdns?.close() }.onFailure { complete = false }
+        val activeDns = jmdns
+        runCatching { activeDns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
+        runCatching { activeDns?.unregisterAllServices() }
+        if (activeDns != null && runCatching { activeDns.close() }.isFailure) {
+            return false
+        }
         jmdns = null
-        runCatching { lock?.release() }.onFailure { complete = false }
+        boundIp = null
+        peerMap.clear()
+        val activeLock = lock
+        if (activeLock != null && runCatching { activeLock.release() }.isFailure) {
+            return false
+        }
         lock = null
-        return complete && deadline.remainingMs() > 0L
+        return deadline.remainingMs() > 0L
     }
 
     /**
@@ -280,7 +316,10 @@ class MdnsAdvertiser(
                 val serviceIps = it.inetAddresses.orEmpty()
                     .mapNotNull { address -> address.hostAddress?.substringBefore('%') }
                     .toSet()
-                safeAdvertisedHaUrl(advertised, serviceIps)
+                // An IP-form advertised URL is rewritten to the record's own hostname (same record, same
+                // trust) so downstream suggestions — HA URL and the derived MQTT broker — stay hostname-
+                // shaped and IPv6-capable instead of pinning the panel to one IPv4 address.
+                HaDiscovery.preferServerHostname(safeAdvertisedHaUrl(advertised, serviceIps), it.server)
             }
         }.getOrNull()
         Log.i(TAG, "HA mDNS base url (broker=${brokerIps.joinToString(",").ifEmpty { "?" }}): ${url ?: "none"}")
@@ -345,6 +384,52 @@ class MdnsAdvertiser(
         )
     }
 
+    /**
+     * [discoverHaBaseUrl] plus *why* it came back empty, so setup can distinguish "nothing found yet"
+     * from "this can never work here" and tell the user to type the address instead of leaving them at a
+     * blank field. A panel on a different network segment from Home Assistant is the case that matters:
+     * mDNS is link-local, so no amount of retrying will help, and only an explanation makes that obvious.
+     *
+     * The off-link judgement is made from addresses and interface prefixes, independently of the browse,
+     * so it holds even when the browse itself succeeds at reaching nothing.
+     *
+     * Blocking for the same budget as [discoverHaBaseUrl]; call off the main thread.
+     */
+    fun discoverHaBaseUrlDetailed(configuredBroker: String, timeoutMs: Long = 4000): DiscoveryResult {
+        val attemptedAtMs = System.currentTimeMillis()
+        val offLink = HaDiscovery.brokerOffLink(brokerHostIps(configuredBroker).toList(), localPrefixes())
+        val url = discoverHaBaseUrl(configuredBroker, timeoutMs)
+        return HaDiscovery.classify(
+            mdnsRunning = jmdns != null,
+            multicastLockHeld = lock != null,
+            brokerConfigured = configuredBroker.isNotBlank(),
+            brokerOffLink = offLink,
+            // The "nothing answered at all" inference stays unwired: counting responses would mean
+            // restructuring the browse hot path for the one signal already known to be unreliable (a
+            // healthy single-panel LAN whose HA simply does not advertise looks identical). The signals
+            // above are facts or sound inferences; this one would be a guess, so it is not made.
+            servicesSeen = SERVICES_SEEN_UNKNOWN,
+            discoveredUrl = url.orEmpty(),
+            attemptedAtMs = attemptedAtMs,
+        )
+    }
+
+    /**
+     * Local interface prefixes for the off-link judgement. Loopback and down interfaces are excluded, and
+     * an interface that reports no prefix length is left for [HaDiscovery] to treat as unjudgeable rather
+     * than being assumed to be a /24.
+     */
+    private fun localPrefixes(): List<LocalPrefix> = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces().toList()
+            .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+            .flatMap { nif ->
+                nif.interfaceAddresses.orEmpty().mapNotNull { ia ->
+                    val host = ia?.address?.hostAddress?.substringBefore('%') ?: return@mapNotNull null
+                    LocalPrefix(host, ia.networkPrefixLength.toInt())
+                }
+            }
+    }.getOrDefault(emptyList())
+
     /** All of the configured MQTT broker host's IP addresses (v4 + v6), to match against HA mDNS records. */
     private fun brokerHostIps(configuredBroker: String): Set<String> = runCatching {
         val host = configuredBroker.substringAfter("://").substringBefore(":").substringBefore("/").trim()
@@ -357,11 +442,6 @@ class MdnsAdvertiser(
         runCatching {
             java.net.Socket().use { it.connect(java.net.InetSocketAddress(ip, port), timeoutMs) }; true
         }.getOrDefault(false)
-
-    // Bind JmDNS to the panel's real LAN address. The old WifiManager.connectionInfo path returns
-    // 0 on Ethernet panels (→ 127.0.0.1, which HA zeroconf can't reach), so enumerate interfaces.
-    private fun localAddress(): InetAddress =
-        localIpv4()?.let { InetAddress.getByName(it) } ?: InetAddress.getLocalHost()
 
     companion object {
         private const val TAG = "ha-paneld/mdns"
@@ -377,6 +457,30 @@ class MdnsAdvertiser(
         private const val MAX_HA_RECORDS = 16
     }
 }
+
+/** Observable mDNS state. A null [lanIp] means DHCP has not supplied a usable IPv4 address yet. */
+data class MdnsHealth(
+    val advertising: Boolean,
+    val boundIp: String?,
+    val lanIp: String?,
+)
+
+/** A concise status warning for an advertiser that is absent or bound to an obsolete LAN address. */
+internal fun mdnsHealthWarning(health: MdnsHealth): String? = when {
+    // Before DHCP there is nothing useful to advertise; the network cards already explain that state.
+    health.lanIp == null -> null
+    !health.advertising ->
+        "⚠ <b>Panel discovery (mDNS) is not running</b> — this panel will not appear in other panels' " +
+            "switcher menus or Home Assistant discovery. Reconnect the panel to the network or restart ha-paneld."
+    health.boundIp != health.lanIp ->
+        "⚠ <b>Panel discovery (mDNS) has a stale address</b> (${health.boundIp}, now ${health.lanIp}) — " +
+            "other panels cannot reach this one from their switcher until it rebinds."
+    else -> null
+}
+
+/** True when an existing JmDNS instance must be replaced for the current LAN address. */
+internal fun mdnsRebindRequired(boundIp: String?, lanIp: String, browsing: Boolean): Boolean =
+    !browsing || boundIp != lanIp
 
 /** A zeroconf TXT URL is untrusted input. Keep credentials on the service host that advertised it. */
 internal fun safeAdvertisedHaUrl(raw: String?, serviceIps: Set<String>): String? {

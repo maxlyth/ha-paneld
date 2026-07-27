@@ -264,7 +264,7 @@ object HaLink {
     /**
      * Find the device id using exact entity ids which ha-paneld itself publishes. A broad `<slug>_…`
      * prefix is unsafe because default panel ids are often room names: `sensor.kitchen_temperature`
-     * must never make the Kitchen panel link to a temperature-sensor device.
+     * must never make the wall panel link to a temperature-sensor device.
      *
      * HA appends `_2`, `_3`, … when a default entity id collides. Those forms are accepted alongside
      * exact ids, but a device must match at least two known markers including one ha-paneld-specific

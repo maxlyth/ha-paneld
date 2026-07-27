@@ -2,18 +2,12 @@ package io.github.maxlyth.hapaneld.control
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.PixelFormat
 import android.media.AudioManager
 import android.media.SoundPool
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
-import android.view.Gravity
-import android.view.MotionEvent
-import android.view.View
-import android.view.WindowManager
 import io.github.maxlyth.hapaneld.persistence.AppState
 import java.io.File
 import kotlin.math.PI
@@ -28,10 +22,10 @@ import kotlin.math.sin
  *     it muted. Touch sound and boot-chime policy must never fight over the same stream.
  *  2. ha-paneld's OWN click. Dashboard taps live in the WebView, which never plays Android touch sounds,
  *     and the IME has its own keypress-sound pref we don't control — so neither covers a wall-panel
- *     dashboard. We add a 1 px `FLAG_WATCH_OUTSIDE_TOUCH` overlay that receives `ACTION_OUTSIDE` for
- *     every tap anywhere on screen WITHOUT consuming it (the tap still reaches the dashboard), and play
- *     an app-owned generated click on the media stream. This avoids firmware sample paths and remains
- *     independent of ring/system muting while respecting the user's media volume.
+ *     dashboard. We subscribe to [PanelTouchObserver]'s shared 1 px `FLAG_WATCH_OUTSIDE_TOUCH` overlay,
+ *     which receives `ACTION_OUTSIDE` without consuming it, and play an app-owned generated click on the
+ *     media stream. This avoids firmware sample paths and remains independent of ring/system muting
+ *     while respecting the user's media volume.
  *
  * App-direct: `SOUND_EFFECTS_ENABLED` needs `WRITE_SETTINGS`; the overlay needs `SYSTEM_ALERT_WINDOW`
  * (already held for the navbar). No root, no daemon.
@@ -40,8 +34,8 @@ class TouchSoundController(context: Context, clickGain: Float) {
     private val ctx = context.applicationContext
     private val clickGain = clickGain.coerceIn(0.05f, 1f)
     private val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
+    private val touchObserver = PanelTouchObserver.shared(ctx)
     private val statePolicy = TouchSoundStatePolicy(
         AndroidTouchSoundStateStore(AppState.preferences(ctx, "controller-state", STATE_PREFS)),
         AndroidTouchSoundHardware(ctx),
@@ -50,7 +44,7 @@ class TouchSoundController(context: Context, clickGain: Float) {
     private var pool: SoundPool? = null
     private var clickId = 0
     @Volatile private var clickReady = false
-    private var watcher: View? = null
+    private var touchSubscription: PanelTouchObserver.Subscription? = null
 
     fun isEnabled(): Boolean = statePolicy.isEnabled(
         Settings.System.getInt(ctx.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1,
@@ -109,40 +103,21 @@ class TouchSoundController(context: Context, clickGain: Float) {
         pool = sp
     }
 
-    @Suppress("ClickableViewAccessibility")
     private fun enableOverlay() = main.post {
-        if (watcher != null) return@post
+        if (touchSubscription != null) return@post
         ensurePool()
-        val v = View(ctx)
-        v.setOnTouchListener { _, e ->
-            if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) {
-                Log.d(TAG, "tap -> click")
-                pool?.takeIf { clickId != 0 && clickReady }
-                    ?.play(clickId, clickGain, clickGain, 1, 0, 1f)
-            }
-            false // never consume — the tap still reaches the dashboard
+        touchSubscription = touchObserver.subscribe {
+            Log.d(TAG, "tap -> click")
+            pool?.takeIf { clickId != 0 && clickReady }
+                ?.play(clickId, clickGain, clickGain, 1, 0, 1f)
         }
-        val lp = WindowManager.LayoutParams(
-            1, 1, overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
-        runCatching { wm.addView(v, lp); watcher = v }
-            .onFailure { Log.w(TAG, "touch-click overlay addView failed: ${it.message}") }
+        if (touchSubscription == null) Log.w(TAG, "touch-click overlay unavailable")
     }
 
     private fun disableOverlay() = main.post {
-        watcher?.let { runCatching { wm.removeView(it) } }
-        watcher = null
+        touchSubscription?.close()
+        touchSubscription = null
     }
-
-    private fun overlayType(): Int =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else
-            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
     companion object {
         private const val TAG = "ha-paneld/touchsound"

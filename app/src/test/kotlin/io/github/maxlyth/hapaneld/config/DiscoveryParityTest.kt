@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.control.CpuController
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -22,6 +23,10 @@ class DiscoveryParityTest {
         assertTrue(SettingsRegistry.spec("cpu_governor")?.transient == true)
     }
 
+    @Test fun cpuGovernorDiscoveryOptionsStayAlignedWithRuntimeTiers() {
+        assertEquals(CpuController.TIERS, SettingsRegistry.spec("cpu_governor")?.options)
+    }
+
     private val panel = "test"
     private val avail =
         """"availability_topic":"ha-paneld/test/availability","payload_available":"online","payload_not_available":"offline""""
@@ -38,31 +43,17 @@ class DiscoveryParityTest {
         )
     }
 
-    @Test fun watchdogMatchesLegacy() {
-        assertEquals(
-            """{"name":"App watchdog","object_id":"test_watchdog","unique_id":"test_watchdog","command_topic":"ha-paneld/test/watchdog/set","state_topic":"ha-paneld/test/watchdog/state","icon":"mdi:restart-alert","entity_category":"config",$avail,$device}""",
-            build("watchdog_enabled"),
-        )
-    }
-
-    @Test fun preventIdleDimMatchesLegacy() {
-        assertEquals(
-            """{"name":"Prevent idle dim","object_id":"test_prevent_idle_dim","unique_id":"test_prevent_idle_dim","command_topic":"ha-paneld/test/prevent_idle_dim/set","state_topic":"ha-paneld/test/prevent_idle_dim/state","icon":"mdi:brightness-7","entity_category":"config",$avail,$device}""",
-            build("prevent_idle_dim"),
-        )
-    }
-
-    @Test fun silenceBootChimeMatchesLegacy() {
-        assertEquals(
-            """{"name":"Silence boot chime","object_id":"test_silence_boot_chime","unique_id":"test_silence_boot_chime","command_topic":"ha-paneld/test/silence_boot_chime/set","state_topic":"ha-paneld/test/silence_boot_chime/state","icon":"mdi:volume-off","entity_category":"config",$avail,$device}""",
-            build("silence_boot_chime"),
-        )
-    }
-
     @Test fun autoBrightnessMatchesLegacy() {
         assertEquals(
             """{"name":"Auto-brightness","object_id":"test_auto_brightness","unique_id":"test_auto_brightness","command_topic":"ha-paneld/test/auto_brightness/set","state_topic":"ha-paneld/test/auto_brightness/state","icon":"mdi:brightness-auto","entity_category":"config",$avail,$device}""",
             build("auto_brightness"),
+        )
+    }
+
+    @Test fun navbarModeMatchesLegacySelect() {
+        assertEquals(
+            """{"name":"Navbar","object_id":"test_navbar","unique_id":"test_navbar","command_topic":"ha-paneld/test/navbar/set","state_topic":"ha-paneld/test/navbar/state","options":["Off","Always on","Swipe reveal"],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}""",
+            build("navbar_mode"),
         )
     }
 
@@ -107,6 +98,25 @@ class DiscoveryParityTest {
         )
     }
 
+    @Test fun configEntitiesMigratedToRegistryMatchLegacyLiterals() {
+        // Golden = the exact hand-written literals these entities used before the discovery loop was
+        // switched to the registry. Byte-parity here is what lets the migration be behaviour-preserving
+        // (existing HA installs see no entity churn). cpu_governor's options mirror CpuController.TIERS.
+        val expected = mapOf(
+            "touch_sound" to
+                """{"name":"Touch sound","object_id":"test_touch_sound","unique_id":"test_touch_sound","command_topic":"ha-paneld/test/touch_sound/set","state_topic":"ha-paneld/test/touch_sound/state","icon":"mdi:volume-high","entity_category":"config",$avail,$device}""",
+            "companion_auto_update" to
+                """{"name":"Companion auto-update","object_id":"test_companion_auto_update","unique_id":"test_companion_auto_update","command_topic":"ha-paneld/test/companion_auto_update/set","state_topic":"ha-paneld/test/companion_auto_update/state","icon":"mdi:cellphone-arrow-down","entity_category":"config",$avail,$device}""",
+            "companion_update_channel" to
+                """{"name":"Companion auto-update channel","object_id":"test_companion_update_channel","unique_id":"test_companion_update_channel","command_topic":"ha-paneld/test/companion_update_channel/set","state_topic":"ha-paneld/test/companion_update_channel/state","options":["Stable","Pre-release"],"icon":"mdi:source-branch","entity_category":"config",$avail,$device}""",
+            "cpu_governor" to
+                """{"name":"CPU profile","object_id":"test_cpu_governor","unique_id":"test_cpu_governor","command_topic":"ha-paneld/test/cpu_governor/set","state_topic":"ha-paneld/test/cpu_governor/state","options":["Performance","Efficiency","Auto"],"icon":"mdi:speedometer","entity_category":"config",$avail,$device}""",
+            "network_adb" to
+                """{"name":"Network ADB","object_id":"test_network_adb","unique_id":"test_network_adb","command_topic":"ha-paneld/test/network_adb/set","state_topic":"ha-paneld/test/network_adb/state","icon":"mdi:adb","entity_category":"config",$avail,$device}""",
+        )
+        expected.forEach { (key, payload) -> assertEquals(payload, build(key)) }
+    }
+
     @Test fun wifiSignalUsesHomeAssistantDiagnosticSignalSchema() {
         assertEquals(
             """{"name":"Wi-Fi signal strength","object_id":"test_diag_wifi_rssi","unique_id":"test_diag_wifi_rssi","state_topic":"ha-paneld/test/diag_wifi_rssi/state","device_class":"signal_strength","unit_of_measurement":"dBm","state_class":"measurement","icon":"mdi:wifi","entity_category":"diagnostic",$avail,$device}""",
@@ -122,8 +132,40 @@ class DiscoveryParityTest {
         assertNull(SettingsRegistry.spec("ambient_lux"))
     }
 
+    @Test fun operationalPanelSettingsRemainLocalOnly() {
+        listOf(
+            "silence_boot_chime",
+            "prevent_idle_dim",
+            "watchdog_enabled",
+            "zigbee_router",
+            "self_update",
+            "update_channel",
+        ).forEach { key ->
+            assertNull("$key must not expose a Configure HA sync pip", SettingsRegistry.spec(key)!!.ha)
+        }
+    }
+
+    @Test fun removedOperationalEntitiesRemainInTheDiscoveryTombstoneSuperset() {
+        val known = io.github.maxlyth.hapaneld.mqttKnownConfigTopics(panel)
+        listOf(
+            "homeassistant/switch/test_silence_boot_chime/config",
+            "homeassistant/switch/test_prevent_idle_dim/config",
+            "homeassistant/switch/test_watchdog/config",
+            "homeassistant/switch/test_zigbee_router/config",
+            "homeassistant/switch/test_self_update/config",
+            "homeassistant/select/test_update_channel/config",
+            "homeassistant/button/test_admin_launcher/config",
+            "homeassistant/button/test_back/config",
+            "homeassistant/button/test_home/config",
+            "homeassistant/button/test_launcher/config",
+            "homeassistant/button/test_recents/config",
+        ).forEach { topic ->
+            assertTrue("missing tombstone topic $topic", known.contains(topic))
+        }
+    }
+
     @Test fun softHideAppendsEnabledByDefaultFalse() {
-        val out = SettingsRegistry.spec("watchdog_enabled")!!.ha!!
+        val out = SettingsRegistry.spec("touch_sound")!!.ha!!
             .buildDiscoveryJson(panel, avail, device, enabledByDefault = false)
         assertTrue(out.contains(""","entity_category":"config","enabled_by_default":false,"availability_topic""""))
     }

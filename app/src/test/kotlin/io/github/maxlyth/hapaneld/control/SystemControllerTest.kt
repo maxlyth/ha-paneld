@@ -73,15 +73,14 @@ class SystemControllerTest {
     }
 
     // ---------- resolveDashboard / dashboardState ----------
-    @Test fun dashboardStateUnknownWhenNoDashboardInstalled() =
-        assertEquals(AppState.UNKNOWN, sc(FakeSystemEnv(), daemon = null).first.dashboardState(""))
+    @Test fun dashboardStateBlankAutoUsesBuiltin() =
+        assertEquals(AppState.BG, sc(FakeSystemEnv(), daemon = null).first.dashboardState(""))
 
-    @Test fun dashboardStateResolvesCompanionWhenPkgBlank() {
-        // blank configured pkg → resolveDashboard finds the installed Companion, then queries it.
+    @Test fun dashboardStateBlankAutoDoesNotProbeInstalledCompanion() {
         val env = FakeSystemEnv(installed = setOf(MIN))
         val (c, _, d) = sc(env, daemon = mapOf("APPSTATE $MIN" to "FG"))
-        assertEquals(AppState.FG, c.dashboardState(""))
-        assertTrue(d.sent.contains("APPSTATE $MIN"))
+        assertEquals(AppState.BG, c.dashboardState(""))
+        assertFalse(d.sent.contains("APPSTATE $MIN"))
     }
 
     @Test fun dashboardStateDaemonRepliesMapped() {
@@ -157,10 +156,16 @@ class SystemControllerTest {
         assertTrue("monkey relaunch, got ${root.ran}", root.ran.contains("monkey -p $MIN 1"))
     }
 
-    @Test fun reloadNoopWhenNoDashboard() {
-        val (c, root, d) = sc(FakeSystemEnv(), daemon = null)
+    @Test fun reloadBlankAutoUsesBuiltin() {
+        val env = FakeSystemEnv()
+        val (c, root, d) = sc(env, daemon = null)
         c.reloadDashboard("")
-        assertTrue(root.ran.isEmpty() && d.sent.isEmpty())
+        assertTrue(
+            "built-in renderer relaunched via privileged or direct route",
+            root.ran.contains("am start -n $OWN/.DashboardActivity") ||
+                env.directStarts.contains("$OWN/.DashboardActivity"),
+        )
+        assertFalse(d.sent.any { it.startsWith("RELOAD ") })
     }
 
     @Test fun companionDataLeaseSuppressesReloadAndHomeLaunchUntilReleased() {
@@ -470,18 +475,28 @@ class SystemControllerTest {
         assertTrue(env.directStarts.isEmpty())
     }
 
-    @Test fun launchHomeUsesDefaultHomeWhenNoDashboard() {
-        val env = FakeSystemEnv(default = ActivityRef(VENDOR, "L")) // nothing installed, blank pkg
+    @Test fun launchHomeBlankAutoUsesBuiltin() {
+        val env = FakeSystemEnv(default = ActivityRef(VENDOR, "L")) // blank auto ignores launcher default
         val (c, root, _) = sc(env, daemon = null, su = true)
         c.launchHome("")
-        assertTrue(root.ran.contains("am start -n $VENDOR/L"))
+        assertEquals(listOf("am start -n $OWN/.DashboardActivity"), root.ran)
     }
 
-    @Test fun launchHomeNoTargetResolved() {
+    @Test fun launchHomeFallsToDirectStartWhenPrivilegedFails() {
+        // Non-builtin home launch shares the single launch mechanism: when neither daemon nor su can
+        // start the resolved dashboard component, it degrades to a direct (pre-BAL) start.
+        val env = FakeSystemEnv(installed = setOf(MIN), launchers = mapOf(MIN to "$MIN/.Main"))
+        val (c, _, _) = sc(env, daemon = null, su = false) // no daemon, su run fails
+        c.launchHome(MIN)
+        assertTrue("direct-start fallback used, got ${env.directStarts}", env.directStarts.contains("$MIN/.Main"))
+    }
+
+    @Test fun launchHomeBlankAutoUsesBuiltinWithoutAnyResolvedForeignTarget() {
         val env = FakeSystemEnv() // nothing installed, no default
         val (c, root, _) = sc(env, daemon = null)
         c.launchHome("")
-        assertTrue("no target → no start", root.ran.isEmpty() && env.directStarts.isEmpty())
+        assertEquals(listOf("am start -n $OWN/.DashboardActivity"), root.ran)
+        assertTrue(env.directStarts.isEmpty())
     }
 
     // ---------- built-in renderer (dashboard_package = "builtin") ----------
@@ -508,6 +523,13 @@ class SystemControllerTest {
         val (c, root, _) = sc(FakeSystemEnv(), daemon = null, su = true)
         c.launchHome(BUILTIN)
         assertTrue("started our DashboardActivity", root.ran.contains("am start -n $OWN/.DashboardActivity"))
+    }
+
+    @Test fun recoveryRoutingUsesTheSameBuiltinResolutionAsLaunches() {
+        val (c, _, _) = sc(FakeSystemEnv())
+        assertTrue(c.isBuiltinDashboardTarget(BUILTIN))
+        assertTrue(c.isBuiltinDashboardTarget(OWN))
+        assertFalse(c.isBuiltinDashboardTarget(MIN))
     }
 
     @Test fun builtinLaunchHomeFallsToDirectStart() {
@@ -617,7 +639,7 @@ class SystemControllerTest {
 
     @Test fun reloadRequestConsumedOnce() {
         assertFalse("no reload pending by default (kiosk snap-back = foreground only)", BuiltinDashboard.consumeReloadRequest())
-        BuiltinDashboard.requestReload()
+        BuiltinDashboard.requestExplicitReload()
         assertTrue(BuiltinDashboard.consumeReloadRequest())
         assertFalse(BuiltinDashboard.consumeReloadRequest())
     }

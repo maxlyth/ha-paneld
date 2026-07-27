@@ -28,6 +28,7 @@ import io.github.maxlyth.hapaneld.device.profile.RuntimeProfileRegistry
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.control.AutoSleepController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.BrightnessPreferenceOrigin
@@ -62,6 +63,7 @@ import io.github.maxlyth.hapaneld.control.AndroidZigbeeGatewayHealthSource
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthMonitor
 import io.github.maxlyth.hapaneld.control.ZigbeeObservation
 import io.github.maxlyth.hapaneld.control.observeTypedShellCapability
+import io.github.maxlyth.hapaneld.control.preventIdleDimDiagnostic
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.hardware.LedFactory
@@ -75,10 +77,12 @@ import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.http.PaneldServer
 import io.github.maxlyth.hapaneld.http.PanelInfo
 import io.github.maxlyth.hapaneld.http.ManagementProjection
+import io.github.maxlyth.hapaneld.http.ConfigDiscoverySuggestions
 import io.github.maxlyth.hapaneld.http.DiagReader
 import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpAction
 import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpApi
 import io.github.maxlyth.hapaneld.http.AutoBrightnessHttpValidation
+import io.github.maxlyth.hapaneld.http.AutoSleepHttpApi
 import io.github.maxlyth.hapaneld.http.retainCompanionLeaseUntilHelperIdle
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipper
@@ -94,7 +98,12 @@ import io.github.maxlyth.hapaneld.sensors.submitIlluminanceIfExposed
 import io.github.maxlyth.hapaneld.sensors.HaAmbientLuxSubscriber
 import io.github.maxlyth.hapaneld.sensors.HaAmbientSourceValidation
 import io.github.maxlyth.hapaneld.sensors.HaAmbientSourcePhase
+import io.github.maxlyth.hapaneld.sensors.DashboardHaApiSessionProvider
+import io.github.maxlyth.hapaneld.sensors.HaExactEntityStreamOwner
+import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
+import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
+import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
 import kotlinx.coroutines.CancellationException
@@ -115,13 +124,14 @@ import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.RendererPreparationState
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
+import io.github.maxlyth.hapaneld.util.submit
+import io.github.maxlyth.hapaneld.util.OwnedThread
 import io.github.maxlyth.hapaneld.util.awaitSuccessful
 import io.github.maxlyth.hapaneld.util.awaitTrue
 import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
 import io.github.maxlyth.hapaneld.util.ServiceRestartBarrier
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -146,6 +156,8 @@ import io.github.maxlyth.hapaneld.util.SystemProps
 import io.github.maxlyth.hapaneld.dashboard.shouldReloadBuiltinAfterEntityFilterChange
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import java.io.File
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.Callable
@@ -161,6 +173,9 @@ internal fun shouldDisableAutoBrightnessForMissingSource(
     haEntity: String,
     hasLocalSensor: Boolean,
 ): Boolean = enabled && haEntity.isBlank() && !hasLocalSensor
+
+internal fun defaultNetworkIpv4(addresses: Iterable<InetAddress>): String? =
+    addresses.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }?.hostAddress
 
 internal fun preferredAdminHomeRepairRoute(
     privilege: PrivilegedRouteObservation,
@@ -320,6 +335,16 @@ internal fun replayThenRefreshLiveConfiguration(
 internal fun adaptiveHaSource(enabled: Boolean, configuredEntity: String): String? =
     configuredEntity.trim().takeIf { enabled && it.isNotEmpty() }
 
+/** Prefer the hostname advertised by Home Assistant for the MQTT suggestion; retain an IP fallback
+ * when the advertisement is absent or malformed. Hostnames avoid pinning a panel to one IPv4 address
+ * and let the broker resolve over IPv6 where the network supports it. */
+internal fun mqttBrokerSuggestionFromHaUrl(haUrl: String): String? = runCatching {
+    val host = java.net.URI(haUrl.trim()).host?.trim()?.removePrefix("[")?.removeSuffix("]")
+        ?.takeIf { it.isNotEmpty() } ?: return@runCatching null
+    val authorityHost = if (host.contains(':')) "[$host]" else host
+    "tcp://$authorityHost:1883"
+}.getOrNull()
+
 internal fun prepareEntityLearningStartup(
     startMdns: () -> Unit,
     reconcileRenderer: () -> RendererPreparationCoordinator.Result,
@@ -463,6 +488,32 @@ internal class HaLinkIdentity(
 
 internal data class ConfigRefreshEffects(val reannounceMqtt: Boolean, val resolveHaLink: Boolean)
 
+internal data class ConfigOwnerRefreshPlan(
+    val adaptiveBrightness: Boolean,
+    val autoSleep: Boolean,
+    val logShipping: Boolean,
+    val keepAwake: Boolean,
+    val launcherHome: Boolean,
+    val rendererTarget: Boolean,
+)
+
+internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefreshPlan {
+    val ha = setOf("ha_url", "ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id")
+    return ConfigOwnerRefreshPlan(
+        adaptiveBrightness = changedKeys.any(ha::contains),
+        autoSleep = changedKeys.any((ha + "panel_id")::contains),
+        logShipping = changedKeys.any(setOf(
+            "log_ship_enabled", "log_ship_host", "log_ship_port", "log_ship_protocol",
+        )::contains),
+        keepAwake = "keep_awake" in changedKeys,
+        launcherHome = changedKeys.any(setOf("launcher_package", "dashboard_package", "ha_url")::contains),
+        rendererTarget = changedKeys.any((ha + setOf("dashboard_package", "home_dashboard"))::contains),
+    )
+}
+
+internal fun nextLiveSettingRetryAttempt(currentAttempt: Int, maximumAttempts: Int = 3): Int? =
+    (currentAttempt + 1).takeIf { it < maximumAttempts }
+
 internal data class NetworkConfigurationSnapshot(
     val runtime: NetworkRuntimeIdentity,
     val projection: MqttProjectionIdentity,
@@ -478,6 +529,68 @@ internal fun configRefreshEffects(
     reannounceMqtt = activeProjection != nextProjection,
     resolveHaLink = activeHaLink != nextHaLink,
 )
+
+internal fun refreshAmbientSourceBinding(
+    restartSource: Boolean,
+    selectedSource: String?,
+    markUnavailable: () -> Unit,
+    setSource: (String?) -> Unit,
+) {
+    if (restartSource) {
+        markUnavailable()
+        setSource(null)
+    }
+    setSource(selectedSource)
+}
+
+internal fun applyAutoSleepAreaFailOff(
+    expectedEpoch: Long,
+    expectedSettingGeneration: Long,
+    epochIsCurrent: (Long) -> Boolean,
+    persistOff: (Long) -> AutoSleepWriteResult?,
+    refreshController: () -> Unit,
+    applyBridge: () -> LiveSettingApplyResult,
+): LiveSettingApplyResult {
+    if (!epochIsCurrent(expectedEpoch)) return LiveSettingApplyResult.APPLIED
+    return when (persistOff(expectedSettingGeneration)) {
+        null -> LiveSettingApplyResult.APPLIED
+        AutoSleepWriteResult.FAILED -> LiveSettingApplyResult.FAILED
+        AutoSleepWriteResult.COMMITTED -> {
+            refreshController()
+            applyBridge()
+        }
+        AutoSleepWriteResult.UNCHANGED -> applyBridge()
+    }
+}
+
+internal fun applyAutoSleepFencedReplay(
+    fence: Long,
+    currentGeneration: Long,
+    currentEnabled: Boolean,
+    persistOff: (Long) -> AutoSleepWriteResult?,
+    refreshController: () -> Unit,
+    applyBridge: () -> LiveSettingApplyResult,
+): LiveSettingApplyResult = when {
+    currentGeneration == fence -> applyBridge()
+    currentEnabled && currentGeneration + 1L == fence -> when (persistOff(currentGeneration)) {
+        AutoSleepWriteResult.COMMITTED -> {
+            refreshController()
+            applyBridge()
+        }
+        AutoSleepWriteResult.UNCHANGED -> applyBridge()
+        AutoSleepWriteResult.FAILED -> LiveSettingApplyResult.FAILED
+        null -> LiveSettingApplyResult.APPLIED
+    }
+    else -> LiveSettingApplyResult.APPLIED
+}
+
+internal fun acceptCommittedAutoSleepSetting(
+    authority: LiveSettingAuthority,
+    refreshController: () -> Unit,
+) {
+    authority.discard("auto_sleep")
+    refreshController()
+}
 
 /**
  * Persistent foreground service. Hosts the Ktor HTTP listener, the JmDNS advertiser, the MQTT
@@ -495,6 +608,9 @@ class PaneldService : Service() {
     // Observations capture the generation and concrete MQTT/mDNS pair together, so watchdog/network work cannot read a generation from one runtime and then reach a replacement through a mutable field.
     private data class NetworkRuntime(val mqtt: MqttBridge, val mdns: MdnsAdvertiser)
     private lateinit var runtime: ServiceRuntimeOwner<NetworkRuntime>
+    private val reconfigureKeysLock = Any()
+    private val pendingReconfigureKeys = linkedSetOf<String>()
+    private val liveSettingRetryAttempts = mutableMapOf<String, Int>()
     private lateinit var restartLease: ServiceRestartBarrier.Lease
     private lateinit var mainHandler: Handler
     private lateinit var liveSettingAuthority: LiveSettingAuthority
@@ -508,17 +624,31 @@ class PaneldService : Service() {
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private data class MdnsRevalidation(
+        val observed: ServiceRuntimeOwner.Observation<NetworkRuntime>,
+        val lanIp: String?,
+    )
+    private val mdnsRevalidation = LatestDispatcher.singleSlot<MdnsRevalidation>(
+        threadName = "ha-paneld-mdns-revalidation",
+        consume = { request ->
+            val current = runtime.observe() ?: return@singleSlot
+            if (current.generation != request.observed.generation || current.value !== request.observed.value) {
+                return@singleSlot
+            }
+            current.value.mdns.start(request.lanIp)
+        },
+        onFailure = { failure -> Log.w(TAG, "mDNS revalidation failed", failure) },
+    )
     // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
     @Volatile private var mqttWatchdogAlive = false
-    @Volatile private var mqttWatchdogThread: Thread? = null
-    @Volatile private var serviceStopping = false
+    @Volatile private var mqttWatchdog: OwnedThread? = null
     private val launcherHomePolicyGeneration = java.util.concurrent.atomic.AtomicLong()
     private val launcherHomeFailedGeneration = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
-    @Volatile private var kioskReassertThread: Thread? = null
+    @Volatile private var kioskReassert: OwnedThread? = null
     private val wakeOnWaveWorker = SingleFlightExecutor("ha-paneld-wake-on-wave")
     private val lightMqttPublisher = SensorLightPublisher(
         publish = { lux ->
-            if (!serviceStopping) {
+            if (!teardownBoundary.isStopping) {
                 runCatching { mqtt.publishLight(lux) }
                     .onFailure { Log.w(TAG, "light MQTT publication failed", it) }
             }
@@ -533,7 +663,9 @@ class PaneldService : Service() {
     // Controllers are fields so the MQTT bridge can be rebuilt on a panel_id change.
     private lateinit var brightness: BrightnessController
     private lateinit var autoBright: AutoBrightnessController
+    private lateinit var autoSleep: AutoSleepController
     private lateinit var haAmbientLux: HaAmbientLuxSubscriber
+    private lateinit var haExactEntityStream: HaExactEntityStreamOwner
     private lateinit var haSiteMetadata: HaSiteMetadataClient
     private var brightnessObserver: ContentObserver? = null
     private var haCandidateIdentity = ""
@@ -584,6 +716,10 @@ class PaneldService : Service() {
         restartLease = SERVICE_RESTART_BARRIER.enter()
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
+        // Must run BEFORE ensurePanelId and before any renderer starts: it decides, once, whether this panel
+        // predates the entity-filter question, and a panel that predates it must never be held to answer it.
+        config.migrateSetupQuestionsForExistingInstall()
+        config.ensurePanelId()      // materialize the generated identity before MQTT/mDNS snapshot it
         updateForegroundStatus("Starting…")
         liveSettingAuthority = LiveSettingAuthority.persistent(this, MqttBridge.APPLY_SETTING_KEYS)
         // Resolve one immutable profile revision before constructing any hardware owner. Activations are
@@ -614,16 +750,18 @@ class PaneldService : Service() {
                 // replacement. It avoids Android 12+'s background foreground-service start ban.
                 requestSafeProcessBoundary("activating staged profile")
             },
-            safeToRestart = { !InstallProgress.running },
-            shouldAbandon = { serviceStopping },
+            safeToRestart = { !InstallProgress.running &&
+                !GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime()) },
+            shouldAbandon = { teardownBoundary.isStopping },
         )
         recoveryRestart = ProfileRestartCoordinator(
             schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
             restartProcess = {
                 requestSafeProcessBoundary("bounded runtime recovery")
             },
-            safeToRestart = { !InstallProgress.running },
-            shouldAbandon = { serviceStopping },
+            safeToRestart = { !InstallProgress.running &&
+                !GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime()) },
+            shouldAbandon = { teardownBoundary.isStopping },
             responseGraceMs = RECOVERY_RESTART_GRACE_MS,
         )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
@@ -654,9 +792,19 @@ class PaneldService : Service() {
         )
         autoBright = AutoBrightnessController(this, brightness, config, screen::actuateBrightnessIfOn)
         haSiteMetadata = HaSiteMetadataClient(config)
+        val haSessionAuthority = DashboardHaApiSessionProvider(config)
+        val haApi = KtorHaAmbientTransport()
+        haExactEntityStream = HaExactEntityStreamOwner(
+            scope = scope,
+            auth = haSessionAuthority,
+            transport = KtorHaExactEntityStreamTransport(haApi),
+            monotonicMillis = { android.os.SystemClock.elapsedRealtime() },
+        )
         haAmbientLux = HaAmbientLuxSubscriber(
             scope = scope,
-            config = config,
+            auth = haSessionAuthority,
+            transport = haApi,
+            streamOwner = haExactEntityStream,
             onSample = { sample -> autoBright.submitHaLux(sample.lux) },
             onStatus = { status ->
                 autoBright.setHaSourceAvailable(status.phase == HaAmbientSourcePhase.LIVE)
@@ -664,9 +812,15 @@ class PaneldService : Service() {
         )
         screen.onWakeCompleted = {
             scope.launch(Dispatchers.Default) { autoBright.reapplyLatest() }
+            if (::autoSleep.isInitialized) autoSleep.noteScreenWoken()
         }
         // After a LOCAL touch-wake, tell HA the screen is on so `light.<panel>_screen` tracks reality.
-        screen.onWakeByTap = { runCatching { mqtt.publishScreenOn() } }
+        screen.onWakeByTap = { automaticEpoch ->
+            // Manual tap-wakes are already observed by the shared raw-touch listener; only an exact
+            // automatic epoch is additional causal proof for the auto-sleep learner.
+            if (automaticEpoch != null && ::autoSleep.isInitialized) autoSleep.noteTapWake(automaticEpoch)
+            runCatching { mqtt.publishScreenOn() }
+        }
         led = LedFactory.detect(profile)
         ledEffect = LedEffectController(led)
         navigate = NavigateController(this)
@@ -689,10 +843,15 @@ class PaneldService : Service() {
                 // during a staged cutover). Persist the learned set, but never let that background work
                 // launch DashboardActivity behind the configured renderer's back.
                 if (shouldReloadBuiltinAfterEntityFilterChange(
-                        config.dashboardPackage,
+                        system.resolveDashboard(config.dashboardPackage),
                         SystemController.BUILTIN_DASHBOARD,
+                        setupEntityFilterAnswered = config.setupEntityFilterAnswered,
+                        setupEverCompleted = config.setupEverCompleted,
                     )) {
-                    system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+                    system.reloadDashboard(
+                        SystemController.BUILTIN_DASHBOARD,
+                        reason = "applying the entity filter",
+                    )
                 }
             },
         )
@@ -707,9 +866,9 @@ class PaneldService : Service() {
         // thread (the gesture fires on the overlay's touch listener; root + HiveMQ must not run there).
         kiosk.onUnlockRequested = {
             Thread {
-                if (serviceStopping) return@Thread
+                if (teardownBoundary.isStopping) return@Thread
                 kioskSettings.apply(false) {
-                    if (!serviceStopping) mqtt.publishKioskState()
+                    if (!teardownBoundary.isStopping) mqtt.publishKioskState()
                 }
             }.apply { isDaemon = true; name = "kiosk-unlock" }.start()
         }
@@ -756,6 +915,69 @@ class PaneldService : Service() {
         adb = AdbController(config)
         power = PowerController(this)
 
+        autoSleep = AutoSleepController(
+            context = this,
+            scope = scope,
+            config = config,
+            screen = screen,
+            onScreenChanged = {
+                if (::runtime.isInitialized && !teardownBoundary.isStopping) {
+                    runCatching { mqtt.publishScreenState() }
+                }
+            },
+            onProjectionChanged = {
+                if (::runtime.isInitialized && !teardownBoundary.isStopping) {
+                    runCatching { runtime.observe()?.value?.mqtt?.publishAutoSleepActivity() }
+                }
+            },
+            onNoArea = { expectedEpoch ->
+                if (::runtime.isInitialized && !teardownBoundary.isStopping) {
+                    val expectedSettingGeneration = config.autoSleepGeneration
+                    val admitted = liveSettingAuthority.applyOrQueueIf(
+                        key = "auto_sleep",
+                        value = "false",
+                        previousValue = "true",
+                        fence = expectedSettingGeneration + 1L,
+                        expected = {
+                            config.autoSleep && config.autoSleepGeneration == expectedSettingGeneration &&
+                                autoSleep.isCurrentConfigurationEpoch(expectedEpoch)
+                        },
+                    ) { _, _, _ ->
+                        applyAutoSleepAreaFailOff(
+                            expectedEpoch = expectedEpoch,
+                            expectedSettingGeneration = expectedSettingGeneration,
+                            epochIsCurrent = autoSleep::isCurrentConfigurationEpoch,
+                            persistOff = { generation ->
+                                config.setAutoSleepIf(
+                                    expected = true,
+                                    expectedGeneration = generation,
+                                    on = false,
+                                )
+                            },
+                            refreshController = { autoSleep.refresh() },
+                            applyBridge = {
+                                runtime.observe()?.value?.mqtt?.convergeAutoSleep(
+                                    expectedGeneration = expectedSettingGeneration + 1L,
+                                    expectedValue = false,
+                                ) ?: LiveSettingApplyResult.DEFERRED
+                            },
+                        )
+                    }
+                    if (!admitted) {
+                        Log.w(TAG, "stale or failed auto-sleep Area-removal fail-off was not admitted")
+                    }
+                }
+            },
+            sourceManagerFactory = { offerAggregate ->
+                HaPresenceSourceManager(
+                    scope = scope,
+                    config = config,
+                    streamOwner = haExactEntityStream,
+                    offerAggregate = offerAggregate,
+                )
+            },
+        )
+
         runtime = ServiceRuntimeOwner(
             initial = NetworkRuntime(
                 buildMqtt(appliedNetworkConfiguration.runtime),
@@ -764,7 +986,7 @@ class PaneldService : Service() {
             threadName = "ha-paneld-runtime",
             onError = { operation, error -> Log.e(TAG, "runtime $operation failed", error) },
             onRecoverySaturated = {
-                if (!serviceStopping && !recoveryRestart.request()) {
+                if (!teardownBoundary.isStopping && !recoveryRestart.request()) {
                     Log.w(TAG, "runtime recovery restart is already scheduled")
                 }
             },
@@ -821,16 +1043,21 @@ class PaneldService : Service() {
             { k, v ->
                 if (k == "kiosk_lock") {
                     SettingValue.parseBool(v)?.let { on ->
-                        kioskSettings.apply(on) { mqtt.publishKioskState() }
-                    } ?: false
+                        if (kioskSettings.apply(on) { mqtt.publishKioskState() }) {
+                            LiveSettingRequestOutcome.APPLIED
+                        } else {
+                            LiveSettingRequestOutcome.REJECTED
+                        }
+                    } ?: LiveSettingRequestOutcome.REJECTED
                 } else {
-                    liveSettingAuthority.applyOrQueue(
+                    liveSettingAuthority.applyOrQueueOutcomeObserved(
                         key = k,
                         value = v,
                         previousValue = previousLiveSettingValue(k),
-                    ) { key, value, previous -> applyLiveSetting(mqtt, key, value, previous) }
+                    ) { key, value, previous -> applyLiveSettingObserved(mqtt, key, value, previous) }
                 }
             },
+            pendingLiveSettings = liveSettingAuthority::pendingSnapshot,
             // Controller-sourced setting values (their state isn't in the config namespace) so the
             // config form/schema/dashboard show live truth. Called on Ktor IO threads (su-safe).
             configLiveValues = ::currentConfigLiveValues,
@@ -846,13 +1073,59 @@ class PaneldService : Service() {
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
+            // Captures the FIELD, not a snapshot, so it follows reconfigure()'s bridge reassignment.
+            // A bridge generation built from credentials that no longer match the persisted config is
+            // mid-swap: whatever state it reports was earned by the OLD credentials (on a fresh panel,
+            // the anonymous discovery connect's auth rejection), so report the truthful transient
+            // instead — the wizard was blaming freshly-typed correct credentials for it.
+            mqttState = {
+                val bridge = runtime.current().mqtt
+                if (bridge.servesCredentials(config.mqttBroker, config.mqttUser, config.mqttPassword)) {
+                    bridge.state
+                } else "connecting"
+            },
             onZigbeeJoinRetry = { mqtt.requestZigbeeJoin() },
             // LAN ha-paneld peers over mDNS for the header panel switcher. Captures the `mdns` FIELD (not a
             // snapshot) so it follows reconfigure()'s reassignment; browsePeers null-guards the swap window.
             peers = { mdns.browsePeers() },
+            // Report the current advertiser rather than a startup snapshot: DHCP may not have completed
+            // when the service began, and the operator needs to see a later failed/deferred advertisement.
+            mdnsWarning = { mdnsHealthWarning(mdns.health()) },
+            configDiscoverySuggestions = {
+                val active = runtime.current()
+                val existingOrActiveBroker = config.mqttBroker.ifBlank { active.mqtt.activeBroker }
+                val haDiscovery = active.mdns.discoverHaBaseUrlDetailed(existingOrActiveBroker)
+                val discoveredHa = haDiscovery.value
+                val broker = config.mqttBroker.ifBlank {
+                    // Hostname form FIRST: the auto-connected bridge's activeBroker is always a raw
+                    // IPv4 (discoverHaIp), and letting it shadow the hostname suggestion pinned fresh
+                    // panels to one address family. Safe against multi-instance LANs because
+                    // discoverHaBaseUrlDetailed already selects the HA whose addresses match the active
+                    // broker, so a non-empty suggestion names the same machine by its advertised host.
+                    mqttBrokerSuggestionFromHaUrl(discoveredHa)
+                        ?: active.mqtt.activeBroker.ifBlank {
+                            active.mdns.discoverHaIp()?.let { "tcp://$it:1883" } ?: ""
+                        }
+                }
+                ConfigDiscoverySuggestions(
+                    mqttBroker = broker,
+                    haUrl = discoveredHa,
+                    haDiscovery = haDiscovery,
+                )
+            },
             rendererPreparation = rendererPreparation,
             entityLearning = entityLearning,
             autoBrightnessHttpApi = adaptiveBrightnessHttpApi(),
+            autoSleepHttpApi = object : AutoSleepHttpApi {
+                override fun statusJson(): String = autoSleep.statusJson()
+                override suspend fun historyJson(hours: Int): String = autoSleep.historyJson(hours)
+                override suspend fun prerequisite() = autoSleep.prerequisite()
+                override fun setSourceIncluded(areaKey: String, sourceKey: String, included: Boolean) =
+                    autoSleep.setSourceIncluded(areaKey, sourceKey, included)
+                override fun noteAreaChanged() {
+                    autoSleep.refresh()
+                }
+            },
             companionDataOperationState = companionDataOperationState,
             profileAdmin = profileRegistry,
             profileTemplate = {
@@ -890,7 +1163,7 @@ class PaneldService : Service() {
     ): MqttBridge {
         val credentials = identity.mqttCredentials()
         return MqttBridge(
-            config, brightness, screen, led, ledEffect, navigate, volume, system, navbar, watchdog, kiosk, touchSound, bootChime, zigbee, relay, cpu, adb,
+            config, brightness, screen, led, ledEffect, navigate, volume, system, navbar, watchdog, touchSound, bootChime, zigbee, relay, cpu, adb,
             accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
             { capabilitiesSnapshot() },
             sensors.hasLight(), sensors.hasProximity(),
@@ -899,9 +1172,9 @@ class PaneldService : Service() {
             // Button backlight is a distinct profiled node (TPA10), not a property of the RGB backend:
             // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
             profile.hasButtonBacklight,
-            profile.appCanSu, profile.hasRecents,
             autoBright,
             onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
+            autoSleepActivity = { autoSleep.activitySnapshot() },
             configUrl = { localIpv4()?.let { "http://$it:${identity.httpPort}/" } },
             // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
             discoverHaIp = { mdns.discoverHaIp() },
@@ -924,6 +1197,7 @@ class PaneldService : Service() {
             onDirectKioskSetting = { on ->
                 kioskSettings.apply(on)
             },
+            onExternalSettingApplied = liveSettingAuthority::discard,
             zigbeeHealth = zigbeeHealth::snapshot,
             onZigbeeExplicitRetry = zigbeeHealth::explicitRetry,
             stalePanelId = stalePanelId,
@@ -936,6 +1210,9 @@ class PaneldService : Service() {
             runtimeMqttPassword = credentials.password,
             wifiDiagnostics = wifiDiagnostics::snapshot,
             learnedProximityEligibility = sensors::hasLearnedProximity,
+            onAutoSleepConfigChanged = {
+                acceptCommittedAutoSleepSetting(liveSettingAuthority) { autoSleep.refresh() }
+            },
         )
     }
 
@@ -951,39 +1228,69 @@ class PaneldService : Service() {
      * to transition-sensitive handlers. Transient HA-fed inputs intentionally have no persisted value. */
     private fun previousLiveSettingValue(key: String): String? = SettingsRegistry.spec(key)?.let(config::getRaw)
 
-    private fun applyLiveSetting(
+    private fun applyLiveSettingObserved(
         bridge: MqttBridge,
         key: String,
         value: String,
         previousValue: String? = null,
-    ): LiveSettingApplyResult {
-        val spec = SettingsRegistry.spec(key) ?: return LiveSettingApplyResult.FAILED
-        return durableLiveSettingApply(
-            previousValue = previousValue ?: config.getRaw(spec),
-            transient = spec.transient,
-            // Navbar persistence is owned by its acknowledged command handler: committing the desired
-            // mode here would report durable success before asynchronous overlay actuation finishes.
-            actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock",
-            persist = { config.commitRaw(spec, value) },
-            apply = { previous -> bridge.applySetting(key, value, previous) },
-        )
+    ): LiveSettingApplication {
+        val spec = SettingsRegistry.spec(key)
+            ?: return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
+        val previous = previousValue ?: config.getRaw(spec)
+        val actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock"
+        if (!spec.transient && !actuationOwnsPersistence && !config.commitRaw(spec, value)) {
+            return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
+        }
+        return bridge.applySettingObserved(key, value, previous.takeUnless { spec.transient })
+    }
+
+    private fun replayLiveSettingObserved(
+        bridge: MqttBridge,
+        key: String,
+        value: String,
+        previousValue: String?,
+        fence: Long?,
+    ): LiveSettingApplication {
+        if (key != "auto_sleep" || fence == null) {
+            return applyLiveSettingObserved(bridge, key, value, previousValue)
+        }
+        return LiveSettingApplication.immediate(applyAutoSleepFencedReplay(
+            fence = fence,
+            currentGeneration = config.autoSleepGeneration,
+            currentEnabled = config.autoSleep,
+            persistOff = { generation ->
+                config.setAutoSleepIf(expected = true, expectedGeneration = generation, on = false)
+            },
+            refreshController = { autoSleep.refresh() },
+            applyBridge = { bridge.convergeAutoSleep(expectedGeneration = fence, expectedValue = false) },
+        ))
     }
 
     /**
      * Apply config the HTTP page has already written to [config], then rebuild MQTT + mDNS. A renamed
      * panel's discovery cleanup is handed to the replacement bridge so it runs on a live connection.
      */
-    private fun reconfigure() {
-        launcherHomePolicyGeneration.incrementAndGet()
-        launcherHomeFailedGeneration.set(Long.MIN_VALUE)
-        scope.launch(Dispatchers.IO) {
-            runCatching {
-                system.applyLauncherHomePolicy(
-                    config.launcherPackage,
-                    config.dashboardPackage,
-                    config.haUrl.isNotBlank(),
-                )
-            }.onFailure { Log.w(TAG, "launcher HOME policy apply failed", it) }
+    private fun reconfigure(changedKeys: Set<String>) {
+        enqueueReconfigure(changedKeys, resetLiveRetries = true)
+    }
+
+    private fun enqueueReconfigure(changedKeys: Set<String>, resetLiveRetries: Boolean) {
+        synchronized(reconfigureKeysLock) {
+            pendingReconfigureKeys += changedKeys
+            if (resetLiveRetries) changedKeys.forEach { liveSettingRetryAttempts[it] = 0 }
+        }
+        if (configOwnerRefreshPlan(changedKeys).launcherHome) {
+            launcherHomePolicyGeneration.incrementAndGet()
+            launcherHomeFailedGeneration.set(Long.MIN_VALUE)
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    system.applyLauncherHomePolicy(
+                        config.launcherPackage,
+                        config.dashboardPackage,
+                        config.haUrl.isNotBlank(),
+                    )
+                }.onFailure { Log.w(TAG, "launcher HOME policy apply failed", it) }
+            }
         }
         when (runtime.requestLatest()) {
             ServiceRuntimeOwner.LatestAdmission.COALESCED ->
@@ -1005,7 +1312,7 @@ class PaneldService : Service() {
         val generation = launcherHomePolicyGeneration.get()
         val route = server.lastPrivilegeObservation()?.let(::preferredAdminHomeRepairRoute)
         if (!shouldAttemptPeriodicAdminHomeRepair(
-                serviceStopping = serviceStopping,
+                serviceStopping = teardownBoundary.isStopping,
                 adminHomeSelected = system.isAdminLauncherSelection(config.launcherPackage),
                 admittedRoute = route,
                 policyGeneration = generation,
@@ -1058,20 +1365,23 @@ class PaneldService : Service() {
             haCandidateIdentity = candidateIdentity
             haAmbientLux.invalidateCandidates()
         }
-        autoBright.setHaSourceAvailable(false)
-        if (restartSource) haAmbientLux.setSource(null)
-        haAmbientLux.setSource(selected)
+        refreshAmbientSourceBinding(
+            restartSource = restartSource,
+            selectedSource = selected,
+            markUnavailable = { autoBright.setHaSourceAvailable(false) },
+            setSource = haAmbientLux::setSource,
+        )
         val generation = adaptiveSiteGeneration.incrementAndGet()
         if (enabled) {
             scope.launch {
                 val site = haSiteMetadata.fetch().metadata
-                if (site != null && !serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                if (site != null && !teardownBoundary.isStopping && adaptiveSiteGeneration.get() == generation) {
                     autoBright.updateSite(site.latitude, site.longitude, site.timeZone)
                 }
-                if (selected != null && !serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                if (selected != null && !teardownBoundary.isStopping && adaptiveSiteGeneration.get() == generation) {
                     try {
                         val seed = haAmbientLux.loadHistory(selected)
-                        if (!serviceStopping && adaptiveSiteGeneration.get() == generation) {
+                        if (!teardownBoundary.isStopping && adaptiveSiteGeneration.get() == generation) {
                             autoBright.seedHaHistory(seed)
                         }
                     } catch (cancelled: CancellationException) {
@@ -1107,6 +1417,7 @@ class PaneldService : Service() {
                 })
                 put("entityId", selected ?: JSONObject.NULL)
                 put("sourceAvailable", runtime.sourceAvailable)
+                put("sourceRevision", runtime.sourceRevision)
                 put("latestLux", runtime.latestLux ?: JSONObject.NULL)
                 put("expectedLux", runtime.expectedLux ?: JSONObject.NULL)
                 put("automaticTarget", runtime.automaticTarget ?: JSONObject.NULL)
@@ -1127,11 +1438,13 @@ class PaneldService : Service() {
         override fun historyJson(hours: Int, sensitivity: Int?, minimumPercent: Int?): String {
             val nowEpochMinute = System.currentTimeMillis() / 60_000L
             val cutoffMinute = nowEpochMinute - hours * 60L
+            val previewSensitivity = sensitivity ?: config.autoBrightnessSensitivity
             val previewMinimum = minimumPercent ?: config.autoBrightnessMinimumPercent
-            val points = autoBright.chartPoints(
-                sensitivity ?: config.autoBrightnessSensitivity,
+            val snapshot = autoBright.chartSnapshot(
+                previewSensitivity,
                 previewMinimum,
             )
+            val points = snapshot.points
                 .filter { it.epochMinute >= cutoffMinute }
             val zone = autoBright.timeZone()
             val today = Calendar.getInstance(zone).apply {
@@ -1145,9 +1458,14 @@ class PaneldService : Service() {
                 put("available", true)
                 put("hours", hours)
                 put("bucket_minutes", 5)
+                put("sensitivity", previewSensitivity)
                 put("minimum_percent", previewMinimum)
                 put("minimum_brightness", io.github.maxlyth.hapaneld.control.AdaptiveLuxCurve.percentToBrightness(previewMinimum))
                 put("now_epoch_minute", nowEpochMinute)
+                put("sourceRevision", snapshot.sourceRevision)
+                // Freshness describes the newest point actually returned to this chart request,
+                // rather than a newer raw minute that has not completed its five-minute bucket.
+                put("latestEpochMinute", points.lastOrNull()?.epochMinute ?: JSONObject.NULL)
                 put("time_zone", zone.id)
                 put("points", JSONArray().apply {
                     points.forEach { point -> put(JSONObject().apply {
@@ -1264,6 +1582,10 @@ class PaneldService : Service() {
     ) {
         val executionDeadline = mutation.deadline
         if (executionDeadline.remainingMs() <= 0L) return
+        val changedKeys = synchronized(reconfigureKeysLock) {
+            pendingReconfigureKeys.toSet().also { pendingReconfigureKeys.clear() }
+        }
+        val ownerRefresh = configOwnerRefreshPlan(changedKeys)
         // A committed configuration application starts a fresh comparison epoch while process-lifetime
         // startup evidence remains available in the same fixed-cardinality diagnostics projection.
         FeatureCosts.beginEpoch()
@@ -1272,37 +1594,64 @@ class PaneldService : Service() {
             runtime.pendingLatestCount(),
         )
         var cost: io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry.Span? = null
+        var obligationsCompleted = false
         try {
             val desired = currentNetworkConfigurationSnapshot()
             val replacementRequired =
                 desired.runtime != appliedNetworkConfiguration.runtime || !mutation.isRunning
+            val adaptiveSourceRestartRequired =
+                replacementRequired || desired.haLink != appliedNetworkConfiguration.haLink
             val operation = if (replacementRequired) FeatureCostOperation.NETWORK_RECONFIGURE
                 else FeatureCostOperation.CONFIG_LIVE_REFRESH
             val operationCost = FeatureCosts.registry.span(operation)
                 .work(units = if (replacementRequired) 1 else 0)
             cost = operationCost
-            refreshAdaptiveBrightnessInputs()
+            if (ownerRefresh.adaptiveBrightness) {
+                refreshAdaptiveBrightnessInputs(restartSource = adaptiveSourceRestartRequired)
+            }
             if (!replacementRequired) {
                 val active = mutation.current.mqtt
-                replayThenRefreshLiveConfiguration(
-                    replay = {
-                        liveSettingAuthority.replay { key, value, previous ->
-                            applyLiveSetting(active, key, value, previous)
-                        }
-                    },
-                    refresh = {
-                        refreshLiveConfiguration(
-                            active,
-                            desired,
-                            evaluateMqttEffects = true,
-                            cost = operationCost,
-                        )
-                    },
+                val replayKeys = liveSettingAuthority.pendingSnapshot().keys.intersect(changedKeys)
+                if (replayKeys.isNotEmpty()) {
+                    liveSettingAuthority.replayKeysObserved(replayKeys) { key, value, previous, fence ->
+                        replayLiveSettingObserved(active, key, value, previous, fence)
+                    }
+                    scheduleLiveSettingRetries(replayKeys)
+                }
+                refreshLiveConfiguration(
+                    active,
+                    desired,
+                    ownerRefresh = ownerRefresh,
+                    evaluateMqttEffects = true,
+                    cost = operationCost,
                 )
+                obligationsCompleted = true
                 return
             }
             val completed = mutation.replace(
                 retire = { previous ->
+                    // FIRST-CONFIGURATION FAST PATH (maintainer decision, 2026-07-27): a panel whose
+                    // applied runtime never had a broker AND whose probe never connected has published
+                    // nothing, owns nothing and owes nobody an offline — every fence below protects
+                    // state that provably does not exist, and paying full ceremony here is why a fresh
+                    // panel's first MQTT save felt like minutes instead of seconds. Best-effort stop on
+                    // a tight budget, nothing to prove, straight to build.
+                    val firstConfiguration = previous.mqtt.configuredBroker.isEmpty() &&
+                        previous.mqtt.activeBroker.isEmpty()
+                    if (firstConfiguration) {
+                        Log.i(TAG, "first-configuration fast path: no prior broker state to retire")
+                        val quick = MonotonicDeadline(FIRST_CONFIG_RETIRE_MS)
+                        val mdnsRetirement = previous.mdns.retire(quick)
+                        val mqttRetirement = previous.mqtt.stop(
+                            deadline = quick,
+                            publishOffline = false,
+                            clearDiscovery = false,
+                        )
+                        mqttRetirement.ownersDrained.awaitTrue(quick)
+                        mqttRetirement.finalization.awaitSuccessful(quick)
+                        mdnsRetirement.awaitTrue(quick)
+                        return@replace
+                    }
                     // The replacement uses the same availability topic unless the panel id changed. Do not race
                     // its retained online with a late offline from the retiring client. A genuinely different
                     // broker still needs an explicit offline because the replacement cannot clean that broker.
@@ -1345,8 +1694,8 @@ class PaneldService : Service() {
                     )
                 },
                 complete = { replacement ->
-                    liveSettingAuthority.replay { key, value, previous ->
-                        applyLiveSetting(replacement.mqtt, key, value, previous)
+                    liveSettingAuthority.replayKeysObserved(MqttBridge.APPLY_SETTING_KEYS) { key, value, previous, fence ->
+                        replayLiveSettingObserved(replacement.mqtt, key, value, previous, fence)
                     }
                     // Publish only the immutable configuration this concrete replacement consumed. A newer
                     // config can arrive while start() is blocked; retaining this older snapshot makes the
@@ -1354,6 +1703,7 @@ class PaneldService : Service() {
                     refreshLiveConfiguration(
                         replacement.mqtt,
                         desired,
+                        ownerRefresh = ownerRefresh,
                         evaluateMqttEffects = false,
                         cost = operationCost,
                     )
@@ -1367,7 +1717,7 @@ class PaneldService : Service() {
             if (!completed) {
                 operationCost.outcome(FeatureCostOutcome.REJECTED)
                 if (executionDeadline.remainingMs() > 0L) requestNetworkRecovery()
-            }
+            } else obligationsCompleted = true
         } catch (e: InterruptedException) {
             cost?.outcome(FeatureCostOutcome.CANCELLED)
             Thread.currentThread().interrupt()
@@ -1376,6 +1726,9 @@ class PaneldService : Service() {
             Log.w(TAG, "network reconfigure failed", e)
             if (executionDeadline.remainingMs() > 0L) requestNetworkRecovery()
         } finally {
+            if (!obligationsCompleted) synchronized(reconfigureKeysLock) {
+                pendingReconfigureKeys += changedKeys
+            }
             if (executionDeadline.remainingMs() <= 0L && !Thread.currentThread().isInterrupted) {
                 cost?.outcome(FeatureCostOutcome.REJECTED)
             }
@@ -1383,8 +1736,28 @@ class PaneldService : Service() {
         }
     }
 
+    private fun scheduleLiveSettingRetries(attemptedKeys: Set<String>) {
+        val remaining = liveSettingAuthority.pendingSnapshot().keys.intersect(attemptedKeys)
+        val retry = synchronized(reconfigureKeysLock) {
+            attemptedKeys.minus(remaining).forEach(liveSettingRetryAttempts::remove)
+            remaining.filterTo(linkedSetOf()) { key ->
+                val next = nextLiveSettingRetryAttempt(liveSettingRetryAttempts[key] ?: 0)
+                if (next == null) false else {
+                    liveSettingRetryAttempts[key] = next
+                    true
+                }
+            }
+        }
+        if (retry.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(1_000)
+            val stillPending = liveSettingAuthority.pendingSnapshot().keys.intersect(retry)
+            if (stillPending.isNotEmpty()) enqueueReconfigure(stillPending, resetLiveRetries = false)
+        }
+    }
+
     private fun requestNetworkRecovery() {
-        if (!serviceStopping) recoveryRestart.request()
+        if (!teardownBoundary.isStopping) recoveryRestart.request()
     }
 
     private fun onNetworkReconfigureTimeout() {
@@ -1436,6 +1809,7 @@ class PaneldService : Service() {
     private fun refreshLiveConfiguration(
         bridge: MqttBridge,
         desired: NetworkConfigurationSnapshot,
+        ownerRefresh: ConfigOwnerRefreshPlan,
         evaluateMqttEffects: Boolean,
         cost: io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry.Span,
     ) {
@@ -1453,12 +1827,12 @@ class PaneldService : Service() {
             )
         }
         appliedNetworkConfiguration = desired
-        // These owners already change-gate internally; they do not require broker/mDNS replacement.
-        runCatching { logShipper.reconfigure() }
-        runCatching { power.apply(config.keepAwake) }
-        io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
-        io.github.maxlyth.hapaneld.http.PerfReader.builtinActive =
-            config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
+        if (ownerRefresh.logShipping) runCatching { logShipper.reconfigure() }
+        if (ownerRefresh.keepAwake) runCatching { power.apply(config.keepAwake) }
+        if (ownerRefresh.autoSleep) runCatching { autoSleep.refresh() }
+        if (ownerRefresh.rendererTarget) {
+            io.github.maxlyth.hapaneld.http.PerfReader.updateRendererTarget(rendererTargetSnapshot())
+        }
     }
 
     /** Controller reads shared by the dashboard facts, live values and capability projection. */
@@ -1497,10 +1871,11 @@ class PaneldService : Service() {
             "zigbee_router" to config.zigbeeRouterEnabled.toString(),
         )
 
-    /** Fresh non-transient controller values for config export and concurrency checks. CPU governor is
-     * reboot-transient and projectConfigSnapshot omits it, so probing it here would be pure wasted work. */
+    /** Fresh controller values for direct equality, config export and concurrency checks. Direct POST
+     * planning also consumes the transient CPU tier, so a full payload cannot reapply an unchanged tier. */
     private fun currentConfigLiveValues(): Map<String, String> = mapOf(
         "touch_sound" to touchSound.isEnabled().toString(),
+        "cpu_governor" to (cpu.currentTier(allowRootFallback = false) ?: "Auto"),
         "network_adb" to adb.isPersisted().toString(),
         "zigbee_router" to config.zigbeeRouterEnabled.toString(),
     )
@@ -1559,8 +1934,9 @@ class PaneldService : Service() {
             },
             // Wakelock/Wi-Fi-lock intent vs reality — a panel that should be keep-awake but isn't
             // holding the lock is a strong hint for stalled-idle-connection reports.
-            "Keep awake" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
-            "Kiosk lock" to if (config.kioskLock) "on" else "off",
+            "Keep panel responsive" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
+            "Prevent idle dim" to preventIdleDimDiagnostic(config.preventIdleDim, brightness.screenOffTimeoutMs()),
+            "Android dashboard lock" to if (config.kioskLock) "on" else "off",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
             "Platform" to profile.displayName,
             "SoC" to (profile.soc?.displayText() ?: profile.socClass),
@@ -1758,10 +2134,10 @@ class PaneldService : Service() {
     }
 
     /** Activate a successfully installed WebView provider in whichever renderer owns the dashboard. */
-    private suspend fun activateWebView(result: String, verb: String) {
-        if (!result.startsWith("OK")) return
+    private suspend fun activateWebView(result: WebViewInstaller.HealResult, verb: String) {
+        if (result !is WebViewInstaller.HealResult.Installed) return
         kotlinx.coroutines.delay(2_000)
-        if (config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
+        if (config.dashboardPackage.isBlank() || config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
             // A WebView provider binds once per process. Progress is terminal and the HTTP reply has
             // time to flush before START_STICKY restarts the service and HOME on the new provider.
             Log.i(TAG, "WebView $verb — restarting process so the built-in renderer binds the new provider")
@@ -1775,13 +2151,14 @@ class PaneldService : Service() {
     /** Scheduled WebView auto-update (opt-in, update tick): advance the System WebView to the profile's
      *  pinned build when it's newer than the running engine. A loop guard skips re-downloading a version
      *  that already installed but never became the provider; it clears when the pinned version advances. */
-    private suspend fun autoUpdateWebView(): String {
-        val rec = profile.recommendedWebView ?: return "skipped: no managed WebView"
+    private suspend fun autoUpdateWebView(): WebViewInstaller.HealResult {
+        val rec = profile.recommendedWebView
+            ?: return WebViewInstaller.HealResult.NoAction("skipped: no managed WebView")
         val engineMajor = io.github.maxlyth.hapaneld.http.PanelInfo.webViewStatus(this@PaneldService).engineMajor
         if (io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate(config.webViewAutoLastVersion, rec.version, rec.major, engineMajor)) {
             val skipped = "skipped: ${rec.version} already attempted but engine is ${engineMajor ?: "?"}; manual heal may be needed"
             Log.w(TAG, "WebView auto-update: $skipped")
-            return skipped
+            return WebViewInstaller.HealResult.NoAction(skipped)
         }
         val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(
             this@PaneldService, profile, engineMajor = engineMajor, force = false, autoUpdate = true,
@@ -1821,6 +2198,9 @@ class PaneldService : Service() {
         }
         val force = action == "reinstall"
         val tag = version.takeIf { it.isNotBlank() }
+        // The WebView heal returns a typed result; capture it so `after` can reactivate the provider on
+        // the typed success variant while the operation still surfaces its status string to InstallProgress.
+        var webViewHeal: WebViewInstaller.HealResult? = null
         return launchOperation(
             component = label,
             logLabel = "install $name",
@@ -1841,11 +2221,12 @@ class PaneldService : Service() {
                             maxVersion = profile.companionMaxVersion,
                         )
                     "webview" -> WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
+                        .also { webViewHeal = it }.status
                     else -> "unknown component"
                 }
             },
-            after = { result ->
-                if (name == "webview") activateWebView(result, "healed")
+            after = {
+                webViewHeal?.let { activateWebView(it, "healed") }
                 // Refresh the available-update list so the banner + Install tab reflect the new state.
                 runCatching {
                     UpdateChecker.check(
@@ -1859,17 +2240,13 @@ class PaneldService : Service() {
         )
     }
 
-    /** Smoothness-metrics target: the configured override, else the installed HA Companion app
-     *  (this is an HA project — the dashboard is the Companion app, so no config needed normally). */
-    private fun dashboardTarget(): String {
-        // Built-in renderer: the WebView runs in our own process, so smoothness metrics target us.
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) return packageName
-        config.dashboardPackage.takeIf { it.isNotBlank() }?.let { return it }
-        for (p in listOf("io.homeassistant.companion.android.minimal", "io.homeassistant.companion.android")) {
-            if (runCatching { packageManager.getPackageInfo(p, 0) }.isSuccess) return p
+    /** The resolved renderer-target snapshot for perf smoothness attribution (the built-in sentinel, a
+     *  foreign dashboard package, or none), resolved here off the sampling path and handed to PerfReader
+     *  as an immutable value so PerfReader never touches PackageManager on the hot path. */
+    private fun rendererTargetSnapshot(): RendererTarget? =
+        RendererResolver.resolveControlTarget(config.dashboardPackage) {
+            runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess
         }
-        return ""
-    }
 
     /** Advertise the button-event entity only if our a11y service is actually enabled. */
     private fun accessibilityEnabled(): Boolean {
@@ -1896,7 +2273,7 @@ class PaneldService : Service() {
             // never releases this in-process fence: completed teardown exits the process, guaranteeing
             // that no old hardware owner can overlap the replacement generation.
             restartLease.awaitPredecessor()
-            if (serviceStopping) return@runtimeStart
+            if (teardownBoundary.isStopping) return@runtimeStart
 
             // Everything below can start work, write hardware state, attach a process-global owner, or
             // create an overlay. Keep all of it behind the predecessor fence, not merely HTTP/MQTT start.
@@ -1921,7 +2298,7 @@ class PaneldService : Service() {
             if (!kioskRecoveredAtStartup) {
                 Log.w(TAG, "pending kiosk platform state could not be recovered; continuing unlocked")
             }
-            if (serviceStopping) return@runtimeStart
+            if (teardownBoundary.isStopping) return@runtimeStart
             // Re-apply at boot so a persisted enabled state loads the owned click sample and reconciles
             // Android's sound-effects setting for this process; touch sound never changes stream volume.
             if (touchSound.isEnabled()) touchSound.set(true)
@@ -1948,7 +2325,7 @@ class PaneldService : Service() {
                             operationStatus = HelperClient::companionOperationStatus,
                             pollMs = COMPANION_STARTUP_STATUS_POLL_MS,
                             afterRelease = {
-                                if (!serviceStopping) {
+                                if (!teardownBoundary.isStopping) {
                                     runCatching {
                                         rendererPreparation.reconcileStartup(
                                             ensureHome = { pkg, ready ->
@@ -1992,17 +2369,16 @@ class PaneldService : Service() {
             // Keep the SoC + network awake (screen still free to sleep) so Doze/suspend can't freeze the
             // MQTT reactor + keepalive into a half-open, unreachable connection. On by default; see keep_awake.
             runCatching { power.apply(config.keepAwake) }
-            io.github.maxlyth.hapaneld.http.PerfReader.dashboardPkg = dashboardTarget()
-            io.github.maxlyth.hapaneld.http.PerfReader.builtinActive = config.dashboardPackage == SystemController.BUILTIN_DASHBOARD
-            io.github.maxlyth.hapaneld.http.PerfReader.start(scope)
+            io.github.maxlyth.hapaneld.http.PerfReader.start(scope, packageName, rendererTargetSnapshot())
             server.start()
             // Startup always reconciles both additions and removals from durable desired state against
             // the write-ahead overlay ownership markers. This completes work handed off by profile restart.
             server.requestTameReconcile()
             activeRuntime.mqtt.start()
+            autoSleep.start()
             if (profile.zigbeeGatewayDir != null) zigbeeHealth.start()
-            liveSettingAuthority.replay { key, value, previous ->
-                applyLiveSetting(activeRuntime.mqtt, key, value, previous)
+            liveSettingAuthority.replayKeysObserved(MqttBridge.APPLY_SETTING_KEYS) { key, value, previous, fence ->
+                replayLiveSettingObserved(activeRuntime.mqtt, key, value, previous, fence)
             }
             // Forward our own logcat to the configured aggregator (no-op unless a sink host is set).
             logShipper.start()
@@ -2028,6 +2404,7 @@ class PaneldService : Service() {
                 onLuxRaw = autoBright::submitLux,
                 onProximity = { near, level, reportMask ->
                     mqtt.publishProximity(near, level, reportMask)
+                    autoSleep.noteProximityState(near)
                 },
                 onGesture = gesture@{
                     if (!config.wakeOnWave || !sensors.hasLearnedProximity()) return@gesture
@@ -2035,13 +2412,13 @@ class PaneldService : Service() {
                     val settingGeneration = config.wakeOnWaveGeneration
                     wakeOnWaveWorker.execute {
                         if (
-                            serviceStopping || !config.wakeOnWave || !sensors.hasLearnedProximity() ||
+                            teardownBoundary.isStopping || !config.wakeOnWave || !sensors.hasLearnedProximity() ||
                             config.wakeOnWaveGeneration != settingGeneration
                         ) return@execute
                         if (screen.wakeIfStillDark(generation) {
-                                !serviceStopping && config.wakeOnWave && sensors.hasLearnedProximity() &&
+                                !teardownBoundary.isStopping && config.wakeOnWave && sensors.hasLearnedProximity() &&
                                     config.wakeOnWaveGeneration == settingGeneration
-                            } == WakeOutcome.WOKEN && !serviceStopping
+                            } == WakeOutcome.WOKEN && !teardownBoundary.isStopping
                         ) {
                             mqtt.publishScreenOn()
                         }
@@ -2086,15 +2463,18 @@ class PaneldService : Service() {
                 // System WebView auto-update (opt-in): advance to the profile's pinned build. BEFORE
                 // self-update because a successful WebView install also restarts the process.
                 if (config.webViewAutoUpdate) {
+                    var webViewHeal: WebViewInstaller.HealResult? = null
                     runOperation(
                         component = "System WebView",
                         logLabel = "WebView auto-update",
-                        operation = { autoUpdateWebView() },
-                        after = { result -> activateWebView(result, "auto-updated") },
+                        operation = { autoUpdateWebView().also { webViewHeal = it }.status },
+                        after = { webViewHeal?.let { activateWebView(it, "auto-updated") } },
                     )
                 }
                 // ha-paneld self-update LAST — a successful install restarts this process (and this loop).
-                if (config.selfUpdate) {
+                // The setting defaults on only for capable panels; keep the runtime guard too so an
+                // imported/restored true value cannot make an unsupported panel attempt an app install.
+                if (config.selfUpdate && capabilitiesSnapshot().canInstallVerifiedApps) {
                     runOperation(
                         component = "ha-paneld",
                         logLabel = "self-update auto",
@@ -2114,9 +2494,8 @@ class PaneldService : Service() {
                 tag = TAG,
                 name = "never-blank",
             ) {
-                if (!screen.isIntendedOff() && screen.looksDark()) {
+                if (screen.recoverUnexpectedDark()) {
                     Log.w(TAG, "screen dark with no intent — re-lighting (never-blank guard)")
-                    screen.wake()
                     mqtt.publishScreenOn()
                 }
                 repairAdminHomeFromCapturedRoute()
@@ -2217,8 +2596,7 @@ class PaneldService : Service() {
         if (mqttWatchdogAlive) return
         mqttWatchdogAlive = true
         val supervisor = ConnectionSupervisor(MQTT_STALE_MS, REBUILD_ABANDON_MS)
-        val worker = Thread {
-            try {
+        val worker = OwnedThread("mqtt-watchdog", onExit = { mqttWatchdogAlive = false }) {
                 data class HeartbeatProbe(val generation: Long, val thread: Thread)
                 data class RebuildAttempt(
                     val runtimeGeneration: Long,
@@ -2234,8 +2612,8 @@ class PaneldService : Service() {
                     if (!mqttWatchdogAlive) break
                     heartbeats.removeAll { !it.thread.isAlive }
                     if (terminalRecoveryNeeded) {
-                        if (!serviceStopping && recoveryRestart.request()) break
-                        if (!serviceStopping) {
+                        if (!teardownBoundary.isStopping && recoveryRestart.request()) break
+                        if (!teardownBoundary.isStopping) {
                             Log.w(TAG, "MQTT watchdog terminal recovery was not admitted; retrying next tick")
                         }
                         continue
@@ -2396,22 +2774,14 @@ class PaneldService : Service() {
                         rebuild = null
                         supervisor.runtimeUnavailable()
                         Log.e(TAG, "MQTT watchdog failed; requesting bounded process recovery", failure)
-                        if (!serviceStopping) {
+                        if (!teardownBoundary.isStopping) {
                             if (recoveryRestart.request()) break
                             Log.w(TAG, "MQTT watchdog terminal recovery was not admitted; retrying next tick")
                         }
                     }
                 }
-            } finally {
-                synchronized(this@PaneldService) {
-                    if (mqttWatchdogThread === Thread.currentThread()) {
-                        mqttWatchdogAlive = false
-                        mqttWatchdogThread = null
-                    }
-                }
-            }
-        }.apply { isDaemon = true; name = "mqtt-watchdog" }
-        synchronized(this) { mqttWatchdogThread = worker }
+        }
+        mqttWatchdog = worker
         worker.start()
     }
 
@@ -2420,6 +2790,15 @@ class PaneldService : Service() {
      * waiting out the auto-reconnect backoff. A blank broker in discovery-wait also restarts mDNS before
      * retrying; an already connected, terminally stopped, or auth-recovery runtime is left alone.
      */
+    private fun revalidateMdns(
+        observed: ServiceRuntimeOwner.Observation<NetworkRuntime>,
+        lanIp: String?,
+    ) {
+        // Discovery can fail while MQTT remains connected, so it cannot share MQTT's state gate.
+        // One dedicated latest-value slot prevents callback bursts from saturating MQTT recovery workers.
+        mdnsRevalidation.submit(MdnsRevalidation(observed, lanIp))
+    }
+
     private fun registerNetworkCallback() {
         if (netCallback != null) return
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
@@ -2441,6 +2820,7 @@ class PaneldService : Service() {
                 val observed = runtime.observe() ?: return
                 val target = observed.value.mqtt
                 target.refreshDiscoveryAddress()
+                revalidateMdns(observed, defaultNetworkIpv4(cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address }))
                 when (networkAvailableAction(target.state, target.configuredBroker)) {
                     NetworkAvailableAction.NONE -> Unit
                     NetworkAvailableAction.RECONNECT -> {
@@ -2450,7 +2830,6 @@ class PaneldService : Service() {
                     NetworkAvailableAction.RETRY_DISCOVERY -> {
                         Log.i(TAG, "network available — retrying mDNS and MQTT auto-discovery")
                         runtime.reconnect(observed) {
-                            it.mdns.start()
                             it.mqtt.reconnect()
                         }
                     }
@@ -2458,7 +2837,11 @@ class PaneldService : Service() {
             }
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                runtime.observe()?.value?.mqtt?.refreshDiscoveryAddress()
+                if (network != defaultNetwork) return
+                val observed = runtime.observe() ?: return
+                observed.value.mqtt.refreshDiscoveryAddress()
+                // This covers the DHCP address arriving after service boot and later address changes.
+                revalidateMdns(observed, defaultNetworkIpv4(linkProperties.linkAddresses.map { it.address }))
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -2505,7 +2888,7 @@ class PaneldService : Service() {
     }
 
     private fun updateForegroundStatus(statusText: String) {
-        if (serviceStopping) return
+        if (teardownBoundary.isStopping) return
         val silent = config.silenceBootChime
         val (mgr, channelId) = notificationChannel(silent)
         mgr.notify(NOTIF_ID, foregroundNotification(channelId, silent, statusText))
@@ -2521,6 +2904,18 @@ class PaneldService : Service() {
             .setSilent(silent)
             .build()
 
+    /**
+     * Close the synchronous admission gates shared by ordinary destruction and an explicit process
+     * boundary. Each owner is guarded because a requested boundary can arrive during startup, before
+     * every controller exists; normal destruction has already initialized all of them.
+     */
+    private fun closeServiceAdmissions() {
+        if (::audio.isInitialized) beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
+        if (::kiosk.isInitialized) kiosk.closeAdmission()
+        if (::navbar.isInitialized) navbar.closeAdmission()
+        if (::screen.isInitialized) screen.closeAdmission()
+    }
+
     override fun onDestroy() {
         // Android invokes this on the main thread. All deliberate waits below consume one deadline so
         // individually safe phase timeouts cannot accumulate into an input-dispatch ANR.
@@ -2528,17 +2923,14 @@ class PaneldService : Service() {
         // App-local completion may continue off-main, but every subsidiary owner shares this one budget.
         // External display/system-policy recovery remains mandatory even after this deadline expires.
         val asyncTeardownDeadline = MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)
-        serviceStopping = true
+        teardownBoundary.markStopping()
         lightMqttPublisher.close()
         adaptiveSiteGeneration.incrementAndGet()
         brightnessObserver?.let { observer ->
             runCatching { contentResolver.unregisterContentObserver(observer) }
             brightnessObserver = null
         }
-        beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
-        kiosk.closeAdmission()
-        navbar.closeAdmission()
-        screen.closeAdmission()
+        closeServiceAdmissions()
         // A deliberately dark panel is the only external state that becomes unrecoverable if Android
         // kills this process after onDestroy returns (the touch-wake overlay dies with it). Give its
         // dedicated recovery owner first use of the aggregate deadline, then let it keep retrying while
@@ -2552,6 +2944,9 @@ class PaneldService : Service() {
         netCallback?.let { cb ->
             runCatching { (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb) }
             netCallback = null
+        }
+        if (!mdnsRevalidation.closeAndJoin(teardownDeadline.remainingMs())) {
+            Log.w(TAG, "mDNS revalidation worker did not drain before service teardown")
         }
         stopMqttWatchdog(teardownDeadline.remainingMs())
         // The existing runtime lane owns latest configuration work. Close its one admission point now;
@@ -2629,6 +3024,12 @@ class PaneldService : Service() {
             if (::zigbeeHealth.isInitialized) closeOwnerResult("Zigbee health") { zigbeeHealth.stop() }
             closeOwner("evdev") { EvdevButtonClient.stop() }
             if (::haAmbientLux.isInitialized) closeOwner("HA ambient light") { haAmbientLux.close() }
+            if (::autoSleep.isInitialized) {
+                closeOwnerResult("auto sleep") { autoSleep.closeAndJoin(asyncTeardownDeadline.remainingMs()) }
+            }
+            if (::haExactEntityStream.isInitialized) {
+                closeOwner("HA exact entity stream") { haExactEntityStream.close() }
+            }
             closeOwner("sensors") { sensorPersistenceClosed.set(sensors.stop()) }
             if (::autoBright.isInitialized) {
                 closeOwnerResult("adaptive brightness") {
@@ -2880,13 +3281,7 @@ class PaneldService : Service() {
     private fun requestSafeProcessBoundary(reason: String) {
         if (!teardownBoundary.requestExplicitBoundary()) return
         Log.i(TAG, "safe process restart requested: $reason")
-        serviceStopping = true
-        if (::audio.isInitialized) {
-            beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
-        }
-        if (::kiosk.isInitialized) kiosk.closeAdmission()
-        if (::navbar.isInitialized) navbar.closeAdmission()
-        if (::screen.isInitialized) screen.closeAdmission()
+        closeServiceAdmissions()
         Thread {
             if (::server.isInitialized) {
                 runCatching { server.stop() }
@@ -2987,59 +3382,49 @@ class PaneldService : Service() {
     }
 
     private fun scheduleKioskReassert() {
-        val worker = Thread {
-            try {
-                val recovered = recoverAndMaybeEnableKiosk(
-                    escapeDelayMs = KIOSK_REASSERT_MS,
-                    retryDelayMs = KIOSK_RECOVERY_RETRY_MS,
-                    maxAttempts = KIOSK_RECOVERY_ATTEMPTS,
-                    shouldContinue = { !serviceStopping },
-                    recover = {
-                        kioskSettings.serialized { kiosk.recoverPersistentState(config.kioskLock) }
-                    },
-                    enabled = { config.kioskLock },
-                    enable = {
-                        kioskSettings.serialized { config.kioskLock && kiosk.apply(true) }
-                    },
-                )
-                if (!recovered && !serviceStopping) {
-                    Log.w(TAG, "kiosk platform recovery remains pending; leaving kiosk unlocked")
-                }
-            } finally {
-                synchronized(this@PaneldService) {
-                    if (kioskReassertThread === Thread.currentThread()) kioskReassertThread = null
-                }
+        val worker = OwnedThread("kiosk-reassert") {
+            val recovered = recoverAndMaybeEnableKiosk(
+                escapeDelayMs = KIOSK_REASSERT_MS,
+                retryDelayMs = KIOSK_RECOVERY_RETRY_MS,
+                maxAttempts = KIOSK_RECOVERY_ATTEMPTS,
+                shouldContinue = { !teardownBoundary.isStopping },
+                recover = {
+                    kioskSettings.serialized { kiosk.recoverPersistentState(config.kioskLock) }
+                },
+                enabled = { config.kioskLock },
+                enable = {
+                    kioskSettings.serialized { config.kioskLock && kiosk.apply(true) }
+                },
+            )
+            if (!recovered && !teardownBoundary.isStopping) {
+                Log.w(TAG, "kiosk platform recovery remains pending; leaving kiosk unlocked")
             }
-        }.apply { isDaemon = true; name = "kiosk-reassert" }
-        synchronized(this) { kioskReassertThread = worker }
+        }
+        kioskReassert = worker
         worker.start()
     }
 
     private fun cancelKioskReassert() {
-        val worker = synchronized(this) { kioskReassertThread.also { kioskReassertThread = null } }
-        worker?.interrupt()
-        runCatching { worker?.join(KIOSK_CANCEL_JOIN_MS) }
+        kioskReassert?.stop(KIOSK_CANCEL_JOIN_MS)
     }
 
     private fun stopMqttWatchdog(joinMs: Long) {
         mqttWatchdogAlive = false
-        val worker = synchronized(this) { mqttWatchdogThread.also { mqttWatchdogThread = null } }
-        worker?.interrupt()
-        if (joinMs > 0L) runCatching { worker?.join(joinMs) }
+        mqttWatchdog?.stop(joinMs)
     }
 
     private fun reconcileHelperInstallStaging() {
-        scope.launch {
-            val stagingDir = File(filesDir, HelperInstallTransaction.STAGING_DIR)
-            val reconciler = HelperInstallReconciler(HelperClient)
-            while (isActive) {
-                val result = runCatching { reconciler.reconcile(stagingDir) }
-                    .onFailure { Log.w(TAG, "helper install staging reconciliation failed", it) }
-                    .getOrNull()
-                if (result != null && (result.removed > 0 || result.remaining > 0)) {
-                    Log.d(TAG, "helper install staging: removed=${result.removed} remaining=${result.remaining}")
-                }
-                delay(INSTALL_RECONCILE_MS)
+        val stagingDir = File(filesDir, HelperInstallTransaction.STAGING_DIR)
+        val reconciler = HelperInstallReconciler(HelperClient)
+        scope.periodic(
+            intervalMs = INSTALL_RECONCILE_MS,
+            tag = TAG,
+            name = "helper-install-staging",
+            onError = { error -> Log.w(TAG, "helper install staging reconciliation failed", error) },
+        ) {
+            val result = reconciler.reconcile(stagingDir)
+            if (result.removed > 0 || result.remaining > 0) {
+                Log.d(TAG, "helper install staging: removed=${result.removed} remaining=${result.remaining}")
             }
         }
     }
@@ -3081,6 +3466,10 @@ class PaneldService : Service() {
         private const val EXTERNAL_STATE_RETRY_MS = 1_000L
         private const val EXTERNAL_STATE_BOUNDARY_ATTEMPTS = 5
         private const val NETWORK_RECONFIGURE_BUDGET_MS = 15_000L
+
+        /** First-configuration retire budget: nothing is published/owned, so this bounds only the
+         *  best-effort close of a never-connected runtime. See the fast path in the retire lambda. */
+        private const val FIRST_CONFIG_RETIRE_MS = 1_500L
         private val SERVICE_RESTART_BARRIER = ServiceRestartBarrier()
 
         fun start(context: Context) {

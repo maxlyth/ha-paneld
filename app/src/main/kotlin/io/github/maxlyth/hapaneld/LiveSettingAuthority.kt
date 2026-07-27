@@ -2,9 +2,38 @@ package io.github.maxlyth.hapaneld
 
 import android.content.Context
 import io.github.maxlyth.hapaneld.persistence.AppState
+import java.util.UUID
 import org.json.JSONObject
 
 internal enum class LiveSettingApplyResult { APPLIED, DEFERRED, FAILED }
+
+/** Immediate request disposition plus an optional observable terminal result for admitted work that
+ * outlived the bounded response wait. */
+internal class LiveSettingApplication(
+    val initial: LiveSettingApplyResult,
+    private val lateCompletion: (((LiveSettingApplyResult) -> Unit) -> Unit)? = null,
+) {
+    val hasLateCompletion: Boolean get() = lateCompletion != null
+    fun observeLateCompletion(observer: (LiveSettingApplyResult) -> Unit) {
+        lateCompletion?.invoke(observer)
+    }
+
+    companion object {
+        fun immediate(result: LiveSettingApplyResult) = LiveSettingApplication(result)
+    }
+}
+
+/** Request-level disposition after the desired value has (or has not) entered durable ownership. */
+internal enum class LiveSettingRequestOutcome {
+    APPLIED,
+    DEFERRED,
+    FAILED_PENDING,
+    REJECTED;
+
+    val legacyAcknowledged: Boolean get() = this == APPLIED || this == DEFERRED
+    val pending: Boolean get() = this == DEFERRED || this == FAILED_PENDING
+    val durablyAccepted: Boolean get() = this != REJECTED
+}
 
 /** Keep the desired value immediately durable/readable while preserving the previous value for handlers
  * whose side effects depend on detecting a transition. */
@@ -31,7 +60,12 @@ internal class LiveSettingAuthority(
     private val supportedKeys: Set<String>,
     private val journal: Journal = MemoryJournal(),
 ) {
-    internal data class Pending(val value: String, val previousValue: String?)
+    internal data class Pending(
+        val value: String,
+        val previousValue: String?,
+        val fence: Long? = null,
+        val generation: String = UUID.randomUUID().toString(),
+    )
 
     internal interface Journal {
         fun load(): Map<String, Pending>
@@ -47,35 +81,116 @@ internal class LiveSettingAuthority(
     }
 
     private val pending = journal.load().filterKeys(supportedKeys::contains).toMutableMap()
+    /** Pending generations already admitted to a dispatcher. Replays must not enqueue the same desired
+     * value behind its original execution, because a newer external command may already follow it. */
+    private val inFlight = mutableMapOf<String, Pending>()
+    /** Serializes runtime application of one setting without blocking journal inspection or discard. */
+    private val applyLocks = supportedKeys.associateWith { Any() }
 
-    @Synchronized
     fun applyOrQueue(
         key: String,
         value: String,
         apply: (String, String) -> LiveSettingApplyResult,
-    ): Boolean = applyOrQueue(key, value, null) { appliedKey, appliedValue, _ ->
+    ): Boolean = applyOrQueueOutcome(key, value, null) { appliedKey, appliedValue, _ ->
         apply(appliedKey, appliedValue)
-    }
+    }.legacyAcknowledged
 
-    @Synchronized
     fun applyOrQueue(
         key: String,
         value: String,
         previousValue: String?,
         apply: (String, String, String?) -> LiveSettingApplyResult,
-    ): Boolean {
-        if (key !in supportedKeys) return false
-        // A latest-wins update must retain the provenance from before the first unapplied desired value.
-        val queued = Pending(value, pending[key]?.previousValue ?: previousValue)
-        if (!journal.put(key, queued)) return false
-        pending[key] = queued
-        return when (runCatching { apply(key, value, queued.previousValue) }.getOrDefault(LiveSettingApplyResult.FAILED)) {
-            LiveSettingApplyResult.APPLIED -> {
-                if (journal.remove(key)) pending.remove(key)
-                true
+    ): Boolean = applyOrQueueOutcome(key, value, previousValue, apply).legacyAcknowledged
+
+    fun applyOrQueueOutcome(
+        key: String,
+        value: String,
+        previousValue: String?,
+        apply: (String, String, String?) -> LiveSettingApplyResult,
+    ): LiveSettingRequestOutcome = applyOrQueueOutcomeIf(
+        key, value, previousValue, expected = { true },
+        apply = { appliedKey, appliedValue, previous ->
+            LiveSettingApplication.immediate(apply(appliedKey, appliedValue, previous))
+        },
+    )
+
+    fun applyOrQueueOutcomeObserved(
+        key: String,
+        value: String,
+        previousValue: String?,
+        apply: (String, String, String?) -> LiveSettingApplication,
+    ): LiveSettingRequestOutcome = applyOrQueueOutcomeIf(
+        key, value, previousValue, expected = { true }, apply = apply,
+    )
+
+    /** Atomically rejects a stale safety intent before it can supersede a newer queued value. */
+    fun applyOrQueueIf(
+        key: String,
+        value: String,
+        previousValue: String?,
+        fence: Long? = null,
+        expected: () -> Boolean,
+        apply: (String, String, String?) -> LiveSettingApplyResult,
+    ): Boolean = applyOrQueueOutcomeIf(
+        key, value, previousValue, fence, expected,
+    ) { appliedKey, appliedValue, previous ->
+        LiveSettingApplication.immediate(apply(appliedKey, appliedValue, previous))
+    }.legacyAcknowledged
+
+    private fun applyOrQueueOutcomeIf(
+        key: String,
+        value: String,
+        previousValue: String?,
+        fence: Long? = null,
+        expected: () -> Boolean,
+        apply: (String, String, String?) -> LiveSettingApplication,
+    ): LiveSettingRequestOutcome {
+        val applyLock = applyLocks[key] ?: return LiveSettingRequestOutcome.REJECTED
+        return synchronized(applyLock) {
+            val queued = synchronized(this) {
+                if (!expected()) return LiveSettingRequestOutcome.REJECTED
+                // A latest-wins update retains provenance from before the first unapplied desired value.
+                Pending(value, pending[key]?.previousValue ?: previousValue, fence).also {
+                    if (!journal.put(key, it)) return LiveSettingRequestOutcome.REJECTED
+                    pending[key] = it
+                }
             }
-            LiveSettingApplyResult.DEFERRED -> true
-            LiveSettingApplyResult.FAILED -> false
+            val application = runCatching { apply(key, value, queued.previousValue) }
+                .getOrDefault(LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED))
+            if (application.hasLateCompletion) {
+                synchronized(this) {
+                    if (pending[key] == queued) inFlight[key] = queued
+                }
+                application.observeLateCompletion { terminal ->
+                    settleLateCompletion(key, queued, terminal)
+                }
+            }
+            when (application.initial) {
+                LiveSettingApplyResult.APPLIED -> {
+                    val cleared = synchronized(this) {
+                        // Discard may establish a newer external truth while application is blocked.
+                        if (pending[key] != queued) true else if (journal.remove(key)) {
+                            pending.remove(key)
+                            true
+                        } else false
+                    }
+                    if (cleared) LiveSettingRequestOutcome.APPLIED else LiveSettingRequestOutcome.FAILED_PENDING
+                }
+                LiveSettingApplyResult.DEFERRED -> LiveSettingRequestOutcome.DEFERRED
+                LiveSettingApplyResult.FAILED -> LiveSettingRequestOutcome.FAILED_PENDING
+            }
+        }
+    }
+
+    private fun settleLateCompletion(key: String, queued: Pending, terminal: LiveSettingApplyResult) {
+        val applyLock = applyLocks[key] ?: return
+        synchronized(applyLock) {
+            synchronized(this) {
+                if (inFlight[key] == queued) inFlight.remove(key)
+                if (terminal == LiveSettingApplyResult.APPLIED && pending[key] == queued && journal.remove(key)) {
+                    pending.remove(key)
+                }
+            }
         }
     }
 
@@ -88,26 +203,55 @@ internal class LiveSettingAuthority(
         return journal.remove(key)
     }
 
-    @Synchronized
     fun replay(apply: (String, String) -> LiveSettingApplyResult) {
         replay { key, value, _ -> apply(key, value) }
     }
 
-    @Synchronized
     fun replay(apply: (String, String, String?) -> LiveSettingApplyResult) {
-        val iterator = pending.iterator()
-        while (iterator.hasNext()) {
-            val (key, queued) = iterator.next()
-            if (runCatching { apply(key, queued.value, queued.previousValue) }.getOrDefault(LiveSettingApplyResult.FAILED) ==
-                LiveSettingApplyResult.APPLIED && journal.remove(key)
-            ) {
-                iterator.remove()
+        replay { key, value, previous, _ -> apply(key, value, previous) }
+    }
+
+    fun replay(apply: (String, String, String?, Long?) -> LiveSettingApplyResult) {
+        replayKeys(supportedKeys, apply)
+    }
+
+    fun replayKeys(keys: Set<String>, apply: (String, String, String?, Long?) -> LiveSettingApplyResult) {
+        replayKeysObserved(keys) { key, value, previous, fence ->
+            LiveSettingApplication.immediate(apply(key, value, previous, fence))
+        }
+    }
+
+    fun replayKeysObserved(keys: Set<String>, apply: (String, String, String?, Long?) -> LiveSettingApplication) {
+        val snapshot = synchronized(this) { pending.filterKeys(keys::contains).toList() }
+        snapshot.forEach { (key, queued) ->
+            synchronized(checkNotNull(applyLocks[key])) {
+                // A newer apply may have superseded this snapshot while replay waited for the key.
+                if (synchronized(this) { pending[key] == queued && inFlight[key] != queued }) {
+                    val application = runCatching {
+                        apply(key, queued.value, queued.previousValue, queued.fence)
+                    }.getOrDefault(LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED))
+                    if (application.hasLateCompletion) {
+                        synchronized(this) {
+                            if (pending[key] == queued) inFlight[key] = queued
+                        }
+                        application.observeLateCompletion { terminal ->
+                            settleLateCompletion(key, queued, terminal)
+                        }
+                    }
+                    if (application.initial == LiveSettingApplyResult.APPLIED) synchronized(this) {
+                        if (pending[key] == queued && journal.remove(key)) {
+                            pending.remove(key)
+                        }
+                    }
+                }
             }
         }
     }
 
     @Synchronized
     internal fun pendingSnapshot(): Map<String, String> = pending.mapValues { it.value.value }
+    @Synchronized
+    internal fun pendingGenerationSnapshot(): Map<String, String> = pending.mapValues { it.value.generation }
     internal fun pendingPreviousSnapshot(): Map<String, String?> = pending.mapValues { it.value.previousValue }
 
     companion object {
@@ -123,6 +267,9 @@ internal class LiveSettingAuthority(
                             Pending(
                                 decoded.getString("value"),
                                 decoded.optString("previous").takeIf { decoded.has("previous") },
+                                decoded.optLong("fence").takeIf { decoded.has("fence") },
+                                decoded.optString("generation").takeIf(String::isNotBlank)
+                                    ?: UUID.randomUUID().toString(),
                             )
                         } else Pending(encoded, null) // legacy desired-only journal
                         key to pending
@@ -134,6 +281,8 @@ internal class LiveSettingAuthority(
                         key,
                         JSONObject().put("value", value.value).apply {
                             value.previousValue?.let { put("previous", it) }
+                            value.fence?.let { put("fence", it) }
+                            put("generation", value.generation)
                         }.toString(),
                     ).commit()
 

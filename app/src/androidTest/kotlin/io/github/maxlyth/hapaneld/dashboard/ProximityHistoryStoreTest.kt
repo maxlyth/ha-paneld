@@ -59,11 +59,11 @@ class ProximityHistoryStoreTest {
             )
 
             store.readableDatabase.rawQuery(
-                "SELECT (SELECT COUNT(*) FROM proximity_rollup)," +
+                "SELECT (SELECT COUNT(*) FROM proximity_sample)," +
                     "(SELECT COUNT(*) FROM proximity_episode)," +
                     "(SELECT behavior_signature FROM proximity_model WHERE fingerprint=?)," +
-                    "sample_count,raw_min,raw_max,raw_sum,raw_square_sum,excursion_count,gesture_count " +
-                    "FROM proximity_rollup WHERE fingerprint=? AND bucket=?",
+                    "sample_count,raw_min,raw_max,raw_sum,raw_sum_squares,excursion_count,gesture_count " +
+                    "FROM proximity_sample WHERE fingerprint=? AND bucket=?",
                 arrayOf(fingerprint, fingerprint, bucket.toString()),
             ).use { cursor ->
                 cursor.moveToFirst()
@@ -400,6 +400,5 @@ class ProximityHistoryStoreTest {
             android.content.Context.MODE_PRIVATE,
         ).edit().clear().commit()
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 }

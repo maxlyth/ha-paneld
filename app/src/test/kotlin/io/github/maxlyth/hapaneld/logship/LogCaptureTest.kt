@@ -7,10 +7,12 @@ import kotlinx.coroutines.Dispatchers
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.InterruptedIOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
@@ -18,6 +20,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * [LogCapture.redact] is the last line of defence before a log line reaches ANY consumer — the
@@ -58,6 +61,22 @@ class LogCaptureTest {
             return this
         }
         override fun isAlive(): Boolean = finished.count > 0
+    }
+
+    private class InterruptingInputStream : InputStream() {
+        private val entered = CountDownLatch(1)
+
+        override fun read(): Int {
+            entered.countDown()
+            try {
+                CountDownLatch(1).await()
+                return -1
+            } catch (_: InterruptedException) {
+                throw InterruptedIOException("log dump reader interrupted during cleanup")
+            }
+        }
+
+        fun awaitEntered() = assertTrue("dump reader did not start", entered.await(2, TimeUnit.SECONDS))
     }
 
     private fun redact(s: String) = LogCapture.redact(s)
@@ -286,6 +305,48 @@ class LogCaptureTest {
             assertTrue("timeout must escalate to forced destruction", process.forcedDestroys.get() > 0)
         } finally {
             cap.close()
+        }
+    }
+
+    @Test fun interruptedDumpReaderCannotCrashTheProcess() {
+        val input = InterruptingInputStream()
+        val uncaught = AtomicReference<Throwable?>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            if (thread.name == "ha-paneld-log-dump") uncaught.set(error)
+        }
+        val cap = LogCapture(
+            CoroutineScope(Dispatchers.IO),
+            listOf("unused"),
+            { listOf("dump") },
+            dumpTimeoutMs = 50,
+            processStarter = { object : Process() {
+                override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+                override fun getInputStream(): InputStream = input
+                override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+                override fun waitFor(): Int = 137
+                override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = false
+                override fun exitValue(): Int = 137
+                override fun destroy() = Unit
+                override fun destroyForcibly(): Process = this
+                override fun isAlive(): Boolean = true
+            } },
+        )
+        try {
+            val executor = Executors.newSingleThreadExecutor()
+            val result = try {
+                val future = executor.submit<List<String>> { cap.dump() }
+                input.awaitEntered()
+                future.get(2, TimeUnit.SECONDS)
+            } finally {
+                executor.shutdownNow()
+            }
+            assertTrue(result.isEmpty())
+            Thread.sleep(100)
+            assertNull(uncaught.get())
+        } finally {
+            cap.close()
+            Thread.setDefaultUncaughtExceptionHandler(previous)
         }
     }
 

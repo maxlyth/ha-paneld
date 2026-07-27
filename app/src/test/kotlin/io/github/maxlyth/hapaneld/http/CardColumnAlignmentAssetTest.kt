@@ -58,13 +58,14 @@ class CardColumnAlignmentAssetTest {
         assertTrue(configure.contains("focusHash();\n    scheduleConfigColumnAlignment();"))
 
         val install = asset("install.js")
-        assertTrue(install.contains("scheduleInstallColumnAlignment = window.CardColumnAlignment"))
+        assertTrue(install.contains("alignInstallColumns = window.CardColumnAlignment"))
         assertTrue(install.contains("card.style.display = ''; scheduleInstallColumnAlignment()"))
         assertTrue(install.contains("btn.disabled = false; scheduleInstallColumnAlignment();"))
 
         val dashboard = asset("info.js")
         assertTrue(dashboard.contains("card.style.display='';refreshScreenshot(card);scheduleDashboardColumnAlignment();"))
-        assertTrue(dashboard.contains("scheduleDashboardColumnAlignment();\n }\n function hydrate"))
+        assertTrue(dashboard.contains("setupScreenshotOverlay();scheduleDashboardColumnAlignment();"))
+        assertTrue(dashboard.contains("setupScreenshotOverlay();scheduleDashboardColumnAlignment();\n  cardSizeSourceReady('info');"))
     }
 
     @Test fun sharedAuthorityCoalescesAndCorrectsEveryCardInAnOffsetColumn() {

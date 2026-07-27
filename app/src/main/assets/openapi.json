@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.9.5",
+    "version": "0.9.6-rc1",
     "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN. Relaxed mode keeps the trusted-LAN workflow. Optional Hardened mode requires physical access for selected high-impact remote requests: someone must approve them on the panel's screen, and they cannot be approved remotely. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
   },
   "servers": [{ "url": "/" }],
@@ -41,6 +41,11 @@
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
     "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix and Zigbee gateway health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "{warnings:[html], capabilities:[{name,note,color}], zigbee_gateway:{state,...}|null}" }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
+    "/api/v1/setup": { "get": { "summary": "What setup still needs before this panel can show a dashboard, and the single next step", "tags": ["status"], "responses": { "200": { "description": "{complete, next|null, panel:{id,name}, steps:[{stage,status,blocking,detail}], discovery:{outcome,reason,explanation}}. In-memory reads only, so it is safe to poll while a step is in flight; no-store." }, "403": { "description": "Cross-origin or unverifiable browser request refused" } } } },
+    "/api/v1/setup/identity": { "post": { "summary": "Record that a human saw and accepted the panel identity during guided setup", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Not a setting: never on the Configure form, in bundles, or as an HA entity" } } } },
+    "/api/v1/setup/home-dashboard": { "post": { "summary": "Record that the guided-setup dashboard question was answered, including choosing the account's default", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Records the answer only; the dashboard itself is an ordinary POST /api/v1/config home_dashboard beforehand" } } } },
+    "/api/v1/setup/entity-filter": { "post": { "summary": "Record that the guided-setup entity-filter question was answered, releasing the built-in renderer's first load", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Records the answer only; turning the filter on is an ordinary POST /api/v1/config beforehand" } } } },
+    "/api/v1/setup/attest": { "post": { "summary": "Record a human's confirmation that the dashboard is showing on the panel", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Bound to the current configuration fingerprint; changing URL/renderer/account voids it and setup re-arms" } } } },
     "/api/v1/provisioning/plan": {
       "get": {
         "summary": "Read the active profile's idempotent provisioning guidance combined with live observations",
@@ -167,7 +172,7 @@
       "post": { "summary": "Delete an inactive unselected local revision", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"] } } } }, "responses": { "200": { "description": "Deleted" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Bundled, active, selected or protected revision" } } }
     },
     "/api/v1/config": {
-      "get": { "summary": "Read full config (MQTT password redacted) incl. registry `settings` + `ha_expose` flags", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
+      "get": { "summary": "Read full config (MQTT password redacted) incl. observed registry `settings`, durable `apply_pending` desired values, and `ha_expose` flags", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
       "post": {
         "summary": "Update config — partial-merge: only the keys you send change. Accepts every settings-registry key (see /api/v1/config/schema) plus per-entity ha_expose_<key> toggles.", "tags": ["config"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": {
@@ -176,7 +181,8 @@
           "mqtt_broker": { "type": "string", "description": "tcp://host:1883; blank = auto-discover HA on the LAN" },
           "mqtt_user": { "type": "string" }, "mqtt_password": { "type": "string", "description": "blank = unchanged" },
           "dashboard_package": { "type": "string" }, "launcher_package": { "type": "string" },
-          "wake_on_wave": { "type": "boolean" }, "prevent_idle_dim": { "type": "boolean" },
+          "wake_on_wave": { "type": "boolean" }, "auto_sleep": { "type": "boolean", "default": false, "description": "Enable the device-local presence-aware sleep policy; manual screen control remains separate" },
+          "prevent_idle_dim": { "type": "boolean" },
           "watchdog_enabled": { "type": "boolean" }, "touch_sound": { "type": "boolean" },
           "silence_boot_chime": { "type": "boolean" }, "keep_awake": { "type": "boolean" },
           "auto_brightness": { "type": "boolean" },
@@ -194,10 +200,11 @@
           "log_ship_enabled": { "type": "boolean" }, "log_ship_host": { "type": "string" },
           "log_ship_port": { "type": "integer" }, "log_ship_protocol": { "type": "string", "enum": ["syslog", "http"] }
         } } } } },
-        "responses": { "200": { "description": "updated" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active, or renderer sign-in/Home Assistant source state conflicts" } }
+        "responses": { "200": { "description": "No-op or all changed settings saved and applied; JSON clients receive applied/pending/rejected outcome lists and HTML form clients receive the equivalent result page" }, "202": { "description": "Changed settings are durably saved but named hardware application remains pending with bounded automatic retry, or Hardened-mode approval-required: approve the request on the panel and retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object", "required": ["ok", "status", "pending", "message"] }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "400": { "description": "invalid setting, or a built-in-renderer-only setting was submitted for another renderer" }, "409": { "description": "network ADB cannot be enabled while Hardened mode is active, renderer sign-in/Home Assistant source state conflicts, or a concurrent config change invalidated the checked request baseline" }, "500": { "description": "Structured saved-partial outcome (JSON or equivalent HTML result page) naming changes that committed and effects that could not be durably admitted" } }
       }
     },
     "/api/v1/config/schema": { "get": { "summary": "Settings-registry metadata (key/type/group/label/help/default/tier/scope/options/range + HA-capable/exposed), capability-gated to this panel", "tags": ["config"], "responses": { "200": { "description": "[{key,…}]" } } } },
+    "/api/v1/config/discovery": { "get": { "summary": "Suggest MQTT broker and Home Assistant URLs discovered over mDNS for currently blank Configure fields; does not persist them", "tags": ["config"], "responses": { "200": { "description": "{mqtt_broker,ha_url}" } } } },
     "/api/v1/ha/oauth/status": {
       "get": { "summary": "Probe the current Home Assistant browser sign-in", "description": "A no-store, one-shot connection check. Returns only the connection phase and the authenticated user's bounded display name when Home Assistant supplies one; user IDs, permissions, credentials and tokens are never returned.", "tags": ["config"],
         "responses": { "200": { "description": "{phase,display_name?}" } }
@@ -207,6 +214,14 @@
       "post": { "summary": "Start a short-lived Home Assistant browser sign-in", "description": "Returns an authorization URL for an administrator browser. The one-use state is bound to this panel Host for ten minutes, and a newer start supersedes every older attempt; credentials are never returned to the browser. This is an ordinary HA connection change, not a Hardened-mode hardware action.", "tags": ["config"],
         "requestBody": { "required": true, "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["ha_url"], "properties": { "ha_url": { "type": "string", "format": "uri", "description": "Home Assistant base URL reachable by both this panel and the administrator browser" } } } } } },
         "responses": { "200": { "description": "{ok:true,authorization_url}" }, "400": { "description": "Invalid HA URL or panel Host" } }
+      }
+    },
+    "/api/v1/ha/oauth/panel-start": {
+      "get": { "summary": "Start a short-lived Home Assistant sign-in from the panel itself", "description": "Starts the same bounded Home Assistant sign-in flow without a remote administrator browser. The request must come through this panel's local HTTP endpoint and carry a valid current Home Assistant URL.", "tags": ["config"],
+        "parameters": [
+          { "name": "ha_url", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" }, "description": "Home Assistant base URL reachable by this panel" }
+        ],
+        "responses": { "200": { "description": "Minimal success HTML that opens the Home Assistant sign-in flow on the panel" }, "400": { "description": "Missing or invalid Home Assistant URL, or the request did not come through the panel's local HTTP endpoint" } }
       }
     },
     "/api/v1/ha/oauth/callback": {
@@ -223,6 +238,18 @@
       "get": { "summary": "Export a versioned config bundle", "tags": ["config"],
         "parameters": [{ "name": "include_secrets", "in": "query", "schema": { "type": "string", "enum": ["1"] }, "description": "include secret values (excluded by default)" }],
         "responses": { "200": { "description": "{kind, schema, exported_at, exported_by, values}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" } } }
+    },
+    "/api/v1/config/home-dashboards": {
+      "get": { "summary": "List Home Assistant dashboards available to the signed-in user", "tags": ["config"],
+        "responses": { "200": { "description": "{items: [{path, title, icon, group}], default: {explicit, path}} — built-in panel dashboards then user dashboards in Home Assistant order; default reports the account's server-side default dashboard" } } }
+    },
+    "/api/v1/config/ha-area": {
+      "get": { "summary": "Home Assistant areas, this panel device's current area, and whether the signed-in account may move it", "tags": ["config"],
+        "responses": { "200": { "description": "{areas: [{area_id, name, icon}], device: {found, area_id, area_name}, admin, queried, requested, ha_username}. Reading also reconciles: Home Assistant's area is canonical and is adopted into the local ha_area setting; a pending local request is applied when the session is admin and the device has no area. ha_username is the signed-in account's login name (admin sessions only; blank otherwise)" } } }
+    },
+    "/api/v1/config/probe-broker": {
+      "get": { "summary": "Pre-flight a broker URL from the panel's network: DNS resolve + bounded TCP connect", "tags": ["config"],
+        "responses": { "200": { "description": "{ok, host, port, resolved?, error?: invalid-url|unresolvable|unreachable}. Read-only; advisory — the wizard offers save-anyway on failure" } } }
     },
     "/api/v1/config/import": {
       "post": { "summary": "Bundle import: migrate → scope/secret filter → validate → snapshot revision → apply valid keys (or validate all with strict=1)", "tags": ["config"],
@@ -261,16 +288,53 @@
     "/api/v1/perf/costs": { "get": { "summary": "Non-sampling fixed-key cumulative feature costs for sparse A/B harvesting", "tags": ["performance"], "responses": { "200": { "description": "feature-cost JSON" } } } },
     "/api/v1/perf/history": { "get": { "summary": "Bounded minute-rollup history for built-in dashboard responsiveness and state-stream diagnostics", "description": "Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["performance"], "parameters": [{ "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 168, "default": 24 } }], "responses": { "200": { "description": "Up to seven days of content-free dashboard performance rollups" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } } } },
     "/api/v1/auto-brightness": {
-      "get": { "summary": "Adaptive auto-brightness runtime status", "tags": ["display"], "responses": { "200": { "description": "Current source, learning/paused state and latest bounded decision snapshot; available=false while the runtime is not connected" } } }
+      "get": { "summary": "Adaptive auto-brightness runtime status", "tags": ["display"], "responses": { "200": { "description": "Current source, opaque sourceRevision, learning/paused state and latest bounded decision snapshot; available=false while the runtime is not connected" } } }
+    },
+    "/api/v1/auto-sleep": {
+      "get": { "summary": "Presence-aware auto-sleep policy status", "tags": ["display"], "responses": { "200": { "description": "Current phase, reason, learned lease, source count and manual-suppression state; available=false until the policy has live evidence" } } }
+    },
+    "/api/v1/auto-sleep/prerequisite": {
+      "get": {
+        "summary": "Check whether this panel has a Home Assistant Area",
+        "description": "Reads only the Home Assistant device and Area registries. Registry IDs and device identifiers are not returned.",
+        "tags": ["display"],
+        "responses": {
+          "200": {
+            "description": "Redacted Area eligibility",
+            "content": { "application/json": { "schema": {
+              "type": "object",
+              "required": ["eligible", "phase", "area_name", "detail"],
+              "properties": {
+                "eligible": { "type": "boolean" },
+                "phase": { "type": "string", "enum": ["assigned", "unassigned", "auth_failed", "unavailable"] },
+                "area_name": { "type": "string" },
+                "detail": { "type": "string", "maxLength": 240 }
+              }
+            } } }
+          }
+        }
+      }
+    },
+    "/api/v1/auto-sleep/history": {
+      "get": { "summary": "Current-version auto-sleep replay over Home Assistant area-source history", "description": "Re-fetches source history and runs the currently installed policy. It is a counterfactual source-history estimate: past panel touches, panel proximity, manual overrides and historical learning changes are not reconstructable. Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["display"],
+        "parameters": [{ "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 48, "default": 6 } }],
+        "responses": { "200": { "description": "At most one categorical hold_awake, allow_sleep or inhibited policy sample per minute, recalculated from current included Area-source history with a one-hour warm-up; source_lanes contains opaque source keys, inclusion state, friendly display labels and coalesced on/off/unavailable intervals for every credible source without exposing entity identifiers; diagnostics reports observed history volume and replay timings" }, "400": { "description": "hours outside the public bounds" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } }
+      }
+    },
+    "/api/v1/auto-sleep/source": {
+      "post": { "summary": "Include or suppress one discovered auto-sleep Area source", "description": "Persists an idempotent inclusion decision using the opaque area_key and source_key returned by auto-sleep history. Suppressed entity IDs remain remembered when Home Assistant discovery changes and remain visible as excluded replay lanes when rediscovered.", "tags": ["display"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["area_key", "source_key", "included"], "properties": { "area_key": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "source_key": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "included": { "type": "boolean" } } } } } },
+        "responses": { "200": { "description": "Durable inclusion state updated and source rediscovery started" }, "400": { "description": "Malformed request" }, "409": { "description": "Area/source keys are stale or discovery is unavailable" }, "500": { "description": "Durable state commit failed" } }
+      }
     },
     "/api/v1/auto-brightness/history": {
       "get": { "summary": "Seven-day ambient-light learning projection", "description": "Returns bounded aggregate lux buckets and the learned expected pattern. A sensitivity override previews proposed brightness without changing config. Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["display"],
         "parameters": [
           { "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 168, "default": 168 } },
-          { "name": "sensitivity", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100 }, "description": "Optional what-if preview; 50 is neutral" },
+          { "name": "sensitivity", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100 }, "description": "Optional what-if preview; 50 is balanced" },
           { "name": "minimum_percent", "in": "query", "schema": { "type": "integer", "minimum": 4, "maximum": 95 }, "description": "Optional minimum automatic brightness percentage for what-if preview" }
         ],
-        "responses": { "200": { "description": "{available,hours,bucket_minutes,minimum_percent,minimum_brightness,now_epoch_minute,time_zone,points:[{epochMinute,localDay,minuteOfDay,dayAge,observedMeanLux,minLux,maxLux,expectedLux,proposedBrightness}]} (localDay, minuteOfDay, and dayAge use the panel timezone)" }, "400": { "description": "hours, sensitivity, or minimum_percent outside the public bounds" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } }
+        "responses": { "200": { "description": "{available,hours,bucket_minutes,sensitivity,minimum_percent,minimum_brightness,now_epoch_minute,sourceRevision,latestEpochMinute,time_zone,points:[{epochMinute,localDay,minuteOfDay,dayAge,observedMeanLux,minLux,maxLux,expectedLux,proposedBrightness}]} (sensitivity and minimum_percent identify the projection inputs; sourceRevision is an opaque partition identity; latestEpochMinute is the newest returned five-minute point; localDay, minuteOfDay, and dayAge use the panel timezone)" }, "400": { "description": "hours, sensitivity, or minimum_percent outside the public bounds" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } }
       }
     },
     "/api/v1/auto-brightness/sources": {
@@ -320,8 +384,8 @@
       "post": { "summary": "Start an immediate catalog and dashboard synchronization", "tags": ["performance"], "responses": { "202": { "description": "Started" }, "409": { "description": "Already running" } } }
     },
     "/api/v1/dashboard/entities/issues": {
-      "get": { "summary": "Sanitized entity-filter configuration checks and non-blocking dynamic expressions", "tags": ["performance"], "responses": { "200": { "description": "{items,dashboard_issue_count,blocking_issue_count,ignored_issue_count,dynamic_expressions}; issue items include severity, blocking, ignored, source locations, rule summary, candidate count, limit, reason and recommendation" } } },
-      "post": { "summary": "Ignore or re-enable one current entity-filter safety check", "tags": ["performance"],
+      "get": { "summary": "Sanitized entity-discovery compatibility checks and non-blocking dynamic expressions", "tags": ["performance"], "responses": { "200": { "description": "{items,dashboard_issue_count,blocking_issue_count,ignored_issue_count,dynamic_expressions}; issue items include severity, blocking, ignorable, ignored, source locations, rule summary, candidate count, limit, reason and recommendation" } } },
+      "post": { "summary": "Ignore or re-enable one current entity-discovery safety check", "tags": ["performance"],
         "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["fingerprint", "ignored"], "properties": {
           "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{16}$" }, "ignored": { "type": "boolean" }
         } } } } }, "responses": { "200": { "description": "Override stored and replacement scan requested" }, "400": { "description": "Issue is invalid or no longer present" } } }
@@ -398,9 +462,9 @@
         "responses": { "202": { "description": "Routine action accepted into the bounded control lane, or for a Hardened-mode reboot, approval-required: approve the request on the panel, then retry the identical reboot request from the same peer.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/input": {
-      "post": { "summary": "Inject a tap at device pixel (x,y) — the interactive screenshot's control mode (needs root)", "tags": ["control"],
-        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } } } } },
-        "responses": { "202": { "description": "accepted into the bounded control lane in Relaxed mode or for a loopback caller" }, "400": { "description": "bad-coords" }, "403": { "description": "remote-input-disabled: non-loopback coordinate injection is disabled in Hardened mode and cannot be approved" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
+      "post": { "summary": "Inject a tap at device pixel (x,y) through the live root, accessibility, or Shizuku route", "tags": ["control"],
+        "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" }, "capture": { "type": "boolean", "description": "When true, wait for tap completion and return one fresh PNG instead of the legacy admission-only response." } } } } } },
+        "responses": { "200": { "description": "capture=true only: tap completed and a fresh PNG was captured; response headers identify the input route, screenshot route, request and screenshot IDs", "content": { "image/png": {} } }, "202": { "description": "capture omitted/false: accepted into the bounded control lane in Relaxed mode or for a loopback caller" }, "400": { "description": "bad-coords or bad-capture" }, "403": { "description": "remote-input-disabled: non-loopback coordinate injection is disabled in Hardened mode and cannot be approved" }, "409": { "description": "control queue busy or the pending tap was superseded" }, "502": { "description": "no input route completed the tap" }, "503": { "description": "control plane stopping or the post-tap screenshot was unavailable" }, "504": { "description": "the combined tap/capture completion is unknown; clients must not retry the tap" } } }
     },
     "/api/v1/proximity": { "get": { "summary": "Hardware-normalized proximity learning state, local raw diagnostic, learned presence and fleet-comparable 0–100 level", "tags": ["proximity"], "responses": { "200": { "description": "proximity learning JSON" } } } },
     "/api/v1/proximity/teach": { "post": { "summary": "Start or cancel an optional guided three-wave learning session", "tags": ["proximity"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["action"], "properties": { "action": { "type": "string", "enum": ["start", "cancel"] } } } } } }, "responses": { "202": { "description": "session accepted" }, "409": { "description": "ranged proximity is not proven or the session is unavailable in the current phase" } } } },

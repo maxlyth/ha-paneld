@@ -41,9 +41,14 @@ interface MetricSource {
     fun cpuGovernor(allowRootFallback: Boolean = true): String?
     fun cpuAvailableGovernors(allowRootFallback: Boolean = true): String?
 
-    /** Raw room-climate reply (`T=<centi> H=<centi>`) from an authenticated helper or the fixed Shizuku
-     *  shell-UID input reader. Null when neither authority can read an exact supported layout. */
-    fun roomClimate(): String?
+    // Raw room-climate readers (`T=<centi> H=<centi>`), one per authority. The reader ([PanelMetrics])
+    // owns the helper→Shizuku source selection + the single parse, exactly like every other metric —
+    // the source just exposes each raw read and never parses or decides which one wins.
+    /** Raw room-climate reply from the authenticated helper daemon (`CHT8305`), or null when unreachable. */
+    fun roomClimateDaemon(): String?
+
+    /** Raw room-climate reply from the fixed Shizuku shell-UID input reader, or null when unavailable. */
+    fun roomClimateShell(): String?
 }
 
 /**
@@ -102,10 +107,11 @@ class OsMetricSource(
     /** cpu0 available governors (raw, space-separated). Same direct→su read path as [cpuGovernor]. */
     override fun cpuAvailableGovernors(allowRootFallback: Boolean): String? = directThenSu(AVAIL, allowRootFallback)
 
-    /** Exact room-climate inputs: established helper first, then locally approved shell-UID Shizuku. */
-    override fun roomClimate(): String? =
-        daemon.send("CHT8305")?.takeIf { MetricParse.parseCht8305(it) != null }
-            ?: shellRoomClimate()?.takeIf { MetricParse.parseCht8305(it) != null }
+    /** Raw `CHT8305` daemon reply — the established helper authority. Parsing + fallback live in the reader. */
+    override fun roomClimateDaemon(): String? = daemon.send("CHT8305")
+
+    /** Raw Shizuku shell-UID room-climate reply — the locally approved fallback authority. */
+    override fun roomClimateShell(): String? = shellRoomClimate()
 
     /** Direct file read, falling back to `su cat` when the app can't read the node directly. */
     private fun directThenSu(path: String, allowRootFallback: Boolean = true): String? =

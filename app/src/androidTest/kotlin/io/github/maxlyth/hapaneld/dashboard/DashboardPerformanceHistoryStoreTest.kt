@@ -16,12 +16,10 @@ class DashboardPerformanceHistoryStoreTest {
 
     @Before fun cleanBefore() {
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @After fun cleanAfter() {
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @Test fun minuteRollupsSurviveStoreReopenAndAggregateBatches() {
@@ -64,10 +62,10 @@ class DashboardPerformanceHistoryStoreTest {
                 minute - 1,
             )
             assertEquals(1, rows.size)
-            assertEquals(10_000, rows.single().sampleMs)
-            assertEquals(25, rows.single().updates)
-            assertEquals(50_000, rows.single().payloadBytes)
-            assertEquals(500_000, rows.single().interactionMaxMicros)
+            assertEquals(10_000, rows.single().totals.sampleMs)
+            assertEquals(25, rows.single().totals.updates)
+            assertEquals(50_000, rows.single().totals.payloadBytes)
+            assertEquals(500_000, rows.single().totals.interactionMaxMicros)
             assertTrue(rows.single().filterActive)
         }
     }

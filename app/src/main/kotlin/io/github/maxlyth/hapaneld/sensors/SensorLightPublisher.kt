@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.sensors
 
-import io.github.maxlyth.hapaneld.util.BoundedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
+import io.github.maxlyth.hapaneld.util.submit
 
 internal fun submitIlluminanceIfExposed(
     exposed: Boolean,
@@ -22,7 +23,7 @@ internal class SensorLightPublisher(
     publish: (Int) -> Unit,
     threadName: String = "ha-paneld-light-mqtt",
 ) : AutoCloseable {
-    private val dispatcher = BoundedLatestDispatcher(
+    private val dispatcher = LatestDispatcher.singleSlot(
         threadName = threadName,
         consume = publish,
     )

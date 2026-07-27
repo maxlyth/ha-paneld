@@ -1,7 +1,22 @@
 // ha-paneld info page — live performance, responsiveness and learned proximity status.
 // Served as a static asset (linted by CI: `node --check`) rather than embedded in a Kotlin
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
-var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='';  // ~4 min at 2s
+var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='',topMode='cpu',topCpu=null,topRam=null;  // ~4 min at 2s
+var TOP_PROCESS_MEMORY_FALLBACK_POLLS=12,topProcessMemoryPolls=0,topProcessMemoryPopulated=false;
+var cardSizeSources={info:document.body.getAttribute('data-hydrate')!=='1',perf:false,topProcesses:false,sensors:false,inspect:false};
+function cardSizeSourcesReady(){return cardSizeSources.info&&cardSizeSources.perf&&cardSizeSources.topProcesses&&cardSizeSources.sensors&&cardSizeSources.inspect;}
+function settleCardSizeMemory(){if(cardSizeSourcesReady()&&window.CardSizeMemory)window.CardSizeMemory.settle('dashboard-cards',1200);}
+function cardSizeSourceReady(source){if(cardSizeSources[source])return;cardSizeSources[source]=true;settleCardSizeMemory();}
+// A successful /perf response does not mean Top processes is ready. After a service restart its CPU
+// ranking needs two heavy sampler passes (~10s apart); releasing the remembered card height on the
+// first null response collapses the masonry, then expands it again when rows arrive. Keep the hint until
+// rows exist, with a bounded successful-poll fallback for panels that cannot produce a ranking.
+function topProcessMemoryReady(top){
+ var populated=Array.isArray(top)&&top.length>0;
+ if(populated&&!topProcessMemoryPopulated){topProcessMemoryPopulated=true;
+  if(cardSizeSources.topProcesses)settleCardSizeMemory();else cardSizeSourceReady('topProcesses');return;}
+ if(!cardSizeSources.topProcesses&&++topProcessMemoryPolls>=TOP_PROCESS_MEMORY_FALLBACK_POLLS)cardSizeSourceReady('topProcesses');
+}
 // Reconcile a key/value table IN PLACE — stable DOM + textContent, never innerHTML. Rebuilding innerHTML
 // each poll destroyed the scroll-anchor nodes (the page jumped) and thrashed layout; updating text on
 // persistent nodes lets the browser hold scroll position and skips reflow. rows=[{label,val,suf,col,bold}].
@@ -25,8 +40,9 @@ function paint(id,rows){
 function paintTop(top,msg){
  var t=document.getElementById('topproc');
  if(!t._h){var hr=document.createElement('tr'),a=document.createElement('th');a.textContent='Process';
-  var b=document.createElement('th');b.className='num';b.textContent='% CPU';hr.appendChild(a);hr.appendChild(b);
+  var b=document.createElement('th');b.className='num';hr.appendChild(a);hr.appendChild(b);
   t.textContent='';t.appendChild(hr);t._h=true;}
+ t.children[0].children[1].textContent=topMode==='ram'?'RAM':'% CPU';
  var empty=!top||!top.length,data=empty?[{name:msg||'needs root (su)'}]:top;
  t.children[0].style.display=empty?'none':'';
  for(var i=0;i<data.length;i++){var p=data[i],tr=t.children[i+1];
@@ -39,8 +55,13 @@ function paintTop(top,msg){
   var dim=empty||p.self;nm.style.color=dim?'#888':'';cp.style.color=p.self?'#888':'';
   tr.style.borderTop=p.self?'1px solid #2a2a2a':'';
   nm.style.fontStyle=p.self?'italic':'';cp.style.fontStyle=p.self?'italic':'';
-  var cv=p.cpu==null?'':p.cpu+'%';if(cp.textContent!==cv)cp.textContent=cv;}
+  var cv=topMode==='ram'?(p.ramMb==null?'':p.ramMb+' MB'):(p.cpu==null?'':p.cpu+'%');if(cp.textContent!==cv)cp.textContent=cv;}
  while(t.children.length>data.length+1)t.removeChild(t.lastChild);
+}
+function setTopMode(mode){
+ if(mode!=='cpu'&&mode!=='ram')return;topMode=mode;
+ document.querySelectorAll('.top-process-mode').forEach(function(button){var on=button.dataset.mode===mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false');});
+ paintTop(mode==='ram'?topRam:topCpu,mode==='ram'?'RAM data unavailable':'needs root (su)');hwm('topproc');
 }
 // Noisy state-stream contributors: one sortable-looking data shape instead of repeating the same
 // "Noisy entity" key/value label for every contributor.
@@ -66,7 +87,7 @@ function paintNoisy(entities,identified){
 }
 // Optional metric latch: once seen, the row stays (showing '–' when momentarily absent) for stable height.
 var pseen={};
-function opt(k,label,ok,val,suf){if(ok)pseen[k]=true;if(!pseen[k])return null;
+function opt(k,label,ok,val,suf){if(ok&&!pseen[k]){pseen[k]=true;settleCardSizeMemory();}if(!pseen[k])return null;
  return {label:label,val:ok?val:'–',suf:ok?(suf||''):'',col:ok?'':'#888'};}
 function draw(){
  var c=document.getElementById('perfchart'),x=c.getContext('2d'),W=c.width,H=c.height;
@@ -103,7 +124,7 @@ function drawResp(hist){
  });
 }
 function fmtRate(n,unit){return n<10?n.toFixed(1)+' '+unit:Math.round(n)+' '+unit;}
-function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MiB/s';if(n>=1024)return (n/1024).toFixed(1)+' KiB/s';return Math.round(n)+' B/s';}
+function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB/s';if(n>=1024)return (n/1024).toFixed(1)+' KB/s';return Math.round(n)+' B/s';}
 function fmtByteTotal(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB';if(n>=1024)return (n/1024).toFixed(1)+' KB';return Math.round(n)+' B';}
 function causeLabel(c){return ({state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
  rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
@@ -140,7 +161,8 @@ async function perf(){
    opt('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
    opt('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
   paint('perf',rows.filter(Boolean));
-  paintTop(d.top);
+  topCpu=d.top;topRam=d.topRam;paintTop(topMode==='ram'?topRam:topCpu,topMode==='ram'?'RAM data unavailable':null);
+  topProcessMemoryReady(topCpu);
   var r=d.render,smh=document.getElementById('smhdr'),dash=d.dashboard;
   perfMode=dash&&dash.mode||'';var direct=perfMode==='builtin_direct';
   // Built-in renderer self-measurement (time-to-interactive + involuntary-reload churn). It runs
@@ -184,6 +206,7 @@ async function perf(){
   paint('streamtbl',sr);
   hwm('smtbl');hwm('streamtbl');hwm('topproc');
   document.getElementById('perfage').textContent='· live';
+  cardSizeSourceReady('perf');
  }catch(e){document.getElementById('perfage').textContent='· unavailable';}
 }
 perf();setInterval(perf,2000);
@@ -192,7 +215,7 @@ perf();setInterval(perf,2000);
 function formatBrightness(raw){
  if(typeof raw!=='number'||!isFinite(raw)||raw<0)return null;
  var value=Math.max(0,Math.min(255,Math.round(raw)));
- return Math.round(value*100/255)+'% ('+value+' / 255)';
+ return Math.round(value*100/255)+'% ('+value+')';
 }
 function sensorsCard(tbl,age){
  function fA(a){return a==null?'':(a<90?'· '+a+'s ago':(a<5400?'· '+Math.round(a/60)+'m ago':'· '+Math.round(a/3600)+'h ago'));}
@@ -211,6 +234,7 @@ function sensorsCard(tbl,age){
    if(!rows.length)rows.push({label:'',val:'no sensors on this panel',col:'#888'});
    paint(tbl,rows);
    var a=document.getElementById(age);if(a)a.textContent='· live';
+   cardSizeSourceReady('sensors');
   }catch(e){var a=document.getElementById(age);if(a)a.textContent='· unavailable';}
  }
  s();setInterval(s,2000);
@@ -221,7 +245,10 @@ sensorsCard('senstbl','sensage');
 // lines) — never shrink below the tallest they've been (latched min-height on the card). They stop jumping
 // between 2s polls; grow occasionally, then settle. Reset on resize (column width changes re-wrap content,
 // voiding the old max). Other cards keep wrapping freely — only these two opted in.
-function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,h=c.offsetHeight;if(h>(c._hwm||0)){c._hwm=h;c.style.minHeight=h+'px';}}
+function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNode,hint=c.getAttribute('data-card-size-hint');
+ if(hint&&c.style.minHeight===hint+'px')c.style.minHeight='';
+ var h=c.offsetHeight;if(h>(c._hwm||0))c._hwm=h;
+ c.style.minHeight=hint?hint+'px':(c._hwm?c._hwm+'px':'');}
 window.addEventListener('resize',function(){['smtbl','streamtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 
 // Controls panel: collapse the labelled action buttons (Back/Recents/Launcher/Admin) to icons-only when
@@ -257,6 +284,7 @@ function inspApply(d){
  else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
  else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
  else hint.innerHTML=(perfMode==='builtin_direct'?'The performance cards above use direct built-in instrumentation without DevTools. ':'')+'For deeper inspection, open <b>chrome://inspect</b> → <b>Configure…</b>, add '+hp+', then press <b>Enable</b>. Companion also requires Settings → Troubleshooting → <b>WebView remote debugging</b> and a dashboard relaunch. The relay needs root.';
+ cardSizeSourceReady('inspect');
 }
 async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){var hint=document.getElementById('insthint');
@@ -304,16 +332,37 @@ function diagToggle(el){el.textContent=(el.textContent.indexOf('cm')<0)?el.datas
 // Screenshot card: render the app-private last-successful capture immediately, then refresh in the
 // background. Only swap after the new PNG has fully loaded, so a slow or failed capture never blanks
 // the useful placeholder. The timestamp makes every Dashboard visit a genuinely fresh request.
+function screenshotState(card){return card._screenshotState||(card._screenshotState={generation:0,tapping:false,fallbackUsed:false,objectUrl:null});}
+function screenshotStatus(text,error){var status=document.getElementById('screenshot-dialog-status');if(!status)return;
+ status.textContent=text||'';status.classList.toggle('error',!!error);}
+function installScreenshotBlob(card,blob,generation,headers,seedCache){
+ var state=screenshotState(card),sc=card.querySelector('.shot'),im=sc&&sc.querySelector('img');
+ if(!im||generation!==state.generation)return Promise.resolve(false);
+ var objectUrl=URL.createObjectURL(blob);
+ return new Promise(function(resolve){var next=new Image();
+  next.onload=function(){
+   if(generation!==state.generation){URL.revokeObjectURL(objectUrl);resolve(false);return;}
+   var previous=state.objectUrl;state.objectUrl=objectUrl;
+   im.onload=function(){sc.classList.remove('failed');sc.classList.add('loaded');};
+   im.onerror=function(){sc.classList.add('failed');};im.src=objectUrl;
+   var dialogImage=document.getElementById('screenshot-dialog-image');
+   if(dialogImage)dialogImage.src=objectUrl;
+   var id=seedCache&&headers&&headers.get('X-ha-paneld-Screenshot-Id');
+   if(id&&/^[0-9a-f]{64}$/.test(id)){var seed=new Image();seed.src='/api/v1/screenshot.png?cached='+id;}
+   // Keep the displayed URL alive for modal reopen and slow target-image decode; release only the
+   // previously displayed blob after this replacement has been predecoded successfully.
+   if(previous)URL.revokeObjectURL(previous);resolve(true);
+  };
+  next.onerror=function(){URL.revokeObjectURL(objectUrl);resolve(false);};next.src=objectUrl;
+ });
+}
 function refreshScreenshot(card){
  var sc=card&&card.querySelector('.shot'),im=sc&&sc.querySelector('img');if(!im||im.dataset.refreshing==='1')return;
- im.dataset.refreshing='1';var url='/api/v1/screenshot.png?t='+Date.now();
+ var state=screenshotState(card);if(state.tapping)return;
+ var generation=++state.generation;im.dataset.refreshing='1';var url='/api/v1/screenshot.png?t='+Date.now();
  fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('capture failed');
-  var id=r.headers.get('X-ha-paneld-Screenshot-Id');return r.blob().then(function(blob){return{id:id,blob:blob};});})
- .then(function(fresh){var objectUrl=URL.createObjectURL(fresh.blob);
-  im.onload=function(){sc.classList.remove('failed');sc.classList.add('loaded');URL.revokeObjectURL(objectUrl);
-   if(fresh.id&&/^[0-9a-f]{64}$/.test(fresh.id)){var seed=new Image();
-    seed.src='/api/v1/screenshot.png?cached='+fresh.id;}};
-  im.src=objectUrl;im.dataset.refreshing='0';})
+  return r.blob().then(function(blob){return installScreenshotBlob(card,blob,generation,r.headers,true);});})
+ .then(function(){if(generation===state.generation)im.dataset.refreshing='0';})
  .catch(function(){im.dataset.refreshing='0';});
 }
 function showAndRefreshScreenshot(card,cachedUrl){
@@ -321,6 +370,97 @@ function showAndRefreshScreenshot(card,cachedUrl){
  if(!im.getAttribute('src')&&cachedUrl)im.src=cachedUrl;
  card.style.display='';refreshScreenshot(card);scheduleDashboardColumnAlignment();
 }
+
+// The loaded screenshot opens in a native modal dialog. The original anchor remains the deliberately
+// boring fallback for missing/broken images, modifier clicks and browsers without <dialog> support.
+function screenshotLoaded(shot,im){return !!(shot&&im&&shot.classList.contains('loaded')&&im.complete&&im.naturalWidth&&im.naturalHeight);}
+function screenshotTapPoint(ev,im){var r=im&&im.getBoundingClientRect(),nw=im&&im.naturalWidth,nh=im&&im.naturalHeight;
+ if(!r||!nw||!nh||r.width<=0||r.height<=0)return null;
+ var px=ev.clientX-r.left,py=ev.clientY-r.top;
+ if(px<0||py<0||px>=r.width||py>=r.height)return null;
+ return{x:Math.max(0,Math.min(nw-1,Math.floor(px*nw/r.width))),y:Math.max(0,Math.min(nh-1,Math.floor(py*nh/r.height)))};
+}
+function screenshotTrace(dialog,headers){
+ [['inputId','X-ha-paneld-Input-Id'],['inputRoute','X-ha-paneld-Input-Route'],
+  ['screenshotRoute','X-ha-paneld-Screenshot-Route'],['screenshotId','X-ha-paneld-Screenshot-Id']]
+  .forEach(function(item){var value=headers.get(item[1]);if(value)dialog.dataset[item[0]]=value;});
+}
+function clearScreenshotTrace(dialog){['inputId','inputRoute','screenshotRoute','screenshotId'].forEach(function(key){delete dialog.dataset[key];});}
+function fallbackScreenshot(card,dialog,generation,tapConfirmed){var state=screenshotState(card);if(state.fallbackUsed)return Promise.resolve(false);
+ state.fallbackUsed=true;screenshotStatus(tapConfirmed?'Tap completed; capturing a fresh screenshot…':'Tap outcome unknown; capturing the current panel…',false);
+ return new Promise(function(resolve){setTimeout(resolve,250);}).then(function(){
+  return fetch('/api/v1/screenshot.png?t='+Date.now(),{cache:'no-store'});
+ }).then(function(r){if(!r.ok)throw new Error('capture failed');screenshotTrace(dialog,r.headers);return r.blob().then(function(blob){
+   return installScreenshotBlob(card,blob,generation,r.headers);});
+ }).then(function(updated){screenshotStatus(updated?(tapConfirmed?'Screenshot updated.':'Tap outcome unknown; current screenshot refreshed.'):
+  (tapConfirmed?'The tap completed, but the screenshot could not be updated.':'Tap outcome unknown; the screenshot could not be updated.'),!updated);return updated;})
+ .catch(function(){screenshotStatus(tapConfirmed?'The tap completed, but the screenshot could not be updated.':'Tap outcome unknown; the screenshot could not be updated.',true);return false;});
+}
+function sendScreenshotTap(ev,card,dialog,image){
+ if(!ev||ev.detail<=0||ev.button!==0||ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey)return;
+ if(document.body.getAttribute('data-hardened')==='1')return;
+ var point=screenshotTapPoint(ev,image);if(!point)return;ev.preventDefault();
+ var state=screenshotState(card);if(state.tapping)return;
+ state.tapping=true;state.fallbackUsed=false;var generation=++state.generation;
+ clearScreenshotTrace(dialog);
+ var cardImage=card.querySelector('.shot img');if(cardImage)cardImage.dataset.refreshing='0';
+ image.classList.add('pending');screenshotStatus('Sending tap…',false);
+ var controller=typeof AbortController==='function'?new AbortController():null;
+ // The server owns the tap/capture completion deadline and response grace. Do not abandon a slow helper or
+ // accessibility route early and race its eventual tap with the safe fallback screenshot.
+ var timeout=controller&&setTimeout(function(){controller.abort();},65000);
+ fetch('/api/v1/input',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+  body:'x='+point.x+'&y='+point.y+'&capture=1',signal:controller?controller.signal:undefined})
+ .then(function(r){if(timeout)clearTimeout(timeout);screenshotTrace(dialog,r.headers);
+  var route=r.headers.get('X-ha-paneld-Input-Route');
+  if(!r.ok)return r.text().then(function(body){var e=new Error('tap request failed');e.status=r.status;e.tapConfirmed=!!route;
+   try{e.code=JSON.parse(body).error;}catch(_ignored){}throw e;});
+  var type=(r.headers.get('Content-Type')||'').toLowerCase();if(type.indexOf('image/png')<0){
+   var bad=new Error('capture response was not a PNG');bad.tapConfirmed=true;throw bad;}
+  return r.blob().then(function(blob){return installScreenshotBlob(card,blob,generation,r.headers);});
+ }).then(function(updated){screenshotStatus(updated?'Screenshot updated.':'The tap completed, but the screenshot could not be updated.',!updated);
+  if(!updated)return fallbackScreenshot(card,dialog,generation,true);return true;
+ }).catch(function(error){if(timeout)clearTimeout(timeout);
+  // A route header proves execution reached a tap route; completion-unknown and network/abort failures
+  // are ambiguous. Queue expiry is explicitly not a tap and must not masquerade as success.
+  if(error.tapConfirmed||error.code==='completion-unknown')return fallbackScreenshot(card,dialog,generation,!!error.tapConfirmed);
+  if(error.status==null)return fallbackScreenshot(card,dialog,generation,false);
+  screenshotStatus(error.status===403?'Remote input is disabled in Hardened mode.':'Tap was not accepted.',true);return false;
+ }).then(function(){if(generation===state.generation){state.tapping=false;image.classList.remove('pending');}});
+}
+function createScreenshotDialog(card,shot){
+ var dialog=document.createElement('dialog');dialog.id='screenshot-dialog';dialog.className='screenshot-dialog';
+ var bar=document.createElement('div');bar.className='screenshot-dialog-bar';
+ var title=document.createElement('h2');title.id='screenshot-dialog-title';title.textContent='Screenshot · live panel';bar.appendChild(title);
+ var refresh=document.createElement('button');refresh.type='button';refresh.className='pbtn screenshot-dialog-refresh';refresh.textContent='Refresh';
+ refresh.addEventListener('click',function(){if(dialog.classList.contains('view-only')){refreshScreenshot(card);return;}refreshScreenshot(card);screenshotStatus('Refreshing screenshot…',false);});
+ bar.appendChild(refresh);
+ var close=document.createElement('button');close.type='button';close.className='pbtn screenshot-dialog-close';close.textContent='Close';
+ close.addEventListener('click',function(){dialog.close();});bar.appendChild(close);dialog.appendChild(bar);
+ var frame=document.createElement('div');frame.className='screenshot-dialog-frame';
+ var image=document.createElement('img');image.id='screenshot-dialog-image';image.alt='Live panel screenshot';image.draggable=false;
+ image.addEventListener('click',function(ev){sendScreenshotTap(ev,card,dialog,image);});frame.appendChild(image);dialog.appendChild(frame);
+ dialog.setAttribute('aria-labelledby',title.id);
+ var status=document.createElement('p');status.id='screenshot-dialog-status';status.className='screenshot-dialog-status';
+ status.setAttribute('role','status');status.setAttribute('aria-live','polite');dialog.appendChild(status);
+ dialog.addEventListener('close',function(){shot.focus();});document.body.appendChild(dialog);card._screenshotDialog=dialog;return dialog;
+}
+function destroyScreenshotOverlay(card){
+ var dialog=card&&card._screenshotDialog;
+ if(dialog){if(dialog.open)dialog.close();dialog.remove();card._screenshotDialog=null;}
+}
+function setupScreenshotOverlay(){var card=document.getElementById('shotcard'),shot=card&&card.querySelector('.shot'),im=shot&&shot.querySelector('img');
+ if(!card||!shot||!im||card._screenshotDialog||typeof HTMLDialogElement==='undefined'||typeof HTMLDialogElement.prototype.showModal!=='function')return;
+ var dialog=createScreenshotDialog(card,shot);
+ shot.addEventListener('click',function(ev){
+  if(ev.button!==0||ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey||!screenshotLoaded(shot,im))return;
+  ev.preventDefault();document.getElementById('screenshot-dialog-image').src=im.currentSrc||im.src;
+  var hardened=document.body.getAttribute('data-hardened')==='1';dialog.classList.toggle('view-only',hardened);
+  screenshotStatus(hardened?'View only — remote input is disabled in Hardened mode.':'Click the screenshot to tap the panel.',false);
+  if(!dialog.open){dialog.showModal();dialog.querySelector('.screenshot-dialog-close').focus();}
+ });
+}
+setupScreenshotOverlay();
 
 // Dashboard hydration: the shell now renders instantly (the probe-backed values used to block the
 // whole page ~12s on PX30). When the server marked the page stale/cold (body data-hydrate="1"),
@@ -332,13 +472,14 @@ function showAndRefreshScreenshot(card,cachedUrl){
   var bz=document.getElementById('bannerzone');if(bz&&typeof d.banners==='string')bz.innerHTML=d.banners;
   Object.keys(d.cards||{}).forEach(function(id){var el=document.getElementById(id);if(!el)return;
    var card=el.closest('.card');
-   if(d.cards[id]&&d.cards[id].trim()){el.innerHTML=d.cards[id];if(card)card.style.display='';}
+   if(d.cards[id]&&d.cards[id].trim()){if(id==='shotcard')destroyScreenshotOverlay(card);el.innerHTML=d.cards[id];if(card)card.style.display='';}
    else if(card){card.style.display='none';}});          // probe says this card has nothing to show
   var cz=document.getElementById('ctlzone');if(cz&&d.controls){cz.innerHTML=d.controls;fitControls();}
   var sc=document.getElementById('shotcard');
   if(sc){if(d.shot){showAndRefreshScreenshot(sc,d.shotCached);}
    else{sc.style.display='none';}}
-  scheduleDashboardColumnAlignment();
+  setupScreenshotOverlay();scheduleDashboardColumnAlignment();
+  cardSizeSourceReady('info');
  }
  function hydrate(tries){fetch('/api/v1/info').then(function(r){return r.json();}).then(apply)
   .catch(function(){if(tries>0)setTimeout(function(){hydrate(tries-1);},3000);});}

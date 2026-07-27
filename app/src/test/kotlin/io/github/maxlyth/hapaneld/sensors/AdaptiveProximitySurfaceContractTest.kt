@@ -11,8 +11,14 @@ class AdaptiveProximitySurfaceContractTest {
         val mqtt = source("MqttBridge.kt")
 
         assertTrue(mqtt.contains("normalizedLevel?.coerceIn(0, 100)"))
-        assertTrue(mqtt.contains("sensor\", \"\${panel}_proximity_level"))
-        assertTrue(mqtt.contains("unit_of_measurement\":\"%\""))
+        assertTrue(mqtt.contains("registryExposable(\"proximity_level\""))
+        // The proximity_level discovery payload is registry-driven; its % unit now lives in the
+        // single SettingsRegistry descriptor rather than a MqttBridge literal (byte-parity is pinned
+        // by DiscoveryParityTest).
+        assertTrue(
+            SettingsRegistry.spec("proximity_level")!!.ha!!
+                .buildDiscoveryJson("test", "a", "d").contains("\"unit_of_measurement\":\"%\""),
+        )
         assertTrue(mqtt.contains("availability_mode\":\"all\""))
         assertTrue(mqtt.contains("numericDeadband(4.0)"))
         assertTrue(mqtt.contains("publish(stateProximityLevel, \"\", retain = true)"))
@@ -107,6 +113,7 @@ class AdaptiveProximitySurfaceContractTest {
         val service = source("PaneldService.kt")
         val screen = source("control/ScreenController.kt")
         val server = source("http/PaneldServer.kt")
+        val configure = asset("configure.js")
 
         assertTrue(runtime.contains("restorePendingEvidence(evidence)"))
         assertTrue(runtime.contains("withoutWakeEvidence(previous"))
@@ -122,7 +129,10 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(server.contains("hasProximity = sensors.hasProximity()"))
         assertTrue(server.contains("hasLearnedProximity = sensors.hasLearnedProximity()"))
         assertTrue(server.contains("action != \"cancel\" && !sensors.hasProximity()"))
-        assertTrue(server.contains("if (sensors.hasProximity()) \"\"\"<div id=\"proximity-learning-mount\""))
+        assertTrue(server.contains("val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave"))
+        assertTrue(server.contains("if (proximityLearningEnabled) \"\"\"<div id=\"proximity-learning-mount\""))
+        assertTrue(configure.contains("submittedValues, \"wake_on_wave\""))
+        assertTrue(configure.contains("window.location.reload();"))
         assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = isLearnedMode(view.mode)"))
         assertTrue(mqttTombstonesAllPresenceSurfaces())
     }
@@ -130,10 +140,8 @@ class AdaptiveProximitySurfaceContractTest {
     private fun mqttTombstonesAllPresenceSurfaces(): Boolean {
         val mqtt = source("MqttBridge.kt")
         return mqtt.contains("capabilitySnapshot?.hasLearnedProximity == true") &&
-            mqtt.contains("exposable(\"proximity\", \"binary_sensor\"") &&
-            mqtt.contains("availableOverride = learnedProximity") &&
-            mqtt.contains("sensorDiscovery(\"proximity\", proximityAvail)") &&
-            mqtt.contains("sensorDiscovery(\"proximity_level\", proximityAvail)") &&
+            mqtt.contains("registryExposable(\"proximity\", proximityAvail, learnedProximity)") &&
+            mqtt.contains("registryExposable(\"proximity_level\", proximityAvail, learnedProximity)") &&
             mqtt.contains("if (hasProximity) known(if (config.wakeOnWave)")
     }
 

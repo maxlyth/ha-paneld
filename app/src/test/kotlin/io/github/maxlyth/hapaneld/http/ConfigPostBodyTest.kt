@@ -89,12 +89,36 @@ class ConfigPostBodyTest {
         assertTrue(mutation > validation)
     }
 
+    @Test fun `config monitor is released before cross-thread live side effects`() {
+        val source = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
+        ).first { it.isFile }.readText()
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleConfigPost(call: ApplicationCall)"),
+            source.indexOf("private fun configSchemaJson()"),
+        )
+        val monitor = handler.substring(
+            handler.indexOf("val persisted = config.synchronizedTransaction"),
+            handler.indexOf("if (persisted && !mutationPlan.isNoOp)"),
+        )
+
+        assertFalse(monitor.contains("applySetting("))
+        assertFalse(monitor.contains("entityLearning."))
+        assertFalse(monitor.contains("applyRendererEffects("))
+        assertTrue(
+            handler.indexOf("applySetting(\"home_dashboard\"") >
+                handler.indexOf("if (persisted && !mutationPlan.isNoOp)"),
+        )
+    }
+
     @Test fun `direct config admission normalizes every registered value before mutation`() {
         val result = normalizeConfigPostParameters(Parameters.build {
             append("friendly_name", "  Example Panel  ")
             append("dashboard_zoom", "125")
             append("dashboard_fullscreen", "on")
             append("ha_expose_wake_on_wave", "0")
+            append("ha_expose_navbar_mode", "1")
             append("tame_vendor_packages", "com.vendor.one, com.vendor.two com.vendor.one")
             append("ha_token_expiry", "42")
             append("mqtt_password", "  exact password  ")
@@ -102,6 +126,7 @@ class ConfigPostBodyTest {
         assertEquals("Example Panel", result.values["friendly_name"])
         assertEquals("true", result.values["dashboard_fullscreen"])
         assertEquals("false", result.values["ha_expose_wake_on_wave"])
+        assertEquals("true", result.values["ha_expose_navbar_mode"])
         assertEquals("com.vendor.one com.vendor.two", result.values["tame_vendor_packages"])
         assertEquals("42", result.values["ha_token_expiry"])
         assertEquals("  exact password  ", result.values["mqtt_password"])
@@ -120,6 +145,25 @@ class ConfigPostBodyTest {
         ).forEach { parameters ->
             assertTrue(normalizeConfigPostParameters(parameters) is ConfigPostParameters.Bad)
         }
+    }
+
+    @Test fun `mqtt onboarding discovers ha url only when user has not posted one`() {
+        assertTrue(shouldDiscoverHaUrlForMqttOnboarding("", Parameters.build {
+            append("mqtt_broker", "tcp://homeassistant.local:1883")
+        }))
+        assertTrue(shouldDiscoverHaUrlForMqttOnboarding("", Parameters.build {
+            append("mqtt_user", "panel")
+        }))
+        assertFalse(shouldDiscoverHaUrlForMqttOnboarding("http://homeassistant.local:8123", Parameters.build {
+            append("mqtt_broker", "tcp://homeassistant.local:1883")
+        }))
+        assertFalse(shouldDiscoverHaUrlForMqttOnboarding("", Parameters.build {
+            append("mqtt_broker", "tcp://homeassistant.local:1883")
+            append("ha_url", "")
+        }))
+        assertFalse(shouldDiscoverHaUrlForMqttOnboarding("", Parameters.build {
+            append("friendly_name", "Office")
+        }))
     }
 
     @Test fun `automatic brightness minimum preserves the visible floor at config admission`() {

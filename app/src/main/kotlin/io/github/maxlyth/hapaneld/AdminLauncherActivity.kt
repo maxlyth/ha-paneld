@@ -121,12 +121,12 @@ class AdminLauncherActivity : AppCompatActivity() {
         val onClick: () -> Unit,
     )
 
-    private fun adminTiles(dashboardTarget: AdminDashboardTarget?): List<Tile> = buildList {
+    private fun adminTiles(dashboardTarget: RendererTarget?): List<Tile> = buildList {
         when (dashboardTarget) {
-            AdminDashboardTarget.Builtin -> add(Tile("Dashboard", appIcon(packageName), "HA") {
+            RendererTarget.Builtin -> add(Tile("Dashboard", appIcon(packageName), "HA") {
                 startSafely(Intent(this@AdminLauncherActivity, DashboardActivity::class.java))
             })
-            is AdminDashboardTarget.Foreign -> add(Tile("Dashboard", appIcon(dashboardTarget.packageName), "HA") {
+            is RendererTarget.Foreign -> add(Tile("Dashboard", appIcon(dashboardTarget.packageName), "HA") {
                 packageManager.getLaunchIntentForPackage(dashboardTarget.packageName)?.let(::startSafely)
             })
             null -> Unit
@@ -204,11 +204,11 @@ class AdminLauncherActivity : AppCompatActivity() {
      * (the selected dashboard renderer, Settings, ourselves) so the grid doesn't duplicate them. The drawer itself has no
      * LAUNCHER filter, so it's absent regardless.
      */
-    private fun installedApps(dashboardTarget: AdminDashboardTarget?): List<ResolveInfo> {
+    private fun installedApps(dashboardTarget: RendererTarget?): List<ResolveInfo> {
         val curated = setOfNotNull(
             packageName,
             "com.android.settings",
-            (dashboardTarget as? AdminDashboardTarget.Foreign)?.packageName,
+            (dashboardTarget as? RendererTarget.Foreign)?.packageName,
         )
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return runCatching {
@@ -234,9 +234,9 @@ class AdminLauncherActivity : AppCompatActivity() {
     private fun appIcon(pkg: String): android.graphics.drawable.Drawable? =
         runCatching { packageManager.getApplicationIcon(pkg) }.getOrNull()
 
-    private fun dashboardTarget(): AdminDashboardTarget? {
+    private fun dashboardTarget(): RendererTarget? {
         val config = Config(this)
-        return resolveAdminDashboardTarget(
+        return RendererResolver.resolveLaunchable(
             configuredPackage = config.dashboardPackage,
             builtinReady = config.haUrl.isNotBlank(),
             isLaunchable = { packageManager.getLaunchIntentForPackage(it) != null },

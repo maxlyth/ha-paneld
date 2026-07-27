@@ -2,23 +2,55 @@ package io.github.maxlyth.hapaneld.http
 
 /**
  * Pure decision for the info-page setup banner: what the panel still needs configured, derived from the
- * live MQTT status string + whether a broker is configured + whether the panel id is still the default.
+ * live MQTT status string and whether a broker is configured. Generated panel identities are complete
+ * identities, not missing setup.
  *
  * Extracted from the HTML builder so it's unit-testable — the key regression it guards is the
  * "needs the MQTT broker" false-positive: while the bridge is mid-(re)connect after a config change its
  * status is transient/blank, and a configured broker must NOT be reported as missing then.
  */
 object SetupBanner {
-    fun needs(mqttStatus: String, brokerConfigured: Boolean, panelIdDefault: Boolean): List<String> {
+    fun needs(mqttStatus: String, brokerConfigured: Boolean, mqttUserConfigured: Boolean = false): List<String> {
         val needs = mutableListOf<String>()
-        if (panelIdDefault) needs.add("a panel id")
         when {
-            mqttStatus.contains("connected") || mqttStatus.contains("connecting") -> {} // connected / transient — fine
-            mqttStatus.contains("auth rejected") -> needs.add("valid MQTT credentials (the broker rejected them)")
+            mqttStatus.contains("connected") || mqttStatus.contains("connecting") ||
+                mqttStatus.contains("auth retrying") -> {} // connected / transient — fine
+            !brokerConfigured -> needs.add("MQTT configuration") // discovery / broker setup is not proven yet
+            mqttStatus.contains("auth rejected") -> needs.add(
+                if (mqttUserConfigured) "valid MQTT credentials (the broker rejected them)"
+                else "valid MQTT credentials",
+            )
             mqttStatus.contains("unreachable") -> needs.add("a reachable MQTT broker")
-            !brokerConfigured -> needs.add("the MQTT broker") // genuinely unconfigured
+            mqttStatus.contains("invalid or unsupported") -> needs.add("a valid MQTT broker URL")
             else -> {} // a broker IS configured but the bridge is mid-(re)connect / initialising — transient
         }
         return needs
+    }
+
+    /**
+     * What the MQTT bridge is doing right now, for a panel that is still being set up or is reconnecting.
+     *
+     * @param dashboardStepPending whether a dashboard/renderer choice is genuinely still outstanding. Only
+     *   then may this promise a next step. Every MQTT (re)connect re-announces discovery — including the one
+     *   after an ordinary app upgrade — so on a fully configured panel the old unconditional copy told the
+     *   owner "the dashboard setup step appears next" about a step that did not exist and would never come.
+     *   Reported from a configured panel immediately after upgrading to versionCode 464. The state
+     *   itself is still worth explaining, because MQTT genuinely is not connected yet; it is the promise that
+     *   was wrong, so only the promise is dropped.
+     */
+    fun progress(
+        mqttStatus: String,
+        brokerConfigured: Boolean,
+        dashboardStepPending: Boolean = false,
+    ): String? {
+        val next = if (dashboardStepPending) " The dashboard setup step appears next." else ""
+        return when {
+            !brokerConfigured -> null
+            mqttStatus.contains("connecting") || mqttStatus.contains("auth retrying") ->
+                "MQTT settings saved — verifying the broker connection. This can take a short while after saving.$next"
+            mqttStatus.contains("connected, announcing") ->
+                "MQTT connected — publishing Home Assistant discovery.$next"
+            else -> null
+        }
     }
 }

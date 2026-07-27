@@ -290,6 +290,12 @@ class MqttFamilyPreferenceTest {
         assertEquals("tls://broker.example:1884", mqttFamilyBrokerIdentity("mqtts://broker.example:1884"))
         assertEquals("tcp://[2001:db8::1]:1883", mqttFamilyBrokerIdentity("tcp://[2001:DB8::1]"))
         assertNull(mqttFamilyBrokerIdentity("https://broker.example"))
+        // Equivalent TLS schemes with the default port collapse to one identity (absorbed from the
+        // former reconfigure-offline broker-identity helper, now converged onto this one canonicalizer).
+        assertEquals(
+            mqttFamilyBrokerIdentity("ssl://broker:8883"),
+            mqttFamilyBrokerIdentity("mqtts://BROKER"),
+        )
     }
 
     @Test fun `device-local family tuple is absent from user configuration registry`() {

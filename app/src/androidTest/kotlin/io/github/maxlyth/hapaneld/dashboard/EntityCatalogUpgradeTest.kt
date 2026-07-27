@@ -19,7 +19,13 @@ class EntityCatalogUpgradeTest {
     @Before fun cleanBefore() = clean()
     @After fun cleanAfter() = clean()
 
-    @Test fun v8UpgradeRetainsCatalogRowsAndCreatesStateProximityAndAmbientSchemas() {
+    /**
+     * Structures older than public v0.9.5 are out of contract: their migration steps were deleted, so
+     * onUpgrade cannot carry them forward. The store must still open — a throw would abort the open and
+     * take configuration down — by setting the old file aside and starting fresh. The previous database
+     * stays on disk for manual recovery.
+     */
+    @Test fun aDatabaseBelowTheSupportedFloorIsSetAsideAndTheStoreStillOpens() {
         legacyDatabase(8).use { db ->
             db.execSQL("CREATE TABLE entity(instance TEXT NOT NULL, entity_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(instance,entity_id))")
             db.execSQL("INSERT INTO entity(instance,entity_id,state) VALUES('home','sensor.room','21.5')")
@@ -29,31 +35,85 @@ class EntityCatalogUpgradeTest {
         EntityCatalogStore(context).use { store ->
             val db = store.writableDatabase
             assertEquals(EntityCatalogSchema.CURRENT_VERSION, db.version)
-            assertEquals("21.5", scalar(db, "SELECT state FROM entity WHERE instance='home' AND entity_id='sensor.room'"))
+            // Fresh store at the current schema, not a half-migrated v8 one.
             assertTrue(tableExists(db, "app_state"))
             assertTrue(tableExists(db, "proximity_model"))
             assertTrue(tableExists(db, "ambient_lux_minute"))
-            assertTrue(indexExists(db, "proximity_rollup_age"))
-            assertTrue(indexExists(db, "ambient_lux_minute_age"))
+            assertEquals("0", scalar(db, "SELECT count(*) FROM entity"))
         }
+        val preserved = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
+            .let { java.io.File(it.parentFile, "${it.name}.v8.superseded") }
+        assertTrue("the out-of-contract database must remain recoverable", preserved.isFile)
     }
 
-    @Test fun v10UpgradePreservesProximityRowsAndAddsAmbientHistory() {
-        legacyDatabase(10).use { db ->
-            db.execSQL(EntityCatalogStore.PROXIMITY_MODEL_TABLE_SQL)
+    @Test fun publicV095DatabaseUpgradePreservesConfigInOneStep() {
+        legacyDatabase(11).use { db ->
             db.execSQL(
-                "INSERT INTO proximity_model(fingerprint,algorithm_version,behavior_signature,snapshot_json,ready,updated_at) " +
-                    "VALUES('fingerprint',3,'behaviour','{}',1,123)",
+                "CREATE TABLE dashboard(" +
+                    "instance TEXT NOT NULL, path TEXT NOT NULL, config_hash TEXT NOT NULL DEFAULT ''," +
+                    "config_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'disabled'," +
+                    "last_sync_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''," +
+                    "unresolved_json TEXT NOT NULL DEFAULT '[]', sync_generation INTEGER NOT NULL DEFAULT 0," +
+                    "issues_json TEXT NOT NULL DEFAULT '[]'," +
+                    "PRIMARY KEY(instance,path))",
             )
-            db.version = 10
+            db.execSQL("INSERT INTO dashboard(instance,path,status) VALUES('fixture','home','synced')")
+            db.execSQL(EntityCatalogStore.APP_STATE_REVISION_TABLE_SQL)
+            db.execSQL(EntityCatalogStore.APP_STATE_NAMESPACE_TABLE_SQL)
+            db.execSQL(EntityCatalogStore.APP_STATE_TABLE_SQL)
+            db.execSQL("CREATE INDEX ix_app_state_updated ON app_state(namespace,updated_at)")
+            db.execSQL("INSERT INTO app_state_revision(committed_at,namespace,source) VALUES(1700000000000,'config','fixture')")
+            db.execSQL("INSERT INTO app_state_namespace(namespace,imported_at,legacy_name) VALUES('config',1700000000000,'')")
+            db.execSQL(
+                "INSERT INTO app_state(namespace,state_key,value_type,value_text,updated_at,revision) " +
+                    "VALUES('config','ha_url','string','https://ha.example.test',1700000000000,1)",
+            )
+            db.execSQL(
+                "INSERT INTO app_state(namespace,state_key,value_type,value_text,updated_at,revision) " +
+                    "VALUES('config','config_schema','int','2',1700000000000,1)",
+            )
+            db.version = 11
         }
 
         EntityCatalogStore(context).use { store ->
             val db = store.writableDatabase
             assertEquals(EntityCatalogSchema.CURRENT_VERSION, db.version)
-            assertEquals("fingerprint", scalar(db, "SELECT fingerprint FROM proximity_model"))
-            assertTrue(tableExists(db, "ambient_lux_minute"))
-            assertTrue(indexExists(db, "ambient_lux_minute_age"))
+            assertEquals("https://ha.example.test", scalar(db, "SELECT value_text FROM app_state WHERE namespace='config' AND state_key='ha_url'"))
+            assertEquals("2", scalar(db, "SELECT value_text FROM app_state WHERE namespace='config' AND state_key='config_schema'"))
+            assertEquals("0", scalar(db, "SELECT analyzer_policy_version FROM dashboard"))
+        }
+    }
+
+    /**
+     * The metric payload migration moves Tier-2 history, so it must arrive intact. `dashboard_performance`
+     * is deliberately left in place: dropping it would be non-additive, and keeping it lets an older build
+     * still open this database.
+     */
+    @Test fun performanceHistoryIsCarriedIntoPayloadsAndTheOldTableIsRetainedEmpty() {
+        legacyDatabase(12).use { db ->
+            db.execSQL(EntityCatalogStore.PERFORMANCE_HISTORY_TABLE_SQL)
+            db.execSQL(
+                "INSERT INTO dashboard_performance(instance,path,minute,filter_active,entity_count," +
+                    "frames,loaf_max_micros,interaction_max_micros,input_delay_micros) " +
+                    "VALUES('home','lovelace',1000,1,42,7,900,500,60)",
+            )
+            db.version = 12
+        }
+
+        EntityCatalogStore(context).use { store ->
+            val db = store.writableDatabase
+            assertEquals(EntityCatalogSchema.CURRENT_VERSION, db.version)
+            val history = store.dashboardPerformanceHistory("home", "lovelace", 0)
+            assertEquals(1, history.size)
+            val minute = history.single()
+            assertEquals(1000L, minute.minute)
+            assertTrue(minute.filterActive)
+            assertEquals(42, minute.entityCount)
+            assertEquals(7L, minute.totals.frames)
+            assertEquals(900L, minute.totals.loafMaxMicros)
+            assertEquals("the slowest interaction keeps its breakdown", 60L, minute.totals.inputDelayMicros)
+            assertEquals("0", scalar(db, "SELECT count(*) FROM dashboard_performance"))
+            assertTrue("the old table must remain for an older build", tableExists(db, "dashboard_performance"))
         }
     }
 
@@ -73,6 +133,11 @@ class EntityCatalogUpgradeTest {
 
     private fun clean() {
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
+        // The reconcile paths leave .vN.premigrate / .vN.superseded copies beside the database; without
+        // sweeping them a preserved database from one test becomes a restore source in the next.
+        val target = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
+        target.parentFile?.listFiles()
+            ?.filter { it.name.startsWith("${target.name}.v") }
+            ?.forEach { it.delete() }
     }
 }

@@ -17,6 +17,7 @@
     <!-- SQLite/XML bridge hashes are install-local migration state, not portable user settings. -->
     <exclude domain="sharedpref" path="ha-paneld-state-bridge.xml" />
     <!-- Unified state includes credentials and panel-local recovery/controller state. -->
+    <exclude domain="database" path="." />
     <exclude domain="database" path="ha-paneld.db" />
     <!-- Compatibility fallback while the one-time filename migration remains supported. -->
     <exclude domain="database" path="entity-learning.db" />

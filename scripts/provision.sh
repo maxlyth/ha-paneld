@@ -110,9 +110,12 @@ RELEASE_HELPER_BUILD_ID=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
+SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
+LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
-EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""
+EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""; AUTO_EXPORT_FILE=""
+CONFIG_BACKUP_DIR="${HAPANELD_CONFIG_BACKUP_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/ha-paneld/config-backups}"
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
 MQTT_PASS_INPUT_FILE="${HAPANELD_MQTT_PASS_FILE:-}"
 HA_TOKEN_INPUT_FILE="${HAPANELD_HA_TOKEN_FILE:-}"
@@ -185,6 +188,7 @@ while [ "${1:-}" ]; do
     --restore) RESTORE_FILE="$2"; RESTORE_MODE="restore"; shift 2 ;;      # import config JSON, including device-scoped keys
     --restore-fleet) RESTORE_FILE="$2"; RESTORE_MODE="fleet"; shift 2 ;;  # apply only PORTABLE keys (cross-panel deploy)
     --verify) VERIFY_ONLY=1; shift ;;
+    --reset-config) RESET_CONFIG=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "${RED}unknown arg: $1${X}" >&2; exit 2 ;;
   esac
@@ -292,9 +296,18 @@ if { [ -n "$HA_USER" ] || [ -n "$HA_TOKEN" ]; } && [ -z "$HA_URL" ]; then
   echo "${RED}✗ --ha-user/--ha-pass and --ha-token require --ha-url.${X}" >&2
   exit 2
 fi
+if [ "$RESET_CONFIG" = 1 ] && [ "$VERIFY_ONLY" = 1 ]; then
+  echo "${RED}✗ --reset-config cannot be combined with --verify.${X} --verify never changes the panel." >&2
+  exit 2
+fi
+if [ "$RESET_CONFIG" = 1 ] && [ -n "$RESTORE_FILE" ]; then
+  echo "${RED}✗ --reset-config cannot be combined with --restore/--restore-fleet.${X}" >&2
+  echo "   Erasing the configuration and then importing one are opposite intents. Run the reset first, then restore." >&2
+  exit 2
+fi
 if [ "$BUILTIN" = 1 ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
   echo "${RED}✗ --builtin needs Home Assistant credentials during non-interactive provisioning.${X}" >&2
-  echo "   Run without --builtin, then open the printed Browser sign-in URL and select the Built-in renderer." >&2
+  echo "   Run without --builtin, then open the printed guided-setup URL and select the Built-in renderer." >&2
   exit 2
 fi
 
@@ -431,6 +444,118 @@ show_provisioning_plan() {
   fi
   warn "profile-guided provisioning stayed ${status:-unavailable}; the installed app could not complete profile verification"
   return 1
+}
+
+# ── Closing guidance ────────────────────────────────────────────────────────────────────────────
+# GET /api/v1/setup is the app's own authority for "what does this panel still need, and what is the
+# one next thing to do". Rendering it here, instead of re-deriving the answer from config fields, is
+# what keeps the installer's last line identical to the panel's standing screen and the /setup page.
+# It replaced an unconditional "connect Home Assistant in your browser" that fired whenever OAuth was
+# not yet configured — including on a brand-new panel, where that link cannot work at all, because
+# POST /api/v1/ha/oauth/start rejects the request until an ha_url has been saved.
+#
+# Two properties of the journey have to survive the trip through bash:
+#   1. `next` is the first BLOCKED stage, or failing that the first IN_FLIGHT one. So a non-null
+#      `next` does NOT mean the user must act. In-flight is reported as progress, never as a fault.
+#   2. `detail` is a machine token (a package name, an MQTT state, "awaiting_frontend"), never
+#      display prose. The wording below is therefore ours, and an unrecognised stage falls through to
+#      generic guidance rather than printing a raw token — which is what lets the app add a stage
+#      (as ENTITY_FILTER was added) without silently degrading this output.
+read_setup_journey() {
+  local body steps line cfg
+  SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0
+  SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
+  LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
+  body="$(curl -fsS --max-time 5 "$URL/api/v1/setup" 2>/dev/null || true)"
+  case "$body" in
+    *'"steps"'*) SETUP_JOURNEY_AVAILABLE=1 ;;
+    *)
+      # Pre-wizard build: fall back to the config fields this script already reads elsewhere.
+      cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
+      [ -n "$cfg" ] || return 0
+      printf '%s' "$cfg" | grep -Eq '"mqtt_broker"[[:space:]]*:[[:space:]]*"[^"]+"' && LEGACY_MQTT_SET=1
+      printf '%s' "$cfg" | grep -Eq '"ha_url"[[:space:]]*:[[:space:]]*"[^"]+"' && LEGACY_HA_URL_SET=1
+      printf '%s' "$cfg" | grep -Eq '"ha_auth"[[:space:]]*:[[:space:]]*\{[^}]*"configured"[[:space:]]*:[[:space:]]*true' &&
+        LEGACY_HA_AUTH_CONFIGURED=1
+      return 0
+      ;;
+  esac
+  printf '%s' "$body" | grep -Eq '"complete"[[:space:]]*:[[:space:]]*true' && SETUP_COMPLETE=1
+  printf '%s' "$body" | grep -Eq '"repair"[[:space:]]*:[[:space:]]*true' && SETUP_REPAIR=1
+  SETUP_NEXT="$(printf '%s' "$body" | sed -n 's/.*"next"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p')"
+  [ -n "$SETUP_NEXT" ] || return 0
+  # One step object per line, so the greedy field matches below cannot cross an object boundary.
+  steps="$(printf '%s' "$body" | tr '\n' ' ' | sed 's/},[[:space:]]*{/}\n{/g')"
+  line="$(printf '%s\n' "$steps" | grep -F "\"stage\":\"$SETUP_NEXT\"" | head -1)"
+  SETUP_NEXT_STATUS="$(printf '%s' "$line" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p')"
+  SETUP_NEXT_DETAIL="$(printf '%s' "$line" | sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sanitize_terminal)"
+  return 0
+}
+
+# One short imperative per stage. Deliberately not derived from the stage name: these are the words a
+# first-time installer reads, and they must match what the wizard page actually asks for.
+setup_next_headline() {
+  case "$1" in
+    identity)         echo "confirm this panel's name" ;;
+    mqtt_broker)      echo "set the MQTT broker" ;;
+    mqtt_credentials) echo "enter MQTT credentials the broker accepts" ;;
+    mqtt_connection)  echo "get MQTT connected" ;;
+    renderer)         echo "choose how this panel shows its dashboard" ;;
+    ha_url)           echo "set the Home Assistant address" ;;
+    ha_credentials)   echo "sign in to Home Assistant" ;;
+    entity_filter)    echo "answer the entity-filter question" ;;
+    render_proof)     echo "confirm the dashboard renders" ;;
+    *)                echo "finish guided setup" ;;
+  esac
+}
+
+# An extra clarifying line for the tokens where the stage name alone leaves the user guessing why.
+setup_next_reason() {
+  case "$1/$2" in
+    mqtt_connection/auth-failed)      echo "The broker is reachable but rejected these credentials." ;;
+    mqtt_connection/unreachable)      echo "The broker did not answer at that address." ;;
+    mqtt_connection/config-error)     echo "That broker URL is not valid." ;;
+    renderer/webview_too_old_fixable) echo "This panel's system WebView is too old for the built-in renderer; setup offers the update." ;;
+    renderer/webview_too_old)         echo "This panel's system WebView is too old for the built-in renderer." ;;
+    ha_credentials/*)                 echo "Guided setup offers Browser sign-in, so no credentials are typed on the panel." ;;
+    *) : ;;
+  esac
+}
+
+print_next_step() {
+  local headline reason
+  if [ "$SETUP_JOURNEY_AVAILABLE" != 1 ]; then
+    # Pre-wizard panel. Only ever offer the Home Assistant sign-in link once an address exists to
+    # sign in to; without one the OAuth endpoint refuses the request.
+    if [ "$LEGACY_HA_URL_SET" = 1 ] && [ "$LEGACY_HA_AUTH_CONFIGURED" != 1 ]; then
+      echo "   ${CYN}${B}Next: connect Home Assistant in your browser${X} — ${B}$URL/configure#cfg-ha-oauth${X}"
+    elif [ "$LEGACY_MQTT_SET" != 1 ] && [ "$LEGACY_HA_URL_SET" != 1 ]; then
+      echo "   ${CYN}${B}Next: configure this panel in your browser${X} — ${B}$URL/configure${X}"
+    fi
+    return 0
+  fi
+  [ "$SETUP_COMPLETE" = 1 ] && return 0
+  if [ -z "$SETUP_NEXT" ]; then
+    echo "   ${CYN}${B}Next: finish guided setup${X} — ${B}$URL/setup${X}"
+    return 0
+  fi
+  if [ "$SETUP_NEXT_STATUS" = "in_flight" ]; then
+    # Never present work in progress as something to fix; that false positive is what makes a user
+    # "repair" a panel that was about to succeed on its own.
+    echo "   ${CYN}${B}Nothing to do yet${X} — the panel is still working on: $(setup_next_headline "$SETUP_NEXT")."
+    echo "   ${D}Follow it at $URL/setup${X}"
+    return 0
+  fi
+  headline="$(setup_next_headline "$SETUP_NEXT")"
+  if [ "$SETUP_REPAIR" = 1 ]; then
+    echo "   ${YEL}${B}This panel needs attention: $headline${X} — ${B}$URL/setup${X}"
+  else
+    echo "   ${CYN}${B}Next: $headline${X} — ${B}$URL/setup${X}"
+  fi
+  reason="$(setup_next_reason "$SETUP_NEXT" "$SETUP_NEXT_DETAIL")"
+  [ -z "$reason" ] || echo "   ${D}$reason${X}"
+  echo "   ${D}Or on the panel itself: tap Set up on its screen.${X}"
+  return 0
 }
 
 verify() {
@@ -1148,6 +1273,10 @@ rollback_root_helper() {
   esac
   if printf '%s\n' "$restored" | grep -qx ROLLBACK_RESTARTED; then
     if wait_for_helper_reply PING OK "$install_kind" "$probe_path"; then
+      # Restarting the restored system helper can briefly restart adbd. Do not race journal
+      # finalization against that transport transition: reconnect once, then wait boundedly.
+      adb connect "$TARGET" >/dev/null 2>&1 || true
+      run_with_deadline 30 adb -s "$TARGET" wait-for-device >/dev/null 2>&1 || return 1
       run_root 'rm -f '"$probe_path" >/dev/null 2>&1 || true
       finalize_root_helper_rollback "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper"
       return $?
@@ -2046,6 +2175,18 @@ install_hybrid() {
   echo INSTALL_OK
 }
 
+wait_for_helper_retirement() {
+  attempt=0
+  while [ "$attempt" -lt 10 ]; do
+    if ! pidof hapaneld-helper >/dev/null 2>&1 && ! pidof hapaneld-ledd >/dev/null 2>&1; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  return 1
+}
+
 rollback_system() {
   mount -o rw,remount / 2>/dev/null
   mount -o rw,remount /system 2>/dev/null
@@ -2075,6 +2216,7 @@ rollback_system() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   restore_or_remove OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
   restore_or_remove LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
@@ -2084,7 +2226,9 @@ rollback_system() {
   sync || return 1
 
   if [ -x /system/bin/hapaneld-helper ] && [ -f /system/bin/hapaneld-helper.hapaneld-recovery ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
@@ -2119,6 +2263,7 @@ rollback_systemless() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
   sync || return 1
@@ -2126,7 +2271,9 @@ rollback_systemless() {
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -2168,6 +2315,7 @@ rollback_hybrid() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_RC /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
   restore_or_remove SYS_RC /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
@@ -2181,7 +2329,9 @@ rollback_hybrid() {
     /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &
+    start hapaneld_helper 2>/dev/null
+    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -2706,6 +2856,224 @@ export_config() {
   echo "   ${GRN}✓${X} $(wc -c < "$destination") bytes saved with owner-only permissions"
 }
 
+# Prepare the persistent backup directory, or stop before touching the panel. Everything written
+# here — the settings export and now the data-store snapshot — carries credentials, so the directory
+# must be a real owner-only one and is verified as such rather than assumed.
+ensure_config_backup_dir() {
+  local backup_mode
+  [ ! -L "$CONFIG_BACKUP_DIR" ] || fail "config backup directory must not be a symlink" \
+    "Choose a real owner-only directory with HAPANELD_CONFIG_BACKUP_DIR, then retry before changing the panel."
+  mkdir -p "$CONFIG_BACKUP_DIR" || fail "could not create the persistent config backup directory" \
+    "Check that $CONFIG_BACKUP_DIR is writable, then retry before changing the panel."
+  chmod 700 "$CONFIG_BACKUP_DIR" 2>/dev/null || fail "could not protect the persistent config backup directory" \
+    "Set its permissions to 700, then retry before changing the panel."
+  backup_mode="$(stat -c '%a' "$CONFIG_BACKUP_DIR" 2>/dev/null || stat -f '%Lp' "$CONFIG_BACKUP_DIR" 2>/dev/null || true)"
+  case "$backup_mode" in *[!0-7]*|'') fail "could not verify config backup directory permissions" \
+    "Set $CONFIG_BACKUP_DIR to owner-only mode 700, then retry before changing the panel." ;; esac
+  [ "${backup_mode: -2}" = 00 ] || fail "config backup directory is readable by other users" \
+    "Protect $CONFIG_BACKUP_DIR with mode 700, then retry before changing the panel."
+}
+
+auto_export_before_upgrade() {
+  local path_output safe_target stamp
+  # Test harnesses may disable the emergency guard when exercising later transaction branches; the
+  # production default is fail-closed (unset/0).
+  [ "${HAPANELD_SKIP_AUTO_EXPORT:-0}" = 1 ] && return 0
+  [ -n "$EXPORT_FILE" ] && return 0
+  if ! path_output="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
+    fail "could not verify the installed panel before upgrade" \
+      "The configuration backup could not be guaranteed, so no helper or APK was changed." \
+      "Restore adb/package-manager responsiveness, then re-run the same command."
+  fi
+  path_output="$(printf '%s\n' "$path_output" | tr -d '\r')"
+  if ! printf '%s\n' "$path_output" | grep -q '^package:'; then
+    echo "   ${D}fresh install — no existing config requires an upgrade backup${X}"
+    return 0
+  fi
+  ensure_config_backup_dir
+  safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  AUTO_EXPORT_FILE="$CONFIG_BACKUP_DIR/${safe_target}-${stamp}.json"
+  export_config "$AUTO_EXPORT_FILE"
+}
+
+# The panel's data partition must have room for the store AND a second copy of it.
+#
+# ha-paneld.db is the canonical store — configuration, the entity catalog, proximity and ambient
+# history and the revision ring all live in it. The pre-upgrade snapshot below stages a full copy
+# before pulling it, so the installer requires a conservative 64 MB of headroom before proceeding.
+DATA_CAPACITY_MIN_KB=65536
+
+check_data_capacity() {
+  local out row extra available
+  out="$(adb -s "$TARGET" shell df -P -k /data 2>/dev/null | tr -d '\r')" || out=""
+  row="$(printf '%s\n' "$out" | sed -n '2p')"
+  extra="$(printf '%s\n' "$out" | sed -n '3,$p')"
+  available=""
+  # Same strictness as the /system probe: a wrapped or unexpected df layout is UNKNOWN, never a
+  # guessed number. A device name long enough to wrap would otherwise shift the column that is read.
+  if [ -n "$row" ] && [ -z "$extra" ]; then
+    set -f
+    # shellcheck disable=SC2086
+    set -- $row
+    set +f
+    if [ "$#" -eq 6 ]; then
+      case "$4" in ''|*[!0-9]*) ;; *) available="$4" ;; esac
+    fi
+  fi
+  if [ -z "$available" ]; then
+    # Not observable — say so rather than block an install on a number we could not read.
+    echo "   ${D}panel storage: could not read /data capacity; continuing without the free-space check${X}"
+    return 0
+  fi
+  if [ "$available" -lt "$DATA_CAPACITY_MIN_KB" ]; then
+    fail "the panel has too little free storage for a safe upgrade" \
+      "/data has ${available}KB free; ${DATA_CAPACITY_MIN_KB}KB is required." \
+      "ha-paneld's database holds the configuration, entity catalog and history, and the pre-upgrade backup stages a full copy of it before pulling it — so an upgrade needs room for two copies." \
+      "Nothing was installed or changed. Free space on the panel (Settings → Storage, or clear app caches with: adb -s $TARGET shell pm trim-caches 999G), then re-run."
+  fi
+  echo "   ${GRN}✓${X} panel storage: ${available}KB free on /data"
+}
+
+# Copy the panel's canonical data store to the host, alongside the settings export.
+#
+# The settings export is NOT a recovery point. Configuration, the entity catalog, proximity models,
+# ambient history and the on-panel revision ring all live in ha-paneld.db, and until now nothing in
+# this toolchain held a copy of it. An ordinary `adb install -r` preserves app data, so this matters
+# in the failure path the recovery guidance itself sends people to — an uninstall, which destroys the
+# store with no off-panel copy in existence.
+#
+# BEST-EFFORT on purpose. It needs a root route, so a sandboxed panel cannot do it at all, and an
+# upgrade must not begin failing on panels where it was never possible. The settings export remains
+# the fail-closed guarantee; this is strictly additional cover.
+#
+# The whole file-set moves in ONE root command: pulling ha-paneld.db without its -wal sidecar loses
+# every committed transaction still in the write-ahead log, which surfaces as silent data loss at
+# restore time rather than as a failed backup.
+#
+# BREAK-GLASS, and named so on disk. The panel's own .hpb backup deliberately does NOT contain this
+# file, because restoring a raw database across versions is the downgrade config-reset hazard and
+# restoring one onto a different panel carries the wrong identity. Neither objection applies to what
+# is written here — it is the same panel, the same version, taken seconds before the upgrade — and it
+# covers the one case an .hpb structurally cannot, since producing an .hpb needs the app to be
+# serving HTTP and the panel that most needs a backup is the one whose app will not start.
+#
+# Nothing restores it automatically and nothing should: this is a manual, same-panel, same-version
+# last resort. The `.break-glass.` infix exists so that whoever finds these files months from now
+# reads that from the filename rather than assuming they are an ordinary restorable backup.
+snapshot_panel_database() {
+  local db_dir stage base safe_target stamp staged expected=0 pulled=0 failed=0 name destination
+  [ "${HAPANELD_SKIP_DB_SNAPSHOT:-0}" = 1 ] && return 0
+  if ! adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r' | grep -q '^package:'; then
+    return 0
+  fi
+  if ! probe_su; then
+    echo "   ${D}data-store snapshot: skipped — this panel has no root route, so only settings could be saved${X}"
+    return 0
+  fi
+  db_dir="/data/data/$PKG/databases"
+  stage="/data/local/tmp/.hapaneld-db-snapshot.$$"
+  if [ -n "$AUTO_EXPORT_FILE" ]; then
+    base="${AUTO_EXPORT_FILE%.json}"
+  else
+    ensure_config_backup_dir || return 0
+    safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    base="$CONFIG_BACKUP_DIR/${safe_target}-${stamp}"
+  fi
+  # Share the export's stamp so the pair is obviously one moment in time, and carry the label in the
+  # name itself. The .db suffix stays last so the file is still recognisable to ordinary tools.
+  base="$base.break-glass"
+  # Stage owner-only and shell-owned: the store carries credentials, and /data/local/tmp is readable
+  # by anything running as shell. `adb pull` runs as shell, so 0600 is still pullable.
+  if ! staged="$(run_root "rm -rf $stage && mkdir -p $stage && cp -f $db_dir/ha-paneld.db $stage/ 2>/dev/null && { [ ! -e $db_dir/ha-paneld.db-wal ] || cp -f $db_dir/ha-paneld.db-wal $stage/ 2>/dev/null; } && { [ ! -e $db_dir/ha-paneld.db-shm ] || cp -f $db_dir/ha-paneld.db-shm $stage/ 2>/dev/null; } && chown -R shell:shell $stage 2>/dev/null && chmod 700 $stage && chmod 600 $stage/* 2>/dev/null && ls $stage" 2>/dev/null)"; then
+    echo "   ${D}data-store snapshot: skipped — the panel's database could not be staged for copying${X}"
+    run_root "rm -rf $stage" >/dev/null 2>&1 || true
+    return 0
+  fi
+  staged="$(printf '%s' "$staged" | tr -d '\r')"
+  for name in ha-paneld.db ha-paneld.db-wal ha-paneld.db-shm; do
+    printf '%s\n' "$staged" | grep -Fxq "$name" || continue
+    expected=$((expected + 1))
+    destination="$base.${name#ha-paneld.}"
+    if run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/$name" "$destination" >/dev/null 2>&1 && [ -s "$destination" ]; then
+      chmod 600 "$destination" 2>/dev/null || true
+      pulled=$((pulled + 1))
+    else
+      failed=1
+    fi
+  done
+  run_root "rm -rf $stage" >/dev/null 2>&1 || true
+  # Sidecars are optional only when absent from staging. Losing a staged WAL during pull can silently
+  # discard committed transactions, so reject the entire set unless every staged member arrived.
+  if [ "$expected" -gt 0 ] && [ "$failed" -eq 0 ] && [ "$pulled" -eq "$expected" ] && [ -s "$base.db" ]; then
+    echo "   ${GRN}✓${X} data-store snapshot: ${B}$base.db${X} ${D}(with $((pulled - 1)) sidecar file(s))${X}"
+    echo "   ${D}        Break-glass copy — same panel, same version, restored by hand only. The panel's own${X}"
+    echo "   ${D}        Install → Backup .hpb is the supported restore path.${X}"
+  else
+    rm -f "$base.db" "$base.db-wal" "$base.db-shm" 2>/dev/null || true
+    echo "   ${D}data-store snapshot: skipped — the panel's database could not be copied; only settings were saved${X}"
+  fi
+  return 0
+}
+
+# Erase this panel's ha-paneld configuration so the next launch is a genuine first run.
+#
+# `pm clear`, rather than posting schema defaults back through the API, for a reason that is easy to
+# get wrong: setup completion is itself stored state. A key-by-key reset leaves it set, so the panel
+# reopens in REPAIR mode — "nothing has been reset" — which is the opposite of what someone asking
+# for a clean install wants. Clearing app data is also the only route that reaches every app_state
+# namespace plus the legacy preference journal, which would otherwise be re-imported on the next
+# start and resurrect the values just erased.
+#
+# The cost is real, so it is stated before the prompt rather than discovered afterwards. --force does
+# not stand in for the confirmation: it exists to skip a version comparison, not to authorise a wipe.
+reset_panel_config() {
+  local backup answer out
+  [ "$RESET_CONFIG" = 1 ] || return 0
+  if ! adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r' | grep -q '^package:'; then
+    echo "   ${D}--reset-config: ha-paneld is not installed here, so there is no configuration to erase.${X}"
+    RESET_CONFIG=0
+    return 0
+  fi
+  backup="${EXPORT_FILE:-$AUTO_EXPORT_FILE}"
+  if [ -z "$backup" ] || [ ! -s "$backup" ]; then
+    # The ordinary pre-upgrade snapshot is skippable by a test harness and is bypassed when the caller
+    # supplied its own --export path. An erase must never proceed on that basis, so take one here and
+    # let its own fail-closed handling stop the run if the panel or the backup directory will not
+    # cooperate. The check below is on the resulting file, not on the attempt.
+    HAPANELD_SKIP_AUTO_EXPORT=0 auto_export_before_upgrade
+    backup="${EXPORT_FILE:-$AUTO_EXPORT_FILE}"
+  fi
+  { [ -n "$backup" ] && [ -s "$backup" ]; } || fail "--reset-config has no verified configuration backup to fall back on" \
+    "Nothing was erased and no app or setting was changed." \
+    "Re-run with --export FILE to take one explicitly, or make $CONFIG_BACKUP_DIR writable so the automatic backup can be made."
+  echo "${RED}${B}⚠ --reset-config will erase this panel's ha-paneld configuration.${X}"
+  echo "   ${D}Erased: MQTT and Home Assistant settings, learned entity, proximity and ambient data, and the on-panel revision history.${X}"
+  echo "   ${D}Kept:   the app itself, the root helper, and every other app on the panel.${X}"
+  # Name the backup's limits next to the backup itself. It is a settings export, not an image of the
+  # panel's data store, so it restores configuration and nothing else that this erase removes.
+  echo "   ${D}Backup: $backup${X}"
+  echo "   ${D}        Settings only — restoring it brings back configuration, not the learned data above.${X}"
+  if [ -t 0 ]; then
+    printf "   Type ${B}RESET${X} to continue: "
+    read -r answer
+  else
+    answer="${HAPANELD_RESET_CONFIRM:-}"
+  fi
+  [ "$answer" = "RESET" ] || fail "--reset-config was not confirmed" \
+    "Nothing was erased and no app or setting was changed." \
+    "Re-run and type RESET at the prompt, or set HAPANELD_RESET_CONFIRM=RESET for an unattended reset."
+  step "🧨 resetting" "${D}erasing this panel's configuration${X}"
+  out="$(adb -s "$TARGET" shell pm clear "$PKG" 2>&1 | tr -d '\r')"
+  case "$out" in
+    *Success*) echo "   ${GRN}✓${X} configuration erased — this panel will start guided setup fresh" ;;
+    *) fail "could not erase the panel configuration" \
+         "The package manager reported: ${out:-no output}" \
+         "The configuration backup at $backup is unchanged. Fix the cause above, then re-run." ;;
+  esac
+}
+
 export_is_only_operation() {
   [ -n "$EXPORT_FILE" ] && [ -z "$APK$PANEL_ID$MQTT$MQTT_USER$MQTT_PASS$LOG_HOST$LOG_PORT$LOG_PROTO$LOG_ENABLE" ] &&
     [ -z "$HA_URL$HA_TOKEN$HA_USER$HA_PASS$RESTORE_FILE" ] && [ "$LATEST" = 0 ] && [ "$PERSIST_ADB" = 0 ] &&
@@ -2731,11 +3099,25 @@ if export_is_only_operation; then
   exit 0
 fi
 
+# Refuse a panel that cannot hold its data store plus the copy the backup below stages, before a
+# release is downloaded or anything on the panel is touched.
+check_data_capacity
+
 resolve_apk
 
 verify_release_apk
 
 version_guard
+
+# Emergency upgrade safety window: persist a unique, owner-only config export before the paired
+# helper or APK can mutate the panel. Existing panels fail closed if the export cannot be made.
+auto_export_before_upgrade
+
+# Then the canonical store itself, where a root route allows it. Best-effort by design — see the
+# function comment for why this cannot be fail-closed like the export above.
+snapshot_panel_database
+
+reset_panel_config
 
 TARGET_APK_SHA256="$(host_sha256 "$APK")"
 printf '%s\n' "$TARGET_APK_SHA256" | grep -Eq '^[0-9a-f]{64}$' || fail "could not identify the target APK bytes" \
@@ -2803,7 +3185,7 @@ install_apk() {
     *INSTALL_FAILED_UPDATE_INCOMPATIBLE*|*"signatures do not match"*)
       fail "install failed: signature mismatch — the ha-paneld already on the panel was signed with a different key (e.g. a local debug build vs a GitHub release)" \
         "$helper_recovery" \
-        "1. For complete recovery, open the panel's :8888 page → Install → Backup and verify the downloaded .hpb file is non-empty. --export saves settings only, not profiles, learned entity state, or Companion login." \
+        "1. For the fullest recovery, open the panel's :8888 page → Install → Backup and verify the downloaded .hpb file is non-empty. It carries settings, durable panel state, the profile catalog and the Companion login; the entity catalog and the proximity and ambient history are relearned rather than restored. --export saves settings only." \
         "2. adb -s $TARGET uninstall $PKG    (removes the app AND its on-panel config)" \
         "3. Re-run this command, then restore the .hpb from Install → Restore. Do not pass an .hpb to --restore; that CLI option accepts config JSON only." ;;
     *INSTALL_FAILED_VERSION_DOWNGRADE*)
@@ -3217,10 +3599,13 @@ echo
 VERIFY_DIRECT_GRANTS=1
 if verify; then
   if [ "$PROVISION_FAILED" = 0 ]; then
-    echo "${GRN}${B}✅ provisioned and verified${X} — ${B}$URL/${X}"
-    if [ "$HA_OAUTH_CONFIGURED" != 1 ]; then
-      echo "   ${CYN}${B}Next: connect Home Assistant in your browser${X} — ${B}$URL/configure#cfg-ha-oauth${X}"
+    read_setup_journey
+    if [ "$SETUP_JOURNEY_AVAILABLE" = 1 ] && [ "$SETUP_COMPLETE" != 1 ]; then
+      echo "${GRN}${B}✅ installed and verified${X} — ${B}$URL/${X}"
+    else
+      echo "${GRN}${B}✅ provisioned and verified${X} — ${B}$URL/${X}"
     fi
+    print_next_step
   fi
 else
   PROVISION_FAILED=1

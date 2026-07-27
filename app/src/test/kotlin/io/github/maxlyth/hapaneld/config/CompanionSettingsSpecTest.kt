@@ -23,4 +23,18 @@ class CompanionSettingsSpecTest {
         assertTrue(keys.indexOf("companion_update_channel") > keys.indexOf("companion_auto_update"))
         assertTrue(keys.indexOf("self_update") < keys.indexOf("update_channel"))
     }
+
+    @Test fun paneldUpdaterDefaultsOnOnlyWhenVerifiedInstallIsAvailable() {
+        val auto = SettingsRegistry.spec("self_update")!!
+        val channel = SettingsRegistry.spec("update_channel")!!
+        assertTrue("supported panels default ha-paneld auto-update on", auto.defaultBool())
+        assertTrue("ha-paneld update channel defaults stable", channel.default == "stable")
+        for (spec in listOf(auto, channel)) {
+            assertFalse("${spec.key} hidden without verified app install", spec.availableWhen(Capabilities()))
+            assertTrue(
+                "${spec.key} shown with verified app install",
+                spec.availableWhen(Capabilities(canInstallVerifiedApps = true)),
+            )
+        }
+    }
 }

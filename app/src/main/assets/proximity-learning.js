@@ -6,7 +6,7 @@
   if (!mount) return;
   var cardRoot = document.getElementById("cfg-groups");
   if (!cardRoot) return;
-  var timer = null, active = false;
+  var timer = null, active = false, cardSizeInvalid = false;
 
   function node(tag, cls, text) {
     var n = document.createElement(tag);
@@ -17,6 +17,7 @@
 
   var card = node("section", "card prox-learning");
   card.id = "cfg-proximity-learning";
+  card.setAttribute("data-layout-key", "configure-presence-wake");
   var heading = node("h2", "", "Presence & wake");
   heading.appendChild(node("span", "cardbadge exp", "experimental"));
   var state = node("p", "prox-learning-state", "Waiting for sensor status…");
@@ -88,8 +89,13 @@
       var response = await fetch("/api/v1/proximity", { cache: "no-store" });
       if (!response.ok) throw new Error("status " + response.status);
       render(await response.json());
+      if (window.configCardSizeSourceReady) window.configCardSizeSourceReady("proximity");
+      if (cardSizeInvalid && window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
+      cardSizeInvalid = false;
     } catch (_) {
       state.textContent = "Proximity learning status is unavailable";
+      cardSizeInvalid = true;
+      if (window.configCardSizeGeometryInvalid) window.configCardSizeGeometryInvalid();
     }
     clearTimeout(timer); timer = setTimeout(refresh, active ? 1000 : 5000);
   }

@@ -309,6 +309,4 @@ class ConfigActivity : AppCompatActivity() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 
-    private companion object {
-    }
 }

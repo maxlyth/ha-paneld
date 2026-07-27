@@ -31,9 +31,6 @@ class HiveMqTransport : MqttTransport {
             .identifier(config.clientId)
             .serverHost(config.host)
             .serverPort(config.port)
-            // Auto-reconnect so a network blip / broker restart never permanently orphans the panel;
-            // re-subscribe + re-publish discovery happen in onConnected on every connect.
-            .automaticReconnectWithDefaultConfig()
             .addConnectedListener {
                 synchronized(sessionLock) {
                     if (session.client === self) {
@@ -62,6 +59,10 @@ class HiveMqTransport : MqttTransport {
                 }
             }
         // ssl:///mqtts:// broker → TLS with the default JVM trust store (CA-signed cert validates).
+        // Auto-reconnect so a network blip / broker restart never permanently orphans a CONFIGURED
+        // panel; re-subscribe + re-publish discovery happen in onConnected on every connect. The
+        // credential-less discovery probe opts out — see MqttConnectConfig.automaticReconnect.
+        if (config.automaticReconnect) builder = builder.automaticReconnectWithDefaultConfig()
         if (config.tls) builder = builder.sslWithDefaultConfig()
         val c = builder.buildAsync()
         self = c
@@ -139,8 +140,12 @@ class HiveMqTransport : MqttTransport {
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_TEARDOWN)
                 detach()
             }
-            FinalPublishAdmission.REJECTED ->
+            FinalPublishAdmission.REJECTED -> {
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_TEARDOWN)
+                // Skipping the final publish is acceptable under pressure; skipping the DETACH is how a
+                // live client with auto-reconnect got orphaned. Always sever the session.
+                detach()
+            }
         }
         return completion
     }
@@ -204,7 +209,7 @@ class HiveMqTransport : MqttTransport {
     }
 
     override fun isCurrent(connection: MqttConnectionLease): Boolean =
-        synchronized(sessionLock) { session.client != null && session.connection === connection }
+        synchronized(sessionLock) { session.connection === connection }
 
     internal companion object {
         const val MAX_INBOUND_PACKET_BYTES = 64 * 1024
@@ -214,15 +219,36 @@ class HiveMqTransport : MqttTransport {
 
         private fun disconnectBounded(
             client: Mqtt5AsyncClient,
-        ): java.util.concurrent.CompletableFuture<Unit> = TEARDOWN.submit {
+        ): java.util.concurrent.CompletableFuture<Unit> {
+            val submitted = TEARDOWN.submit {
                 val cost = FeatureCosts.registry.span(FeatureCostOperation.MQTT_TEARDOWN)
                 val result = runCatching {
                     client.disconnect().get(DISCONNECT_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+                }.recoverCatching { failure ->
+                    // Disconnecting an ALREADY-DISCONNECTED client throws in HiveMQ — but a dead client
+                    // is exactly what a teardown wants. Without this, the retire fence read the probe
+                    // client's rejection-then-idle state (no auto-reconnect since vc474) as a cleanup
+                    // FAILURE and looped the whole network reconfigure for minutes on hardware: a fully
+                    // retired client was blocking the bridge swap. Dead == done.
+                    if (client.state == com.hivemq.client.mqtt.MqttClientState.DISCONNECTED) Unit
+                    else throw failure
                 }
                 result.onFailure { cost.outcome(FeatureCostOutcome.FAILURE) }
                 cost.close()
                 result.getOrThrow()
             }
+            submitted.whenComplete { _, failure ->
+                if (failure is java.util.concurrent.RejectedExecutionException) {
+                    // The gate bounds thread pile-up; it is not permission to leak. A rejected teardown
+                    // used to drop the LAST reference to a client whose automaticReconnect stayed armed —
+                    // the immortal anonymous zombie caught in broker logs, reconnecting for the life of
+                    // the process with nothing able to reach it. The async disconnect costs no thread,
+                    // and an explicit disconnect disables HiveMQ's auto-reconnect at call time.
+                    runCatching { client.disconnect() }
+                }
+            }
+            return submitted
+        }
 
         private const val DISCONNECT_TIMEOUT_MS = 2_000L
     }

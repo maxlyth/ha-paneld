@@ -55,9 +55,9 @@ jobs:
         if: matrix.language == 'java-kotlin'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
 
-      - name: Install Android native build tools
+      - name: Install Android build toolchain
         if: matrix.language == 'java-kotlin'
-        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Set up Gradle
         if: matrix.language == 'java-kotlin'

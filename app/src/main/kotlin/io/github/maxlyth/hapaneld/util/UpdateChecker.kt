@@ -77,30 +77,18 @@ object UpdateChecker {
     ) = withContext(Dispatchers.IO) {
         checkMutex.withLock {
             val previous = available
-            val paneldResolution = SelfUpdater.resolve(channel)?.first?.let { paneldLatest ->
-                val current = BuildConfig.VERSION_NAME
-                Resolution.Resolved(
-                    if (isNewer(paneldLatest, current)) {
-                        UpdateInfo(PANELD_LABEL, current, paneldLatest, "https://github.com/maxlyth/ha-paneld/releases")
-                    } else null,
-                )
-            } ?: Resolution.Failed
+            val current = BuildConfig.VERSION_NAME
+            val paneldResolution = ComponentUpdater.resolveUpdate(current) { SelfUpdater.resolveTarget(channel) }
+                .toResolution { target -> UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl) }
 
             val companion = installedCompanion(context)
-            val companionTarget = if (companion == null) null else CompanionInstaller.target(companionChannel, companionMaxVersion)
-            val companionResolution = when {
-                companion == null -> Resolution.Resolved(null)
-                companionTarget == null -> Resolution.Failed
-                else -> Resolution.Resolved(
-                    if (isNewer(companionTarget.version, stripVariant(companion.second))) {
-                        UpdateInfo(
-                            COMPANION_LABEL,
-                            companion.second,
-                            companionTarget.version,
-                            companionTarget.releaseUrl,
-                        )
-                    } else null,
-                )
+            val companionResolution = if (companion == null) {
+                Resolution.Resolved(null)
+            } else {
+                ComponentUpdater.resolveUpdate(companion.second, installedNormalize = ::stripVariant) {
+                    CompanionInstaller.target(companionChannel, companionMaxVersion)
+                        ?.let { ComponentUpdater.Target(it.version, it.apkUrl, it.releaseUrl) }
+                }.toResolution { target -> UpdateInfo(COMPANION_LABEL, companion.second, target.version, target.releaseUrl) }
             }
 
             val requestedPolicies = RequestedPolicies(channel, CompanionPolicy(companionChannel, companionMaxVersion))
@@ -124,6 +112,16 @@ object UpdateChecker {
             }
         }
     }
+
+    /** Map a component's resolve -> compare -> decide [ComponentUpdater.Outcome] onto this checker's cache
+     *  [Resolution]: an unresolved lookup is a [Resolution.Failed] (preserve last-known), an up-to-date
+     *  component authoritatively resolves to no update, and an available update resolves to its [UpdateInfo]. */
+    private inline fun ComponentUpdater.Outcome.toResolution(update: (ComponentUpdater.Target) -> UpdateInfo): Resolution =
+        when (this) {
+            ComponentUpdater.Outcome.Unresolved -> Resolution.Failed
+            ComponentUpdater.Outcome.UpToDate -> Resolution.Resolved(null)
+            is ComponentUpdater.Outcome.Update -> Resolution.Resolved(update(target))
+        }
 
     /** Pure cache transaction: failures preserve only an entry resolved for the exact requested policy, while a successful null result authoritatively clears that component. A transaction is fresh only when both lookups resolved. */
     internal fun reconcileCache(
@@ -173,7 +171,9 @@ object UpdateChecker {
     internal fun filterCurrent(list: List<UpdateInfo>, companionVersion: String?): List<UpdateInfo> = list.mapNotNull { info ->
         if (info.label != COMPANION_LABEL) return@mapNotNull info
         val installed = companionVersion?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        if (isNewer(info.latestVersion, stripVariant(installed))) info.copy(currentVersion = installed) else null
+        if (ComponentUpdater.isUpdate(info.latestVersion, installed, installedNormalize = ::stripVariant)) {
+            info.copy(currentVersion = installed)
+        } else null
     }
 
     /** Compatibility wrapper retained for existing tests/callers. */

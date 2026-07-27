@@ -71,6 +71,15 @@ done
 case "$JOBS" in
   ''|*[!0-9]*|0) echo "${RED}--jobs must be a whole number from 1 to 32${X}" >&2; exit 2 ;;
 esac
+# Erasing configuration is deliberately not a fleet operation. Workers run with stdin closed, so the
+# per-panel confirmation could only be satisfied by an environment variable — which one export would
+# then apply to every panel at once. Reset panels one at a time, on purpose.
+for a in "${PARGS[@]}"; do
+  if [ "$a" = "--reset-config" ]; then
+    echo "${RED}--reset-config is not available for fleet updates${X} — erase one panel at a time with scripts/provision.sh" >&2
+    exit 2
+  fi
+done
 [ "$JOBS" -le 32 ] || { echo "${RED}--jobs must be a whole number from 1 to 32${X}" >&2; exit 2; }
 # Panels may also arrive on stdin (one per line) — but ONLY when none were given as args, so a
 # non-tty stdin (pipelines, CI) can't clobber an explicit `-- <ip> …` list.

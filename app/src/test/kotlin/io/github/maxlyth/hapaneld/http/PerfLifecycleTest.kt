@@ -1,19 +1,85 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.RendererTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class PerfLifecycleTest {
+    private fun idleScope(): Triple<CoroutineScope, () -> Unit, () -> Unit> {
+        val executor = Executors.newSingleThreadExecutor()
+        val dispatcher = executor.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        // An idle sampler (no touch) never ticks, so the loop just pauses — fine for lifecycle assertions.
+        return Triple(scope, { scope.cancel(); dispatcher.close(); executor.shutdownNow() }, {})
+    }
+
+    @Test fun rendererTargetIsInstalledUnderAdmissionAndClearedOnStop() {
+        val (scope, teardown, _) = idleScope()
+        try {
+            PerfReader.stop()
+            assertNull("stop clears the snapshot", PerfReader.rendererTargetForTest())
+
+            PerfReader.start(scope, ownPackage = "io.github.maxlyth.hapaneld", initialTarget = RendererTarget.Builtin)
+            assertEquals("start installs the initial snapshot under admission",
+                RendererTarget.Builtin, PerfReader.rendererTargetForTest())
+
+            PerfReader.stop()
+            assertNull("stop clears the snapshot", PerfReader.rendererTargetForTest())
+        } finally {
+            PerfReader.stop(); teardown()
+        }
+    }
+
+    @Test fun updateRendererTargetIsGenerationGuarded() {
+        val (scope, teardown, _) = idleScope()
+        try {
+            PerfReader.stop()
+            // Before any start: no active generation, so an update must not publish.
+            PerfReader.updateRendererTarget(RendererTarget.Foreign("com.example.before"))
+            assertNull("update before start is a no-op", PerfReader.rendererTargetForTest())
+
+            PerfReader.start(scope, ownPackage = "own", initialTarget = null)
+            PerfReader.updateRendererTarget(RendererTarget.Foreign("com.example.live"))
+            assertEquals("update while running publishes at the config boundary",
+                RendererTarget.Foreign("com.example.live"), PerfReader.rendererTargetForTest())
+
+            PerfReader.stop()
+            PerfReader.updateRendererTarget(RendererTarget.Foreign("com.example.after"))
+            assertNull("update after stop is a no-op — a dead generation can't publish",
+                PerfReader.rendererTargetForTest())
+        } finally {
+            PerfReader.stop(); teardown()
+        }
+    }
+
+    @Test fun perfReaderHoldsNoContextPackageManagerOrServiceCapture() {
+        val src = listOf(
+            File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+            File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PerfReader.kt"),
+        ).first(File::exists).readText()
+        // The renderer identity is a pre-resolved immutable value, resolved service-side — PerfReader must
+        // not reach for a PackageManager on the sampling path, nor capture the service via a lambda.
+        // (Actual-usage tokens, so the explanatory comments that mention these terms don't trip the check.)
+        for (forbidden in listOf("packageManager.", "getPackageInfo(", "android.content.Context", "PaneldService", "-> DashboardIdentity")) {
+            assertTrue("PerfReader must not reference $forbidden", forbidden !in src)
+        }
+        assertTrue("renderer identity is one immutable snapshot", "rendererIdentity = RendererIdentity()" in src)
+        assertTrue("target must not remain a second volatile mirror", "@Volatile private var rendererTarget" !in src)
+        assertTrue("own package must not remain a second volatile mirror", "@Volatile private var ownPackage" !in src)
+    }
+
     @Test fun rootCapabilityProbeWaitsForAnActivePerfWindow() {
         val executor = Executors.newSingleThreadExecutor()
         val dispatcher = executor.asCoroutineDispatcher()

@@ -47,7 +47,7 @@ class HaOAuthRoutesTest {
         val json = JSONObject(response.bodyAsText())
         assertEquals("connected", json.getString("phase"))
         assertEquals("Alice", json.getString("display_name"))
-        assertEquals(setOf("phase", "display_name"), json.keySet())
+        assertEquals(setOf("phase", "display_name"), json.keys().asSequence().toSet())
     }
 
     @Test fun `start validates bounds and panel origin and returns a no-store explicit link`() = testApplication {

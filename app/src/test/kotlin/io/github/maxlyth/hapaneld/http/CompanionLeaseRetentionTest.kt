@@ -159,29 +159,6 @@ class CompanionLeaseRetentionTest {
         directory.deleteRecursively()
     }
 
-    @Test
-    fun affirmativeNeverStartedOutcomeClearsMarkerWithoutWaitingForUnavailableHelper() {
-        val (operationState, directory) = armedOperationState()
-        val lease = requireNotNull(CompanionDataOperationGate.acquire(companionPackage))
-        var retained = false
-        var released = false
-
-        val transferred = settleCompanionOperationLease(
-            lease = lease,
-            operationState = operationState,
-            possiblyInFlight = false,
-            retain = { _, _ -> retained = true },
-            afterRelease = { released = true },
-        )
-
-        assertFalse(transferred)
-        assertFalse(retained)
-        assertTrue(released)
-        assertFalse(operationState.isPending())
-        assertFalse(CompanionDataOperationGate.blocks(companionPackage))
-        directory.deleteRecursively()
-    }
-
     private fun armedOperationState(): Pair<CompanionDataOperationState, java.io.File> {
         val directory = Files.createTempDirectory("companion-operation-test").toFile()
         val state = CompanionDataOperationState.forTest(

@@ -16,6 +16,6 @@ class DashboardIdleReturnSpecTest {
             "../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt",
         ).map(::File).first { it.isFile }.readText()
         assertTrue(server.contains("built-in-renderer-required"))
-        assertTrue(server.contains("(dashboardPackage ?: config.dashboardPackage) != SystemController.BUILTIN_DASHBOARD"))
+        assertTrue(server.contains("it.isNotBlank() && it != SystemController.BUILTIN_DASHBOARD"))
     }
 }

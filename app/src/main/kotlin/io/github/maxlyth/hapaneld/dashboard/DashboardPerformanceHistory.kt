@@ -7,6 +7,15 @@ internal fun interface DashboardPerformanceHistorySink {
     fun record(batch: EntityFilterProtocol.TrafficBatch)
 }
 
+/** Saturating Long addition shared by every dashboard traffic counter; clamps at [Long.MAX_VALUE]. */
+internal fun saturatedAdd(left: Long, right: Long): Long =
+    if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+
+/** Per-second and millisecond projections shared by the live window and the minute rollup. */
+internal fun trafficRatePerSec(value: Long, sampleMs: Long): Double = value * 1000.0 / sampleMs.coerceAtLeast(1L)
+internal fun trafficMicrosPerSecond(value: Long, sampleMs: Long): Double = value.toDouble() / sampleMs.coerceAtLeast(1L)
+internal fun trafficMicrosToMs(value: Long): Double = value / 1000.0
+
 internal data class DashboardPerformanceSample(
     val instance: String,
     val path: String,
@@ -22,59 +31,76 @@ internal data class DashboardPerformanceKey(
     val minute: Long,
 )
 
+/**
+ * Canonical accumulated traffic totals shared by the in-memory minute aggregate and the persisted
+ * minute readout. Sums are plain (non-saturating), preserving the historical rollup arithmetic; the
+ * worst single interaction is retained together with its component input/processing/presentation
+ * timings.
+ */
+internal data class TrafficTotals(
+    val sampleMs: Long = 0,
+    val frames: Long = 0,
+    val payloadBytes: Long = 0,
+    val updates: Long = 0,
+    val hydrationUpdates: Long = 0,
+    val observerMicros: Long = 0,
+    val droppedFrames: Long = 0,
+    val stateTaskMicros: Long = 0,
+    val stateTaskMaxMicros: Long = 0,
+    val interactionCount: Long = 0,
+    val interactionMaxMicros: Long = 0,
+    val inputDelayMicros: Long = 0,
+    val interactionProcessingMicros: Long = 0,
+    val presentationMicros: Long = 0,
+    val loafCount: Long = 0,
+    val blockingMicros: Long = 0,
+    val loafMaxMicros: Long = 0,
+    val scriptMicros: Long = 0,
+    val renderMicros: Long = 0,
+    val longTaskCount: Long = 0,
+) {
+    fun accumulate(batch: EntityFilterProtocol.TrafficBatch): TrafficTotals {
+        val worse = batch.interactionMaxMicros > interactionMaxMicros
+        return copy(
+            sampleMs = sampleMs + batch.sampleMs,
+            frames = frames + batch.frames,
+            payloadBytes = payloadBytes + batch.payloadBytes,
+            updates = updates + batch.entityUpdates,
+            hydrationUpdates = hydrationUpdates + batch.hydrationUpdates,
+            observerMicros = observerMicros + batch.observerMicros,
+            droppedFrames = droppedFrames + batch.droppedFrames,
+            stateTaskMicros = stateTaskMicros + batch.stateTaskMicros,
+            stateTaskMaxMicros = maxOf(stateTaskMaxMicros, batch.stateTaskMaxMicros),
+            interactionCount = interactionCount + batch.interactionBins.sum(),
+            interactionMaxMicros = if (worse) batch.interactionMaxMicros else interactionMaxMicros,
+            inputDelayMicros = if (worse) batch.inputDelayMicros else inputDelayMicros,
+            interactionProcessingMicros = if (worse) batch.interactionProcessingMicros else interactionProcessingMicros,
+            presentationMicros = if (worse) batch.presentationMicros else presentationMicros,
+            loafCount = loafCount + batch.loafCount,
+            blockingMicros = blockingMicros + batch.blockingMicros,
+            loafMaxMicros = maxOf(loafMaxMicros, batch.loafMaxMicros),
+            scriptMicros = scriptMicros + batch.scriptMicros,
+            renderMicros = renderMicros + batch.renderMicros,
+            longTaskCount = longTaskCount + batch.longTaskCount,
+        )
+    }
+
+    fun rate(value: Long): Double = trafficRatePerSec(value, sampleMs)
+    fun microsPerSecond(value: Long): Double = trafficMicrosPerSecond(value, sampleMs)
+}
+
 /** One in-memory minute rollup. Five-second browser batches merge here before SQLite is touched. */
 internal data class DashboardPerformanceAggregate(
     val key: DashboardPerformanceKey,
     var filterActive: Boolean,
     var entityCount: Int,
-    var sampleMs: Long = 0,
-    var frames: Long = 0,
-    var payloadBytes: Long = 0,
-    var updates: Long = 0,
-    var hydrationUpdates: Long = 0,
-    var observerMicros: Long = 0,
-    var droppedFrames: Long = 0,
-    var stateTaskMicros: Long = 0,
-    var stateTaskMaxMicros: Long = 0,
-    var interactionCount: Long = 0,
-    var interactionMaxMicros: Long = 0,
-    var inputDelayMicros: Long = 0,
-    var interactionProcessingMicros: Long = 0,
-    var presentationMicros: Long = 0,
-    var loafCount: Long = 0,
-    var blockingMicros: Long = 0,
-    var loafMaxMicros: Long = 0,
-    var scriptMicros: Long = 0,
-    var renderMicros: Long = 0,
-    var longTaskCount: Long = 0,
+    var totals: TrafficTotals = TrafficTotals(),
 ) {
     fun merge(sample: DashboardPerformanceSample) {
         require(key == DashboardPerformanceKey(sample.instance, sample.path, sample.minute))
-        val batch = sample.batch
         filterActive = sample.filterActive
         entityCount = sample.entityCount
-        sampleMs += batch.sampleMs
-        frames += batch.frames
-        payloadBytes += batch.payloadBytes
-        updates += batch.entityUpdates
-        hydrationUpdates += batch.hydrationUpdates
-        observerMicros += batch.observerMicros
-        droppedFrames += batch.droppedFrames
-        stateTaskMicros += batch.stateTaskMicros
-        stateTaskMaxMicros = maxOf(stateTaskMaxMicros, batch.stateTaskMaxMicros)
-        interactionCount += batch.interactionBins.sum()
-        if (batch.interactionMaxMicros > interactionMaxMicros) {
-            interactionMaxMicros = batch.interactionMaxMicros
-            inputDelayMicros = batch.inputDelayMicros
-            interactionProcessingMicros = batch.interactionProcessingMicros
-            presentationMicros = batch.presentationMicros
-        }
-        loafCount += batch.loafCount
-        blockingMicros += batch.blockingMicros
-        loafMaxMicros = maxOf(loafMaxMicros, batch.loafMaxMicros)
-        scriptMicros += batch.scriptMicros
-        renderMicros += batch.renderMicros
-        longTaskCount += batch.longTaskCount
+        totals = totals.accumulate(sample.batch)
     }
 
     companion object {
@@ -116,56 +142,33 @@ internal data class DashboardPerformanceMinute(
     val minute: Long,
     val filterActive: Boolean,
     val entityCount: Int,
-    val sampleMs: Long,
-    val frames: Long,
-    val payloadBytes: Long,
-    val updates: Long,
-    val hydrationUpdates: Long,
-    val observerMicros: Long,
-    val droppedFrames: Long,
-    val stateTaskMicros: Long,
-    val stateTaskMaxMicros: Long,
-    val interactionCount: Long,
-    val interactionMaxMicros: Long,
-    val inputDelayMicros: Long,
-    val interactionProcessingMicros: Long,
-    val presentationMicros: Long,
-    val loafCount: Long,
-    val blockingMicros: Long,
-    val loafMaxMicros: Long,
-    val scriptMicros: Long,
-    val renderMicros: Long,
-    val longTaskCount: Long,
+    val totals: TrafficTotals,
 ) {
     fun json(): JSONObject = JSONObject()
         .put("minute", minute)
         .put("filterActive", filterActive)
         .put("entityCount", entityCount)
-        .put("sampleMs", sampleMs)
-        .put("updatesPerSec", rate(updates))
-        .put("payloadBytesPerSec", rate(payloadBytes))
-        .put("mainThreadMsPerSec", microsPerSecond(stateTaskMicros))
-        .put("blockedMsPerSec", microsPerSecond(blockingMicros))
-        .put("interactionCount", interactionCount)
-        .put("worstInteractionMs", microsToMs(interactionMaxMicros))
-        .put("longestStateTaskMs", microsToMs(stateTaskMaxMicros))
-        .put("longestFrameMs", microsToMs(loafMaxMicros))
-        .put("frames", frames)
-        .put("hydrationUpdates", hydrationUpdates)
-        .put("observerMicros", observerMicros)
-        .put("droppedFrames", droppedFrames)
-        .put("loafCount", loafCount)
-        .put("longTaskCount", longTaskCount)
-        .put("scriptMsPerSec", microsPerSecond(scriptMicros))
-        .put("renderMsPerSec", microsPerSecond(renderMicros))
+        .put("sampleMs", totals.sampleMs)
+        .put("updatesPerSec", totals.rate(totals.updates))
+        .put("payloadBytesPerSec", totals.rate(totals.payloadBytes))
+        .put("mainThreadMsPerSec", totals.microsPerSecond(totals.stateTaskMicros))
+        .put("blockedMsPerSec", totals.microsPerSecond(totals.blockingMicros))
+        .put("interactionCount", totals.interactionCount)
+        .put("worstInteractionMs", trafficMicrosToMs(totals.interactionMaxMicros))
+        .put("longestStateTaskMs", trafficMicrosToMs(totals.stateTaskMaxMicros))
+        .put("longestFrameMs", trafficMicrosToMs(totals.loafMaxMicros))
+        .put("frames", totals.frames)
+        .put("hydrationUpdates", totals.hydrationUpdates)
+        .put("observerMicros", totals.observerMicros)
+        .put("droppedFrames", totals.droppedFrames)
+        .put("loafCount", totals.loafCount)
+        .put("longTaskCount", totals.longTaskCount)
+        .put("scriptMsPerSec", totals.microsPerSecond(totals.scriptMicros))
+        .put("renderMsPerSec", totals.microsPerSecond(totals.renderMicros))
         .put("slowestInteraction", JSONObject()
-            .put("inputDelayMs", microsToMs(inputDelayMicros))
-            .put("processingMs", microsToMs(interactionProcessingMicros))
-            .put("presentationMs", microsToMs(presentationMicros)))
-
-    private fun rate(value: Long): Double = value * 1000.0 / sampleMs.coerceAtLeast(1L)
-    private fun microsPerSecond(value: Long): Double = value.toDouble() / sampleMs.coerceAtLeast(1L)
-    private fun microsToMs(value: Long): Double = value / 1000.0
+            .put("inputDelayMs", trafficMicrosToMs(totals.inputDelayMicros))
+            .put("processingMs", trafficMicrosToMs(totals.interactionProcessingMicros))
+            .put("presentationMs", trafficMicrosToMs(totals.presentationMicros)))
 }
 
 internal fun dashboardPerformanceHistoryJson(

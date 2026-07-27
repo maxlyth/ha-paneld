@@ -52,7 +52,7 @@ class HelperClientIdentityTest {
         fun read(value: String): HelperBootstrapReply = readHelperBootstrapLine(
             ByteArrayInputStream(value.toByteArray()),
             {},
-            HelperBootstrapDeadline(nowNs = { 0L }),
+            MonotonicDeadline(1_000L) { 0L },
         )
 
         assertEquals(HelperBootstrapReply.Line("HELPER version=1.0.0 proto=1.0"), read("HELPER version=1.0.0 proto=1.0\n"))
@@ -66,7 +66,7 @@ class HelperClientIdentityTest {
         fun read(bytes: ByteArray): HelperBootstrapReply = readHelperBootstrapLine(
             ByteArrayInputStream(bytes),
             {},
-            HelperBootstrapDeadline(nowNs = { 0L }),
+            MonotonicDeadline(1_000L) { 0L },
         )
 
         assertEquals(HelperBootstrapReply.Malformed, read(("X".repeat(129) + "\n").toByteArray()))
@@ -84,7 +84,7 @@ class HelperClientIdentityTest {
         }
         assertEquals(
             HelperBootstrapReply.Malformed,
-            readHelperBootstrapLine(timeoutAfterPrefix, {}, HelperBootstrapDeadline(nowNs = { 0L })),
+            readHelperBootstrapLine(timeoutAfterPrefix, {}, MonotonicDeadline(1_000L) { 0L }),
         )
     }
 
@@ -104,7 +104,7 @@ class HelperClientIdentityTest {
         val reply = readHelperBootstrapLine(
             trickle,
             timeouts::add,
-            HelperBootstrapDeadline(timeoutMs = 1_000L, nowNs = { nowNs }),
+            MonotonicDeadline(1_000L) { nowNs },
         )
 
         assertEquals(HelperBootstrapReply.Malformed, reply)
@@ -202,7 +202,7 @@ class HelperClientIdentityTest {
         fun readPing(input: java.io.InputStream): HelperBootstrapReply = readHelperBootstrapLine(
             input,
             {},
-            HelperBootstrapDeadline(nowNs = { 0L }),
+            MonotonicDeadline(1_000L) { 0L },
         )
 
         val failures = listOf(
@@ -456,7 +456,7 @@ private class FakeHelperTransport(initial: FakeGeneration = FakeGeneration()) : 
         val session = sessions.incrementAndGet()
         val snapshot = generation
         return object : HelperCommandSession {
-            override fun bootstrap(command: String, deadline: HelperBootstrapDeadline): HelperBootstrapReply {
+            override fun bootstrap(command: String, deadline: MonotonicDeadline): HelperBootstrapReply {
                 bootstrapCommands += RecordedCommand(session, snapshot.id, command)
                 return when (command) {
                     "VERSION" -> snapshot.version.also { snapshot.afterVersion?.invoke() }

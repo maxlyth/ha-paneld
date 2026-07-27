@@ -38,7 +38,7 @@ class EntityLearningProtocolWebSocketTest {
             const timers=[];
             global.setInterval=(fn)=>{timers.push(fn);return timers.length;};
             const metricBatches=[];
-            global.externalApp={entityLearningMetrics(payload){metricBatches.push(JSON.parse(payload));}};
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw);if(message.type==='entityLearningMetrics')metricBatches.push(message.payload);}};
             function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];this.listeners={};}
             Native.prototype.send=function(data){this.sent.push(data);};
             Native.prototype.addEventListener=function(type,listener){this.listeners[type]=listener;};
@@ -75,10 +75,10 @@ class EntityLearningProtocolWebSocketTest {
             const timers=[];
             global.setInterval=(fn)=>{timers.push(fn);return timers.length;};
             const accessPayloads=[],accessBatches=[],metricPayloads=[],metricBatches=[];
-            global.externalApp={
-              entityLearningAccesses(payload){accessPayloads.push(payload);accessBatches.push(JSON.parse(payload));},
-              entityLearningMetrics(payload){metricPayloads.push(payload);metricBatches.push(JSON.parse(payload));}
-            };
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw),payload=JSON.stringify(message.payload);
+              if(message.type==='entityLearningAccesses'){accessPayloads.push(payload);accessBatches.push(message.payload);}
+              if(message.type==='entityLearningMetrics'){metricPayloads.push(payload);metricBatches.push(message.payload);}
+            }};
             function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];this.listeners={};}
             Native.prototype.send=function(data){this.sent.push(data);};
             Native.prototype.addEventListener=function(type,listener){this.listeners[type]=listener;};
@@ -126,7 +126,7 @@ class EntityLearningProtocolWebSocketTest {
             const timers=[];
             global.setInterval=(fn)=>{timers.push(fn);return timers.length;};
             const metricBatches=[];
-            global.externalApp={entityLearningMetrics(payload){metricBatches.push(JSON.parse(payload));}};
+            global.haPaneldV2={postMessage(raw){const message=JSON.parse(raw);if(message.type==='entityLearningMetrics')metricBatches.push(message.payload);}};
             function Native(url,protocols){this.url=String(url);this.protocols=protocols;this.sent=[];this.listeners={};}
             Native.prototype.send=function(data){this.sent.push(data);};
             Native.prototype.addEventListener=function(type,listener){(this.listeners[type]||(this.listeners[type]=[])).push(listener);};

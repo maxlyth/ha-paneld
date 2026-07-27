@@ -4,14 +4,22 @@ package io.github.maxlyth.hapaneld.metrics
  * The daemon's `PERFDUMP` reply, parsed. On sandbox-walled panels (appCanSu=false) the app is
  * SELinux-denied `/proc/stat`, `/proc/loadavg`, the thermal zones and other pids' stat, so one PERFDUMP
  * from the root helper supplies everything at once. [stat] is the `cpu`/`cpuN` jiffy lines; [proc] is
- * `(pid, utime+stime, comm)`; [rend] is renderer pid → CrRendererMain jiffies.
+ * the per-process CPU/resident-memory snapshot; [rend] is renderer pid → CrRendererMain jiffies.
  */
+data class ProcessMetric(
+    val pid: Int,
+    val jiffies: Long,
+    val name: String,
+    /** Resident pages from `/proc/<pid>/stat`, or null when talking to an older helper. */
+    val rssPages: Long?,
+)
+
 data class PerfDump(
     val stat: List<LongArray>,
     val loadavg: List<String>,
     val tempMilli: Long,
     val gpuRaw: String?,
-    val proc: List<Triple<Int, Long, String>>,
+    val proc: List<ProcessMetric>,
     val rend: Map<Int, Long>,
 )
 
@@ -79,13 +87,30 @@ object MetricParse {
     fun loadavg3(text: String): List<String> = text.trim().split(" ").take(3)
 
     /**
+     * The whitespace-split fields of a `/proc/<pid>/stat` (or `/proc/<pid>/task/<tid>/stat`) line that
+     * follow the `comm` field — i.e. starting at the process state (stat field 3). `comm` is wrapped in
+     * parentheses and may itself contain spaces and `)` (the kernel truncates it to 16 chars but permits
+     * arbitrary bytes), so the split point is the **last** `)`, never the first. Returns null when there
+     * is no `)` or nothing follows the closing `") "` (guarding the substring, exactly as the old inline
+     * `childJiffiesOf` did). Index map into the result: `state=0`, … `utime=11`, `stime=12`, `cutime=13`,
+     * `cstime=14` (stat fields 3, 14, 15, 16, 17). This is the single slicer behind every per-PID CPU
+     * reader (top-5 by CPU, renderer main-thread jiffies, the reaped-child sampling-probe accounting).
+     */
+    fun statFieldsAfterComm(statLine: String): List<String>? {
+        val rp = statLine.lastIndexOf(')')
+        if (rp < 0 || rp + 2 > statLine.length) return null
+        return statLine.substring(rp + 2).split(' ')
+    }
+
+    /**
      * Parse a `PERFDUMP` reply. The wire format (see helper/src/perf.c): `@STAT` then `/proc/stat`,
      * `@LOAD <1m 5m 15m …>`, `@TEMP <millidegrees>`, `@GPU <load@freqHz | ->`, `@PROC` then
-     * `pid\tutime+stime\tcomm` lines, `@REND` then `pid\tjiffies` lines, `@END`.
+     * `pid\tutime+stime\tcomm[\trss-pages]` lines, `@REND` then `pid\tjiffies` lines, `@END`.
+     * The RSS column was appended so a new app remains compatible with the old three-column helper.
      */
     fun parsePerfDump(raw: String): PerfDump {
         val stat = ArrayList<LongArray>()
-        val proc = ArrayList<Triple<Int, Long, String>>()
+        val proc = ArrayList<ProcessMetric>()
         val rend = HashMap<Int, Long>()
         var load: List<String> = emptyList()
         var tempMilli = -1L
@@ -106,7 +131,9 @@ object MetricParse {
                     stat.add(line.trim().split(Regex("\\s+")).drop(1).map { it.toLongOrNull() ?: 0L }.toLongArray())
                 "proc" -> line.split('\t').let { t ->
                     val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()
-                    if (pid != null && j != null) proc.add(Triple(pid, j, t.getOrElse(2) { "" }))
+                    if (pid != null && j != null) {
+                        proc.add(ProcessMetric(pid, j, t.getOrElse(2) { "" }, t.getOrNull(3)?.toLongOrNull()))
+                    }
                 }
                 "rend" -> line.split('\t').let { t ->
                     val pid = t.getOrNull(0)?.toIntOrNull(); val j = t.getOrNull(1)?.toLongOrNull()

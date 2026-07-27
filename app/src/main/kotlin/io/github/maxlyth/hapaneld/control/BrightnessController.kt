@@ -13,6 +13,53 @@ import io.github.maxlyth.hapaneld.util.SuccessStickyProbe
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
+internal const val NEVER_SCREEN_TIMEOUT_MS = Int.MAX_VALUE
+private const val DEFAULT_SCREEN_TIMEOUT_MS = 60_000
+
+internal data class ScreenTimeoutApplyResult(
+    val enabled: Boolean,
+    val targetMs: Int,
+    val observedMs: Int,
+    val writeAccepted: Boolean,
+) {
+    val effective: Boolean get() = observedMs == targetMs
+}
+
+/** Small deterministic boundary around Settings.System's boolean write result and mandatory readback. */
+internal class ScreenTimeoutController(
+    private val read: () -> Int,
+    private val write: (Int) -> Boolean,
+) {
+    fun apply(
+        enabled: Boolean,
+        savedTimeoutMs: Int,
+        rememberTimeout: (Int) -> Unit,
+    ): ScreenTimeoutApplyResult {
+        val before = read()
+        if (enabled && before in 1 until NEVER_SCREEN_TIMEOUT_MS) rememberTimeout(before)
+        val target = if (enabled) {
+            NEVER_SCREEN_TIMEOUT_MS
+        } else {
+            savedTimeoutMs.takeIf { it > 0 } ?: DEFAULT_SCREEN_TIMEOUT_MS
+        }
+        val accepted = write(target)
+        return ScreenTimeoutApplyResult(enabled, target, read(), accepted)
+    }
+
+    fun current(): Int = read()
+}
+
+internal fun preventIdleDimDiagnostic(enabled: Boolean, timeoutMs: Int): String {
+    val state = if (enabled) "on" else "off"
+    if (timeoutMs < 0) return "$state · timeout unknown"
+    val timeout = if (timeoutMs == NEVER_SCREEN_TIMEOUT_MS) "never" else "${timeoutMs / 1_000}s"
+    return when {
+        enabled && timeoutMs == NEVER_SCREEN_TIMEOUT_MS -> "$state · timeout never"
+        enabled -> "$state · timeout $timeout (not applied)"
+        else -> "$state · timeout $timeout"
+    }
+}
+
 /**
  * Screen brightness via the standard `Settings.System` API — no vendor lib. Requires the
  * `WRITE_SETTINGS` app-op (granted at provisioning via `appops set <pkg> WRITE_SETTINGS allow`,
@@ -38,6 +85,22 @@ class BrightnessController(
         elapsedRealtimeMs = BrightnessWriteSequencer.ElapsedRealtimeSource(SystemClock::elapsedRealtime),
     )
     private val writeAttribution = BrightnessWriteAttribution()
+    private val screenTimeout = ScreenTimeoutController(
+        read = {
+            Settings.System.getInt(
+                context.contentResolver,
+                Settings.System.SCREEN_OFF_TIMEOUT,
+                -1,
+            )
+        },
+        write = { value ->
+            Settings.System.putInt(
+                context.contentResolver,
+                Settings.System.SCREEN_OFF_TIMEOUT,
+                value,
+            )
+        },
+    )
 
     fun canWrite(): Boolean = Settings.System.canWrite(context)
 
@@ -170,28 +233,41 @@ class BrightnessController(
      * On (default, for mains-powered panels): the prior timeout is saved once, then set to "never". Off:
      * the saved firmware default is restored (60 s if none was captured).
      */
-    fun applyPreventIdleDim(on: Boolean, config: Config) {
-        try {
-            val cur = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, -1)
-            if (on) {
-                if (cur in 1 until NEVER) config.savedScreenOffTimeout = cur
-                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, NEVER)
-                Log.d(TAG, "prevent idle dim ON: screen_off_timeout $cur -> never")
+    internal fun applyPreventIdleDim(on: Boolean, config: Config): ScreenTimeoutApplyResult = try {
+        screenTimeout.apply(on, config.savedScreenOffTimeout) { config.savedScreenOffTimeout = it }.also { result ->
+            if (result.effective && result.writeAccepted) {
+                Log.d(TAG, "prevent idle dim ${if (on) "ON" else "OFF"}: screen_off_timeout -> ${result.observedMs}")
+            } else if (result.effective) {
+                Log.d(
+                    TAG,
+                    "prevent idle dim ${if (on) "ON" else "OFF"}: timeout already effective " +
+                        "despite rejected write (${result.observedMs})",
+                )
             } else {
-                val restore = config.savedScreenOffTimeout.takeIf { it > 0 } ?: 60000
-                Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, restore)
-                Log.d(TAG, "prevent idle dim OFF: screen_off_timeout -> $restore")
+                Log.w(
+                    TAG,
+                    "prevent idle dim ${if (on) "ON" else "OFF"} ineffective: " +
+                        "write=${result.writeAccepted} target=${result.targetMs} observed=${result.observedMs}",
+                )
             }
-        } catch (e: SecurityException) {
-            Log.w(TAG, "WRITE_SETTINGS not granted — cannot set screen_off_timeout", e)
         }
+    } catch (e: SecurityException) {
+        Log.w(TAG, "WRITE_SETTINGS not granted — cannot set screen_off_timeout", e)
+        ScreenTimeoutApplyResult(
+            enabled = on,
+            targetMs = if (on) NEVER_SCREEN_TIMEOUT_MS else config.savedScreenOffTimeout.takeIf { it > 0 }
+                ?: DEFAULT_SCREEN_TIMEOUT_MS,
+            observedMs = -1,
+            writeAccepted = false,
+        )
     }
+
+    fun screenOffTimeoutMs(): Int = runCatching { screenTimeout.current() }.getOrDefault(-1)
 
     companion object {
         private const val TAG = "ha-paneld/brightness"
         internal const val MIN_VISIBLE = 10 // shared command floor: a dim command must never blank the panel
         private const val EFFECTIVE_TTL_MS = 5_000L // effective-backlight read cache (UI polls + reconcile ticks)
-        private const val NEVER = Int.MAX_VALUE // ~24.8 days; the conventional "never auto-off" sentinel
     }
 }
 

@@ -17,12 +17,10 @@ class AmbientHistoryStoreTest {
 
     @Before fun cleanBefore() {
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @After fun cleanAfter() {
         context.deleteDatabase(EntityCatalogStore.DATABASE_NAME)
-        context.deleteDatabase(EntityCatalogStore.LEGACY_DATABASE_NAME)
     }
 
     @Test fun rowsAggregateAndRemainPartitionedBySourceAndContext() {
@@ -89,6 +87,50 @@ class AmbientHistoryStoreTest {
             val row = store.ambientHistory("location-a", "ha:source", minute - 2).single()
             assertEquals(15.0, row.meanLux, 0.001)
             assertEquals(2L, row.sampleCount)
+        }
+    }
+
+    @Test fun activeHaAndIrreplaceablePanelHistoryBothKeepFullSevenDays() {
+        val now = System.currentTimeMillis()
+        val nowMinute = now / 60_000L
+        val oldestMinute = nowMinute - 7L * 24L * 60L
+        fun aggregate(contextId: String, sourceId: String, minute: Long) = AmbientMinuteAggregate(
+            key = AmbientHistoryKey(contextId, sourceId, minute),
+            luxIntegral = 10.0 * 60_000L,
+            coverageMs = 60_000L,
+            minLux = 10.0,
+            maxLux = 10.0,
+            lastLux = 10.0,
+            sampleCount = 1,
+            baselineLogIntegral = kotlin.math.ln1p(10.0) * 60_000L,
+            baselineCoverageMs = 60_000L,
+        )
+        val active = (oldestMinute..nowMinute).map { aggregate("active-location", "ha:selected", it) }
+        val panel = (oldestMinute..nowMinute).map { minute ->
+            aggregate(if (minute < nowMinute - 5_000L) "old-location" else "active-location", "panel", minute)
+        }
+        val inactive = ((nowMinute - 5_999L)..nowMinute).map { aggregate("old-location", "ha:explored", it) }
+
+        EntityCatalogStore(context).use { store ->
+            store.recordAmbientHistory(
+                active + panel + inactive,
+                now,
+                activeContextId = "active-location",
+                activeSourceId = "ha:selected",
+            )
+
+            assertEquals(active.size, store.ambientHistory("active-location", "ha:selected", oldestMinute).size)
+            val retainedPanel = store.readableDatabase.rawQuery(
+                "SELECT COUNT(*) FROM ambient_lux_minute WHERE source_id='panel'",
+                emptyArray(),
+            ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
+            assertEquals(panel.size, retainedPanel)
+            val total = store.readableDatabase.rawQuery(
+                "SELECT COUNT(*) FROM ambient_lux_minute",
+                emptyArray(),
+            ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
+            assertEquals(24_000, total)
+            assertEquals(24_000 - active.size - panel.size, store.ambientHistory("old-location", "ha:explored", oldestMinute).size)
         }
     }
 }

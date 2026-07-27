@@ -26,18 +26,18 @@ class HaAmbientLuxProtocolTest {
         val added = projection.apply(JSONObject().put(
             "a",
             JSONObject().put(entity, JSONObject().put("s", "12").put("a", attributes).put("lc", 1_768_644_000.0)),
-        )) as HaSocketMessage.State
+        )) as HaExactSocketMessage.State
         val changed = projection.apply(JSONObject().put(
             "c",
             JSONObject().put(entity, JSONObject().put("+", JSONObject().put("s", "34.5").put("lu", 1_768_644_002.0))),
-        )) as HaSocketMessage.State
+        )) as HaExactSocketMessage.State
 
         assertEquals("12", added.json.getString("state"))
         assertEquals("2026-01-17T10:00:00Z", added.json.getString("last_updated"))
         assertEquals("34.5", changed.json.getString("state"))
         assertEquals("lx", changed.json.getJSONObject("attributes").getString("unit_of_measurement"))
         assertEquals("2026-01-17T10:00:02Z", changed.json.getString("last_updated"))
-        assertTrue(projection.apply(JSONObject().put("r", JSONArray().put(entity))) is HaSocketMessage.SourceMissing)
+        assertTrue(projection.apply(JSONObject().put("r", JSONArray().put(entity))) is HaExactSocketMessage.Missing)
     }
 
     @Test fun `subscribe first REST hydration cannot overwrite newer stream state`() {

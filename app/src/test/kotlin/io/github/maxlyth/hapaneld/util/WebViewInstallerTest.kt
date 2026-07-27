@@ -109,22 +109,30 @@ class WebViewInstallerTest {
         assertFalse(shouldSkipAutoUpdate(lastVersion = "", recVersion = "150.0.7871.63", recMajor = 150, engineMajor = 147))
     }
 
+    // A transient failure (network / staging / storage / temporarily unavailable privilege) is carried as
+    // a non-terminal HealResult.Failed, so the guard keeps retrying it on the next tick.
     @Test fun autoAttemptMarkerKeepsTransientFailuresRetryable() {
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("download failed"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("download staging failed"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("insufficient storage (need 300MB)"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("skipped: no root (su or helper daemon needed)"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon unreachable"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon busy"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon stream staging failed"))
-        assertFalse(WebViewInstaller.shouldRecordAutoAttempt("install outcome unknown: helper staging retained for safety"))
+        listOf(
+            "download failed",
+            "download staging failed",
+            "insufficient storage (need 300MB)",
+            "skipped: no root (su or helper daemon needed)",
+            "install failed: daemon unreachable",
+            "install failed: daemon busy",
+            "install failed: daemon stream staging failed",
+            "install outcome unknown: helper staging retained for safety",
+        ).forEach { message ->
+            assertFalse(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.Failed(message, terminal = false)))
+        }
     }
 
+    // A terminal install (success or a durable package-manager/signer rejection) and every no-op decision
+    // are durable evidence, so the guard records the pin and stops re-downloading it.
     @Test fun autoAttemptMarkerRecordsTerminalProviderOutcomes() {
-        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("OK: installed WebView 150 — reloading the dashboard"))
-        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]"))
-        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("install failed: daemon install failed"))
-        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("refused (signer mismatch)"))
-        assertTrue(WebViewInstaller.shouldRecordAutoAttempt("already current (150.0.1)"))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.Installed("OK: installed WebView 150 — reloading the dashboard")))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.Failed("install failed: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE]", terminal = true)))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.Failed("install failed: daemon install failed", terminal = true)))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.Failed("refused (signer mismatch)", terminal = true)))
+        assertTrue(WebViewInstaller.shouldRecordAutoAttempt(WebViewInstaller.HealResult.NoAction("already current (150.0.1)")))
     }
 }

@@ -74,4 +74,50 @@ class SuFormPolicyTest {
         assertEquals(null, selected)
         assertEquals(0, attempts)
     }
+
+    // --- firstAccepted (the independent-timeout, sticky-form selection the one-shots share) ----------
+
+    @Test fun firstAcceptedReturnsFirstWorkingDialectAndStopsThere() {
+        val tried = mutableListOf<Int>()
+        val selected = SuFormPolicy.firstAccepted(SuFormPolicy.UNPROBED) { form ->
+            tried += form
+            if (form == SuFormPolicy.ANDROID) "ok" else null
+        }
+
+        assertEquals(SuFormPolicy.Selection(SuFormPolicy.ANDROID, "ok"), selected)
+        assertEquals(listOf(SuFormPolicy.TOOLBOX, SuFormPolicy.ANDROID), tried)
+    }
+
+    @Test fun firstAcceptedStopsAtTheFirstAcceptedResultWithoutTryingTheSecond() {
+        val tried = mutableListOf<Int>()
+        val selected = SuFormPolicy.firstAccepted(SuFormPolicy.UNPROBED) { form ->
+            tried += form
+            "first"
+        }
+
+        assertEquals(SuFormPolicy.Selection(SuFormPolicy.TOOLBOX, "first"), selected)
+        assertEquals(listOf(SuFormPolicy.TOOLBOX), tried)
+    }
+
+    @Test fun firstAcceptedReturnsNullWhenEveryDialectFails() {
+        val tried = mutableListOf<Int>()
+        val selected = SuFormPolicy.firstAccepted<String>(SuFormPolicy.UNPROBED) { form ->
+            tried += form
+            null
+        }
+
+        assertEquals(null, selected)
+        assertEquals(listOf(SuFormPolicy.TOOLBOX, SuFormPolicy.ANDROID), tried)
+    }
+
+    @Test fun firstAcceptedWithAStickyFormOnlyTriesThatForm() {
+        val tried = mutableListOf<Int>()
+        val selected = SuFormPolicy.firstAccepted(SuFormPolicy.ANDROID) { form ->
+            tried += form
+            "ok"
+        }
+
+        assertEquals(SuFormPolicy.Selection(SuFormPolicy.ANDROID, "ok"), selected)
+        assertEquals(listOf(SuFormPolicy.ANDROID), tried)
+    }
 }

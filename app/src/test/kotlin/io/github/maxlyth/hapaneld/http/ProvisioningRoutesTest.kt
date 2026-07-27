@@ -147,7 +147,7 @@ class ProvisioningRoutesTest {
     }
 
     @Test
-    fun readerCancellationCrossesTheRouteBoundary() = testApplication {
+    fun readerCancellationBypassesRetryableMapping() = testApplication {
         val reader = object : ProvisioningReader {
             override val expectedProfileRef = REF
 
@@ -166,9 +166,14 @@ class ProvisioningRoutesTest {
             }
         }
 
-        val failure = runCatching { client.get("/api/v1/provisioning/plan") }.exceptionOrNull()
+        val response = client.get("/api/v1/provisioning/plan")
 
-        assertTrue(failure is CancellationException)
+        // Ktor 3.5's test host turns a handler CancellationException into its generic 500 response
+        // instead of rethrowing it through the in-memory client. It must still bypass this route's
+        // retryable-error mapping: no 503 body or Retry-After header may be synthesized.
+        assertEquals(HttpStatusCode.InternalServerError, response.status)
+        assertEquals(null, response.headers[HttpHeaders.RetryAfter])
+        assertFalse(response.bodyAsText().contains("provisioning_plan_unavailable"))
     }
 
     @Test

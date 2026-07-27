@@ -45,7 +45,8 @@ object AppInstaller {
 
     /**
      * Download [url], refuse unless the APK declares [pin].pkg AND is signed by [pin].certSha256, then
-     * install over an available privileged route. Returns "OK" on success, else a short reason. The caller owns the
+     * install over an available privileged route. Returns a typed [InstallOutcome] — [InstallOutcome.Succeeded]
+     * or a [InstallOutcome.Failure] carrying the exact status message. The caller owns the
      * version/should-update decision.
      */
     suspend fun install(
@@ -53,12 +54,12 @@ object AppInstaller {
         url: String,
         pin: Pin,
         allowShizuku: Boolean = false,
-    ): String = withContext(Dispatchers.IO) {
+    ): InstallOutcome = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
         if (selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku) == InstallRoute.NONE)
-            return@withContext "skipped: no permitted installer"
+            return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
 
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
@@ -66,32 +67,33 @@ object AppInstaller {
         val size = contentLength(url)
         if (size > MAX_APK_DOWNLOAD_BYTES) {
             Log.w(TAG, "refusing oversized APK download: $size bytes")
-            return@withContext "download too large (${size / 1048576}MB)"
+            return@withContext InstallOutcome.Retryable("download too large (${size / 1048576} MB)")
         }
         val margin = 64L * 1024L * 1024L
         val free = context.cacheDir.usableSpace
         val spaceLimit = (free - margin).coerceAtLeast(0L)
         if (size > 0L && size > spaceLimit) {
             val need = size + margin
-            Log.w(TAG, "insufficient storage: need ${need / 1048576}MB, have ${free / 1048576}MB free")
-            return@withContext "insufficient storage (need ${need / 1048576}MB, ${free / 1048576}MB free)"
+            Log.w(TAG, "insufficient storage: need ${need / 1048576} MB, have ${free / 1048576} MB free")
+            return@withContext InstallOutcome.Retryable(
+                "insufficient storage (need ${need / 1048576} MB, ${free / 1048576} MB free)",
+            )
         }
         val downloadLimit = minOf(MAX_APK_DOWNLOAD_BYTES, spaceLimit)
         if (downloadLimit == 0L) {
-            return@withContext "insufficient storage (64MB safety margin unavailable)"
+            return@withContext InstallOutcome.Retryable("insufficient storage (64 MB safety margin unavailable)")
         }
         val apk = runCatching { File.createTempFile("hapaneld-dl-", ".apk", context.cacheDir) }
-            .getOrElse { return@withContext "download staging failed" }
-        try {
-            if (!download(url, apk, downloadLimit)) return@withContext "download failed"
+            .getOrElse { return@withContext InstallOutcome.Retryable("download staging failed") }
+        withStagedFiles { staged ->
+            staged.stage(apk)
+            if (!download(url, apk, downloadLimit)) return@withStagedFiles InstallOutcome.Retryable("download failed")
             val why = verifyApk(context, apk.absolutePath, pin)
             if (why != null) {
                 Log.w(TAG, "refused install: $why")
-                return@withContext "refused ($why)"
+                return@withStagedFiles InstallOutcome.Rejected("refused ($why)")
             }
             installLocalApk(context, apk, allowShizuku)
-        } finally {
-            apk.delete()
         }
     }
 
@@ -121,28 +123,34 @@ object AppInstaller {
      * the peer-uid-locked daemon socket; an older daemon falls back to its path-based `INSTALL` verb.
      * Shizuku is considered only when [allowShizuku] is explicitly true; arbitrary upload callers keep
      * the default false.
-     * Returns "OK" or a short reason.
+     * Returns a typed [InstallOutcome].
      */
     suspend fun installLocalApk(
         context: Context,
         apk: File,
         allowShizuku: Boolean = false,
-    ): String = withContext(Dispatchers.IO) {
+    ): InstallOutcome = withContext(Dispatchers.IO) {
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
         val route = selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku)
         if (route == InstallRoute.NONE) {
             apk.delete()
-            return@withContext "skipped: no permitted installer"
+            return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
         }
         val replacingSelf = inspect(context, apk.absolutePath)?.pkg == context.packageName
+        if (replacingSelf && !ConfigUpgradeBackup.snapshot(context)) {
+            apk.delete()
+            return@withContext InstallOutcome.Retryable(
+                "install deferred: configuration backup could not be written",
+            )
+        }
         val stateQuiescence = if (replacingSelf) {
             AppState.quiesceForSelfReplace(context, SELF_REPLACE_STATE_FLUSH_MS)
         } else null
         if (replacingSelf && stateQuiescence == null) {
             apk.delete()
-            return@withContext "install deferred: application state is still being saved"
+            return@withContext InstallOutcome.Retryable("install deferred: application state is still being saved")
         }
         var installSucceeded = false
         try {
@@ -160,13 +168,13 @@ object AppInstaller {
                 }
                 if (out.contains("Success", ignoreCase = true)) {
                     installSucceeded = true
-                    return@withContext "OK"
+                    return@withContext InstallOutcome.Succeeded
                 }
                 Log.w(TAG, "install failed: $out")
-                return@withContext "install failed: ${out.take(120)}"
+                return@withContext installFailure(out)
             }
 
-            val result = if (route == InstallRoute.DAEMON) {
+            val outcome: InstallOutcome = if (route == InstallRoute.DAEMON) {
                 HelperInstallTransaction(HelperClient).install(
                     apk,
                     File(context.filesDir, HelperInstallTransaction.STAGING_DIR),
@@ -178,20 +186,33 @@ object AppInstaller {
                 } finally {
                     apk.delete()
                 }
-                if (out.contains("Success", ignoreCase = true)) "OK"
-                else "install failed: ${out.ifBlank { "Shizuku installer unavailable" }.take(120)}"
+                if (out.contains("Success", ignoreCase = true)) InstallOutcome.Succeeded
+                else installFailure(out.ifBlank { "Shizuku installer unavailable" })
             } else {
                 apk.delete()
-                "skipped: no permitted installer"
+                InstallOutcome.Retryable("skipped: no permitted installer")
             }
-            if (result != "OK") Log.w(TAG, result)
-            installSucceeded = result == "OK"
-            result
+            if (outcome is InstallOutcome.Failure) Log.w(TAG, outcome.message)
+            installSucceeded = outcome is InstallOutcome.Succeeded
+            outcome
         } finally {
             // Package-manager success may return before process replacement. Keep state mutation
             // admission quiesced across that lag; only a failed install reopens writes.
             finishSelfReplaceQuiescence(stateQuiescence, installSucceeded)
         }
+    }
+
+    /**
+     * Classify a `pm install` failure [output] line into a typed [InstallOutcome.Failure]. A
+     * package-manager `Failure [...]` rejection is durable — retrying the same APK cannot help — so it
+     * is [InstallOutcome.Rejected]; anything else (empty output, an installer-unavailable note, other
+     * text) is [InstallOutcome.Retryable]. The message preserves the historical
+     * `"install failed: <trimmed output>"` text exactly.
+     */
+    internal fun installFailure(output: String): InstallOutcome {
+        val message = "install failed: ${output.take(120)}"
+        return if (output.startsWith("Failure [")) InstallOutcome.Rejected(message)
+        else InstallOutcome.Retryable(message)
     }
 
     internal fun finishSelfReplaceQuiescence(

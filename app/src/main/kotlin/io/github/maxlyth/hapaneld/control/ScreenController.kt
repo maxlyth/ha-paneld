@@ -13,6 +13,10 @@ import java.util.concurrent.atomic.AtomicLong
 
 enum class WakeOutcome { WOKEN, ALREADY_ON, STALE_GENERATION, ACTUATION_FAILED }
 
+/** Ownership proof for one screen-off transition created by an automatic policy. */
+@JvmInline
+value class AutomaticOffEpoch internal constructor(internal val generation: Long)
+
 /**
  * Screen on/off — vendor-free with one serialized transition owner.
  *
@@ -42,8 +46,9 @@ class ScreenController(
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
 
-    /** Invoked after a LOCAL touch-wake so callers can publish screen=ON to HA. Set by the service. */
-    @Volatile var onWakeByTap: (() -> Unit)? = null
+    /** Invoked after a LOCAL touch-wake. A non-null epoch proves that this exact physical tap woke the
+     * automatic OFF generation; null means it woke a manual OFF and must never train auto-sleep. */
+    @Volatile var onWakeByTap: ((AutomaticOffEpoch?) -> Unit)? = null
     /** Invoked after every completed physical wake. Keep callbacks non-blocking; the service schedules
      * auto-brightness reconciliation away from this serialized screen transition. */
     @Volatile var onWakeCompleted: (() -> Unit)? = null
@@ -56,6 +61,7 @@ class ScreenController(
     private val stateGeneration = AtomicLong()
     @Volatile private var intendedOffGeneration = 0L
     @Volatile private var observedDarkGeneration = 0L
+    @Volatile private var automaticOffGeneration = 0L
     private val admissionClosed = AtomicBoolean(false)
 
     fun isOn(): Boolean = power.isInteractive()
@@ -114,6 +120,30 @@ class ScreenController(
     /** Cautious boolean used by the never-blank watchdog: unknown is not grounds to alter hardware. */
     fun looksDark(): Boolean = observedDark() == true
 
+    /** Recover only a dark backlight on an otherwise interactive panel. A non-interactive device has
+     * entered Android's normal screen sleep and must not be woken by the periodic never-blank guard.
+     * The potentially slow hardware observation stays outside the transition monitor; its generation
+     * is then admitted atomically with the wake so a concurrent explicit screen-off always wins. */
+    fun recoverUnexpectedDark(): Boolean {
+        if (intendedOff || admissionClosed.get() || !power.isInteractive()) return false
+        val observedGeneration = stateGeneration.get()
+        if (!looksDark()) return false
+        return recoverUnexpectedDark(observedGeneration)
+    }
+
+    @Synchronized
+    private fun recoverUnexpectedDark(observedGeneration: Long): Boolean {
+        if (
+            intendedOff || admissionClosed.get() ||
+            stateGeneration.get() != observedGeneration || !power.isInteractive()
+        ) return false
+        // Brightness writes do not represent a screen-state generation, so fresh readback is the final
+        // authority: a newer positive write must win over the stale dark observation made above.
+        if (!looksDark() || !power.isInteractive()) return false
+        wake()
+        return true
+    }
+
     /** Record an explicit brightness so the fallback off/on restores to it. */
     fun noteLevel(level: Int) {
         if (level > 0) savedLevel = level.coerceIn(1, 255)
@@ -121,8 +151,22 @@ class ScreenController(
 
     @Synchronized
     fun sleep() {
-        if (admissionClosed.get()) return
+        sleepInternal(automatic = false)
+    }
+
+    /**
+     * Turn the screen off on behalf of an automatic policy and return ownership of that exact epoch.
+     * If the screen is already intentionally off, the existing (possibly manual) owner wins and no
+     * epoch is returned. This prevents an automatic controller from adopting and later waking a manual
+     * screen-off.
+     */
+    @Synchronized
+    fun sleepAutomatically(): AutomaticOffEpoch? = sleepInternal(automatic = true)
+
+    private fun sleepInternal(automatic: Boolean): AutomaticOffEpoch? {
+        if (admissionClosed.get() || (automatic && intendedOff)) return null
         intendedOffGeneration = stateGeneration.incrementAndGet()
+        automaticOffGeneration = if (automatic) intendedOffGeneration else 0L
         observedDarkGeneration = 0L
         intendedOff = true
         // Never go fully dark without a guaranteed way back. If touch-to-wake can't be armed (no overlay
@@ -131,13 +175,23 @@ class ScreenController(
         // dim instead: still legible + tappable, and HA/proximity can still restore full brightness. This
         // path leaves the screen VISIBLE, so the built-in renderer must NOT be frozen here (a frozen
         // WebView on a still-lit dashboard would show stale, un-tappable cards).
-        if (!wakeTap.canArm() || !wakeTap.arm { wake(); onWakeByTap?.invoke() }) {
+        val wakeTapGeneration = intendedOffGeneration
+        val wakeTapAutomaticEpoch = automaticEpochOrNull()
+        if (!wakeTap.canArm() || !wakeTap.arm {
+                // A touch observer may hand work to another thread. By the time that worker runs, a
+                // manual command or a later automatic transition may own a different OFF epoch. Never
+                // let the old tap wake that newer state: retain and prove the exact epoch armed here.
+                if (wakeIfStillDark(wakeTapGeneration) == WakeOutcome.WOKEN) {
+                    onWakeByTap?.invoke(wakeTapAutomaticEpoch)
+                }
+            }
+        ) {
             val cur = backlight.getBrightness()
             if (cur > 0) savedLevel = cur
             backlight.setBrightness(NO_WAKE_DIM)
             appliedOffRoute = null
             Log.w(TAG, "screen-off with no touch-to-wake — dimming to floor (never-blank; saved=$savedLevel)")
-            return
+            return automaticEpochOrNull()
         }
         // Guaranteed locally wakeable: arm the tap, then power the backlight off for real. Only the two
         // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
@@ -164,7 +218,7 @@ class ScreenController(
             observedDarkGeneration = intendedOffGeneration
             BuiltinDashboard.onScreenAwake(false)
             Log.d(TAG, "screen -> off (${poweredOffRoute.name.lowercase()})")
-            return
+            return automaticEpochOrNull()
         }
         // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the
         // raw setter so it can reach 0: the public setBrightness floors at MIN_VISIBLE to stay never-blank.
@@ -173,11 +227,16 @@ class ScreenController(
         backlight.setBrightnessRaw(0)
         appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
+        return automaticEpochOrNull()
     }
+
+    private fun automaticEpochOrNull(): AutomaticOffEpoch? =
+        automaticOffGeneration.takeIf { it != 0L }?.let(::AutomaticOffEpoch)
 
     @Synchronized
     fun wake() {
         stateGeneration.incrementAndGet()
+        automaticOffGeneration = 0L
         intendedOff = false
         wakeTap.disarm()
         val wakingRoute = appliedOffRoute ?: route
@@ -236,6 +295,7 @@ class ScreenController(
         stateGeneration.incrementAndGet()
         intendedOffGeneration = 0L
         observedDarkGeneration = 0L
+        automaticOffGeneration = 0L
         intendedOff = false
         appliedOffRoute = null
         wakeTap.disarm()
@@ -258,6 +318,31 @@ class ScreenController(
             WakeOutcome.WOKEN
         }.getOrElse {
             Log.e(TAG, "generation-safe wake failed", it)
+            WakeOutcome.ACTUATION_FAILED
+        }
+    }
+
+    /**
+     * Wake only if [epoch] still owns the current automatic screen-off. Manual sleep/wake commands,
+     * physical wake reconciliation, and any later automatic epoch make an older caller harmless.
+     */
+    @Synchronized
+    fun wakeAutomaticallyIfOwned(
+        epoch: AutomaticOffEpoch,
+        admissionStillValid: () -> Boolean = { true },
+    ): WakeOutcome {
+        if (!intendedOff) return WakeOutcome.ALREADY_ON
+        if (
+            epoch.generation != automaticOffGeneration ||
+            epoch.generation != intendedOffGeneration ||
+            stateGeneration.get() != epoch.generation
+        ) return WakeOutcome.STALE_GENERATION
+        if (!admissionStillValid()) return WakeOutcome.STALE_GENERATION
+        return runCatching {
+            wake()
+            WakeOutcome.WOKEN
+        }.getOrElse {
+            Log.e(TAG, "automatic generation-safe wake failed", it)
             WakeOutcome.ACTUATION_FAILED
         }
     }

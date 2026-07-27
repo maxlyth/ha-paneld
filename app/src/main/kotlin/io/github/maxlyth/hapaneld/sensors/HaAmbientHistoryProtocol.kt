@@ -4,8 +4,6 @@ import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.control.AMBIENT_MINUTE_MS
 import org.json.JSONArray
 import org.json.JSONObject
-import java.time.Instant
-import java.time.format.DateTimeParseException
 import kotlin.math.ln1p
 
 internal data class HaAmbientHistoryMinute(
@@ -80,11 +78,7 @@ internal object HaAmbientHistoryProtocol {
 
     private fun timestamp(row: JSONObject): Long? {
         val raw = row.optString("last_changed").ifBlank { row.optString("last_updated") }
-        return try {
-            raw.takeIf(String::isNotBlank)?.let { Instant.parse(it).toEpochMilli() }
-        } catch (_: DateTimeParseException) {
-            null
-        }
+        return parseHaTimestampEpochMs(raw)
     }
 
     private fun finiteLux(raw: String): Double? = raw.trim().toDoubleOrNull()

@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.config
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,7 +38,7 @@ class AdaptiveBrightnessSettingTest {
         assertTrue(SettingValue.validate(spec, "96") is Validation.Bad)
     }
 
-    @Test fun `sensitivity is bounded with a neutral default`() {
+    @Test fun `sensitivity is bounded with a balanced default`() {
         val spec = SettingsRegistry.spec("auto_brightness_sensitivity")!!
 
         assertEquals(SettingType.INT, spec.type)
@@ -74,5 +75,26 @@ class AdaptiveBrightnessSettingTest {
         ).forEach { value ->
             assertTrue("must reject $value", SettingValue.validate(spec, value) is Validation.Bad)
         }
+    }
+
+    @Test fun `configure hides automatic brightness child controls while disabled`() {
+        val source = listOf(
+            File("src/main/assets/configure.js"),
+            File("app/src/main/assets/configure.js"),
+        ).first { it.isFile }.readText()
+
+        val renderGate = source.substring(
+            source.indexOf("function shouldRenderRow"),
+            source.indexOf("function radioJoined"),
+        )
+        assertTrue(renderGate.contains("auto_brightness_minimum_percent"))
+        assertTrue(renderGate.contains("auto_brightness_sensitivity"))
+        assertTrue(renderGate.contains("""values.auto_brightness !== "true""""))
+
+        val displayCard = source.substring(
+            source.indexOf("""if (g === "Display")"""),
+            source.indexOf("// Dashboard card action"),
+        )
+        assertTrue(displayCard.contains("""values.auto_brightness === "true" && ambientLightSourceConfigured()"""))
     }
 }

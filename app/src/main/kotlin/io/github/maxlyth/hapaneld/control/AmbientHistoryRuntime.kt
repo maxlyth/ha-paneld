@@ -103,11 +103,18 @@ internal class AmbientHistoryRuntime(
         executor.execute {
             if (closed || run != generation.get() || contextId != expectedContextId || sourceId != expectedSourceId) return@execute
             if (!flush(reloadAfter = false)) return@execute
-            if (closed || run != generation.get() || contextId != expectedContextId || sourceId != expectedSourceId) return@execute
             runCatching {
-                store.seedAmbientHistory(samples, wallClockMs())
-                val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
-                store.ambientHistory(expectedContextId, expectedSourceId, since)
+                synchronized(pendingLock) {
+                    if (closed || run != generation.get() || contextId != expectedContextId || sourceId != expectedSourceId) {
+                        return@execute
+                    }
+                    // Source changes are rare and seed/prune is a bounded one-shot operation. Keep
+                    // the identity lock through it so configure() cannot make another partition
+                    // current while this transaction still applies active-first retention.
+                    store.seedAmbientHistory(samples, wallClockMs())
+                    val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
+                    store.ambientHistory(expectedContextId, expectedSourceId, since)
+                }
             }.onSuccess {
                 if (run == generation.get() && contextId == expectedContextId && sourceId == expectedSourceId) {
                     cached = it
@@ -119,17 +126,24 @@ internal class AmbientHistoryRuntime(
 
     fun reload() {
         if (closed) return
-        executor.execute {
-            val run = generation.get()
-            val contextSnapshot = contextId
-            val sourceSnapshot = sourceId
-            val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
-            runCatching { store.ambientHistory(contextSnapshot, sourceSnapshot, since) }
-                .onSuccess {
-                    if (run == generation.get() && contextSnapshot == contextId && sourceSnapshot == sourceId) cached = it
-                }
-                .onFailure { Log.w(TAG, "ambient history load failed", it) }
-        }
+        executor.execute { reloadCacheFromStore("ambient history load failed") }
+    }
+
+    /**
+     * Refresh the in-memory cache from the store, discarding the result if the generation or the
+     * context/source identity captured when this refresh started has since moved on. Runs on the
+     * caller's thread; callers own the executor dispatch and the retention/read semantics.
+     */
+    private fun reloadCacheFromStore(failMessage: String) {
+        val run = generation.get()
+        val contextSnapshot = contextId
+        val sourceSnapshot = sourceId
+        val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
+        runCatching { store.ambientHistory(contextSnapshot, sourceSnapshot, since) }
+            .onSuccess {
+                if (run == generation.get() && contextSnapshot == contextId && sourceSnapshot == sourceId) cached = it
+            }
+            .onFailure { Log.w(TAG, failMessage, it) }
     }
 
     private fun flushAsync(reloadAfter: Boolean = false) {
@@ -153,32 +167,24 @@ internal class AmbientHistoryRuntime(
     }
 
     private fun flush(reloadAfter: Boolean): Boolean {
-        val batch = synchronized(pendingLock) {
-            if (pending.isEmpty()) emptyList() else pending.toList().also { pending.clear() }
-        }
-        val persisted = if (batch.isEmpty()) true else runCatching {
-            store.recordAmbientHistory(batch, wallClockMs())
-            true
-        }.getOrElse {
+        val persisted = synchronized(pendingLock) {
+            val batch = if (pending.isEmpty()) emptyList() else pending.toList().also { pending.clear() }
+            if (batch.isEmpty()) return@synchronized true
+            runCatching {
+                // Keep configure() behind the small five-minute write/prune transaction. Otherwise
+                // a source switch can overtake this snapshot and make active-first retention prune
+                // the partition that has just become current.
+                store.recordAmbientHistory(batch, wallClockMs(), contextId, sourceId)
+                true
+            }.getOrElse {
                 Log.w(TAG, "ambient history write failed", it)
-                synchronized(pendingLock) {
-                    pending.addAll(0, batch.takeLast(MAX_PENDING))
-                    while (pending.size > MAX_PENDING) pending.removeAt(0)
-                    scheduleFlushLocked()
-                }
+                pending.addAll(0, batch.takeLast(MAX_PENDING))
+                while (pending.size > MAX_PENDING) pending.removeAt(0)
+                scheduleFlushLocked()
                 false
             }
-        if (reloadAfter) {
-            val run = generation.get()
-            val contextSnapshot = contextId
-            val sourceSnapshot = sourceId
-            val since = wallClockMs() / AMBIENT_MINUTE_MS - AMBIENT_RETENTION_MINUTES
-            runCatching { store.ambientHistory(contextSnapshot, sourceSnapshot, since) }
-                .onSuccess {
-                    if (run == generation.get() && contextSnapshot == contextId && sourceSnapshot == sourceId) cached = it
-                }
-                .onFailure { Log.w(TAG, "ambient history refresh failed", it) }
         }
+        if (reloadAfter) reloadCacheFromStore("ambient history refresh failed")
         return persisted
     }
 

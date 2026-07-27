@@ -11,6 +11,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileAdmin
 import io.github.maxlyth.hapaneld.device.profile.ProfileDiff
 import io.github.maxlyth.hapaneld.device.profile.ProfileDriverDescriptor
 import io.github.maxlyth.hapaneld.device.profile.ProfileDriverKind
+import io.github.maxlyth.hapaneld.device.profile.ProfileHelperAuthorityDemand
 import io.github.maxlyth.hapaneld.device.profile.ProfileFieldDescriptor
 import io.github.maxlyth.hapaneld.device.profile.ProfileIssue
 import io.github.maxlyth.hapaneld.device.profile.ProfileIssueSeverity
@@ -356,7 +357,13 @@ class ProfileRoutesTest {
         )
 
         override fun drivers() = listOf(
-            ProfileDriverDescriptor("relay.sysfs", ProfileDriverKind.RELAY, "Compiled relay driver", privileged = true),
+            ProfileDriverDescriptor(
+                "relay.sysfs",
+                ProfileDriverKind.RELAY,
+                "Compiled relay driver",
+                privileged = true,
+                helperDemand = ProfileHelperAuthorityDemand.NONE,
+            ),
         )
 
         override fun status() = ProfileStatus(

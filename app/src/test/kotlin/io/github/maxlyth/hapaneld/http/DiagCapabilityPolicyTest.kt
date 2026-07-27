@@ -17,10 +17,33 @@ class DiagCapabilityPolicyTest {
     private val fallback = BundledProfileFixtures.fallback()
     private val nspanel = BundledProfileFixtures.profile("nspanel-pro")
 
+    @Test fun userFacingDataSizesUseFamiliarUnitLabels() {
+        val info = java.io.File("src/main/assets/info.js").readText()
+        val entities = java.io.File("src/main/assets/entities.js").readText()
+        val panelInfo = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PanelInfo.kt").readText()
+
+        listOf(info, entities, panelInfo).forEach { source ->
+            assertFalse(source.contains("KiB"))
+            assertFalse(source.contains("MiB"))
+            assertFalse(source.contains("GiB"))
+        }
+        assertTrue(entities.contains("function displayBytes(n)"))
+        assertTrue(entities.contains("+' GB'"))
+        assertTrue(entities.contains("+' MB'"))
+        assertTrue(entities.contains("+' KB'"))
+    }
+
     @Test fun performanceUiNamesTheDevtoolsRelayAsRemoteDebugging() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
         assertTrue(source.contains("<h2>Remote WebView debugging "))
         assertFalse(source.contains("<h2>WebView debugging "))
+    }
+
+    @Test fun topProcessesCardHasAnAccessibleCpuRamSelector() {
+        val server = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        assertTrue(server.contains("""role="group" aria-label="Rank processes by"""))
+        assertTrue(server.contains("""data-mode="cpu" aria-pressed="true"""))
+        assertTrue(server.contains("""data-mode="ram" aria-pressed="false"""))
     }
 
     @Test fun configurableValuePencilsStayAttachedToTheirValue() {
@@ -33,7 +56,7 @@ class DiagCapabilityPolicyTest {
 
     @Test fun behaviourCardOwnsConfiguredRuntimeBehaviourWithoutPanelInfoDuplicates() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        assertTrue(source.contains("""private val BEHAVIOUR_FACT_KEYS = setOf("Keep awake", "Kiosk lock", "Navbar", "Log shipping")"""))
+        assertTrue(source.contains(""""Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar", "Log shipping""""))
         assertTrue(source.contains(""""silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled""""))
         assertTrue(source.contains(""""watchdog_enabled", "kiosk_lock", "touch_sound""""))
     }
@@ -52,10 +75,14 @@ class DiagCapabilityPolicyTest {
         assertTrue(script.contains("toFixed(1)+' MB'"))
         assertFalse(script.contains("toFixed(1)+' KiB'"))
         assertFalse(script.contains("toFixed(1)+' MiB'"))
+        assertTrue(script.contains("toFixed(1)+' KB/s'"))
+        assertTrue(script.contains("toFixed(1)+' MB/s'"))
+        assertFalse(script.contains("KiB/s"))
+        assertFalse(script.contains("MiB/s"))
         assertFalse(script.contains("label:'Noisy entity'"))
         assertTrue(server.contains("""<table class="dt" id="noisyentities">"""))
         assertTrue(server.contains("""<div id="cfg-all-cards">"""))
-        assertTrue(server.contains("""<div id="cfg-groups" class="cards"></div>"""))
+        assertTrue(server.contains("""<div id="cfg-groups" class="cards" data-card-size-page="configure"""))
         assertFalse(server.contains("Save changes does not control them"))
         assertTrue(server.contains("""id="savebar" class="savebar" role="region" aria-label="Unsaved settings" hidden"""))
         assertTrue(configure.contains("""bar.hidden = !dirty && !saving"""))
@@ -68,13 +95,17 @@ class DiagCapabilityPolicyTest {
         assertTrue(configure.contains("""return "Built-in renderer"""))
         assertTrue(configure.contains("""return "Home Assistant connection"""))
         assertTrue(configure.contains("""if (g === "Built-in renderer")"""))
-        assertTrue(configure.contains("""dashboard_entity_learning: true, dashboard_fullscreen: true, dashboard_idle_return_min: true, dashboard_zoom: true"""))
+        assertTrue(configure.contains("""dashboard_entity_learning: true, dashboard_fullscreen: true, dashboard_native_kiosk: true,"""))
+        assertTrue(configure.contains("""dashboard_idle_return_min: true, dashboard_zoom: true"""))
         assertTrue(configure.contains("""var HA_CONNECTION_KEYS = { ha_url: true, ha_token: true }"""))
         assertTrue(configure.contains("""moveGroupTo("Home Assistant connection", 2)"""))
         assertTrue(configure.contains("""moveGroupTo("Dashboard", 3)"""))
         assertTrue(configure.contains("""moveGroupTo("Built-in renderer", 4)"""))
         assertTrue(configure.contains("""groups.push("Logging")"""))
-        assertTrue(configure.contains("""var CARD_NOTES = { "Sensors": "Home Assistant reporting", "Diagnostics": "Home Assistant reporting" }"""))
+        assertFalse(configure.contains(""""Behaviour": "Android/app behaviour""""))
+        assertFalse(configure.contains("dashboard appearance; does not lock Android"))
+        assertTrue(configure.contains(""""Sensors": "Home Assistant reporting""""))
+        assertTrue(configure.contains(""""Diagnostics": "Home Assistant reporting""""))
         assertTrue(configure.contains("""el("small", { text: " · " + CARD_NOTES[g] })"""))
         val css = java.io.File("src/main/assets/info.css").readText()
         assertTrue(css.contains("#noisyentities th:first-child,#noisyentities td:first-child{width:auto}"))
@@ -94,8 +125,8 @@ class DiagCapabilityPolicyTest {
         assertTrue(configure.contains("href: \"/install#cfg-display\", text: \"Display Sizing\""))
         assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))
         assertTrue(server.contains("spec.key == \"dashboard_zoom\" && displaySizingAvailable"))
-        assertTrue(server.contains("""<div class="cards" id="install-cards">"""))
-        assertTrue(server.contains("""<div class="cards" id="dashboard-cards">"""))
+        assertTrue(server.contains("""<div class="cards" id="install-cards" data-card-size-page="install"""))
+        assertTrue(server.contains("""<div class="cards" id="dashboard-cards" data-card-size-page="dashboard"""))
         assertFalse(server.contains("For panels with no physical nav bar"))
         assertTrue(server.indexOf("\${tcard(\"infotbl\", \"Panel information\"") < server.indexOf("\$shotCard"))
         assertTrue(server.contains("""class="gh gh-inline cnotes"""))
@@ -246,6 +277,26 @@ class DiagCapabilityPolicyTest {
         assertEquals("available directly to ha-paneld", cap.note)
     }
 
+    @Test fun screenBrightnessCallsOutReducedHardwareOnlyControl() {
+        val direct = DiagReader.screenBrightnessCapability(canWrite = true, su = false, daemon = false, pkg = "test.pkg")
+        assertEquals("Screen brightness", direct.name)
+        assertEquals("ok", direct.status)
+        assertEquals("WRITE_SETTINGS granted", direct.note)
+
+        val helper = DiagReader.screenBrightnessCapability(canWrite = false, su = false, daemon = true, pkg = "test.pkg")
+        assertEquals("degraded", helper.status)
+        assertTrue(helper.note.contains("helper daemon"))
+        assertFalse(helper.note.contains("adb shell"))
+
+        val root = DiagReader.screenBrightnessCapability(canWrite = false, su = true, daemon = false, pkg = "test.pkg")
+        assertEquals("degraded", root.status)
+        assertTrue(root.note.contains("via su"))
+
+        val unavailable = DiagReader.screenBrightnessCapability(canWrite = false, su = false, daemon = false, pkg = "test.pkg")
+        assertEquals("none", unavailable.status)
+        assertTrue(unavailable.note.contains("adb shell appops set test.pkg WRITE_SETTINGS allow"))
+    }
+
     @Test fun rootedOrHelperBackedPanelsExplainConfiguredShizukuIsRedundant() {
         for (manager in ShizukuManagerIdentity.Status.entries) {
             assertTrue(DiagReader.showShizukuCapability(consentEnabled = true, manager))
@@ -367,6 +418,7 @@ class DiagCapabilityPolicyTest {
             "ha-paneld" to "0.9.5-rc1 (build 294)",
             "MQTT state" to "connected · ack 2s ago · ipv4",
             "Security mode" to "Hardened · high-impact remote actions need physical on-panel approval",
+            "Prevent idle dim" to "on · timeout 60s (not applied)",
             "Platform" to privateValue,
             "Model" to privateValue,
             "Light sensor" to privateValue,
@@ -379,7 +431,7 @@ class DiagCapabilityPolicyTest {
 
         val public = DiagReader.publicPanelFacts(facts)
 
-        assertEquals(listOf("ha-paneld", "MQTT state", "Security mode"), public.keys.toList())
+        assertEquals(listOf("ha-paneld", "MQTT state", "Security mode", "Prevent idle dim"), public.keys.toList())
         assertFalse(public.values.joinToString().contains(privateValue))
     }
 

@@ -17,7 +17,9 @@ class FaviconAssetTest {
         assertTrue(api.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\">"))
         assertTrue(server.contains("get(\"/favicon.svg\")"))
         assertTrue(server.contains("call.respondText(asset(\"favicon.svg\"), ContentType.Image.SVG)"))
-        assertEquals(2, Regex("<link rel=\\\"icon\\\" type=\\\"image/svg\\+xml\\\" href=\\\"/favicon\\.svg\\\">").findAll(server).count())
-        assertEquals(2, Regex("<img src=\\\"/icon\\.svg\\\" class=\\\"logo\\\"").findAll(server).count())
+        // The favicon link and the header logo now live once, in the single shared page shell
+        // (pageShell) that renders every :8888 surface — not once per duplicated shell.
+        assertEquals(1, Regex("<link rel=\\\"icon\\\" type=\\\"image/svg\\+xml\\\" href=\\\"/favicon\\.svg\\\">").findAll(server).count())
+        assertEquals(1, Regex("<img src=\\\"/icon\\.svg\\\" class=\\\"logo\\\"").findAll(server).count())
     }
 }

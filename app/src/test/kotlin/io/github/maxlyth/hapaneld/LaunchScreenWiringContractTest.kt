@@ -38,20 +38,22 @@ class LaunchScreenWiringContractTest {
             main.indexOf("private fun chooseDestination"),
             main.indexOf("// After an app update"),
         )
-        assertTrue(choose.indexOf("setContentView(intro)") < choose.indexOf("acknowledgeVersionAfterFirstDraw"))
+        assertTrue(choose.indexOf("setContentView(intro)") < choose.indexOf("acknowledgeIntroAfterFirstDraw"))
         assertTrue(choose.contains("finish()"))
 
         val acknowledge = main.substring(
-            main.indexOf("private fun acknowledgeVersionAfterFirstDraw"),
+            main.indexOf("private fun acknowledgeIntroAfterFirstDraw"),
             main.indexOf("// After an app update"),
         )
         assertTrue(acknowledge.contains("IntroAcknowledgement(view, versionCode, generation).also { it.arm() }"))
+        assertTrue(acknowledge.indexOf("view.post(this)") < acknowledge.indexOf("armAutoReturn(it)"))
         assertTrue(acknowledge.indexOf("override fun onDraw()") < acknowledge.indexOf("commitLaunchScreenVersionShown"))
         assertTrue(acknowledge.contains("mayAcknowledgePresentedIntro("))
         assertTrue(acknowledge.contains("generationMatches = generation == introGeneration"))
         assertTrue(acknowledge.contains("presentedViewMatches = presentedIntro === view"))
         assertTrue(acknowledge.contains("viewAttached = view.isAttachedToWindow"))
-        assertTrue(main.contains("maybeArmAutoReturn(ignoreUpdateAge = freshDecision.rememberVersionShown)"))
+        assertTrue(main.contains("prepareAutoReturn(ignoreUpdateAge = freshDecision.rememberVersionShown)"))
+        assertTrue(main.contains("preparedAutoReturn?.let"))
         assertTrue(main.contains("restoredIntroState?.let { saved ->"))
         assertTrue(main.contains("presentIntro(restored)"))
 
@@ -71,5 +73,72 @@ class LaunchScreenWiringContractTest {
         assertTrue(destroy.contains("introAcknowledgement?.cancel()"))
         assertTrue(destroy.contains("presentedIntro = null"))
         assertTrue(destroy.contains("introGeneration++"))
+    }
+
+    @Test fun manualBuiltinRecoveryIsAnExplicitRetryRatherThanALatchBypass() {
+        val main = source("MainActivity.kt")
+        val open = main.substring(
+            main.indexOf("private fun openDashboard"),
+            main.indexOf("private fun Bundle.getLongOrNull"),
+        )
+        assertTrue(main.contains("\"Retry dashboard\""))
+        assertTrue(open.contains("DashboardRecoveryState.BUILTIN_RENDERER"))
+        assertTrue(open.indexOf("BuiltinDashboard.requestExplicitReload()") < open.indexOf("startActivity(it)"))
+    }
+
+    @Test fun unconfiguredFreshInstallHomeFallsBackToQrConfigureSurfaceNotAdminLauncher() {
+        val dashboard = source("DashboardActivity.kt")
+        val main = source("MainActivity.kt")
+        val manifest = listOf(
+            File("src/main/AndroidManifest.xml"),
+            File("app/src/main/AndroidManifest.xml"),
+        ).first { it.isFile }.readText()
+
+        assertTrue("MainActivity owns the normal app launch entry", manifest.contains("android:name=\".MainActivity\""))
+        assertTrue("MainActivity must keep the readable configure URL", main.contains("LocalAdminEndpoint.externalUrl"))
+        // The QR's destination is now setup-aware: guided setup until this panel has completed setup
+        // once, the Configure tab afterwards — never a generic admin drawer. The maintainer's direction
+        // is that the QR exists to start commissioning, and the wizard is its primary destination.
+        assertTrue(
+            "MainActivity must route the QR to guided setup first, Configure after completion",
+            main.contains("if (config.setupEverCompleted) \"/configure\" else \"/setup\""),
+        )
+        assertTrue(main.contains("config.httpPort, adminPath()"))
+        assertTrue("MainActivity must render the QR bitmap for the configure URL", main.contains("qrBitmap(url"))
+        assertTrue("DashboardActivity must have a first-run fallback", dashboard.contains("fallbackToFirstRunSurface()"))
+        assertTrue(
+            "An unconfigured built-in renderer must route to MainActivity's QR/configure surface",
+            dashboard.contains("Intent(this, MainActivity::class.java)"),
+        )
+        val unreadyBlock = dashboard.substring(
+            dashboard.indexOf("if (!config.builtInRendererReady())"),
+            dashboard.indexOf("activityConfig = config"),
+        )
+        assertTrue(unreadyBlock.contains("fallbackToFirstRunSurface()"))
+        assertTrue(
+            "Fresh install must not strand the panel on the Panel admin launcher grid",
+            !unreadyBlock.contains("fallbackToLauncher()") &&
+                !unreadyBlock.contains("AdminLauncherActivity::class.java"),
+        )
+    }
+
+    @Test fun qrIntroNoBackgroundLanguage() {
+        val main = source("MainActivity.kt")
+        assertTrue(main.contains("dashboard, app launcher and panel controls"))
+        assertTrue(main.contains("speaker and sensors to Home Assistant over your local network"))
+        assertTrue(main.contains("Configure the panel from "))
+        assertTrue(main.contains("a browser using the address below"))
+        assertTrue(main.contains("v${'$'}{BuildConfig.VERSION_NAME} · build ${'$'}{BuildConfig.VERSION_CODE}"))
+        assertTrue(!main.contains("running in the background"))
+        assertTrue(!main.contains("runs in the background so Home Assistant can control"))
+    }
+
+    @Test fun qrIntroDescribesTheOnPanelDashboardAndLauncher() {
+        val main = source("MainActivity.kt")
+        assertTrue(main.contains("dashboard, app launcher and panel controls"))
+        assertTrue(main.contains("speaker and sensors to Home Assistant over your local network"))
+        assertTrue(main.contains("Configure the panel from "))
+        assertTrue(main.contains("a browser using the address below"))
+        assertTrue(!main.contains("runs in the background so Home Assistant can control"))
     }
 }

@@ -79,28 +79,6 @@ internal sealed interface HelperBootstrapReply {
     data object Malformed : HelperBootstrapReply
 }
 
-/** One absolute monotonic budget shared by VERSION and the optional legacy PING. */
-internal class HelperBootstrapDeadline(
-    timeoutMs: Long = HELPER_BOOTSTRAP_TIMEOUT_MS,
-    private val nowNs: () -> Long = System::nanoTime,
-) {
-    private val budgetNs: Long
-    private val startedNs: Long
-
-    init {
-        require(timeoutMs in 1..Int.MAX_VALUE.toLong())
-        budgetNs = timeoutMs * 1_000_000L
-        startedNs = nowNs()
-    }
-
-    fun nextReadTimeoutMs(): Int? {
-        val elapsedNs = nowNs() - startedNs
-        if (elapsedNs < 0L || elapsedNs >= budgetNs) return null
-        val remainingNs = budgetNs - elapsedNs
-        return (((remainingNs - 1L) / 1_000_000L) + 1L).toInt()
-    }
-}
-
 /**
  * Read one exact ASCII bootstrap line into fixed storage. Socket timeouts are reset to the remaining
  * absolute budget before every read, so a sender cannot extend the deadline by trickling bytes.
@@ -108,15 +86,17 @@ internal class HelperBootstrapDeadline(
 internal fun readHelperBootstrapLine(
     input: InputStream,
     setReadTimeoutMs: (Int) -> Unit,
-    deadline: HelperBootstrapDeadline,
+    deadline: MonotonicDeadline,
 ): HelperBootstrapReply {
     val bytes = ByteArray(MAX_IDENTITY_REPLY_CHARS + 1)
     var used = 0
     while (true) {
-        val timeoutMs = deadline.nextReadTimeoutMs()
-            ?: return if (used == 0) HelperBootstrapReply.Missing else HelperBootstrapReply.Malformed
+        // The remaining absolute budget is reset before every read, so a sender can't extend the deadline
+        // by trickling bytes. remainingMs() == 0 is expiry (the former HelperBootstrapDeadline null).
+        val timeoutMs = deadline.remainingMs()
+        if (timeoutMs <= 0L) return if (used == 0) HelperBootstrapReply.Missing else HelperBootstrapReply.Malformed
         val next = try {
-            setReadTimeoutMs(timeoutMs)
+            setReadTimeoutMs(timeoutMs.toInt())
             input.read()
         } catch (_: Exception) {
             return if (used == 0) HelperBootstrapReply.Missing else HelperBootstrapReply.Malformed
@@ -134,7 +114,7 @@ internal fun readHelperBootstrapLine(
 }
 
 internal interface HelperCommandSession : AutoCloseable {
-    fun bootstrap(command: String, deadline: HelperBootstrapDeadline): HelperBootstrapReply
+    fun bootstrap(command: String, deadline: MonotonicDeadline): HelperBootstrapReply
     fun send(cmd: String): String?
     fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult
     fun sendFile(cmd: String, source: File, timeoutMs: Long): DaemonStreamResult
@@ -205,12 +185,12 @@ internal class IdentityAdmittingHelperClient(
         requireCompanionCapability = true,
     ) { it.restoreCompanion(packageName, files, timeoutMs) }
 
-    private fun newDeadline(): HelperBootstrapDeadline =
-        HelperBootstrapDeadline(bootstrapTimeoutMs, nowNs)
+    private fun newDeadline(): MonotonicDeadline =
+        MonotonicDeadline(bootstrapTimeoutMs, nowNs)
 
     private fun probeIdentity(
         session: HelperCommandSession,
-        deadline: HelperBootstrapDeadline,
+        deadline: MonotonicDeadline,
     ): HelperIdentityProbe = when (val version = session.bootstrap("VERSION", deadline)) {
         HelperBootstrapReply.Missing -> HelperIdentityProbe(HelperIdentityStatus.Missing, rawFallbackAllowed = true)
         HelperBootstrapReply.Malformed -> HelperIdentityProbe(
@@ -346,7 +326,7 @@ private class LocalSocketHelperSession(
     private val input = socket.inputStream
     private val output = socket.outputStream
 
-    override fun bootstrap(command: String, deadline: HelperBootstrapDeadline): HelperBootstrapReply = try {
+    override fun bootstrap(command: String, deadline: MonotonicDeadline): HelperBootstrapReply = try {
         require(command == "VERSION" || command == "PING" || command == "COMPANIONCAPS")
         output.apply { write((command + "\n").toByteArray(StandardCharsets.US_ASCII)); flush() }
         readHelperBootstrapLine(input, { socket.soTimeout = it }, deadline)

@@ -3,13 +3,17 @@ package io.github.maxlyth.hapaneld.dashboard
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.database.SQLException
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import android.database.sqlite.SQLiteException
+import android.util.Log
 import io.github.maxlyth.hapaneld.control.AMBIENT_RETENTION_MINUTES
 import io.github.maxlyth.hapaneld.control.AmbientHistoryMinute
 import io.github.maxlyth.hapaneld.control.AmbientMinuteAggregate
+import io.github.maxlyth.hapaneld.metrics.DashboardMetrics
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
+import io.github.maxlyth.hapaneld.metrics.MetricPayload
+import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import org.json.JSONArray
@@ -18,7 +22,9 @@ import java.io.File
 import java.io.Writer
 
 /** Bounded, derived entity/catalog evidence. Credentials are never stored here. */
-class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseName(context), null, VERSION) {
+class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcileSchemaAndName(context), null, VERSION) {
+    /** Held for the config vault: a freshly created database may need configuration restored into it. */
+    private val appContext: Context = context.applicationContext ?: context
     private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
     private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
     private val databaseBytesCacheLock = Any()
@@ -63,6 +69,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     data class Snapshot(
         val state: String,
         val lastSyncAt: Long,
+        val analyzerPolicyVersion: Int,
         val catalogCount: Int,
         val activeCount: Int,
         val unresolvedCount: Int,
@@ -85,63 +92,69 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("""CREATE TABLE entity(
-            instance TEXT NOT NULL, entity_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
-            attributes_json TEXT NOT NULL DEFAULT '{}', metadata_json TEXT NOT NULL DEFAULT '{}',
-            first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, missing_streak INTEGER NOT NULL DEFAULT 0,
-            tombstone_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(instance,entity_id))""")
-        db.execSQL("""CREATE TABLE dashboard(
-            instance TEXT NOT NULL, path TEXT NOT NULL, config_hash TEXT NOT NULL DEFAULT '',
-            config_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'disabled',
-            last_sync INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
-            unresolved_json TEXT NOT NULL DEFAULT '[]', sync_generation INTEGER NOT NULL DEFAULT 0,
-            issues_json TEXT NOT NULL DEFAULT '[]',
-            PRIMARY KEY(instance,path))""")
-        db.execSQL("""CREATE TABLE membership(
-            instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL,
-            static_ref INTEGER NOT NULL DEFAULT 0, runtime_ref INTEGER NOT NULL DEFAULT 0,
-            pinned INTEGER NOT NULL DEFAULT 0, excluded INTEGER NOT NULL DEFAULT 0,
-            reasons TEXT NOT NULL DEFAULT '', first_access INTEGER NOT NULL DEFAULT 0,
-            last_access INTEGER NOT NULL DEFAULT 0, access_count INTEGER NOT NULL DEFAULT 0,
-            update_count INTEGER NOT NULL DEFAULT 0, update_bytes INTEGER NOT NULL DEFAULT 0,
-            rate_window_start INTEGER NOT NULL DEFAULT 0, rate_update_bytes INTEGER NOT NULL DEFAULT 0,
-            last_update_at INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(instance,path,entity_id))""")
-        db.execSQL("""CREATE TABLE minute_rollup(
-            instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL, minute INTEGER NOT NULL,
-            access_count INTEGER NOT NULL DEFAULT 0, update_count INTEGER NOT NULL DEFAULT 0,
-            update_bytes INTEGER NOT NULL DEFAULT 0, span_start INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(instance,path,entity_id,minute))""")
-        db.execSQL("CREATE INDEX entity_missing ON entity(instance,missing_streak)")
-        db.execSQL("CREATE INDEX membership_load ON membership(instance,path,update_bytes DESC)")
-        db.execSQL("CREATE INDEX minute_rollup_age ON minute_rollup(instance,path,minute)")
-        db.execSQL("""CREATE TABLE dashboard_issue_ignore(
-            instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
-            PRIMARY KEY(instance,path,fingerprint),
-            FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""")
-        db.execSQL(PERFORMANCE_HISTORY_TABLE_SQL)
-        db.execSQL("CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)")
+        db.execSQL(ENTITY_TABLE_SQL)
+        db.execSQL(DASHBOARD_TABLE_SQL)
+        db.execSQL(DASHBOARD_ENTITY_TABLE_SQL)
+        db.execSQL(DASHBOARD_ENTITY_TRAFFIC_TABLE_SQL)
+        db.execSQL("CREATE INDEX ix_entity_missing ON entity(instance,missing_streak)")
+        db.execSQL("CREATE INDEX ix_dashboard_entity_load ON dashboard_entity(instance,path,update_bytes DESC)")
+        db.execSQL("CREATE INDEX ix_dashboard_entity_traffic_minute_age ON dashboard_entity_traffic_minute(instance,path,minute)")
+        db.execSQL(DASHBOARD_IGNORED_ISSUE_TABLE_SQL)
+        db.execSQL(DASHBOARD_METRIC_TABLE_SQL)
+        db.execSQL("CREATE INDEX ix_dashboard_metric_minute_age ON dashboard_metric_minute(minute)")
         db.execSQL(APP_STATE_REVISION_TABLE_SQL)
         db.execSQL(APP_STATE_NAMESPACE_TABLE_SQL)
         db.execSQL(APP_STATE_TABLE_SQL)
-        db.execSQL("CREATE INDEX app_state_updated ON app_state(namespace,updated_at)")
+        db.execSQL("CREATE INDEX ix_app_state_updated ON app_state(namespace,updated_at)")
         db.execSQL(PROXIMITY_MODEL_TABLE_SQL)
-        db.execSQL(PROXIMITY_ROLLUP_TABLE_SQL)
-        db.execSQL("CREATE INDEX proximity_rollup_age ON proximity_rollup(bucket)")
+        db.execSQL(PROXIMITY_SAMPLE_TABLE_SQL)
+        db.execSQL("CREATE INDEX ix_proximity_sample_age ON proximity_sample(bucket)")
         db.execSQL(PROXIMITY_EPISODE_TABLE_SQL)
-        db.execSQL("CREATE INDEX proximity_episode_age ON proximity_episode(started_at)")
+        db.execSQL("CREATE INDEX ix_proximity_episode_age ON proximity_episode(started_at)")
         db.execSQL(AMBIENT_HISTORY_TABLE_SQL)
-        db.execSQL("CREATE INDEX ambient_lux_minute_age ON ambient_lux_minute(minute)")
+        db.execSQL("CREATE INDEX ix_ambient_lux_minute_age ON ambient_lux_minute(minute)")
+        // A database is created fresh either on first install (nothing to recover) or because the
+        // previous one was set aside as out-of-contract or too new. The second case is the crisis this
+        // vault exists for: without a restore the owner silently loses their dashboard, so recover here,
+        // where configuration is provably empty because these tables were just created.
+        restoreConfigurationInto(db, appContext)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         for (step in EntityCatalogSchema.plan(oldVersion, newVersion)) {
-            for (sql in step.sql) db.execSQL(sql)
+            for (sql in step.sql) execMigration(db, sql)
+            step.transform?.invoke(db)
+        }
+    }
+
+    /**
+     * Runs one migration statement, tolerating "already exists" / "duplicate column" so a re-upgrade
+     * over a physically-newer database — e.g. after a downgrade left user_version stamped below objects
+     * that are already physically present — cannot throw and take config down. Any other error still
+     * propagates. Inert on a normal first-time upgrade, where no object yet exists.
+     */
+    private fun execMigration(db: SQLiteDatabase, sql: String) {
+        try {
+            db.execSQL(sql)
+        } catch (e: SQLException) {
+            val message = e.message?.lowercase()
+            val normalized = sql.trimStart().uppercase()
+            val duplicateTolerated = normalized.startsWith("CREATE TABLE") ||
+                normalized.startsWith("CREATE INDEX") || normalized.startsWith("ALTER TABLE")
+            if (!duplicateTolerated || message == null ||
+                !(message.contains("already exists") || message.contains("duplicate column"))) {
+                throw e
+            }
+            Log.w("EntityCatalogStore", "migration skipped, object already exists: ${sql.trim().take(80)}")
         }
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        throw SQLiteException("entity catalog downgrade is unsupported ($oldVersion -> $newVersion)")
+        // Reached only when pre-open reconciliation (reconcilePreOpen) could neither restore a
+        // compatible snapshot nor set the newer database aside. Never throw: a thrown downgrade aborts
+        // the open and takes the whole store — config included — down. Accepting the open lets a newer
+        // additive schema degrade gracefully; non-additive drift is exactly why schema changes must stay
+        // additive (see reconcilePreOpen).
     }
 
     fun markStatus(instance: String, path: String, status: String, error: String = "") {
@@ -156,11 +169,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         states: List<StateRow>,
         metadata: Map<String, String>,
         configJson: String,
+        configHash: String,
         derived: Set<String>,
         unresolved: List<String>,
         status: String,
         now: Long,
         issues: List<JSONObject> = emptyList(),
+        defaultIgnoredFingerprints: Set<String> = emptySet(),
     ) {
         val db = writableDatabase
         db.beginTransaction()
@@ -169,11 +184,11 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             // The catalogue UI and promotion policy never read state attributes. Persisting them copied
             // the full /api/states payload into SQLite and made attribute-heavy installations spend
             // minutes allocating JSON strings and writing megabytes. A compiled upsert keeps the useful
-            // state/registry projection and preserves first_seen in one statement per entity.
+            // state/registry projection and preserves first_seen_at in one statement per entity.
             val upsert = db.compileStatement(
                 """INSERT OR REPLACE INTO entity(instance,entity_id,state,attributes_json,metadata_json,
-                   first_seen,last_seen,missing_streak,tombstone_at)
-                   VALUES(?,?,?,'{}',?,coalesce((SELECT first_seen FROM entity WHERE instance=? AND entity_id=?),?),?,0,0)""",
+                   first_seen_at,last_seen_at,missing_streak,tombstone_at)
+                   VALUES(?,?,?,'{}',?,coalesce((SELECT first_seen_at FROM entity WHERE instance=? AND entity_id=?),?),?,0,0)""",
             )
             try {
                 for (row in states) {
@@ -189,26 +204,28 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                     upsert.executeInsert()
                 }
             } finally { upsert.close() }
-            db.execSQL("UPDATE entity SET tombstone_at=? WHERE instance=? AND missing_streak>=3 AND tombstone_at=0", arrayOf(now, instance))
-            db.execSQL("UPDATE membership SET static_ref=0 WHERE instance=? AND path=?", arrayOf(instance, path))
+            db.execSQL("UPDATE entity SET tombstone_at=? WHERE instance=? AND missing_streak>=3 AND tombstone_at=0", arrayOf<Any?>(now, instance))
+            db.execSQL("UPDATE dashboard_entity SET referenced_by_config=0 WHERE instance=? AND path=?", arrayOf(instance, path))
             for (id in derived) {
-                db.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
                 db.execSQL(
-                    "UPDATE membership SET static_ref=1,reasons=CASE WHEN instr(reasons,'dashboard')=0 THEN trim(reasons||',dashboard',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
+                    "UPDATE dashboard_entity SET referenced_by_config=1,reasons=CASE WHEN instr(reasons,'dashboard')=0 THEN trim(reasons||',dashboard',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
                     arrayOf(instance, path, id),
                 )
             }
             db.execSQL("INSERT OR IGNORE INTO dashboard(instance,path) VALUES(?,?)", arrayOf(instance, path))
             db.execSQL(
-                """UPDATE dashboard SET config_hash=?,config_json=?,status=?,last_sync=?,error='',
-                   unresolved_json=?,issues_json=?,sync_generation=sync_generation+1 WHERE instance=? AND path=?""",
-                arrayOf(
-                    EntityLearningProtocol.hash(EntityLearningProtocol.canonical(JSONObject(configJson))),
+                """UPDATE dashboard SET config_hash=?,config_json=?,status=?,last_sync_at=?,error='',
+                   unresolved_json=?,issues_json=?,analyzer_policy_version=?,sync_generation=sync_generation+1
+                   WHERE instance=? AND path=?""",
+                arrayOf<Any?>(
+                    configHash,
                     configJson,
                     status,
                     now,
                     JSONArray(unresolved).toString(),
                     EntityCatalogIssuePersistence.boundedJson(issues),
+                    DashboardConfigurationLint.ANALYZER_POLICY_VERSION,
                     instance,
                     path,
                 ),
@@ -216,21 +233,31 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             val currentFingerprints = issues.mapNotNull { issue ->
                 issue.optString("fingerprint").takeIf(FINGERPRINT::matches)
             }.toSet()
+            defaultIgnoredFingerprints.intersect(currentFingerprints).forEach { fingerprint ->
+                db.execSQL(
+                    "INSERT OR IGNORE INTO dashboard_ignored_issue(instance,path,fingerprint,ignored_at) VALUES(?,?,?,?)",
+                    arrayOf<Any?>(instance, path, fingerprint, now),
+                )
+            }
             val staleIgnores = db.rawQuery(
-                "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=?",
+                "SELECT fingerprint FROM dashboard_ignored_issue WHERE instance=? AND path=?",
                 arrayOf(instance, path),
             ).use { cursor -> buildList {
                 while (cursor.moveToNext()) cursor.getString(0).takeIf { it !in currentFingerprints }?.let(::add)
             } }
             staleIgnores.forEach { fingerprint ->
                 db.delete(
-                    "dashboard_issue_ignore", "instance=? AND path=? AND fingerprint=?",
+                    "dashboard_ignored_issue", "instance=? AND path=? AND fingerprint=?",
                     arrayOf(instance, path, fingerprint),
                 )
             }
             val cutoff = now - TOMBSTONE_RETENTION_MS
-            db.execSQL("DELETE FROM entity WHERE instance=? AND tombstone_at>0 AND tombstone_at<?", arrayOf(instance, cutoff))
-            db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
+            db.execSQL(
+                "$DELETE_MEMBERSHIP_FOR_PURGED_ENTITIES AND e.instance=? AND e.tombstone_at>0 AND e.tombstone_at<?)",
+                arrayOf<Any?>(instance, cutoff),
+            )
+            db.execSQL("DELETE FROM entity WHERE instance=? AND tombstone_at>0 AND tombstone_at<?", arrayOf<Any?>(instance, cutoff))
+            db.execSQL("DELETE FROM dashboard_entity_traffic_minute WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         maintainSoftLimit(now)
@@ -243,18 +270,18 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         try {
             for ((id, rawCount) in counts) {
                 val count = rawCount.coerceIn(1, 1_000_000)
-                db.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
                 db.execSQL(
-                    """UPDATE membership SET runtime_ref=1,last_access=?,access_count=access_count+?,
-                       first_access=CASE WHEN first_access=0 THEN ? ELSE first_access END,
+                    """UPDATE dashboard_entity SET referenced_at_runtime=1,last_access_at=?,access_count=access_count+?,
+                       first_access_at=CASE WHEN first_access_at=0 THEN ? ELSE first_access_at END,
                        reasons=CASE WHEN instr(reasons,'runtime')=0 THEN trim(reasons||',runtime',',') ELSE reasons END
                        WHERE instance=? AND path=? AND entity_id=?""",
-                    arrayOf(now, count, now, instance, path, id),
+                    arrayOf<Any?>(now, count, now, instance, path, id),
                 )
-                db.execSQL("INSERT OR IGNORE INTO minute_rollup(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / MINUTE_MS))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity_traffic_minute(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf<Any?>(instance, path, id, now / MINUTE_MS))
                 db.execSQL(
-                    "UPDATE minute_rollup SET access_count=access_count+? WHERE instance=? AND path=? AND entity_id=? AND minute=?",
-                    arrayOf(count, instance, path, id, now / MINUTE_MS),
+                    "UPDATE dashboard_entity_traffic_minute SET access_count=access_count+? WHERE instance=? AND path=? AND entity_id=? AND minute=?",
+                    arrayOf<Any?>(count, instance, path, id, now / MINUTE_MS),
                 )
             }
             db.setTransactionSuccessful()
@@ -270,23 +297,23 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             for ((id, metric) in metrics) {
                 // Load evidence covers the complete working stream, not only entities already promoted
                 // by static/runtime dependency evidence.
-                db.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, id))
                 db.execSQL(
-                    """UPDATE membership SET update_count=update_count+?,update_bytes=update_bytes+?,
-                       rate_update_bytes=CASE WHEN rate_window_start=0 OR ?-rate_window_start>? THEN ? ELSE rate_update_bytes+? END,
-                       rate_window_start=CASE WHEN rate_window_start=0 OR ?-rate_window_start>? THEN ? ELSE rate_window_start END,
+                    """UPDATE dashboard_entity SET update_count=update_count+?,update_bytes=update_bytes+?,
+                       rate_update_bytes=CASE WHEN rate_window_started_at=0 OR ?-rate_window_started_at>? THEN ? ELSE rate_update_bytes+? END,
+                       rate_window_started_at=CASE WHEN rate_window_started_at=0 OR ?-rate_window_started_at>? THEN ? ELSE rate_window_started_at END,
                        last_update_at=? WHERE instance=? AND path=? AND entity_id=?""",
-                    arrayOf(
+                    arrayOf<Any?>(
                         metric.first, metric.second,
                         now, RATE_WINDOW_MS, metric.second, metric.second,
                         now, RATE_WINDOW_MS, now - METRIC_BATCH_MS, now,
                         instance, path, id,
                     ),
                 )
-                db.execSQL("INSERT OR IGNORE INTO minute_rollup(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf(instance, path, id, now / MINUTE_MS))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity_traffic_minute(instance,path,entity_id,minute) VALUES(?,?,?,?)", arrayOf<Any?>(instance, path, id, now / MINUTE_MS))
                 db.execSQL(
-                    "UPDATE minute_rollup SET update_count=update_count+?,update_bytes=update_bytes+? WHERE instance=? AND path=? AND entity_id=? AND minute=?",
-                    arrayOf(metric.first, metric.second, instance, path, id, now / MINUTE_MS),
+                    "UPDATE dashboard_entity_traffic_minute SET update_count=update_count+?,update_bytes=update_bytes+? WHERE instance=? AND path=? AND entity_id=? AND minute=?",
+                    arrayOf<Any?>(metric.first, metric.second, instance, path, id, now / MINUTE_MS),
                 )
             }
             db.setTransactionSuccessful()
@@ -301,46 +328,29 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         try {
             samples.forEach { sample ->
                 val key = sample.key
-                db.execSQL(
-                    """INSERT OR IGNORE INTO dashboard_performance(
-                       instance,path,minute,filter_active,entity_count
-                       ) VALUES(?,?,?,?,?)""",
-                    arrayOf(key.instance, key.path, key.minute, if (sample.filterActive) 1 else 0, sample.entityCount),
+                // The accumulation the 25-column UPDATE expressed in SQL now happens against the decoded
+                // bucket, under each metric's declared rule. Same transaction, so the read-merge-write is
+                // as atomic as the upsert it replaces.
+                val existing = db.rawQuery(
+                    "SELECT payload FROM dashboard_metric_minute WHERE instance=? AND path=? AND minute=?",
+                    arrayOf(key.instance, key.path, key.minute.toString()),
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) MetricPayload.decode(cursor.getBlob(0)) else null
+                } ?: emptyMap() // a corrupt bucket is rebuilt rather than propagated
+
+                val merged = DashboardMetrics.merge(
+                    existing,
+                    DashboardMetricCodec.values(sample.filterActive, sample.entityCount, sample.totals),
                 )
                 db.execSQL(
-                    """UPDATE dashboard_performance SET
-                       filter_active=?,entity_count=?,sample_ms=sample_ms+?,frames=frames+?,
-                       payload_bytes=payload_bytes+?,updates=updates+?,hydration_updates=hydration_updates+?,
-                       observer_micros=observer_micros+?,dropped_frames=dropped_frames+?,
-                       state_task_micros=state_task_micros+?,
-                       state_task_max_micros=max(state_task_max_micros,?),
-                       interaction_count=interaction_count+?,
-                       interaction_max_micros=max(interaction_max_micros,?),
-                       input_delay_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE input_delay_micros END,
-                       interaction_processing_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE interaction_processing_micros END,
-                       presentation_micros=CASE WHEN ?>interaction_max_micros THEN ? ELSE presentation_micros END,
-                       loaf_count=loaf_count+?,blocking_micros=blocking_micros+?,
-                       loaf_max_micros=max(loaf_max_micros,?),script_micros=script_micros+?,
-                       render_micros=render_micros+?,long_task_count=long_task_count+?
-                       WHERE instance=? AND path=? AND minute=?""",
-                    arrayOf(
-                        if (sample.filterActive) 1 else 0, sample.entityCount, sample.sampleMs, sample.frames,
-                        sample.payloadBytes, sample.updates, sample.hydrationUpdates,
-                        sample.observerMicros, sample.droppedFrames, sample.stateTaskMicros,
-                        sample.stateTaskMaxMicros, sample.interactionCount, sample.interactionMaxMicros,
-                        sample.interactionMaxMicros, sample.inputDelayMicros,
-                        sample.interactionMaxMicros, sample.interactionProcessingMicros,
-                        sample.interactionMaxMicros, sample.presentationMicros,
-                        sample.loafCount, sample.blockingMicros, sample.loafMaxMicros, sample.scriptMicros,
-                        sample.renderMicros, sample.longTaskCount,
-                        key.instance, key.path, key.minute,
-                    ),
+                    "INSERT OR REPLACE INTO dashboard_metric_minute(instance,path,minute,payload) VALUES(?,?,?,?)",
+                    arrayOf<Any?>(key.instance, key.path, key.minute, MetricPayload.encode(merged)),
                 )
             }
             val latestMinute = samples.maxOf { it.key.minute }
             if (performanceMaintenanceGate.admit(latestMinute * MINUTE_MS)) {
                 db.execSQL(
-                    "DELETE FROM dashboard_performance WHERE minute<?",
+                    "DELETE FROM dashboard_metric_minute WHERE minute<?",
                     arrayOf(latestMinute - PERFORMANCE_RETENTION_MINUTES),
                 )
             }
@@ -351,7 +361,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     }
 
     /** Batched IO-side sink for ambient evidence; sensor callbacks only touch the RAM accumulator. */
-    internal fun recordAmbientHistory(samples: List<AmbientMinuteAggregate>, nowMs: Long) {
+    internal fun recordAmbientHistory(
+        samples: List<AmbientMinuteAggregate>,
+        nowMs: Long,
+        activeContextId: String = samples.lastOrNull()?.key?.contextId.orEmpty(),
+        activeSourceId: String = samples.lastOrNull()?.key?.sourceId.orEmpty(),
+    ) {
         if (samples.isEmpty() || nowMs < 0L) return
         val nowMinute = nowMs / MINUTE_MS
         val oldestMinute = nowMinute - AMBIENT_RETENTION_MINUTES
@@ -377,7 +392,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                             """INSERT OR IGNORE INTO ambient_lux_minute(
                                context_id,source_id,minute,min_lux,max_lux,last_lux)
                                VALUES(?,?,?,?,?,?)""",
-                            arrayOf(sample.key.contextId, sample.key.sourceId, sample.key.minute,
+                            arrayOf<Any?>(sample.key.contextId, sample.key.sourceId, sample.key.minute,
                                 sample.minLux, sample.maxLux, sample.lastLux),
                         )
                         statement.clearBindings()
@@ -395,12 +410,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                         statement.executeUpdateDelete()
                     }
             } finally { statement.close() }
-            db.execSQL("DELETE FROM ambient_lux_minute WHERE minute<? OR minute>?", arrayOf(oldestMinute, nowMinute))
-            db.execSQL(
-                """DELETE FROM ambient_lux_minute WHERE rowid IN (
-                   SELECT rowid FROM ambient_lux_minute ORDER BY minute DESC,context_id,source_id
-                   LIMIT -1 OFFSET $AMBIENT_GLOBAL_ROW_LIMIT)""",
-            )
+            pruneAmbientHistory(db, oldestMinute, nowMinute, activeContextId, activeSourceId)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -448,12 +458,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                         statement.executeInsert()
                     }
             } finally { statement.close() }
-            db.execSQL("DELETE FROM ambient_lux_minute WHERE minute<? OR minute>?", arrayOf(oldestMinute, nowMinute))
-            db.execSQL(
-                """DELETE FROM ambient_lux_minute WHERE rowid IN (
-                   SELECT rowid FROM ambient_lux_minute ORDER BY minute DESC,context_id,source_id
-                   LIMIT -1 OFFSET $AMBIENT_GLOBAL_ROW_LIMIT)""",
-            )
+            val active = samples.last().key
+            pruneAmbientHistory(db, oldestMinute, nowMinute, active.contextId, active.sourceId)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -478,6 +484,30 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         ))
     } }
 
+    /** Retain the complete active seven-day partition first and every irreplaceable panel-sensor
+     * minute second, then spend the fixed remainder on recoverable inactive HA evidence. */
+    private fun pruneAmbientHistory(
+        db: SQLiteDatabase,
+        oldestMinute: Long,
+        nowMinute: Long,
+        activeContextId: String,
+        activeSourceId: String,
+    ) {
+        db.execSQL("DELETE FROM ambient_lux_minute WHERE minute<? OR minute>?", arrayOf(oldestMinute, nowMinute))
+        db.execSQL(
+            """DELETE FROM ambient_lux_minute WHERE rowid IN (
+               SELECT rowid FROM ambient_lux_minute
+               ORDER BY CASE
+                          WHEN context_id=? AND source_id=? THEN 0
+                          WHEN source_id=? THEN 1
+                          ELSE 2
+                        END,
+                        minute DESC,context_id,source_id
+               LIMIT -1 OFFSET $AMBIENT_GLOBAL_ROW_LIMIT)""",
+            arrayOf(activeContextId, activeSourceId, PANEL_AMBIENT_SOURCE_ID),
+        )
+    }
+
     internal fun resetAmbientHistory(contextId: String? = null, sourceId: String? = null): Int = when {
         contextId == null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", null, null)
         contextId != null && sourceId == null -> writableDatabase.delete("ambient_lux_minute", "context_id=?", arrayOf(contextId))
@@ -490,41 +520,17 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         path: String,
         sinceMinute: Long,
     ): List<DashboardPerformanceMinute> = readableDatabase.rawQuery(
-        """SELECT minute,filter_active,entity_count,sample_ms,frames,payload_bytes,updates,
-           hydration_updates,observer_micros,dropped_frames,state_task_micros,state_task_max_micros,
-           interaction_count,interaction_max_micros,input_delay_micros,interaction_processing_micros,
-           presentation_micros,loaf_count,blocking_micros,loaf_max_micros,script_micros,render_micros,
-           long_task_count
-           FROM dashboard_performance WHERE instance=? AND path=? AND minute>=? ORDER BY minute""",
+        """SELECT minute,payload FROM dashboard_metric_minute
+           WHERE instance=? AND path=? AND minute>=? ORDER BY minute""",
         arrayOf(instance, path, sinceMinute.toString()),
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
-                add(DashboardPerformanceMinute(
-                    minute = cursor.getLong(0),
-                    filterActive = cursor.getInt(1) != 0,
-                    entityCount = cursor.getInt(2),
-                    sampleMs = cursor.getLong(3),
-                    frames = cursor.getLong(4),
-                    payloadBytes = cursor.getLong(5),
-                    updates = cursor.getLong(6),
-                    hydrationUpdates = cursor.getLong(7),
-                    observerMicros = cursor.getLong(8),
-                    droppedFrames = cursor.getLong(9),
-                    stateTaskMicros = cursor.getLong(10),
-                    stateTaskMaxMicros = cursor.getLong(11),
-                    interactionCount = cursor.getLong(12),
-                    interactionMaxMicros = cursor.getLong(13),
-                    inputDelayMicros = cursor.getLong(14),
-                    interactionProcessingMicros = cursor.getLong(15),
-                    presentationMicros = cursor.getLong(16),
-                    loafCount = cursor.getLong(17),
-                    blockingMicros = cursor.getLong(18),
-                    loafMaxMicros = cursor.getLong(19),
-                    scriptMicros = cursor.getLong(20),
-                    renderMicros = cursor.getLong(21),
-                    longTaskCount = cursor.getLong(22),
-                ))
+                // A bucket that fails to decode is skipped rather than reported as zeroes: an absent
+                // point in a diagnostic chart is honest, a fabricated one is not.
+                MetricPayload.decode(cursor.getBlob(1))?.let { values ->
+                    add(DashboardMetricCodec.minute(cursor.getLong(0), values))
+                }
             }
         }
     }
@@ -540,9 +546,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         db.beginTransaction()
         try {
             for (entityId in entityIds) {
-                db.execSQL("INSERT OR IGNORE INTO membership(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, entityId))
-                db.execSQL("UPDATE membership SET pinned=?,excluded=?,reasons=CASE WHEN ?=0 AND ?=0 THEN replace(replace(reasons,'manual',''),',,',',') WHEN instr(reasons,'manual')=0 THEN trim(reasons||',manual',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
-                    arrayOf(pinned, excluded, pinned, excluded, instance, path, entityId))
+                db.execSQL("INSERT OR IGNORE INTO dashboard_entity(instance,path,entity_id) VALUES(?,?,?)", arrayOf(instance, path, entityId))
+                db.execSQL("UPDATE dashboard_entity SET pinned=?,excluded=?,reasons=CASE WHEN ?=0 AND ?=0 THEN replace(replace(reasons,'manual',''),',,',',') WHEN instr(reasons,'manual')=0 THEN trim(reasons||',manual',',') ELSE reasons END WHERE instance=? AND path=? AND entity_id=?",
+                    arrayOf<Any?>(pinned, excluded, pinned, excluded, instance, path, entityId))
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -553,8 +559,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val db = writableDatabase
         db.beginTransaction()
         try {
-            db.delete("minute_rollup", "instance=? AND path=?", arrayOf(instance, path))
-            db.delete("membership", "instance=? AND path=?", arrayOf(instance, path))
+            db.delete("dashboard_entity_traffic_minute", "instance=? AND path=?", arrayOf(instance, path))
+            db.delete("dashboard_entity", "instance=? AND path=?", arrayOf(instance, path))
             db.delete("dashboard", "instance=? AND path=?", arrayOf(instance, path))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -571,13 +577,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val cutoff = now - RUNTIME_RETENTION_MS
         val evidence = buildList {
             add("m.pinned=1")
-            if (includeStatic) add("m.static_ref=1")
-            if (includeRuntime) add("m.last_access>=?")
+            if (includeStatic) add("m.referenced_by_config=1")
+            if (includeRuntime) add("m.last_access_at>=?")
         }.joinToString(" OR ")
         val args = mutableListOf(instance, path)
         if (includeRuntime) args += cutoff.toString()
         return readableDatabase.rawQuery(
-            """SELECT m.entity_id FROM membership m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
+            """SELECT m.entity_id FROM dashboard_entity m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
                WHERE m.instance=? AND m.path=? AND m.excluded=0 AND ($evidence)
                AND (e.entity_id IS NULL OR e.missing_streak<3) ORDER BY m.entity_id""",
             args.toTypedArray(),
@@ -586,9 +592,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
 
     /** Unpinned dashboard evidence, independent of exclusion and automatic-promotion policy. */
     fun suggestedIds(instance: String, path: String): List<String> = readableDatabase.rawQuery(
-        """SELECT m.entity_id FROM membership m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
+        """SELECT m.entity_id FROM dashboard_entity m LEFT JOIN entity e ON e.instance=m.instance AND e.entity_id=m.entity_id
            WHERE m.instance=? AND m.path=? AND m.pinned=0
-           AND (m.static_ref=1 OR m.runtime_ref=1)
+           AND (m.referenced_by_config=1 OR m.referenced_at_runtime=1)
            AND (e.entity_id IS NULL OR e.missing_streak<3) ORDER BY m.entity_id""",
         arrayOf(instance, path),
     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
@@ -609,19 +615,20 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
 
     fun snapshot(instance: String, path: String): Snapshot {
         val dashboard = readableDatabase.rawQuery(
-            "SELECT status,last_sync,error,unresolved_json,issues_json FROM dashboard WHERE instance=? AND path=?",
+            "SELECT status,last_sync_at,analyzer_policy_version,error,unresolved_json,issues_json FROM dashboard WHERE instance=? AND path=?",
             arrayOf(instance, path),
         ).use { c ->
             if (c.moveToFirst()) {
-                DashboardRow(c.getString(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4))
+                DashboardRow(c.getString(0), c.getLong(1), c.getInt(2), c.getString(3), c.getString(4), c.getString(5))
             } else null
         }
         fun count(sql: String) = readableDatabase.rawQuery(sql, arrayOf(instance, path)).use { c -> c.moveToFirst(); c.getInt(0) }
         val issueCounts = EntityCatalogIssuePersistence.counts(dashboard?.issuesJson ?: "[]")
         return Snapshot(
             dashboard?.status ?: "disabled", dashboard?.lastSync ?: 0L,
+            dashboard?.analyzerPolicyVersion ?: 0,
             readableDatabase.rawQuery("SELECT count(*) FROM entity WHERE instance=? AND missing_streak<3", arrayOf(instance)).use { c -> c.moveToFirst(); c.getInt(0) },
-            count("SELECT count(*) FROM membership WHERE instance=? AND path=? AND excluded=0 AND (pinned=1 OR static_ref=1 OR runtime_ref=1)"),
+            count("SELECT count(*) FROM dashboard_entity WHERE instance=? AND path=? AND excluded=0 AND (pinned=1 OR referenced_by_config=1 OR referenced_at_runtime=1)"),
             dashboard?.unresolvedJson?.let { runCatching { JSONArray(it).length() }.getOrDefault(0) } ?: 0,
             issueCounts.first,
             issueCounts.second,
@@ -641,7 +648,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     }
 
     fun ignoredIssueFingerprints(instance: String, path: String): Set<String> = readableDatabase.rawQuery(
-        "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=? ORDER BY fingerprint",
+        "SELECT fingerprint FROM dashboard_ignored_issue WHERE instance=? AND path=? ORDER BY fingerprint",
         arrayOf(instance, path),
     ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
 
@@ -656,21 +663,23 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 arrayOf(instance, path),
             ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null } ?: return false
             val issues = JSONArray(EntityCatalogIssuePersistence.boundExistingJson(stored))
-            val exists = (0 until issues.length()).any { issues.optJSONObject(it)?.optString("fingerprint") == fingerprint }
-            if (!exists) return false
+            val issue = (0 until issues.length()).asSequence().mapNotNull(issues::optJSONObject)
+                .firstOrNull { it.optString("fingerprint") == fingerprint }
+                ?: return false
+            if (!EntityCatalogIssuePersistence.canIgnore(issue)) return false
             if (ignored) {
                 db.execSQL(
-                    "INSERT OR REPLACE INTO dashboard_issue_ignore(instance,path,fingerprint,ignored_at) VALUES(?,?,?,?)",
-                    arrayOf(instance, path, fingerprint, now),
+                    "INSERT OR REPLACE INTO dashboard_ignored_issue(instance,path,fingerprint,ignored_at) VALUES(?,?,?,?)",
+                    arrayOf<Any?>(instance, path, fingerprint, now),
                 )
             } else {
                 db.delete(
-                    "dashboard_issue_ignore", "instance=? AND path=? AND fingerprint=?",
+                    "dashboard_ignored_issue", "instance=? AND path=? AND fingerprint=?",
                     arrayOf(instance, path, fingerprint),
                 )
             }
             val ignoredSet = db.rawQuery(
-                "SELECT fingerprint FROM dashboard_issue_ignore WHERE instance=? AND path=?",
+                "SELECT fingerprint FROM dashboard_ignored_issue WHERE instance=? AND path=?",
                 arrayOf(instance, path),
             ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
             db.execSQL(
@@ -720,11 +729,11 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             }
         }
         when (filter) {
-            "active" -> where += "m.excluded=0 AND (m.pinned=1 OR m.static_ref=1 OR m.runtime_ref=1)"
+            "active" -> where += "m.excluded=0 AND (m.pinned=1 OR m.referenced_by_config=1 OR m.referenced_at_runtime=1)"
             "excluded" -> where += "m.excluded=1"
             "missing" -> where += "e.missing_streak>0"
-            "review" -> where += "(e.missing_streak>0 OR (coalesce(m.update_count,0)>0 AND coalesce(m.last_access,0)=0 AND coalesce(m.static_ref,0)=0 AND coalesce(m.pinned,0)=0))"
-            "candidate" -> where += "coalesce(m.pinned,0)=0 AND (m.static_ref=1 OR m.runtime_ref=1)"
+            "review" -> where += "(e.missing_streak>0 OR (coalesce(m.update_count,0)>0 AND coalesce(m.last_access_at,0)=0 AND coalesce(m.referenced_by_config,0)=0 AND coalesce(m.pinned,0)=0))"
+            "candidate" -> where += "coalesce(m.pinned,0)=0 AND (m.referenced_by_config=1 OR m.referenced_at_runtime=1)"
             "unpinned" -> where += "coalesce(m.pinned,0)=0"
             else -> Unit
         }
@@ -746,7 +755,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 args += excludeIds.sorted()
             }
         }
-        val join = "LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?"
+        val join = "LEFT JOIN dashboard_entity m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?"
         val now = System.currentTimeMillis()
         val normalizedSort = EntityCatalogSorting.key(sortKey)
         val requiresRecentOrdering = normalizedSort == "access_1h" || normalizedSort == "rate_1h_bps"
@@ -759,10 +768,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                coalesce(r.bytes_1m,0),coalesce(r.bytes_1h,0),coalesce(r.bytes_1d,0),coalesce(r.first_minute,0),
                (coalesce(r.bytes_1h,0)*1000.0/$observedMs) AS recent_rate_1h"""
         } else "0,0 AS recent_access_1h,0,0,0,0,0,0.0 AS recent_rate_1h"
-        val baseSql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
-            coalesce(m.static_ref,0),coalesce(m.runtime_ref,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
-            coalesce(m.reasons,''),coalesce(m.last_access,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
-            coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
+        val baseSql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen_at,e.last_seen_at,e.missing_streak,
+            coalesce(m.referenced_by_config,0),coalesce(m.referenced_at_runtime,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
+            coalesce(m.reasons,''),coalesce(m.last_access_at,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
+            coalesce(m.rate_window_started_at,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
             $recentProjection
             FROM entity e $join $recentJoin WHERE ${where.joinToString(" AND ")}"""
         val effectiveLimit = limit.coerceIn(1, maxLimit.coerceIn(1, MAX_SQL_ID_FILTER))
@@ -844,7 +853,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val oneHour = (now - HOUR_MS) / MINUTE_MS
         val rows = JSONArray()
         val sql = """SELECT entity_id,sum(update_count),sum(update_bytes)
-            FROM minute_rollup WHERE instance=? AND path=? AND minute>=?
+            FROM dashboard_entity_traffic_minute WHERE instance=? AND path=? AND minute>=?
             GROUP BY entity_id HAVING sum(update_count)>0
             ORDER BY sum(update_bytes) DESC,entity_id COLLATE NOCASE LIMIT 3"""
         readableDatabase.rawQuery(sql, arrayOf(instance, path, oneHour.toString())).use { cursor ->
@@ -865,9 +874,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         ranks: RecentRanks = recentSnapshot.ranks,
     ): JSONObject = JSONObject().apply {
         put("entity_id", row.entityId); put("state", row.state); put("metadata", JSONObject(row.metadataJson))
-        put("first_seen", row.firstSeen); put("last_seen", row.lastSeen); put("missing_streak", row.missingStreak)
+        put("first_seen_at", row.firstSeen); put("last_seen_at", row.lastSeen); put("missing_streak", row.missingStreak)
         put("static", row.staticRef); put("runtime", row.runtimeRef); put("pinned", row.pinned)
-        put("excluded", row.excluded); put("reasons", row.reasons); put("last_access", row.lastAccess)
+        put("excluded", row.excluded); put("reasons", row.reasons); put("last_access_at", row.lastAccess)
         put("access_count", row.accessCount); put("update_count", row.updateCount); put("update_bytes", row.updateBytes)
         val rate = if (row.rateWindowStart == 0L || row.lastUpdateAt == 0L || now - row.lastUpdateAt > RATE_STALE_MS) 0.0
             else row.rateUpdateBytes * 1000.0 / (now - row.rateWindowStart).coerceAtLeast(1000L)
@@ -908,13 +917,13 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             bytes += header.utf8Size()
             val recentSnapshot = recentSnapshot(instance, path, now)
             val recentJoin = "LEFT JOIN (${recentAggregateSql(now)}) r ON r.entity_id=e.entity_id"
-            val sql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen,e.last_seen,e.missing_streak,
-                coalesce(m.static_ref,0),coalesce(m.runtime_ref,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
-                coalesce(m.reasons,''),coalesce(m.last_access,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
-                coalesce(m.rate_window_start,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
+            val sql = """SELECT e.entity_id,e.state,e.metadata_json,e.first_seen_at,e.last_seen_at,e.missing_streak,
+                coalesce(m.referenced_by_config,0),coalesce(m.referenced_at_runtime,0),coalesce(m.pinned,0),coalesce(m.excluded,0),
+                coalesce(m.reasons,''),coalesce(m.last_access_at,0),coalesce(m.access_count,0),coalesce(m.update_count,0),coalesce(m.update_bytes,0),
+                coalesce(m.rate_window_started_at,0),coalesce(m.rate_update_bytes,0),coalesce(m.last_update_at,0),
                 coalesce(r.access_1m,0),coalesce(r.access_1h,0),coalesce(r.access_1d,0),
                 coalesce(r.bytes_1m,0),coalesce(r.bytes_1h,0),coalesce(r.bytes_1d,0),coalesce(r.first_minute,0)
-                FROM entity e LEFT JOIN membership m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?
+                FROM entity e LEFT JOIN dashboard_entity m ON m.instance=e.instance AND m.entity_id=e.entity_id AND m.path=?
                 $recentJoin WHERE e.instance=? ORDER BY e.entity_id COLLATE NOCASE,e.entity_id LIMIT ${policy.maxRows + 1}"""
             readableDatabase.rawQuery(sql, arrayOf(path, instance, path, instance)).use { cursor ->
                 while (cursor.moveToNext()) {
@@ -974,17 +983,18 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             }.usedBytes
             observedBytes = refreshUsage()
             if (observedBytes <= SOFT_LIMIT_BYTES) return
-            db.execSQL("DELETE FROM minute_rollup WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
+            db.execSQL("DELETE FROM dashboard_entity_traffic_minute WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
+            db.execSQL("$DELETE_MEMBERSHIP_FOR_PURGED_ENTITIES AND e.tombstone_at>0)")
             db.execSQL("DELETE FROM entity WHERE tombstone_at>0")
             db.execSQL(
                 """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE (instance,entity_id) NOT IN
-                   (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR runtime_ref=1)""",
+                   (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR referenced_at_runtime=1)""",
             )
             observedBytes = refreshUsage()
             if (observedBytes > SOFT_LIMIT_BYTES) {
                 db.execSQL(
                     """UPDATE entity SET attributes_json='{}' WHERE (instance,entity_id) NOT IN
-                       (SELECT instance,entity_id FROM membership WHERE pinned=1 OR static_ref=1 OR last_access>=?)""",
+                       (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR last_access_at>=?)""",
                     arrayOf(now - RUNTIME_RETENTION_MS),
                 )
                 observedBytes = refreshUsage()
@@ -1010,29 +1020,29 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         db.beginTransaction()
         try {
             if (window.drop) {
-                db.delete("minute_rollup", window.whereSql, window.whereArgs)
+                db.delete("dashboard_entity_traffic_minute", window.whereSql, window.whereArgs)
             } else {
                 db.execSQL("DROP TABLE IF EXISTS temp.entity_rollup_compact")
                 db.execSQL(
                     """CREATE TEMP TABLE entity_rollup_compact(
                        instance TEXT NOT NULL,path TEXT NOT NULL,entity_id TEXT NOT NULL,minute INTEGER NOT NULL,
                        access_count INTEGER NOT NULL,update_count INTEGER NOT NULL,update_bytes INTEGER NOT NULL,
-                       span_start INTEGER NOT NULL,
+                       span_started_at INTEGER NOT NULL,
                        PRIMARY KEY(instance,path,entity_id,minute))""",
                 )
                 val minuteExpression = window.targetMinute?.toString() ?: "(minute/60)*60"
                 db.execSQL(
                     """INSERT INTO entity_rollup_compact
                        SELECT instance,path,entity_id,$minuteExpression,sum(access_count),sum(update_count),sum(update_bytes),
-                              min(CASE WHEN span_start=0 THEN minute ELSE span_start END)
-                       FROM minute_rollup WHERE ${window.whereSql}
+                              min(CASE WHEN span_started_at=0 THEN minute ELSE span_started_at END)
+                       FROM dashboard_entity_traffic_minute WHERE ${window.whereSql}
                        GROUP BY instance,path,entity_id,$minuteExpression""",
                     window.whereArgs,
                 )
-                db.delete("minute_rollup", window.whereSql, window.whereArgs)
+                db.delete("dashboard_entity_traffic_minute", window.whereSql, window.whereArgs)
                 db.execSQL(
-                    """INSERT OR REPLACE INTO minute_rollup(instance,path,entity_id,minute,access_count,update_count,update_bytes,span_start)
-                       SELECT instance,path,entity_id,minute,access_count,update_count,update_bytes,span_start
+                    """INSERT OR REPLACE INTO dashboard_entity_traffic_minute(instance,path,entity_id,minute,access_count,update_count,update_bytes,span_started_at)
+                       SELECT instance,path,entity_id,minute,access_count,update_count,update_bytes,span_started_at
                        FROM entity_rollup_compact""",
                 )
                 db.execSQL("DROP TABLE entity_rollup_compact")
@@ -1080,20 +1090,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         val lastUpdateAt: Long,
         val recent: Recent?,
         val rate1h: Double,
-    ) {
-        val sortProjection get() = EntitySortProjection(
-            entityId = entityId,
-            access1h = recent?.access1h ?: 0,
-            rate1h = rate1h,
-            reasons = reasons,
-            lastAccess = lastAccess,
-            override = when { excluded -> "excluded"; pinned -> "pinned"; else -> "auto" },
-        )
-    }
+    )
 
     private data class DashboardRow(
         val status: String,
         val lastSync: Long,
+        val analyzerPolicyVersion: Int,
         val error: String,
         val unresolvedJson: String,
         val issuesJson: String,
@@ -1151,9 +1153,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 db.insertOrThrow("proximity_model", null, modelValues)
             }
             val mergeRollup = db.compileStatement(
-                """UPDATE proximity_rollup SET
+                """UPDATE proximity_sample SET
                    sample_count=MIN(1000000,sample_count+?),raw_min=MIN(raw_min,?),
-                   raw_max=MAX(raw_max,?),raw_sum=raw_sum+?,raw_square_sum=raw_square_sum+?,
+                   raw_max=MAX(raw_max,?),raw_sum=raw_sum+?,raw_sum_squares=raw_sum_squares+?,
                    excursion_count=excursion_count+?,gesture_count=gesture_count+?
                    WHERE fingerprint=? AND bucket=?""",
             )
@@ -1172,10 +1174,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                     mergeRollup.bindLong(9, row.bucket)
                     if (mergeRollup.executeUpdateDelete() == 0) {
                         db.execSQL(
-                            """INSERT INTO proximity_rollup(
-                               fingerprint,bucket,sample_count,raw_min,raw_max,raw_sum,raw_square_sum,
+                            """INSERT INTO proximity_sample(
+                               fingerprint,bucket,sample_count,raw_min,raw_max,raw_sum,raw_sum_squares,
                                excursion_count,gesture_count) VALUES(?,?,?,?,?,?,?,?,?)""",
-                            arrayOf(
+                            arrayOf<Any?>(
                                 row.fingerprint, row.bucket, row.sampleCount.coerceAtMost(1_000_000),
                                 row.rawMin, row.rawMax, row.rawSum, row.rawSquareSum,
                                 row.excursionCount.coerceAtLeast(0), row.gestureCount.coerceAtLeast(0),
@@ -1192,7 +1194,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                     """INSERT INTO proximity_episode(
                        fingerprint,started_at,duration_ms,peak_level,completed,guided)
                        VALUES(?,?,?,?,?,?)""",
-                    arrayOf(
+                    arrayOf<Any?>(
                         row.fingerprint, row.startedAt, row.durationMs.coerceIn(0, 60_000),
                         row.peakLevel.coerceIn(0, 100), if (row.completed) 1 else 0,
                         if (row.guided) 1 else 0,
@@ -1200,10 +1202,10 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 )
             }
             val cutoffBucket = (now / PROXIMITY_BUCKET_MS) - PROXIMITY_RETENTION_BUCKETS
-            db.execSQL("DELETE FROM proximity_rollup WHERE bucket<?", arrayOf(cutoffBucket))
+            db.execSQL("DELETE FROM proximity_sample WHERE bucket<?", arrayOf(cutoffBucket))
             db.execSQL(
-                """DELETE FROM proximity_rollup WHERE rowid IN (
-                   SELECT rowid FROM proximity_rollup ORDER BY bucket DESC LIMIT -1 OFFSET $MAX_PROXIMITY_ROLLUPS)""",
+                """DELETE FROM proximity_sample WHERE rowid IN (
+                   SELECT rowid FROM proximity_sample ORDER BY bucket DESC LIMIT -1 OFFSET $MAX_PROXIMITY_ROLLUPS)""",
             )
             db.execSQL(
                 """DELETE FROM proximity_episode WHERE fingerprint=? AND rowid NOT IN (
@@ -1218,7 +1220,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                 val placeholders = retainedFingerprints.joinToString(",") { "?" }
                 val args = retainedFingerprints.toTypedArray()
                 db.delete("proximity_model", "fingerprint NOT IN ($placeholders)", args)
-                db.delete("proximity_rollup", "fingerprint NOT IN ($placeholders)", args)
+                db.delete("proximity_sample", "fingerprint NOT IN ($placeholders)", args)
                 db.delete("proximity_episode", "fingerprint NOT IN ($placeholders)", args)
             }
             db.setTransactionSuccessful()
@@ -1234,7 +1236,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         db.beginTransaction()
         try {
             db.delete("proximity_episode", "fingerprint=?", arrayOf(fingerprint))
-            db.delete("proximity_rollup", "fingerprint=?", arrayOf(fingerprint))
+            db.delete("proximity_sample", "fingerprint=?", arrayOf(fingerprint))
             db.delete("proximity_model", "fingerprint=?", arrayOf(fingerprint))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -1271,8 +1273,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
                sum(access_count) AS access_1d,
                sum(CASE WHEN minute>=$oneMinute THEN update_bytes ELSE 0 END) AS bytes_1m,
                sum(CASE WHEN minute>=$oneHour THEN update_bytes ELSE 0 END) AS bytes_1h,
-               sum(update_bytes) AS bytes_1d,min(CASE WHEN span_start=0 THEN minute ELSE span_start END) AS first_minute
-               FROM minute_rollup WHERE instance=? AND path=? AND minute>=$oneDay$entityFilter GROUP BY entity_id"""
+               sum(update_bytes) AS bytes_1d,min(CASE WHEN span_started_at=0 THEN minute ELSE span_started_at END) AS first_minute
+               FROM dashboard_entity_traffic_minute WHERE instance=? AND path=? AND minute>=$oneDay$entityFilter GROUP BY entity_id"""
     }
 
     private fun recentStatsForIds(
@@ -1359,10 +1361,42 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         )
     }
 
+    /**
+     * Every durable `app_state` row, for the portable backup archive.
+     *
+     * Reads the whole table rather than a list of declared settings, so a namespace introduced later is
+     * captured without anyone remembering to add it. What a *restore* may write back is a separate
+     * decision held by [io.github.maxlyth.hapaneld.persistence.StateBackupPolicy].
+     */
+    internal fun exportAppState(): List<ConfigVault.StateRow> =
+        readableDatabase.rawQuery(
+            "SELECT namespace,state_key,value_type,value_text,updated_at FROM app_state",
+            emptyArray(),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        ConfigVault.StateRow(
+                            namespace = cursor.getString(0),
+                            key = cursor.getString(1),
+                            type = cursor.getString(2),
+                            valueText = if (cursor.isNull(3)) null else cursor.getString(3),
+                            updatedAt = cursor.getLong(4),
+                        ),
+                    )
+                }
+            }
+        }
+
     companion object {
         internal const val DATABASE_NAME = "ha-paneld.db"
-        internal const val LEGACY_DATABASE_NAME = "entity-learning.db"
         private const val VERSION = EntityCatalogSchema.CURRENT_VERSION
+
+        /** Mirrors RuntimeProfileRegistry's imported catalog; these live outside the database. */
+        private const val IMPORTED_PROFILE_DIRECTORY = "device-profiles/imported"
+
+        /** A profile is a small YAML document; anything larger is not one and is not worth vaulting. */
+        private const val MAX_VAULTED_PROFILE_BYTES = 256L * 1024
         private const val HOUR_MS = 3_600_000L
         private const val MINUTE_MS = 60_000L
         private const val RUNTIME_RETENTION_MS = 30L * 24 * HOUR_MS
@@ -1379,6 +1413,84 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
         internal const val PERFORMANCE_RETENTION_DAYS = 7
         private const val PERFORMANCE_RETENTION_MINUTES = PERFORMANCE_RETENTION_DAYS * 24L * 60L
         private const val PERFORMANCE_MAINTENANCE_INTERVAL_MS = HOUR_MS
+        /**
+         * Per-minute dashboard measurements, with the metric *set* held as data in [payload].
+         *
+         * Replaces the 25 fixed columns of `dashboard_performance`, where the metric list was part of the
+         * schema and each new probe therefore cost a migration, a version bump and a fleet release —
+         * which in practice meant the instrumentation was never added when it was wanted.
+         *
+         * Storage is a wash, not a saving. On a real panel the payloads are 46 bytes per bucket (207,891
+         * total), but the `(instance, path)` key costs ~59 more, so the table lands at 475,136 against
+         * 450,560 for the columns it replaces — about 5% more on one table, 0.2% of the database. The
+         * prototype that measured 0.66x keyed rows on an interned integer scope id; interning here would
+         * need a second table and a non-additive key change, which is a poor trade for bytes that do not
+         * matter. The flexibility is the point; the storage merely has to not regress meaningfully.
+         */
+        internal val ENTITY_TABLE_SQL = """CREATE TABLE entity(
+            instance TEXT NOT NULL, entity_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
+            attributes_json TEXT NOT NULL DEFAULT '{}', metadata_json TEXT NOT NULL DEFAULT '{}',
+            first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, missing_streak INTEGER NOT NULL DEFAULT 0,
+            tombstone_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(instance,entity_id))"""
+        internal val DASHBOARD_TABLE_SQL = """CREATE TABLE dashboard(
+            instance TEXT NOT NULL, path TEXT NOT NULL, config_hash TEXT NOT NULL DEFAULT '',
+            config_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'disabled',
+            last_sync_at INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+            unresolved_json TEXT NOT NULL DEFAULT '[]', sync_generation INTEGER NOT NULL DEFAULT 0,
+            issues_json TEXT NOT NULL DEFAULT '[]', analyzer_policy_version INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(instance,path))"""
+        internal val DASHBOARD_ENTITY_TABLE_SQL = """CREATE TABLE dashboard_entity(
+            instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL,
+            referenced_by_config INTEGER NOT NULL DEFAULT 0, referenced_at_runtime INTEGER NOT NULL DEFAULT 0,
+            pinned INTEGER NOT NULL DEFAULT 0, excluded INTEGER NOT NULL DEFAULT 0,
+            reasons TEXT NOT NULL DEFAULT '', first_access_at INTEGER NOT NULL DEFAULT 0,
+            last_access_at INTEGER NOT NULL DEFAULT 0, access_count INTEGER NOT NULL DEFAULT 0,
+            update_count INTEGER NOT NULL DEFAULT 0, update_bytes INTEGER NOT NULL DEFAULT 0,
+            rate_window_started_at INTEGER NOT NULL DEFAULT 0, rate_update_bytes INTEGER NOT NULL DEFAULT 0,
+            last_update_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(instance,path,entity_id))"""
+        internal val DASHBOARD_ENTITY_TRAFFIC_TABLE_SQL = """CREATE TABLE dashboard_entity_traffic_minute(
+            instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL, minute INTEGER NOT NULL,
+            access_count INTEGER NOT NULL DEFAULT 0, update_count INTEGER NOT NULL DEFAULT 0,
+            update_bytes INTEGER NOT NULL DEFAULT 0, span_started_at INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(instance,path,entity_id,minute))"""
+        internal val DASHBOARD_IGNORED_ISSUE_TABLE_SQL = """CREATE TABLE dashboard_ignored_issue(
+            instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
+            PRIMARY KEY(instance,path,fingerprint),
+            FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)"""
+        internal val DASHBOARD_METRIC_TABLE_SQL = """CREATE TABLE dashboard_metric_minute(
+            instance TEXT NOT NULL, path TEXT NOT NULL, minute INTEGER NOT NULL,
+            payload BLOB NOT NULL,
+            PRIMARY KEY(instance,path,minute)) WITHOUT ROWID"""
+
+        /**
+         * Moves existing history into payloads. Runs inside the migration transaction, so a failure
+         * leaves the database as it was rather than half-converted.
+         *
+         * The source rows are deleted here; the table itself is dropped by the following step, which
+         * declares the compatibility break that its renames require anyway.
+         */
+        internal fun migrateDashboardPerformanceToPayloads(db: SQLiteDatabase) {
+            val columns = DashboardMetrics.METRICS.joinToString(",") { it.name }
+            db.rawQuery(
+                "SELECT instance,path,minute,$columns FROM dashboard_performance", emptyArray(),
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val values = DashboardMetrics.METRICS.withIndex().associate { (index, metric) ->
+                        metric.id to cursor.getLong(3 + index)
+                    }
+                    db.execSQL(
+                        "INSERT OR REPLACE INTO dashboard_metric_minute(instance,path,minute,payload) VALUES(?,?,?,?)",
+                        arrayOf<Any?>(
+                            cursor.getString(0), cursor.getString(1), cursor.getLong(2),
+                            MetricPayload.encode(values),
+                        ),
+                    )
+                }
+            }
+            db.execSQL("DELETE FROM dashboard_performance")
+        }
+
         internal val PERFORMANCE_HISTORY_TABLE_SQL = """CREATE TABLE dashboard_performance(
             instance TEXT NOT NULL,path TEXT NOT NULL,minute INTEGER NOT NULL,
             filter_active INTEGER NOT NULL DEFAULT 0,entity_count INTEGER NOT NULL DEFAULT 0,
@@ -1411,6 +1523,25 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             revision INTEGER NOT NULL,
             PRIMARY KEY(namespace,state_key),
             FOREIGN KEY(revision) REFERENCES app_state_revision(revision))"""
+        /**
+         * Deletes the dashboard_entity rows an entity purge is about to strand. `dashboard_entity` is logically a child
+         * of `entity` but declares no foreign key, so nothing cascades, and unlike `dashboard_entity_traffic_minute` it has no
+         * age-based prune — so without this, rows for permanently removed entities are retained forever, and
+         * the strandings are produced by the very routines that reclaim space.
+         *
+         * Deliberately scoped two ways. It matches only entities the caller's predicate is purging in this
+         * same transaction, never "any dashboard_entity lacking an entity row": all four dashboard_entity inserts use
+         * `INSERT OR IGNORE` without inserting an entity, so a dashboard_entity row legitimately exists before its
+         * entity appears (a dashboard can reference an entity Home Assistant has not reported yet). And it
+         * retains rows carrying explicit user intent — a manual pin or exclusion from [setOverrides] — which
+         * stays meaningful while the entity is absent and must not be treated as garbage.
+         *
+         * Callers append the entity predicate and a closing parenthesis, qualifying columns with `e.`.
+         */
+        internal const val DELETE_MEMBERSHIP_FOR_PURGED_ENTITIES =
+            "DELETE FROM dashboard_entity WHERE pinned=0 AND excluded=0 AND EXISTS(" +
+                "SELECT 1 FROM entity e WHERE e.instance=dashboard_entity.instance AND e.entity_id=dashboard_entity.entity_id"
+
         internal val PROXIMITY_MODEL_TABLE_SQL = """CREATE TABLE proximity_model(
             fingerprint TEXT PRIMARY KEY,
             algorithm_version INTEGER NOT NULL,
@@ -1418,14 +1549,14 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             snapshot_json TEXT NOT NULL,
             ready INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL)"""
-        internal val PROXIMITY_ROLLUP_TABLE_SQL = """CREATE TABLE proximity_rollup(
+        internal val PROXIMITY_SAMPLE_TABLE_SQL = """CREATE TABLE proximity_sample(
             fingerprint TEXT NOT NULL,
             bucket INTEGER NOT NULL,
             sample_count INTEGER NOT NULL,
             raw_min REAL NOT NULL,
             raw_max REAL NOT NULL,
             raw_sum REAL NOT NULL,
-            raw_square_sum REAL NOT NULL,
+            raw_sum_squares REAL NOT NULL,
             excursion_count INTEGER NOT NULL DEFAULT 0,
             gesture_count INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(fingerprint,bucket),
@@ -1453,35 +1584,292 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
             sample_count INTEGER NOT NULL DEFAULT 0,baseline_log_integral REAL NOT NULL DEFAULT 0,
             baseline_coverage_ms INTEGER NOT NULL DEFAULT 0,
              PRIMARY KEY(context_id,source_id,minute))"""
-        private const val AMBIENT_GLOBAL_ROW_LIMIT = 12_000
+        // Two inclusive seven-day minute streams (20,162 rows) plus 3,838 rows of headroom.
+        private const val AMBIENT_GLOBAL_ROW_LIMIT = 24_000
+        private const val PANEL_AMBIENT_SOURCE_ID = "panel"
         private val FINGERPRINT = Regex("^[a-f0-9]{16}$")
-        private val DATABASE_MIGRATION_LOCK = Any()
 
         /** Main database plus SQLite's allowlisted sidecars; no directory enumeration or path output. */
         internal fun knownDatabaseFootprint(database: File): Long =
             listOf("", "-wal", "-shm", "-journal").fold(0L) { total, suffix ->
                 val bytes = runCatching { File(database.path + suffix).takeIf(File::isFile)?.length() ?: 0L }
                     .getOrDefault(0L)
-                    .coerceAtLeast(0L)
                 if (Long.MAX_VALUE - total < bytes) Long.MAX_VALUE else total + bytes
             }
 
-        // TODO(v1.0): Remove LEGACY_DATABASE_NAME, databaseName(), checkpointLegacyDatabase(),
-        // migrateDatabaseFiles() and their tests. The 0.9.x line is the supported rename runway;
-        // 1.0 should open ha-paneld.db directly and treat a missing database as a fresh install.
-        private fun databaseName(context: Context): String = synchronized(DATABASE_MIGRATION_LOCK) {
-            val target = context.getDatabasePath(DATABASE_NAME)
-            if (target.exists()) return@synchronized DATABASE_NAME
-            val legacy = context.getDatabasePath(LEGACY_DATABASE_NAME)
-            if (!legacy.exists()) return@synchronized DATABASE_NAME
-            if (checkpointLegacyDatabase(legacy) && migrateDatabaseFiles(legacy, target)) {
-                DATABASE_NAME
-            } else {
-                LEGACY_DATABASE_NAME
+        // ---- Schema downgrade safety net (Tier-2). See reconcilePreOpen() below. ----
+        private val SCHEMA_RECONCILE_LOCK = Any()
+
+        /** Outcome of the most recent pre-open schema reconciliation, for health reporting. */
+        @Volatile
+        internal var lastSchemaReconcile: SchemaReconcile? = null
+
+        /**
+         * Set when configuration was recovered from the vault into a freshly created database. Read by
+         * health so the schema warning can say what actually happened: "settings may have reset" is
+         * untrue once they have been restored, and telling an owner to re-enter working configuration is
+         * its own kind of damage.
+         */
+        internal var lastConfigRestore: ConfigRestore? = null
+            private set
+
+        /**
+         * Runs the pre-open backup/restore reconciliation for [DATABASE_NAME] and returns the name to
+         * open. Wrapped so a reconciliation fault can never prevent the store from opening.
+         */
+        private fun reconcileSchemaAndName(context: Context): String = synchronized(SCHEMA_RECONCILE_LOCK) {
+            runCatching {
+                val target = context.getDatabasePath(DATABASE_NAME)
+                val outcome = reconcilePreOpen(
+                    target,
+                    EntityCatalogSchema.CURRENT_VERSION,
+                    readUserVersion(target),
+                    checkpoint = ::checkpointDatabaseFile,
+                    vaultConfig = { database -> vaultConfiguration(context, database) },
+                )
+                lastSchemaReconcile = retainFirstSchemaReconcile(lastSchemaReconcile, outcome)
+            }
+            DATABASE_NAME
+        }
+
+        /**
+         * The on-disk schema version, or null when the file is absent or unreadable. Opened READWRITE
+         * so a hot -wal left by an unclean kill (e.g. `pm install -d` during a downgrade) is recovered:
+         * a read-only open of a hot-WAL database can fail and spuriously report no version, which would
+         * defeat downgrade detection and strand a newer database in place to be version-stamped down.
+         */
+        private fun readUserVersion(database: File): Int? {
+            if (!database.isFile) return null
+            return openForVersion(database, SQLiteDatabase.OPEN_READWRITE)
+                ?: openForVersion(database, SQLiteDatabase.OPEN_READONLY)
+        }
+
+        private fun openForVersion(database: File, flags: Int): Int? = runCatching {
+            SQLiteDatabase.openDatabase(
+                database.path,
+                null,
+                flags or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+            ).use { it.version }
+        }.getOrNull()
+
+        /**
+         * Copies configuration and imported device profiles into the vault before the structure changes.
+         *
+         * Reads the database directly rather than going through [AppState] so it does not depend on the
+         * app's object model or on the schema version, and opens read-only so a failure here can never
+         * damage the database it is protecting. Best-effort by design: an unreadable database yields no
+         * rows, and [ConfigVault.write] refuses an empty export rather than overwriting good generations.
+         */
+        private fun vaultConfiguration(context: Context, database: File) {
+            if (!database.isFile) return
+            val rows = runCatching {
+                SQLiteDatabase.openDatabase(
+                    database.path,
+                    null,
+                    SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+                ).use { db ->
+                    db.rawQuery(
+                        "SELECT namespace,state_key,value_type,value_text,updated_at FROM app_state",
+                        emptyArray(),
+                    ).use { cursor ->
+                        buildList {
+                            while (cursor.moveToNext()) {
+                                add(
+                                    ConfigVault.StateRow(
+                                        namespace = cursor.getString(0),
+                                        key = cursor.getString(1),
+                                        type = cursor.getString(2),
+                                        valueText = if (cursor.isNull(3)) null else cursor.getString(3),
+                                        updatedAt = cursor.getLong(4),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }.getOrDefault(emptyList())
+
+            val profiles = runCatching {
+                File(context.filesDir, IMPORTED_PROFILE_DIRECTORY).listFiles()
+                    ?.filter { it.isFile && it.length() <= MAX_VAULTED_PROFILE_BYTES }
+                    ?.associate { it.name to it.readText() }
+                    .orEmpty()
+            }.getOrDefault(emptyMap())
+
+            ConfigVault.write(
+                File(context.filesDir, ConfigVault.VAULT_DIRECTORY),
+                ConfigVault.Export(rows, profiles),
+                System.currentTimeMillis(),
+            )
+        }
+
+        /**
+         * Restores vaulted configuration and imported profiles into a freshly created database.
+         *
+         * Only ever called from [onCreate], so `app_state` is empty by construction; the emptiness check
+         * is kept anyway because restoring *over* live configuration is the one genuinely dangerous
+         * direction and must be impossible rather than merely unreachable. Only a generation whose digest
+         * verifies is considered, and a failure leaves the fresh database untouched rather than
+         * half-populated — losing a recovery is recoverable, corrupting one is not.
+         *
+         * On first install the vault is absent and this is a no-op. Clearing app data removes the vault
+         * along with the database, so a deliberate reset stays a reset.
+         */
+        private fun restoreConfigurationInto(db: SQLiteDatabase, context: Context) {
+            runCatching {
+                val vaultDir = File(context.filesDir, ConfigVault.VAULT_DIRECTORY)
+                val export = ConfigVault.newestValid(vaultDir) ?: return
+                if (countRows(db, "app_state") != 0) return
+
+                db.beginTransaction()
+                try {
+                    db.execSQL(
+                        "INSERT INTO app_state_revision(committed_at,namespace,source) VALUES(?,?,?)",
+                        arrayOf<Any?>(System.currentTimeMillis(), "config", "config-vault"),
+                    )
+                    val revision = countRows(db, "app_state_revision").toLong()
+                    export.rows.map { it.namespace }.distinct().forEach { namespace ->
+                        db.execSQL(
+                            "INSERT OR IGNORE INTO app_state_namespace(namespace,imported_at,legacy_name) VALUES(?,?,'')",
+                            arrayOf<Any?>(namespace, System.currentTimeMillis()),
+                        )
+                    }
+                    export.rows.forEach { row ->
+                        db.execSQL(
+                            "INSERT OR REPLACE INTO app_state(namespace,state_key,value_type,value_text,updated_at,revision) " +
+                                "VALUES(?,?,?,?,?,?)",
+                            arrayOf<Any?>(row.namespace, row.key, row.type, row.valueText, row.updatedAt, revision),
+                        )
+                    }
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+
+                // Profiles are files, so they are restored only where nothing occupies the name; an
+                // existing profile is always more current than a vaulted copy.
+                val importedDir = File(context.filesDir, IMPORTED_PROFILE_DIRECTORY)
+                export.profiles.forEach { (name, content) ->
+                    val destination = File(importedDir, name)
+                    if (!destination.exists() && destination.parentFile?.let { it.isDirectory || it.mkdirs() } == true) {
+                        runCatching { destination.writeText(content) }
+                    }
+                }
+                lastConfigRestore = ConfigRestore(export.rows.size, export.profiles.size)
             }
         }
 
-        private fun checkpointLegacyDatabase(database: File): Boolean = runCatching {
+        private fun countRows(db: SQLiteDatabase, table: String): Int =
+            db.rawQuery("SELECT count(*) FROM $table", emptyArray()).use {
+                if (it.moveToFirst()) it.getInt(0) else 0
+            }
+
+        /**
+         * Rebuilds every table whose name or columns changed, copying rows across.
+         *
+         * A rebuild rather than `ALTER TABLE ... RENAME COLUMN` because that needs SQLite 3.25, which
+         * arrived in API 30, and `minSdk` is 26 — an API 27 panel cannot execute it. Running once at
+         * upgrade, on a few thousand rows, so the copy costs nothing worth optimising.
+         *
+         * Order is the delicate part. `dashboard` is a foreign-key parent and `dashboard_issue_ignore`
+         * cascades from it, so dropping `dashboard` while that child exists would silently delete the
+         * user's ignored issues. `PRAGMA foreign_keys` is a no-op inside a transaction and `onUpgrade`
+         * already holds one, so the constraint cannot simply be switched off: instead the child is read
+         * out and dropped first, the parent is rebuilt, and the child is recreated and refilled.
+         */
+        internal fun rebuildTablesWithFinalNames(db: SQLiteDatabase) {
+            // 1. Take the cascading child out of the way, keeping its rows.
+            val ignoredIssues = db.rawQuery(
+                "SELECT instance,path,fingerprint,ignored_at FROM dashboard_issue_ignore", emptyArray(),
+            ).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(arrayOf<Any?>(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3)))
+                    }
+                }
+            }
+            db.execSQL("DROP TABLE dashboard_issue_ignore")
+
+            // 2. Rebuild the parent, then the remaining tables. Each is create-copy-drop-rename.
+            rebuild(
+                db, "dashboard", DASHBOARD_TABLE_SQL,
+                "instance,path,config_hash,config_json,status,last_sync_at,error,unresolved_json," +
+                    "sync_generation,issues_json,analyzer_policy_version",
+                "instance,path,config_hash,config_json,status,last_sync,error,unresolved_json," +
+                    "sync_generation,issues_json,analyzer_policy_version",
+            )
+            rebuild(
+                db, "entity", ENTITY_TABLE_SQL,
+                "instance,entity_id,state,attributes_json,metadata_json,first_seen_at,last_seen_at," +
+                    "missing_streak,tombstone_at",
+                "instance,entity_id,state,attributes_json,metadata_json,first_seen,last_seen," +
+                    "missing_streak,tombstone_at",
+            )
+            rebuild(
+                db, "membership", DASHBOARD_ENTITY_TABLE_SQL,
+                "instance,path,entity_id,referenced_by_config,referenced_at_runtime,pinned,excluded,reasons," +
+                    "first_access_at,last_access_at,access_count,update_count,update_bytes," +
+                    "rate_window_started_at,rate_update_bytes,last_update_at",
+                "instance,path,entity_id,static_ref,runtime_ref,pinned,excluded,reasons," +
+                    "first_access,last_access,access_count,update_count,update_bytes," +
+                    "rate_window_start,rate_update_bytes,last_update_at",
+                target = "dashboard_entity",
+            )
+            rebuild(
+                db, "minute_rollup", DASHBOARD_ENTITY_TRAFFIC_TABLE_SQL,
+                "instance,path,entity_id,minute,access_count,update_count,update_bytes,span_started_at",
+                "instance,path,entity_id,minute,access_count,update_count,update_bytes,span_start",
+                target = "dashboard_entity_traffic_minute",
+            )
+            rebuild(
+                db, "proximity_rollup", PROXIMITY_SAMPLE_TABLE_SQL,
+                "fingerprint,bucket,sample_count,raw_min,raw_max,raw_sum,raw_sum_squares,excursion_count,gesture_count",
+                "fingerprint,bucket,sample_count,raw_min,raw_max,raw_sum,raw_square_sum,excursion_count,gesture_count",
+                target = "proximity_sample",
+            )
+
+            // 3. Recreate the child against the rebuilt parent and put its rows back.
+            db.execSQL(DASHBOARD_IGNORED_ISSUE_TABLE_SQL)
+            ignoredIssues.forEach { row ->
+                db.execSQL(
+                    "INSERT OR IGNORE INTO dashboard_ignored_issue(instance,path,fingerprint,ignored_at) " +
+                        "VALUES(?,?,?,?)",
+                    row,
+                )
+            }
+
+            listOf(
+                "CREATE INDEX ix_entity_missing ON entity(instance,missing_streak)",
+                "CREATE INDEX ix_dashboard_entity_load ON dashboard_entity(instance,path,update_bytes DESC)",
+                "CREATE INDEX ix_dashboard_entity_traffic_minute_age ON dashboard_entity_traffic_minute(instance,path,minute)",
+                "CREATE INDEX ix_proximity_sample_age ON proximity_sample(bucket)",
+                "CREATE INDEX ix_app_state_updated ON app_state(namespace,updated_at)",
+                "CREATE INDEX ix_proximity_episode_age ON proximity_episode(started_at)",
+                "CREATE INDEX ix_ambient_lux_minute_age ON ambient_lux_minute(minute)",
+            ).forEach(db::execSQL)
+        }
+
+        /**
+         * Creates [createSql]'s table, copies [source] columns into [destination] columns positionally,
+         * then drops [from]. [target] defaults to [from] for a rebuild that keeps its name.
+         */
+        private fun rebuild(
+            db: SQLiteDatabase,
+            from: String,
+            createSql: String,
+            destination: String,
+            source: String,
+            target: String = from,
+        ) {
+            val staging = "${target}_rebuild"
+            db.execSQL(createSql.replaceFirst("CREATE TABLE $target(", "CREATE TABLE $staging("))
+            db.execSQL("INSERT INTO $staging($destination) SELECT $source FROM $from")
+            db.execSQL("DROP TABLE $from")
+            db.execSQL("ALTER TABLE $staging RENAME TO $target")
+        }
+
+        /** Flushes WAL into the main file so a single-file pre-migration copy is complete. */
+        private fun checkpointDatabaseFile(database: File): Boolean = runCatching {
             SQLiteDatabase.openDatabase(
                 database.path,
                 null,
@@ -1495,28 +1883,242 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, databaseN
     }
 }
 
+// ---- DB-schema downgrade safety net (Tier-2) ----------------------------------------------------
+//
+// Config and derived catalog data share one SQLite file (ha-paneld.db). A downgrade to a build with
+// an older schema must never take the whole store — config included — down. Strategy, all pre-open:
+//   * Upgrade imminent (on-disk version < this build): snapshot the pre-migration file so a later
+//     downgrade can roll back. Additive schema growth is the common case and needs nothing more.
+//   * Downgrade (on-disk version > this build): restore the newest snapshot this build understands;
+//     if none exists, move the newer database aside for recovery and start fresh. Never delete the
+//     live data, never throw.
+// Every schema change SHOULD stay additive (never drop/rename a table or column an older supported
+// build reads) so the no-op onDowngrade path degrades gracefully when no snapshot is available.
+
+internal enum class SchemaReconcileAction { NONE, BACKED_UP, RESTORED, PRESERVED_FRESH }
+
+/** What the config vault put back into a freshly created database. */
+internal data class ConfigRestore(val settings: Int, val profiles: Int)
+
+/** Result of [reconcilePreOpen]; surfaced via EntityCatalogStore.lastSchemaReconcile for health. */
+internal data class SchemaReconcile(
+    val action: SchemaReconcileAction,
+    val fromVersion: Int,
+    val toVersion: Int,
+    val restoredVersion: Int = 0,
+)
+
+/** Keep a meaningful downgrade outcome visible for the lifetime of the process. */
+internal fun retainFirstSchemaReconcile(
+    previous: SchemaReconcile?,
+    current: SchemaReconcile,
+): SchemaReconcile? = when {
+    previous == null || previous.action == SchemaReconcileAction.NONE -> current
+    current.action == SchemaReconcileAction.NONE -> previous
+    else -> previous
+}
+
+private const val PREMIGRATE_SUFFIX = "premigrate"
+private const val SUPERSEDED_SUFFIX = "superseded"
+private const val MAX_PREMIGRATE_BACKUPS = 2
+private const val MAX_PREMIGRATE_BYTES = 64L * 1024 * 1024
+private const val SPACE_MARGIN_BYTES = 8L * 1024 * 1024
+private val DB_SIDECAR_SUFFIXES = listOf("-wal", "-shm", "-journal")
+
+/** Path of the pre-migration snapshot taken at [version] for [target] (a restore source). */
+internal fun preMigrationBackupFile(target: File, version: Int): File =
+    File(target.parentFile, "${target.name}.v$version.$PREMIGRATE_SUFFIX")
+
+/** Path where a too-new database is preserved for manual recovery (never a restore source). */
+internal fun supersededFile(target: File, version: Int): File =
+    File(target.parentFile, "${target.name}.v$version.$SUPERSEDED_SUFFIX")
+
 /**
- * Rename a closed SQLite database and all live sidecars as one best-effort file set. A failed move
- * rolls completed renames back and leaves callers on the legacy name rather than creating an empty DB.
+ * Reconcile the on-disk schema version against this build before the database is opened. Pure file
+ * operations; [checkpoint] flushes WAL for the real store and is stubbed in tests. Never deletes the
+ * live data outright and never throws.
  */
-internal fun migrateDatabaseFiles(legacy: File, target: File): Boolean {
-    val suffixes = listOf("", "-wal", "-shm", "-journal")
-    val moves = suffixes.mapNotNull { suffix ->
-        val source = File(legacy.path + suffix)
-        if (source.exists()) source to File(target.path + suffix) else null
+internal fun reconcilePreOpen(
+    target: File,
+    currentVersion: Int,
+    onDiskVersion: Int?,
+    keepBackups: Int = MAX_PREMIGRATE_BACKUPS,
+    maxBackupBytes: Long = MAX_PREMIGRATE_BYTES,
+    freeSpace: (File) -> Long = { it.usableSpace },
+    checkpoint: (File) -> Boolean = { true },
+    minimumSupportedVersion: Int = EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION,
+    minimumCompatibleVersion: Int = EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION,
+    vaultConfig: (File) -> Unit = {},
+): SchemaReconcile {
+    if (onDiskVersion == null || onDiskVersion == currentVersion) {
+        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion ?: 0, currentVersion)
     }
-    if (moves.isEmpty() || moves.any { (_, destination) -> destination.exists() }) return false
-    if (target.parentFile?.let { it.isDirectory || it.mkdirs() } == false) return false
-    val completed = ArrayList<Pair<File, File>>(moves.size)
-    for ((source, destination) in moves) {
-        if (!source.renameTo(destination)) {
-            completed.asReversed().forEach { (old, renamed) -> renamed.renameTo(old) }
-            return false
+    // The structure is about to change, the file is about to be replaced, or an older build is about to
+    // operate on a newer one. Copy configuration out first, unconditionally: it is a fraction of a
+    // percent of the bytes and effectively all of the value, whereas the whole-database snapshot below is
+    // deliberately skipped when the file is large or space is short — exactly the conditions under which
+    // loss is most likely. It dumps raw rows, so it captures keys this build does not itself understand.
+    runCatching { vaultConfig(target) }
+    if (onDiskVersion > currentVersion && onDiskVersion >= minimumCompatibleVersion &&
+        currentVersion >= minimumCompatibleVersion
+    ) {
+        // Newer, but only additively so: every version at or above the compatible baseline is a superset
+        // of the others, enforced by SchemaAdditivePolicy rather than assumed. Open it untouched. This
+        // build reads and writes the columns it knows, ignores the rest, and its inserts still satisfy
+        // the newer constraints because additive columns carry defaults.
+        //
+        // The alternative — setting the database aside and starting fresh — resets the owner's
+        // configuration, which is why this case is worth distinguishing at all: it turns every future
+        // version bump from a latent config-reset event into a non-event.
+        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
+    }
+    if (onDiskVersion < currentVersion) {
+        if (onDiskVersion < minimumSupportedVersion) {
+            // Below the supported floor: the steps that would carry this structure forward have been
+            // deleted, so onUpgrade would throw — and a thrown upgrade aborts the open, taking config
+            // down with it. Preserve the whole file-set for manual recovery and start fresh instead.
+            // Reported as PRESERVED_FRESH because that is exactly what happened; too-old and too-new are
+            // distinguishable from fromVersion versus toVersion, and it inherits the health warning.
+            return if (preserveAside(target, onDiskVersion, checkpoint)) {
+                SchemaReconcile(SchemaReconcileAction.PRESERVED_FRESH, onDiskVersion, currentVersion)
+            } else {
+                SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
+            }
         }
-        completed += source to destination
+        // Upgrade imminent: snapshot the pre-migration structure so a later downgrade can roll back.
+        // Space-aware and best-effort — an upgrade must never fail for lack of room to archive a copy.
+        writePreMigrationBackup(target, onDiskVersion, keepBackups, maxBackupBytes, freeSpace, checkpoint)
+        return SchemaReconcile(SchemaReconcileAction.BACKED_UP, onDiskVersion, currentVersion)
     }
+    // Downgrade: this build is older than the on-disk structure and cannot open it directly. Choose the
+    // newest snapshot this build understands that is also a structurally valid SQLite file.
+    val restore = listVersioned(target, PREMIGRATE_SUFFIX)
+        .filter { it.version <= currentVersion && it.file.isFile && looksLikeSqlite(it.file) }
+        .maxByOrNull { it.version }
+    if (!preserveAside(target, onDiskVersion, checkpoint)) {
+        // Could not safely set the newer database aside; leave it for the onDowngrade backstop.
+        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
+    }
+    if (restore != null && installBackup(restore.file, target)) {
+        return SchemaReconcile(SchemaReconcileAction.RESTORED, onDiskVersion, currentVersion, restore.version)
+    }
+    return SchemaReconcile(SchemaReconcileAction.PRESERVED_FRESH, onDiskVersion, currentVersion)
+}
+
+private data class VersionedFile(val file: File, val version: Int)
+
+private fun listVersioned(target: File, suffix: String): List<VersionedFile> {
+    val dir = target.parentFile ?: return emptyList()
+    val pattern = Regex("^" + Regex.escape(target.name) + "\\.v(\\d+)\\." + suffix + "$")
+    return (dir.listFiles() ?: emptyArray()).mapNotNull { file ->
+        pattern.matchEntire(file.name)?.groupValues?.get(1)?.toIntOrNull()?.let { VersionedFile(file, it) }
+    }
+}
+
+private fun pruneVersioned(target: File, suffix: String, keep: Int) {
+    listVersioned(target, suffix).sortedByDescending { it.version }.drop(keep.coerceAtLeast(0))
+        .forEach { runCatching { it.file.delete() } }
+}
+
+private fun writePreMigrationBackup(
+    target: File,
+    version: Int,
+    keepBackups: Int,
+    maxBytes: Long,
+    freeSpace: (File) -> Long,
+    checkpoint: (File) -> Boolean,
+) {
+    runCatching {
+        if (!target.isFile || !checkpoint(target)) return
+        val size = target.length()
+        if (size > maxBytes) return
+        val dir = target.parentFile ?: return
+        // Retain at most keepBackups-1 existing snapshots so the new copy stays within budget, then drop
+        // further snapshots while disk space is tight. An upgrade must never fail for lack of room to
+        // archive a rollback copy: a reduced or absent backup is acceptable, a failed upgrade is not.
+        var keepExisting = (keepBackups - 1).coerceAtLeast(0)
+        pruneVersioned(target, PREMIGRATE_SUFFIX, keepExisting)
+        while (freeSpace(dir) < size + SPACE_MARGIN_BYTES && keepExisting > 0) {
+            keepExisting--
+            pruneVersioned(target, PREMIGRATE_SUFFIX, keepExisting)
+        }
+        if (freeSpace(dir) < size + SPACE_MARGIN_BYTES) return // no room even after pruning — skip
+        val dest = preMigrationBackupFile(target, version)
+        val tmp = File(dest.path + ".tmp")
+        target.copyTo(tmp, overwrite = true)
+        if (!tmp.renameTo(dest)) tmp.delete()
+    }
+}
+
+/**
+ * Move the newer database aside for recovery; returns true when [target] is safely gone afterward.
+ * Checkpoints first so the recovery copy absorbs committed WAL frames, and keeps ONLY this newest
+ * recovery copy — pruning by embedded version could delete the copy that holds the current live data
+ * when a stale higher-version aside from an earlier downgrade already exists.
+ */
+private fun preserveAside(target: File, version: Int, checkpoint: (File) -> Boolean): Boolean {
+    if (!target.isFile) {
+        clearSidecars(target)
+        return true
+    }
+    // A successful checkpoint folds ordinary WAL frames into the main file. If the checkpoint cannot
+    // complete, preserve the complete SQLite file-set below instead of deleting live sidecars.
+    runCatching { checkpoint(target) }
+    val aside = supersededFile(target, version)
+    val sources = listOf("") + DB_SIDECAR_SUFFIXES
+    val destinations = sources.map { suffix -> if (suffix.isEmpty()) aside else File(aside.path + suffix) }
+    destinations.forEach { runCatching { it.delete() } }
+    val copied = sources.zip(destinations).all { (suffix, destination) ->
+        val source = if (suffix.isEmpty()) target else File(target.path + suffix)
+        !source.isFile || runCatching { source.copyTo(destination, overwrite = true) }.isSuccess
+    }
+    if (!copied) return false
+    val removed = sources.all { suffix ->
+        val source = if (suffix.isEmpty()) target else File(target.path + suffix)
+        !source.exists() || runCatching { source.delete() }.getOrDefault(false)
+    }
+    if (!removed) return false
+    listVersioned(target, SUPERSEDED_SUFFIX)
+        .filter { it.file.name != aside.name }
+        .forEach {
+            runCatching { it.file.delete() }
+            DB_SIDECAR_SUFFIXES.forEach { suffix -> runCatching { File(it.file.path + suffix).delete() } }
+        }
     return true
 }
+
+private fun installBackup(backup: File, target: File): Boolean = runCatching {
+    val tmp = File(target.path + ".restore.tmp")
+    backup.copyTo(tmp, overwrite = true)
+    clearSidecars(target)
+    tmp.renameTo(target).also { if (!it) tmp.delete() }
+}.getOrDefault(false)
+
+private fun clearSidecars(target: File) {
+    DB_SIDECAR_SUFFIXES.forEach { runCatching { File(target.path + it).delete() } }
+}
+
+/** The 16-byte SQLite file header, so a torn or non-database snapshot is never restored over live data. */
+private val SQLITE_MAGIC = byteArrayOf(
+    0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
+) // ASCII "SQLite format 3" followed by NUL
+
+private fun looksLikeSqlite(file: File): Boolean = runCatching {
+    if (file.length() < SQLITE_MAGIC.size) {
+        false
+    } else {
+        file.inputStream().use { input ->
+            val header = ByteArray(SQLITE_MAGIC.size)
+            var read = 0
+            while (read < header.size) {
+                val n = input.read(header, read, header.size - read)
+                if (n < 0) break
+                read += n
+            }
+            read == header.size && header.contentEquals(SQLITE_MAGIC)
+        }
+    }
+}.getOrDefault(false)
 
 /** Heat-map percentiles are diagnostic context, not control state. Recompute them at most once per
  * five minutes while the Entities tab is open; exact per-page values remain current. */
@@ -1689,7 +2291,7 @@ internal data class EntitySortProjection(
 
 /** Public API sort policy: unknown keys/directions never become SQL or reflection input. */
 internal object EntityCatalogSorting {
-    private val keys = setOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access", "override")
+    private val keys = setOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access_at", "override")
     fun key(raw: String): String = raw.takeIf(keys::contains) ?: "entity_id"
     fun direction(raw: String): String = raw.lowercase().takeIf { it == "asc" || it == "desc" } ?: "asc"
 
@@ -1701,7 +2303,7 @@ internal object EntityCatalogSorting {
         val expression = when (normalizedKey) {
             "entity_id" -> return "e.entity_id COLLATE NOCASE $dir, e.entity_id $dir"
             "reasons" -> "coalesce(m.reasons,'') COLLATE NOCASE"
-            "last_access" -> "coalesce(m.last_access,0)"
+            "last_access_at" -> "coalesce(m.last_access_at,0)"
             "override" -> "CASE WHEN coalesce(m.excluded,0)=1 THEN 'excluded' WHEN coalesce(m.pinned,0)=1 THEN 'pinned' ELSE 'auto' END COLLATE NOCASE"
             "access_1h" -> "recent_access_1h"
             "rate_1h_bps" -> "recent_rate_1h"
@@ -1719,7 +2321,7 @@ internal object EntityCatalogSorting {
                 "access_1h" -> a.access1h.compareTo(b.access1h)
                 "rate_1h_bps" -> a.rate1h.compareTo(b.rate1h)
                 "reasons" -> a.reasons.compareTo(b.reasons, ignoreCase = true)
-                "last_access" -> a.lastAccess.compareTo(b.lastAccess)
+                "last_access_at" -> a.lastAccess.compareTo(b.lastAccess)
                 "override" -> a.override.compareTo(b.override, ignoreCase = true)
                 else -> compareEntityIds(a.entityId, b.entityId)
             } * sign
@@ -1754,91 +2356,139 @@ internal class BoundedSnapshotCache<K, V>(private val windowMs: Long, private va
     @Synchronized internal fun sizeForTest(): Int = entries.size
 }
 
+/**
+ * The additive-only rule, made executable.
+ *
+ * Every schema change creates a future downgrade event, and a downgrade that an older build cannot
+ * tolerate costs the owner their configuration. Additive changes are tolerable: an older build simply
+ * ignores a table or column it has never heard of. Two shapes are not, and both are silent — nothing
+ * fails at the moment the change is written, only years later on somebody's panel:
+ *
+ * - **Removing or retyping** anything an older build still reads.
+ * - **Adding a `NOT NULL` column without a default**, which leaves an older build's inserts — written
+ *   against the columns it knows — failing against a constraint it cannot satisfy.
+ *
+ * Keeping this as a comment in the reconcile path was not enough; it is a rule about SQL, so it is
+ * checked against the SQL. Pure and unit-tested, so it runs on every build rather than only on a panel.
+ */
+internal object SchemaAdditivePolicy {
+    private val FORBIDDEN = listOf(
+        Regex("""\bDROP\s+TABLE\b""") to "drops a table",
+        Regex("""\bDROP\s+COLUMN\b""") to "drops a column",
+        Regex("""\bRENAME\s+TO\b""") to "renames a table",
+        Regex("""\bRENAME\s+COLUMN\b""") to "renames a column",
+        Regex("""\bALTER\s+COLUMN\b""") to "retypes a column",
+    )
+
+    /** Human-readable reasons [sql] is not additive; empty when it is safe for an older build. */
+    fun violations(sql: String): List<String> {
+        val normalized = sql.uppercase().replace(Regex("""\s+"""), " ")
+        return buildList {
+            FORBIDDEN.forEach { (pattern, reason) -> if (pattern.containsMatchIn(normalized)) add(reason) }
+            if (normalized.contains("ADD COLUMN") &&
+                normalized.contains("NOT NULL") &&
+                !normalized.contains("DEFAULT")
+            ) {
+                add("adds a NOT NULL column with no default, so an older build's inserts would fail")
+            }
+        }
+    }
+
+    fun violations(statements: List<String>): List<String> = statements.flatMap { statement ->
+        violations(statement).map { "$it: ${statement.trim().take(80)}" }
+    }
+}
+
 /** Sequential forward-only schema contract. Never add an ad-hoc conditional to [onUpgrade]. */
 object EntityCatalogSchema {
-    const val CURRENT_VERSION = 11
-    data class Step(val from: Int, val to: Int, val sql: List<String>)
+    const val CURRENT_VERSION = 14
+
+    /**
+     * Oldest on-disk structure this build can carry forward — the schema public v0.9.5 shipped.
+     *
+     * Steps below this are deliberately deleted rather than kept forever: each one is dead weight that
+     * still has to be read, tested and reasoned about, and none can run because no supported release
+     * produces such a database. Anything older is handled before the database is opened
+     * (`reconcilePreOpen` preserves it and starts fresh); it must never reach [plan], because a throw
+     * inside `onUpgrade` aborts the open and takes configuration down with it.
+     *
+     * Raising this floor is a compatibility decision, not a cleanup: it makes upgrading from an older
+     * release impossible, so it belongs with a release that states the supported upgrade range.
+     */
+    const val MINIMUM_SUPPORTED_VERSION = 11
+
+    /**
+     * Oldest structure this build can *tolerate being newer than itself* — the downgrade counterpart to
+     * [MINIMUM_SUPPORTED_VERSION].
+     *
+     * Versions at or above this are additive supersets of one another, which [SchemaAdditivePolicy] and
+     * the realized-schema superset test enforce rather than assume. That makes a downgrade across them a
+     * non-event: this build reads and writes the columns it knows and ignores the rest, and every column
+     * added since carries a default so its inserts still satisfy the newer constraints.
+     *
+     * Without this, any newer database was set aside and replaced by a fresh one, resetting the owner's
+     * configuration — so every version bump manufactured a future config-reset event. Raising this is
+     * therefore the deliberate act of shipping a non-additive change, and costs exactly that.
+     */
+    const val MINIMUM_COMPATIBLE_VERSION = 14
+
+    /**
+     * [transform] carries data that SQL alone cannot express — an encoding, for instance. It runs after
+     * [sql], inside the same transaction, so a failure leaves the step as if it had never run. Prefer
+     * plain [sql]; this exists so such a migration stays a declared step rather than becoming the ad-hoc
+     * conditional in `onUpgrade` that this contract forbids.
+     */
+    data class Step(
+        val from: Int,
+        val to: Int,
+        val sql: List<String>,
+        val transform: ((SQLiteDatabase) -> Unit)? = null,
+        /**
+         * Declares that this step drops, renames or retypes something an older build reads.
+         *
+         * Such a change is allowed — the forward migration chain handles it on upgrade, which is the
+         * common direction — but it cannot be *silent*, because the one thing the chain cannot do is run
+         * backwards. An older build meeting this structure will not find what it expects, so
+         * [MINIMUM_COMPATIBLE_VERSION] must move past it and the downgrade takes the set-aside path,
+         * where configuration is refilled from the vault rather than lost.
+         */
+        val breaksCompatibility: Boolean = false,
+    )
 
     private val steps = mapOf(
-        1 to Step(
-            1, 2,
-            listOf("ALTER TABLE dashboard ADD COLUMN sync_generation INTEGER NOT NULL DEFAULT 0"),
+        11 to Step(
+            11, 12,
+            listOf("ALTER TABLE dashboard ADD COLUMN analyzer_policy_version INTEGER NOT NULL DEFAULT 0"),
         ),
-        2 to Step(
-            2, 3,
+        12 to Step(
+            12, 13,
             listOf(
-                "ALTER TABLE membership ADD COLUMN rate_window_start INTEGER NOT NULL DEFAULT 0",
-                "ALTER TABLE membership ADD COLUMN rate_update_bytes INTEGER NOT NULL DEFAULT 0",
-                "ALTER TABLE membership ADD COLUMN last_update_at INTEGER NOT NULL DEFAULT 0",
+                EntityCatalogStore.DASHBOARD_METRIC_TABLE_SQL,
+                "CREATE INDEX ix_dashboard_metric_minute_age ON dashboard_metric_minute(minute)",
             ),
+            // Carries existing history into payloads. Additive: dashboard_performance is left in place so
+            // an older build still opens this database; only its rows move, costing such a build recent
+            // diagnostic history rather than anything it cannot rebuild.
+            transform = EntityCatalogStore::migrateDashboardPerformanceToPayloads,
         ),
-        3 to Step(
-            3, 4,
+        13 to Step(
+            13, 14,
             listOf(
-                """CREATE TABLE minute_rollup(
-                    instance TEXT NOT NULL, path TEXT NOT NULL, entity_id TEXT NOT NULL, minute INTEGER NOT NULL,
-                    access_count INTEGER NOT NULL DEFAULT 0, update_count INTEGER NOT NULL DEFAULT 0,
-                    update_bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(instance,path,entity_id,minute))""",
-                "CREATE INDEX minute_rollup_age ON minute_rollup(instance,path,minute)",
+                // Superseded by dashboard_metric_minute and already emptied by the previous step.
+                "DROP TABLE IF EXISTS dashboard_performance",
             ),
-        ),
-        4 to Step(
-            4, 5,
-            listOf("ALTER TABLE dashboard ADD COLUMN issues_json TEXT NOT NULL DEFAULT '[]'"),
-        ),
-        5 to Step(
-            5, 6,
-            listOf(
-                """CREATE TABLE dashboard_issue_ignore(
-                    instance TEXT NOT NULL, path TEXT NOT NULL, fingerprint TEXT NOT NULL, ignored_at INTEGER NOT NULL,
-                    PRIMARY KEY(instance,path,fingerprint),
-                    FOREIGN KEY(instance,path) REFERENCES dashboard(instance,path) ON DELETE CASCADE)""",
-            ),
-        ),
-        6 to Step(
-            6, 7,
-            listOf(
-                "DROP TABLE IF EXISTS hourly",
-                "ALTER TABLE minute_rollup ADD COLUMN span_start INTEGER NOT NULL DEFAULT 0",
-            ),
-        ),
-        7 to Step(
-            7, 8,
-            listOf(
-                EntityCatalogStore.PERFORMANCE_HISTORY_TABLE_SQL,
-                "CREATE INDEX dashboard_performance_age ON dashboard_performance(minute)",
-            ),
-        ),
-        8 to Step(
-            8, 9,
-            listOf(
-                EntityCatalogStore.APP_STATE_REVISION_TABLE_SQL,
-                EntityCatalogStore.APP_STATE_NAMESPACE_TABLE_SQL,
-                EntityCatalogStore.APP_STATE_TABLE_SQL,
-                "CREATE INDEX app_state_updated ON app_state(namespace,updated_at)",
-            ),
-        ),
-        9 to Step(
-            9, 10,
-            listOf(
-                EntityCatalogStore.PROXIMITY_MODEL_TABLE_SQL,
-                EntityCatalogStore.PROXIMITY_ROLLUP_TABLE_SQL,
-                "CREATE INDEX proximity_rollup_age ON proximity_rollup(bucket)",
-                EntityCatalogStore.PROXIMITY_EPISODE_TABLE_SQL,
-                "CREATE INDEX proximity_episode_age ON proximity_episode(started_at)",
-            ),
-        ),
-        10 to Step(
-            10, 11,
-            listOf(
-                EntityCatalogStore.AMBIENT_HISTORY_TABLE_SQL,
-                "CREATE INDEX ambient_lux_minute_age ON ambient_lux_minute(minute)",
-            ),
+            // Renaming a column needs SQLite 3.25 (API 30) and minSdk is 26, so every table whose
+            // columns change is rebuilt and copied instead. Ordered so `dashboard` -- a foreign-key
+            // parent with ON DELETE CASCADE -- is never dropped while a child still references it:
+            // DROP TABLE fires that cascade, and PRAGMA foreign_keys cannot be turned off inside the
+            // transaction onUpgrade already holds.
+            transform = EntityCatalogStore::rebuildTablesWithFinalNames,
+            breaksCompatibility = true,
         ),
     )
 
     fun plan(oldVersion: Int, newVersion: Int): List<Step> {
-        require(oldVersion >= 1) { "invalid old schema version" }
+        require(oldVersion >= MINIMUM_SUPPORTED_VERSION) { "schema version below the supported floor" }
         require(newVersion >= oldVersion) { "schema downgrade is unsupported" }
         val out = mutableListOf<Step>()
         var current = oldVersion
@@ -1864,11 +2514,19 @@ internal object EntityCatalogIssuePersistence {
 
     fun boundedJson(issues: List<JSONObject>): String {
         val out = JSONArray()
-        for (issue in issues.take(MAX_ISSUE_GROUPS)) {
-            val sanitized = sanitizeObject(issue, 0)
-            out.put(sanitized)
-            if (out.toString().toByteArray(Charsets.UTF_8).size > MAX_PAYLOAD_BYTES) {
-                out.remove(out.length() - 1)
+        val buckets = Array(4) { ArrayList<JSONObject>(MAX_ISSUE_GROUPS) }
+        for (issue in issues) {
+            val bucket = buckets[issuePriority(issue)]
+            if (bucket.size < MAX_ISSUE_GROUPS) bucket += issue
+        }
+        for (bucket in buckets) {
+            for (issue in bucket) {
+                if (out.length() >= MAX_ISSUE_GROUPS) return out.toString()
+                val sanitized = sanitizeObject(issue, 0)
+                out.put(sanitized)
+                if (out.toString().toByteArray(Charsets.UTF_8).size > MAX_PAYLOAD_BYTES) {
+                    out.remove(out.length() - 1)
+                }
             }
         }
         return out.toString()
@@ -1895,12 +2553,17 @@ internal object EntityCatalogIssuePersistence {
         (0 until array.length()).count { array.optJSONObject(it)?.optBoolean("ignored", false) == true }
     }.getOrDefault(0)
 
+    fun canIgnore(issue: JSONObject): Boolean {
+        val wouldBlock = issue.optBoolean("would_block", issue.optBoolean("blocking", false))
+        return wouldBlock && issue.optBoolean("ignorable", true)
+    }
+
     fun applyIgnores(issues: JSONArray, ignoredFingerprints: Set<String>): String {
         val effective = buildList {
             for (index in 0 until issues.length()) issues.optJSONObject(index)?.let { source ->
                 val issue = JSONObject(source.toString())
-                val ignored = issue.optString("fingerprint") in ignoredFingerprints
                 val wouldBlock = issue.optBoolean("would_block", issue.optBoolean("blocking", false))
+                val ignored = canIgnore(issue) && issue.optString("fingerprint") in ignoredFingerprints
                 issue.put("ignored", ignored)
                 issue.put("would_block", wouldBlock)
                 issue.put("blocking", wouldBlock && !ignored)
@@ -1909,6 +2572,13 @@ internal object EntityCatalogIssuePersistence {
             }
         }
         return boundedJson(effective)
+    }
+
+    private fun issuePriority(issue: JSONObject): Int = when {
+        issue.optString("type") == "diagnostic_limit" -> 0
+        issue.optBoolean("blocking", false) -> 1
+        issue.optBoolean("would_block", false) -> 2
+        else -> 3
     }
 
     private fun sanitizeObject(input: JSONObject, depth: Int): JSONObject = JSONObject().apply {

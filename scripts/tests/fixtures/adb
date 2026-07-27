@@ -30,6 +30,21 @@ emit_system_layout_probe() {
   esac
 }
 
+emit_db_snapshot_stage() {
+  local snapshot_command="$1"
+  [ "${MOCK_DB_SNAPSHOT:-ok}" = stage_fail ] && return 1
+  # Model Android cp accurately: the old one-shot multi-source command failed when a cleanly
+  # checkpointed database had no WAL/SHM files. Independently guarded copies remain valid.
+  if [ "${MOCK_DB_SIDECARS:-present}" = absent ] &&
+     printf '%s\n' "$snapshot_command" | grep -Eq 'cp -f [^;&|]*ha-paneld\.db[[:space:]]+[^;&|]*ha-paneld\.db-wal'; then
+    return 1
+  fi
+  printf 'ha-paneld.db\n'
+  if [ "${MOCK_DB_SIDECARS:-present}" = present ]; then
+    printf 'ha-paneld.db-wal\nha-paneld.db-shm\n'
+  fi
+}
+
 if [ "${1:-}" = "connect" ]; then
   exit 0
 fi
@@ -64,7 +79,20 @@ case "${1:-}" in
     ;;
   pull)
     [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
-    cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}"
+    case "${2:-}" in
+      *hapaneld-db-snapshot*)
+        [ "${MOCK_DB_SNAPSHOT:-ok}" = pull_fail ] && exit 1
+        [ "${MOCK_DB_SNAPSHOT:-ok}" = wal_pull_fail ] && [ "${2##*/}" = ha-paneld.db-wal ] && exit 1
+        # A cleanly checkpointed database has no sidecars; model that so the "main file only" path
+        # is exercised rather than always producing a complete three-file set.
+        case "${2##*/}" in
+          ha-paneld.db) printf 'mock sqlite panel database\n' > "${3:?pull destination missing}" ;;
+          *) [ "${MOCK_DB_SIDECARS:-present}" = present ] || exit 1
+             printf 'mock sqlite sidecar\n' > "${3:?pull destination missing}" ;;
+        esac
+        ;;
+      *) cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}" ;;
+    esac
     ;;
   install)
     if [[ "${!#}" == */shizuku.apk ]] && [ "${MOCK_SHIZUKU_INSTALL:-ok}" = block ]; then
@@ -116,6 +144,23 @@ case "${1:-}" in
         if [ -n "${MOCK_SHIZUKU_VERSION_CODE:-}" ]; then
           printf 'package:/data/app/moe.shizuku.privileged.api/base.apk\n'
         fi
+        ;;
+      "df -P -k /data")
+        case "${MOCK_DATA_CAPACITY:-valid}" in
+          # A device name long enough to wrap pushes the columns onto a third line. df then cannot be
+          # read safely, which must read as UNKNOWN rather than as a number.
+          wrapped)
+            printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/block/mapper/an-extremely-long-userdata-device-name\n 12000000 100000 900000 1%% /data\n'
+            ;;
+          missing) ;;
+          *)
+            printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/block/dm-5 12000000 100000 %s 1%% /data\n' "${MOCK_DATA_AVAIL_KB:-1048576}"
+            ;;
+        esac
+        ;;
+      "pm clear io.github.maxlyth.hapaneld")
+        [ "${MOCK_PM_CLEAR:-ok}" = ok ] || { printf 'Failed\n'; exit 0; }
+        printf 'Success\n'
         ;;
       "pm path io.github.maxlyth.hapaneld")
         [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
@@ -230,6 +275,8 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
+          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -269,13 +316,14 @@ case "${1:-}" in
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
-          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
+          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ] && \
+             [ "${MOCK_FINALIZE_RECORDED_STATE:-ok}" = ok ]; then
             printf 'ROLLBACK_FINALIZED\n'
             rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
-            [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
+            [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && [ "${MOCK_ROLLBACK_RETIREMENT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then
@@ -315,6 +363,8 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
+          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -338,13 +388,14 @@ case "${1:-}" in
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
-          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ]; then
+          if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != finalize ] && \
+             [ "${MOCK_FINALIZE_RECORDED_STATE:-ok}" = ok ]; then
             printf 'ROLLBACK_FINALIZED\n'
             rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != rollback ]; then
-            [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
+            [ "${MOCK_ROLLBACK_RESULT:-ok}" = ok ] && [ "${MOCK_ROLLBACK_RETIREMENT:-ok}" = ok ] && printf 'ROLLBACK_RESTARTED\n'
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != commit ]; then

@@ -17,11 +17,12 @@ import java.util.concurrent.atomic.AtomicLong
  * When enabled it polls the dashboard app every [INTERVAL_MS] via [SystemController.dashboardState]
  * (the daemon's `APPSTATE` verb, else `su`) and recovers two failure modes:
  *
- * - **process died** — the dashboard crashed or was killed: relaunch it. Debounced over [DEAD_STREAK]
+ * - **foreign process died** — the dashboard crashed or was killed: relaunch it. Debounced over [DEAD_STREAK]
  *   consecutive dead checks so a momentary restart isn't mistaken for a crash. Relaunches are rate-limited
  *   by a [CrashLoopTracker]: if the app crashes on launch (e.g. an incompatible Companion update) and is
- *   relaunched too many times too fast, it backs off and raises [PanelStatus.dashboardCrashLooping] rather
+ *   relaunched too many times too fast, it backs off and publishes external recovery suppression rather
  *   than storming the screen — cleared automatically when the dashboard comes back foreground.
+ *   Built-in renderer DEAD is its own monotonic WebView latch; it bypasses this foreign-app budget.
  * - **backgrounded too long** — the dashboard is alive but hasn't been foreground for [BG_TIMEOUT_MS]
  *   (someone opened another app / Settings and walked away): bring it back.
  *
@@ -42,7 +43,7 @@ class WatchdogController(
     @Synchronized
     fun apply(enabled: Boolean) {
         val generation = synchronized(this) {
-            runGeneration.incrementAndGet().also { PanelStatus.dashboardCrashLooping = false }
+            runGeneration.incrementAndGet().also { PanelStatus.clearExternalRecovery() }
         }
         job?.cancel()
         job = null
@@ -53,9 +54,16 @@ class WatchdogController(
             val pkg = config.dashboardPackage
             val state = runCatching { system.dashboardState(pkg) }.getOrDefault(AppState.UNKNOWN)
             if (generation != runGeneration.get() || pkg != config.dashboardPackage) return@periodic
-            val decision = policy.evaluate(pkg, state, SystemClock.elapsedRealtime())
+            val now = SystemClock.elapsedRealtime()
+            val decision = evaluateDashboardRecovery(
+                policy = policy,
+                pkg = pkg,
+                state = state,
+                now = now,
+                builtinTarget = system.isBuiltinDashboardTarget(pkg),
+            )
             if (generation != runGeneration.get() || pkg != config.dashboardPackage) return@periodic
-            val becameCrashLooping = publishCrashStatus(generation, decision.crashLooping) ?: return@periodic
+            val becameCrashLooping = publishCrashStatus(generation, pkg, decision.crashLooping) ?: return@periodic
             if (becameCrashLooping) {
                 Log.e(TAG, "dashboard crash-looping -> backing off relaunches; see health warning")
             }
@@ -79,18 +87,20 @@ class WatchdogController(
     fun stop() {
         synchronized(this) {
             runGeneration.incrementAndGet()
-            PanelStatus.dashboardCrashLooping = false
+            PanelStatus.clearExternalRecovery()
         }
         job?.cancel()
         job = null
     }
 
     /** Publish only for the live run. Null means this run was retired; true means the warning rose. */
-    private fun publishCrashStatus(generation: Long, crashLooping: Boolean): Boolean? = synchronized(this) {
+    private fun publishCrashStatus(
+        generation: Long,
+        target: String,
+        crashLooping: Boolean,
+    ): Boolean? = synchronized(this) {
         if (generation != runGeneration.get()) return@synchronized null
-        val becameCrashLooping = !PanelStatus.dashboardCrashLooping && crashLooping
-        PanelStatus.dashboardCrashLooping = crashLooping
-        becameCrashLooping
+        PanelStatus.publishExternalRecovery(target, crashLooping)
     }
 
     companion object {
@@ -99,4 +109,24 @@ class WatchdogController(
         private const val DEAD_STREAK = 2           // consecutive dead checks before a relaunch
         private const val BG_TIMEOUT_MS = 300_000L  // 5 min backgrounded -> return to dashboard
     }
+}
+
+/** Route one watchdog observation without layering the foreign crash budget over the built-in latch.
+ *  Resetting the generic policy retires any pre-latch BG timer; after expiry, normal built-in BG recovery
+ *  begins from fresh evidence. */
+internal fun evaluateDashboardRecovery(
+    policy: DashboardRecoveryPolicy,
+    pkg: String,
+    state: AppState,
+    now: Long,
+    builtinTarget: Boolean,
+): DashboardRecoveryPolicy.Decision {
+    // Built-in state is DEAD only for its own renderer latch; unlike a foreign process it cannot be
+    // absent while this service process is alive. Route on the observed state as one fact, so a latch
+    // clear/expiry racing after that observation cannot leak a stale DEAD sample into the foreign budget.
+    if (builtinTarget && state == AppState.DEAD) {
+        policy.reset()
+        return DashboardRecoveryPolicy.Decision(DashboardRecoveryPolicy.Action.NONE, crashLooping = false)
+    }
+    return policy.evaluate(pkg, state, now)
 }

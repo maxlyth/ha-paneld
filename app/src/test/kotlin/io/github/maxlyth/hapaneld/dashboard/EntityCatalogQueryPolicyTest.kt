@@ -17,13 +17,13 @@ class EntityCatalogQueryPolicyTest {
     ) = EntitySortProjection(id, access, rate, reasons, last, override)
 
     @Test fun apiSortPolicyAllowsOnlyDisplayedColumnsAndDirections() {
-        val allowed = listOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access", "override")
+        val allowed = listOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access_at", "override")
         allowed.forEach { assertEquals(it, EntityCatalogSorting.key(it)) }
         assertEquals("entity_id", EntityCatalogSorting.key("update_bytes DESC; DROP TABLE entity"))
         assertEquals("asc", EntityCatalogSorting.direction("sideways"))
         assertEquals("desc", EntityCatalogSorting.direction("DESC"))
         assertTrue(EntityCatalogSorting.sqlOrder("entity_id", "asc")!!.startsWith("e.entity_id"))
-        assertTrue(EntityCatalogSorting.sqlOrder("last_access", "desc")!!.contains("DESC"))
+        assertTrue(EntityCatalogSorting.sqlOrder("last_access_at", "desc")!!.contains("DESC"))
         assertTrue(EntityCatalogSorting.sqlOrder("access_1h", "asc")!!.startsWith("recent_access_1h ASC"))
         assertTrue(EntityCatalogSorting.sqlOrder("rate_1h_bps", "desc")!!.startsWith("recent_rate_1h DESC"))
     }
@@ -34,7 +34,7 @@ class EntityCatalogQueryPolicyTest {
             row("sensor.a", 7, 2.5, "runtime", 100, "pinned"),
             row("sensor.m", 2, 9.0, "dashboard", 300, "excluded"),
         )
-        for (key in listOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access", "override")) {
+        for (key in listOf("entity_id", "access_1h", "rate_1h_bps", "reasons", "last_access_at", "override")) {
             for (direction in listOf("asc", "desc")) {
                 val sorted = rows.sortedWith(EntityCatalogSorting.comparator(key, direction) { it })
                 // Equal primary values are stable across refreshes/pages regardless of primary direction.

@@ -33,6 +33,18 @@ class MqttBridgeLiveSettingResultTest {
         }
     }
 
+    @Test fun `admitted work still pending at the response deadline maps to deferred`() {
+        assertEquals(
+            LiveSettingApplyResult.DEFERRED,
+            liveSettingApplyResult(
+                MqttCommandDispatcher.RunResult(
+                    MqttCommandDispatcher.Admission.ACCEPTED,
+                    MqttCommandDispatcher.Execution.PENDING,
+                ),
+            ),
+        )
+    }
+
     @Test fun `admitted execution failure is not misclassified as deferred`() {
         assertEquals(
             LiveSettingApplyResult.FAILED,

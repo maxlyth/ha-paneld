@@ -45,8 +45,8 @@ class CompanionDbTest {
     }
 
     @Test fun internalUrlWarningOnlyWhenCompanionRendersTheDashboard() {
-        // Blank dashboard_package = auto-detect, which prefers the Companion when installed.
-        assertTrue(CompanionDb.warningApplies(""))
+        // Automatic selection is the built-in renderer, so Companion-specific warnings stay quiet.
+        assertFalse(CompanionDb.warningApplies(""))
         assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.FULL_PKG))
         assertTrue(CompanionDb.warningApplies(io.github.maxlyth.hapaneld.util.CompanionInstaller.MINIMAL_PKG))
         // Built-in renderer or another explicit dashboard app: the Companion doesn't draw, so no banner.
@@ -131,5 +131,31 @@ class CompanionDbTest {
         assertNull(CompanionDb.parsePageZoom("""<map><string name="theme">dark</string></map>"""))
         assertNull(CompanionDb.parsePageZoom(""))
         assertNull(CompanionDb.parsePageZoom(null))
+    }
+
+    // --- warning(): the shared decision the status endpoint + dashboard/Install banner both consume ---
+    private val needsRepairObs = CompanionDb.observeServers(listOf(
+        CompanionDb.ServerRow("1", "", "https://ha.example.com/"),
+    ))
+
+    @Test fun warningQuietWhenTheCompanionIsNotTheRenderer() {
+        // A non-companion dashboard package never trips the internal-URL warning, even with bad rows.
+        assertNull(CompanionDb.warning("de.ozerov.fully", needsRepairObs, directSuReady = true))
+    }
+
+    @Test fun warningStaysQuietForAutomaticBuiltinRenderer() {
+        assertNull(CompanionDb.warning("", needsRepairObs, directSuReady = true))
+    }
+
+    @Test fun warningReportsProbeFailedOnlyForAnExplicitCompanionAndPrivilegedRetry() {
+        val companion = io.github.maxlyth.hapaneld.util.CompanionInstaller.MINIMAL_PKG
+        assertEquals(CompanionDb.Warning.ProbeFailed, CompanionDb.warning(companion, CompanionDb.ServerObservation.UNKNOWN, directSuReady = true))
+        // No su → ha-paneld can't re-inspect, so stay quiet rather than nag.
+        assertNull(CompanionDb.warning(companion, CompanionDb.ServerObservation.UNKNOWN, directSuReady = false))
+    }
+
+    @Test fun warningQuietForHealthyOrMissingObservation() {
+        assertNull(CompanionDb.warning("", CompanionDb.ServerObservation.EMPTY, directSuReady = true))
+        assertNull(CompanionDb.warning("", null, directSuReady = true))
     }
 }

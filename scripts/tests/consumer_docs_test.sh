@@ -91,8 +91,6 @@ fi
 # flatten into misleading user promises during release editing.
 api_contract_requirements=(
   'RGB or brightness-only panel LED'
-  '`button.<panel>_back` | Android Back navigation action.'
-  '`button.<panel>_recents` | Android Recents navigation action when'
   'The panel and Companion update buttons are always published.'
   '`/api/v1/restore`'
   '`/api/v1/input`'
@@ -101,6 +99,20 @@ api_contract_requirements=(
 for requirement in "${api_contract_requirements[@]}"; do
   if ! grep -Fq -- "$requirement" docs/api.md; then
     printf 'docs/api.md: API currency contract is missing %s\n' "$requirement" >&2
+    failed=1
+  fi
+done
+
+removed_navigation_entities=(
+  '`button.<panel>_admin_launcher`'
+  '`button.<panel>_back`'
+  '`button.<panel>_home`'
+  '`button.<panel>_launcher`'
+  '`button.<panel>_recents`'
+)
+for entity in "${removed_navigation_entities[@]}"; do
+  if grep -Fq -- "$entity" docs/api.md; then
+    printf 'docs/api.md: retired MQTT navigation entity is still documented: %s\n' "$entity" >&2
     failed=1
   fi
 done

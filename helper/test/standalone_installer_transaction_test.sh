@@ -41,6 +41,11 @@ if [ "${MOCK_MANUAL_COMMIT_LIVE_STATE:-}" = UNKNOWN ] &&
   printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
   exit 1
 fi
+if [ "${MOCK_ROLLBACK_RETIREMENT:-ok}" = fail ] &&
+   printf '%s' "$command_text" | grep -Fq ROLLBACK_RESTARTED; then
+  printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+  exit 1
+fi
 exec "${REAL_ADB_FIXTURE:?}" "$@"
 EOF
 chmod +x "$TMP/bin/adb"
@@ -103,6 +108,19 @@ fi
 grep -q 'rollback could not be verified' "$TMP/ping-fail.out"
 [ -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
 ! grep -q 'echo ROLLBACK_FINALIZED' "$MOCK_CALL_LOG"
+rm -f "$MOCK_STATE_DIR/manual-helper-transaction"
+
+export MOCK_ROLLBACK_PING=ok
+export MOCK_ROLLBACK_RETIREMENT=fail
+: > "$MOCK_CALL_LOG"
+if bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/retirement-fail.out" 2>&1; then
+  echo "installer unexpectedly finalized rollback before the old helper retired" >&2
+  exit 1
+fi
+grep -q 'rollback could not be verified' "$TMP/retirement-fail.out"
+[ -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
+! grep -q 'echo ROLLBACK_FINALIZED' "$MOCK_CALL_LOG"
+unset MOCK_ROLLBACK_RETIREMENT
 rm -f "$MOCK_STATE_DIR/manual-helper-transaction"
 
 export MOCK_HELPER_CAPABILITY=ok

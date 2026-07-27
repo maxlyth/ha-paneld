@@ -1,6 +1,6 @@
 # VS Code devcontainer for building ha-paneld (Android/Kotlin + the native LED lib) — keeps the
 # Android SDK/NDK off bare metal. Toolchain pinned to match CI (.github/workflows/ci.yml) and
-# app/build.gradle.kts: JDK 17 · compileSdk 35 · build-tools 35.0.0 · NDK 27.0.12077973 · cmake 3.22.1.
+# app/build.gradle.kts: JDK 17 · compileSdk 37 · build-tools 36.0.0 · NDK 27.0.12077973 · cmake 3.22.1.
 #
 # The release keystore is NEVER baked into this image. To sign locally, put a gitignored
 # keystore.properties (+ the .jks) in the project root at runtime — see docs/local-builds.md.
@@ -47,8 +47,8 @@ RUN if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
     fi
 
 # Android command-line tools (bumpable — see https://developer.android.com/studio#command-line-tools-only).
-ARG CMDLINE_TOOLS=11076708
-ARG CMDLINE_TOOLS_SHA256=2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258
+ARG CMDLINE_TOOLS=15859902
+ARG CMDLINE_TOOLS_SHA256=4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583
 RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
     && curl -fsSL --proto '=https' --proto-redir '=https' "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS}_latest.zip" -o /tmp/clt.zip \
     && echo "$CMDLINE_TOOLS_SHA256  /tmp/clt.zip" | sha256sum -c - \
@@ -62,7 +62,7 @@ ENV PATH="${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platf
 RUN yes | sdkmanager --licenses > /dev/null \
     && sdkmanager --install \
         "platform-tools" \
-        "platforms;android-35" \
-        "build-tools;35.0.0" \
+        "platforms;android-37.0" \
+        "build-tools;36.0.0" \
         "ndk;27.0.12077973" \
         "cmake;3.22.1" > /dev/null

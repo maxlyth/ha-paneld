@@ -1,0 +1,300 @@
+package io.github.maxlyth.hapaneld
+
+import io.github.maxlyth.hapaneld.sensors.HaAmbientTransport
+import io.github.maxlyth.hapaneld.sensors.HaApiSession
+import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
+import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.runTest
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class DashboardV2CompatibilityTest {
+    @Test fun `HA 2026 4 2 is the exact V2 floor`() {
+        assertFalse(DashboardV2Compatibility.eligible("2026.4.1", true))
+        assertTrue(DashboardV2Compatibility.eligible("2026.4.2", true))
+        assertTrue(DashboardV2Compatibility.eligible("2026.5.0", true))
+        assertTrue(DashboardV2Compatibility.eligible("2026.4.2b0", true).not())
+        assertFalse(DashboardV2Compatibility.eligible("2026.4.2-beta.1", true))
+        assertFalse(DashboardV2Compatibility.eligible("2026.13.1", true))
+        assertFalse(DashboardV2Compatibility.eligible(null, true))
+        assertFalse(DashboardV2Compatibility.eligible("not-a-version", true))
+        assertFalse(DashboardV2Compatibility.eligible("2027.1.0", false))
+    }
+
+    @Test fun `admission uses cache only for transient live unavailability`() {
+        assertEquals(
+            DashboardV2Admission.Compatible("2026.4.2", live = false),
+            DashboardV2Admission.resolve(DashboardV2ProbeResult.Unavailable("offline"), "2026.4.2"),
+        )
+        assertEquals(
+            DashboardV2Admission.Blocked(DashboardV2ProbeResult.Unavailable("offline")),
+            DashboardV2Admission.resolve(DashboardV2ProbeResult.Unavailable("offline"), "2026.4.1"),
+        )
+        assertEquals(
+            DashboardV2Admission.Blocked(DashboardV2ProbeResult.UnsupportedHa("2026.4.1")),
+            DashboardV2Admission.resolve(DashboardV2ProbeResult.UnsupportedHa("2026.4.1"), "2026.5.0"),
+        )
+    }
+}
+
+class DashboardV2CompatibilityProbeTest {
+    @Test fun `live stable versions are classified at the exact floor`() = runTest {
+        assertEquals(
+            DashboardV2ProbeResult.Compatible("2026.4.2"),
+            probe(listOf(HaApiSession(URL, "token")), JSONObject().put("version", "2026.4.2")).check(),
+        )
+        assertEquals(
+            DashboardV2ProbeResult.UnsupportedHa("2026.4.1"),
+            probe(listOf(HaApiSession(URL, "token")), JSONObject().put("version", "2026.4.1")).check(),
+        )
+        assertEquals(
+            DashboardV2ProbeResult.Unverifiable("2026.4.2b0"),
+            probe(listOf(HaApiSession(URL, "token")), JSONObject().put("version", "2026.4.2b0")).check(),
+        )
+    }
+
+    @Test fun `REST rejection performs exactly one forced credential refresh`() = runTest {
+        val forces = mutableListOf<Boolean>()
+        val sessions = ArrayDeque(
+            listOf(HaApiSession(URL, "old"), HaApiSession(URL, "fresh")),
+        )
+        val auth = HaApiSessionProvider { force ->
+            forces += force
+            sessions.removeFirst()
+        }
+        var calls = 0
+        val transport = ConfigTransport {
+            if (++calls == 1) throw HaAuthenticationException("rejected")
+            JSONObject().put("version", "2026.5.0")
+        }
+
+        assertEquals(
+            DashboardV2ProbeResult.Compatible("2026.5.0"),
+            DashboardV2CompatibilityProbe(auth, transport, Dispatchers.Unconfined).check(),
+        )
+        assertEquals(listOf(false, true), forces)
+        assertEquals(2, calls)
+    }
+
+    @Test fun `missing credentials reject without network and transient errors stay unavailable`() = runTest {
+        var networkCalls = 0
+        val missing = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, rejected = true) },
+            ConfigTransport { networkCalls++; JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.AuthenticationFailed, missing)
+        assertEquals(0, networkCalls)
+
+        val unavailable = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, "token") },
+            ConfigTransport { error("network\nfailed") },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.Unavailable("network failed"), unavailable)
+    }
+
+    private fun probe(sessions: List<HaApiSession>, response: JSONObject): DashboardV2CompatibilityProbe {
+        val remaining = ArrayDeque(sessions)
+        return DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { remaining.removeFirst() },
+            ConfigTransport { response },
+            Dispatchers.Unconfined,
+        )
+    }
+
+    private fun interface ConfigCall { suspend fun run(): JSONObject }
+
+    private class ConfigTransport(private val call: ConfigCall) : HaAmbientTransport {
+        override suspend fun config(baseUrl: String, accessToken: String): JSONObject = call.run()
+        override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? = null
+        override suspend fun states(baseUrl: String, accessToken: String): JSONArray = JSONArray()
+    }
+
+    private companion object { const val URL = "https://ha.example" }
+}
+
+class DashboardV2AttemptGateTest {
+    @Test fun `only the latest attempt for the unchanged endpoint and auth owner may complete`() {
+        val gate = DashboardV2AttemptGate()
+        val firstOwner = owner("https://first.example", "first-refresh")
+        val first = gate.start(firstOwner)
+        assertTrue(gate.owns(first, firstOwner))
+        assertFalse(gate.owns(first, owner("https://changed.example", "first-refresh")))
+        assertFalse(gate.owns(first, owner("https://first.example", "replacement-refresh")))
+
+        val secondOwner = owner("https://second.example", "second-refresh")
+        val second = gate.start(secondOwner)
+        assertFalse(gate.owns(first, firstOwner))
+        assertTrue(gate.owns(second, secondOwner))
+        gate.invalidate()
+        assertFalse(gate.owns(second, secondOwner))
+    }
+
+    private fun owner(url: String, refreshToken: String) = DashboardV2CompatibilityOwner(
+        normalizedUrl = url,
+        authOwner = HaAuthOwner(url, refreshToken, "client", ""),
+    )
+}
+
+class BoundedAuthQueueTest {
+    private data class Request(val owner: Int, val force: Boolean, val label: String)
+
+    @Test fun `queue retains one active and one successor with forced request priority`() {
+        val queue = queue()
+        val active = requireNotNull(queue.offer(Request(1, false, "active")))
+        assertEquals(null, queue.offer(Request(1, true, "forced")))
+        assertEquals(null, queue.offer(Request(1, false, "ordinary-after-force")))
+        assertEquals(2, queue.retainedCount())
+
+        val next = requireNotNull(queue.complete(active) { true })
+        assertEquals("forced", next.request.label)
+        assertEquals(1, queue.retainedCount())
+        assertEquals(null, queue.complete(next) { true })
+        assertEquals(0, queue.retainedCount())
+    }
+
+    @Test fun `clear makes stale completion unable to consume newer document work`() {
+        val queue = queue()
+        val stale = requireNotNull(queue.offer(Request(1, false, "stale")))
+        queue.clear()
+        val current = requireNotNull(queue.offer(Request(2, false, "current")))
+
+        assertEquals(null, queue.complete(stale) { true })
+        assertEquals(1, queue.retainedCount())
+        assertEquals(null, queue.complete(current) { true })
+        assertEquals(0, queue.retainedCount())
+    }
+
+    @Test fun `completion drops a successor whose generation is no longer current`() {
+        val queue = queue()
+        val active = requireNotNull(queue.offer(Request(1, false, "active")))
+        queue.offer(Request(1, false, "pending"))
+        assertEquals(null, queue.complete(active) { false })
+        assertEquals(0, queue.retainedCount())
+    }
+
+    private fun queue() = BoundedAuthQueue<Request>(
+        sameOwner = { left, right -> left.owner == right.owner },
+        forced = Request::force,
+    )
+}
+
+class V2HandshakeGateTest {
+    @Test fun `missing V2 evidence is counted only for finished current documents`() {
+        val gate = V2HandshakeGate(missingDocumentLimit = 2)
+        val first = ExternalBusController.Session(1, 1)
+        val second = ExternalBusController.Session(1, 2)
+
+        gate.begin(first)
+        assertFalse(gate.onTimeout(first))
+        gate.finish(first)
+        assertFalse(gate.onTimeout(first))
+        gate.begin(second)
+        assertFalse(gate.onTimeout(first))
+        gate.finish(second)
+        assertTrue(gate.onTimeout(second))
+    }
+
+    @Test fun `valid current-document V2 observation clears missing history`() {
+        val gate = V2HandshakeGate(missingDocumentLimit = 2)
+        val first = ExternalBusController.Session(2, 1)
+        val second = ExternalBusController.Session(2, 2)
+        val third = ExternalBusController.Session(2, 3)
+
+        gate.begin(first); gate.finish(first)
+        assertFalse(gate.onTimeout(first))
+        gate.observe(first)
+        assertFalse(gate.onTimeout(first))
+        gate.begin(second); gate.finish(second)
+        assertFalse(gate.onTimeout(second))
+        gate.begin(third); gate.finish(third)
+        assertTrue(gate.onTimeout(third))
+        gate.reset()
+        assertFalse(gate.onTimeout(third))
+    }
+}
+
+class DashboardV2OriginTest {
+    @Test fun `origin comparison uses scheme host and effective port only`() {
+        assertTrue(sameDashboardOrigin("https://HA.Example", "https://ha.example/dashboard?x=1"))
+        assertTrue(sameDashboardOrigin("https://ha.example:443", "https://ha.example/path"))
+        assertTrue(sameDashboardOrigin("http://ha.example", "http://ha.example:80/path"))
+        assertFalse(sameDashboardOrigin("http://ha.example", "https://ha.example/path"))
+        assertFalse(sameDashboardOrigin("https://ha.example", "https://sub.ha.example/path"))
+        assertFalse(sameDashboardOrigin("https://ha.example:8443", "https://ha.example/path"))
+        assertFalse(sameDashboardOrigin("data:", "data:text/html,x"))
+        assertFalse(sameDashboardOrigin(null, "https://ha.example"))
+        assertFalse(sameDashboardOrigin("https://ha.example", null))
+    }
+}
+
+class ExternalAppV2ProtocolTest {
+    @Test fun `official auth revoke and bus envelopes retain object payloads`() {
+        val auth = ExternalAppV2Protocol.parse(
+            """{"type":"getExternalAuth","payload":{"callback":"externalAuthSetToken","force":true}}""",
+        ) as ExternalAppV2Protocol.Incoming.GetExternalAuth
+        assertEquals(true, ExternalAuthProtocol.validAuthRequestForce(auth.payload))
+
+        val revoke = ExternalAppV2Protocol.parse(
+            """{"type":"revokeExternalAuth","payload":{"callback":"externalAuthRevokeToken"}}""",
+        ) as ExternalAppV2Protocol.Incoming.RevokeExternalAuth
+        assertTrue(ExternalAuthProtocol.revokeReply(revoke.payload)!!.contains("externalAuthRevokeToken(true)"))
+
+        val bus = ExternalAppV2Protocol.parse(
+            """{"type":"externalBus","payload":{"id":11,"type":"config/get"}}""",
+        ) as ExternalAppV2Protocol.Incoming.ExternalBus
+        assertEquals(ExternalBusProtocol.Incoming.ConfigGet(11), ExternalBusProtocol.parse(bus.payload))
+    }
+
+    @Test fun `malformed bounded and future envelopes are harmless`() {
+        listOf(
+            null,
+            "not-json",
+            "{}",
+            """{"type":"externalBus"}""",
+            """{"type":"externalBus","payload":"quoted"}""",
+            """{"type":"getExternalAuth","payload":[]}""",
+        ).forEach { assertTrue("$it", ExternalAppV2Protocol.parse(it) is ExternalAppV2Protocol.Incoming.Malformed) }
+        assertTrue(
+            ExternalAppV2Protocol.parse("x".repeat(ExternalAppV2Protocol.MAX_MESSAGE_CHARS + 1))
+                is ExternalAppV2Protocol.Incoming.Malformed,
+        )
+        val deep = """{"type":"future","payload":""" + "[".repeat(33) + "]".repeat(33) + "}"
+        assertEquals(ExternalAppV2Protocol.Incoming.Malformed("too-deep"), ExternalAppV2Protocol.parse(deep))
+        assertEquals(
+            ExternalAppV2Protocol.Incoming.Unknown("future/envelope"),
+            ExternalAppV2Protocol.parse("""{"type":"future/envelope","payload":{"anything":true}}"""),
+        )
+    }
+}
+
+class HaPaneldV2ProtocolTest {
+    @Test fun `private telemetry has typed bounded envelopes`() {
+        assertEquals(
+            HaPaneldV2Protocol.Incoming.EntityFilterSubscriptionModified,
+            HaPaneldV2Protocol.parse("""{"type":"entityFilterSubscriptionModified"}"""),
+        )
+        assertEquals(
+            HaPaneldV2Protocol.Incoming.EntityFilterTrafficMetrics("1,2,3"),
+            HaPaneldV2Protocol.parse("""{"type":"entityFilterTrafficMetrics","payload":"1,2,3"}"""),
+        )
+        val access = HaPaneldV2Protocol.parse(
+            """{"type":"entityLearningAccesses","payload":{"accessed":{"light.one":2},"missing":[]}}""",
+        ) as HaPaneldV2Protocol.Incoming.EntityLearningAccesses
+        assertTrue(access.payload.contains("light.one"))
+        assertTrue(
+            HaPaneldV2Protocol.parse("""{"type":"entityLearningMetrics","payload":"wrong"}""")
+                is HaPaneldV2Protocol.Incoming.Malformed,
+        )
+        assertTrue(
+            HaPaneldV2Protocol.parse("x".repeat(HaPaneldV2Protocol.MAX_MESSAGE_CHARS + 1))
+                is HaPaneldV2Protocol.Incoming.Malformed,
+        )
+    }
+}

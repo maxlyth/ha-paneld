@@ -26,6 +26,52 @@ class RestoreAndImportContractTest {
         assertTrue("body timeout must be HTTP 408", "HttpStatusCode.RequestTimeout" in handler)
     }
 
+    /**
+     * The backup must carry the whole `app_state` table, not a projection of declared settings, so a
+     * namespace added in a later release is captured without anyone remembering to extend the backup.
+     */
+    @Test fun theBackupCarriesTheCompleteStateTableAndSurvivesAnUnreadableDatabase() {
+        val parts = source.substring(
+            source.indexOf("private fun backupArchiveParts"),
+            source.indexOf("private fun backupManifest"),
+        )
+        assertTrue("the whole table must be exported", "exportAppState()" in parts)
+        assertTrue("the vault codec must be reused", "ConfigVault.encode" in parts)
+        assertTrue("the entry must be declared", "STATE_BACKUP_ENTRY" in parts)
+        assertTrue("an unreadable database must not lose the rest of the backup", "runCatching" in parts)
+        assertTrue("no rows means no entry rather than an empty one", "takeIf { it.isNotEmpty() }" in parts)
+    }
+
+    /**
+     * Restoring state must be bounded, validated, and never able to undo the configuration the owner came
+     * for: it runs after the durable commit and its failure is swallowed rather than rolling config back.
+     */
+    @Test fun stateRestoreIsValidatedBoundedAndAppliedAfterTheDurableConfigCommit() {
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleRestore"),
+            source.indexOf("private fun planCompanionRestore"),
+        )
+        assertTrue("a corrupt payload must be rejected", "invalid app_state payload" in handler)
+        assertTrue("the payload must be size-bounded", "MAX_STATE_BACKUP_BYTES" in handler)
+        assertTrue("the digest-verifying decoder must be used", "ConfigVault.decode" in handler)
+        assertTrue("the policy decides what may be written", "StateBackupPolicy.restorableRows" in handler)
+        assertTrue("device-local rows need panel identity", "config.panelId" in handler)
+
+        val afterApply = handler.substring(handler.indexOf("afterApply = afterApply@{"))
+        val apply = afterApply.indexOf("AppState.applyRestoredRows")
+        val profileEarlyReturn = afterApply.indexOf("profilePayload?.payload ?: return@afterApply")
+        assertTrue("state must be applied inside afterApply", apply >= 0)
+        assertTrue(
+            "state must be applied before the profile early-return, or a backup without profiles " +
+                "would silently skip its state",
+            apply < profileEarlyReturn,
+        )
+        assertTrue(
+            "a state failure must not roll back committed configuration",
+            "runCatching {\n                                    AppState.applyRestoredRows" in afterApply,
+        )
+    }
+
     @Test fun completedRestoreSeparatesConfigCompanionAndRollbackResults() {
         val handler = source.substring(
             source.indexOf("private suspend fun handleRestore"),
@@ -77,6 +123,16 @@ class RestoreAndImportContractTest {
             "approval must use the HTTP binding that includes the complete query multimap",
             "exactHttpApprovalPayload(call, importDigest)" in handler,
         )
+    }
+
+    @Test fun builtInRendererEffectsUseTheResolvedAutoRenderer() {
+        val apply = source.substring(
+            source.indexOf("private fun applyRendererEffects"),
+            source.indexOf("private fun requireRendererResult"),
+        )
+        assertTrue("built-in reload must handle auto resolving to built-in", "effects.reloadBuiltin && effectiveDashboardIsBuiltin()" in apply)
+        assertTrue("built-in relaunch must handle auto resolving to built-in", "effects.relaunchBuiltin && effectiveDashboardIsBuiltin()" in apply)
+        assertTrue("literal package gate would skip fresh auto panels", "config.dashboardPackage == SystemController.BUILTIN_DASHBOARD" !in apply)
     }
 
     @Test fun restoreRollbackFenceMatchesOnlyTheGenerationDurableBeforeRendererPreparation() {

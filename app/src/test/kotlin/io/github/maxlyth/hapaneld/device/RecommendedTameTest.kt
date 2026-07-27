@@ -43,7 +43,7 @@ class RecommendedTameTest {
     }
 
     @Test fun defaultTameOffForUnmarkedProfiles() {
-        // defaultTame is a legacy name for recommendation membership; it never implies execution consent.
+        // defaultTame is a legacy name for recommendation dashboard_entity; it never implies execution consent.
         // The packaged fallback has no candidates at all.
         assertTrue(fallback.tameVendorCandidates.none { it.defaultTame })
     }

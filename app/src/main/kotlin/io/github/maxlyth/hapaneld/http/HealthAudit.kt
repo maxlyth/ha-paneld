@@ -13,11 +13,11 @@ import io.github.maxlyth.hapaneld.util.UpdateChecker
  * JSON), but they all agree on the SET of findings this returns. Pure — unit-tested in HealthAuditTest.
  */
 object HealthAudit {
-    enum class Kind { WEBVIEW_OLD, NO_RENDERER, UPDATE }
+    enum class Kind { SCHEMA_ROLLED_BACK, WEBVIEW_OLD, NO_RENDERER, UPDATE }
 
     data class Finding(
         val kind: Kind,
-        /** WEBVIEW_OLD: the WebView version string to show. Empty otherwise. */
+        /** WEBVIEW_OLD: the WebView version string. SCHEMA_ROLLED_BACK: the schema-version detail. Empty otherwise. */
         val detail: String = "",
         /** Present only for [Kind.UPDATE] findings — the available component update. */
         val update: UpdateChecker.UpdateInfo? = null,
@@ -26,17 +26,25 @@ object HealthAudit {
     /**
      * @param webViewTooOld  engine-aware verdict (`PanelInfo.webViewStatus(...).tooOld`)
      * @param webViewDisplay the WebView version string to show in the WEBVIEW_OLD finding
-     * @param hasRenderer    a dashboard app (Companion / Fully Kiosk / configured package) is present
+     * @param hasRenderer    a supported dashboard app (built-in / Companion / configured package) is present
+     * @param brokerConfigured whether the user has configured an MQTT broker; renderer setup follows it
      * @param updates        available component updates, already filtered + ordered by the caller
+     * @param schemaRolledBack   config was reset by a version downgrade (last reconcile was PRESERVED_FRESH)
+     * @param schemaRollbackDetail the schema-version detail to show (e.g. "schema 13 → 11")
      */
     fun evaluate(
         webViewTooOld: Boolean,
         webViewDisplay: String,
         hasRenderer: Boolean,
+        brokerConfigured: Boolean,
         updates: List<UpdateChecker.UpdateInfo>,
+        schemaRolledBack: Boolean = false,
+        schemaRollbackDetail: String = "",
     ): List<Finding> = buildList {
+        // A downgrade that reset config to defaults is the most severe finding — render it first.
+        if (schemaRolledBack) add(Finding(Kind.SCHEMA_ROLLED_BACK, detail = schemaRollbackDetail))
         if (webViewTooOld) add(Finding(Kind.WEBVIEW_OLD, detail = webViewDisplay))
-        if (!hasRenderer) add(Finding(Kind.NO_RENDERER))
+        if (brokerConfigured && !hasRenderer) add(Finding(Kind.NO_RENDERER))
         updates.forEach { add(Finding(Kind.UPDATE, update = it)) }
     }
 }

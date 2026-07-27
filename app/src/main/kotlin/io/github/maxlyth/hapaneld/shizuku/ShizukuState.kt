@@ -143,6 +143,7 @@ internal class ShizukuReconnectCoordinator(
     private var attempt = 0
     private var nextToken = 1L
     private var pending: Pending? = null
+    private var stableResetHandle: ShizukuScheduledHandle? = null
 
     init {
         require(delaysMs.isNotEmpty() && delaysMs.all { it > 0L })
@@ -199,5 +200,34 @@ internal class ShizukuReconnectCoordinator(
 
     @Synchronized fun resetBackoff() {
         attempt = 0
+    }
+
+    /**
+     * Own the single deferred backoff-reset handle. After a stable period the caller's [onElapsed]
+     * decides whether to [resetBackoff]; keeping the handle here lets a disconnect cancel it through
+     * [cancelBackoffReset] instead of a second ad-hoc handle field outside the coordinator.
+     */
+    fun scheduleBackoffReset(delayMs: Long, onElapsed: () -> Unit): Boolean {
+        synchronized(this) {
+            stableResetHandle?.cancel()
+            stableResetHandle = null
+        }
+        val handle = try {
+            scheduler.schedule(delayMs) {
+                onElapsed()
+                synchronized(this) { stableResetHandle = null }
+            }
+        } catch (_: Throwable) {
+            return false
+        }
+        synchronized(this) { stableResetHandle = handle }
+        return true
+    }
+
+    fun cancelBackoffReset() {
+        val handle = synchronized(this) {
+            stableResetHandle.also { stableResetHandle = null }
+        }
+        handle?.cancel()
     }
 }

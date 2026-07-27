@@ -14,13 +14,28 @@ object EntityFilterTelemetry {
     private var failures = 0L
     private var directFallbacks = 0L
     private var trafficInstalled = false
-    private var trafficBatches = 0L
-    private var trafficSampleMs = 0L
-    private var trafficFrames = 0L
-    private var trafficPayloadBytes = 0L
-    private var trafficEntityUpdates = 0L
-    private var trafficObserverMicros = 0L
-    private var trafficDroppedFrames = 0L
+    private var trafficCounters = TrafficCounters()
+
+    /** Saturating cumulative traffic counters surfaced in the filter status snapshot. */
+    private data class TrafficCounters(
+        val batches: Long = 0,
+        val sampleMs: Long = 0,
+        val frames: Long = 0,
+        val payloadBytes: Long = 0,
+        val entityUpdates: Long = 0,
+        val observerMicros: Long = 0,
+        val droppedFrames: Long = 0,
+    ) {
+        fun add(batch: EntityFilterProtocol.TrafficBatch) = TrafficCounters(
+            batches = saturatedAdd(batches, 1),
+            sampleMs = saturatedAdd(sampleMs, batch.sampleMs),
+            frames = saturatedAdd(frames, batch.frames),
+            payloadBytes = saturatedAdd(payloadBytes, batch.payloadBytes),
+            entityUpdates = saturatedAdd(entityUpdates, batch.entityUpdates),
+            observerMicros = saturatedAdd(observerMicros, batch.observerMicros),
+            droppedFrames = saturatedAdd(droppedFrames, batch.droppedFrames),
+        )
+    }
 
     @Synchronized fun started(entityIds: List<String>): Lease {
         val lease = Lease(++nextLease)
@@ -63,13 +78,7 @@ object EntityFilterTelemetry {
     private fun resetTraffic() {
         DashboardTelemetry.reset()
         trafficInstalled = false
-        trafficBatches = 0
-        trafficSampleMs = 0
-        trafficFrames = 0
-        trafficPayloadBytes = 0
-        trafficEntityUpdates = 0
-        trafficObserverMicros = 0
-        trafficDroppedFrames = 0
+        trafficCounters = TrafficCounters()
     }
 
     @Synchronized fun isActive(lease: Lease): Boolean = owner == lease.id && active
@@ -101,43 +110,25 @@ object EntityFilterTelemetry {
     }
     @Synchronized fun traffic(lease: Lease, batch: EntityFilterProtocol.TrafficBatch) {
         if (owner != lease.id || !trafficInstalled) return
-        trafficBatches = saturatedAdd(trafficBatches, 1)
-        trafficSampleMs = saturatedAdd(trafficSampleMs, batch.sampleMs)
-        trafficFrames = saturatedAdd(trafficFrames, batch.frames)
-        trafficPayloadBytes = saturatedAdd(
-            trafficPayloadBytes,
-            batch.payloadBytes,
-        )
-        trafficEntityUpdates = saturatedAdd(
-            trafficEntityUpdates,
-            batch.entityUpdates,
-        )
-        trafficObserverMicros = saturatedAdd(
-            trafficObserverMicros,
-            batch.observerMicros,
-        )
-        trafficDroppedFrames = saturatedAdd(
-            trafficDroppedFrames,
-            batch.droppedFrames,
-        )
+        trafficCounters = trafficCounters.add(batch)
         DashboardTelemetry.record(batch)
     }
 
-    @Synchronized fun json(): String = "{" +
-        "\"active\":$active," +
-        "\"mode\":\"native_socket\"," +
-        "\"entityCount\":$configuredCount," +
-        "\"filterHash\":\"$configuredHash\"," +
-        "\"modifiedSubscriptions\":$modifiedSubscriptions," +
-        "\"failures\":$failures,\"directFallbacks\":$directFallbacks," +
-        "\"lastError\":\"$lastError\"," +
-        "\"traffic\":{\"installed\":$trafficInstalled,\"batches\":$trafficBatches," +
-        "\"sampleMs\":$trafficSampleMs,\"frames\":$trafficFrames," +
-        "\"frameChars\":$trafficPayloadBytes,\"payloadBytes\":$trafficPayloadBytes," +
-        "\"entityUpdates\":$trafficEntityUpdates," +
-        "\"processingMicros\":$trafficObserverMicros,\"observerMicros\":$trafficObserverMicros," +
-        "\"droppedFrames\":$trafficDroppedFrames}}"
-
-    private fun saturatedAdd(left: Long, right: Long): Long =
-        if (right >= Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+    @Synchronized fun json(): String {
+        val t = trafficCounters
+        return "{" +
+            "\"active\":$active," +
+            "\"mode\":\"native_socket\"," +
+            "\"entityCount\":$configuredCount," +
+            "\"filterHash\":\"$configuredHash\"," +
+            "\"modifiedSubscriptions\":$modifiedSubscriptions," +
+            "\"failures\":$failures,\"directFallbacks\":$directFallbacks," +
+            "\"lastError\":\"$lastError\"," +
+            "\"traffic\":{\"installed\":$trafficInstalled,\"batches\":${t.batches}," +
+            "\"sampleMs\":${t.sampleMs},\"frames\":${t.frames}," +
+            "\"frameChars\":${t.payloadBytes},\"payloadBytes\":${t.payloadBytes}," +
+            "\"entityUpdates\":${t.entityUpdates}," +
+            "\"processingMicros\":${t.observerMicros},\"observerMicros\":${t.observerMicros}," +
+            "\"droppedFrames\":${t.droppedFrames}}}"
+    }
 }

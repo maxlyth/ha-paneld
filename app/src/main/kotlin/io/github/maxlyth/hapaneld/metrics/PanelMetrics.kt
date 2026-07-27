@@ -1,5 +1,11 @@
 package io.github.maxlyth.hapaneld.metrics
 
+import android.os.SystemClock
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+
 /**
  * A coherent reading of the system telemetry union at [ts]. [cpuOverall] is null on the very first read
  * (no prior baseline) or when the CPU source is unavailable; [gpuPct] is −1 when there's no GPU load
@@ -45,9 +51,10 @@ data class Snapshot(
 
 /**
  * The single source of truth for ha-paneld's OS-sourced **poll** telemetry — the union of what PerfReader
- * (the page-gated `/perf` chart) and Diagnostics (the always-on HA `diag_*` sensors) used to read via
- * duplicated, divergent `/proc`+`/sys` logic. Both now call this one reader while keeping their own
- * lifecycles; only the data source is shared.
+ * (the page-gated `/perf` chart) and the always-on HA `diag_*` publisher (in `MqttBridge`) used to read
+ * via duplicated, divergent `/proc`+`/sys` logic. Both now call this one reader directly while keeping
+ * their own lifecycles; only the data source is shared. It also owns the constant boot-time timestamp
+ * ([bootTime]) that the `diag_boot` sensor publishes.
  *
  * **Two distinct caches** (they must not be conflated):
  *  - *Source-resolution* ([Resolvable]) — which strategy WORKS for a metric (direct `/proc`+`/sys`, then
@@ -73,8 +80,19 @@ class PanelMetrics(
     private val clock: () -> Long = System::currentTimeMillis,
     private val freshMs: Long = FRESH_MS,
     unavailRetryMs: Long = UNAVAIL_RETRY_MS,
+    private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) {
     private val lock = Any()
+
+    // Boot wall-clock, computed once — a constant timestamp sensor never flaps (vs an ever-rising uptime).
+    // An Android-only constant (never a `/proc` poll), so it lives here rather than being a polled metric:
+    // wall-now minus elapsed-realtime, formatted as ISO-8601 UTC.
+    private val bootIso: String by lazy {
+        val bootMs = clock() - elapsedRealtime()
+        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+            .apply { timeZone = TimeZone.getTimeZone("UTC") }
+            .format(Date(bootMs))
+    }
     private var prevStat: List<LongArray>? = null   // the ONE shared /proc/stat delta baseline
     private var cached: Snapshot? = null
     private var roomCachedAt: Long? = null           // value-freshness cache for the off-tick room read (null = never read)
@@ -99,6 +117,16 @@ class PanelMetrics(
         Strategy(SourceKind.DAEMON) { c -> c.dump()?.loadavg?.takeIf { it.isNotEmpty() } },
     ))
 
+    // Room climate (CHT8305): the helper→Shizuku authority ladder, folded into the same [Resolvable]
+    // source-selection every other metric uses — each strategy reads its raw authority and parses ONCE,
+    // so the winner's value is produced without the reader re-parsing it. `unavailRetryMs = 0` keeps the
+    // prior semantics on chip-less panels (re-run the ladder on every fresh-miss read, no source backoff);
+    // the value-freshness cache below is what coalesces the temp + humidity heartbeat reads onto one round-trip.
+    private val roomR = Resolvable(0L, listOf(
+        Strategy(SourceKind.DAEMON) { c -> MetricParse.parseCht8305(c.source.roomClimateDaemon()) },
+        Strategy(SourceKind.SHIZUKU) { c -> MetricParse.parseCht8305(c.source.roomClimateShell()) },
+    ), stickyWinner = false)
+
     /** A coherent reading, freshness-cached. Thread-safe: safe to call from the PerfReader coroutine and
      *  the MQTT heartbeat thread concurrently. */
     fun systemSnapshot(now: Long = clock()): Snapshot = synchronized(lock) {
@@ -108,6 +136,9 @@ class PanelMetrics(
 
     /** LAN IPv4 (headline diag sensor). Not delta/cache-sensitive — a straight source read. */
     fun ipAddress(): String? = source.localIp()
+
+    /** Boot time as an ISO-8601 UTC timestamp (constant until reboot → HA shows "N hours ago"). */
+    fun bootTime(): String = bootIso
 
     /** SELinux mode ("1"/"0"). A control read-back routed through the reader (with [cpuGovernor] below);
      *  backlight / relay / LED reads are registered in [MetricRegistry] but still read in their controllers
@@ -124,14 +155,14 @@ class PanelMetrics(
         source.cpuAvailableGovernors(allowRootFallback)
 
     /**
-     * Room air temperature + humidity (CHT8305), or null on panels without the chip. Daemon-only + read
-     * off-tick on the heartbeat (not the 2 s perf tick), so it's a plain passthrough — not a [Resolvable] —
-     * but it keeps its own [freshMs] value cache so the two heartbeat consumers (the temp sensor and the
-     * humidity sensor) coalesce onto one `CHT8305` round-trip instead of reading twice.
+     * Room air temperature + humidity (CHT8305), or null on panels without the chip. Read off-tick on the
+     * heartbeat (not the 2 s perf tick); source selection runs through [roomR] (the helper→Shizuku ladder as
+     * a [Resolvable], parsed once at the source), and its own [freshMs] value cache coalesces the two
+     * heartbeat consumers (the temp sensor and the humidity sensor) onto one round-trip instead of reading twice.
      */
     fun roomClimate(now: Long = clock()): RoomClimate? = synchronized(lock) {
         roomCachedAt?.let { if (isWithinForwardWindow(now, it, freshMs)) return roomCached }
-        roomCached = MetricParse.parseCht8305(source.roomClimate())
+        roomCached = roomR.read(TickCtx(source), now)
         roomCachedAt = now
         roomCached
     }
@@ -191,8 +222,8 @@ class PanelMetrics(
     }
 }
 
-/** Which kind of source a strategy reads from — cheap-first ordering is DIRECT < DAEMON < SU. */
-internal enum class SourceKind { DIRECT, DAEMON, SU }
+/** Which kind of source a strategy reads from — cheap-first ordering is DIRECT < DAEMON < SU/SHIZUKU. */
+internal enum class SourceKind { DIRECT, DAEMON, SU, SHIZUKU }
 
 /** One way to read a metric; [read] returns null when that source is unavailable/denied this tick. */
 internal class Strategy<out T>(val kind: SourceKind, val read: (TickCtx) -> T?)
@@ -221,22 +252,29 @@ internal class TickCtx(val source: MetricSource) {
 
 /**
  * A metric's source-resolution cache. [resolved] is −1 (never resolved), −2 (no working source — retried
- * only every [unavailRetryMs]), or the winning strategy index. All state is mutated only inside
+ * only every [unavailRetryMs]), or the winning strategy index. Most metrics use the sticky winner because
+ * authority availability is stable; a transient-priority ladder can set [stickyWinner] false to rerun its
+ * ordered strategies on each read without probing a failed winner twice. All state is mutated only inside
  * [PanelMetrics.readCoherent], under the reader lock, so it needs no separate synchronization.
  */
 internal class Resolvable<T : Any>(
     private val unavailRetryMs: Long,
     private val strategies: List<Strategy<T>>,
+    private val stickyWinner: Boolean = true,
 ) {
     private var resolved = -1
     private var lastResolveAt = 0L
 
     fun read(ctx: TickCtx, now: Long): T? {
+        if (!stickyWinner) return reResolve(ctx, now)
         val idx = resolved
         return when {
             idx >= 0 -> strategies[idx].read(ctx) ?: reResolve(ctx, now)   // sticky winner; re-resolve if it fails
             idx == -1 -> reResolve(ctx, now)                                // first read
-            retryDue(now, lastResolveAt, unavailRetryMs) -> reResolve(ctx, now) // unavailable: slow retry
+            // Unavailable: retry once the backoff window has elapsed. "Not still inside the forward window"
+            // is the same forward-window clock stance the freshness caches use — a rollback (now < lastResolve)
+            // ends the window immediately so a recovered source is retried, never suppressed.
+            !isWithinForwardWindow(now, lastResolveAt, unavailRetryMs) -> reResolve(ctx, now)
             else -> null                                                    // unavailable, within backoff
         }
     }
@@ -253,9 +291,11 @@ internal class Resolvable<T : Any>(
     }
 }
 
-/** Wall-clock rollback is an expiry boundary, never a reason to retain stale data or suppress recovery. */
+/**
+ * The one forward-window clock guard for the reader: `then <= now < then + windowMs`. Used for both the
+ * value-freshness caches (fresh = still inside the window) and the source-resolution backoff (retry = no
+ * longer inside the window). Wall-clock rollback (`now < then`) is an expiry boundary, never a reason to
+ * retain stale data or suppress recovery.
+ */
 private fun isWithinForwardWindow(now: Long, then: Long, windowMs: Long): Boolean =
     now >= then && now - then < windowMs
-
-private fun retryDue(now: Long, lastAttempt: Long, intervalMs: Long): Boolean =
-    now < lastAttempt || now - lastAttempt >= intervalMs

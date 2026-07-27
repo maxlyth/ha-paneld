@@ -28,7 +28,7 @@ class KioskAdminUiTest {
             configuredRenderer = SystemController.BUILTIN_DASHBOARD,
             builtInUrlConfigured = true,
             dashboardLaunchAvailable = true,
-            dashboardCrashLooping = false,
+            dashboardRecoveryBlocked = false,
             currentVersionCode = 336L,
             lastShownVersionCode = 336L,
             explicitAdminEntry = true,

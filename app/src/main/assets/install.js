@@ -3,11 +3,15 @@
   var hardenedApprovalAttrs = ' data-hardened-approval aria-describedby="hardened-approval-description" title="Requires physical on-panel approval for this action when Hardened mode is enabled."';
   var hardenedApprovalA11yAttrs = ' aria-describedby="hardened-approval-description" title="Requires physical on-panel approval for this action when Hardened mode is enabled."';
   var scheduleInstallColumnAlignment = function () {};
+  var installCardMemoryReady = false, installInitialLoadsComplete = false;
   var msg = function (t) {
     var e = document.getElementById('comp-msg');
     if (e && e.textContent !== t) { e.textContent = t; scheduleInstallColumnAlignment(); }
   };
   var row = function (name) { return document.querySelector('.comprow[data-name="' + name + '"]'); };
+  function markVersionGeometryValid() {
+    if (installInitialLoadsComplete && !installCardMemoryReady) { installCardMemoryReady = true; scheduleInstallColumnAlignment(); }
+  }
 
   function approvalMessage(body) {
     return body && body.message || 'Approve this request on the panel, then retry it.';
@@ -67,10 +71,10 @@
     var chan = r.querySelector('.cchan').value, vsel = r.querySelector('.cvsel');
     var installed = (r.querySelector('.cver') || {}).textContent || '';
     vsel.innerHTML = '<option>loading…</option>';
-    fetch('/api/v1/install/versions?name=' + encodeURIComponent(name) + '&channel=' + encodeURIComponent(chan))
+    return fetch('/api/v1/install/versions?name=' + encodeURIComponent(name) + '&channel=' + encodeURIComponent(chan))
       .then(function (res) { return res.json(); }).then(function (d) {
         var vs = (d && d.versions) || [];
-        if (!vs.length) { vsel.innerHTML = '<option value="">no versions found</option>'; verChanged(name); return; }
+        if (!vs.length) { vsel.innerHTML = '<option value="">no versions found</option>'; verChanged(name); markVersionGeometryValid(); return true; }
         vsel.innerHTML = '';
         var firstInstallable = -1, installedIndex = -1;
         vs.forEach(function (v, i) {
@@ -85,7 +89,10 @@
         });
         vsel.selectedIndex = firstInstallable >= 0 ? firstInstallable : (installedIndex >= 0 ? installedIndex : 0);
         verChanged(name);
-      }).catch(function () { vsel.innerHTML = '<option value="">check failed</option>'; verChanged(name); });
+        markVersionGeometryValid();
+        return true;
+      }).catch(function () { installCardMemoryReady = false;vsel.innerHTML = '<option value="">check failed</option>'; verChanged(name);
+        if (window.CardSizeMemory) window.CardSizeMemory.invalidate('install-cards');return false; });
   };
 
   // Sync the release-notes link + Install button to the currently-selected version.
@@ -237,12 +244,13 @@
 
   // --- Uninstall an app ---
   function loadPackages() {
-    var sel = document.getElementById('uninst-pkg'); if (!sel) return;
-    fetch('/api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
+    var sel = document.getElementById('uninst-pkg'); if (!sel) return Promise.resolve();
+    return fetch('/api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
       var ps = (d && d.packages) || [];
-      if (!ps.length) { sel.innerHTML = '<option value="">no removable apps</option>'; return; }
+      if (!ps.length) { sel.innerHTML = '<option value="">no removable apps</option>'; return true; }
       sel.innerHTML = ps.map(function (p) { return '<option value="' + esc(p.pkg) + '">' + esc(p.label) + ' (' + esc(p.pkg) + ')</option>'; }).join('');
-    }).catch(function () { sel.innerHTML = '<option value="">load failed</option>'; });
+      return true;
+    }).catch(function () { sel.innerHTML = '<option value="">load failed</option>'; return false; });
   }
   window.doUninstall = function (btn) {
     var sel = document.getElementById('uninst-pkg'), msg = document.getElementById('uninst-msg');
@@ -255,7 +263,7 @@
         btn.disabled = false; if (d.ok) loadPackages();
       }).catch(function (error) { if (msg) msg.textContent = requestFailure(error, 'Failed.'); btn.disabled = false; });
   };
-  if (document.getElementById('uninst-pkg')) loadPackages();
+  var initialPackagesLoad = loadPackages();
 
   // --- Encrypted backup / restore ---
   var bkMsg = function (t) {
@@ -438,7 +446,9 @@
       setTimeout(function () { location.href = target; }, path === '/api/v1/tame' ? 1800 : 900);
     }).catch(function (error) {
       note.textContent = error && error.message ? error.message : 'Could not apply this change.';
-      if (submitter) submitter.disabled = false;
+      if (submitter && submitter.id === 'tame-package-submit' && typeof updateTamePackageSubmit === 'function') {
+        updateTamePackageSubmit();
+      } else if (submitter) submitter.disabled = false;
     });
   });
 
@@ -452,21 +462,35 @@
     }, 0);
   }
 
-  scheduleInstallColumnAlignment = window.CardColumnAlignment
+  var alignInstallColumns = window.CardColumnAlignment
     ? window.CardColumnAlignment.attach('install-cards')
     : function () {};
+  scheduleInstallColumnAlignment = function () {
+    alignInstallColumns();
+    if (installCardMemoryReady && window.CardSizeMemory) window.CardSizeMemory.settle('install-cards', 1200);
+  };
   scheduleInstallColumnAlignment();
 
   // Radio card: show it only when this panel actually has an EFR32 radio gateway.
-  fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.present) return;
+  var initialRadioLoad = fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.present) return true;
     var card = document.getElementById('radiocard'), st = document.getElementById('radio-status'),
         health = document.getElementById('radio-health');
     if (st) st.textContent = d.status || '';
     if (health) health.textContent = d.state || 'unknown';
     if (card) { card.style.display = ''; scheduleInstallColumnAlignment(); }
-  }).catch(function () {});
+    return true;
+  }).catch(function () { return false; });
 
   // Hydrate every picker component's version list on load.
-  document.querySelectorAll('.comprow[data-name]').forEach(function (r) { loadVersions(r.getAttribute('data-name')); });
+  var initialVersionLoads = [];
+  document.querySelectorAll('.comprow[data-name]').forEach(function (r) {
+    initialVersionLoads.push(loadVersions(r.getAttribute('data-name')));
+  });
+  Promise.all([initialPackagesLoad, initialRadioLoad].concat(initialVersionLoads)).then(function (outcomes) {
+    if (!outcomes.every(function (ok) { return ok !== false; })) return;
+    installInitialLoadsComplete = true;
+    installCardMemoryReady = true;
+    scheduleInstallColumnAlignment();
+  });
 })();

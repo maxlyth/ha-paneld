@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.BoundedLaunchGate
 import io.github.maxlyth.hapaneld.util.BoundedStreams
@@ -112,9 +113,7 @@ object DiagReader {
                     shizuku -> "available through locally approved Shizuku access; app updates remain signer-verified"
                     else -> "needs supported privileged panel access"
                 }),
-            Cap("Brightness", if (canWrite) "ok" else "none",
-                if (canWrite) "WRITE_SETTINGS granted" else
-                    "grant it (no root needed): adb shell appops set $pkg WRITE_SETTINGS allow"),
+            screenBrightnessCapability(canWrite, su, daemon, pkg),
             Cap("Screen on/off", if (daemon || su) "ok" else "degraded",
                 when {
                     daemon -> "true backlight-off via the helper daemon"
@@ -169,6 +168,19 @@ object DiagReader {
             else -> "not available directly to ha-paneld — see the individual capability rows below"
         },
     )
+
+    /** The hardware route can adjust the backlight without WRITE_SETTINGS, but cannot update Android's
+     * logical brightness value. Present that as reduced, rather than unavailable, when it is usable. */
+    internal fun screenBrightnessCapability(canWrite: Boolean, su: Boolean, daemon: Boolean, pkg: String): Cap = when {
+        canWrite -> Cap("Screen brightness", "ok", "WRITE_SETTINGS granted")
+        daemon -> Cap("Screen brightness", "degraded", "backlight control via helper daemon; Android setting is unchanged")
+        su -> Cap("Screen brightness", "degraded", "backlight control via su; Android setting is unchanged")
+        else -> Cap(
+            "Screen brightness",
+            "none",
+            "needs WRITE_SETTINGS: adb shell appops set $pkg WRITE_SETTINGS allow",
+        )
+    }
 
     internal fun showShizukuCapability(
         consentEnabled: Boolean,
@@ -301,7 +313,7 @@ object DiagReader {
             appendLine("  pin_dirs: ${pinDirs.ifBlank { "(none exported)" }}")
             appendLine("  value_nodes: ${valueNodes.ifBlank { "(none)" }}")
         }
-        appendLine("[packages] " + listOf("io.homeassistant.companion.android", "io.homeassistant.companion.android.minimal")
+        appendLine("[packages] " + CompanionInstaller.SUPPORTED_PACKAGES
             .joinToString(" ") { "${it.substringAfterLast('.')}=${pkgVer(ctx, it)}" })
         // Keep profile package identifiers out of the public report: a custom profile can contain a private
         // package namespace. Counts retain the useful "is this candidate present/active?" evidence.
@@ -357,7 +369,7 @@ object DiagReader {
      *  custom sensor descriptions, package namespaces and configured network destinations stay private. */
     private val PUBLIC_PANEL_FACTS = setOf(
         "ha-paneld", "Android", "Firmware", "Device", "CPU", "RAM", "Storage", "Display",
-        "System WebView", "HA Companion", "MQTT state", "Security mode", "Keep awake", "Kiosk lock",
+        "System WebView", "HA Companion", "MQTT state", "Security mode", "Keep panel responsive", "Prevent idle dim", "Android dashboard lock",
         "LED", "Nav actions (a11y)", "Navbar", "Zigbee", "Relays", "Network ADB", "Audio playback",
         "App database", "Product version", "Local-state sync", "State convergence",
     )

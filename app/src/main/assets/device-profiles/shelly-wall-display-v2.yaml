@@ -1,20 +1,15 @@
 schema: 2
 id: shelly-wall-display-v2
-version: 2.1.2
+version: 2.1.3
 display_name: Shelly Wall Display (modern)
-soc_class: PX30 / rk3326 (Jenna confirmed; others unverified)
+soc_class: "Model-dependent (known: RK3326-S / RK3566)"
 metadata:
   author: ha-paneld maintainers
   source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/shelly-wall-display.md
-  links:
-    - label: SoC details
-      url: https://www.rock-chips.com/a/en/News/Press_Releases/2018/0413/898.html
   license: Apache-2.0
   maturity: experimental
-  tested_firmware:
-    - WallDisplayV2 2.7.1 (Jenna)
   limitations:
-    - Only Jenna hardware has been confirmed from firmware; other modern SKUs remain inferred.
+    - SoC and proximity or motion details vary by model and still need live-hardware confirmation.
     - On-board relays are not exposed because no safe supported local control path is known.
 requires:
   min_core_version: 0.9.5-rc1
@@ -76,7 +71,6 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  proximity_technology: Infrared
   light_technology: Ambient light
   cht8305: false
   room_temp_offset_c: 0.0

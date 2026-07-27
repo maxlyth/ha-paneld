@@ -64,6 +64,14 @@ data class MqttConnectConfig(
     val keepAliveSeconds: Int,
     val willTopic: String,
     val willPayload: String,
+    /**
+     * Whether the client may auto-reconnect on its own. True for configured, credentialed connections
+     * (a network blip must never orphan a working panel). False for the credential-LESS discovery
+     * probe of an unconfigured panel: its transport-level retry loop hammered brokers with anonymous
+     * failures for the whole first-run journey, and a leaked probe client reconnected forever. A
+     * successful anonymous session that later drops is re-established by the bridge's own watchdog.
+     */
+    val automaticReconnect: Boolean = true,
 )
 
 /** Lifecycle callbacks the transport invokes for the LIVE client only (superseded clients are filtered).

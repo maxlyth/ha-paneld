@@ -144,6 +144,9 @@ class HardenedApprovalAssetContractTest {
         val compactMarkerSize = Regex("""\.pbtn\[data-hardened-approval]::after\{width:([^;]+);height:([^;]+)""")
             .find(css)?.destructured?.let { (width, height) -> width to height }
         assertEquals("compact controls should use a smaller shield", ".68rem" to ".8rem", compactMarkerSize)
+        assertTrue("protected setting labels must keep the final word and shield in one inline run", configure.contains("class: \"hardened-label-tail\""))
+        assertTrue("the shield tail must not wrap away from the final label word", css.contains(".hardened-label-tail{white-space:nowrap}"))
+        assertTrue("the shield tail must retain visible separation from the final label word", css.contains(".hardened-label-tail::after{margin-left:.34rem}"))
         assertTrue(source.contains("Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely."))
         assertTrue(source.contains("aria-describedby=\"hardened-approval-description\""))
 
@@ -177,7 +180,7 @@ class HardenedApprovalAssetContractTest {
         listOf(
             "hardenedApprovalCardTitle(\"Managed components\", conditional = true)",
             "hardenedApprovalCardTitle(\"Uninstall an app\")",
-            "hardenedApprovalCardTitle(\"Vendor packages\"",
+            "hardenedApprovalCardTitle(\"Vendor packages\", conditional = true)",
             "hardenedApprovalCardTitle(\"Display sizing\"",
             "hardenedApprovalCardTitle(\"Backup &amp; restore\", conditional = true)",
         ).forEach { assertTrue("missing shielded Install card title $it", source.contains(it)) }
@@ -197,6 +200,7 @@ class HardenedApprovalAssetContractTest {
         assertTrue(source.lineSequence().first { it.contains("Tame all recommended</button>") }.contains("hardenedApprovalA11yAttrs()"))
         val vendorCard = source.substringAfter("private fun tameRowHtml").substringBefore("/** Display-sizing card")
         assertFalse(vendorCard.contains("hardenedApprovalAttrs()"))
+        assertFalse("Vendor packages is no longer an experimental feature", vendorCard.contains("cardbadge exp"))
         assertTrue(Regex("hardenedApprovalA11yAttrs\\(\\)").findAll(vendorCard).count() >= 2)
         assertTrue(vendorCard.contains("<h3 data-hardened-approval=\"conditional\""))
         val displayCard = source.substringAfter("private fun displayCardHtml").substringBefore("/** Read a bundled static asset")
@@ -209,9 +213,14 @@ class HardenedApprovalAssetContractTest {
         assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(\"Display sizing\""))
         listOf("self_update", "update_channel", "companion_auto_update", "companion_update_channel", "webview_auto_update")
             .forEach { assertTrue(configure.contains("$it: true")) }
-        assertTrue(configure.contains("labelText.setAttribute(\"data-hardened-approval\", \"conditional\")"))
+        assertTrue(configure.contains("shieldTail.setAttribute(\"data-hardened-approval\", \"conditional\")"))
         assertTrue(configure.contains("valueControl.setAttribute(\"aria-describedby\", \"hardened-approval-conditional-description\")"))
         assertTrue(configure.contains("text: \"Renderer storage\", \"data-hardened-approval\": \"\""))
+        assertTrue(configure.contains("text: \"Clear cached dashboard data. Keeps sign-in.\""))
+        assertTrue(configure.contains("setClearStatus(r.ok ? \"Clear requested.\""))
+        assertTrue(configure.contains("}, 4000);"))
+        assertTrue(configure.contains("class: \"pbtn\", text: \"Clear renderer storage\""))
+        assertFalse(configure.contains("🧹"))
         assertFalse(configure.contains("text: \"🧹 Clear renderer storage\", \"data-hardened-approval\": \"\""))
         assertTrue(api.contains("var approvalKind=JSON.stringify(op.responses||{}).indexOf('ApprovalRequired')>=0?'required':null"))
         listOf(

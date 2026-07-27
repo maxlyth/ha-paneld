@@ -1,7 +1,8 @@
 package io.github.maxlyth.hapaneld.control
 
-/** Pure dashboard-watchdog policy. Runtime polling and privileged launches stay in [WatchdogController];
- *  this object owns every target-specific streak, background timer, crash-loop budget, and warning bit. */
+/** Pure dashboard-watchdog policy. Runtime polling and privileged launches stay in [WatchdogController].
+ *  It owns background timing for every renderer and dead-process recovery for foreign renderers. Built-in
+ *  DEAD is a WebView latch owned by [BuiltinDashboard] and is routed around this foreign crash budget. */
 internal class DashboardRecoveryPolicy(
     private val deadStreakLimit: Int,
     private val backgroundTimeoutMs: Long,

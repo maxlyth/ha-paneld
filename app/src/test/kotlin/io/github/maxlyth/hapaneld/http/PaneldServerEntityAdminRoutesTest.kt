@@ -71,9 +71,10 @@ class PaneldServerEntityAdminRoutesTest {
         }
     }
 
-    @Test fun `live route contract delegates all six endpoints to the bounded reader`() {
+    @Test fun `live route contract delegates every entity-sensitive endpoint to the bounded reader`() {
         val source = paneldServerSource()
         val contracts = linkedMapOf(
+            "/auto-sleep/source" to "receiveEntityAdminJson(call)",
             "/dashboard/entities/activate" to "receiveEntityAdminJson(call, allowBlank = true)",
             "/dashboard/entities/policy" to "receiveEntityAdminJson(call)",
             "/dashboard/entities/override" to "receiveEntityAdminJson(call)",

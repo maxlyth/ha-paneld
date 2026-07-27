@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import android.Manifest
 import android.content.Intent
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.SystemController
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -46,9 +47,121 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private val config by lazy { Config(this) }
+
+    /**
+     * Where the QR and the Configure button send people. Until this panel has completed setup once, that
+     * is the guided setup page — the QR exists to start commissioning, and landing a first-time user on
+     * the full settings wall was the original onboarding complaint. A panel that has ever completed goes
+     * to Configure as before (and if its setup later re-arms, Configure carries a resume-setup banner, so
+     * the guided path stays one tap away rather than this screen re-deriving journey state).
+     */
+    private fun adminPath(): String = if (config.setupEverCompleted) "/configure" else "/setup"
     private val url: String
-        get() = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort)
+        get() = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort, adminPath())
     private val handler = Handler(Looper.getMainLooper())
+
+    // ---- live setup stage on the standing screen ----------------------------------------------------
+    // The screen used to be identical whether the panel was untouched, mid-commissioning or broken, so
+    // someone walking up mid-setup learnt nothing. A loopback poll of the same journey the browser
+    // wizard renders fills one bold line + one hint — and, at the sign-in stage, reveals a button. The
+    // QR bitmap is never regenerated (a synchronous ZXing encode per tick would jank the screen); only
+    // the two TextViews and the button change, and only when the stage actually changes.
+    private var stageView: TextView? = null
+    private var configButton: Button? = null
+    private var configButtonCompact = false
+    private var hintView: TextView? = null
+    private var signInButton: Button? = null
+    private var lastStageKey: String? = null
+    private val setupPollExecutor by lazy { java.util.concurrent.Executors.newSingleThreadExecutor() }
+    private val setupPoll = object : Runnable {
+        override fun run() {
+            if (presentedIntro == null) return
+            val generation = introGeneration
+            setupPollExecutor.execute {
+                val body = runCatching {
+                    val conn = java.net.URL(
+                        LocalAdminEndpoint.loopbackUrl(config.httpPort, "/api/v1/setup"),
+                    ).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 1500
+                    conn.readTimeout = 1500
+                    try { conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) } } finally { conn.disconnect() }
+                }.getOrNull()
+                handler.post {
+                    if (generation != introGeneration || presentedIntro == null) return@post
+                    body?.let { runCatching { applySetupStage(org.json.JSONObject(it)) } }
+                    handler.postDelayed(this, SETUP_POLL_MS)
+                }
+            }
+        }
+    }
+
+    /** The admin button's label, matching where it actually goes. Kept beside [adminPath] so the two
+     *  can never drift — the hint text tells the user which button to tap, by name. */
+    private fun configButtonLabel(compact: Boolean, complete: Boolean = config.setupEverCompleted): String =
+        if (!complete) "Set up" else if (compact) "Configure" else "Open configuration"
+
+    /** Map the journey to the standing screen's one bold line + one hint. The rule: a passer-by always
+     *  learns what stage the panel is at AND whether they need to act — "nothing to do here" matters as
+     *  much as an instruction, because it is what prevents a second, conflicting editing session. */
+    private fun applySetupStage(journey: org.json.JSONObject) {
+        val complete = journey.optBoolean("complete", false)
+        val next = journey.optString("next", "")
+        var connectionDetail = ""
+        var rendererDetail = ""
+        val steps = journey.optJSONArray("steps")
+        if (steps != null) {
+            for (i in 0 until steps.length()) {
+                val s = steps.optJSONObject(i) ?: continue
+                when (s.optString("stage")) {
+                    "mqtt_connection" -> connectionDetail = s.optString("detail")
+                    "renderer" -> rendererDetail = s.optString("detail")
+                }
+            }
+        }
+        val key = "$complete|$next|$connectionDetail|$rendererDetail"
+        if (key == lastStageKey) return
+        lastStageKey = key
+        val stage: Pair<String, String>? = when {
+            complete -> null // the launcher's own auto-return takes over; show the pre-wizard screen
+            next == "identity" -> "This panel isn’t set up yet." to
+                "Scan the code or open the address below on your phone or laptop — it takes about two " +
+                "minutes. Or tap ${configButtonLabel(configButtonCompact, complete = false)} to do it on this screen."
+            next == "mqtt_broker" || next == "mqtt_credentials" ->
+                if (connectionDetail == "auth_failed") {
+                    "MQTT couldn’t connect." to "The broker rejected the username and password — fix them on the setup page in a browser."
+                } else {
+                    "Waiting for MQTT details." to "Someone’s setting this up in a browser. Nothing to do here."
+                }
+            next == "mqtt_connection" ->
+                if (connectionDetail == "unreachable" || connectionDetail == "config_error") {
+                    "MQTT couldn’t connect." to "Check the broker address on the setup page in a browser."
+                } else {
+                    "Checking the MQTT connection…" to "This takes a few seconds. Nothing to do here."
+                }
+            // A too-old engine is the one renderer problem a passer-by cannot act on here, so name it as the
+            // panel's own fault rather than asking for a choice that would not help.
+            next == "renderer" && rendererDetail.startsWith("webview_too_old") ->
+                "This panel's browser engine is too old." to
+                    "Home Assistant dashboards need a newer one. Fix it on the setup page in a browser."
+            next == "renderer" -> "Choose a dashboard app." to "Continue on the setup page in a browser."
+            next == "ha_url" -> "Connected. Next: the Home Assistant address." to "Continue on the setup page in a browser."
+            next == "ha_credentials" -> "Almost there — one sign-in left." to
+                "Continue in the browser, or tap the button below to sign in on this screen."
+            // The panel is deliberately holding its first load here, so it must say that rather than look
+            // stalled — and say the wait ends in a browser, since nothing on this screen can end it.
+            next == "entity_filter" -> "One important question left." to
+                "Finish it in your browser to optimise the performance of your dashboards."
+            next == "render_proof" -> "Loading your dashboard…" to "Nothing to do here."
+            else -> null
+        }
+        stageView?.visibility = if (stage == null) View.GONE else View.VISIBLE
+        stageView?.text = stage?.first ?: ""
+        hintView?.text = stage?.second ?: GENERIC_DESCRIPTION
+        signInButton?.visibility = if (!complete && next == "ha_credentials") View.VISIBLE else View.GONE
+        configButton?.text = configButtonLabel(configButtonCompact, complete)
+    }
+    // --------------------------------------------------------------------------------------------------
+
     private var autoReturn: Runnable? = null
     private var autoReturnDeadlineMs = 0L
     private var autoReturnNextAttemptMs = 0L
@@ -59,6 +172,7 @@ class MainActivity : AppCompatActivity() {
     private var introGeneration = 0L
     private var presentedIntro: View? = null
     private var introAcknowledgement: IntroAcknowledgement? = null
+    private var preparedAutoReturn: PreparedVisibleAutoReturn? = null
 
     /** Colours for the standing screen, chosen to read on the panel's current light/dark setting. The
      *  wordmark itself switches via res/drawable(-night)-nodpi/wordmark.png; this covers everything else. */
@@ -110,7 +224,6 @@ class MainActivity : AppCompatActivity() {
                 saved = saved,
                 currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
                 lastShownVersionCode = config.lastLaunchScreenVersionCode,
-                nowMs = SystemClock.elapsedRealtime(),
                 minimumReturnDelayMs = AUTO_RETURN_RESTORE_GRACE_MS,
                 maximumReturnWindowMs = AUTO_RETURN_WINDOW_MS,
             )
@@ -129,9 +242,9 @@ class MainActivity : AppCompatActivity() {
         val decision = LaunchScreenPolicy.decide(
             kioskEnabled = config.kioskLock,
             configuredRenderer = config.dashboardPackage,
-            builtInUrlConfigured = config.haUrl.isNotBlank(),
+            builtInUrlConfigured = config.builtInRendererReady(),
             dashboardLaunchAvailable = target != null,
-            dashboardCrashLooping = PanelStatus.dashboardCrashLooping,
+            dashboardRecoveryBlocked = dashboardRecoveryState() != PanelStatus.DashboardRecoveryState.NONE,
             currentVersionCode = BuildConfig.VERSION_CODE.toLong(),
             lastShownVersionCode = config.lastLaunchScreenVersionCode,
             explicitAdminEntry = explicitAdminEntry,
@@ -151,7 +264,7 @@ class MainActivity : AppCompatActivity() {
                 pendingVersionCode = BuildConfig.VERSION_CODE.toLong().takeIf {
                     decision.rememberVersionShown
                 },
-                autoReturnDeadlineMs = null,
+                autoReturnRemainingMs = null,
                 autoReturnDelayMs = null,
             ),
             freshDecision = decision,
@@ -171,20 +284,25 @@ class MainActivity : AppCompatActivity() {
         introExplicitAdminEntry = plan.explicitAdminEntry
         introVersionPending = plan.pendingVersionCode
         startupChosen = true
-        plan.pendingVersionCode?.let { acknowledgeVersionAfterFirstDraw(intro, it) }
-        if (!plan.explicitAdminEntry) {
-            if (plan.autoReturnDeadlineMs != null && plan.autoReturnDelayMs != null) {
-                maybeArmAutoReturn(
-                    restoredDeadlineMs = plan.autoReturnDeadlineMs,
+        preparedAutoReturn = if (!plan.explicitAdminEntry) {
+            if (plan.autoReturnRemainingMs != null && plan.autoReturnDelayMs != null) {
+                prepareAutoReturn(
+                    restoredRemainingMs = plan.autoReturnRemainingMs,
                     restoredDelayMs = plan.autoReturnDelayMs,
                 )
             } else if (freshDecision != null) {
-                maybeArmAutoReturn(ignoreUpdateAge = freshDecision.rememberVersionShown)
-            }
-        }
+                prepareAutoReturn(ignoreUpdateAge = freshDecision.rememberVersionShown)
+            } else null
+        } else null
+        acknowledgeIntroAfterFirstDraw(intro, plan.pendingVersionCode)
+        // Start the stage poll only once the intro is the content view; it self-stops when the intro
+        // generation moves on or the activity is destroyed.
+        lastStageKey = null
+        handler.removeCallbacks(setupPoll)
+        handler.post(setupPoll)
     }
 
-    private fun acknowledgeVersionAfterFirstDraw(view: View, versionCode: Long) {
+    private fun acknowledgeIntroAfterFirstDraw(view: View, versionCode: Long?) {
         introAcknowledgement?.cancel()
         val generation = ++introGeneration
         introAcknowledgement = IntroAcknowledgement(view, versionCode, generation).also { it.arm() }
@@ -192,7 +310,7 @@ class MainActivity : AppCompatActivity() {
 
     private inner class IntroAcknowledgement(
         private val view: View,
-        private val versionCode: Long,
+        private val versionCode: Long?,
         private val generation: Long,
     ) : ViewTreeObserver.OnDrawListener, Runnable {
         private val observer = view.viewTreeObserver
@@ -210,22 +328,31 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             removeListener()
             if (introAcknowledgement === this) introAcknowledgement = null
-            if (mayAcknowledgePresentedIntro(
-                    generationMatches = generation == introGeneration,
-                    presentedViewMatches = presentedIntro === view,
-                    viewAttached = view.isAttachedToWindow,
-                    activityFinishing = isFinishing,
-                    activityDestroyed = isDestroyed,
-                    startupChosen = startupChosen,
-                )
-            ) {
-                if (config.commitLaunchScreenVersionShown(versionCode) &&
-                    introVersionPending == versionCode
-                ) {
-                    introVersionPending = null
+            if (currentPresentation()) {
+                // Start the redirect clock only after Android has completed the first QR-screen draw.
+                // Slow startup and rendering must not consume the visible eight-second dwell time.
+                preparedAutoReturn?.let {
+                    preparedAutoReturn = null
+                    armAutoReturn(it)
+                }
+                versionCode?.let { pendingVersion ->
+                    if (config.commitLaunchScreenVersionShown(pendingVersion) &&
+                        introVersionPending == pendingVersion
+                    ) {
+                        introVersionPending = null
+                    }
                 }
             }
         }
+
+        private fun currentPresentation(): Boolean = mayAcknowledgePresentedIntro(
+            generationMatches = generation == introGeneration,
+            presentedViewMatches = presentedIntro === view,
+            viewAttached = view.isAttachedToWindow,
+            activityFinishing = isFinishing,
+            activityDestroyed = isDestroyed,
+            startupChosen = startupChosen,
+        )
 
         fun cancel() {
             view.removeCallbacks(this)
@@ -248,29 +375,36 @@ class MainActivity : AppCompatActivity() {
     // renderer owns its own HA readiness; MQTT is optional for both. Re-check every
     // [AUTO_RETURN_POLL_MS] until the renderer-specific gate opens or the [AUTO_RETURN_WINDOW_MS]
     // window elapses.
-    private fun maybeArmAutoReturn(
+    private fun prepareAutoReturn(
         ignoreUpdateAge: Boolean = false,
-        restoredDeadlineMs: Long? = null,
+        restoredRemainingMs: Long? = null,
         restoredDelayMs: Long? = null,
-    ) {
-        if (!config.autoReturnDashboard || dashboardIntent() == null) return
+    ): PreparedVisibleAutoReturn? {
+        if (!config.autoReturnDashboard || dashboardIntent() == null) return null
         val updated = runCatching { packageManager.getPackageInfo(packageName, 0).lastUpdateTime }.getOrDefault(0L)
-        if (restoredDeadlineMs == null &&
+        if (restoredRemainingMs == null &&
             !ignoreUpdateAge &&
             System.currentTimeMillis() - updated > 5 * 60 * 1000L
-        ) return
+        ) return null
+        return prepareVisibleAutoReturn(
+            restoredRemainingMs = restoredRemainingMs,
+            restoredDelayMs = restoredDelayMs,
+            defaultWindowMs = AUTO_RETURN_WINDOW_MS,
+            defaultFirstDelayMs = AUTO_RETURN_FIRST_MS,
+        )
+    }
+
+    private fun armAutoReturn(prepared: PreparedVisibleAutoReturn) {
         val now = SystemClock.elapsedRealtime()
-        val deadline = restoredDeadlineMs ?: now + AUTO_RETURN_WINDOW_MS
-        val firstDelay = restoredDelayMs ?: AUTO_RETURN_FIRST_MS
-        if (deadline <= now || now + firstDelay > deadline) return
+        val schedule = armVisibleAutoReturn(prepared, now)
         val r = object : Runnable {
             override fun run() {
                 val launchAvailable = dashboardIntent() != null
                 if (PostUpdateReturnPolicy.dashboardReady(
                         configuredRenderer = config.dashboardPackage,
-                        builtInUrlConfigured = config.haUrl.isNotBlank(),
+                        builtInUrlConfigured = config.builtInRendererReady(),
                         dashboardLaunchAvailable = launchAvailable,
-                        dashboardCrashLooping = PanelStatus.dashboardCrashLooping,
+                        dashboardRecoveryBlocked = dashboardRecoveryState() != PanelStatus.DashboardRecoveryState.NONE,
                     )
                 ) {
                     cancelAutoReturn()
@@ -278,18 +412,19 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
                 val retryNow = SystemClock.elapsedRealtime()
-                if (retryNow >= deadline) { cancelAutoReturn(); return } // give up (unconfigured)
+                if (retryNow >= schedule.deadlineMs) { cancelAutoReturn(); return } // give up (unconfigured)
                 autoReturnNextAttemptMs = retryNow + AUTO_RETURN_POLL_MS
                 handler.postDelayed(this, AUTO_RETURN_POLL_MS)
             }
         }
         autoReturn = r
-        autoReturnDeadlineMs = deadline
-        autoReturnNextAttemptMs = now + firstDelay
-        handler.postDelayed(r, firstDelay) // let a genuine touch cancel + give MQTT a head start
+        autoReturnDeadlineMs = schedule.deadlineMs
+        autoReturnNextAttemptMs = schedule.firstAttemptMs
+        handler.postDelayed(r, prepared.firstDelayMs) // let a genuine touch cancel + give MQTT a head start
     }
 
     private fun cancelAutoReturn() {
+        preparedAutoReturn = null
         autoReturn?.let { handler.removeCallbacks(it) }
         autoReturn = null
         autoReturnDeadlineMs = 0L
@@ -312,6 +447,10 @@ class MainActivity : AppCompatActivity() {
                 val nextRemaining = (autoReturnNextAttemptMs - now).coerceIn(0L, remaining)
                 outState.putLong(STATE_AUTO_RETURN_REMAINING, remaining)
                 outState.putLong(STATE_AUTO_RETURN_NEXT_REMAINING, nextRemaining)
+            } else preparedAutoReturn?.let { pending ->
+                // Recreation before the first frame keeps the full not-yet-visible dwell time.
+                outState.putLong(STATE_AUTO_RETURN_REMAINING, pending.remainingMs)
+                outState.putLong(STATE_AUTO_RETURN_NEXT_REMAINING, pending.firstDelayMs)
             }
         }
         super.onSaveInstanceState(outState)
@@ -320,9 +459,15 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         KioskAdminUi.setVisible(this, false)
         cancelAutoReturn()
+        handler.removeCallbacks(setupPoll)
+        setupPollExecutor.shutdownNow()
         introAcknowledgement?.cancel()
         introAcknowledgement = null
         presentedIntro = null
+        configButton = null
+        stageView = null
+        hintView = null
+        signInButton = null
         introGeneration++
         super.onDestroy()
     }
@@ -370,16 +515,19 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(logoH))
                 .apply { bottomMargin = dp(if (compact) 8 else 18) }
         })
-        root.addView(text("v${BuildConfig.VERSION_NAME} · running in the background", 12f, pal.subtle, padBottom = if (compact) 8 else 18))
+        root.addView(text("v${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}", 12f, pal.subtle, padBottom = if (compact) 8 else 18))
+        // Live setup stage — the answer to someone walking up to the panel mid-commissioning: what is it
+        // doing, and do I need to act? Filled by the loopback journey poll; hidden until data arrives so
+        // an unpolled screen is exactly the pre-wizard layout.
+        stageView = text("", if (compact) 14f else 16f, pal.body, bold = true, padBottom = if (compact) 4 else 8)
+            .also { it.visibility = View.GONE; root.addView(it) }
         // Description — shown on all panels (the shorter wordmark frees the vertical space on 480x480);
-        // slightly smaller + tighter on compact so it still fits without scrolling.
-        root.addView(text(
-            "This device is a Home Assistant wall panel. ha-paneld runs in the background so Home " +
-                "Assistant can control the screen, LED, buttons and speaker and read its sensors — all " +
-                "over your local network. The dashboard is rendered either by ha-paneld's own built-in " +
-                "renderer or by the Home Assistant app.",
+        // slightly smaller + tighter on compact so it still fits without scrolling. Doubles as the
+        // stage HINT once the journey poll reports (the generic text returns when setup completes).
+        hintView = text(
+            GENERIC_DESCRIPTION,
             if (compact) 12.5f else 14f, pal.body, padBottom = if (compact) 10 else 22,
-        ))
+        ).also { root.addView(it) }
         // The full URL — tappable here, and readable so it can be typed on another device.
         root.addView(TextView(this).apply {
             gravity = Gravity.CENTER
@@ -400,8 +548,21 @@ class MainActivity : AppCompatActivity() {
             if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, pal.subtle, padBottom = 24))
         }
         // Buttons: side-by-side when vertical space is tight (shorter labels), stacked otherwise.
-        val cfgBtn = button(if (compact) "Configure" else "Open configuration") { openConfig() }
-        val haBtn = dashboardIntent()?.let { button(if (compact) "Dashboard" else "Open dashboard") { openDashboard() } }
+        // The label follows the journey for the same reason the URL does — on an unfinished panel this
+        // opens guided setup, so calling it "configuration" both undersells it and contradicts the hint
+        // above, which tells the user which button to tap. Updated live by applySetupStage.
+        val cfgBtn = button(configButtonLabel(compact)) { openConfig() }
+        configButton = cfgBtn
+        configButtonCompact = compact
+        val recovery = dashboardRecoveryState()
+        val dashboardLabel = if (recovery == PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER) {
+            "Retry dashboard"
+        } else if (compact) {
+            "Dashboard"
+        } else {
+            "Open dashboard"
+        }
+        val haBtn = dashboardIntent()?.let { button(dashboardLabel) { openDashboard() } }
         if (compact && haBtn != null) {
             root.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -413,6 +574,15 @@ class MainActivity : AppCompatActivity() {
             root.addView(cfgBtn)
             haBtn?.let { root.addView(it) }
         }
+        // The one moment setup hands BACK to the panel: sign-in. The wizard announces it in the browser;
+        // this button is the same action under the user's finger, so the handoff never depends on the
+        // automatic relaunch having fired. DashboardActivity's readiness gate routes a URL-without-
+        // credentials start to the on-panel Home Assistant login rather than bouncing here.
+        signInButton = button("Sign in to Home Assistant") {
+            runCatching {
+                startActivity(Intent(this, DashboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }.also { it.visibility = View.GONE; root.addView(it) }
 
         // Cap the content column so the paragraph wraps instead of stretching across a wide panel,
         // and centre it. A ScrollView remains as a safety net if a panel is unexpectedly short.
@@ -472,25 +642,39 @@ class MainActivity : AppCompatActivity() {
     // Open the config page in-app — kiosk panels usually have no browser, so an ACTION_VIEW intent
     // would find no handler and do nothing.
     private fun openConfig() {
-        runCatching { startActivity(Intent(this, ConfigActivity::class.java)) }
+        runCatching {
+            startActivity(Intent(this, ConfigActivity::class.java).putExtra("path", adminPath()))
+        }
     }
 
-    /** Intent that opens the CONFIGURED dashboard: a ready built-in renderer, an explicitly selected
-     * foreign renderer, or Companion auto-detection when the selection is blank. Null preserves the
-     * recovery screen when nothing launchable exists. */
+    /** Intent that opens the configured dashboard: a ready automatic/explicit built-in renderer or an
+     * explicitly selected foreign renderer. Null preserves the recovery screen when nothing is ready. */
     private fun dashboardIntent(): Intent? {
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && config.haUrl.isNotBlank()) {
-            return Intent(this, DashboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return when (val target = RendererResolver.resolveLaunchable(
+            configuredPackage = config.dashboardPackage,
+            builtinReady = config.builtInRendererReady(),
+            isLaunchable = { packageManager.getLaunchIntentForPackage(it) != null },
+        )) {
+            RendererTarget.Builtin -> Intent(this, DashboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            is RendererTarget.Foreign -> packageManager.getLaunchIntentForPackage(target.packageName)
+                ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            null -> null
         }
-        for (p in externalRendererCandidates(config.dashboardPackage)) {
-            packageManager.getLaunchIntentForPackage(p)?.let { return it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-        }
-        return null
     }
 
-    private fun openDashboard(): Boolean = dashboardIntent()?.let {
-        runCatching { startActivity(it) }.isSuccess
-    } ?: false
+    private fun dashboardRecoveryState(): PanelStatus.DashboardRecoveryState =
+        PanelStatus.dashboardRecoveryState(
+            config.dashboardPackage,
+            packageName,
+            SystemClock.elapsedRealtime(),
+        )
+
+    private fun openDashboard(): Boolean {
+        if (dashboardRecoveryState() == PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER) {
+            BuiltinDashboard.requestExplicitReload()
+        }
+        return dashboardIntent()?.let { runCatching { startActivity(it) }.isSuccess } ?: false
+    }
 
     private fun Bundle.getLongOrNull(key: String): Long? =
         if (containsKey(key)) getLong(key) else null
@@ -507,5 +691,11 @@ class MainActivity : AppCompatActivity() {
         const val AUTO_RETURN_FIRST_MS = 8_000L   // initial delay before the first redirect attempt
         const val AUTO_RETURN_POLL_MS = 2_000L    // re-check cadence while waiting for MQTT to reconnect
         const val AUTO_RETURN_WINDOW_MS = 90_000L // give up after this (genuinely unconfigured panel)
+        const val SETUP_POLL_MS = 3_000L          // standing-screen stage refresh (loopback, in-memory read)
+        val GENERIC_DESCRIPTION =
+            "This device is a Home Assistant wall panel powered by ha-paneld. It provides the on-panel " +
+                "dashboard, app launcher and panel controls, while exposing the screen, LED, buttons, " +
+                "speaker and sensors to Home Assistant over your local network. Configure the panel from " +
+                "a browser using the address below."
     }
 }

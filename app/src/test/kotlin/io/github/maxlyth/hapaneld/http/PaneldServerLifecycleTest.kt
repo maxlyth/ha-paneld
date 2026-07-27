@@ -1,6 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
-import io.github.maxlyth.hapaneld.util.KeyedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -74,7 +74,7 @@ class PaneldServerLifecycleTest {
         val events = Collections.synchronizedList(mutableListOf<String>())
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
-        val mutations = KeyedLatestDispatcher<String, Int>("http-stop-proof", 1) { _, _ ->
+        val mutations = LatestDispatcher<String, Int>("http-stop-proof", 1, consume = { _, _ ->
             entered.countDown()
             while (release.count > 0L) {
                 try {
@@ -83,9 +83,9 @@ class PaneldServerLifecycleTest {
                     // Model an admitted privileged mutation that does not stop on interruption alone.
                 }
             }
-        }
+        })
         try {
-            assertEquals(KeyedLatestDispatcher.Admission.ACCEPTED, mutations.submit("pkg", 1))
+            assertEquals(LatestDispatcher.Admission.ACCEPTED, mutations.submit("pkg", 1))
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             val incomplete = mutableListOf<Pair<String, Throwable?>>()
             val stopped = stopHttpOwners(
@@ -113,7 +113,7 @@ class PaneldServerLifecycleTest {
             assertEquals(listOf("HTTP engine stop request", "vendor mutation"), incomplete.map { it.first })
             assertEquals("engine stop failed", incomplete[0].second?.message)
             assertEquals(null, incomplete[1].second)
-            assertEquals(KeyedLatestDispatcher.Admission.CLOSED, mutations.submit("late", 2))
+            assertEquals(LatestDispatcher.Admission.CLOSED, mutations.submit("late", 2))
         } finally {
             release.countDown()
             assertTrue(mutations.closeAndJoin(2_000L))

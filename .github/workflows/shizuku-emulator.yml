@@ -53,7 +53,7 @@ jobs:
           cache-provider: basic
 
       - name: Install build SDK, NDK, and emulator image
-        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Download curated Shizuku manager
         run: |

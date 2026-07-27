@@ -126,8 +126,10 @@ object CompanionInstaller {
         exactVersionRefusal(tag, maxVersion)?.let { return@withContext it }
         val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no minimal APK for $tag"
         Log.i(TAG, "install Companion tag $tag")
-        val result = AppInstaller.install(context, url, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)
-        if (result != "OK") return@withContext result
+        when (val outcome = AppInstaller.install(context, url, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)) {
+            is InstallOutcome.Failure -> return@withContext outcome.message
+            InstallOutcome.Succeeded -> Unit
+        }
         "installing HA Companion $version"
     }
 
@@ -151,8 +153,7 @@ object CompanionInstaller {
      *  require the explicit/manual [force] path; scheduled automatic updates never downgrade. */
     internal fun shouldInstallTarget(installed: String, targetVersion: String, force: Boolean, maxVersion: String?): Boolean =
         installed.isBlank() ||
-            force ||
-            UpdateChecker.isNewer(targetVersion, UpdateChecker.stripVariant(installed))
+            ComponentUpdater.isUpdate(targetVersion, installed, force, UpdateChecker::stripVariant)
 
     /** Install the minimal Companion if missing or update it when newer. An already-installed build above
      *  the device cap is downgraded only through explicit [force]; [force] never bypasses [maxVersion]. */
@@ -180,8 +181,10 @@ object CompanionInstaller {
             else "up to date ($installed)"
         }
 
-        val result = AppInstaller.install(context, target.apkUrl, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)
-        if (result != "OK") return@withContext result
+        when (val outcome = AppInstaller.install(context, target.apkUrl, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)) {
+            is InstallOutcome.Failure -> return@withContext outcome.message
+            InstallOutcome.Succeeded -> Unit
+        }
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG).ifBlank { target.version }
         val verb = when {
             missing -> "installed"

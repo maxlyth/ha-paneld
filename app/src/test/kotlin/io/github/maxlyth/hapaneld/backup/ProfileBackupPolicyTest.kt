@@ -36,6 +36,8 @@ class ProfileBackupPolicyTest {
             assertEquals("legacy exclusion for $path", 1, legacy.count { it == exclusion })
             assertEquals("modern exclusions for $path", 2, modern.count { it == exclusion })
         }
+        assertEquals(1, legacy.count { it == Exclusion("database", ".") })
+        assertEquals(2, modern.count { it == Exclusion("database", ".") })
     }
 
     private fun exclusions(path: String): List<Exclusion> {

@@ -1,10 +1,34 @@
 name: Android instrumentation
 run-name: Android instrumentation · ${{ github.event_name == 'schedule' && 'nightly' || github.ref_name }}
 
-# The device-backed persistence and backup suites compile in CI but otherwise only run when an
-# RC is being qualified. Keep this separate from the normal PR gate: two emulator boots are too
-# expensive for every source change, while a nightly run catches API-level storage regressions.
+# Keep the two emulator boots outside the normal source gate. Run them for changes that can affect
+# Android compatibility, after those changes reach main, during nightly coverage, and on demand.
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/android-instrumentation.yml'
+      - 'app/build.gradle.kts'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/libs.versions.toml'
+      - 'gradle/wrapper/**'
+      - 'app/gradle.lockfile'
+      - 'gradle/verification-metadata.xml'
+      - 'app/src/androidTest/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-instrumentation.yml'
+      - 'app/build.gradle.kts'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'gradle/libs.versions.toml'
+      - 'gradle/wrapper/**'
+      - 'app/gradle.lockfile'
+      - 'gradle/verification-metadata.xml'
+      - 'app/src/androidTest/**'
   schedule:
     - cron: '37 3 * * *'
   workflow_dispatch:
@@ -41,7 +65,7 @@ jobs:
           cache-provider: basic
 
       - name: Install build SDK, NDK, and emulator image
-        run: sdkmanager "platform-tools" "platforms;android-35" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
+        run: sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "system-images;android-${{ matrix.api-level }};default;x86_64" "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Build app and instrumentation APKs
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace

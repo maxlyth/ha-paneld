@@ -91,14 +91,84 @@ class ConfigBundleTest {
         )
     }
 
+    @Test fun autoSleepSurvivesLegacyBundleRoundTripAndMigration() {
+        val legacy = ConfigBundle.fromValues(mapOf("auto_sleep" to "true"), schema = 2)
+        val parsed = ConfigBundle.parse(legacy.serialize())!!
+        val (migrated, warnings) = Migrations.migrate(parsed.schema, parsed.values)
+
+        assertTrue(warnings.isEmpty())
+        assertEquals("true", migrated["auto_sleep"])
+        assertEquals(
+            Validation.Ok("true"),
+            SettingValue.validate(requireNotNull(SettingsRegistry.spec("auto_sleep")), migrated.getValue("auto_sleep")),
+        )
+    }
+
     @Test fun malformedReturnsNull() {
         assertNull(ConfigBundle.parse("not json"))
         assertNull(ConfigBundle.parse("{\"kind\":"))
         assertNull(ConfigBundle.parse(ConfigBundle.fromValues(mapOf("a" to "1")).serialize() + " trailing"))
     }
+
+    @Test fun missingKeysFallBackToDefaults() {
+        val parsed = ConfigBundle.parse("{}")!!
+        assertEquals("", parsed.kind)
+        assertEquals(0, parsed.schema)
+        assertEquals("", parsed.exportedAt)
+        assertEquals("", parsed.exportedBy)
+        assertTrue(parsed.values.isEmpty())
+    }
+
+    @Test fun unknownTopLevelKeysAreIgnored() {
+        val parsed = ConfigBundle.parse(
+            "{\"kind\":\"ha-paneld-config\",\"schema\":3,\"extra\":\"ignored\",\"values\":{\"a\":\"1\"}}",
+        )!!
+        assertEquals("ha-paneld-config", parsed.kind)
+        assertEquals(3, parsed.schema)
+        assertEquals(mapOf("a" to "1"), parsed.values)
+    }
+
+    @Test fun wrongTypesRejectTheWholeBundle() {
+        // A JSON array, not an object.
+        assertNull(ConfigBundle.parse("[]"))
+        // kind present but not a string.
+        assertNull(ConfigBundle.parse("{\"kind\":5}"))
+        // schema present but not a number.
+        assertNull(ConfigBundle.parse("{\"schema\":\"2\"}"))
+        // values present but not an object.
+        assertNull(ConfigBundle.parse("{\"values\":\"x\"}"))
+        // values present but a member is not a string.
+        assertNull(ConfigBundle.parse("{\"values\":{\"a\":1}}"))
+    }
 }
 
 class MigrationsTest {
+    @Test fun publicV095ConfigFixtureUpgradesInOneStepAndPreservesEveryValue() {
+        val fixture = requireNotNull(javaClass.getResource("/fixtures/config-v0.9.5.json"))
+            .readText()
+        val bundle = requireNotNull(ConfigBundle.parse(fixture))
+
+        assertEquals(ConfigBundle.KIND_CONFIG, bundle.kind)
+        assertEquals(2, bundle.schema)
+        assertTrue(bundle.exportedBy.contains("0.9.5"))
+
+        val (migrated, warnings) = Migrations.migrate(bundle.schema, bundle.values)
+
+        assertTrue("public 0.9.5 must migrate directly without an unknown intermediate step", warnings.isEmpty())
+        bundle.values.forEach { (key, value) -> assertEquals("value changed for $key", value, migrated[key]) }
+        assertEquals("false", migrated["auto_sleep"])
+        assertTrue("the public fixture must be older than the current schema", SettingsRegistry.SCHEMA > bundle.schema)
+        migrated.forEach { (key, value) ->
+            val exposure = SettingsRegistry.parseExposure(key)
+            if (exposure != null) {
+                assertTrue("migrated exposure for $key should be boolean", value == "true" || value == "false")
+            } else {
+                val spec = requireNotNull(SettingsRegistry.spec(key)) { "fixture key is not a current setting: $key" }
+                assertTrue("migrated value for $key should remain valid", SettingValue.validate(spec, value) is Validation.Ok)
+            }
+        }
+    }
+
     @Test fun sameSchemaNoChange() {
         val (m, w) = Migrations.migrate(SettingsRegistry.SCHEMA, mapOf("a" to "1"))
         assertEquals(mapOf("a" to "1"), m)
@@ -126,6 +196,25 @@ class MigrationsTest {
         )
 
         assertEquals("25", migrated["auto_brightness_minimum_percent"])
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test fun schemaTwoAddsOnlyTheDeviceLocalAutoSleepSwitch() {
+        val (migrated, warnings) = Migrations.migrate(2, mapOf("a" to "1"))
+
+        assertEquals("false", migrated["auto_sleep"])
+        assertFalse(migrated.containsKey("auto_sleep_source_mode"))
+        assertFalse(migrated.containsKey("auto_sleep_ha_entities"))
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test fun schemaThreeBundlePreservesLegacyImplicitWakeAndExposureDefaults() {
+        val (migrated, warnings) = Migrations.migrate(3, emptyMap())
+
+        assertEquals("true", migrated["wake_on_wave"])
+        SettingsRegistry.LEGACY_DEFAULT_ON_HA_EXPOSURES.forEach { key ->
+            assertEquals("true", migrated["${SettingsRegistry.HA_EXPOSE_PREFIX}$key"])
+        }
         assertTrue(warnings.isEmpty())
     }
 }

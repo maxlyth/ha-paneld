@@ -110,7 +110,7 @@ class HelperSocketCompositionTest {
         val directory = Files.createTempDirectory("helper-socket-install-").toFile()
         val source = File(directory, "fixture.apk").apply { writeBytes(byteArrayOf(0x50, 0x4b, 0, 4, 0x7f)) }
         try {
-            assertEquals("OK", HelperInstallTransaction(SocketDaemon(socketPath)).install(source, File(directory, "staging")))
+            assertEquals(InstallOutcome.Succeeded, HelperInstallTransaction(SocketDaemon(socketPath)).install(source, File(directory, "staging")))
             assertFalse(source.exists())
             assertFalse(File("/tmp/hapaneld-helper-install-stream-test.apk").exists())
         } finally {
@@ -192,7 +192,7 @@ class HelperSocketCompositionTest {
         private val input = Channels.newInputStream(channel)
         private val output = Channels.newOutputStream(channel)
 
-        override fun bootstrap(command: String, deadline: HelperBootstrapDeadline): HelperBootstrapReply {
+        override fun bootstrap(command: String, deadline: MonotonicDeadline): HelperBootstrapReply {
             output.apply { write((command + "\n").toByteArray()); flush() }
             return readHelperBootstrapLine(input, {}, deadline)
         }

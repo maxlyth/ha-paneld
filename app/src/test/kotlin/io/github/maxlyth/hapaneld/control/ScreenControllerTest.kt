@@ -2,9 +2,11 @@ package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.platform.WakeTap
 import io.github.maxlyth.hapaneld.device.ScreenOff
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
@@ -99,6 +101,125 @@ class ScreenControllerTest {
         backlight.level = -1
         assertEquals(null, controller(blPower = null).first.observedDark())
         assertFalse("unknown must not trigger never-blank hardware changes", controller(blPower = null).first.looksDark())
+    }
+
+    @Test fun neverBlankRecoversDarkInteractivePanelsButNotAndroidSleep() {
+        val sc = ScreenController(
+            backlight, power, FakeRootShell(), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO,
+        )
+        backlight.level = 0
+        power.interactive = true
+        assertTrue(sc.recoverUnexpectedDark())
+        assertEquals(1, power.pulses)
+
+        power.interactive = false
+        backlight.level = 0
+        assertFalse("normal non-interactive Android sleep must not be woken", sc.recoverUnexpectedDark())
+    }
+
+    @Test fun neverBlankStillLeavesExplicitScreenOffAlone() {
+        val sc = ScreenController(
+            backlight, power, FakeRootShell(), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO,
+        )
+        power.interactive = true
+        sc.sleep()
+
+        assertFalse(sc.recoverUnexpectedDark())
+        assertTrue(sc.isIntendedOff())
+    }
+
+    @Test fun neverBlankRevalidatesInteractivityAfterTheBacklightRead() {
+        var reads = 0
+        val transitioningPower = object : io.github.maxlyth.hapaneld.platform.ScreenPower {
+            override fun isInteractive(): Boolean = ++reads == 1
+            override fun pulseWake() = Unit
+        }
+        val sc = ScreenController(
+            FakeBacklight(0), transitioningPower, FakeRootShell(), FakeDaemon(), wakeTap,
+            ScreenOff.BRIGHTNESS_ZERO,
+        )
+
+        assertFalse(sc.recoverUnexpectedDark())
+        assertEquals(2, reads)
+    }
+
+    @Test fun explicitScreenOffWinsWhileNeverBlankIsObservingDarkness() {
+        val observationStarted = CountDownLatch(1)
+        val releaseObservation = CountDownLatch(1)
+        var reads = 0
+        val blockingBacklight = object : Backlight {
+            val calls = Collections.synchronizedList(mutableListOf<String>())
+            override fun getBrightness(): Int {
+                if (++reads == 1) {
+                    observationStarted.countDown()
+                    assertTrue(releaseObservation.await(1, TimeUnit.SECONDS))
+                    return 0
+                }
+                return 120
+            }
+            override fun setBrightness(level: Int) { calls += "set:$level" }
+            override fun setBrightnessRaw(level: Int) { calls += "raw:$level" }
+        }
+        val sc = ScreenController(
+            blockingBacklight, power, FakeRootShell(), FakeDaemon(), wakeTap,
+            ScreenOff.BRIGHTNESS_ZERO,
+        )
+        var recovered: Boolean? = null
+        val recovery = Thread(
+            { recovered = sc.recoverUnexpectedDark() },
+            "test-never-blank-recovery",
+        ).apply { start() }
+
+        assertTrue(observationStarted.await(1, TimeUnit.SECONDS))
+        sc.sleep()
+        releaseObservation.countDown()
+        recovery.join(TimeUnit.SECONDS.toMillis(2))
+
+        assertFalse("recovery thread must finish", recovery.isAlive)
+        assertEquals(false, recovered)
+        assertTrue("the explicit screen-off must remain authoritative", sc.isIntendedOff())
+        assertEquals(listOf("raw:0"), blockingBacklight.calls)
+        assertEquals("the rejected recovery must not pulse wake", 0, power.pulses)
+    }
+
+    @Test fun positiveBrightnessWriteWinsWhileNeverBlankIsObservingDarkness() {
+        val observationStarted = CountDownLatch(1)
+        val releaseObservation = CountDownLatch(1)
+        var reads = 0
+        val blockingBacklight = object : Backlight {
+            @Volatile var level = 0
+            val calls = Collections.synchronizedList(mutableListOf<String>())
+            override fun getBrightness(): Int {
+                if (++reads == 1) {
+                    observationStarted.countDown()
+                    assertTrue(releaseObservation.await(1, TimeUnit.SECONDS))
+                    return 0
+                }
+                return level
+            }
+            override fun setBrightness(level: Int) { calls += "set:$level"; this.level = level }
+            override fun setBrightnessRaw(level: Int) { calls += "raw:$level"; this.level = level }
+        }
+        val sc = ScreenController(
+            blockingBacklight, power, FakeRootShell(), FakeDaemon(), wakeTap,
+            ScreenOff.BRIGHTNESS_ZERO,
+        )
+        var recovered: Boolean? = null
+        val recovery = Thread(
+            { recovered = sc.recoverUnexpectedDark() },
+            "test-never-blank-recovery",
+        ).apply { start() }
+
+        assertTrue(observationStarted.await(1, TimeUnit.SECONDS))
+        assertTrue(sc.actuateBrightnessIfOn { blockingBacklight.setBrightness(180) })
+        releaseObservation.countDown()
+        recovery.join(TimeUnit.SECONDS.toMillis(2))
+
+        assertFalse("recovery thread must finish", recovery.isAlive)
+        assertEquals(false, recovered)
+        assertEquals(180, blockingBacklight.level)
+        assertEquals(listOf("set:180"), blockingBacklight.calls)
+        assertEquals("the rejected recovery must not pulse wake", 0, power.pulses)
     }
 
     @Test fun privilegedRouteNeedsBlPowerReadbackToProveTheScreenLit() {
@@ -262,6 +383,56 @@ class ScreenControllerTest {
         assertEquals(0, power.pulses)
     }
 
+    @Test fun automaticSleepReturnsOwnershipOnlyWhenItCreatesTheOffEpoch() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+
+        val owned = sc.sleepAutomatically()
+
+        assertTrue(owned != null)
+        assertEquals(null, sc.sleepAutomatically())
+        assertEquals(WakeOutcome.WOKEN, sc.wakeAutomaticallyIfOwned(owned!!))
+        assertFalse(sc.isIntendedOff())
+    }
+
+    @Test fun automaticSleepCannotAdoptOrWakeAManualOff() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+
+        sc.sleep()
+
+        assertEquals(null, sc.sleepAutomatically())
+        assertTrue(sc.isIntendedOff())
+    }
+
+    @Test fun laterManualSleepInvalidatesAutomaticOwnershipWithoutWaking() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val owned = sc.sleepAutomatically()!!
+
+        sc.sleep()
+
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeAutomaticallyIfOwned(owned))
+        assertTrue(sc.isIntendedOff())
+        assertEquals(0, power.pulses)
+    }
+
+    @Test fun laterWakeAndOffEpochRejectsOldAutomaticOwner() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val old = sc.sleepAutomatically()!!
+        sc.wake()
+        val current = sc.sleepAutomatically()!!
+
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeAutomaticallyIfOwned(old))
+        assertEquals(WakeOutcome.WOKEN, sc.wakeAutomaticallyIfOwned(current))
+    }
+
+    @Test fun automaticWakeRevalidatesPolicyAdmissionInsideScreenLock() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val owned = sc.sleepAutomatically()!!
+
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeAutomaticallyIfOwned(owned) { false })
+        assertTrue(sc.isIntendedOff())
+        assertEquals(0, power.pulses)
+    }
+
     @Test fun observedPhysicalWakeClearsIntentAndInvalidatesQueuedGestureWithoutActuation() {
         val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
         val sc = ScreenController(backlight, power, FakeRootShell(), daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
@@ -380,13 +551,87 @@ class ScreenControllerTest {
     @Test fun tapWhileDarkWakesAndNotifies() {
         val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
         var notified = false
-        sc.onWakeByTap = { notified = true }
+        var proof: AutomaticOffEpoch? = AutomaticOffEpoch(-1L)
+        sc.onWakeByTap = { epoch -> notified = true; proof = epoch }
         sc.sleep()
         assertTrue(sc.isIntendedOff())
         wakeTap.fireTap()                     // simulate a touch on the dark screen
         assertFalse("tap must wake (clear intendedOff)", sc.isIntendedOff())
         assertFalse("tap must disarm the tap", wakeTap.armed)
         assertTrue("tap must notify so HA tracks screen=ON", notified)
+        assertNull("a manual OFF never produces automatic policy proof", proof)
+    }
+
+    @Test fun automaticTapReportsTheExactOwnedEpoch() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        var proof: AutomaticOffEpoch? = null
+        sc.onWakeByTap = { proof = it }
+        val epoch = checkNotNull(sc.sleepAutomatically())
+
+        wakeTap.fireTap()
+
+        assertEquals(epoch, proof)
+        assertFalse(sc.isIntendedOff())
+    }
+
+    @Test fun delayedTapFromAnOlderEpochCannotWakeANewerManualOff() {
+        val delayedTap = CapturingWakeTap()
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val sc = ScreenController(
+            backlight,
+            power,
+            FakeRootShell(),
+            daemon,
+            delayedTap,
+            ScreenOff.DAEMON_BLPOWER,
+        )
+        var notifications = 0
+        sc.onWakeByTap = { notifications++ }
+        sc.sleep()
+        val oldWorker = delayedTap.callbacks.single()
+
+        // A later manual OFF owns a new generation before the old observer's worker gets CPU time.
+        sc.sleep()
+        assertEquals(2, delayedTap.callbacks.size)
+        oldWorker()
+
+        assertTrue("old tap must not wake the replacement manual OFF", sc.isIntendedOff())
+        assertEquals(0, power.pulses)
+        assertEquals(0, notifications)
+        delayedTap.callbacks.last().invoke()
+        assertFalse(sc.isIntendedOff())
+        assertEquals(1, power.pulses)
+        assertEquals(1, notifications)
+    }
+
+    @Test fun delayedTapFromAnOlderEpochCannotWakeANewerAutomaticOff() {
+        val delayedTap = CapturingWakeTap()
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val sc = ScreenController(
+            backlight,
+            power,
+            FakeRootShell(),
+            daemon,
+            delayedTap,
+            ScreenOff.DAEMON_BLPOWER,
+        )
+        var notifications = 0
+        sc.onWakeByTap = { notifications++ }
+        sc.sleepAutomatically()
+        val oldWorker = delayedTap.callbacks.single()
+
+        sc.wake()
+        sc.sleepAutomatically()
+        assertEquals(2, delayedTap.callbacks.size)
+        oldWorker()
+
+        assertTrue("old tap must not wake the replacement automatic OFF", sc.isIntendedOff())
+        assertEquals("only the explicit intervening wake may pulse", 1, power.pulses)
+        assertEquals(0, notifications)
+        delayedTap.callbacks.last().invoke()
+        assertFalse(sc.isIntendedOff())
+        assertEquals(2, power.pulses)
+        assertEquals(1, notifications)
     }
 
     // --- guaranteed-wake degradation: no overlay -> dim instead of a true (unwakeable) off ---
@@ -440,6 +685,17 @@ class ScreenControllerTest {
         assertTrue(daemon.sent.isEmpty())
         assertFalse(sc.actuateBrightnessIfOn { backlight.setBrightness(0) })
         assertEquals(160, backlight.level)
+    }
+
+    /** Retains callbacks after disarm to model an OverlayWakeTap worker already queued on another thread. */
+    private class CapturingWakeTap : WakeTap {
+        val callbacks = mutableListOf<() -> Unit>()
+        override fun canArm() = true
+        override fun arm(onTap: () -> Unit): Boolean {
+            callbacks += onTap
+            return true
+        }
+        override fun disarm() = Unit
     }
 
     @Test fun exitRecoveryRetriesWakeUntilPrivilegedReadbackIsAffirmativelyLit() {

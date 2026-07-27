@@ -1,8 +1,9 @@
 package io.github.maxlyth.hapaneld.shizuku
 
+import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.StreamDeadline
 import java.io.ByteArrayOutputStream
-import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -29,7 +30,7 @@ internal class ShizukuInstallRunner(
 ) {
     fun run(source: InputStream, expectedBytes: Long, process: ShizukuInstallProcess): String? {
         require(timeoutMs > 0L)
-        val budget = InstallTimeBudget(timeoutMs, nanoTime)
+        val budget = MonotonicDeadline(timeoutMs, nanoTime)
         val timedOut = AtomicBoolean(false)
         val reply = ByteArrayOutputStream()
         val reader = thread(name = "hapaneld-shizuku-install-output", isDaemon = true) {
@@ -78,16 +79,7 @@ internal class ShizukuInstallRunner(
     }
 
     private fun copyExact(input: InputStream, output: OutputStream, expected: Long) {
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var copied = 0L
-        while (copied < expected) {
-            val wanted = minOf(buffer.size.toLong(), expected - copied).toInt()
-            val read = input.read(buffer, 0, wanted)
-            if (read < 0) throw EOFException("short APK stream")
-            if (read == 0) continue
-            output.write(buffer, 0, read)
-            copied += read
-        }
+        BoundedStreams.copyExact(input, output, expected)
         if (input.read() != -1) throw java.io.IOException("extra APK bytes")
     }
 
@@ -108,26 +100,8 @@ internal class ShizukuInstallRunner(
         runCatching { closeable.close() }
     }
 
-    private class InstallTimeBudget(timeoutMs: Long, private val nanoTime: () -> Long) {
-        private val deadlineNanos = saturatingAdd(nanoTime(), millisToNanos(timeoutMs))
-
-        fun remainingMs(): Long {
-            val remainingNanos = deadlineNanos - nanoTime()
-            if (remainingNanos <= 0L) return 0L
-            return ((remainingNanos - 1L) / NANOS_PER_MILLISECOND) + 1L
-        }
-
-        private fun millisToNanos(value: Long): Long =
-            if (value > Long.MAX_VALUE / NANOS_PER_MILLISECOND) Long.MAX_VALUE
-            else value * NANOS_PER_MILLISECOND
-
-        private fun saturatingAdd(left: Long, right: Long): Long =
-            if (right > 0L && left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
-    }
-
     private companion object {
         const val MAX_REPLY_BYTES = 16 * 1024
         const val CLEANUP_TIMEOUT_MS = 1_000L
-        const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }

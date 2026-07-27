@@ -1,12 +1,22 @@
 package io.github.maxlyth.hapaneld.http
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceUpdate
+import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisite
+import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisitePhase
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.DashboardEntityBackupState
+import io.github.maxlyth.hapaneld.DiscoveryResult
+import io.github.maxlyth.hapaneld.GuidedSetupPresence
 import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.HaAuthSnapshot
+import io.github.maxlyth.hapaneld.HaDiscovery
+import io.github.maxlyth.hapaneld.LiveSettingRequestOutcome
+import io.github.maxlyth.hapaneld.PanelStatus
+import io.github.maxlyth.hapaneld.haSignInPending
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
 import io.github.maxlyth.hapaneld.stableOwner
@@ -23,13 +33,17 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.AdaptiveLuxCurve
 import io.github.maxlyth.hapaneld.control.CompanionDb
+import io.github.maxlyth.hapaneld.control.CompanionDataLease
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.DisplaySizingObservation
 import io.github.maxlyth.hapaneld.control.InteractiveController
+import io.github.maxlyth.hapaneld.control.PrivilegeRoute
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
@@ -39,9 +53,12 @@ import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthState
 import io.github.maxlyth.hapaneld.control.observePrivilegedRoutes
+import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
+import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
+import io.github.maxlyth.hapaneld.dashboard.SchemaReconcileAction
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.LedMechanism
 import io.github.maxlyth.hapaneld.device.TameCandidate
@@ -55,6 +72,8 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.persistence.AppState
+import io.github.maxlyth.hapaneld.persistence.ConfigVault
+import io.github.maxlyth.hapaneld.persistence.StateBackupPolicy
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
@@ -75,15 +94,21 @@ import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.isLocalSource
+import io.github.maxlyth.hapaneld.util.isLoopbackPeer
+import io.github.maxlyth.hapaneld.util.isRoutable
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
+import io.github.maxlyth.hapaneld.util.InstallOutcome
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
-import io.github.maxlyth.hapaneld.util.KeyedLatestDispatcher
+import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import io.github.maxlyth.hapaneld.util.GenerationSingleFlight
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.UpdateChecker
+import io.github.maxlyth.hapaneld.util.withStagedFiles
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.parseQueryString
@@ -106,6 +131,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -119,6 +145,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -166,11 +193,23 @@ internal fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SH
     .digest(bytes)
     .joinToString("") { "%02x".format(it) }
 
+/** User-facing remediation for the renderer-specific recovery authority. */
+internal fun dashboardRecoveryWarning(state: PanelStatus.DashboardRecoveryState): String? = when (state) {
+    PanelStatus.DashboardRecoveryState.NONE -> null
+    PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER ->
+        "⛔ <b>Built-in renderer stopped retrying</b> after repeated WebView failures. " +
+            "Update or repair System WebView, then use Reload dashboard from the panel navbar or Dashboard tab."
+    PanelStatus.DashboardRecoveryState.EXTERNAL_RENDERER ->
+        "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
+            "Reinstall or downgrade the dashboard/Companion app (see <a href=\"/install\">updates</a>), or reboot the panel."
+}
+
 internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
     "dashboard_package",
     "home_dashboard",
     "ha_url",
     "dashboard_fullscreen",
+    "dashboard_native_kiosk",
     "dashboard_overscroll",
     "dashboard_idle_return_min",
     "dashboard_zoom",
@@ -282,29 +321,6 @@ internal suspend fun retainCompanionLeaseUntilHelperIdle(
     afterRelease()
 }
 
-/**
- * Resolve one app-side Companion lease. A BUSY/indeterminate exchange retains durable suppression;
- * every terminal or explicit never-submitted outcome clears it immediately. If clearing cannot be
- * made durable, retain the lease and let status reconciliation retry rather than launching partially.
- *
- * Returns true when ownership was transferred to asynchronous retention.
- */
-internal fun settleCompanionOperationLease(
-    lease: CompanionDataOperationGate.Lease,
-    operationState: CompanionDataOperationState,
-    possiblyInFlight: Boolean,
-    retain: (CompanionDataOperationGate.Lease, () -> Unit) -> Unit,
-    afterRelease: () -> Unit,
-): Boolean {
-    if (possiblyInFlight || !operationState.clear()) {
-        retain(lease, afterRelease)
-        return true
-    }
-    lease.close()
-    afterRelease()
-    return false
-}
-
 /** Bound config mutations before Ktor or JSONObject materializes attacker-controlled form/JSON data. */
 internal suspend fun receiveBoundedConfigParameters(
     call: ApplicationCall,
@@ -383,10 +399,10 @@ internal interface AutoBrightnessHttpApi {
     companion object {
         val UNAVAILABLE: AutoBrightnessHttpApi = object : AutoBrightnessHttpApi {
             override fun statusJson(): String =
-                """{"available":false,"state":"unavailable","detail":"Adaptive brightness runtime is not connected."}"""
+                """{"available":false,"state":"unavailable","sourceRevision":null,"detail":"Adaptive brightness runtime is not connected."}"""
 
             override fun historyJson(hours: Int, sensitivity: Int?, minimumPercent: Int?): String =
-                """{"available":false,"hours":$hours,"bucket_minutes":0,"points":[]}"""
+                """{"available":false,"hours":$hours,"bucket_minutes":0,"sourceRevision":null,"latestEpochMinute":null,"points":[]}"""
 
             override fun haSourcesJson(query: String, limit: Int): String =
                 """{"available":false,"items":[]}"""
@@ -426,6 +442,51 @@ internal data class AutoBrightnessHistoryParameters(
     val minimumPercent: Int?,
 )
 
+/** Compact read-only boundary over the service-owned auto-sleep runtime. Configuration continues to
+ * use the ordinary schema/config transaction; the runtime owns the coherent bounded status JSON. */
+internal interface AutoSleepHttpApi {
+    fun statusJson(): String
+    suspend fun historyJson(hours: Int = 6): String
+    suspend fun prerequisite(): HaPanelAreaPrerequisite
+    fun setSourceIncluded(areaKey: String, sourceKey: String, included: Boolean): HaPresenceSourceUpdate
+
+    /** The panel's area changed; the runtime must re-read its configuration. Kept abstract so a service
+     * implementation cannot silently compile with a no-op while the running discovery keeps stale room. */
+    fun noteAreaChanged()
+
+    companion object {
+        val UNAVAILABLE: AutoSleepHttpApi = object : AutoSleepHttpApi {
+            override fun statusJson(): String =
+                """{"available":false,"enabled":false,"phase":"unavailable","reason":"runtime_unavailable","learned_lease_ms":null,"source_count":0,"manual_suppression":false,"detail":""}"""
+
+            override suspend fun historyJson(hours: Int): String =
+                """{"available":false,"hours":$hours,"bucket_ms":60000,"window_start_epoch_ms":null,"window_end_epoch_ms":null,"warmup_ms":3600000,"learned_lease_ms":null,"source_scope":"selected_area_sources","area_sources_only":true,"source_count":0,"exclusions":["past_touch","panel_proximity","manual_override_or_suppression","screen_wake","historical_learning_changes"],"segments":[],"detail":"runtime_unavailable"}"""
+
+            override suspend fun prerequisite() = HaPanelAreaPrerequisite(
+                HaPanelAreaPrerequisitePhase.UNAVAILABLE,
+                detail = "Auto-sleep Area discovery is unavailable",
+            )
+
+            override fun noteAreaChanged() {} // no runtime exists to refresh
+
+            override fun setSourceIncluded(areaKey: String, sourceKey: String, included: Boolean) =
+                HaPresenceSourceUpdate.UNAVAILABLE
+        }
+    }
+}
+
+internal fun autoSleepHistoryHours(hours: String?): Int {
+    val parsed = hours?.toIntOrNull() ?: if (hours == null) 6 else null
+    require(parsed != null && parsed in 1..48) { "hours must be between 1 and 48" }
+    return parsed
+}
+
+internal fun autoSleepConfigErrorJson(error: String, message: String): String = JSONObject()
+    .put("ok", false)
+    .put("error", error)
+    .put("message", message)
+    .toString()
+
 internal fun autoBrightnessHistoryParameters(
     hours: String?,
     sensitivity: String?,
@@ -459,6 +520,14 @@ internal fun builtinRendererNeedsConnection(
     return !effectiveCredentials
 }
 
+internal fun shouldDiscoverHaUrlForMqttOnboarding(currentHaUrl: String, posted: Parameters): Boolean {
+    if (currentHaUrl.isNotBlank()) return false
+    if (posted["ha_url"] != null) return false
+    return posted["mqtt_broker"]?.isNotBlank() == true ||
+        posted["mqtt_user"] != null ||
+        posted["mqtt_password"] != null
+}
+
 /**
  * Validate and normalize every direct-config value in one pass. Historically the bespoke route
  * normalized only panel_id while malformed booleans became false, numeric values were silently
@@ -481,10 +550,10 @@ internal fun normalizeConfigPostParameters(raw: Parameters): ConfigPostParameter
                         is Validation.Bad -> return ConfigPostParameters.Bad(result.reason)
                     }
                 }
-                name.startsWith("ha_expose_") -> {
-                    val target = name.removePrefix("ha_expose_")
-                    val targetSpec = SettingsRegistry.spec(target)
-                    if (targetSpec?.ha == null) return ConfigPostParameters.Bad("$name: unknown exposure setting")
+                name.startsWith(SettingsRegistry.HA_EXPOSE_PREFIX) -> {
+                    if (SettingsRegistry.parseExposure(name) == null) {
+                        return ConfigPostParameters.Bad("$name: unknown exposure setting")
+                    }
                     SettingValue.parseBool(value)?.toString()
                         ?: return ConfigPostParameters.Bad("$name: expected a boolean")
                 }
@@ -558,6 +627,39 @@ internal fun dashboardControlButtonHtml(
 internal fun shouldSnapshotConfigSetting(key: String, zigbeeRouterConfigured: Boolean): Boolean =
     key != "zigbee_router" || zigbeeRouterConfigured
 
+/** The Companion-dependent parts of the backup card. Empty throughout when the app is absent. */
+internal data class BackupCompanionCopy(
+    val row: String,
+    val restoreWarning: String,
+    val bundleSuffix: String,
+)
+
+/**
+ * Decides what the backup card may say about the HA Companion.
+ *
+ * A panel without the Companion installed has nothing to say about it: the include-login checkbox would
+ * offer to back up a login that does not exist, and the "needs the current helper" note would advertise a
+ * capability for an absent app. So every mention is gated on the app being [installed], and only the
+ * *offer* additionally requires the [helper]. Keeping this pure keeps it directly testable.
+ */
+internal fun backupCompanionCopy(installed: Boolean, helper: Boolean): BackupCompanionCopy {
+    if (!installed) return BackupCompanionCopy("", "", "")
+    if (!helper) {
+        return BackupCompanionCopy(
+            row = """<p class="note">HA Companion login backup needs the current ha-paneld helper. """ +
+                """Update or reprovision this rooted panel to enable it.</p>""",
+            restoreWarning = "",
+            bundleSuffix = "",
+        )
+    }
+    return BackupCompanionCopy(
+        row = """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem">""" +
+            """<input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>""",
+        restoreWarning = " and rewrites the HA Companion login (force-stops it)",
+        bundleSuffix = " + the HA Companion login",
+    )
+}
+
 internal fun projectConfigSnapshot(
     specs: Iterable<SettingSpec>,
     zigbeeRouterConfigured: Boolean,
@@ -571,6 +673,51 @@ internal fun projectConfigSnapshot(
         snapshot[spec.key] = effectiveValue(spec)
     }
     return snapshot
+}
+
+internal data class DirectConfigMutationPlan(
+    val changedKeys: Set<String>,
+    val changedLive: List<Pair<String, String>>,
+) {
+    val isNoOp: Boolean get() = changedKeys.isEmpty()
+    val requiresReconfigure: Boolean get() = changedKeys.any { it !in SettingsRegistry.liveApplyKeys() }
+}
+
+/** Server-side equality is the transaction authority; browser dirty tracking is only a UX hint. */
+internal fun planDirectConfigMutation(
+    posted: Map<String, String>,
+    before: Map<String, String>,
+): DirectConfigMutationPlan {
+    val liveKeys = SettingsRegistry.liveApplyKeys()
+    val changed = linkedSetOf<String>()
+    posted.forEach { (key, value) ->
+        val spec = SettingsRegistry.spec(key)
+        val unchangedSecretPlaceholder = spec?.secret == true && value.isEmpty()
+        val equivalent = when (key) {
+            "home_dashboard" -> normalizeDashboardEntityPath(value) ==
+                normalizeDashboardEntityPath(before[key].orEmpty())
+            else -> before[key] == value
+        }
+        if (!unchangedSecretPlaceholder && !equivalent) changed += key
+    }
+    return DirectConfigMutationPlan(
+        changedKeys = changed,
+        changedLive = liveKeys.mapNotNull { key ->
+            posted[key]?.takeIf { key in changed }?.let { key to it }
+        },
+    )
+}
+
+internal fun configMutationWantsJson(accept: String?, contentType: String?): Boolean =
+    accept?.contains("application/json", ignoreCase = true) == true ||
+        contentType?.startsWith("application/json", ignoreCase = true) == true
+
+internal fun configMutationHtml(message: String): String {
+    val escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return "<!doctype html><meta charset=utf-8>" +
+        "<meta http-equiv=refresh content='2;url=/configure'>" +
+        "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+        escaped + "</body>"
 }
 
 /** Schema-1 backups made before ownership-aware omission cannot distinguish untouched vendor state
@@ -592,6 +739,16 @@ internal data class ManagementProjection(
     val capabilityRows: List<DiagReader.Cap>,
 )
 
+internal data class ConfigDiscoverySuggestions(
+    val mqttBroker: String = "",
+    val haUrl: String = "",
+    /** Why [haUrl] is empty, so setup can explain rather than leave the user at a blank field. */
+    val haDiscovery: DiscoveryResult = DiscoveryResult(),
+)
+
+private const val SETUP_PRESENCE_HEADER = "X-ha-paneld-setup-presence"
+private const val SETUP_PRESENCE_ACTIVE = "active"
+
 class PaneldServer internal constructor(
     private val config: Config,
     private val cacheDir: File,
@@ -605,11 +762,12 @@ class PaneldServer internal constructor(
     // Service-owned latest-wins audio lane. False means teardown has closed admission.
     private val playAudio: (String) -> Boolean,
     // Called after this server has written new settings to [config]; the service rebuilds MQTT/mDNS.
-    private val onReconfigure: () -> Unit,
+    private val onReconfigure: (Set<String>) -> Unit,
     // Applies a single behaviour setting through the MQTT bridge's command path (persist → drive
     // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
-    // to an HA command. Returns true if the key was a recognised live setting.
-    private val applySetting: (String, String) -> Boolean,
+    // to an HA command while preserving whether durable desired state is still waiting for actuation.
+    private val applySetting: (String, String) -> LiveSettingRequestOutcome,
+    private val pendingLiveSettings: () -> Map<String, String> = { emptyMap() },
     // Fresh non-transient controller authorities for config export/diff/concurrency (touch sound,
     // network ADB and Zigbee intent). ManagementProjection owns the broader render/capability view.
     private val configLiveValues: () -> Map<String, String> = { emptyMap() },
@@ -638,17 +796,30 @@ class PaneldServer internal constructor(
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
     // Bounded EFR32 health snapshot, or null when this panel has no radio gateway.
     private val radioStatus: () -> ZigbeeHealthSnapshot? = { null },
+    /**
+     * The MQTT bridge's canonical lifecycle token (a volatile read, so free to poll). Supplied as the raw
+     * token rather than the info page's prose because mapping prose back to a state fails silently: an
+     * unrecognised string reads as "still connecting", so setup guidance stops with no visible symptom.
+     */
+    private val mqttState: () -> String = { "" },
     // Reassert Repeater mode through the service-owned serialized Zigbee actuator. Admitted only when
     // the persisted router switch is explicitly ON; false means the runtime lane is unavailable.
     private val onZigbeeJoinRetry: () -> Boolean = { false },
     // LAN ha-paneld peers discovered over mDNS — powers the header panel switcher. Injected by the service
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
+    // mDNS can fail independently of HTTP and MQTT, leaving the panel absent from peer switchers.
+    // This supplies a concise operator warning for the status endpoint when that happens.
+    private val mdnsWarning: () -> String? = { null },
+    // Proposed values for blank MQTT/HA fields. Discovery is blocking, so the route invokes this on IO;
+    // values remain unsaved until the user accepts them with the normal Configure Save action.
+    private val configDiscoverySuggestions: () -> ConfigDiscoverySuggestions = { ConfigDiscoverySuggestions() },
     // Shared with the service startup path: serializes renderer config commit → atomic Companion borrow →
     // launch, and retries an interrupted built-in switch from its durable blank-URL state.
     private val rendererPreparation: RendererPreparationCoordinator,
     private val entityLearning: EntityLearningManager,
     private val autoBrightnessHttpApi: AutoBrightnessHttpApi = AutoBrightnessHttpApi.UNAVAILABLE,
+    private val autoSleepHttpApi: AutoSleepHttpApi = AutoSleepHttpApi.UNAVAILABLE,
     private val haOAuthExchange: (String, String, String) -> HaLink.AuthorizationCodeExchange =
         HaLink::exchangeAuthorizationCode,
     private val companionDataOperationState: CompanionDataOperationState =
@@ -687,10 +858,6 @@ class PaneldServer internal constructor(
         )
         return false
     }
-
-    private fun isLoopbackPeer(peer: String): Boolean = runCatching {
-        java.net.InetAddress.getByName(peer.substringBefore('%').removePrefix("/")).isLoopbackAddress
-    }.getOrDefault(false)
 
     private suspend fun rejectHardenedNetworkAdb(call: ApplicationCall, requested: String?): Boolean {
         if (!config.hardenedSecurityEnabled || SettingValue.parseBool(requested.orEmpty()) != true) {
@@ -734,30 +901,12 @@ class PaneldServer internal constructor(
         runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime.toString() }
             .getOrDefault(Config.VERSION)
 
-    /** True if [host] (the request's source IP) is a LAN-local address: loopback, RFC1918, link-local, or
-     *  IPv6 ULA. Global/public sources return false → 403. Parses with InetAddress, which unmaps an
-     *  IPv4-mapped IPv6 source (`::ffff:a.b.c.d`) to its IPv4 form, so the dual-stack bind can't smuggle a
-     *  public IPv4 past the RFC1918 check. Strips any `%zone` and leading `/`. */
-    private fun isLocalSource(host: String): Boolean = runCatching {
-        val a = java.net.InetAddress.getByName(host.substringBefore('%').removePrefix("/"))
-        a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isAnyLocalAddress ||
-            (a is java.net.Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc) // fc00::/7 ULA
-    }.getOrDefault(false)
-
     // Panel-info rows blurred by default (screenshot hygiene) — identity + network values a casual share
     // shouldn't leak. "Reveal" un-blurs them. Not access control: the values are still in the page source.
     private val SECRET_FIELDS = setOf("Device ID", "MQTT")
     // Address rows blur ONLY when the value is globally ROUTABLE — an unroutable RFC1918 / ULA / link-local
     // address (e.g. the LAN IPv4, or a ULA v6) has no external use, so it stays visible.
     private val ADDRESS_FIELDS = setOf("Local IP", "Local IPv6")
-
-    /** True only for a parseable, globally-routable address (not loopback / RFC1918 / ULA / link-local).
-     *  Unparseable values (e.g. "—") return false → not blurred. */
-    private fun isRoutable(host: String): Boolean = runCatching {
-        val a = java.net.InetAddress.getByName(host.substringBefore('%').removePrefix("/"))
-        !(a.isLoopbackAddress || a.isLinkLocalAddress || a.isSiteLocalAddress || a.isAnyLocalAddress ||
-            (a is java.net.Inet6Address && (a.address[0].toInt() and 0xfe) == 0xfc))
-    }.getOrDefault(false)
 
     /** Appends physical dimensions only when the device profile supplies independently verified PPI.
      *  Logical density is a layout setting and must never be used to infer the panel's physical size. */
@@ -790,6 +939,14 @@ class PaneldServer internal constructor(
             if (prefs.edit().putString("secret", generated).commit()) generated else ""
         }
     }
+    /**
+     * The most recent Home Assistant discovery verdict, so `GET /setup` can explain a blank URL without
+     * running a browse of its own. A poll must never start a ~4s multicast sweep; discovery happens on the
+     * paths that already do it (the suggestion route, and the MQTT-onboarding save) and leaves its result
+     * here.
+     */
+    @Volatile private var lastHaDiscovery: DiscoveryResult = DiscoveryResult()
+
     private val haOAuthFlow = HaOAuthFlow()
     private val haOAuthStartLock = Any()
     private val haCurrentUser = HaCurrentUserClient(config)
@@ -797,7 +954,12 @@ class PaneldServer internal constructor(
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
     private val inspectLock = Any()
+    private val directConfigMutationLock = Any()
+    private val haAreaWarmLock = Any()
     @Volatile private var stopping = true
+    private var haAreaJob: kotlinx.coroutines.Job? = null
+    @Volatile private var haAreaWarmJob: kotlinx.coroutines.Job? = null
+    private var haAreaWriteJob: kotlinx.coroutines.Job? = null
     private val tameReconciliation = TameReconcileAuthority(
         readDesired = { config.tameVendorPackages.toSet() },
         reconcile = { desired ->
@@ -821,23 +983,36 @@ class PaneldServer internal constructor(
         },
     )
     private sealed class RemoteControl(val key: String) {
-        class Tap(val x: Float, val y: Float, val loopback: Boolean = false) : RemoteControl("tap")
+        class Tap(
+            val x: Float,
+            val y: Float,
+            val loopback: Boolean = false,
+            val capture: Boolean = false,
+            val requestId: Long? = null,
+            val executeBeforeElapsedMs: Long? = null,
+            val completeBeforeElapsedMs: Long? = null,
+            val completion: CompletableDeferred<TapCaptureResult>? = null,
+        ) : RemoteControl("tap")
         class Action(val name: String) : RemoteControl(name)
     }
-    private val remoteControls: KeyedLatestDispatcher<String, RemoteControl> = KeyedLatestDispatcher(
+    private val remoteInputSequence = AtomicLong()
+    private val remoteControls: LatestDispatcher<String, RemoteControl> = LatestDispatcher(
         threadName = "ha-paneld-remote-control",
         maxPendingKeys = 8,
         consume = { _, command -> executeRemoteControl(command) },
+        onDiscard = { _, command ->
+            (command as? RemoteControl.Tap)?.completion?.complete(TapCaptureResult.NotExecuted)
+        },
     )
     private val clearStorageGate = GenerationSingleFlight()
 
     private fun executeRemoteControl(command: RemoteControl) {
         FeatureCosts.registry.setBacklog(FeatureCostOperation.REMOTE_INPUT, remoteControls.pendingCount())
         val cost = FeatureCosts.registry.span(FeatureCostOperation.REMOTE_INPUT).work(units = 1)
-        val ok = runCatching {
+        val startedAt = SystemClock.elapsedRealtime()
+        val ok = try {
             when (command) {
-                is RemoteControl.Tap -> if (config.hardenedSecurityEnabled && !command.loopback) false
-                    else interactive.tap(command.x, command.y)
+                is RemoteControl.Tap -> executeRemoteTap(command)
                 is RemoteControl.Action -> when (command.name) {
                     "back" -> interactive.back()
                     "recents" -> interactive.recents()
@@ -849,9 +1024,61 @@ class PaneldServer internal constructor(
                     else -> false
                 }
             }
-        }.getOrDefault(false)
+        } catch (error: Exception) {
+            if (error is InterruptedException) Thread.currentThread().interrupt()
+            (command as? RemoteControl.Tap)?.completion?.complete(TapCaptureResult.CompletionUnknown())
+            Log.w(TAG, "remote control execution failed", error)
+            false
+        }
         if (!ok) cost.outcome(FeatureCostOutcome.FAILURE)
         cost.close()
+        (command as? RemoteControl.Tap)?.requestId?.let { requestId ->
+            Log.i(TAG, "remote input id=$requestId complete ok=$ok elapsed_ms=" +
+                (SystemClock.elapsedRealtime() - startedAt))
+        }
+    }
+
+    private fun executeRemoteTap(command: RemoteControl.Tap): Boolean {
+        if (!command.capture) {
+            if (config.hardenedSecurityEnabled && !command.loopback) return false
+            return interactive.tapWithRoute(command.x, command.y) != null
+        }
+        val executeBefore = command.executeBeforeElapsedMs
+        val completeBefore = command.completeBeforeElapsedMs
+        if (executeBefore == null || completeBefore == null) {
+            command.completion?.complete(TapCaptureResult.CompletionUnknown())
+            return false
+        }
+        val result = performTapCapture(
+            execution = TapCaptureExecution(
+                command.x,
+                command.y,
+                command.loopback,
+                executeBefore,
+                completeBefore,
+                REMOTE_TAP_CAPTURE_SETTLE_MS,
+                REMOTE_SCREENSHOT_WAIT_MS,
+            ),
+            hardened = { config.hardenedSecurityEnabled },
+            nowElapsedMs = SystemClock::elapsedRealtime,
+            tap = interactive::tapOnceWithRoute,
+            settle = { waitMs ->
+                try {
+                    Thread.sleep(waitMs)
+                    true
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    false
+                }
+            },
+            screenshot = interactive::screenshotOnceWithRoute,
+        )
+        command.completion?.complete(result)
+        if (result is TapCaptureResult.Success) {
+            Log.i(TAG, "remote input id=${command.requestId} routes=" +
+                "${result.inputRoute.name.lowercase()}/${result.screenshotRoute.name.lowercase()}")
+        }
+        return result is TapCaptureResult.Success
     }
     private val pendingApks = PendingUploadStore()
 
@@ -879,6 +1106,19 @@ class PaneldServer internal constructor(
                 // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 192.168.x etc.
                 if (!isLocalSource(call.request.origin.remoteAddress)) {
                     call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
+                    return@intercept finish()
+                }
+                // While guided setup is waiting on a person, every HTML page follows the panel into the
+                // wizard — a laptop tab opened before the first run began otherwise keeps showing the old
+                // page and never presents the wizard (hardware review). After the source gate on purpose:
+                // page redirects are a LAN-client courtesy, never a response to an unverified peer.
+                // Scope: exact page paths only (API, assets, OAuth untouched); a `wiz_escape` cookie —
+                // set by the wizard's own "Skip and exit" link — is honoured so the escape hatch cannot
+                // become a trap.
+                if (call.request.uri.substringBefore('?') in WIZARD_REDIRECT_PAGES &&
+                    call.request.cookies["wiz_escape"] == null && setupNeedsUser()
+                ) {
+                    call.respondRedirect("/setup")
                     return@intercept finish()
                 }
                 // CSRF guard: a LAN browser on a malicious page must not be able to silently drive a
@@ -941,7 +1181,15 @@ class PaneldServer internal constructor(
                                 val apk = claimed.file
                                 val job = scope.launch {
                                     val result = runCatching { AppInstaller.installLocalApk(appContext, apk) }
-                                        .getOrElse { "error: ${it.message}" }
+                                        .fold(
+                                            onSuccess = { outcome ->
+                                                when (outcome) {
+                                                    InstallOutcome.Succeeded -> "OK"
+                                                    is InstallOutcome.Failure -> outcome.message
+                                                }
+                                            },
+                                            onFailure = { "error: ${it.message}" },
+                                        )
                                     Log.i(TAG, "APK upload install: $result")
                                     InstallProgress.finish(progress, result)
                                 }
@@ -990,6 +1238,22 @@ class PaneldServer internal constructor(
                 // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
                 // other tabs are dedicated pages that consume /api/v1.
                 get("/configure") { call.respondText(page("configure", "Configure", configureBody()), ContentType.Text.Html) }
+                get("/setup") {
+                    // No data-cfg, unlike every other page: buildwatch.js reloads /configure when settings
+                    // change underneath it, and that same reload mid-step would throw away what the user is
+                    // typing. The wizard tracks server state by polling instead. The build token stays, so a
+                    // reinstall still refreshes the page.
+                    call.respondText(
+                        pageShell(
+                            active = "setup",
+                            sectionTitle = "Set up",
+                            bodyAttrs = """data-build="${buildToken()}"""",
+                            rightControls = ghLink(),
+                            body = setupBody(),
+                        ),
+                        ContentType.Text.Html,
+                    )
+                }
                 get("/profiles") { call.respondText(page("profiles", "Profile", profilesBody()), ContentType.Text.Html) }
                 // The experimental remote-control page is withheld from 0.9.2. Keep old bookmarks
                 // useful while its tap-injection UX is reviewed for a later release.
@@ -1055,6 +1319,133 @@ class PaneldServer internal constructor(
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
                     get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
+                    get("/config/home-dashboards") {
+                        val catalog = entityLearning.homeDashboardCatalog()
+                        val items = catalog.items.joinToString(",") { dashboard ->
+                            "{\"path\":${jsonStr(dashboard.path)},\"title\":${jsonStr(dashboard.title)}," +
+                                "\"icon\":${jsonStr(dashboard.icon)},\"group\":${jsonStr(dashboard.group)}}"
+                        }
+                        // `default` reports whether the ACCOUNT carries a real server-side default dashboard
+                        // (HA ≥ 2025.12 stores the profile picker's choice per user). When it does not, the
+                        // pickers demote "follow the account's default" and recommend nominating one.
+                        val default = "{\"explicit\":${catalog.default.explicit}," +
+                            "\"path\":${jsonStr(catalog.default.path)}}"
+                        call.respondText("{\"items\":[$items],\"default\":$default}", ContentType.Application.Json)
+                    }
+                    get("/config/ha-area") {
+                        // Registry LISTS are readable by any authenticated HA user; `admin` tells the
+                        // pickers whether editing is honest to offer (moving a device is admin-only).
+                        val snapshot = captureHaAreaSnapshot()
+                        val catalog = applyHaAreaPrecedence(snapshot, haAreaCatalogFor(snapshot))
+                        val areas = catalog.areas.joinToString(",") { area ->
+                            "{\"area_id\":${jsonStr(area.areaId)},\"name\":${jsonStr(area.name)}," +
+                                "\"icon\":${jsonStr(area.icon)}}"
+                        }
+                        val device = "{\"found\":${catalog.device.found}," +
+                            "\"area_id\":${jsonStr(catalog.device.areaId)}," +
+                            "\"area_name\":${jsonStr(catalog.device.areaName)}}"
+                        call.respondText(
+                            "{\"areas\":[$areas],\"device\":$device,\"admin\":${catalog.admin}," +
+                                "\"queried\":${catalog.queried},\"requested\":${jsonStr(config.haArea)}," +
+                                "\"ha_username\":${jsonStr(catalog.haUsername)}}",
+                            ContentType.Application.Json,
+                        )
+                    }
+                    get("/config/probe-broker") {
+                        // Pre-flight from the PANEL's network vantage — the only one that matters — so
+                        // the wizard can name an unresolvable host or closed port in ~2s instead of
+                        // committing the save and discovering it minutes into the connect workflow.
+                        // Read-only: resolves and touches a TCP port, changes nothing.
+                        val url = call.request.queryParameters["url"].orEmpty()
+                        val body = withContext(Dispatchers.IO) { probeBrokerJson(url) }
+                        call.respondText(body, ContentType.Application.Json)
+                    }
+                    get("/config/discovery") {
+                        val needsMqtt = config.mqttBroker.isBlank()
+                        val needsHa = config.haUrl.isBlank()
+                        val found = if (needsMqtt || needsHa) {
+                            withContext(Dispatchers.IO) { configDiscoverySuggestions() }
+                                .also { lastHaDiscovery = it.haDiscovery }
+                        } else ConfigDiscoverySuggestions()
+                        val mqtt = found.mqttBroker.takeIf { needsMqtt && config.mqttBroker.isBlank() }.orEmpty()
+                        val ha = found.haUrl.takeIf { needsHa && config.haUrl.isBlank() }.orEmpty()
+                        call.respondText(
+                            "{\"mqtt_broker\":${jsonStr(mqtt)},\"ha_url\":${jsonStr(ha)}}",
+                            ContentType.Application.Json,
+                        )
+                    }
+                    post("/setup/attest") {
+                        // A human at the panel (or looking at it) confirms the dashboard is actually
+                        // showing. Bound to the current configuration fingerprint, so changing the URL,
+                        // renderer or account silently voids it and the journey re-arms — nothing to
+                        // expire, nothing to clean up.
+                        config.setupRenderAttestation = setupProofFingerprint()
+                        config.setupEverCompleted = true
+                        call.respondText("{\"ok\":true}", ContentType.Application.Json)
+                    }
+                    post("/setup/identity") {
+                        // Separate from POST /config on purpose. The panel name is an ordinary setting and
+                        // goes through the usual validated path; what this records is that a human saw the
+                        // consequence and accepted it, which is not a setting and must never appear on the
+                        // Configure form, in a config bundle or as a Home Assistant entity.
+                        config.setupIdentityConfirmed = true
+                        call.respondText("{\"ok\":true}", ContentType.Application.Json)
+                    }
+                    post("/setup/home-dashboard") {
+                        // Records that the dashboard question was answered — including "follow the account's
+                        // default", which leaves home_dashboard blank and is otherwise indistinguishable from
+                        // never having been asked. The value itself is an ordinary setting and has already
+                        // arrived via POST /config; no renderer side-effect here, because the first load stays
+                        // held until the entity-filter answer that necessarily follows this step.
+                        config.setupHomeDashboardChosen = true
+                        // The entity-filter question is next, and it needs a COUNT — but on a fresh panel
+                        // every scan trigger is gated on dashboard_entity_learning, the very setting that
+                        // question asks about, so nothing would ever produce one and the card showed a
+                        // green "0 entities" on hardware. This answer is the moment the count becomes
+                        // needed; kick a catalog scan for it. A POST side effect on purpose: GET /setup
+                        // must stay cheap and write-free. syncNow is already the ungated manual-refresh
+                        // path and populates only the rebuildable catalog.
+                        if (!config.dashboardEntityLearningEnabled && effectiveDashboardIsBuiltin() &&
+                            entityLearning.scanProgress() == null && entityLearning.catalogCount() == null &&
+                            (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank())
+                        ) {
+                            entityLearning.syncNow("entity-filter-count")
+                        }
+                        call.respondText("{\"ok\":true}", ContentType.Application.Json)
+                    }
+                    post("/setup/entity-filter") {
+                        // Records that the question was ANSWERED, which is what releases the renderer's
+                        // first load. Turning the filter on is an ordinary setting and goes through POST
+                        // /config first, so by the time this arrives the filter is already committed and the
+                        // panel's first render is the filtered one — the entire point of asking before it
+                        // loads. Recording the answer here rather than inferring it from the setting is what
+                        // lets a user decline and still get a dashboard.
+                        config.setupEntityFilterAnswered = true
+                        if (effectiveDashboardIsBuiltin()) {
+                            // The renderer has been sitting on the pre-render surface waiting for exactly
+                            // this. Nothing watches an internal pref, so release it explicitly.
+                            scope.launch {
+                                runCatching {
+                                    rendererPreparation.prepareIfNeeded()
+                                    system.launchHome(SystemController.BUILTIN_DASHBOARD)
+                                }.onFailure { Log.w(TAG, "entity-filter answer: renderer release failed", it) }
+                            }
+                        }
+                        call.respondText("{\"ok\":true}", ContentType.Application.Json)
+                    }
+                    get("/setup") {
+                        // Deliberately NOT part of /api/v1/status: that endpoint's inputs are
+                        // root/daemon-backed stale-while-revalidate reads, so a wizard polling every couple
+                        // of seconds would keep kicking off privileged refreshes for data it never uses.
+                        // Everything here is an in-memory read, and SetupStateEndpointContractTest pins it.
+                        // Generic state readers (provisioning, diagnostics, monitoring) must not suppress
+                        // recovery restarts. Only the wizard UI sends this explicit heartbeat header.
+                        if (call.request.headers[SETUP_PRESENCE_HEADER] == SETUP_PRESENCE_ACTIVE) {
+                            GuidedSetupPresence.noteHeartbeat(android.os.SystemClock.elapsedRealtime())
+                        }
+                        call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+                        call.respondText(setupJourneyJson(), ContentType.Application.Json)
+                    }
                     haOAuthRoutes(
                         HaOAuthRouteDependencies(
                             panelPort = config.httpPort,
@@ -1065,6 +1456,12 @@ class PaneldServer internal constructor(
                             } },
                             complete = ::completeHaOAuth,
                             status = haCurrentUser::status,
+                            // Same journey rule as the QR: an unfinished panel returns to guided setup so
+                            // the wizard can show the render-proof/completion step, a finished one to
+                            // Configure. Evaluated at callback time, after the token has committed.
+                            successReturnPath = {
+                                if (!setupNeedsUser()) "/configure#cfg-ha_url" else "/setup"
+                            },
                         ),
                     )
                     // Versioned config bundle: backup (export) and validated restore/deploy (import).
@@ -1117,9 +1514,71 @@ class PaneldServer internal constructor(
                         call.respondText(entityLearning.performanceHistoryJson(hours), ContentType.Application.Json)
                     }
                     get("/auto-brightness") {
+                        call.response.headers.append("Cache-Control", "no-store")
                         call.respondText(autoBrightnessHttpApi.statusJson(), ContentType.Application.Json)
                     }
+                    get("/auto-sleep") {
+                        call.respondText(autoSleepHttpApi.statusJson(), ContentType.Application.Json)
+                    }
+                    get("/auto-sleep/prerequisite") {
+                        if (!admitActiveRead(call)) return@get
+                        val result = autoSleepHttpApi.prerequisite()
+                        call.respondText(
+                            JSONObject()
+                                .put("eligible", result.eligible)
+                                .put("phase", result.phase.name.lowercase())
+                                .put("area_name", result.areaName)
+                                .put("detail", result.detail.take(240))
+                                .toString(),
+                            ContentType.Application.Json,
+                        )
+                    }
+                    get("/auto-sleep/history") {
+                        if (!admitActiveRead(call)) return@get
+                        val hours = runCatching {
+                            autoSleepHistoryHours(call.request.queryParameters["hours"])
+                        }.getOrElse {
+                            return@get call.respondText(
+                                "${it.message ?: "invalid history query"}\n",
+                                status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        call.respondText(autoSleepHttpApi.historyJson(hours), ContentType.Application.Json)
+                    }
+                    post("/auto-sleep/source") {
+                        val obj = receiveEntityAdminJson(call) ?: return@post
+                        val areaKey = obj.optString("area_key").trim()
+                        val sourceKey = obj.optString("source_key").trim()
+                        val includedValue = obj.opt("included")
+                        if (!OPAQUE_AUTO_SLEEP_KEY.matches(areaKey) ||
+                            !OPAQUE_AUTO_SLEEP_KEY.matches(sourceKey) || includedValue !is Boolean
+                        ) {
+                            return@post call.respondText(
+                                "area_key, source_key and included are required\n",
+                                status = HttpStatusCode.BadRequest,
+                            )
+                        }
+                        when (autoSleepHttpApi.setSourceIncluded(areaKey, sourceKey, includedValue)) {
+                            HaPresenceSourceUpdate.UPDATED -> call.respondText(
+                                """{"ok":true,"included":$includedValue}""",
+                                ContentType.Application.Json,
+                            )
+                            HaPresenceSourceUpdate.STALE -> call.respondText(
+                                "activity sources changed; reload and try again\n",
+                                status = HttpStatusCode.Conflict,
+                            )
+                            HaPresenceSourceUpdate.COMMIT_FAILED -> call.respondText(
+                                "configuration commit failed\n",
+                                status = HttpStatusCode.InternalServerError,
+                            )
+                            HaPresenceSourceUpdate.UNAVAILABLE -> call.respondText(
+                                "activity sources are unavailable\n",
+                                status = HttpStatusCode.Conflict,
+                            )
+                        }
+                    }
                     get("/auto-brightness/history") {
+                        call.response.headers.append("Cache-Control", "no-store")
                         if (!admitActiveRead(call)) return@get
                         val request = runCatching {
                             autoBrightnessHistoryParameters(
@@ -1414,7 +1873,7 @@ class PaneldServer internal constructor(
                     // removable apps. `pm uninstall` (system/vendor apps aren't removable, only disable-able
                     // via taming — a separate, safer path).
                     post("/uninstall") {
-                        if (!suCache.get()) return@post call.respondText(
+                        if (!Su.availableCachedIsolated()) return@post call.respondText(
                             """{"ok":false,"error":"no-root"}""", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
                         val parameters = receiveBoundedFormParameters(call) ?: return@post
                         val pkg = parameters["pkg"]?.trim().orEmpty()
@@ -1543,7 +2002,14 @@ class PaneldServer internal constructor(
                                 if (config.dashboardPackage == "builtin" && !stopping) {
                                     // Privileged-first relaunch (BAL rules block a plain startActivity
                                     // from a service context) — off the main thread, it may shell out.
-                                    scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+                                    scope.launch {
+                                        runCatching {
+                                            system.reloadDashboard(
+                                                SystemController.BUILTIN_DASHBOARD,
+                                                reason = "clearing the dashboard’s stored data",
+                                            )
+                                        }
+                                    }
                                 }
                             } catch (error: Exception) {
                                 cost.outcome(FeatureCostOutcome.FAILURE)
@@ -1595,16 +2061,21 @@ class PaneldServer internal constructor(
                         ) ?: return@post)["layout"].orEmpty()
                         call.respondText("""{"ok":true}""", ContentType.Application.Json)
                     }
-                    // Inject a tap at device pixel (x,y). The UI is withheld pending a remote-control
-                    // review, but the API remains available for established automation and testing.
+                    // Inject a tap at device pixel (x,y). capture=1 is the Dashboard overlay PoC's
+                    // combined one-tap/settled-screenshot operation; omission preserves legacy 202 admission.
                     post("/input") {
                         val q = receiveBoundedFormParameters(call) ?: return@post
                         val x = q["x"]?.trim()?.toFloatOrNull()
                         val y = q["y"]?.trim()?.toFloatOrNull()
-                        if (x == null || y == null || !x.isFinite() || !y.isFinite() || x < 0f || y < 0f) {
+                        val capture = q["capture"]?.let(SettingValue::parseBool) ?: false
+                        if (x == null || y == null || !x.isFinite() || !y.isFinite() ||
+                            x < 0f || y < 0f || x > Int.MAX_VALUE || y > Int.MAX_VALUE
+                        ) {
                             call.respondText("bad-coords\n", status = HttpStatusCode.BadRequest)
+                        } else if (q["capture"] != null && SettingValue.parseBool(q["capture"].orEmpty()) == null) {
+                            call.respondText("bad-capture\n", status = HttpStatusCode.BadRequest)
                         } else {
-                            respondRemoteAdmission(call, RemoteControl.Tap(x, y))
+                            respondRemoteAdmission(call, RemoteControl.Tap(x, y, capture = capture))
                         }
                     }
                     // On-screen Controls card (software navbar) for panels with no physical nav bar.
@@ -1724,9 +2195,10 @@ class PaneldServer internal constructor(
                         call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
                     }
                     // Per-package vendor taming from the Vendor packages card. action=tame adds the package to
-                    // the blocklist and tames it now; action=untame removes it and re-enables it. The work is
-                    // privileged + slow, so it runs off-thread and the browser gets a short auto-reload back to
-                    // the Install card (the row's new state shows on reload).
+                    // the blocklist and tames it now; action=untame explicitly enables it, then removes it from
+                    // the blocklist. The explicit enable also handles firmware-disabled packages which ha-paneld
+                    // never owned and therefore have no restoration marker. The work is privileged + slow, so it
+                    // runs off-thread and the browser gets a short auto-reload back to the Install card.
                     post("/tame") {
                         val p = receiveBoundedFormParameters(call) ?: return@post
                         // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
@@ -1782,6 +2254,10 @@ class PaneldServer internal constructor(
                                 "${if (untame) "Re-enable" else "Tame"} vendor package $pkg",
                             )
                         ) return@post
+                        if (untame && !withContext(Dispatchers.IO) { tame.reenable(pkg) }) {
+                            call.respondText("could not re-enable package\n", status = HttpStatusCode.ServiceUnavailable)
+                            return@post
+                        }
                         val committed = withContext(Dispatchers.IO) {
                             updateTameSelection { selected ->
                                 if (untame) selected.remove(pkg) else selected.add(pkg)
@@ -1945,6 +2421,7 @@ class PaneldServer internal constructor(
                 closeIngress = pendingApks::close,
             )
             stopServer = { server.stop(500, 1500) }
+            startHaAreaConvergence()
             Log.i(TAG, "HTTP listening on :${config.httpPort}")
         } catch (e: Exception) {
             // HTTP is part of the service's required control plane. Propagate a bind/start failure to the
@@ -1990,6 +2467,14 @@ class PaneldServer internal constructor(
      * the service scope and are proved separately by the service's terminal scope drain. */
     fun stop(): Boolean {
         stopping = true
+        haAreaJob?.cancel()
+        haAreaJob = null
+        synchronized(haAreaWarmLock) {
+            haAreaWarmJob?.cancel()
+            haAreaWarmJob = null
+        }
+        haAreaWriteJob?.cancel()
+        haAreaWriteJob = null
         return stopHttpOwners(
             closeOperationAdmission = clearStorageGate::close,
             closeUploadIngress = pendingApks::close,
@@ -2067,7 +2552,7 @@ class PaneldServer internal constructor(
     private suspend fun handleLogStream(call: ApplicationCall) {
         val cap = when (val src = call.request.queryParameters["source"] ?: "app") {
             "app" -> logApp
-            "system" -> if (withContext(Dispatchers.IO) { suCache.get() }) logSystem else {
+            "system" -> if (withContext(Dispatchers.IO) { Su.availableCachedIsolated() }) logSystem else {
                 call.respondText("system log needs root\n", status = HttpStatusCode.ServiceUnavailable)
                 return
             }
@@ -2167,14 +2652,18 @@ class PaneldServer internal constructor(
     private fun navBar(active: String): String {
         fun tab(id: String, href: String, label: String): String =
             """<a href="$href"${if (id == active) " class=\"active\"" else ""}>$label</a>"""
-        val entityTab = if (config.dashboardEntityLearningEnabled && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD)
-            tab("entities", "/entities", "Entities")
-        else """<span class="disabled-tab" title="Enable Automatic dashboard entity filter with the built-in renderer">Entities</span>"""
+        // The guided setup tab exists only while the journey is unfinished, then disappears — a healthy
+        // panel's navigation is exactly what it was before the wizard existed. Placed first because on an
+        // unfinished panel it IS the primary destination (the QR points at it).
+        val setup = if (setupNeedsUser()) {
+            tab("setup", "/setup", "Set up")
+        } else ""
         return "<div class=\"nav\">" +
+            setup +
             tab("dashboard", "/", "Dashboard") +
             tab("configure", "/configure", "Configure") +
             tab("profiles", "/profiles", "Profile") +
-            entityTab +
+            tab("entities", "/entities", "Entities") +
             tab("install", "/install", "Install") +
             // Keep the dormant /fleet route available to old bookmarks without presenting the
             // placeholder as a near-term product commitment.
@@ -2182,7 +2671,7 @@ class PaneldServer internal constructor(
             """<a href="/api">API</a></div>"""
     }
 
-    private fun entitiesBody(): String = if (!config.dashboardEntityLearningEnabled || config.dashboardPackage != SystemController.BUILTIN_DASHBOARD) {
+    private fun entitiesBody(): String = if (!config.dashboardEntityLearningEnabled || !effectiveDashboardIsBuiltin()) {
         """<div class="cards"><div class="card"><h2>Dashboard entities <small>· experimental</small></h2>
         <p>Enable <b>Automatic dashboard entity filter</b> on Configure → Dashboard while using the built-in renderer.</p></div></div>"""
     } else """
@@ -2203,8 +2692,8 @@ class PaneldServer internal constructor(
             </fieldset>
             <div style="margin-top:12px"><input id="entity-search" placeholder="Search the complete Home Assistant entity catalogue"></div>
           </div>
-          <div class="card entity-issues" id="entity-issues"><h2>Entity-filter configuration checks</h2>
-            <div id="entity-issues-summary" class="muted">Checking the dashboard configuration…</div>
+          <div class="card entity-issues" id="entity-issues"><h2>Entity-discovery compatibility</h2>
+            <div id="entity-issues-summary" class="muted" role="status" aria-live="polite">Checking the dashboard configuration…</div>
             <div id="entity-issues-list" class="entity-issues-list"></div>
             <section id="entity-dynamic" class="entity-dynamic" hidden>
               <h3>Dynamic expressions to exercise</h3>
@@ -2227,12 +2716,55 @@ class PaneldServer internal constructor(
           <button class="pbtn" data-bulk="pinned">Pin selected</button><button class="pbtn" data-bulk="auto">Auto selected</button><button class="pbtn" data-bulk="forced_exclude">Exclude selected</button>
           ${if (filter == "candidate") "<button class=\"pbtn\" data-all-candidates=\"true\">Pin all suggested</button>" else ""}<span class="muted entity-selected">0 selected</span>
         </div>
-        <div class="tablewrap"><table class="entity-table"><thead><tr><th class="col-select"><input type="checkbox" class="entity-select-page" aria-label="Select this page"></th><th class="col-entity"><button data-sort="entity_id">Entity</button></th><th class="col-access"><button data-sort="access_1h">Accesses <small>1m / 1h / 1d</small></button></th><th class="col-rate"><button data-sort="rate_1h_bps">Data rate <small>B/s · 1m / 1h / 1d</small></button></th><th class="col-reason"><button data-sort="reasons">Reason</button></th><th class="col-last"><button data-sort="last_access">Last access</button></th><th class="col-override"><button data-sort="override">Override</button></th></tr></thead><tbody></tbody></table></div>
+        <div class="tablewrap"><table class="entity-table"><thead><tr><th class="col-select"><input type="checkbox" class="entity-select-page" aria-label="Select this page"></th><th class="col-entity"><button data-sort="entity_id">Entity</button></th><th class="col-access"><button data-sort="access_1h">Accesses <small>1m / 1h / 1d</small></button></th><th class="col-rate"><button data-sort="rate_1h_bps">Data rate <small>B/s · 1m / 1h / 1d</small></button></th><th class="col-reason"><button data-sort="reasons">Reason</button></th><th class="col-last"><button data-sort="last_access_at">Last access</button></th><th class="col-override"><button data-sort="override">Override</button></th></tr></thead><tbody></tbody></table></div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button class="pbtn entity-prev">Previous</button><button class="pbtn entity-next">Next</button><span class="muted entity-msg">Loading…</span>
         </div>
       </div>
     """.trimIndent()
+
+    /** The GitHub-repository icon link shown in the header of every :8888 surface. */
+    private fun ghLink(): String =
+        """<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a>"""
+
+    /**
+     * The one page shell shared by every :8888 surface. The tabbed pages (page()) and the dashboard
+     * (infoHtml()) render byte-identical chrome — doctype, theme-pin script, header, nav bar and the
+     * buildwatch reload bar — through this single builder; only the per-surface deltas are passed in:
+     * the body data-attributes, the header right-hand controls, the body markup itself, and any extra
+     * scripts loaded ahead of the shared switcher/buildwatch pair.
+     */
+    private fun pageShell(
+        active: String,
+        sectionTitle: String? = null,
+        bodyAttrs: String,
+        rightControls: String,
+        body: String,
+        extraScripts: String = "",
+    ): String {
+        // Capture panel identity once so title, switcher metadata and visible name cannot disagree if a
+        // concurrent config save replaces the live identity while this response is being rendered.
+        val rawPanelId = config.panelId
+        val rawFriendlyName = config.friendlyName
+        val panelId = esc(rawPanelId)
+        val friendlyName = esc(rawFriendlyName)
+        val title = esc(panelBrowserTitle(rawFriendlyName, sectionTitle))
+        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
+(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$title</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/info.css"></head><body $bodyAttrs><div class="wrap">
+<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
+ <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
+${navBar(active)}</div>
+<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
+$body
+$extraScripts<script src="/assets/switcher.js"></script>
+<script src="/assets/buildwatch.js"></script>
+</div></body></html>"""
+    }
 
     /** Shared page shell (header + tab bar + body) for the non-dashboard tabs. */
     private fun page(active: String, title: String, body: String): String {
@@ -2241,43 +2773,99 @@ class PaneldServer internal constructor(
         val approvalKey = if (active in setOf("configure", "install")) hardenedApprovalKey(top = active == "install") else ""
         val approvalKeyBefore = approvalKey.takeIf { active == "install" }.orEmpty()
         val approvalKeyAfter = approvalKey.takeIf { active != "install" }.orEmpty()
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
-(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(panelBrowserTitle(config.friendlyName, title))}</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}"><div class="wrap">
-<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="${esc(config.panelId)}" data-self-name="${esc(config.friendlyName)}"><span class="sep">·</span>${esc(config.friendlyName)}</small></h1>
- <span style="display:flex;gap:10px;align-items:center">$haLink<a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
-${navBar(active)}</div>
-<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
-${hardenedApprovalDescription()}
+        // While setup is unfinished, Configure carries a `commissioning` body class: a first-time user on
+        // the full settings wall may not know a Save button exists at all, so an unsaved change there gets
+        // a throb (see info.css). Pure function of journey state — no dismissal memory, so it can never
+        // stick on, and a finished panel's Configure is byte-identical to before the wizard existed.
+        // Urgency treatment only while a person actually owes an action; a configured panel whose render proof
+        // is merely being re-earned after a restart must not get a throbbing Save button.
+        val commissioning = active == "configure" && setupNeedsUser()
+        return pageShell(
+            active = active,
+            sectionTitle = title,
+            bodyAttrs = (if (commissioning) """class="commissioning" """ else "") +
+                """data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}"""",
+            rightControls = "$haLink${ghLink()}",
+            body = """${hardenedApprovalDescription()}
 $approvalKeyBefore
 $body
-$approvalKeyAfter
-<script src="/assets/switcher.js"></script>
-<script src="/assets/buildwatch.js"></script>
-</div></body></html>"""
+$approvalKeyAfter""",
+        )
     }
+
+    /**
+     * The guided setup page — the surface the panel's QR code points at, and the primary way a new panel
+     * is commissioned.
+     *
+     * A separate route rather than a mode of Configure. Configure is a schema-driven wall of every setting
+     * with one save-everything bar, which is the right tool for an owner changing one thing and the wrong
+     * one for somebody who has never seen this product: nothing there says which four fields matter, in
+     * what order, or that a save is required at all. It is also pinned by contract tests that assert its
+     * source text, so folding a wizard into it would put unrelated risk on the page every existing user
+     * relies on.
+     *
+     * The markup here is only a frame. Steps are rendered by setup.js from GET /api/v1/setup, so the panel
+     * and the browser read the same authority and cannot disagree about what comes next.
+     */
+    private fun setupBody(): String = """
+<div class="wiz" id="wiz">
+  <ol class="wiz-dots" id="wiz-dots" aria-label="Setup progress"></ol>
+  <div id="wiz-step" class="wiz-step" role="region" aria-live="polite" aria-atomic="false">
+    <p class="muted">Loading setup…</p>
+  </div>
+  <p class="wiz-escape"><a href="/configure" onclick="document.cookie='wiz_escape=1;path=/;max-age=3600'">Skip and exit the wizard &rarr;</a></p>
+</div>
+<script src="/assets/setup.js"></script>"""
 
     /** Configure tab — schema-driven, save-together settings only. */
     private fun configureBody(): String {
-        val proximityMount = if (sensors.hasProximity()) """<div id="proximity-learning-mount" hidden></div>""" else ""
-        val proximityScript = if (sensors.hasProximity()) """<script src="/assets/proximity-learning.js"></script>""" else ""
+        val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave
+        val proximityMount = if (proximityLearningEnabled) """<div id="proximity-learning-mount" hidden></div>""" else ""
+        val proximityScript = if (proximityLearningEnabled) """<script src="/assets/proximity-learning.js"></script>""" else ""
+        val setup = configureSetupBanners()
         return """
 <!-- Basic/Advanced tab bar hidden until every setting is assigned a Basic/Advanced tier; with it hidden
      the form shows ALL settings (configure.js defaults `advanced=true`), so nothing is lost. The tier
      machinery (SettingSpec.tier + cfgTab) stays in place — restore the bar once tiers are curated. -->
 <div class="cfg-tabs" style="display:none"><button id="tab-basic" onclick="cfgTab(false)">Basic</button><button id="tab-adv" class="on" onclick="cfgTab(true)">Advanced</button></div>
+$setup
 <div id="cfg-status" class="muted" style="margin-bottom:10px">Loading settings…</div>
 <div id="cfg-all-cards">
-<div id="cfg-groups" class="cards"></div>
+<div id="cfg-groups" class="cards" data-card-size-page="configure" data-card-size-epoch="1" data-card-size-restore="1" data-card-size-proximity="${if (proximityLearningEnabled) "1" else "0"}"></div>
 $proximityMount</div>
 <div id="savebar" class="savebar" role="region" aria-label="Unsaved settings" hidden><button id="savebtn" type="button" disabled onclick="cfgSave()">Save changes</button><span id="cfg-msg" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div>
+<script src="/assets/card-size-memory.js"></script>
 <script src="/assets/card-column-alignment.js"></script>
 <script src="/assets/configure.js"></script>
 $proximityScript"""
+    }
+
+    private fun configureSetupBanners(): String {
+        // Someone landing on the full settings wall mid-commissioning (an old bookmark, the QR from a
+        // build that pointed here) should learn the guided path exists — once setup completes this line
+        // vanishes with the rest of the wizard surface.
+        val resume = if (setupNeedsUser()) {
+            """<div class="setup info">Setting up this panel? <a href="/setup"><b>Guided setup</b></a> walks """ +
+                """through it one step at a time. This page has every setting at once.</div>"""
+        } else ""
+        // MQTT verification runs asynchronously after the save returns, and the Configure tab is where the
+        // user actually is while it happens — but it showed nothing, so a save that was still being checked
+        // looked like a save that had done nothing. SetupBanner already derives this state and is already
+        // rendered on the dashboard; surfacing it here too costs nothing and keeps one authority.
+        val mqtt = snapStaleOk().facts["MQTT"] ?: "disabled"
+        SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending())?.let { progress ->
+            return resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
+        }
+        if (haSignInNeededForEffectiveDashboard()) {
+            return resume + """<div class="setup">🏠 <b>MQTT is configured. Next: Home Assistant sign-in.</b> """ +
+                """ha-paneld's built-in renderer is selected. Use Browser sign-in in the Home Assistant connection """ +
+                """card below, or complete the sign-in shown on the panel.</div>"""
+        }
+        val noRenderer = healthFindings(healthInputs(), "", emptyList()).any { it.kind == HealthAudit.Kind.NO_RENDERER }
+        if (!noRenderer) return resume
+        return resume + """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's """ +
+            """built-in renderer in the Dashboard card below or configure another dashboard package. Until then, """ +
+            """this panel won't display a dashboard. <small>(ha-paneld itself runs fine without one.)</small></div>"""
     }
 
     /** Runtime profile authoring. All content is hydrated through the guarded /api/v1/profile routes. */
@@ -2347,13 +2935,75 @@ $proximityScript"""
 <script src="/assets/vendor/profile-editor/codemirror.js"></script>
 <script src="/assets/profiles.js"></script>"""
 
+    /** Request-scoped snapshot of the two health inputs several render surfaces consult — the real WebView
+     *  engine status and whether any dashboard renderer is present. Captured ONCE per render so the banner,
+     *  facts card and diagnostics rows on one page can't disagree about the WebView. Benign normalization of
+     *  a within-render race (the probes are cached + stable across a render-millisecond; making the reads
+     *  consistent can never surface a warning that a fresh read wouldn't have). */
+    private class HealthInputs(
+        val webView: PanelInfo.WebViewStatus,
+        val hasRenderer: Boolean,
+        val brokerConfigured: Boolean,
+    )
+
+    /**
+     * Whether the system WebView is too old, resolved once per process.
+     *
+     * `GET /api/v1/setup` is polled every two seconds during setup, and reading the true engine version can
+     * load the WebView provider to get its user agent — far too expensive to repeat on a poll. Caching is
+     * exactly right rather than merely cheap: a WebView swap restarts this process (see `autoUpdateWebView`),
+     * so the value cannot change underneath the cache, and the answer after a successful update is read by
+     * the new process. Routed through [healthInputs] so the probe keeps its single call site, which is the
+     * discipline HealthWarningAuthoritySourceTest exists to hold — surfaces that probe independently drift.
+     */
+    private val webViewTooOldOnce: Boolean by lazy { healthInputs().webView.tooOld }
+
+    private fun healthInputs(): HealthInputs = HealthInputs(
+        PanelInfo.webViewStatus(appContext),
+        PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
+        config.mqttBroker.isNotBlank(),
+    )
+
+    /** HealthAudit findings for a render surface. The shared (WebView-too-old, no-renderer) inputs come from
+     *  the request snapshot; [webViewDisplay] (the version string to show) and [updates] stay per-surface —
+     *  the Install tab passes no updates, GET /api/v1/status the unfiltered list, and the dashboard banner
+     *  the ignore-filtered list. */
+    /** The schema-version detail to warn about when a downgrade reset config to defaults (the last
+     *  reconcile was PRESERVED_FRESH), else null. Stable after boot — the reconcile runs once at store
+     *  construction — so the warning clears only on the next start at the current schema. */
+    private fun schemaRollbackDetail(): String? {
+        // Suppressed when the config vault refilled the fresh store: this warning exists to tell an owner
+        // their settings may have reset and to check them, and once they have been recovered that is both
+        // untrue and actionless. A warning demanding no action teaches people to ignore warnings. The
+        // event itself remains visible in diagnostics.
+        if (EntityCatalogStore.lastConfigRestore != null) return null
+        return EntityCatalogStore.lastSchemaReconcile
+            ?.takeIf { it.action == SchemaReconcileAction.PRESERVED_FRESH }
+            ?.let { "schema ${it.fromVersion} → ${it.toVersion}" }
+    }
+
+    private fun healthFindings(
+        h: HealthInputs,
+        webViewDisplay: String,
+        updates: List<UpdateChecker.UpdateInfo>,
+    ): List<HealthAudit.Finding> = HealthAudit.evaluate(
+        webViewTooOld = h.webView.tooOld,
+        webViewDisplay = webViewDisplay,
+        hasRenderer = h.hasRenderer,
+        brokerConfigured = h.brokerConfigured,
+        updates = updates,
+        schemaRolledBack = schemaRollbackDetail() != null,
+        schemaRollbackDetail = schemaRollbackDetail() ?: "",
+    )
+
     /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
      *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */
     private fun installBody(): String {
         val management = snapStaleOk()
         val companion = companionServersStaleOk()
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
-        val wv = PanelInfo.webViewStatus(appContext)
+        val h = healthInputs()
+        val wv = h.webView
         val root = management.privilege.rootControlReady
         val installer = management.privilege.typedShellControlReady
         val su = management.privilege.directSuReady
@@ -2365,12 +3015,7 @@ $proximityScript"""
         val companionHelper = companionHelperCache.get()
         // Same finding set as the dashboard banner (HealthAudit). Update findings are surfaced by the
         // Managed-components card below, so the top warnings show only the render-blocking states.
-        val problems = HealthAudit.evaluate(
-            webViewTooOld = wv.tooOld,
-            webViewDisplay = wv.display,
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
-            updates = emptyList(),
-        )
+        val problems = healthFindings(h, wv.display, emptyList())
         // Auto-heal offer: if the profile ships a known-good WebView and we have root/daemon to install it,
         // the too-old warning gets a one-tap "Update WebView now" button (POST /api/v1/webview/heal).
         val canHeal = wv.tooOld && profile.recommendedWebView != null && root
@@ -2381,25 +3026,26 @@ $proximityScript"""
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
         val extra = adHocWarnings(management, companion, inlineRepair = true)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
-        val allGood = if (problems.isEmpty() && extra.isEmpty()) """<div class="card"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
+        val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty()) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
-<div class="cards" id="install-cards">
+<div class="cards" id="install-cards" data-card-size-page="install" data-card-size-epoch="1" data-card-size-restore="1">
 ${componentsCardHtml(wv, root, installer)}
 ${apkCardHtml(root)}
 ${uninstallCardHtml(su)}
-<div class="card" id="radiocard" style="display:none"><h2>Radio firmware</h2>
+<div class="card" id="radiocard" data-layout-key="radio-firmware" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr>
 <tr><th>Gateway health</th><td id="radio-health">…</td></tr></table>
 <p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Enable or retry joining from <a href="/configure#cfg-zigbee_join">Configure → Join Zigbee network</a>. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
-<div class="card"><h2>Health audit</h2>
+<div class="card" data-layout-key="health-audit"><h2>Health audit</h2>
 <p class="note">Re-check this panel for problems that stop the dashboard rendering — old WebView, no dashboard app, available updates.</p>
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
 ${tameCardHtml(root)}
 ${displayCardHtml(management.privilege.typedShellControlReady, displaySizing)}
-${backupCardHtml(companionHelper)}
+${backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null)}
 $allGood</div>
+<script src="/assets/card-size-memory.js"></script>
 <script src="/assets/card-column-alignment.js"></script>
 <script src="/assets/install.js"></script>"""
     }
@@ -2415,12 +3061,17 @@ $allGood</div>
                 (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.NO_RENDERER ->
-            """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
-                """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                """dashboard package on <a href="/configure">Configure</a>.""" +
+            """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's built-in renderer """ +
+                """on <a href="/configure">Configure</a>, install the Home Assistant Companion app, or set another """ +
+                """dashboard package there.""" +
                 (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
+        HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
+            """<div class="setup crit">⚠ <b>Newer database preserved after a version downgrade</b> (${esc(f.detail)}) — """ +
+                """this build opened a fresh state store because its schema is older. Some settings may have reset. """ +
+                """The previous database is preserved on the panel for recovery. Check """ +
+                """<a href="/configure">Configure</a>, or restore a backup below.</div>"""
     }
 
     /** Managed-components card. ha-paneld + HA Companion get a channel + version picker (default channel
@@ -2452,7 +3103,7 @@ $allGood</div>
         } else {
             "<h2>Managed components</h2>"
         }
-        return """<div class="card">$title
+        return """<div class="card" data-layout-key="managed-components">$title
 $paneldRow
 $compRow
 ${simpleRow("System WebView", wv.display, wvAction)}
@@ -2464,13 +3115,12 @@ $installNote
     /** Backup & restore card: an ENCRYPTED device-state bundle (ha-paneld config + optionally the HA
      *  Companion login) with a passphrase; restore shows a decrypt preview before the destructive apply.
      *  Also links the plain config-only bundle (for cloning settings between panels). */
-    private fun backupCardHtml(companionHelper: Boolean): String {
-        val compRow = if (companionHelper)
-            """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>"""
-        else """<p class="note">HA Companion login backup needs the current ha-paneld helper. Update or reprovision this rooted panel to enable it.</p>"""
-        val restoreWarn = if (companionHelper) " and rewrites the HA Companion login (force-stops it)" else ""
-        return """<div class="card">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true)}
-<p class="note">A bundle of this panel's ha-paneld config${if (companionHelper) " + the HA Companion login" else ""}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
+    private fun backupCardHtml(companionHelper: Boolean, companionInstalled: Boolean): String {
+        val companion = backupCompanionCopy(installed = companionInstalled, helper = companionHelper)
+        val compRow = companion.row
+        val restoreWarn = companion.restoreWarning
+        return """<div class="card" data-layout-key="backup-restore">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true)}
+<p class="note">A bundle of this panel's ha-paneld config${companion.bundleSuffix}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
 <input type="password" id="bk-pw" placeholder="Passphrase (required for encrypted backup)">
@@ -2513,7 +3163,7 @@ $compRow
 <div id="apk-preview" style="margin-top:10px"></div>
 </div>"""
         }
-        return """<div class="card"><h2>Install an APK</h2>
+        return """<div class="card" data-layout-key="apk-install"><h2>Install an APK</h2>
 <p class="note">Sideload an app (e.g. a dashboard renderer) by uploading its APK — you'll see its package, version and signer before it installs.</p>
 $body
 <p class="note" id="apk-msg"></p></div>"""
@@ -2530,7 +3180,7 @@ $body
 </div>
 <p class="note" id="uninst-msg"></p>"""
         val title = if (root) hardenedApprovalCardTitle("Uninstall an app") else "<h2>Uninstall an app</h2>"
-        return """<div class="card">$title
+        return """<div class="card" data-layout-key="uninstall-app">$title
 $body</div>"""
     }
 
@@ -2652,6 +3302,15 @@ Every ha-paneld already advertises itself over mDNS (<code>${esc(Config.MDNS_SER
 publishes MQTT availability, so the discovery hooks are in place.</p>
 <p class="note">For now, open another panel directly at <code>http://&lt;its-ip&gt;:${config.httpPort}/</code>.</p></div></div>"""
 
+    /** One renderer-aware warning shared by JSON status and the Dashboard/Install banners. */
+    private fun dashboardRecoveryWarning(): String? = dashboardRecoveryWarning(
+        PanelStatus.dashboardRecoveryState(
+            config.dashboardPackage,
+            appContext.packageName,
+            SystemClock.elapsedRealtime(),
+        ),
+    )
+
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
         val management = snapStaleOk()
@@ -2660,34 +3319,28 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version). Same finding
         // set as the dashboard banner + Install tab (HealthAudit); the audit lists ALL available updates
         // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
-        // modelled by HealthAudit: a crash-looping dashboard app and a Companion with a blank internal_url.
-        val wv = PanelInfo.webViewStatus(appContext)
-        val findings = HealthAudit.evaluate(
-            webViewTooOld = wv.tooOld,
-            webViewDisplay = wv.display,
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
-            updates = UpdateChecker.current(appContext),
-        )
+        // modelled by HealthAudit: renderer recovery suppression and a Companion with a blank internal_url.
+        val h = healthInputs()
+        val findings = healthFindings(h, h.webView.display, UpdateChecker.current(appContext))
         val warns = mutableListOf<String>()
-        if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) warns.add(
-            "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
-                "Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
-        )
-        if (CompanionDb.warningApplies(config.dashboardPackage)) {
-            companion.status.let { u ->
-                if (u.needsRepair) warns.add(
-                    "⚠ <b>Home Assistant Companion has no internal URL</b> (${u.affected} server${if (u.affected == 1) "" else "s"}) — " +
-                        "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
-                )
-                else if (!companion.probeSucceeded && management.privilege.directSuReady) warns.add(
-                    "⚠ <b>Home Assistant Companion settings could not be inspected</b> — " +
-                        "ha-paneld will retain any last-known result and retry automatically.",
-                )
-            }
+        dashboardRecoveryWarning()?.let(warns::add)
+        // Same companion internal-URL decision as the dashboard/Install banner (CompanionDb.warning); this
+        // surface presents it as bare JSON strings (no Ignore/repair buttons), so the copy stays distinct.
+        when (val w = CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)) {
+            is CompanionDb.Warning.NeedsRepair -> warns.add(
+                "⚠ <b>Home Assistant Companion has no internal URL</b> (${w.affected} server${if (w.affected == 1) "" else "s"}) — " +
+                    "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
+            )
+            CompanionDb.Warning.ProbeFailed -> warns.add(
+                "⚠ <b>Home Assistant Companion settings could not be inspected</b> — " +
+                    "ha-paneld will retain any last-known result and retry automatically.",
+            )
+            null -> {}
         }
         radio?.let { z ->
             zigbeeWarning(z)?.let(warns::add)
         }
+        runCatching(mdnsWarning).getOrNull()?.let(warns::add)
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         // Stale-while-revalidate keeps status polling fast while ensuring a status-only client still
@@ -2708,11 +3361,15 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant dashboard may render blank. " +
                 "<a href=\"$WEBVIEW_DOC\" target=\"_blank\" rel=\"noopener\">How &amp; why to update</a> (target Chromium ${PanelHealth.MIN_CHROMIUM}+)."
         HealthAudit.Kind.NO_RENDERER ->
-            "ℹ <b>No dashboard app detected</b> — install the HA Companion, Fully Kiosk, or set a dashboard package."
+            "ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's built-in renderer, install the Home Assistant Companion app, or configure another dashboard package."
         HealthAudit.Kind.UPDATE -> f.update!!.let { u ->
             "⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed ${esc(u.currentVersion)}) — " +
                 "<a href=\"${esc(u.releaseUrl)}\" target=\"_blank\" rel=\"noopener\">download</a>"
         }
+        HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
+            "⚠ <b>Newer database preserved after a version downgrade</b> (${esc(f.detail)}) — this build opened a " +
+                "fresh state store because its schema is older; some settings may have reset. The previous database " +
+                "is preserved on the panel for recovery. Check Configure or restore a backup."
     }
 
 
@@ -2724,22 +3381,31 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun installIcon(anchor: String): String =
         """&nbsp;<a class="cfglink" href="/install#$anchor" title="Open on the Install tab" aria-label="Open">✎</a>"""
 
-    /** What the "auto" (blank) package settings actually resolved to — shown as `auto (pkg)` in the
+    /** What the "auto" (blank) package settings actually resolved to — shown as `auto (label)` in the
      *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
      *  launcher app resolves, the Launcher key falls back to ha-paneld's own admin launcher (see
      *  SystemController.launchLauncher) — say so instead of leaving a "—" that reads like a dead key. */
     private fun autoHints(): Map<String, String> = buildMap {
-        system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", it) }
+        system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", dashboardRendererAutoLabel(it)) }
         put("launcher_package", system.resolvedLauncher("") ?: "ha-paneld admin launcher")
-        // Unset home_dashboard = reload/boot land on whatever HA's frontend picks (the device-level
-        // "set as default on this device" if ever used, else the HA user's profile default). The
-        // Companion has no config of its own for this, so there's nothing more specific to read.
-        put("home_dashboard", "HA default view")
+        // Unset home_dashboard = reload/boot land on whatever HA's frontend picks. On this path,
+        // resolve the HA user's profile default (or the system fallback) in-band so the UI shows
+        // a concrete target instead of an abstract description.
+        put("home_dashboard", EntityLearningRuntime.resolvedHomeDashboardPath("").ifBlank { "HA default view" })
     }
+
+    private fun dashboardRendererAutoLabel(resolved: String): String =
+        if (resolved == SystemController.BUILTIN_DASHBOARD) "Built-in renderer" else resolved
 
     /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.
      *  Null when the setting doesn't exist on this panel (capability-gated). */
-    private fun settingRowHtml(key: String, live: Map<String, String>, caps: Capabilities, hints: Map<String, String> = emptyMap()): String? {
+    private fun settingRowHtml(
+        key: String,
+        live: Map<String, String>,
+        caps: Capabilities,
+        hints: Map<String, String> = emptyMap(),
+        valueFormatter: ((String) -> String)? = null,
+    ): String? {
         val spec = SettingsRegistry.spec(key) ?: return null
         if (!spec.availableWhen(caps)) return null
         val raw = effectiveValue(spec, live)
@@ -2749,7 +3415,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
             // The built-in renderer sentinel has no package label — show its friendly name, not "builtin".
             raw == SystemController.BUILTIN_DASHBOARD -> "Built-in renderer"
-            else -> raw
+            else -> valueFormatter?.invoke(raw) ?: raw
         }
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
     }
@@ -2776,8 +3442,6 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
     private val densityCache = Cached(DENSITY_TTL_MS) { density.observeSizing() }
-    // su presence doesn't flap — cache the probe gating screenshot / controls / system logs / taming.
-    private val suCache = Cached(SU_TTL_MS) { Su.availableIsolated() }
     private val companionHelperCache = Cached(SU_TTL_MS) { HelperClient.supportsCompanionData() }
     private fun ensureCompanionHelper(): Boolean {
         if (HelperClient.supportsCompanionData()) return true
@@ -2788,7 +3452,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         if (ready) companionHelperCache.invalidate()
         return ready
     }
-    private fun rootOk(): Boolean = suCache.get() || HelperClient.available()
+    private fun rootOk(): Boolean = Su.availableCachedIsolated() || HelperClient.available()
 
     private val screenshotCacheDir: File
         get() = File(appContext.filesDir, "panel-screenshots")
@@ -2858,7 +3522,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // stale-while-revalidate so an expired SQLite observation never blocks rendering.
     private val companionServerCache: Cached<CompanionDb.ServerObservation> by lazy {
         Cached(COMPANION_URL_TTL_MS) {
-            val observed = if (suCache.get()) {
+            val observed = if (Su.availableCachedIsolated()) {
                 CompanionDb.observeServers(appContext, Su)
             } else if (CompanionInstaller.installedPkg(appContext) == null) {
                 CompanionDb.ServerObservation.EMPTY
@@ -2870,7 +3534,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     private fun privilegeObservation(): PrivilegedRouteObservation = observePrivilegedRoutes(
-        directSuProbe = { suCache.get() },
+        directSuProbe = { Su.availableCachedIsolated() },
         helperRootProbe = HelperClient::available,
         shizukuSnapshot = ShizukuBridge::snapshot,
     )
@@ -2984,7 +3648,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val CONTEXT_KEYS = listOf(
         "MQTT state", "State convergence", "App database", "Security mode", "Audio playback",
     )
-    private val BEHAVIOUR_FACT_KEYS = setOf("Keep awake", "Kiosk lock", "Navbar", "Log shipping")
+    private val BEHAVIOUR_FACT_KEYS = setOf(
+        "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar", "Log shipping",
+    )
     // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
     // at the fix: Platform/SoC=profile identity, LED=ledMechanism, sensor tech=proximityTech/lightTech,
     // Zigbee=zigbeeGatewayDir, Relays=relayBase, CPU profile=cpuGovernors.
@@ -2993,34 +3659,56 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             it !in NET_KEYS && it !in PROFILE_FACT_KEYS && it !in CONTEXT_KEYS && it !in BEHAVIOUR_FACT_KEYS
         }
 
-    private fun contextRowsHtml(s: Snap): String {
+    private fun contextRowsHtml(s: Snap, h: HealthInputs): String {
         val rows = CONTEXT_KEYS.mapNotNull { key ->
             s.facts[key]?.let { value ->
                 val label = if (key == "MQTT state") "MQTT connection / auth timing" else key
                 "<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>"
             }
         }.toMutableList()
-        PanelInfo.webViewStatus(appContext).reportingQuirk?.let {
+        h.webView.reportingQuirk?.let {
             rows += "<tr><th>System WebView reporting</th><td>${esc(it)}</td></tr>"
         }
         return rows.joinToString("\n")
     }
 
+    /**
+     * Whether setup genuinely still owes the user a dashboard/renderer step.
+     *
+     * The MQTT progress banner may only promise "the dashboard setup step appears next" when that is true.
+     * Every MQTT reconnect re-announces discovery, including the one after an ordinary upgrade, so without
+     * this a fully configured panel was promised a step that did not exist. Derived from the journey's
+     * RENDERER stage rather than from `dashboard_package` directly, so a blocked renderer — an uninstalled
+     * foreign app, or an engine too old to render — still counts as outstanding, which it is.
+     */
+    /** Whether setup is waiting on a person — the one gate every first-run affordance shares. */
+    private fun setupNeedsUser(): Boolean = SetupJourney.evaluate(setupJourneyInputs()).needsUser
+
+    private fun dashboardSetupStepPending(): Boolean =
+        SetupJourney.evaluate(setupJourneyInputs()).step(SetupJourney.Stage.RENDERER).status !=
+            SetupJourney.Status.SATISFIED
+
     /** The setup / health / update banners — everything above the cards. Needs the facts map (MQTT
      *  state), so on a cold start it hydrates with the rest. */
-    private fun bannersHtml(s: Snap): String {
+    private fun bannersHtml(s: Snap, h: HealthInputs): String {
         val mqtt = s.facts["MQTT"] ?: "disabled"
         // Pure decision (unit-tested in SetupBannerTest) — note a CONFIGURED broker that's merely
         // mid-(re)connect must not be reported as missing.
-        val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.panelIdIsDefault)
+        val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.mqttUser.isNotBlank())
         val setup = if (needs.isNotEmpty())
             """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
         else ""
-        val haSetup = if (config.dashboardPackage == "builtin" &&
-            config.haToken.isBlank() && config.haRefreshToken.isBlank()
-        ) {
-            """<div class="setup">🏠 <b>Home Assistant sign-in needed</b> — <a href="/configure#cfg-ha-oauth">connect this panel from a browser</a>.</div>"""
-        } else ""
+        // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
+        // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
+        // panel this banner kept reappearing to narrate a step that was done months ago. Reported twice from
+        // the fleet. The Configure tab keeps it unconditionally: there it is feedback for a save the user just
+        // made, which is the reason it was added.
+        val mqttProgress = if (!setupNeedsUser()) "" else {
+            SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending())?.let {
+                """<div class="setup">⟳ ${esc(it)}</div>"""
+            }.orEmpty()
+        }
+        val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner() else ""
         val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
             """<div class="setup">👋 <b>Wake on wave is learning</b> — ${esc(sensors.proximitySummary())}. """ +
                 """Touch-to-wake remains available. <a href="/configure#cfg-proximity-learning">See progress or teach a wave</a>.</div>"""
@@ -3030,18 +3718,27 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // The WebView verdict is from the REAL engine version (WebView UA), not the stamped package version
         // (cached, so cheap). Shared decision — see HealthAudit; updates are filtered by the per-version
         // dismissals so an "Ignore this version" click stays hidden until a newer release ticks it back.
-        val findings = HealthAudit.evaluate(
-            webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld,
-            webViewDisplay = s.facts["System WebView"] ?: "",
-            hasRenderer = PanelInfo.dashboardRenderers(appContext, config.dashboardPackage, config.haUrl).isNotEmpty(),
-            updates = UpdateChecker.current(appContext, config.ignoredUpdates),
-        )
+        val findings = healthFindings(h, s.facts["System WebView"] ?: "", UpdateChecker.current(appContext, config.ignoredUpdates))
         // Order: actively-broken states (crash-loop / blank internal_url) first, then render findings
         // (WebView / renderer / updates), then the needs-config setup notice. On the dashboard the ad-hoc
         // warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
         return adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
-            findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + setup
+            findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + mqttProgress + setup
     }
+
+    private fun effectiveDashboardIsBuiltin(): Boolean =
+        system.resolveDashboard(config.dashboardPackage) == SystemController.BUILTIN_DASHBOARD
+
+    // Shares haSignInPending with the renderer, so what the browser advertises as the next step and what
+    // the panel actually does when it starts cannot drift apart.
+    private fun haSignInNeededForEffectiveDashboard(): Boolean =
+        effectiveDashboardIsBuiltin() &&
+            haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)
+
+    private fun haSignInBanner(): String =
+        """<div class="setup">🏠 <b>MQTT is configured. Next: Home Assistant sign-in.</b> """ +
+            """ha-paneld's built-in renderer is selected. Complete the sign-in shown on the panel, or """ +
+            """<a href="/configure#cfg-ha-oauth">connect this panel from a browser</a>.</div>"""
 
     /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and Companion
      *  server inspection/blank-internal-URL findings — the latter only when Companion is the active renderer
@@ -3065,36 +3762,32 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """<a href="/configure#cfg-ha-oauth">Configure → Home Assistant connection</a>; the dashboard reloads automatically when """ +
                 """the credentials change.</div>""",
         )
-        if (io.github.maxlyth.hapaneld.PanelStatus.dashboardCrashLooping) append(
-            """<div class="setup crit">⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it """ +
-                """to avoid a restart storm. This usually means an incompatible dashboard-app update; reinstall or """ +
-                """downgrade the dashboard/Companion app (see <a href="/install">updates</a>), or reboot the panel.</div>""",
-        )
-        if (CompanionDb.warningApplies(config.dashboardPackage)) {
-            companion?.status?.let { u ->
-                if (u.needsRepair) {
-                    val action = if (inlineRepair)
-                        """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
-                    else """ <a href="/install">Repair on the Install tab →</a>"""
-                    append(
-                        """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
-                            """(${u.affected} server${if (u.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
-                            """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
-                    )
-                } else if (!companion.probeSucceeded && management.privilege.directSuReady) {
-                    append(
-                        """<div class="setup">⚠ <b>Home Assistant Companion settings could not be inspected</b> — """ +
-                            """ha-paneld will retain any last-known result and retry automatically.</div>""",
-                    )
-                }
+        dashboardRecoveryWarning()?.let { append("""<div class="setup crit">$it</div>""") }
+        // Shared companion internal-URL decision (CompanionDb.warning); this surface renders it as a banner
+        // with the one-tap repair button ([inlineRepair], Install tab) or an Install-tab link (dashboard).
+        when (val w = CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)) {
+            is CompanionDb.Warning.NeedsRepair -> {
+                val action = if (inlineRepair)
+                    """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
+                else """ <a href="/install">Repair on the Install tab →</a>"""
+                append(
+                    """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
+                        """(${w.affected} server${if (w.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
+                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
+                )
             }
+            CompanionDb.Warning.ProbeFailed -> append(
+                """<div class="setup">⚠ <b>Home Assistant Companion settings could not be inspected</b> — """ +
+                    """ha-paneld will retain any last-known result and retry automatically.</div>""",
+            )
+            null -> {}
         }
         // Built-in renderer zoomed off 100% (usually carried over from the Companion's "Page zoom"). App
         // zoom is a compatibility lever; the cleaner way to size the dashboard is the panel display density
         // — so we only nudge when that's actually available (rooted / helper daemon). No root = app zoom is
         // the only sizing tool, so stay quiet. densityBase comes from the shared snapshot (no su round-trip).
         val zoom = config.dashboardZoom
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD && zoom != 100 && management.densityBase != null) {
+        if ((config.dashboardPackage.isBlank() || config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) && zoom != 100 && management.densityBase != null) {
             // Reset is a plain form POST (no JS), so it works on the dashboard banner too — not just the
             // Install tab. The message already links to the Display-sizing card.
             append(
@@ -3126,10 +3819,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small> """ +
                 """<a href="/install">Manage on the Install tab →</a></div>"""
         HealthAudit.Kind.NO_RENDERER ->
-            """<div class="setup">ℹ <b>No dashboard app detected</b> — install the HA Companion app, """ +
-                """<a href="https://www.fully-kiosk.com/" target="_blank" rel="noopener">Fully Kiosk</a>, or set a """ +
-                """dashboard package on <a href="/configure">Configure</a>, or this panel won't display a dashboard. """ +
-                """<small>(ha-paneld itself runs fine without one.)</small> <a href="/install">Install tab →</a></div>"""
+            """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's """ +
+                """built-in renderer on <a href="/configure">Configure</a> or configure another dashboard package. """ +
+                """Until then, this panel won't display a dashboard. <small>(ha-paneld itself runs fine without one.)</small></div>"""
         HealthAudit.Kind.UPDATE -> {
             val u = f.update!!
             """<div class="setup info" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
@@ -3137,11 +3829,16 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """<a href="/install">manage on the Install tab</a> """ +
                 """<button class="pbtn" onclick="ignoreUpdate(this)">Ignore this version</button></div>"""
         }
+        HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
+            """<div class="setup crit">⚠ <b>Newer database preserved after a version downgrade</b> (${esc(f.detail)}) — """ +
+                """this build opened a fresh state store because its schema is older; some settings may have reset. """ +
+                """The previous database is preserved on the panel for recovery. """ +
+                """<a href="/configure">Check Configure →</a> or restore a backup on the <a href="/install">Install tab</a>.</div>"""
     }
 
     /** Table rows for one facts card (Panel information / Networking / ha-paneld profile). */
-    private fun factRowsHtml(s: Snap, keys: List<String>): String {
-        val webViewTooOld = PanelInfo.webViewStatus(appContext).tooOld
+    private fun factRowsHtml(s: Snap, keys: List<String>, h: HealthInputs): String {
+        val webViewTooOld = h.webView.tooOld
         return keys.filter { s.facts.containsKey(it) }.joinToString("\n") { k ->
             val v = s.facts.getValue(k)
             // Version: plain text + a compact GitHub releases icon (a hyperlinked version reads ugly).
@@ -3170,9 +3867,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun liveRowsHtml(): String {
         val led = config.lastLed.split(",").mapNotNull { it.toIntOrNull() }
         val ledShown = if (led.size == 5 && led[0] == 1) "on · rgb(${led[2]},${led[3]},${led[4]}) @ ${led[1]}" else "off"
-        val brightnessShown = effectiveBrightness().takeIf { it >= 0 }?.toString() ?: runCatching {
+        val brightness = effectiveBrightness().takeIf { it >= 0 } ?: runCatching {
             android.provider.Settings.System.getInt(appContext.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS)
-        }.getOrNull()?.toString() ?: "?"
+        }.getOrNull()
+        val brightnessShown = brightness?.coerceIn(0, 255)?.let { value ->
+            "${(value * 100 + 127) / 255}% ($value)"
+        } ?: "?"
         return listOf(
             "Screen brightness" to brightnessShown,
             "Volume" to "${volume.getPercent()}%",
@@ -3184,7 +3884,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun behaviourRowsHtml(s: Snap): String = listOf(
         "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "touch_sound",
         "silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled",
-        "home_dashboard", "dashboard_package", "launcher_package",
+        "home_dashboard", "ha_area", "dashboard_package", "launcher_package",
     ).let { keys ->
         val hints = autoHints()
         val caps = liveCapabilities(s.caps)
@@ -3195,7 +3895,20 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun displayRowsHtml(s: Snap): String {
         return listOf(
             "auto_brightness", "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
-        ).mapNotNull { settingRowHtml(it, s.live, liveCapabilities(s.caps)) }
+        ).mapNotNull { key ->
+            val formatter: ((String) -> String)? = when (key) {
+                "auto_brightness_minimum_percent" -> { raw ->
+                    raw.toIntOrNull()?.coerceIn(0, 100)?.let { percent ->
+                        "$percent% (${AdaptiveLuxCurve.percentToBrightness(percent)})"
+                    } ?: raw
+                }
+                "auto_brightness_sensitivity" -> { raw ->
+                    raw.toIntOrNull()?.coerceIn(0, 100)?.let { "$it%" } ?: raw
+                }
+                else -> null
+            }
+            settingRowHtml(key, s.live, liveCapabilities(s.caps), valueFormatter = formatter)
+        }
             .joinToString("\n") + "\n" + listOfNotNull(
             s.densityCur?.let { """<tr><th>Logical density</th><td>$it dpi (factory base ${s.densityBase ?: "?"})${installIcon("cfg-display")}</td></tr>""" },
             s.densityCur?.let { """<tr><th>Text size</th><td>${s.fontScale}${installIcon("cfg-display")}</td></tr>""" },
@@ -3285,35 +3998,38 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  is where the probe cost actually lands — once per TTL). */
     private fun infoJson(): String {
         val s = snapCache.get()
+        // One health snapshot for this render — the banner, facts card and diagnostics rows below all read
+        // the same WebView/renderer verdict rather than each re-probing (which could otherwise disagree).
+        val h = healthInputs()
         val cards = listOf(
             "livetbl" to liveRowsHtml(),
             "behavtbl" to behaviourRowsHtml(s),
             "disptbl" to displayRowsHtml(s),
             "updtbl" to updatesRowsHtml(s),
-            "infotbl" to factRowsHtml(s, infoKeys(s)),
-            "nettbl" to factRowsHtml(s, NET_KEYS),
-            "proftbl" to factRowsHtml(s, profileFactKeys(profile, s.facts)),
-            "contexttbl" to contextRowsHtml(s),
+            "infotbl" to factRowsHtml(s, infoKeys(s), h),
+            "nettbl" to factRowsHtml(s, NET_KEYS, h),
+            "proftbl" to factRowsHtml(s, profileFactKeys(profile, s.facts), h),
+            "contexttbl" to contextRowsHtml(s, h),
             "captbl" to capRowsHtml(s.capabilityRows),
         ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
-        return """{"banners":${jsonStr(bannersHtml(s))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
+        return """{"banners":${jsonStr(bannersHtml(s, h))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s))},"cards":{$cards}}"""
     }
 
     private fun infoHtml(): String {
-        val pid = esc(config.panelId)
-        val fname = esc(config.friendlyName)
-        val browserTitle = esc(panelBrowserTitle(config.friendlyName))
         // Stale-while-revalidate: render the last-known snapshot instantly (placeholders if none yet)
         // and let the page hydrate/refresh from /api/v1/info when the snapshot is missing or old.
         val s = snapCache.peek()
+        // One health snapshot shared by every warm branch below (banner + facts + diagnostics), captured
+        // lazily so a cold shell (s == null, nothing rendered warm) still probes nothing.
+        val h: HealthInputs by lazy(LazyThreadSafetyMode.NONE) { healthInputs() }
         val hydrate = s == null || snapCache.ageMs() > SNAP_TTL_MS
         val placeholder = """<tr><td style="color:#888">reading…</td></tr>"""
         // One facts/value card: cold → placeholder rows (hydration fills or hides); warm → rows, and
         // an EMPTY card is omitted exactly as before.
         fun tcard(id: String, title: String, rows: String?, pre: String = "", post: String = ""): String = when {
-            rows == null -> """<div class="card"><h2>${esc(title)}</h2>$pre<table id="$id">$placeholder</table>$post</div>"""
+            rows == null -> """<div class="card" data-layout-key="$id"><h2>${esc(title)}</h2>$pre<table id="$id">$placeholder</table>$post</div>"""
             rows.isBlank() -> ""
-            else -> """<div class="card"><h2>${esc(title)}</h2>$pre<table id="$id">$rows</table>$post</div>"""
+            else -> """<div class="card" data-layout-key="$id"><h2>${esc(title)}</h2>$pre<table id="$id">$rows</table>$post</div>"""
         }
         val profileReferences = profile.profileLinks.joinToString(" · ") { link ->
             val host = runCatching { java.net.URI(link.url).host }.getOrNull().orEmpty()
@@ -3322,7 +4038,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 .orEmpty()
             """<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><bdi class="profile-reference-label" dir="auto">${esc(link.label)}</bdi>$destination</a>"""
         }.takeIf { it.isNotBlank() }?.let { """<br><span class="profile-reference-links">$it</span>""" }.orEmpty()
-        val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a> — if one looks wrong, that's where to correct it.$profileReferences</p>"""
+        val profNote = """<p class="note">Values declared by this panel's <a href="$REPO_URL/blob/main/docs/architecture/device-profiles.md" target="_blank" rel="noopener" style="color:#9cf">device profile</a>.$profileReferences</p>"""
         val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — a copy-paste
 report of this panel's hardware, firmware, SELinux, su and node probes for bug reports.</p>"""
         // A cold shell can safely show the app-private last-successful capture before the capability
@@ -3335,54 +4051,54 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
         }
         val shotCard = when {
             s == null && cachedShot != null ->
-                """<div class="card" id="shotcard" data-capture-ok="0">$shotTitle${shotInner(cachedShot)}</div>"""
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="0">$shotTitle${shotInner(cachedShot)}</div>"""
             s == null ->
-                """<div class="card" id="shotcard" data-capture-ok="0" style="display:none">$shotTitle${shotInner(null)}</div>"""
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="0" style="display:none">$shotTitle${shotInner(null)}</div>"""
             s.privilege.typedShellControlReady ->
-                """<div class="card" id="shotcard" data-capture-ok="1">$shotTitle${shotInner(cachedShot)}</div>"""
+                """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="1">$shotTitle${shotInner(cachedShot)}</div>"""
             else -> ""
         }
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
-(function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$browserTitle</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}" data-hardened="${if (config.hardenedSecurityEnabled) "1" else "0"}"><div class="wrap">
-<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$pid" data-self-name="$fname"><span class="sep">·</span>$fname</small></h1>
- <span style="display:flex;gap:10px;align-items:center">${if (config.haLinkUrl.isNotBlank()) """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""}<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>
- <a class="gh" href="$REPO_URL" target="_blank" rel="noopener" title="ha-paneld on GitHub" aria-label="GitHub"><svg viewBox="0 0 24 24"><path d="$GH_ICON"/></svg></a></span></div>
-${navBar("dashboard")}</div>
-<div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
-<div id="bannerzone">${s?.let { bannersHtml(it) } ?: ""}</div>
-<div class="cards" id="dashboard-cards">
-<div class="card"><h2>Controls <small>· software nav bar</small></h2>
+        val infoHaLink = if (config.haLinkUrl.isNotBlank())
+            """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""
+        val revealBtn = """<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>"""
+        return pageShell(
+            active = "dashboard",
+            sectionTitle = null,
+            bodyAttrs = """data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}" data-hardened="${if (config.hardenedSecurityEnabled) "1" else "0"}"""",
+            rightControls = "$infoHaLink$revealBtn ${ghLink()}",
+            extraScripts = """<script src="/assets/card-size-memory.js"></script>
+<script src="/assets/card-column-alignment.js"></script>
+<script src="/info.js"></script>
+""",
+            body = """<div id="bannerzone">${s?.let { bannersHtml(it, h) } ?: ""}</div>
+<div class="cards" id="dashboard-cards" data-card-size-page="dashboard" data-card-size-epoch="1" data-card-size-restore="1">
+<div class="card" data-layout-key="controls"><h2>Controls <small>· software nav bar</small></h2>
 <div id="ctlzone">${controlsHtml(s)}</div></div>
-${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it)) })}
+${tcard("infotbl", "Panel information", s?.let { factRowsHtml(it, infoKeys(it), h) })}
 $shotCard
-${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS) })}
-${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, profileFactKeys(profile, it.facts)) }, post = profNote)}
-${tcard("contexttbl", "Runtime diagnostics", s?.let { contextRowsHtml(it) })}
+${tcard("nettbl", "Networking", s?.let { factRowsHtml(it, NET_KEYS, h) })}
+${tcard("proftbl", "ha-paneld profile", s?.let { factRowsHtml(it, profileFactKeys(profile, it.facts), h) }, post = profNote)}
+${tcard("contexttbl", "Runtime diagnostics", s?.let { contextRowsHtml(it, h) })}
 ${tcard("captbl", "Capabilities", s?.let { capRowsHtml(it.capabilityRows) }, post = capNote)}
-<div class="card"><h2>Dashboard responsiveness <small id="smhdr"></small></h2>
+<div class="card" data-layout-key="responsiveness"><h2>Dashboard responsiveness <small id="smhdr"></small></h2>
 <canvas id="respchart" width="600" height="150" style="height:150px"></canvas>
 <div class="leg"><span style="color:#d04a3b">▬</span> interaction latency&nbsp;&nbsp;<span style="color:#4a9eff">▬</span> state updates&nbsp;&nbsp;<span style="color:#f5a623">▬</span> main-thread blocking · ~4 min</div>
 <table id="smtbl"><tr><td style="color:#888">measuring…</td></tr></table></div>
-<div class="card"><h2>Home Assistant state stream <small>· built-in renderer</small></h2>
+<div class="card" data-layout-key="ha-state-stream"><h2>Home Assistant state stream <small>· built-in renderer</small></h2>
 <table id="streamtbl"><tr><td style="color:#888">waiting for state traffic…</td></tr></table>
 <table class="dt" id="noisyentities"><tr><td style="color:#888">waiting for entity contributors…</td></tr></table>
 <p class="note">Payload is uncompressed application JSON. Main-thread time measures dispatch until the browser yields; it is not claimed as Home Assistant-only CPU. <a href="/entities">Open entity diagnostics</a>.</p></div>
-<div class="card"><h2>Sensors <small id="sensage"></small></h2>
+<div class="card" data-layout-key="sensors"><h2>Sensors <small id="sensage"></small></h2>
 <table id="senstbl"><tr><td style="color:#888">reading…</td></tr></table>
 <p class="note">Live readings from this panel’s sensors — shown even when a value is hidden from Home Assistant.</p></div>
-<div class="card"><h2>Performance <small id="perfage"></small></h2>
+<div class="card" data-layout-key="performance"><h2>Performance <small id="perfage"></small></h2>
 <div style="color:#666;font-size:.78rem;margin-bottom:8px">Samples only while this page is open.</div>
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>
 <div class="leg"><span style="color:#4a9eff">■</span> CPU&nbsp;&nbsp;<span style="color:#48c774">■</span> RAM&nbsp;&nbsp;<span style="color:#f5a623">■</span> GPU (% used) · ~4&nbsp;min</div>
 <table id="perf"><tr><td style="color:#888">sampling…</td></tr></table></div>
-<div class="card"><h2>Top processes <small>· by CPU</small></h2>
+<div class="card" data-layout-key="top-processes"><h2>Top processes <span class="top-process-modes" role="group" aria-label="Rank processes by"><button type="button" class="top-process-mode on" data-mode="cpu" aria-pressed="true" onclick="setTopMode('cpu')">CPU</button><button type="button" class="top-process-mode" data-mode="ram" aria-pressed="false" onclick="setTopMode('ram')">RAM</button></span></h2>
 <table class="dt" id="topproc"><tr><td style="color:#888">top processes…</td></tr></table></div>
-<div class="card"><h2>Remote WebView debugging <small id="insthdr"></small></h2>
+<div class="card" data-layout-key="remote-webview"><h2>Remote WebView debugging <small id="insthdr"></small></h2>
 <div style="display:flex;gap:8px;margin-bottom:4px">
  <button id="inspstart" type="button" class="pbtn" onclick="inspStart()"${if (config.hardenedSecurityEnabled) " disabled title=\"Unavailable while Hardened mode is enabled\"" else ""}>Enable</button>
  <button type="button" class="pbtn" onclick="inspStop()">Stop</button></div>
@@ -3393,12 +4109,8 @@ ${tcard("disptbl", "Display & tuning", s?.let { displayRowsHtml(it) })}
 ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
 </div>
 <p class="note" style="text-align:center;margin-top:18px"><a href="/api" style="color:#9cf">REST API explorer</a>
- · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>
-<script src="/assets/card-column-alignment.js"></script>
-<script src="/info.js"></script>
-<script src="/assets/switcher.js"></script>
-<script src="/assets/buildwatch.js"></script>
-</div></body></html>"""
+ · <a href="/api/v1/diag" target="_blank" style="color:#9cf">diagnostics</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>""",
+        )
     }
 
     private fun esc(s: String): String = s
@@ -3471,18 +4183,19 @@ ${tcard("updtbl", "Updates", s?.let { updatesRowsHtml(it) })}
         }
         val dis = if (locked) " disabled" else ""
         val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
-        val badge = """<span class="cardbadge exp">experimental</span>"""
-        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", badge, conditional = true)
-            else "<h2>Vendor packages$badge</h2>"
-        return """<div class="card" id="cfg-tame">$title
+        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", conditional = true)
+            else "<h2>Vendor packages</h2>"
+        return """<div class="card" id="cfg-tame" data-layout-key="vendor-packages">$title
 $lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body
 <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px" class="${if (locked) "locked" else ""}">
  <button type="button" onclick="pkgPick()"$dis>Find a package…</button>
- <form method="post" action="/api/v1/tame" style="display:flex;flex-direction:row;gap:8px;margin:0">
-  <input name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="…or tame a package by name" style="flex:1"$dis>
+ <form method="post" action="/api/v1/tame" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin:0">
+  <label for="tame-pkg" style="grid-column:1/-1">Android package name</label>
+  <input id="tame-pkg" name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" required pattern="[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*" maxlength="255" aria-describedby="tame-pkg-hint" placeholder="io.example.app" style="min-width:0"$dis oninput="updateTamePackageSubmit()">
   <input type="hidden" name="action" value="tame">
-  <button type="submit"${hardenedApprovalA11yAttrs()}$dis>Tame</button>
+  <button id="tame-package-submit" type="submit"${hardenedApprovalA11yAttrs()}$dis>Tame</button>
+  <small id="tame-pkg-hint" class="note" style="grid-column:1/-1">Use the Android package id, for example io.example.app.</small>
  </form>
 </div>
 <dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
@@ -3493,7 +4206,8 @@ $body
 </dialog>
 <script>function pkgPick(){var d=document.getElementById('pkgdlg');d.showModal();
 document.getElementById('pkgdlgbody').innerHTML='Loading…';
-fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent='Could not list packages.'});}</script></div>"""
+fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent='Could not list packages.'});}
+function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg'),button=document.getElementById('tame-package-submit');if(!input||!button)return;button.disabled=input.disabled||!input.checkValidity();}updateTamePackageSubmit();</script></div>"""
     }
 
     /** Display-sizing card (density + text scale). Empty when su isn't reachable (no control). */
@@ -3519,7 +4233,7 @@ fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t
         val lock = if (locked) privilegedLockBanner("With supported privileged panel access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
         val badge = """<span class="cardbadge exp">experimental</span>"""
         val title = if (!locked) hardenedApprovalCardTitle("Display sizing", badge) else "<h2>Display sizing$badge</h2>"
-        return """<div class="card" id="cfg-display">$title
+        return """<div class="card" id="cfg-display" data-layout-key="display-sizing">$title
 $lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
 (lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
@@ -3632,8 +4346,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         call.respondText(entityFilterStatusJson(), ContentType.Application.Json)
         // The live renderer is singleTask. reloadDashboard marks a reload intent; onNewIntent sees the
         // changed filter signature and rebuilds the WebView so document-start wiring is atomic.
-        if (config.dashboardPackage == SystemController.BUILTIN_DASHBOARD) {
-            scope.launch { runCatching { system.reloadDashboard(SystemController.BUILTIN_DASHBOARD) } }
+        if (effectiveDashboardIsBuiltin()) {
+            scope.launch {
+                runCatching {
+                    system.reloadDashboard(
+                        SystemController.BUILTIN_DASHBOARD,
+                        reason = "updating the entity filter",
+                    )
+                }
+            }
         }
     }
 
@@ -3700,14 +4421,78 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      */
     private suspend fun handleConfigPost(call: ApplicationCall) {
         val received = receiveBoundedConfigParameters(call) ?: return
-        val p = when (val result = normalizeConfigPostParameters(received)) {
+        val normalizedPost = when (val result = normalizeConfigPostParameters(received)) {
             is ConfigPostParameters.Ok -> result.values
             is ConfigPostParameters.Bad -> {
                 call.respondText("${result.reason}\n", status = HttpStatusCode.BadRequest)
                 return
             }
         }
+        val onboardingPost = augmentPostWithDiscoveredHaUrlForMqttOnboarding(normalizedPost)
+        val p = onboardingPost.parameters
         if (rejectHardenedNetworkAdb(call, p["network_adb"])) return
+        // Fence every baseline-dependent admission decision below. The direct mutation lane rechecks
+        // this complete effective snapshot before persistence, so a concurrent save cannot bypass an
+        // Area prerequisite or hardened approval by changing the value while this request waits.
+        val admissionBaselineHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues())
+        val enablingAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) == true && !config.autoSleep
+        var autoSleepPrerequisiteOwner: HaAuthOwner? = null
+        val prerequisiteAndroidId = config.androidId
+        val prerequisitePanelId = config.panelId
+        if (enablingAutoSleep) {
+            val connectionChanged = p["ha_url"]?.trimEnd('/')?.let { it != config.haUrl.trimEnd('/') } == true ||
+                listOf("ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id").any { p[it] != null }
+            val identityChanged = p["panel_id"]?.let { it != prerequisitePanelId } == true
+            if (connectionChanged || identityChanged) {
+                call.respondText(
+                    autoSleepConfigErrorJson(
+                        "auto-sleep-prerequisite-stale",
+                        "Save the Home Assistant connection and panel identity first, then enable Auto sleep.",
+                    ),
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+            val prerequisite = autoSleepHttpApi.prerequisite()
+            when (prerequisite.phase) {
+                HaPanelAreaPrerequisitePhase.ASSIGNED -> {
+                    autoSleepPrerequisiteOwner = prerequisite.authOwner ?: run {
+                        call.respondText(
+                            autoSleepConfigErrorJson(
+                                "auto-sleep-prerequisite-stale",
+                                "Home Assistant settings changed during the Area check. Try again.",
+                            ),
+                            ContentType.Application.Json,
+                            status = HttpStatusCode.Conflict,
+                        )
+                        return
+                    }
+                }
+                HaPanelAreaPrerequisitePhase.UNASSIGNED -> {
+                    call.respondText(
+                        autoSleepConfigErrorJson(
+                            "auto-sleep-area-required",
+                            "Assign this panel to a Home Assistant Area before enabling Auto sleep.",
+                        ),
+                        ContentType.Application.Json,
+                        status = HttpStatusCode.Conflict,
+                    )
+                    return
+                }
+                HaPanelAreaPrerequisitePhase.AUTH_FAILED, HaPanelAreaPrerequisitePhase.UNAVAILABLE -> {
+                    call.respondText(
+                        autoSleepConfigErrorJson(
+                            "auto-sleep-prerequisite-unavailable",
+                            "Auto sleep could not check this panel's Home Assistant Area. Check the Home Assistant connection.",
+                        ),
+                        ContentType.Application.Json,
+                        status = HttpStatusCode.ServiceUnavailable,
+                    )
+                    return
+                }
+            }
+        }
         val previousAmbientSource = config.autoBrightnessHaEntity
         var ambientSourceOwner: io.github.maxlyth.hapaneld.HaAuthOwner? = null
         p["auto_brightness_ha_entity"]?.takeIf { it.isNotBlank() && it != previousAmbientSource }?.let { entityId ->
@@ -3757,7 +4542,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             return
         }
         if (p["dashboard_idle_return_min"] != null &&
-            (dashboardPackage ?: config.dashboardPackage) != SystemController.BUILTIN_DASHBOARD
+            (dashboardPackage ?: config.dashboardPackage).let { it.isNotBlank() && it != SystemController.BUILTIN_DASHBOARD }
         ) {
             call.respondText(
                 """{"ok":false,"error":"built-in-renderer-required","message":"Idle return is available only for the built-in renderer."}""",
@@ -3786,6 +4571,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 },
             )
         ) return
+        lateinit var mutationPlan: DirectConfigMutationPlan
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
         val panelId = p["panel_id"]
@@ -3800,31 +4586,56 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         var relaunchForDash = false
         var relaunchForFullscreen = false
         var relaunchForOverscroll = false
+        var relaunchForNativeKiosk = false
         var reloadForZoom = false
         var entityLearningChanged: Boolean? = null
         var entityTargetChanged = false
         var homeDashboardAppliedEarly = false
         var homeDashboardChangedEarly = false
         var rendererFailure: Throwable? = null
+        val liveApplied = ArrayList<String>()
+        val livePending = ArrayList<String>()
+        val liveRejected = ArrayList<String>()
         var ambientSourceValidationStale = false
+        var autoSleepPrerequisiteStale = false
+        var directAdmissionStale = false
+        var previous: ConfigBundle? = null
         val committed = withContext(Dispatchers.IO) {
-            rendererPreparation.transaction {
-                config.synchronizedTransaction {
+            synchronized(directConfigMutationLock) {
+                val saved = rendererPreparation.transaction {
+                    val persisted = config.synchronizedTransaction {
+                    if (io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues()) != admissionBaselineHash) {
+                        directAdmissionStale = true
+                        return@synchronizedTransaction false
+                    }
+                    mutationPlan = planDirectConfigMutation(
+                        posted = p.names().associateWith { p[it].orEmpty() },
+                        before = directMutationValues(),
+                    )
+                    if (mutationPlan.isNoOp) return@synchronizedTransaction true
                     if (ambientSourceOwner != null &&
                         (config.haAuthSnapshot().stableOwner() != ambientSourceOwner || config.autoBrightnessHaEntity != previousAmbientSource)
                     ) {
                         ambientSourceValidationStale = true
                         return@synchronizedTransaction false
                     }
-                    val previous = ConfigBundle.fromValues(
-                    revisionValues(), kind = ConfigBundle.KIND_REVISION,
-                    exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
-                )
-                val saved = config.applyBatch(
-                    afterCommit = {
-                        if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
-                    },
-                ) {
+                    if (autoSleepPrerequisiteOwner != null &&
+                        (config.haAuthSnapshot().stableOwner() != autoSleepPrerequisiteOwner ||
+                            config.androidId != prerequisiteAndroidId || config.panelId != prerequisitePanelId ||
+                            config.autoSleep)
+                    ) {
+                        autoSleepPrerequisiteStale = true
+                        return@synchronizedTransaction false
+                    }
+                    previous = ConfigBundle.fromValues(
+                        revisionValues(), kind = ConfigBundle.KIND_REVISION,
+                        exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
+                    )
+                    config.applyBatch(
+                        afterCommit = {
+                            if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
+                        },
+                    ) {
                     panelId?.let { config.setPanelId(it) }
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     val prevDash = config.dashboardPackage
@@ -3853,6 +4664,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     val postedFullscreen = p["dashboard_fullscreen"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
                     postedFullscreen?.let { config.setDashboardFullscreen(it) }
                     relaunchForFullscreen = postedFullscreen != null && postedFullscreen != prevFullscreen && !dashChanged
+                    // Native HA kiosk mode is applied over the live external bus. Foregrounding the
+                    // singleTask renderer lets onNewIntent update the current document without reload.
+                    val prevNativeKiosk = config.dashboardNativeKiosk
+                    val postedNativeKiosk = p["dashboard_native_kiosk"]?.let {
+                        it.trim().equals("true", ignoreCase = true) || it.trim() == "1"
+                    }
+                    postedNativeKiosk?.let { config.setDashboardNativeKiosk(it) }
+                    relaunchForNativeKiosk = postedNativeKiosk != null &&
+                        postedNativeKiosk != prevNativeKiosk && !dashChanged
                     // Overscroll stretch/glow (hidden, API-only). Same live-apply as fullscreen: a foreground
                     // relaunch re-runs onResume → applyOverscroll. Detected from the POSTED value (read-back
                     // inside applyBatch is pre-commit).
@@ -3898,8 +4718,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
-                        (mfr ?: config.manufacturer).ifEmpty { "ha-paneld" },
-                        (mdl ?: config.model).ifEmpty { "panel agent" },
+                        mfr ?: config.manufacturerRaw,
+                        mdl ?: config.modelRaw,
                     )
                     val broker = p["mqtt_broker"]?.trim()
                     val user = p["mqtt_user"]?.trim()
@@ -3977,26 +4797,34 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
                     // Per-row "expose to HA" toggles (ha_expose_<key>=true|false) — take effect on the reconfigure.
                     for (name in p.names()) {
-                        if (name.startsWith("ha_expose_")) {
-                            SettingValue.parseBool(p[name].orEmpty())?.let {
-                                config.setHaExposed(name.removePrefix("ha_expose_"), it)
-                            }
+                        val exposed = SettingsRegistry.parseExposure(name) ?: continue
+                        SettingValue.parseBool(p[name].orEmpty())?.let {
+                            config.setHaExposed(exposed.key, it)
                         }
                     }
+                    }
                 }
-                if (saved) {
-                    revisions.snapshot(previous)
+                if (persisted && !mutationPlan.isNoOp) {
+                    revisions.snapshot(requireNotNull(previous))
                     runCatching {
                         // Home dashboard normally travels through the live MQTT-equivalent path. Apply this
                         // one target-defining value before any renderer effect so owner-scoped filter state
                         // is rebound (or hidden) before a relaunched WebView can observe it.
-                        p["home_dashboard"]?.let { posted ->
+                        mutationPlan.changedLive.firstOrNull { it.first == "home_dashboard" }?.let { (_, posted) ->
                             val previousHome = config.homeDashboard
-                            check(applySetting("home_dashboard", posted)) { "home_dashboard live apply refused" }
+                            recordLiveApplyOutcome(
+                                "home_dashboard",
+                                applySetting("home_dashboard", posted),
+                                liveApplied,
+                                livePending,
+                                liveRejected,
+                            )
                             homeDashboardAppliedEarly = true
                             homeDashboardChangedEarly = config.homeDashboard != previousHome
                         }
-                        if (entityTargetChanged && !homeDashboardChangedEarly) entityLearning.onTargetConfigurationChanged()
+                        if (entityTargetChanged && !homeDashboardChangedEarly) {
+                            entityLearning.onTargetConfigurationChanged()
+                        }
                         entityLearningChanged?.let { enabled ->
                             check(entityLearning.setEnabled(enabled)) { "entity-learning transition failed" }
                             entityLearningChanged = null
@@ -4008,13 +4836,62 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                                 zoomChanged = reloadForZoom,
                                 fullscreenChanged = relaunchForFullscreen,
                                 overscrollChanged = relaunchForOverscroll,
+                                nativeKioskChanged = relaunchForNativeKiosk,
+                                homeChanged = homeDashboardChangedEarly,
                                 darkMode = applyDark,
                             ),
                         )
                     }.onFailure { rendererFailure = it }
                 }
-                saved
+                    persisted
                 }
+                if (saved && !mutationPlan.isNoOp) {
+                    // Keep equality planning, persistence and hardware admission in one request lane. A
+                    // concurrent retry therefore observes this request's durable desired state as its baseline.
+                    for ((key, raw) in mutationPlan.changedLive) {
+                        if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
+                        val spec = SettingsRegistry.spec(key)
+                        val value = if (spec != null) {
+                            when (val validated = SettingValue.validate(spec, raw)) {
+                                is Validation.Ok -> validated.normalized
+                                is Validation.Bad -> continue
+                            }
+                        } else raw.trim()
+                        recordLiveApplyOutcome(
+                            key,
+                            applySetting(key, value),
+                            liveApplied,
+                            livePending,
+                            liveRejected,
+                        )
+                    }
+                }
+                if (saved && "ha_area" in mutationPlan.changedKeys) {
+                    // A value saved HERE was chosen by a person: record it as a deliberate override so
+                    // adoption cannot revert it seconds later (the maintainer set Hall's area to a
+                    // neighbouring room for auto-sleep sources and watched the save silently undo itself,
+                    // 2026-07-26). Blank means "follow Home Assistant" and hands the value back to
+                    // adoption. Auto-sleep re-reads its configuration so the area takes effect now.
+                    config.haAreaUserOverride = config.haArea.isNotBlank()
+                    autoSleepHttpApi.noteAreaChanged()
+                }
+                if (saved && "ha_area" in mutationPlan.changedKeys && config.haArea.isNotBlank()) {
+                    // Requested-area write-back, post-commit and in the background: admin sessions move
+                    // the device now; non-admin attempts fail closed inside and the request simply stands
+                    // (it seeds discovery's suggested_area and retries when an admin next reads the
+                    // ha-area endpoint). Afterwards adopt whatever HA actually reports — for a value HA
+                    // agrees with the override bit retires; a deliberate divergence is KEPT.
+                    haAreaWriteJob?.cancel()
+                    invalidateHaAreaCatalogCache()
+                    val snapshot = captureHaAreaSnapshot()
+                    haAreaWriteJob = scope.launch {
+                        runCatching {
+                            val before = haAreaCatalogFor(snapshot, fresh = true)
+                            applyHaAreaPrecedence(snapshot, before)
+                        }.onFailure { Log.w(TAG, "ha-area: write-back after config save failed", it) }
+                    }
+                }
+                saved
             }
         }
         if (ambientSourceValidationStale) {
@@ -4025,52 +4902,194 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             return
         }
+        if (autoSleepPrerequisiteStale) {
+            call.respondText(
+                autoSleepConfigErrorJson(
+                    "auto-sleep-prerequisite-stale",
+                    "Home Assistant settings changed during the Area check. Try again.",
+                ),
+                ContentType.Application.Json,
+                status = HttpStatusCode.Conflict,
+            )
+            return
+        }
+        if (directAdmissionStale) {
+            respondConfigMutation(
+                call,
+                "configuration-stale",
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                "Settings changed while this request was being checked. Reload and try again.",
+                HttpStatusCode.Conflict,
+            )
+            return
+        }
         if (!committed) {
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
         }
-        // Formerly MQTT-only behaviour settings — applied through the bridge's command path so HTTP
-        // and HA behave identically. Registry-validated where the key is registered; invalid skipped.
-        val liveApplyFailures = ArrayList<String>()
-        for (key in HTTP_LIVE_KEYS) {
-            if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
-            val raw = p[key] ?: continue
-            val spec = SettingsRegistry.spec(key)
-            val value = if (spec != null) {
-                when (val v = SettingValue.validate(spec, raw)) {
-                    is Validation.Ok -> v.normalized
-                    is Validation.Bad -> continue
-                }
-            } else {
-                raw.trim()
-            }
-            if (!applySetting(key, value)) liveApplyFailures += key
+        if (mutationPlan.isNoOp) {
+            respondConfigMutation(call, "no-op", emptyList(), emptyList(), emptyList(), null)
+            return
         }
+        // Ordinary preferences are durably committed even when a later hardware admission is rejected;
+        // include them explicitly so a mixed response never hides which unrelated changes took effect.
+        liveApplied.addAll(0, mutationPlan.changedKeys.filter { it !in HTTP_LIVE_KEYS })
         snapInvalidate()
-        onReconfigure()
+        val reconfigureKeys = mutationPlan.changedKeys.filterTo(linkedSetOf()) {
+            it !in HTTP_LIVE_KEYS || it == "home_dashboard"
+        }.apply { addAll(livePending) }
+        if (reconfigureKeys.isNotEmpty()) onReconfigure(reconfigureKeys)
         rendererFailure?.let {
             Log.e(TAG, "configuration committed but renderer preparation failed", it)
-            call.respondText(
-                "settings saved; renderer preparation failed and remains retryable on service restart\n",
-                ContentType.Text.Plain,
+            val failedOwner = if (entityLearningChanged != null) "dashboard_entity_learning" else "renderer"
+            liveApplied.remove(failedOwner)
+            if (failedOwner !in liveRejected) liveRejected += failedOwner
+        }
+        if (liveRejected.isNotEmpty()) {
+            respondConfigMutation(
+                call,
+                "saved-partial",
+                liveApplied,
+                livePending,
+                liveRejected,
+                "Some settings were saved, but ${liveRejected.joinToString()} could not be durably accepted.",
                 HttpStatusCode.InternalServerError,
             )
             return
         }
-        if (liveApplyFailures.isNotEmpty()) {
-            val body = "{\"ok\":false,\"status\":\"committed-apply-failed\",\"keys\":${jarr(liveApplyFailures)}}"
-            call.respondText(body, ContentType.Application.Json, HttpStatusCode.InternalServerError)
-            return
+        val pendingMessage = livePending.takeIf(List<String>::isNotEmpty)?.let {
+            "Settings were saved; retrying hardware apply: ${it.joinToString()}. " +
+                "If they remain pending, restart the service."
         }
-        if (call.request.headers["Accept"]?.contains("application/json") == true) {
-            call.respondText(configJson(), ContentType.Application.Json)
+        val onboardingSignInMessage = mqttOnboardingSignInMessage(
+            onboardingPost.haUrlDiscovered,
+            mutationPlan.changedKeys,
+            onboardingPost.haDiscovery,
+        )
+        respondConfigMutation(
+            call,
+            if (livePending.isEmpty()) "saved" else "saved-apply-pending",
+            liveApplied,
+            livePending,
+            emptyList(),
+            pendingMessage ?: onboardingSignInMessage,
+            if (livePending.isEmpty()) HttpStatusCode.OK else HttpStatusCode.Accepted,
+        )
+    }
+
+    private data class OnboardingConfigPost(
+        val parameters: Parameters,
+        val haUrlDiscovered: Boolean,
+        /** Carried so the response can explain a failed discovery without browsing a second time. */
+        val haDiscovery: DiscoveryResult = DiscoveryResult(),
+    )
+
+    private suspend fun augmentPostWithDiscoveredHaUrlForMqttOnboarding(posted: Parameters): OnboardingConfigPost {
+        if (!shouldDiscoverHaUrlForMqttOnboarding(config.haUrl, posted)) {
+            return OnboardingConfigPost(posted, false)
+        }
+        val suggestions = withContext(Dispatchers.IO) { configDiscoverySuggestions() }
+        val found = suggestions.haDiscovery
+        lastHaDiscovery = found
+        val discovered = suggestions.haUrl.trim()
+        if (discovered.isBlank() || config.haUrl.isNotBlank()) return OnboardingConfigPost(posted, false, found)
+        val spec = SettingsRegistry.spec("ha_url") ?: return OnboardingConfigPost(posted, false, found)
+        val normalized = when (val validation = SettingValue.validate(spec, discovered)) {
+            is Validation.Ok -> validation.normalized
+            is Validation.Bad -> {
+                Log.w(TAG, "config: ignoring invalid discovered Home Assistant URL during MQTT onboarding")
+                return OnboardingConfigPost(posted, false, found)
+            }
+        }
+        val augmented = Parameters.build {
+            for (name in posted.names()) {
+                posted.getAll(name).orEmpty().forEach { append(name, it) }
+            }
+            append("ha_url", normalized)
+        }
+        Log.i(TAG, "config: discovered Home Assistant URL during MQTT onboarding")
+        return OnboardingConfigPost(augmented, true, found)
+    }
+
+    /**
+     * What to tell the user immediately after they save MQTT settings, so the next step is never a guess.
+     *
+     * The message must NOT be conditional on discovery having succeeded. It previously returned null
+     * whenever `ha_url` was still blank, which is exactly the state a panel on a different network segment
+     * from Home Assistant is always left in: mDNS is link-local, discovery cannot reach across the
+     * boundary, so the URL stayed empty and the user got no message at all — silence at the precise moment
+     * they most needed direction. Now a failed discovery produces guidance *and* the reason for it.
+     */
+    private fun mqttOnboardingSignInMessage(
+        haUrlDiscovered: Boolean,
+        changedKeys: Collection<String>,
+        discovery: DiscoveryResult,
+    ): String? {
+        if (!effectiveDashboardIsBuiltin()) return null
+        if (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) return null
+        val onboardingKeys = setOf("mqtt_broker", "mqtt_user", "mqtt_password", "ha_url", "dashboard_package")
+        if (!haUrlDiscovered && changedKeys.none { it in onboardingKeys }) return null
+        if (config.haUrl.isBlank()) {
+            val next = "MQTT settings saved. Next: enter the Home Assistant URL in the Home Assistant " +
+                "connection card below."
+            val why = HaDiscovery.unavailableExplanation(discovery)
+                ?: return "$next It was not found automatically on this network."
+            return "$next It could not be found automatically because $why."
+        }
+        return "MQTT settings saved — preparing Home Assistant sign-in. " +
+            "The panel should show the sign-in workflow; you can also use Browser sign-in below."
+    }
+
+    private fun recordLiveApplyOutcome(
+        key: String,
+        outcome: LiveSettingRequestOutcome,
+        applied: MutableList<String>,
+        pending: MutableList<String>,
+        rejected: MutableList<String>,
+    ) {
+        when {
+            outcome == LiveSettingRequestOutcome.APPLIED -> applied += key
+            outcome.pending -> pending += key
+            else -> rejected += key
+        }
+    }
+
+    private suspend fun respondConfigMutation(
+        call: ApplicationCall,
+        status: String,
+        applied: List<String>,
+        pending: List<String>,
+        rejected: List<String>,
+        message: String?,
+        httpStatus: HttpStatusCode = HttpStatusCode.OK,
+    ) {
+        val resolvedMessage = message ?: when (status) {
+            "no-op" -> "No settings changed."
+            else -> "Settings saved."
+        }
+        val jsonResponse = configMutationWantsJson(
+            call.request.headers["Accept"],
+            call.request.headers["Content-Type"],
+        )
+        if (jsonResponse) {
+            call.respondText(
+                configJson(
+                    mutationStatus = status,
+                    applied = applied,
+                    pending = pending,
+                    rejected = rejected,
+                    message = resolvedMessage,
+                ),
+                ContentType.Application.Json,
+                httpStatus,
+            )
         } else {
             call.respondText(
-                "<!doctype html><meta charset=utf-8>" +
-                    "<meta http-equiv=refresh content='2;url=/'>" +
-                    "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                    "settings saved — reconnecting…</body>",
+                configMutationHtml(resolvedMessage),
                 ContentType.Text.Html,
+                httpStatus,
             )
         }
     }
@@ -4106,15 +5125,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     private fun requestTameReconcileAfterCommit(): Boolean {
         val admission = tameReconciliation.request()
         when (admission) {
-            KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
-            KeyedLatestDispatcher.Admission.COALESCED ->
+            LatestDispatcher.Admission.ACCEPTED -> Unit
+            LatestDispatcher.Admission.COALESCED ->
                 FeatureCosts.registry.recordCoalesced(FeatureCostOperation.TAME_MUTATION)
-            KeyedLatestDispatcher.Admission.REJECTED,
-            KeyedLatestDispatcher.Admission.CLOSED ->
+            LatestDispatcher.Admission.REJECTED,
+            LatestDispatcher.Admission.CLOSED ->
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.TAME_MUTATION)
         }
-        return admission == KeyedLatestDispatcher.Admission.ACCEPTED ||
-            admission == KeyedLatestDispatcher.Admission.COALESCED
+        return admission == LatestDispatcher.Admission.ACCEPTED ||
+            admission == LatestDispatcher.Admission.COALESCED
     }
 
     private suspend fun respondRemoteAdmission(call: ApplicationCall, command: RemoteControl) {
@@ -4130,27 +5149,77 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             return
         }
-        val admittedCommand = if (command is RemoteControl.Tap) RemoteControl.Tap(command.x, command.y, loopback)
-            else command
+        val admittedCommand = if (command is RemoteControl.Tap) {
+            val requestId = if (command.capture) remoteInputSequence.incrementAndGet() else null
+            RemoteControl.Tap(
+                x = command.x,
+                y = command.y,
+                loopback = loopback,
+                capture = command.capture,
+                requestId = requestId,
+                executeBeforeElapsedMs = requestId?.let {
+                    SystemClock.elapsedRealtime() + REMOTE_TAP_QUEUE_DEADLINE_MS
+                },
+                completeBeforeElapsedMs = requestId?.let {
+                    SystemClock.elapsedRealtime() + REMOTE_TAP_CAPTURE_TIMEOUT_MS
+                },
+                completion = requestId?.let { CompletableDeferred() },
+            )
+        } else command
         val admission = remoteControls.submit(admittedCommand.key, admittedCommand)
         when (admission) {
-            KeyedLatestDispatcher.Admission.ACCEPTED -> Unit
-            KeyedLatestDispatcher.Admission.COALESCED ->
+            LatestDispatcher.Admission.ACCEPTED -> Unit
+            LatestDispatcher.Admission.COALESCED ->
                 FeatureCosts.registry.recordCoalesced(FeatureCostOperation.REMOTE_INPUT)
-            KeyedLatestDispatcher.Admission.REJECTED,
-            KeyedLatestDispatcher.Admission.CLOSED ->
+            LatestDispatcher.Admission.REJECTED,
+            LatestDispatcher.Admission.CLOSED ->
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.REMOTE_INPUT)
         }
         FeatureCosts.registry.setBacklog(FeatureCostOperation.REMOTE_INPUT, remoteControls.pendingCount())
-        if (admission == KeyedLatestDispatcher.Admission.ACCEPTED ||
-            admission == KeyedLatestDispatcher.Admission.COALESCED
+        (admittedCommand as? RemoteControl.Tap)?.requestId?.let { requestId ->
+            Log.i(TAG, "remote input id=$requestId admission=${admission.name.lowercase()} " +
+                "backlog=${remoteControls.pendingCount()}")
+        }
+        if (admission == LatestDispatcher.Admission.ACCEPTED ||
+            admission == LatestDispatcher.Admission.COALESCED
         ) {
-            call.respondText("accepted\n", status = HttpStatusCode.Accepted)
+            val tap = admittedCommand as? RemoteControl.Tap
+            if (tap?.completion == null || tap.requestId == null) {
+                call.respondText("accepted\n", status = HttpStatusCode.Accepted)
+            } else {
+                // The worker owns the semantic deadline. A larger response grace prevents an ambiguous
+                // HTTP timeout from racing a still-running, exactly-once input/capture operation.
+                val result = withTimeoutOrNull(REMOTE_TAP_CAPTURE_RESPONSE_TIMEOUT_MS) {
+                    tap.completion.await()
+                }
+                    ?: TapCaptureResult.CompletionUnknown()
+                respondTapCapture(call, tap.requestId, result)
+            }
         } else {
             call.respondText(
                 "control queue busy\n",
                 status = if (stopping) HttpStatusCode.ServiceUnavailable else HttpStatusCode.Conflict,
             )
+        }
+    }
+
+    private suspend fun respondTapCapture(
+        call: ApplicationCall,
+        requestId: Long,
+        result: TapCaptureResult,
+    ) {
+        val outcome = when (result) {
+            is TapCaptureResult.Success -> "success"
+            is TapCaptureResult.TapFailed -> "tap-failed"
+            is TapCaptureResult.ScreenshotFailed -> "screenshot-unavailable"
+            is TapCaptureResult.CompletionUnknown -> "completion-unknown"
+            TapCaptureResult.HardenedRefusal -> "remote-input-disabled"
+            TapCaptureResult.Expired -> "tap-expired"
+            TapCaptureResult.NotExecuted -> if (stopping) "control-plane-stopping" else "tap-superseded"
+        }
+        Log.i(TAG, "remote input id=$requestId response=$outcome")
+        respondTapCaptureResult(call, requestId, result, stopping) { png ->
+            withContext(Dispatchers.IO) { cacheScreenshot(png) }
         }
     }
 
@@ -4181,7 +5250,30 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val items = schemaSpecs.joinToString(",") { spec ->
             val opts = spec.options.joinToString(",") { s(it) }
             val isHa = spec.ha != null
-            val placeholder = hints[spec.key]?.let { "auto ($it)" }
+            val placeholder = hints[spec.key]?.let { "auto ($it)" } ?: when (spec.key) {
+                "manufacturer" -> profile.manufacturer
+                "model" -> profile.model
+                else -> null
+            }?.takeIf { it.isNotBlank() }
+            // Resolve every value that needs a quote — a key comparison, or the bare JSON `null` token —
+            // BEFORE the template below, so each interpolation is a plain identifier. Nesting a quoted
+            // literal inside ${...} is valid Kotlin, but it reads as though it were string data that
+            // someone forgot to escape, and it has twice been "corrected" to \" — which is a parse error,
+            // because ${...} holds code, and which takes the whole module's compilation down with it
+            // (Kotlin loses the enclosing class, so every companion member reports as unresolved).
+            // Bare identifiers leave nothing to second-guess. Guarded by StringTemplateEscapeContractTest.
+            val nullJson = "null"
+            val autoSleepActivityHidden = spec.key == "auto_sleep_activity" && !config.autoSleep
+            val available = spec.availableWhen(caps) && !autoSleepActivityHidden
+            val displaySizing = spec.key == "dashboard_zoom" && displaySizingAvailable
+            val pickerJson = spec.picker?.let { s(it) } ?: nullJson
+            val minJson = spec.min?.toString() ?: nullJson
+            val maxJson = spec.max?.toString() ?: nullJson
+            val stepJson = spec.step?.toString() ?: nullJson
+            val sized = spec.type == SettingType.STRING || spec.type == SettingType.PASSWORD
+            val maxLengthJson = if (sized) spec.maxChars.toString() else nullJson
+            val exposed = if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false
+            val placeholderJson = placeholder?.let { s(it) } ?: nullJson
             "{" +
                 "\"key\":${s(spec.key)}," +
                 "\"type\":${s(spec.type.name)}," +
@@ -4193,17 +5285,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 "\"scope\":${s(spec.scope.name)}," +
                 "\"secret\":${spec.secret}," +
                 "\"readOnly\":${spec.readOnly}," +
-                "\"available\":${spec.availableWhen(caps)}," +
-                "\"displaySizingAvailable\":${spec.key == "dashboard_zoom" && displaySizingAvailable}," +
+                "\"available\":$available," +
+                "\"displaySizingAvailable\":$displaySizing," +
                 "\"options\":[$opts]," +
-                "\"picker\":${spec.picker?.let { s(it) } ?: "null"}," +
-                "\"min\":${spec.min?.toString() ?: "null"}," +
-                "\"max\":${spec.max?.toString() ?: "null"}," +
-                "\"step\":${spec.step?.toString() ?: "null"}," +
-                "\"maxLength\":${if (spec.type == SettingType.STRING || spec.type == SettingType.PASSWORD) spec.maxChars else "null"}," +
+                "\"picker\":$pickerJson," +
+                "\"min\":$minJson," +
+                "\"max\":$maxJson," +
+                "\"step\":$stepJson," +
+                "\"maxLength\":$maxLengthJson," +
                 "\"ha\":$isHa," +
-                "\"exposed\":${if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false}," +
-                "\"placeholder\":${placeholder?.let { s(it) } ?: "null"}" +
+                "\"exposed\":$exposed," +
+                "\"placeholder\":$placeholderJson" +
                 "}"
         }
         return "[$items]"
@@ -4245,9 +5337,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         return "{$parts}"
     }
 
-    /** Inject a tap at device pixel (x,y) for the interactive screenshot. */
-    private fun injectTap(x: Float, y: Float): Boolean = interactive.tap(x, y)
-
     private fun exposureSpec(key: String) = key.takeIf { it.startsWith("ha_expose_") }
         ?.removePrefix("ha_expose_")
         ?.let(SettingsRegistry::spec)
@@ -4266,12 +5355,440 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             effectiveValue = { effectiveValue(it, live) },
         )
         SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
-            m["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
+            m[SettingsRegistry.exposureKey(spec)] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
         }
         return m
     }
 
+    /** Complete effective values for direct POST equality. Unlike export/revision snapshots this includes
+     * transient and untouched hardware-backed settings, and pending durable intent supersedes observed state. */
+    private fun directMutationValues(): Map<String, String> {
+        val live = configLiveValues()
+        return LinkedHashMap<String, String>().apply {
+            SettingsRegistry.settable().forEach { spec -> put(spec.key, effectiveValue(spec, live)) }
+            SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
+                put(SettingsRegistry.exposureKey(spec), config.haExposed(spec.key, spec.haExposedByDefault).toString())
+            }
+            putAll(pendingLiveSettings())
+        }
+    }
+
     /** Page shells and liveness use only persisted/non-privileged controller state. */
+    /**
+     * Live inputs for [SetupJourney], all read from memory.
+     *
+     * The MQTT state arrives as its canonical token rather than the info page's prose. Mapping prose back
+     * to a state would reintroduce exactly the two-vocabulary drift the adapter exists to remove, and its
+     * failure mode is invisible: an unrecognised string reads as "still connecting", so guidance silently
+     * stops and the user waits forever.
+     *
+     * The renderer snapshot uses the same resolver the launcher does, so what setup reports and what the
+     * panel actually opens cannot disagree.
+     */
+    private fun setupJourneyInputs(): SetupJourney.Inputs {
+        val resolved = system.resolveDashboard(config.dashboardPackage)
+        val renderer = when {
+            resolved == SystemController.BUILTIN_DASHBOARD -> SetupJourney.RendererChoice.Builtin
+            resolved.isBlank() -> SetupJourney.RendererChoice.Unresolved
+            else -> SetupJourney.RendererChoice.Foreign(resolved, installed = true)
+        }
+        val builtin = renderer is SetupJourney.RendererChoice.Builtin
+        val fingerprint = setupProofFingerprint()
+        val proof = when {
+            builtin && BuiltinDashboard.frontendEverConnected -> SetupJourney.RenderProof(
+                source = SetupJourney.ProofSource.BUILTIN_FRONTEND_CONNECTED,
+                certain = true,
+                observedAtMs = BuiltinDashboard.lastFrontendConnectedAtMs.takeIf { it >= 0 },
+                fingerprint = fingerprint,
+            )
+            // A human said so, and against this exact configuration — the only proof a foreign renderer
+            // can ever have. A stale attestation (fingerprint mismatch) is NONE, not "stale proof": the
+            // journey should simply ask again rather than explain bookkeeping.
+            config.setupRenderAttestation.isNotBlank() && config.setupRenderAttestation == fingerprint ->
+                SetupJourney.RenderProof(
+                    source = SetupJourney.ProofSource.USER_ATTESTED,
+                    certain = true,
+                    observedAtMs = null,
+                    fingerprint = fingerprint,
+                )
+            else -> SetupJourney.RenderProof()
+        }
+        // The pre-existing-install inference is only valid BEFORE guided setup has begun. The wizard
+        // itself writes a broker at step 2, so inferring "upgraded install" from durable config alone
+        // force-satisfied the later question stages MID-JOURNEY: on the first hardware walk the journey
+        // reported complete the instant the HA token committed, the sign-in callback sent the browser to
+        // Configure, the dashboard and filter pages never showed, and the panel deadlocked on its hold
+        // screen (whose predicate has no such escape) while this authority claimed nothing was needed.
+        // Identity confirmation is the begin-marker: a fresh panel records it at step 1, which switches
+        // the inference off for the rest of that journey; a genuinely pre-existing install never confirms
+        // identity through the wizard, so it keeps the escape until the startup migration stamps its
+        // durable flags. The identity input itself still uses the raw inference — that is the upgrade
+        // case the inference exists for.
+        val preTracking = !config.setupIdentityConfirmed && panelConfiguredBeforeSetupTracking()
+        return SetupJourney.Inputs(
+            identityConfirmed = config.setupIdentityConfirmed || panelConfiguredBeforeSetupTracking(),
+            panelId = config.panelId,
+            brokerConfigured = config.mqttBroker.isNotBlank(),
+            mqttUserConfigured = config.mqttUser.isNotBlank(),
+            mqttPasswordConfigured = config.mqttPassword.isNotEmpty(),
+            mqtt = SetupJourney.MqttSetupState.of(mqttState()),
+            renderer = renderer,
+            haUrl = config.haUrl,
+            haCredentialed = config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank(),
+            haOAuthInFlight = haOAuthFlow.pendingCount() > 0,
+            discovery = lastHaDiscovery,
+            // Uses the true engine major from the WebView user agent, not the package stamp, so a panel
+            // already swapped to a LineageOS/Cromite build is not accused of being ancient because the
+            // provider still reports the OEM version.
+            webViewTooOld = builtin && webViewTooOldOnce,
+            webViewFixable = profile.recommendedWebView != null,
+            entityFilterAnswered = config.setupEntityFilterAnswered || preTracking,
+            homeDashboardChosen = config.setupHomeDashboardChosen || preTracking,
+            proof = proof,
+            currentFingerprint = fingerprint,
+        )
+    }
+
+    /**
+     * The entity-filter question's supporting facts: how many entities Home Assistant would send, and how
+     * much panel there is to receive them.
+     *
+     * The count is a live reading — a scan in flight reports its running total so the wizard can show the
+     * number climbing while the user reads the question, and only a completed scan produces a settled
+     * verdict. The tier comes from the profile's declared SoC where there is one and from the platform
+     * otherwise; neither costs a probe.
+     */
+    /** Sticky across catalog re-keys; see the comment in entityFilterVerdict(). */
+    @Volatile private var lastSettledEntityCount = 0
+
+    /** The panel's chip as the filter question shows it: model and core layout, nothing else. */
+    private fun entityFilterTierLabel(): String {
+        val soc = profile.soc ?: return ""
+        val cores = soc.cpuCores.takeIf { it.isNotEmpty() }
+            ?.joinToString(" + ") { "${it.count}× ${it.architecture.removePrefix("Arm ")}" }
+        return listOfNotNull(soc.model, cores).joinToString(" · ")
+    }
+
+    private fun entityFilterVerdict(): EntityFilterAdvice.Verdict {
+        val progress = entityLearning.scanProgress()
+        val settled = entityLearning.catalogCount()
+        val (tier, source) = EntityFilterAdvice.tier(
+            soc = profile.soc,
+            sdkInt = android.os.Build.VERSION.SDK_INT,
+            cores = Runtime.getRuntime().availableProcessors(),
+            totalRamBytes = runCatching {
+                val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
+            }.getOrDefault(0L),
+        )
+        // A scan in flight wins even when an older total exists: the user is watching this scan, and showing
+        // last week's number while a new one runs would be stale the moment it finished.
+        // No scan running AND no settled catalog = NO READING — a live Home Assistant always has
+        // entities, so a literal zero is an impossible value, not a measurement. Presented as still
+        // counting (the answer route kicks the scan the moment this step becomes next), because the
+        // alternative shipped: a fresh panel showed "0 entities · Measured · all fine" on hardware.
+        // The last settled count is STICKY across a catalog re-key (the sync's instance-UUID adoption
+        // momentarily nulls the snapshot): a settled red verdict briefly flashing 0/green mid-page read
+        // as flakiness on hardware. Serve the remembered number with the counting tag instead.
+        if (settled != null) lastSettledEntityCount = settled
+        val counting = progress != null || settled == null
+        return EntityFilterAdvice.advise(
+            tier = tier,
+            tierSource = source,
+            entityCount = progress ?: settled ?: lastSettledEntityCount,
+            counting = counting,
+        )
+    }
+
+    /**
+     * Whether this panel was already set up before identity confirmation began being recorded.
+     *
+     * The confirmation flag defaults false, so without this every existing install would be told its next
+     * step is to confirm a panel name the user chose long ago — wrong on its face, and on a working panel
+     * it would drag a finished journey back to step one. Found immediately on the first canary deploy: an
+     * established panel reported `next: identity` while its real gap was a missing Home Assistant login.
+     *
+     * Durable configuration is the evidence. A broker, a Home Assistant URL or an explicit renderer can
+     * only be present because somebody configured this panel, and a genuinely fresh install has none of
+     * them — so an upgrade infers the consent it could not have recorded, while a new panel still asks.
+     * Read-only by design: a GET must not write, and the inference is stable enough not to need storing.
+     */
+    /** See GET /config/probe-broker. Bounded: one DNS resolve + one 2s TCP connect attempt. */
+    private fun probeBrokerJson(url: String): String {
+        val ep = io.github.maxlyth.hapaneld.util.BrokerEndpoint.endpoint(url.trim())
+            ?: return """{"ok":false,"error":"invalid-url"}"""
+        val resolved = runCatching { java.net.InetAddress.getByName(ep.host).hostAddress }.getOrNull()
+            ?: return "{\"ok\":false,\"error\":\"unresolvable\",\"host\":${jsonStr(ep.host)}}"
+        val reachable = runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(ep.host, ep.port), 2_000); true }
+        }.getOrDefault(false)
+        return "{\"ok\":$reachable,\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
+            "\"resolved\":${jsonStr(resolved)}" +
+            if (reachable) "}" else ",\"error\":\"unreachable\"}"
+    }
+
+    /**
+     * The single owner of the HA-canonical area rule: adopt what Home Assistant reports, or push a pending
+     * request when HA has none and this session may write. Called by the area endpoint and by the
+     * unprompted convergence loop below, so the rule has exactly one implementation.
+     */
+    private data class HaAreaSnapshot(
+        val ownerKey: String,
+        val androidId: String,
+        val panelId: String,
+        val localArea: String,
+        val userOverride: Boolean = false,
+    )
+
+    private fun captureHaAreaSnapshot(): HaAreaSnapshot = HaAreaSnapshot(
+        ownerKey = entityLearning.haAreaOwnerKey(),
+        androidId = config.androidId,
+        panelId = config.panelId,
+        localArea = config.haArea,
+        userOverride = config.haAreaUserOverride,
+    )
+
+    /**
+     * A briefly-held copy of the area registry, this device's row and the account's admin flag.
+     *
+     * All three change about once in a panel's life — "in real life this is a value that changes once and
+     * almost never again" (maintainer, 2026-07-26) — yet the picker asked Home Assistant for them on EVERY
+     * Configure paint: one authenticated WebSocket session per page load, and one per reload through an
+     * upgrade round, which is what made the control look like it was constantly refreshing. Only successful
+     * reads are held, so a failed query never becomes authoritative; the unprompted convergence pass
+     * deliberately bypasses this, because noticing an admin's change in Home Assistant is its whole job.
+     */
+    private data class HaAreaCatalogCacheEntry(
+        val key: String,
+        val cachedAtMs: Long,
+        val catalog: EntityLearningManager.HaAreaCatalog,
+    )
+
+    @Volatile private var haAreaCatalogCache: HaAreaCatalogCacheEntry? = null
+
+    private fun haAreaCatalogKey(snapshot: HaAreaSnapshot): String =
+        "${snapshot.ownerKey}|${snapshot.androidId}|${snapshot.panelId}"
+
+    private fun cacheHaAreaCatalog(
+        snapshot: HaAreaSnapshot,
+        catalog: EntityLearningManager.HaAreaCatalog,
+        nowMs: Long = System.nanoTime() / 1_000_000L,
+    ) {
+        synchronized(directConfigMutationLock) {
+            if (catalog.queried && catalog.ownerKey == snapshot.ownerKey && ownsHaAreaSnapshot(snapshot)) {
+                haAreaCatalogCache = HaAreaCatalogCacheEntry(haAreaCatalogKey(snapshot), nowMs, catalog)
+            }
+        }
+    }
+
+    private suspend fun haAreaCatalogFor(
+        snapshot: HaAreaSnapshot,
+        fresh: Boolean = false,
+    ): EntityLearningManager.HaAreaCatalog {
+        val key = haAreaCatalogKey(snapshot)
+        val now = System.nanoTime() / 1_000_000L
+        if (!fresh) {
+            haAreaCatalogCache?.takeIf { entry ->
+                haAreaCacheEntryUsable(entry.key, key, entry.cachedAtMs, now, HA_AREA_CATALOG_TTL_MS)
+            }?.catalog?.let { return it }
+        }
+        val catalog = entityLearning.haAreaCatalog(snapshot.androidId, snapshot.panelId)
+        cacheHaAreaCatalog(snapshot, catalog, now)
+        return catalog
+    }
+
+    /** A local area change must never be answered from a catalog read before it. */
+    private fun invalidateHaAreaCatalogCache() {
+        haAreaCatalogCache = null
+    }
+
+    /** Populate the config-response seed without making config rendering wait on Home Assistant. */
+    private fun warmHaAreaCatalogInBackground() {
+        synchronized(haAreaWarmLock) {
+            if (stopping || haAreaWarmJob?.isActive == true) return
+            haAreaWarmJob = scope.launch {
+                val credentialed = config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()
+                if (!HaAreaProtocol.canQueryUnprompted(config.haUrl, credentialed)) return@launch
+                runCatching { haAreaCatalogFor(captureHaAreaSnapshot(), fresh = true) }
+                    .onFailure { Log.w(TAG, "ha-area: catalog warm failed", it) }
+            }
+        }
+    }
+
+    private fun ownsHaAreaSnapshot(snapshot: HaAreaSnapshot): Boolean =
+        snapshot.ownerKey == entityLearning.haAreaOwnerKey() &&
+            snapshot.androidId == config.androidId && snapshot.panelId == config.panelId &&
+            snapshot.localArea == config.haArea && snapshot.userOverride == config.haAreaUserOverride
+
+    private suspend fun applyHaAreaPrecedence(
+        snapshot: HaAreaSnapshot,
+        catalog: EntityLearningManager.HaAreaCatalog,
+        allowWriteBack: Boolean = true,
+    ): EntityLearningManager.HaAreaCatalog {
+        if (!catalog.queried || !catalog.device.found || catalog.ownerKey != snapshot.ownerKey ||
+            !ownsHaAreaSnapshot(snapshot)
+        ) return catalog
+        when (HaAreaProtocol.reconcile(snapshot.localArea, catalog.device.areaName, catalog.admin, snapshot.userOverride)) {
+            HaAreaProtocol.ReconcileAction.ADOPT_HA -> withContext(Dispatchers.IO) {
+                synchronized(directConfigMutationLock) {
+                    if (!ownsHaAreaSnapshot(snapshot)) return@synchronized
+                    config.synchronizedTransaction {
+                        if (!ownsHaAreaSnapshot(snapshot)) return@synchronizedTransaction false
+                        Log.i(TAG, "ha-area: adopting Home Assistant's area for this device")
+                        config.haArea = catalog.device.areaName
+                        // Adoption is only reachable for a non-override value, or for an override that
+                        // matches HA in a different casing — either way nothing local-only remains.
+                        config.haAreaUserOverride = false
+                        true
+                    }
+                }
+            }
+            HaAreaProtocol.ReconcileAction.WRITE_BACK -> if (allowWriteBack && ownsHaAreaSnapshot(snapshot)) {
+                val moved = entityLearning.applyRequestedArea(
+                    snapshot.androidId,
+                    snapshot.panelId,
+                    snapshot.localArea,
+                    snapshot.ownerKey,
+                )
+                if (moved && ownsHaAreaSnapshot(snapshot)) {
+                    invalidateHaAreaCatalogCache()
+                    val after = entityLearning.haAreaCatalog(snapshot.androidId, snapshot.panelId)
+                    cacheHaAreaCatalog(snapshot, after)
+                    return applyHaAreaPrecedence(snapshot, after, allowWriteBack = false)
+                }
+            }
+            HaAreaProtocol.ReconcileAction.KEEP -> {
+                // An override HA has come to agree with (exactly) is no longer overriding anything.
+                if (snapshot.userOverride && catalog.device.areaName == snapshot.localArea &&
+                    ownsHaAreaSnapshot(snapshot)
+                ) withContext(Dispatchers.IO) {
+                    synchronized(directConfigMutationLock) {
+                        if (!ownsHaAreaSnapshot(snapshot)) return@synchronized
+                        config.synchronizedTransaction {
+                            if (!ownsHaAreaSnapshot(snapshot)) return@synchronizedTransaction false
+                            config.haAreaUserOverride = false
+                            true
+                        }
+                    }
+                }
+            }
+        }
+        return catalog
+    }
+
+    /**
+     * Converge the panel's area WITHOUT waiting for a person.
+     *
+     * "Home Assistant is canonical" was implemented only at read time, and every reader was a UI control —
+     * the Configure area picker and the wizard's dashboard step. A panel nobody had opened that dropdown on
+     * therefore never adopted anything: five of six fleet panels held a blank `ha_area` while their HA
+     * devices sat in real areas, so every surface honestly reported "No area" and discovery published no
+     * `suggested_area` (reported 2026-07-26 on a panel whose device is plainly in Office). One unprompted
+     * pass after start, then a slow repeat, is enough: the area of a wall panel changes about never, and the
+     * read is one authenticated WebSocket round trip.
+     */
+    private fun startHaAreaConvergence() {
+        if (haAreaJob?.isActive == true) return
+        warmHaAreaCatalogInBackground()
+        haAreaJob = scope.launch {
+            delay(HA_AREA_FIRST_PASS_MS)
+            while (true) {
+                val credentialed = config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()
+                if (HaAreaProtocol.canQueryUnprompted(config.haUrl, credentialed)) {
+                    val snapshot = captureHaAreaSnapshot()
+                    runCatching {
+                        applyHaAreaPrecedence(snapshot, haAreaCatalogFor(snapshot, fresh = true))
+                    }
+                        .onFailure { Log.w(TAG, "ha-area: unprompted convergence failed", it) }
+                }
+                delay(HA_AREA_REPEAT_MS)
+            }
+        }
+    }
+
+    private fun panelConfiguredBeforeSetupTracking(): Boolean =
+        config.mqttBroker.isNotBlank() || config.haUrl.isNotBlank() || config.dashboardPackage.isNotBlank()
+
+    /**
+     * Identity a render proof is valid for. Changing the endpoint, the renderer or the credentialled
+     * account means the panel has not been shown to work as it is now configured, so the proof must not
+     * carry over.
+     *
+     * Built only from non-secret values. `HaAuthSnapshot.stableOwner()` would be the natural identity but
+     * it carries the refresh and access tokens, and this fingerprint is computed on the request path of an
+     * unauthenticated LAN endpoint — materialising token text there risks it reaching a log or a heap dump
+     * for no benefit, since the hash is all that is ever emitted. The client id plus the credential's
+     * expiry stamp move whenever the account or session actually changes, and a token merely rotated for
+     * the same account leaves the panel rendering the same dashboard, so keeping the proof is correct.
+     */
+    private fun setupProofFingerprint(): String = io.github.maxlyth.hapaneld.config.ConfigHash.of(
+        mapOf(
+            "ha_url" to config.haUrl.trim().trimEnd('/'),
+            "dashboard_package" to config.dashboardPackage,
+            "ha_client_id" to config.haClientId,
+            "ha_credentialed" to (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()).toString(),
+        ),
+    )
+
+    private fun setupJourneyJson(): String {
+        val journey = SetupJourney.evaluate(setupJourneyInputs())
+        val steps = journey.steps.joinToString(",") { step ->
+            "{\"stage\":${jsonStr(step.stage.name.lowercase())}," +
+                "\"status\":${jsonStr(step.status.name.lowercase())}," +
+                "\"blocking\":${step.blocking}," +
+                "\"detail\":${jsonStr(step.detail)}}"
+        }
+        val next = journey.next?.let { jsonStr(it.name.lowercase()) } ?: "null"
+        val discovery = lastHaDiscovery
+        val reason = jsonStr(discovery.reason.name.lowercase())
+        val explanation = jsonStr(HaDiscovery.unavailableExplanation(discovery).orEmpty())
+        // No config-hash token here. It would cost a full settings read on every poll, and it would tell a
+        // client nothing the steps do not: the journey is derived from live config, so a change made from
+        // another browser already shows up as a changed stage on the next poll.
+        // The panel identity rides along (non-secret) so the wizard's name step can prefill without ever
+        // touching GET /api/v1/config — the endpoint whose redacted reads have previously wiped credentials
+        // when echoed back.
+        // `repair` separates a re-armed journey on a panel that once worked from a first run — the wizard
+        // hides its numbered-journey framing and says "nothing has been reset" instead of starting over.
+        // `entity_filter` carries its own step's facts — the live count, the panel's tier and the resulting
+        // recommendation — so the page can render the whole question without ever reading GET /api/v1/config.
+        val builtinRenderer = system.resolveDashboard(config.dashboardPackage) == SystemController.BUILTIN_DASHBOARD
+        val verdict = entityFilterVerdict()
+        val entityFilter = "{\"relevant\":$builtinRenderer," +
+            "\"enabled\":${config.dashboardEntityLearningEnabled}," +
+            "\"answered\":${config.setupEntityFilterAnswered}," +
+            "\"count\":${verdict.entityCount}," +
+            "\"counting\":${verdict.counting}," +
+            "\"tier\":${jsonStr(verdict.tier.name.lowercase())}," +
+            "\"tier_source\":${jsonStr(verdict.tierSource.name.lowercase())}," +
+            // Model + cores only. The profile's own displayText() appends "introduced YYYY", which is a fact
+            // about the chip rather than about this decision and is long enough to wrap the row badly.
+            "\"tier_label\":${jsonStr(entityFilterTierLabel())}," +
+            "\"level\":${jsonStr(verdict.level.name.lowercase())}," +
+            "\"confidence\":${jsonStr(verdict.confidence.name.lowercase())}," +
+            "\"recommend_above\":${verdict.bands.recommendAbove}," +
+            "\"struggle_above\":${verdict.bands.struggleAbove ?: "null"}," +
+            // Deterministic bring-up milestones (all in-memory/store reads): the wizard narrates
+            // reading→building→applying→optimising from these instead of going silent post-answer.
+            "\"learning\":{\"applied\":${config.dashboardEntityLearningApplied}," +
+            "\"scanned\":${entityLearning.scanProgress() ?: -1}," +
+            "\"catalog\":${entityLearning.catalogCount() ?: -1}}}"
+        // `home_dashboard` carries only the current value and the answered bit — the dashboard LIST and the
+        // account default stay on GET /api/v1/config/home-dashboards, which does a live HA round-trip and
+        // must never ride along on this poll (SetupStateEndpointContractTest pins the expense rule).
+        val homeDashboard = "{\"value\":${jsonStr(config.homeDashboard)}," +
+            "\"answered\":${config.setupHomeDashboardChosen}}"
+        return "{\"complete\":${journey.complete}," +
+            "\"repair\":${config.setupEverCompleted && !journey.complete}," +
+            "\"entity_filter\":$entityFilter," +
+            "\"home_dashboard\":$homeDashboard," +
+            "\"next\":$next," +
+            "\"panel\":{\"id\":${jsonStr(config.panelId)},\"name\":${jsonStr(config.friendlyName)}}," +
+            "\"steps\":[$steps]," +
+            "\"discovery\":{\"outcome\":${jsonStr(discovery.outcome.name.lowercase())}," +
+            "\"reason\":$reason,\"explanation\":$explanation}}"
+    }
+
     private fun renderConfigConcurrencyHash(): String =
         configConcurrencyHash(currentValues())
 
@@ -4325,7 +5842,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             effectiveValue = { effectiveValue(it, live) },
         )
         SettingsRegistry.SPECS.filter { it.ha != null }.forEach { spec ->
-            values["ha_expose_${spec.key}"] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
+            values[SettingsRegistry.exposureKey(spec)] = config.haExposed(spec.key, spec.haExposedByDefault).toString()
         }
         val bundle = ConfigBundle.fromValues(
             values, exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
@@ -4387,7 +5904,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val warn = warnings.toMutableList()
         for ((key, raw) in migrated) {
             val spec = SettingsRegistry.spec(key)
-            val exposedSpec = exposureSpec(key)
+            val exposedSpec = SettingsRegistry.parseExposure(key)
             if (exposedSpec != null) {
                 val normalized = SettingValue.parseBool(raw)?.toString()
                 if (normalized == null) errors.add("$key: expected a boolean") else accepted[key] = normalized
@@ -4520,7 +6037,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 for ((key, value) in accepted) {
                     when {
                         key == "panel_id" -> config.stagePanelId(editor, value)
-                        exposureSpec(key) != null -> editor.putBoolean(key, SettingValue.parseBool(value) == true)
+                        SettingsRegistry.parseExposure(key) != null -> editor.putBoolean(key, SettingValue.parseBool(value) == true)
                         // EntityLearningManager owns enable/disable transition semantics and commits this
                         // preference after the ordinary bundle transaction succeeds.
                         key == "dashboard_entity_learning" -> Unit
@@ -4559,12 +6076,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
                 val previousHome = phase.previous.values["home_dashboard"].orEmpty()
                 phase.live.firstOrNull { it.first == "home_dashboard" }?.let { (_, value) ->
-                    val applied = applySetting("home_dashboard", value)
+                    val applied = applySetting("home_dashboard", value).legacyAcknowledged
                     onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
                     check(applied) { "home_dashboard live apply refused" }
                 }
                 for ((k, v) in phase.live) if (k != "home_dashboard") {
-                    val applied = applySetting(k, v)
+                    val applied = applySetting(k, v).legacyAcknowledged
                     onDurableRevision(io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()))
                     check(applied) { "$k live apply refused" }
                 }
@@ -4589,7 +6106,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 applyRendererEffects(phase.effects)
             }.onFailure { rendererFailure = it }
             snapInvalidate()
-            onReconfigure()
+            onReconfigure(accepted.keys)
             rendererFailure?.let { throw it }
             afterApply()
             ApplyAcceptedResult.APPLIED
@@ -4625,12 +6142,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 requireRendererResult(result)
                 Log.i(TAG, "renderer switch completed (preparation=$result)")
             }
-            effects.reloadBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD -> {
+            effects.reloadBuiltin && effectiveDashboardIsBuiltin() -> {
                 val result = rendererPreparation.prepareIfNeeded()
                 requireRendererResult(result)
-                system.reloadDashboard(SystemController.BUILTIN_DASHBOARD)
+                system.reloadDashboard(
+                    SystemController.BUILTIN_DASHBOARD,
+                    reason = "applying your settings",
+                )
             }
-            effects.relaunchBuiltin && config.dashboardPackage == SystemController.BUILTIN_DASHBOARD -> {
+            effects.relaunchBuiltin && effectiveDashboardIsBuiltin() -> {
                 val result = rendererPreparation.prepareIfNeeded()
                 requireRendererResult(result)
                 system.launchHome(SystemController.BUILTIN_DASHBOARD)
@@ -4712,10 +6232,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     /** Keep the v2 manifest small: large profile and owner-scoped entity strings are bounded ZIP entries. */
     private fun backupArchiveParts(companion: CapturedCompanion?): BackupArchiveParts {
-        val owned = ArrayList<File>(3)
-        return try {
+        return withStagedFiles { staged ->
+            val owned = ArrayList<File>(3)
             fun textEntry(name: String, prefix: String, text: String, maxBytes: Long): PanelBackup.ArchiveSource {
-                val file = File.createTempFile(prefix, ".payload", cacheDir).also(owned::add)
+                val file = staged.stage(File.createTempFile(prefix, ".payload", cacheDir)).also(owned::add)
                 file.writer(Charsets.UTF_8).use { it.write(text) }
                 if (file.length() > maxBytes) throw ByteLimitExceeded(maxBytes)
                 return PanelBackup.ArchiveSource(name, file)
@@ -4726,21 +6246,41 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             val profile = profileAdmin?.exportBackup()?.let {
                 textEntry(PROFILE_BACKUP_ENTRY, "profile-backup-", it.toJson().toString(), MAX_PROFILE_BACKUP_ENTRY_BYTES)
             }
-            val sources = ArrayList<PanelBackup.ArchiveSource>(6)
+            // Best-effort: a database that will not read must not cost the owner the rest of the backup,
+            // which still carries the validated config projection.
+            val stateRows = runCatching { EntityCatalogStore(appContext).use { it.exportAppState() } }
+                .getOrDefault(emptyList())
+            val state = stateRows.takeIf { it.isNotEmpty() }?.let { rows ->
+                textEntry(
+                    STATE_BACKUP_ENTRY,
+                    "app-state-backup-",
+                    ConfigVault.encode(ConfigVault.Export(rows, emptyMap())),
+                    MAX_STATE_BACKUP_BYTES,
+                )
+            }
+            val sources = ArrayList<PanelBackup.ArchiveSource>(7)
             sources.add(filter)
             sources.add(overrides)
             profile?.let(sources::add)
+            state?.let(sources::add)
             sources += companion?.files.orEmpty().mapIndexed { index, file ->
                 PanelBackup.ArchiveSource("companion/$index", file.file)
             }
-            BackupArchiveParts(
-                manifest = backupManifest(companion, entity, filter.file.length(), overrides.file.length(), profile?.file?.length()),
+            val parts = BackupArchiveParts(
+                manifest = backupManifest(
+                    companion,
+                    entity,
+                    filter.file.length(),
+                    overrides.file.length(),
+                    profile?.file?.length(),
+                    state?.file?.length(),
+                    stateRows.size,
+                ),
                 sources = sources,
                 ownedFiles = owned,
             )
-        } catch (error: Exception) {
-            owned.forEach(File::delete)
-            throw error
+            staged.commit()
+            parts
         }
     }
 
@@ -4751,6 +6291,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         filterBytes: Long,
         overrideBytes: Long,
         profileBytes: Long?,
+        stateBytes: Long?,
+        stateRows: Int,
     ): String {
         val live = configLiveValues()
         val cfg = projectConfigSnapshot(
@@ -4761,7 +6303,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         ).entries.joinToString(",") { (key, value) -> "${jsonStr(key)}:${jsonStr(value)}" }
         val exposures = SettingsRegistry.SPECS.filter { it.ha != null }
             .joinToString(",") { spec ->
-                "${jsonStr("ha_expose_${spec.key}")}:${jsonStr(config.haExposed(spec.key, spec.haExposedByDefault).toString())}"
+                "${jsonStr(SettingsRegistry.exposureKey(spec))}:${jsonStr(config.haExposed(spec.key, spec.haExposedByDefault).toString())}"
             }
         val sb = StringBuilder("{\"kind\":\"ha-paneld-backup\",\"schema\":${SettingsRegistry.SCHEMA}")
         sb.append(",\"panel_id\":${jsonStr(config.panelId)},\"created\":${jsonStr(System.currentTimeMillis().toString())}")
@@ -4770,6 +6312,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (profileBytes != null) {
             sb.append(",\"profiles\":{\"entry\":").append(jsonStr(PROFILE_BACKUP_ENTRY))
                 .append(",\"size\":").append(profileBytes).append('}')
+        }
+        if (stateBytes != null) {
+            sb.append(",\"state\":{\"entry\":").append(jsonStr(STATE_BACKUP_ENTRY))
+                .append(",\"size\":").append(stateBytes)
+                .append(",\"rows\":").append(stateRows).append('}')
         }
         if (companion != null) {
             val files = companion.files.mapIndexed { index, file ->
@@ -4791,15 +6338,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (!ensureCompanionHelper()) {
             throw CompanionBackupUnavailable("HA Companion backup needs the current ha-paneld helper")
         }
-        val lease = CompanionDataOperationGate.acquire(pkg)
-            ?: throw CompanionBackupUnavailable("Another Companion data operation is running")
-        if (!companionDataOperationState.arm()) {
-            lease.close()
-            throw CompanionBackupUnavailable("Companion operation safety marker could not be persisted")
+        val lease = when (
+            val acquisition = CompanionDataLease.acquireArmed(
+                pkg,
+                companionDataOperationState,
+                ::retainCompanionLeaseUntilHelperIdle,
+            )
+        ) {
+            is CompanionDataLease.Acquisition.Acquired -> acquisition.lease
+            CompanionDataLease.Acquisition.GateBusy ->
+                throw CompanionBackupUnavailable("Another Companion data operation is running")
+            CompanionDataLease.Acquisition.MarkerFailed ->
+                throw CompanionBackupUnavailable("Companion operation safety marker could not be persisted")
         }
         var helperCapture: CompanionHelperProtocol.Capture? = null
         var needsCompanionRecovery = false
-        var leaseTransferred = false
         try {
             val result = HelperClient.backupCompanion(pkg, cacheDir)
             val capture = when (result) {
@@ -4807,13 +6360,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     needsCompanionRecovery = !it.relaunched
                 }
                 CompanionHelperProtocol.BackupResult.Busy -> {
-                    leaseTransferred = settleCompanionOperationLease(
-                        lease,
-                        companionDataOperationState,
-                        possiblyInFlight = true,
-                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
-                        afterRelease = {},
-                    )
+                    lease.settle(possiblyInFlight = true) {}
                     throw CompanionBackupUnavailable("Companion helper is busy")
                 }
                 CompanionHelperProtocol.BackupResult.NotSubmitted ->
@@ -4826,18 +6373,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     )
                 }
                 CompanionHelperProtocol.BackupResult.Indeterminate -> {
-                    leaseTransferred = settleCompanionOperationLease(
-                        lease,
-                        companionDataOperationState,
-                        possiblyInFlight = true,
-                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
-                        afterRelease = {
-                            system.launchHome(pkg)
-                            if (system.resolveDashboard(config.dashboardPackage) != pkg) {
-                                system.launchHome(config.dashboardPackage)
-                            }
-                        },
-                    )
+                    lease.settle(possiblyInFlight = true) {
+                        system.launchHome(pkg)
+                        if (system.resolveDashboard(config.dashboardPackage) != pkg) {
+                            system.launchHome(config.dashboardPackage)
+                        }
+                    }
                     throw CompanionBackupUnavailable("Companion capture result was indeterminate")
                 }
             }
@@ -4865,21 +6406,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             helperCapture = null
             return CapturedCompanion(pkg, captured, capture)
         } finally {
-            if (!leaseTransferred) {
-                settleCompanionOperationLease(
-                    lease,
-                    companionDataOperationState,
-                    possiblyInFlight = false,
-                    retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
-                    afterRelease = {
-                        // The helper always launches Companion to clear Android's stopped state. Restore the
-                        // configured dashboard after releasing suppression when Companion is not it.
-                        if (needsCompanionRecovery) system.launchHome(pkg)
-                        if (system.resolveDashboard(config.dashboardPackage) != pkg) {
-                            system.launchHome(config.dashboardPackage)
-                        }
-                    },
-                )
+            lease.settle(possiblyInFlight = false) {
+                // The helper always launches Companion to clear Android's stopped state. Restore the
+                // configured dashboard after releasing suppression when Companion is not it.
+                if (needsCompanionRecovery) system.launchHome(pkg)
+                if (system.resolveDashboard(config.dashboardPackage) != pkg) {
+                    system.launchHome(config.dashboardPackage)
+                }
             }
             helperCapture?.close()
         }
@@ -5043,8 +6576,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     HttpStatusCode.BadRequest,
                 )
             }
+            val stateObj = obj.optJSONObject("state")
+            if (obj.has("state") && stateObj == null) return call.respondText(
+                """{"ok":false,"error":"invalid state object"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
             val archiveEntries = if (archiveManifest != null) {
-                runCatching { declaredArchiveEntries(entityObj, profilesObj, comp) }.getOrNull()
+                runCatching { declaredArchiveEntries(entityObj, profilesObj, comp, stateObj) }.getOrNull()
                     ?: return call.respondText(
                         """{"ok":false,"error":"invalid backup archive metadata"}""",
                         ContentType.Application.Json,
@@ -5081,6 +6620,31 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 ContentType.Application.Json,
                 HttpStatusCode.UnprocessableEntity,
             )
+            // Durable state outside the settings registry. `panel_id` is read before any config write, so
+            // it still identifies the physical target: device-local rows return only to their own panel.
+            // A cleared panel that no longer carries its old id is treated as a different one, which
+            // withholds hardware-specific rows rather than guessing.
+            val restorableState = if (archiveManifest != null && stateObj?.has("entry") == true) {
+                val samePanel = obj.optString("panel_id").let { it.isNotEmpty() && it == config.panelId }
+                runCatching {
+                    val ref = archiveTextRef(
+                        stateObj,
+                        "entry",
+                        "size",
+                        STATE_BACKUP_ENTRY,
+                        MAX_STATE_BACKUP_BYTES,
+                        allowEmpty = false,
+                    )
+                    val decoded = ConfigVault.decode(
+                        readArchiveText(plainFile, ref, archiveEntries, "app-state-restore-"),
+                    ) ?: throw IllegalArgumentException("corrupt app_state payload")
+                    StateBackupPolicy.restorableRows(decoded.rows, samePanel)
+                }.getOrNull() ?: return call.respondText(
+                    """{"ok":false,"error":"invalid app_state payload"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.UnprocessableEntity,
+                )
+            } else emptyList()
             val profilePayload = profilesObj?.let {
                 if (archiveManifest != null && it.has("entry")) {
                     readProfileArchive(it, plainFile, archiveEntries)
@@ -5167,6 +6731,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 )
                 var configCommitted = false
                 var configItems = 0
+                var restoredStateRows = 0
                 var companionResult: CompanionApplyResult? = null
                 var profileResult: ProfileBackupRestoreResult? = null
                 var appliedRevisionHash: String? = null
@@ -5187,6 +6752,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                             reconcileAfterCompanionRestore(effects)
                         },
                         afterApply = afterApply@{
+                            // Post-commit, and before the profile early-return below so a backup without
+                            // profiles still restores its state. Never fatal: the configuration the owner
+                            // came for is already durable, so a failure here must not roll it back.
+                            if (restorableState.isNotEmpty()) {
+                                restoredStateRows = runCatching {
+                                    AppState.applyRestoredRows(appContext, restorableState)
+                                }.getOrDefault(0)
+                            }
                             val payload = profilePayload?.payload ?: return@afterApply
                             profileResult = requireNotNull(profileAdmin).restoreBackup(
                                 payload,
@@ -5205,7 +6778,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         },
                     )
                     RestoreOperationResult(
-                        message = "Restore completed",
+                        message = if (restoredStateRows > 0) {
+                            "Restore completed, including $restoredStateRows panel state values"
+                        } else {
+                            "Restore completed"
+                        },
                         structured = InstallProgress.OperationResult(
                             status = InstallProgress.Outcome.SUCCEEDED,
                             config = succeededComponent(configItems),
@@ -5370,8 +6947,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         entity: org.json.JSONObject?,
         profiles: org.json.JSONObject?,
         companion: org.json.JSONObject?,
+        state: org.json.JSONObject?,
     ): Set<String> {
-        val entries = ArrayList<String>(6)
+        val entries = ArrayList<String>(7)
+        if (state?.has("entry") == true) {
+            entries += archiveTextRef(
+                state,
+                "entry",
+                "size",
+                STATE_BACKUP_ENTRY,
+                MAX_STATE_BACKUP_BYTES,
+                allowEmpty = false,
+            ).entry
+        }
         if (entity?.has("filter_ids_entry") == true || entity?.has("overrides_entry") == true) {
             entries += archiveTextRef(
                 entity,
@@ -5419,8 +7007,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         allowedEntries: Set<String>,
         prefix: String,
     ): String {
-        val target = File.createTempFile(prefix, ".payload", cacheDir)
-        try {
+        return withStagedFiles { staged ->
+            val target = staged.stage(File.createTempFile(prefix, ".payload", cacheDir))
             require(
                 PanelBackup.extractArchive(
                     archive,
@@ -5430,13 +7018,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             require(target.length() == ref.size)
             val bytes = target.inputStream().use { BoundedStreams.readBytes(it, ref.maxBytes) }
-            return Charsets.UTF_8.newDecoder()
+            Charsets.UTF_8.newDecoder()
                 .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                 .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
                 .decode(java.nio.ByteBuffer.wrap(bytes))
                 .toString()
-        } finally {
-            target.delete()
         }
     }
 
@@ -5516,46 +7102,43 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             return CompanionRestore.PlanResult.Invalid("Companion restore contains an invalid file count")
         }
         data class Pending(val relativePath: String, val entry: String, val size: Long, val target: File)
-        val pending = ArrayList<Pending>(files.length())
-        var ownershipTransferred = false
-        try {
+        return withStagedFiles { staged ->
+            val pending = ArrayList<Pending>(files.length())
             for (index in 0 until files.length()) {
                 val file = files.optJSONObject(index)
-                    ?: return CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $index")
+                    ?: return@withStagedFiles CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $index")
                 val relativePath = file.optString("rel")
                 val entry = file.optString("entry")
                 val declaredSize = file.optLong("size", -1L)
                 if (relativePath !in CompanionRestore.ALLOWED_FILES ||
                     declaredSize !in 1..CompanionRestore.maxBytes(relativePath)
-                ) return CompanionRestore.PlanResult.Invalid("Invalid Companion file metadata at index $index")
+                ) return@withStagedFiles CompanionRestore.PlanResult.Invalid("Invalid Companion file metadata at index $index")
                 pending += Pending(
                     relativePath,
                     entry,
                     declaredSize,
-                    File.createTempFile("companion-restore-", ".payload", cacheDir),
+                    staged.stage(File.createTempFile("companion-restore-", ".payload", cacheDir)),
                 )
             }
             if (pending.map { it.relativePath }.toSet().size != pending.size ||
                 pending.map { it.entry }.toSet().size != pending.size ||
                 pending.sumOf { it.size } > CompanionRestore.MAX_AGGREGATE_BYTES
-            ) return CompanionRestore.PlanResult.Invalid("Duplicate or oversized Companion archive metadata")
+            ) return@withStagedFiles CompanionRestore.PlanResult.Invalid("Duplicate or oversized Companion archive metadata")
             val extracted = PanelBackup.extractArchive(
                 archive,
                 pending.map { PanelBackup.ArchiveTarget(it.entry, it.target, CompanionRestore.maxBytes(it.relativePath)) },
                 allowedEntries,
             )
             if (!extracted || pending.any { it.target.length() != it.size }) {
-                return CompanionRestore.PlanResult.Invalid("Companion archive files are missing, corrupt, or too large")
+                return@withStagedFiles CompanionRestore.PlanResult.Invalid("Companion archive files are missing, corrupt, or too large")
             }
             val result = CompanionRestore.planFiles(
                 packageName = comp.optString("pkg"),
                 files = pending.map { CompanionRestore.FilePayload(it.relativePath, it.target) },
                 installedPackages = CompanionInstaller.installedPackages(appContext),
             )
-            ownershipTransferred = result is CompanionRestore.PlanResult.Valid
-            return result
-        } finally {
-            if (!ownershipTransferred) pending.forEach { it.target.delete() }
+            if (result is CompanionRestore.PlanResult.Valid) staged.commit()
+            result
         }
     }
 
@@ -5635,6 +7218,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             appliedOwner = string("applied_owner", 2_560),
             overrides = overrideLines.sorted().joinToString("\n"),
             overrideOwner = string("override_owner", 2_560),
+            // A restored archive is established state, never an in-flight first activation.
+            initialActivationPending = false,
         )
     }
 
@@ -5652,7 +7237,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val errors = ArrayList<String>()
         for ((key, value) in migrated) {
             val spec = SettingsRegistry.spec(key)
-            val exposedSpec = exposureSpec(key)
+            val exposedSpec = SettingsRegistry.parseExposure(key)
             when {
                 exposedSpec != null -> {
                     val normalized = SettingValue.parseBool(value)?.toString()
@@ -5733,14 +7318,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion payload validation failed"),
             )
         preparation.use { prepared ->
-            val lease = CompanionDataOperationGate.acquire(plan.packageName)
-                ?: return CompanionApplyResult(
+            val lease = when (
+                val acquisition = CompanionDataLease.acquireArmed(
+                    plan.packageName,
+                    companionDataOperationState,
+                    ::retainCompanionLeaseUntilHelperIdle,
+                )
+            ) {
+                is CompanionDataLease.Acquisition.Acquired -> acquisition.lease
+                CompanionDataLease.Acquisition.GateBusy -> return CompanionApplyResult(
                     false,
                     InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
                 )
-            if (!companionDataOperationState.arm()) {
-                lease.close()
-                return CompanionApplyResult(
+                CompanionDataLease.Acquisition.MarkerFailed -> return CompanionApplyResult(
                     false,
                     InstallProgress.ComponentResult(
                         InstallProgress.Outcome.FAILED,
@@ -5750,7 +7340,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 )
             }
             var result = CompanionHelperProtocol.RestoreResult.INDETERMINATE
-            var leaseTransferred = false
             try {
                 result = HelperClient.restoreCompanion(
                     plan.packageName,
@@ -5759,36 +7348,22 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 if (result == CompanionHelperProtocol.RestoreResult.INDETERMINATE ||
                     result == CompanionHelperProtocol.RestoreResult.BUSY
                 ) {
-                    leaseTransferred = settleCompanionOperationLease(
-                        lease,
-                        companionDataOperationState,
-                        possiblyInFlight = true,
-                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
-                        afterRelease = {
-                            if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
-                                system.launchHome(config.dashboardPackage)
-                            }
-                        },
-                    )
+                    lease.settle(possiblyInFlight = true) {
+                        if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                            system.launchHome(config.dashboardPackage)
+                        }
+                    }
                 }
             } finally {
-                if (!leaseTransferred) {
-                    settleCompanionOperationLease(
-                        lease,
-                        companionDataOperationState,
-                        possiblyInFlight = false,
-                        retain = { retained, after -> retainCompanionLeaseUntilHelperIdle(retained, after) },
-                        afterRelease = {
-                            if (result in setOf(
-                                CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED,
-                                CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED,
-                            )
-                            ) system.launchHome(plan.packageName)
-                            if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
-                                system.launchHome(config.dashboardPackage)
-                            }
-                        },
+                lease.settle(possiblyInFlight = false) {
+                    if (result in setOf(
+                        CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED,
+                        CompanionHelperProtocol.RestoreResult.ROLLED_BACK_RELAUNCH_FAILED,
                     )
+                    ) system.launchHome(plan.packageName)
+                    if (system.resolveDashboard(config.dashboardPackage) != plan.packageName) {
+                        system.launchHome(config.dashboardPackage)
+                    }
                 }
             }
             val repaired = prepared.repairedInternalUrls
@@ -5887,7 +7462,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val (migrated, _) = Migrations.migrate(bundle.schema, ordinaryValues)
         val accepted = LinkedHashMap<String, String>()
         for ((key, raw) in migrated) {
-            if (exposureSpec(key) != null) {
+            if (SettingsRegistry.parseExposure(key) != null) {
                 SettingValue.parseBool(raw)?.let { accepted[key] = it.toString() }
                 continue
             }
@@ -5934,12 +7509,59 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
         "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
 
+    /** Last successfully queried catalog for the current owner; never blocks a config response. */
+    private fun haAreaCatalogJson(): String? {
+        val snapshot = captureHaAreaSnapshot()
+        val entry = haAreaCatalogCache
+        val now = System.nanoTime() / 1_000_000L
+        if (entry == null || !haAreaCacheEntryUsable(
+                entry.key,
+                haAreaCatalogKey(snapshot),
+                entry.cachedAtMs,
+                now,
+                HA_AREA_CATALOG_TTL_MS,
+            ) ||
+            entry.catalog.ownerKey != snapshot.ownerKey || !entry.catalog.queried
+        ) {
+            warmHaAreaCatalogInBackground()
+            return null
+        }
+        val catalog = entry.catalog
+        val areas = catalog.areas.joinToString(",") { area ->
+            "{\"area_id\":${Json.str(area.areaId)},\"name\":${Json.str(area.name)}," +
+                "\"icon\":${Json.str(area.icon)}}"
+        }
+        return "{\"areas\":[$areas],\"device\":{\"found\":${catalog.device.found}," +
+            "\"area_id\":${Json.str(catalog.device.areaId)}," +
+            "\"area_name\":${Json.str(catalog.device.areaName)}}," +
+            "\"admin\":${catalog.admin},\"queried\":true}"
+    }
+
     /** Full config as JSON for fleet management. The MQTT password is never emitted — only a boolean
      *  saying whether one is set. `http_port` is read-only (changing it needs a restart). */
-    private fun configJson(): String {
+    private fun configJson(
+        mutationStatus: String? = null,
+        applied: List<String> = emptyList(),
+        pending: List<String> = emptyList(),
+        rejected: List<String> = emptyList(),
+        message: String? = null,
+    ): String {
         fun s(v: String) = Json.str(v)
+        val mutation = mutationStatus?.let {
+            "\"ok\":${rejected.isEmpty()}," +
+                "\"status\":${s(it)}," +
+                "\"applied\":${jarr(applied)}," +
+                "\"pending\":${jarr(pending)}," +
+                "\"rejected\":${jarr(rejected)}," +
+                "\"message\":${s(message.orEmpty())},"
+        }.orEmpty()
+        val pendingDesired = pendingLiveSettings().entries.joinToString(",") { (key, value) ->
+            "${s(key)}:${s(value)}"
+        }
         return "{" +
+            mutation +
             "\"panel_id\":${s(config.panelId)}," +
+            "\"ha_area_user_override\":${config.haAreaUserOverride}," +
             "\"friendly_name\":${s(config.friendlyName)}," +
             "\"manufacturer\":${s(config.manufacturer)}," +
             "\"model\":${s(config.model)}," +
@@ -5961,7 +7583,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"proximity\":${sensors.proximityJson()}," +
             // Registry-driven current values + per-key HA-exposure flags for the Configure form.
             "\"settings\":${settingsValuesJson()}," +
-            "\"ha_expose\":${haExposeJson()}" +
+            "\"ha_expose\":${haExposeJson()}," +
+            haAreaCatalogJson()?.let { "\"ha_area_catalog\":$it," }.orEmpty() +
+            "\"apply_pending\":{$pendingDesired}" +
             "}"
     }
 
@@ -5983,19 +7607,34 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         private const val PROXIMITY_SOURCE_REQUIRED =
             "{\"error\":\"proximity_source_required\"}"
         private const val ENTITY_REVISION_PREFIX = "_local.entity_state"
+        // Late enough that the first pass does not compete with boot (renderer, MQTT, profile activation),
+        // early enough that a panel is correct long before anybody opens a settings page.
+        // Long enough that a round of page reloads costs one Home Assistant read, short enough that an
+        // admin who moves the device in HA sees it here without waiting for the six-hourly pass.
+        private const val HA_AREA_CATALOG_TTL_MS = 10 * 60 * 1000L
+        private const val HA_AREA_FIRST_PASS_MS = 45_000L
+        private const val HA_AREA_REPEAT_MS = 6 * 60 * 60 * 1000L
         private const val TAME_SHUTDOWN_MS = 5_000L
         private const val REMOTE_CONTROL_SHUTDOWN_MS = 5_000L
+        private const val REMOTE_TAP_QUEUE_DEADLINE_MS = 5_000L
+        // The panel renderer can blank its surface briefly after input. Give it a bounded redraw
+        // window before the one-shot capture; the response still has a hard overall deadline.
+        private const val REMOTE_TAP_CAPTURE_SETTLE_MS = 1000L
+        private const val REMOTE_SCREENSHOT_WAIT_MS = 25_000L
+        private const val REMOTE_TAP_CAPTURE_TIMEOUT_MS = 45_000L
+        private const val REMOTE_TAP_CAPTURE_RESPONSE_TIMEOUT_MS = 60_000L
         private val REMOTE_ACTIONS = setOf(
             "back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn",
         )
+        private val OPAQUE_AUTO_SLEEP_KEY = Regex("^[a-f0-9]{64}$")
 
-        /** Behaviour keys routed through [applySetting] after an HTTP persistence commit. */
-        internal val HTTP_LIVE_KEYS = listOf(
-            "wake_on_wave", "prevent_idle_dim", "watchdog_enabled", "kiosk_lock", "auto_brightness",
-            "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
-            "navbar_mode", "touch_sound", "cpu_governor", "network_adb", "zigbee_router",
-            "companion_auto_update", "companion_update_channel", "self_update", "webview_auto_update",
-            "update_channel", "home_dashboard", "silence_boot_chime",
+        /** Keys routed through [applySetting] after an HTTP persistence commit, declared by the registry. */
+        internal val HTTP_LIVE_KEYS = SettingsRegistry.liveApplyKeys()
+
+        /** HTML pages that follow the panel into guided setup while it is waiting on a person. `/setup`
+         *  itself, the API, assets and the OAuth callback are deliberately absent. */
+        internal val WIZARD_REDIRECT_PAGES = setOf(
+            "/", "/configure", "/profiles", "/install", "/logs", "/entities", "/api",
         )
 
         private val PROFILE_FACT_KEYS =
@@ -6057,6 +7696,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         private const val PROFILE_BACKUP_ENTRY = "profiles/catalog.json"
         private const val ENTITY_FILTER_BACKUP_ENTRY = "entity/filter-ids.txt"
         private const val ENTITY_OVERRIDES_BACKUP_ENTRY = "entity/overrides.txt"
+
+        /**
+         * The complete `app_state` dump. The manifest's `config` block is a projection of declared
+         * settings, so it cannot represent a namespace that is not a setting; this entry is the whole
+         * table, in the same flat-text codec the config vault uses.
+         */
+        private const val STATE_BACKUP_ENTRY = "state/app-state.txt"
+
+        /** Configuration is tens of kilobytes on real panels; this is headroom, not a target. */
+        internal const val MAX_STATE_BACKUP_BYTES = 4L * 1024L * 1024L
         private val ENTITY_STATE_CONFIG_KEYS = setOf(
             "dashboard_entity_overrides",
             "dashboard_entity_learning_applied",
@@ -6258,6 +7907,8 @@ internal data class RendererConfigEffects(
                 zoomChanged = changed("dashboard_zoom"),
                 fullscreenChanged = changed("dashboard_fullscreen"),
                 overscrollChanged = changed("dashboard_overscroll"),
+                nativeKioskChanged = changed("dashboard_native_kiosk"),
+                homeChanged = changed("home_dashboard"),
                 darkMode = accepted["dark_mode"]?.toBooleanStrictOrNull()
                     ?.takeIf { changed("dark_mode") && android.os.Build.VERSION.SDK_INT < 29 },
             )
@@ -6269,10 +7920,15 @@ internal data class RendererConfigEffects(
             zoomChanged: Boolean,
             fullscreenChanged: Boolean,
             overscrollChanged: Boolean,
+            nativeKioskChanged: Boolean = false,
+            // A new home path only took effect on the next incidental reload, so editing it in the UI
+            // appeared to do nothing. A change reloads the built-in renderer onto the new home now.
+            homeChanged: Boolean = false,
             darkMode: Boolean?,
         ): RendererConfigEffects {
-            val reload = !dashboardChanged && (credentialChanged || zoomChanged || darkMode != null)
-            val relaunch = !dashboardChanged && !reload && (fullscreenChanged || overscrollChanged)
+            val reload = !dashboardChanged && (credentialChanged || zoomChanged || homeChanged || darkMode != null)
+            val relaunch = !dashboardChanged && !reload &&
+                (fullscreenChanged || overscrollChanged || nativeKioskChanged)
             return RendererConfigEffects(dashboardChanged, reload, relaunch, darkMode)
         }
     }
