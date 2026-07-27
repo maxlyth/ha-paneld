@@ -330,11 +330,12 @@ PANEL_POST_CONNECT_TIMEOUT_SECONDS="${PANEL_POST_CONNECT_TIMEOUT_SECONDS:-5}"
 PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-30}"
 PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-60}"
 APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-300}"
+APP_LAUNCH_COMMAND_TIMEOUT_SECONDS="${APP_LAUNCH_COMMAND_TIMEOUT_SECONDS:-15}"
 STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-6}"
 STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-2}"
 for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
     PANEL_POST_CONNECT_TIMEOUT_SECONDS PANEL_POST_TIMEOUT_SECONDS PANEL_RESTORE_TIMEOUT_SECONDS \
-    APK_INSTALL_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
+    APK_INSTALL_TIMEOUT_SECONDS APP_LAUNCH_COMMAND_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
   timeout_value="${!timeout_name}"
   case "$timeout_value" in
     ''|*[!0-9]*|0)
@@ -3647,13 +3648,11 @@ fi
 # NOT auto-start — not even via START_STICKY — until something launches it (or the device reboots). A
 # fleet update that installs without this step leaves panels installed-but-dead (their entities go
 # `unavailable` in HA). Android's normal LAUNCHER route is the reporter-proven stopped-state recovery
-# path on PX30/API 27; keep the direct activity start only for devices where monkey itself is missing
-# or fails. launch_and_wait polls the panel's web server (host-side curl, so it works even on panels
-# that ship no `curl` themselves) and is retried once to cover a stopped-state / slow-boot race.
-launch_and_wait() {
-  if ! adb -s "$TARGET" shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; then
-    adb -s "$TARGET" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
-  fi
+# path on PX30/API 27. A zero launcher exit is not proof that Android cleared stopped state, so health
+# remains authoritative: after one bounded LAUNCHER attempt and bounded health wait, advance to the
+# distinct direct-component compatibility route. Invoke the absolute adb executable under the existing
+# deadline owner rather than nesting the general adb wrapper's process group.
+wait_for_launch_health() {
   local attempt=0
   while [ "$attempt" -lt 15 ]; do
     attempt=$((attempt + 1))
@@ -3662,10 +3661,26 @@ launch_and_wait() {
   done
   return 1
 }
+
+launch_and_wait() {
+  local route="$1"
+  case "$route" in
+    launcher)
+      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell \
+        monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || return 1
+      ;;
+    direct)
+      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell \
+        am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || return 1
+      ;;
+    *) return 2 ;;
+  esac
+  wait_for_launch_health
+}
 step "▶️  starting" "the panel agent"
-if ! launch_and_wait; then
-  step "▶️  re-starting" "${D}agent didn't answer — retrying${X}"
-  launch_and_wait || { warn "web server still not answering on $URL — provisioning is incomplete."
+if ! launch_and_wait launcher; then
+  step "▶️  re-starting" "${D}launcher did not produce a healthy agent — trying the direct route${X}"
+  launch_and_wait direct || { warn "web server still not answering on $URL — provisioning is incomplete."
                        echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
                        PROVISION_FAILED=1; }
 fi

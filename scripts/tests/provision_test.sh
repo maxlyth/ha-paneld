@@ -119,6 +119,8 @@ run_provision() {
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
   MOCK_LAUNCHER_START="${MOCK_LAUNCHER_START:-ok}" \
+  MOCK_LAUNCHER_PID_FILE="${MOCK_LAUNCHER_PID_FILE:-}" \
+  MOCK_DIRECT_START="${MOCK_DIRECT_START:-ok}" \
   MOCK_STORAGE_HEALTH="${MOCK_STORAGE_HEALTH:-healthy}" \
   MOCK_POWER_SAFETY="${MOCK_POWER_SAFETY:-safe}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
@@ -612,11 +614,36 @@ else
   fail_test "stopped-state recovery launches after install and before verified app-owned guidance"
 fi
 
-# Retain the old direct component route only as compatibility recovery when the launcher tool itself
-# reports failure. Its exit status is not health: the same bounded HTTP polling still decides success.
-MOCK_LAUNCHER_START=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "direct component fallback remains available when the launcher command fails"
+# A zero launcher exit is not recovery evidence. While the package remains stopped, health must stay
+# unavailable and force the distinct direct route, whose successful start makes health reachable.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "ineffective zero-exit launcher advances to direct stopped-state recovery"
+assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "zero-exit recovery tries the normal launcher first"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "unhealthy zero-exit launcher advances to the direct route"
+if [ ! -e "$TMP/package-stopped" ]; then pass "direct fallback actually clears stopped state after an ineffective launcher"
+else fail_test "direct fallback actually clears stopped state after an ineffective launcher"; fi
+
+# Launcher failure while stopped must recover the package rather than merely proving that a fallback
+# command was invoked. Health and the fixture's stopped-state authority both have to converge.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "launcher failure while stopped recovers through the direct route"
 assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "launcher command failure invokes the direct component fallback"
+if [ ! -e "$TMP/package-stopped" ]; then pass "direct fallback actually clears stopped state after launcher failure"
+else fail_test "direct fallback actually clears stopped state after launcher failure"; fi
+
+# The primary launcher is a host ADB command and must not be able to strand provisioning before the
+# bounded health state machine. Its deadline must reap the blocked fixture and continue via direct start.
+LAUNCHER_PID_FILE="$TMP/blocked-launcher.pid"
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=block MOCK_LAUNCHER_PID_FILE="$LAUNCHER_PID_FILE" \
+  APP_LAUNCH_COMMAND_TIMEOUT_SECONDS=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "blocked launcher reaches its host deadline and recovers through direct start"
+assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "launcher deadline advances to the direct route"
+blocked_launcher_pid="$(cat "$LAUNCHER_PID_FILE" 2>/dev/null || true)"
+if [ -n "$blocked_launcher_pid" ] && ! kill -0 "$blocked_launcher_pid" 2>/dev/null; then
+  pass "launcher deadline reaps the blocked host ADB process"
+else
+  fail_test "launcher deadline reaps the blocked host ADB process"
+fi
 
 # A settling profile returns 503. The portable client retries it and then displays the final plan.
 MOCK_PLAN=transient run_provision "$MOCK_TARGET" --apk "$APK"
@@ -1693,8 +1720,12 @@ MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "launch timeout returns nonzero"
 assert_contains '(did not start|not answering|launch|health)' "launch timeout explains what failed"
 launcher_attempts="$(grep -Ec '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "$MOCK_CALL_LOG" || true)"
-if [ "$launcher_attempts" -eq 2 ]; then pass "launch timeout performs exactly one bounded retry"
-else fail_test "launch timeout performs exactly one bounded retry (expected 2 launches, got $launcher_attempts)"; fi
+direct_attempts="$(grep -Ec '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "$MOCK_CALL_LOG" || true)"
+if [ "$launcher_attempts" -eq 1 ] && [ "$direct_attempts" -eq 1 ]; then
+  pass "launch timeout performs one launcher attempt and one distinct direct fallback"
+else
+  fail_test "launch timeout uses exactly one launcher and one direct fallback (got $launcher_attempts/$direct_attempts)"
+fi
 unset MOCK_HEALTH
 
 # Some panels answer /health before the heavier diagnostics endpoint finishes root/capability probes.

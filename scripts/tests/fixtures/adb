@@ -139,11 +139,22 @@ case "${1:-}" in
     command_text="$*"
     case "$command_text" in
       "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
-        [ "${MOCK_LAUNCHER_START:-ok}" = ok ] || exit 1
-        rm -f "$STATE_DIR/package-stopped"
+        case "${MOCK_LAUNCHER_START:-ok}" in
+          ok) rm -f "$STATE_DIR/package-stopped" ;;
+          ineffective) : ;;
+          block)
+            [ -z "${MOCK_LAUNCHER_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_LAUNCHER_PID_FILE"
+            trap 'exit 143' TERM INT
+            while :; do /bin/sleep 1; done
+            ;;
+          *) exit 1 ;;
+        esac
         ;;
       "am start -n io.github.maxlyth.hapaneld/.MainActivity")
-        # A direct component start deliberately does not clear the modeled package stopped state.
+        # Compatibility fallback is independently observable: unlike an ineffective launcher result,
+        # a successful direct start clears the fixture's stopped state and makes health reachable.
+        [ "${MOCK_DIRECT_START:-ok}" = ok ] || exit 1
+        rm -f "$STATE_DIR/package-stopped"
         ;;
       "dumpsys package moe.shizuku.privileged.api")
         if [ "${MOCK_SHIZUKU_INSPECT:-ok}" = block ]; then
