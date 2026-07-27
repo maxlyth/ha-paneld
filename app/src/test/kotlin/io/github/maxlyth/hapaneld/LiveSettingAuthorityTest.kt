@@ -71,59 +71,6 @@ class LiveSettingAuthorityTest {
         assertTrue(authority.pendingSnapshot().isEmpty())
     }
 
-    @Test fun `a value this hardware can never apply stops replaying after three strikes`() {
-        // Replay durability is for TRANSIENT failure. A root-backed apply on a panel whose root path is
-        // gone failed on every boot forever, and the journal entry kept a permanent "waiting to apply"
-        // warning over a setting the user never touched (fleet report: silence_boot_chime, 2026-07-26).
-        // Three failed REPLAYS and the journal gives the value up — the saved setting stands, only the
-        // endless retry and its warning end.
-        val authority = LiveSettingAuthority(setOf("silence_boot_chime"))
-        authority.applyOrQueueOutcome("silence_boot_chime", "true", "false") { _, _, _ ->
-            LiveSettingApplyResult.FAILED
-        }
-        assertEquals(mapOf("silence_boot_chime" to "true"), authority.pendingSnapshot())
-
-        repeat(LiveSettingAuthority.MAX_REPLAY_ATTEMPTS - 1) {
-            authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-            assertEquals("still retrying before the limit", mapOf("silence_boot_chime" to "true"), authority.pendingSnapshot())
-        }
-        authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-        assertTrue("the third failed replay retires the value", authority.pendingSnapshot().isEmpty())
-    }
-
-    @Test fun `a replay that succeeds within the strike window clears normally`() {
-        val authority = LiveSettingAuthority(setOf("silence_boot_chime"))
-        authority.applyOrQueueOutcome("silence_boot_chime", "true", "false") { _, _, _ ->
-            LiveSettingApplyResult.FAILED
-        }
-        authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-        authority.replay { _, _, _ -> LiveSettingApplyResult.APPLIED }
-        assertTrue(authority.pendingSnapshot().isEmpty())
-    }
-
-    @Test fun `a fresh user intent restarts the strike count`() {
-        // The give-up must never eat a NEW instruction: strikes belong to one queued value, and a person
-        // saving again is a new value even when the text is identical intent.
-        val authority = LiveSettingAuthority(setOf("silence_boot_chime"))
-        authority.applyOrQueueOutcome("silence_boot_chime", "true", "false") { _, _, _ ->
-            LiveSettingApplyResult.FAILED
-        }
-        repeat(LiveSettingAuthority.MAX_REPLAY_ATTEMPTS - 1) {
-            authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-        }
-        // Two strikes down; the user saves again — the count must restart, so two MORE failed replays
-        // still retry rather than retiring on what would have been the original third strike.
-        authority.applyOrQueueOutcome("silence_boot_chime", "true", "false") { _, _, _ ->
-            LiveSettingApplyResult.FAILED
-        }
-        repeat(LiveSettingAuthority.MAX_REPLAY_ATTEMPTS - 1) {
-            authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-            assertTrue("fresh intent keeps its own window", authority.pendingSnapshot().isNotEmpty())
-        }
-        authority.replay { _, _, _ -> LiveSettingApplyResult.FAILED }
-        assertTrue(authority.pendingSnapshot().isEmpty())
-    }
-
     @Test fun `applied hardware remains reported pending when durable journal cleanup fails`() {
         val journal = FakeJournal().apply { removesSucceed = false }
         val authority = LiveSettingAuthority(setOf("touch_sound"), journal)

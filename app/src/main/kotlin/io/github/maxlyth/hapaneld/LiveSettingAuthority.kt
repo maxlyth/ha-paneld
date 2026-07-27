@@ -65,8 +65,6 @@ internal class LiveSettingAuthority(
         val previousValue: String?,
         val fence: Long? = null,
         val generation: String = UUID.randomUUID().toString(),
-        /** Failed REPLAY attempts so far. A fresh user intent always starts at zero. */
-        val attempts: Int = 0,
     )
 
     internal interface Journal {
@@ -244,29 +242,6 @@ internal class LiveSettingAuthority(
                         if (pending[key] == queued && journal.remove(key)) {
                             pending.remove(key)
                         }
-                    } else if (application.initial == LiveSettingApplyResult.FAILED &&
-                        !application.hasLateCompletion
-                    ) synchronized(this) {
-                        // Replay durability is for TRANSIENT failure (a draining bridge, a root hiccup) —
-                        // but a value this hardware can never apply replayed and failed on every boot
-                        // forever, keeping a permanent "waiting to apply" warning over an untouched
-                        // setting (fleet report: silence_boot_chime on a panel whose root path is gone).
-                        // Three strikes across replays and the journal gives the value up: the SAVED
-                        // setting stands, only the endless retry and its warning end. A new user intent
-                        // starts a fresh count.
-                        if (pending[key] == queued) {
-                            val struck = queued.copy(attempts = queued.attempts + 1)
-                            if (struck.attempts >= MAX_REPLAY_ATTEMPTS) {
-                                if (journal.remove(key)) pending.remove(key)
-                                android.util.Log.w(
-                                    "ha-paneld/livesetting",
-                                    "giving up replaying $key after ${struck.attempts} failed attempts; " +
-                                        "the saved value stands but this hardware could not apply it",
-                                )
-                            } else if (journal.put(key, struck)) {
-                                pending[key] = struck
-                            }
-                        }
                     }
                 }
             }
@@ -280,8 +255,6 @@ internal class LiveSettingAuthority(
     internal fun pendingPreviousSnapshot(): Map<String, String?> = pending.mapValues { it.value.previousValue }
 
     companion object {
-        /** Failed replays tolerated before the journal stops retrying a value (one replay per boot). */
-        internal const val MAX_REPLAY_ATTEMPTS = 3
         private const val JOURNAL = "ha-paneld-live-setting-journal"
 
         fun persistent(context: Context, supportedKeys: Set<String>): LiveSettingAuthority {
@@ -297,7 +270,6 @@ internal class LiveSettingAuthority(
                                 decoded.optLong("fence").takeIf { decoded.has("fence") },
                                 decoded.optString("generation").takeIf(String::isNotBlank)
                                     ?: UUID.randomUUID().toString(),
-                                decoded.optInt("attempts"),
                             )
                         } else Pending(encoded, null) // legacy desired-only journal
                         key to pending
@@ -307,7 +279,7 @@ internal class LiveSettingAuthority(
                 override fun put(key: String, value: Pending): Boolean =
                     preferences.edit().putString(
                         key,
-                        JSONObject().put("value", value.value).put("attempts", value.attempts).apply {
+                        JSONObject().put("value", value.value).apply {
                             value.previousValue?.let { put("previous", it) }
                             value.fence?.let { put("fence", it) }
                             put("generation", value.generation)
