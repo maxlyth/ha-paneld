@@ -801,11 +801,11 @@ verify() {
       ;;
     valid:caution)
       echo "   ${YEL}⚠ panel power safety: caution — reachability depends on only one observed power guard.${X}"
-      echo "     ${D}Review the exact observations and explicit repair at $URL/configure#cfg-keep_awake.${X}"
+      echo "     ${D}Review the exact observations at $URL/configure#cfg-keep_awake. Use Repair when offered; a healthy app-only caution can instead be explicitly hidden without changing this classification.${X}"
       ;;
     valid:at_risk)
       echo "   ${RED}✗ panel power safety: at risk — screen-off can leave this panel unreachable.${X}"
-      echo "     ${D}Use the explicit Repair power safety action at $URL/configure#cfg-keep_awake, then re-run verification.${X}"
+      echo "     ${D}Follow the warning at $URL/configure#cfg-keep_awake: use Repair when offered, otherwise inspect the manual guidance, then re-run verification.${X}"
       rc=1
       ;;
     valid:unknown)

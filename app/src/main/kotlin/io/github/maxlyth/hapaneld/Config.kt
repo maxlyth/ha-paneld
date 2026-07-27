@@ -113,6 +113,7 @@ class Config private constructor(
     private val prefs: SharedPreferences,
     private val contentResolver: ContentResolver?,
     private val calibrationPrefs: SharedPreferences,
+    private val deviceStatePrefs: SharedPreferences,
     private val resources: Resources?,
 ) {
     enum class SecurityMode { RELAXED, HARDENED }
@@ -125,15 +126,16 @@ class Config private constructor(
         AppState.preferences(context, "config", "ha-paneld"),
         context.applicationContext.contentResolver,
         AppState.preferences(context, "profile-calibration", PROFILE_CALIBRATION_PREFS),
+        AppState.preferences(context, "power-safety-acknowledgement", POWER_SAFETY_ACKNOWLEDGEMENT_PREFS),
         context.applicationContext.resources,
     )
 
     /** JVM-test seam; identity defaults that consult Android settings require the production constructor. */
-    internal constructor(prefs: SharedPreferences) : this(prefs, null, prefs, null)
+    internal constructor(prefs: SharedPreferences) : this(prefs, null, prefs, prefs, null)
 
     /** JVM-test seam that keeps configuration and non-transferable sensor calibration separate. */
     internal constructor(prefs: SharedPreferences, calibrationPrefs: SharedPreferences) :
-        this(prefs, null, calibrationPrefs, null)
+        this(prefs, null, calibrationPrefs, prefs, null)
 
     /** Activity-scoped observation of live settings without exposing the persistence implementation. */
     internal fun registerChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
@@ -1010,6 +1012,18 @@ class Config private constructor(
     /** Commit only after MainActivity has actually selected and installed the intro view. */
     fun commitLaunchScreenVersionShown(versionCode: Long): Boolean = synchronized(CONFIG_LOCK) {
         durableCommit { putLong(LAST_LAUNCH_SCREEN_VERSION_PREF, versionCode) }
+    }
+
+    /** Device-local suppression for one exact healthy manual-only power caution. This deliberately sits
+     * outside SettingsRegistry, so exports/imports cannot transfer a hardware acknowledgement. */
+    val powerSafetyAcknowledgementFingerprint: String
+        get() = deviceStatePrefs.getString(POWER_SAFETY_ACKNOWLEDGEMENT_PREF, "").orEmpty()
+
+    fun commitPowerSafetyAcknowledgement(fingerprint: String): Boolean = synchronized(CONFIG_LOCK) {
+        if (!fingerprint.matches(Regex("[0-9a-f]{64}"))) return false
+        (deviceStatePrefs as? DurableVisibilityPreferences)?.commitWithDurableVisibility {
+            putString(POWER_SAFETY_ACKNOWLEDGEMENT_PREF, fingerprint)
+        } ?: deviceStatePrefs.edit().putString(POWER_SAFETY_ACKNOWLEDGEMENT_PREF, fingerprint).commit()
     }
 
     // HA Companion app auto-manage: when on, ha-paneld installs the minimal Companion if it's
@@ -2072,6 +2086,10 @@ class Config private constructor(
         private const val MAX_AUTO_SLEEP_EXCLUSIONS_BYTES = 256 * 1024
         private const val LAST_LAUNCH_SCREEN_VERSION_PREF =
             "device_local_last_launch_screen_version"
+        private const val POWER_SAFETY_ACKNOWLEDGEMENT_PREF =
+            "device_local_power_safety_acknowledgement_v1"
+        private const val POWER_SAFETY_ACKNOWLEDGEMENT_PREFS =
+            "ha-paneld-power-safety-acknowledgement"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY =
             "dashboard_entity_default_resolver_version"
         private const val DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY =

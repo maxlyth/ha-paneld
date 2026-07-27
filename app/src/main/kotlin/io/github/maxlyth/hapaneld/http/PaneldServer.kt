@@ -45,6 +45,10 @@ import io.github.maxlyth.hapaneld.control.DisplaySizingObservation
 import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.PrivilegeRoute
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
+import io.github.maxlyth.hapaneld.control.PowerRepairCapability
+import io.github.maxlyth.hapaneld.control.PowerSafetyAcknowledgementDecision
+import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisory
+import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisoryPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
 import io.github.maxlyth.hapaneld.control.PowerSafetyMutationPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyRepairResult
@@ -884,6 +888,9 @@ class PaneldServer internal constructor(
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
     // One read-only Android power assessment shared by every user and diagnostic surface.
     private val powerSafety: () -> PowerSafetyAssessment,
+    // Uncached harmless direct-root capability probe. Explicit acknowledgement and repair paths only;
+    // passive rendering derives capability from the bounded management snapshot instead.
+    private val freshPowerSafetyRepairCapability: () -> PowerRepairCapability = { PowerRepairCapability.DEGRADED },
     // Explicit repair only. Per-step readback decides whether the result is complete.
     private val onRepairPowerSafety: () -> PowerSafetyRepairResult,
     // Bounded EFR32 health snapshot, or null when this panel has no radio gateway.
@@ -1941,8 +1948,9 @@ class PaneldServer internal constructor(
                         )
                     }
                     get("/power-safety") {
+                        val advisory = powerSafetyAdvisory(snapStaleOk().privilege)
                         call.respondText(
-                            PowerSafetyPresentation.json(powerSafety()),
+                            PowerSafetyPresentation.json(advisory),
                             ContentType.Application.Json,
                         )
                     }
@@ -1959,21 +1967,25 @@ class PaneldServer internal constructor(
                         ) return@post
                         val result = withContext(Dispatchers.IO) { onRepairPowerSafety() }
                         snapInvalidate()
+                        val repairCapability = PowerRepairCapability.values()
+                            .firstOrNull { it.wireValue == result.privilegedPowerControl }
+                            ?: PowerRepairCapability.DEGRADED
+                        val advisory = PowerSafetyAdvisoryPolicy.evaluate(
+                            result.assessment,
+                            repairCapability,
+                            config.powerSafetyAcknowledgementFingerprint,
+                        )
                         val failed = result.status == "failed"
                         val wantsJson = call.request.headers[HttpHeaders.Accept]
                             ?.contains("application/json", ignoreCase = true) == true
                         if (wantsJson) {
                             call.respondText(
-                                PowerSafetyPresentation.repairJson(result),
+                                PowerSafetyPresentation.repairJson(result, advisory),
                                 ContentType.Application.Json,
                                 if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK,
                             )
                         } else {
-                            val message = when (result.status) {
-                                "repaired" -> "Power safety repaired and verified."
-                                "partial" -> "Power safety repair was partial; review the remaining warning."
-                                else -> "Power safety repair failed; no reboot was attempted."
-                            }
+                            val message = PowerSafetyPresentation.repairMessage(result)
                             call.respondText(
                                 configMutationHtml(message).replace(
                                     "url=/configure",
@@ -1981,6 +1993,89 @@ class PaneldServer internal constructor(
                                 ),
                                 ContentType.Text.Html,
                                 if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK,
+                            )
+                        }
+                    }
+                    post("/power-safety/acknowledge") {
+                        val parameters = receiveBoundedFormParameters(call) ?: return@post
+                        val requested = parameters["fingerprint"]?.trim().orEmpty()
+                        if (!PowerSafetyAdvisoryPolicy.isAcknowledgementFingerprint(requested)) {
+                            call.respondText(
+                                """{"ok":false,"acknowledged":false,"error":"invalid-fingerprint","message":"The acknowledgement token is invalid; refresh and review the current caution."}""",
+                                ContentType.Application.Json,
+                                HttpStatusCode.BadRequest,
+                            )
+                            return@post
+                        }
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.POWER_SAFETY_ACKNOWLEDGEMENT,
+                                exactHttpApprovalPayload(call, parameters.canonicalDigest()),
+                                "Hide one exact unchanged panel power-safety caution",
+                            )
+                        ) return@post
+                        // Re-observe after the request is materialized. The submitted value is only an
+                        // expected-state token; persisted truth always comes from this server observation.
+                        val current = withContext(Dispatchers.IO) {
+                            PowerSafetyAdvisoryPolicy.evaluate(
+                                powerSafety(),
+                                freshPowerSafetyRepairCapability(),
+                                config.powerSafetyAcknowledgementFingerprint,
+                            )
+                        }
+                        val decision = PowerSafetyAdvisoryPolicy.admitAcknowledgement(requested, current)
+                        val wantsJson = call.request.headers[HttpHeaders.Accept]
+                            ?.contains("application/json", ignoreCase = true) == true
+                        val (status, error, message) = when (decision) {
+                            PowerSafetyAcknowledgementDecision.MALFORMED -> Triple(
+                                HttpStatusCode.BadRequest,
+                                "invalid-fingerprint",
+                                "The acknowledgement token is invalid; refresh and review the current caution.",
+                            )
+                            PowerSafetyAcknowledgementDecision.STALE -> Triple(
+                                HttpStatusCode.Conflict,
+                                "stale-assessment",
+                                "Power-safety evidence changed; review the current caution before hiding it.",
+                            )
+                            PowerSafetyAcknowledgementDecision.NOT_ACKNOWLEDGEABLE -> Triple(
+                                HttpStatusCode.Conflict,
+                                "not-acknowledgeable",
+                                "This power-safety state cannot be hidden because repair is available or risk is elevated or unknown.",
+                            )
+                            PowerSafetyAcknowledgementDecision.ACCEPT -> {
+                                val fingerprint = requireNotNull(current.acknowledgementFingerprint)
+                                if (config.commitPowerSafetyAcknowledgement(fingerprint)) {
+                                    Triple(HttpStatusCode.OK, "", "This unchanged caution is hidden on panel web pages. Diagnostics and installer checks remain unchanged.")
+                                } else {
+                                    Triple(HttpStatusCode.ServiceUnavailable, "persistence-failed", "The caution was not hidden because the acknowledgement could not be saved.")
+                                }
+                            }
+                        }
+                        val acknowledged = decision == PowerSafetyAcknowledgementDecision.ACCEPT && status == HttpStatusCode.OK
+                        val projected = if (acknowledged) {
+                            PowerSafetyAdvisoryPolicy.evaluate(
+                                current.assessment,
+                                current.repairCapability,
+                                current.acknowledgementFingerprint,
+                            )
+                        } else current
+                        if (wantsJson) {
+                            call.respondText(
+                                JSONObject()
+                                    .put("ok", acknowledged)
+                                    .put("acknowledged", acknowledged)
+                                    .put("error", error.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+                                    .put("message", message)
+                                    .put("power_safety", JSONObject(PowerSafetyPresentation.json(projected)))
+                                    .toString(),
+                                ContentType.Application.Json,
+                                status,
+                            )
+                        } else {
+                            call.respondText(
+                                configMutationHtml(message).replace("url=/configure", "url=/configure#cfg-keep_awake"),
+                                ContentType.Text.Html,
+                                status,
                             )
                         }
                     }
@@ -3015,7 +3110,11 @@ $proximityScript"""
     }
 
     private fun configureSetupBanners(): String {
-        val power = PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true)
+        val management = snapStaleOk()
+        val power = PowerSafetyPresentation.bannerHtml(
+            powerSafetyAdvisory(management.privilege),
+            inlineRepair = true,
+        )
         // Someone landing on the full settings wall mid-commissioning (an old bookmark, the QR from a
         // build that pointed here) should learn the guided path exists — once setup completes this line
         // vanishes with the rest of the wizard surface.
@@ -3027,7 +3126,7 @@ $proximityScript"""
         // user actually is while it happens — but it showed nothing, so a save that was still being checked
         // looked like a save that had done nothing. SetupBanner already derives this state and is already
         // rendered on the dashboard; surfacing it here too costs nothing and keeps one authority.
-        val mqtt = snapStaleOk().facts["MQTT"] ?: "disabled"
+        val mqtt = management.facts["MQTT"] ?: "disabled"
         SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let { progress ->
             return power + resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
         }
@@ -3199,10 +3298,14 @@ $proximityScript"""
         val canInstallCompanion = installer
         // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
-        val extra = PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true) +
+        val powerAdvisory = powerSafetyAdvisory(management.privilege)
+        val extra = PowerSafetyPresentation.bannerHtml(
+            powerAdvisory,
+            inlineRepair = true,
+        ) +
             adHocWarnings(management, companion, inlineRepair = true)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
-        val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty()) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
+        val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty() && !powerAdvisory.assessment.warning) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
 <div class="cards" id="install-cards" data-card-size-page="install" data-card-size-epoch="1" data-card-size-restore="1">
 ${componentsCardHtml(wv, root, installer)}
@@ -3490,7 +3593,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
         val management = snapStaleOk()
-        val powerAssessment = powerSafety()
+        val powerAdvisory = powerSafetyAdvisory(management.privilege)
         val companion = companionServersStaleOk()
         val radio = radioStatus()
         val storage = HealthAudit.storage(storageHealth())
@@ -3519,7 +3622,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             zigbeeWarning(z)?.let(warns::add)
         }
         storage.warningHtml()?.let(warns::add)
-        PowerSafetyPresentation.statusWarningHtml(powerAssessment)?.let(warns::add)
+        PowerSafetyPresentation.statusWarningHtml(powerAdvisory)?.let(warns::add)
         runCatching(mdnsWarning).getOrNull()?.let(warns::add)
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
@@ -3533,7 +3636,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         } ?: "null"
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
-            "\"power_safety\":${PowerSafetyPresentation.json(powerAssessment)}}"
+            "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
     }
 
     /** A health finding as a one-line HTML warning for GET /api/v1/status (no Ignore button; updates keep
@@ -3801,6 +3904,21 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
     }
 
+    /** Presentation capability from the existing bounded privilege snapshot. Fresh root probing remains
+     * confined to the explicit repair operation, so opening a page cannot add a multi-second su probe. */
+    private fun powerSafetyAdvisory(privilege: PrivilegedRouteObservation): PowerSafetyAdvisory {
+        val capability = when {
+            privilege.directSuReady -> PowerRepairCapability.DIRECT_ROOT
+            profile.appCanSu -> PowerRepairCapability.DEGRADED
+            else -> PowerRepairCapability.APP_ONLY
+        }
+        return PowerSafetyAdvisoryPolicy.evaluate(
+            powerSafety(),
+            capability,
+            config.powerSafetyAcknowledgementFingerprint,
+        )
+    }
+
     private fun companionServersStaleOk(): CompanionDb.ServerObservation =
         companionServerCache.staleWhileRevalidate { refresh, releaseAdmission ->
             if (stopping) return@staleWhileRevalidate false
@@ -3912,7 +4030,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Order: storage/database safety first, then actively-broken render states, render findings
         // (WebView / renderer / updates), and finally the needs-config setup notice. On the dashboard the
         // ad-hoc warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
-        return storage.bannerHtml() + PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true) +
+        return storage.bannerHtml() + PowerSafetyPresentation.bannerHtml(
+            powerSafetyAdvisory(s.privilege),
+            inlineRepair = true,
+        ) +
             adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
             findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + mqttProgress + setup
     }
@@ -7884,7 +8005,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         message: String? = null,
     ): String {
         fun s(v: String) = Json.str(v)
-        val powerAssessment = powerSafety()
+        val powerAdvisory = powerSafetyAdvisory(snapStaleOk().privilege)
         val mutation = mutationStatus?.let {
             "\"ok\":${rejected.isEmpty()}," +
                 "\"status\":${s(it)}," +
@@ -7919,7 +8040,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"ha_auth\":{\"configured\":${config.haToken.isNotEmpty() || config.haRefreshToken.isNotEmpty()},\"oauth\":${config.haRefreshToken.isNotEmpty()}}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}," +
-            "\"power_safety\":${PowerSafetyPresentation.json(powerAssessment)}," +
+            "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}," +
             // Registry-driven current values + per-key HA-exposure flags for the Configure form.
             "\"settings\":${settingsValuesJson()}," +
             "\"ha_expose\":${haExposeJson()}," +

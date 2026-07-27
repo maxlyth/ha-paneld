@@ -1,7 +1,10 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.control.PowerRepairCapability
 import io.github.maxlyth.hapaneld.control.PowerRepairStepStatus
 import io.github.maxlyth.hapaneld.control.PowerRiskLevel
+import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisory
+import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisoryPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
 import io.github.maxlyth.hapaneld.control.PowerSafetyObservation
 import io.github.maxlyth.hapaneld.control.PowerSafetyRepairResult
@@ -15,10 +18,12 @@ import org.junit.Test
 class PowerSafetyPresentationTest {
     @Test fun structuredJsonAndDiagnosticsRetainBoundedProbeTruth() {
         val assessment = assessment(PowerRiskLevel.UNKNOWN)
-        val json = JSONObject(PowerSafetyPresentation.json(assessment))
+        val json = JSONObject(PowerSafetyPresentation.json(advisory(assessment)))
 
         assertEquals("unknown", json.getString("state"))
         assertTrue(json.getBoolean("warning"))
+        assertFalse(json.getBoolean("acknowledge_available"))
+        assertTrue(json.isNull("acknowledgement_fingerprint"))
         assertTrue(json.isNull("plugged_mask"))
         assertEquals("unknown", json.getString("power_source"))
         assertTrue(json.isNull("stay_on_effective"))
@@ -31,42 +36,73 @@ class PowerSafetyPresentationTest {
         assertFalse(diagnostic.contains("battery"))
     }
 
-    @Test fun warningsUseOneSharedSummaryAndOfferOnlyAnExplicitPostRepair() {
+    @Test fun repairableWarningsUseOneSharedSummaryAndOfferOnlyAnExplicitPostRepair() {
         val assessment = assessment(PowerRiskLevel.AT_RISK)
-        val warning = PowerSafetyPresentation.statusWarningHtml(assessment).orEmpty()
-        val banner = PowerSafetyPresentation.bannerHtml(assessment, inlineRepair = true)
+        val advisory = advisory(assessment, PowerRepairCapability.DIRECT_ROOT)
+        val warning = PowerSafetyPresentation.statusWarningHtml(advisory).orEmpty()
+        val banner = PowerSafetyPresentation.bannerHtml(advisory, inlineRepair = true)
 
         assertTrue(warning.contains(assessment.summary))
-        assertTrue(warning.contains(assessment.action))
         assertTrue(banner.contains("method=\"post\""))
         assertTrue(banner.contains("action=\"/api/v1/power-safety/repair\""))
         assertTrue(banner.contains("data-power-safety-repair"))
         assertTrue(banner.contains("Repair power safety"))
         assertTrue(banner.contains("never reboots"))
         assertFalse(banner.contains("onclick="))
-        assertEquals("", PowerSafetyPresentation.bannerHtml(assessment(PowerRiskLevel.SAFE), true))
+        assertEquals("", PowerSafetyPresentation.bannerHtml(advisory(assessment(PowerRiskLevel.SAFE)), true))
     }
 
-    @Test fun repairResultReportsEveryCapabilityAwareStep() {
+    @Test fun healthyAppOnlyCautionCanBeHiddenWithoutChangingStructuredRiskTruth() {
+        val assessment = assessment(PowerRiskLevel.CAUTION)
+        val offered = advisory(assessment)
+        val banner = PowerSafetyPresentation.bannerHtml(offered, inlineRepair = true)
+        val json = JSONObject(PowerSafetyPresentation.json(offered))
+
+        assertTrue(banner.contains("action=\"/api/v1/power-safety/acknowledge\""))
+        assertTrue(banner.contains("data-power-safety-acknowledge"))
+        assertTrue(banner.contains("Hide this caution"))
+        assertTrue(banner.contains("data-hardened-approval"))
+        assertFalse(banner.contains("Repair power safety"))
+        assertEquals("caution", json.getString("state"))
+        assertTrue(json.getBoolean("warning"))
+        assertTrue(json.getBoolean("manual_only"))
+        assertTrue(json.getBoolean("acknowledge_available"))
+        assertEquals(64, json.getString("acknowledgement_fingerprint").length)
+
+        val hidden = PowerSafetyAdvisoryPolicy.evaluate(
+            assessment,
+            PowerRepairCapability.APP_ONLY,
+            offered.acknowledgementFingerprint,
+        )
+        assertEquals("", PowerSafetyPresentation.bannerHtml(hidden, inlineRepair = true))
+        assertTrue(PowerSafetyPresentation.statusWarningHtml(hidden).orEmpty().contains("caution"))
+        assertTrue(JSONObject(PowerSafetyPresentation.json(hidden)).getBoolean("warning"))
+        assertTrue(JSONObject(PowerSafetyPresentation.json(hidden)).getBoolean("acknowledged"))
+    }
+
+    @Test fun repairResultReportsEveryCapabilityAwareStepAndNextAction() {
         val result = PowerSafetyRepairResult(
             status = "partial",
             keepAwake = PowerRepairStepStatus.APPLIED,
             preventIdleDim = PowerRepairStepStatus.FAILED,
             stayOnWhilePluggedIn = PowerRepairStepStatus.UNAVAILABLE,
-            dozeExemption = PowerRepairStepStatus.ALREADY,
-            privilegedPowerControl = "unavailable",
+            dozeExemption = PowerRepairStepStatus.UNAVAILABLE,
+            privilegedPowerControl = "app_only",
             assessment = assessment(PowerRiskLevel.CAUTION),
         )
-        val json = JSONObject(PowerSafetyPresentation.repairJson(result))
+        val json = JSONObject(PowerSafetyPresentation.repairJson(result, advisory(result.assessment)))
         val steps = json.getJSONObject("steps")
 
         assertEquals("partial", json.getString("status"))
         assertFalse(json.getBoolean("complete"))
-        assertEquals("unavailable", json.getString("privileged_power_control"))
+        assertEquals("app_only", json.getString("privileged_power_control"))
+        assertEquals("acknowledge_caution", json.getString("next_action"))
+        assertTrue(json.getString("message").contains("Failed: infinite screen timeout"))
+        assertTrue(json.getString("message").contains("Unavailable: Android stay-awake, Doze exemption"))
         assertEquals("applied", steps.getString("keep_awake"))
         assertEquals("failed", steps.getString("prevent_idle_dim"))
         assertEquals("unavailable", steps.getString("stay_on_while_plugged_in"))
-        assertEquals("already", steps.getString("doze_exemption"))
+        assertEquals("unavailable", steps.getString("doze_exemption"))
     }
 
     @Test fun allRequestedSurfacesConsumeTheSameAssessmentPresentation() {
@@ -76,16 +112,21 @@ class PowerSafetyPresentationTest {
         val interaction = source("app/src/main/assets/power-safety.js")
         val provisioner = source("scripts/provision.sh")
 
-        assertTrue(server.contains("PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true)"))
-        assertTrue(server.contains("PowerSafetyPresentation.statusWarningHtml(powerAssessment)"))
-        assertTrue(server.contains("\\\"power_safety\\\":${'$'}{PowerSafetyPresentation.json(powerAssessment)}"))
+        assertTrue(server.contains("PowerSafetyPresentation.bannerHtml("))
+        assertTrue(server.contains("PowerSafetyPresentation.statusWarningHtml(powerAdvisory)"))
+        assertTrue(server.contains("PowerSafetyPresentation.json(powerAdvisory)"))
+        assertTrue(server.contains("!powerAdvisory.assessment.warning"))
+        assertTrue(server.contains("post(\"/power-safety/acknowledge\")"))
+        assertTrue(server.contains("PowerSafetyAdvisoryPolicy.admitAcknowledgement"))
+        assertTrue(server.contains("exactHttpApprovalPayload(call, parameters.canonicalDigest())"))
         assertTrue(diagnostic.contains("PowerSafetyPresentation.diagnosticLine(it)"))
         assertTrue(server.contains("/assets/power-safety.js"))
         assertTrue(interaction.contains("form[data-power-safety-repair]"))
+        assertTrue(interaction.contains("form[data-power-safety-acknowledge]"))
         assertTrue(interaction.contains("body.error === 'approval-required'"))
         assertTrue(interaction.contains("method: 'POST'"))
         assertTrue(interaction.contains("'Accept': 'application/json'"))
-        assertTrue(controller.contains("runCatching(root::available)"))
+        assertTrue(controller.contains("fun repairCapabilityFresh()"))
         assertTrue(controller.contains("root.runSingleAttempt(\"settings put global"))
         assertTrue(controller.contains("Settings.Global.getInt"))
         assertTrue(controller.contains("stayBaseline == null -> PowerRepairStepStatus.UNAVAILABLE"))
@@ -101,7 +142,30 @@ class PowerSafetyPresentationTest {
         assertTrue(provisioner.contains("Read the app-owned power classification"))
         assertFalse(provisioner.contains("settings get global stay_on_while_plugged_in"))
         assertFalse(provisioner.contains("deviceidle whitelist"))
+
+        val acknowledgeRoute = server.substringAfter("post(\"/power-safety/acknowledge\")")
+            .substringBefore("post(\"/updates/ignore\")")
+        assertTrue(acknowledgeRoute.contains("commitPowerSafetyAcknowledgement"))
+        assertTrue(acknowledgeRoute.contains("freshPowerSafetyRepairCapability()"))
+        assertFalse(acknowledgeRoute.contains("powerSafetyAdvisory(snapStaleOk()"))
+        assertTrue(acknowledgeRoute.indexOf("authorizeSensitive(") < acknowledgeRoute.indexOf("freshPowerSafetyRepairCapability()"))
+        assertTrue(acknowledgeRoute.indexOf("freshPowerSafetyRepairCapability()") < acknowledgeRoute.indexOf("commitPowerSafetyAcknowledgement"))
+        assertFalse(acknowledgeRoute.contains("onRepairPowerSafety"))
+        assertFalse(acknowledgeRoute.contains("settings put"))
+        assertFalse(acknowledgeRoute.contains("deviceidle"))
+        assertFalse(acknowledgeRoute.contains("reboot"))
+        assertTrue(server.contains("?: PowerRepairCapability.DEGRADED"))
     }
+
+    private fun advisory(
+        assessment: PowerSafetyAssessment,
+        capability: PowerRepairCapability = PowerRepairCapability.APP_ONLY,
+        acknowledgedFingerprint: String? = null,
+    ): PowerSafetyAdvisory = PowerSafetyAdvisoryPolicy.evaluate(
+        assessment,
+        capability,
+        acknowledgedFingerprint,
+    )
 
     private fun assessment(level: PowerRiskLevel): PowerSafetyAssessment = PowerSafetyAssessment(
         level = level,

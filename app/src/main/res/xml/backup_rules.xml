@@ -14,6 +14,7 @@
     <exclude domain="sharedpref" path="ha-paneld-profile-calibration.xml" />
     <!-- Exact pre-mutation HOME, app-op and audio state belongs to the source Android install. -->
     <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
+    <exclude domain="sharedpref" path="ha-paneld-power-safety-acknowledgement.xml" />
     <!-- SQLite/XML bridge hashes are install-local migration state, not portable user settings. -->
     <exclude domain="sharedpref" path="ha-paneld-state-bridge.xml" />
     <!-- Unified state includes credentials and panel-local recovery/controller state. -->

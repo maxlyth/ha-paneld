@@ -160,6 +160,28 @@ class ConfigTransactionTest {
         assertNull(config.lastLaunchScreenVersionCode)
     }
 
+    @Test fun powerSafetyAcknowledgementIsExactReplaceableAndDurable() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        val first = "a".repeat(64)
+        val second = "b".repeat(64)
+
+        assertEquals("", config.powerSafetyAcknowledgementFingerprint)
+        assertFalse(config.commitPowerSafetyAcknowledgement("not-a-fingerprint"))
+        assertTrue(config.commitPowerSafetyAcknowledgement(first))
+        assertEquals(first, Config(prefs.instance).powerSafetyAcknowledgementFingerprint)
+        assertTrue(config.commitPowerSafetyAcknowledgement(second))
+        assertEquals(second, Config(prefs.instance).powerSafetyAcknowledgementFingerprint)
+    }
+
+    @Test fun failedPowerSafetyAcknowledgementRemainsUnseen() {
+        val prefs = fakePreferences(commitSucceeds = false)
+        val config = Config(prefs.instance)
+
+        assertFalse(config.commitPowerSafetyAcknowledgement("a".repeat(64)))
+        assertEquals("", config.powerSafetyAcknowledgementFingerprint)
+    }
+
     @Test fun automaticBrightnessMinimumDefaultsAndPersistsWithinPublicBounds() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

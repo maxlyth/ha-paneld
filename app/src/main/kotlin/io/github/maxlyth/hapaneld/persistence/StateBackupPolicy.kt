@@ -46,6 +46,7 @@ object StateBackupPolicy {
         "profile-calibration" to Disposition.DEVICE_LOCAL,
         "performance-binding" to Disposition.DEVICE_LOCAL,
         "shizuku-consent" to Disposition.DEVICE_LOCAL,
+        "power-safety-acknowledgement" to Disposition.DEVICE_LOCAL,
 
         // Runtime scratch: a manual brightness override in progress, the live-setting journal, and
         // crash-loop counters whose whole purpose is to describe *this* boot.

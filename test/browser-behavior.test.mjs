@@ -41,7 +41,7 @@ async function startHarness(routes, pageFixture = fixture) {
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://panel.test').pathname;
     if (path === '/') return response.end(pageFixture());
-    if (['/configure.js', '/proximity-learning.js', '/install.js', '/info.js'].includes(path)) {
+    if (['/configure.js', '/proximity-learning.js', '/install.js', '/info.js', '/power-safety.js'].includes(path)) {
       response.setHeader('content-type', 'application/javascript; charset=utf-8');
       return response.end(await readFile(join(root, path.slice(1)), 'utf8'));
     }
@@ -165,6 +165,19 @@ function installCardMemoryFixture(compact) {
   </body></html>`;
 }
 
+function powerSafetyFixture() {
+  return `<!doctype html><html><head><meta charset="utf-8"></head><body>
+    <div class="setup" data-power-safety-banner>
+      <span class="power-safety-warning">Panel power safety needs attention.</span>
+      <form method="post" action="/api/v1/power-safety/repair" data-power-safety-repair style="display:inline">
+        <button class="pbtn" type="submit" data-hardened-approval>Repair power safety</button>
+        <span class="power-safety-repair-result" role="status" aria-live="polite"></span>
+      </form>
+    </div>
+    <script src="/power-safety.js"></script>
+  </body></html>`;
+}
+
 async function requestBody(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -197,6 +210,155 @@ function screenshotRoutes(options = {}) {
     if (path === '/api/v1/sensors') return json({});
     if (path === '/api/v1/inspect') return json({ status: 'needs-root', running: false, port: 9222 });
   };
+}
+
+browserTest('Power safety partial repair shows the server result without reloading', async (t) => {
+  const calls = [];
+  let pageLoads = 0;
+  const serverMessage = 'App guards are active; Android stay-awake still needs a manual change.';
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/power-safety/repair') {
+      calls.push({ method: request.method, path });
+      return json({
+        status: 'partial',
+        message: serverMessage,
+        power_safety: { acknowledge_available: false },
+      });
+    }
+  }, () => {
+    pageLoads += 1;
+    return powerSafetyFixture();
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Repair power safety' }).click();
+  await assert.doesNotReject(() => page.locator('.power-safety-repair-result').waitFor({ state: 'visible' }));
+  await assert.doesNotReject(() => page.waitForFunction(
+    (expected) => document.querySelector('.power-safety-repair-result')?.textContent === expected,
+    serverMessage,
+  ));
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+
+  assert.deepEqual(calls, [{ method: 'POST', path: '/api/v1/power-safety/repair' }]);
+  assert.equal(pageLoads, 1, 'partial repair reloaded the page');
+  assert.equal(await page.locator('[data-power-safety-banner]').count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Repair power safety' }).isEnabled(), true);
+});
+
+browserTest('Power safety partial repair offers and submits the exact acknowledgement fingerprint', async (t) => {
+  const fingerprint = '0123456789abcdef'.repeat(4);
+  const calls = [];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/power-safety/repair') {
+      calls.push({ method: request.method, path, body: await requestBody(request) });
+      return json({
+        status: 'partial',
+        message: 'Automatic repair is complete; the remaining caution requires manual Android settings.',
+        power_safety: {
+          acknowledge_available: true,
+          acknowledgement_fingerprint: fingerprint,
+        },
+      });
+    }
+    if (path === '/api/v1/power-safety/acknowledge') {
+      calls.push({ method: request.method, path, body: await requestBody(request) });
+      return json({ acknowledged: true, message: 'Caution hidden while this evidence remains unchanged.' });
+    }
+  }, powerSafetyFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Repair power safety' }).click();
+
+  const acknowledgeForm = page.locator('form[data-power-safety-acknowledge]');
+  await acknowledgeForm.waitFor();
+  assert.equal(await acknowledgeForm.getAttribute('action'), '/api/v1/power-safety/acknowledge');
+  assert.equal(await acknowledgeForm.locator('input[name="fingerprint"]').inputValue(), fingerprint);
+  const hideButton = page.getByRole('button', { name: 'Hide this caution' });
+  assert.equal(await hideButton.getAttribute('data-hardened-approval'), '');
+  assert.equal(await hideButton.isEnabled(), true);
+
+  await hideButton.click();
+  await page.locator('[data-power-safety-banner]').waitFor({ state: 'detached' });
+
+  assert.deepEqual(calls, [
+    { method: 'POST', path: '/api/v1/power-safety/repair', body: '' },
+    { method: 'POST', path: '/api/v1/power-safety/acknowledge', body: `fingerprint=${fingerprint}` },
+  ]);
+});
+
+for (const scenario of [
+  {
+    name: '503 repair failure',
+    responses: [{
+      status: 503,
+      body: { status: 'failed', message: 'The app-owned guard could not be verified.' },
+    }],
+    button: 'Repair power safety',
+    message: 'The app-owned guard could not be verified.',
+  },
+  {
+    name: '202 physical approval challenge',
+    responses: [{
+      status: 202,
+      body: { error: 'approval-required', message: 'Approve this request physically on the panel.' },
+    }],
+    button: 'Repair power safety',
+    message: 'Approve this request physically on the panel.',
+  },
+  {
+    name: '409 stale acknowledgement',
+    responses: [
+      {
+        status: 200,
+        body: {
+          status: 'partial',
+          message: 'Only a manual Android guard remains.',
+          power_safety: {
+            acknowledge_available: true,
+            acknowledgement_fingerprint: 'fedcba9876543210'.repeat(4),
+          },
+        },
+      },
+      {
+        status: 409,
+        body: { acknowledged: false, message: 'Power-safety evidence changed; review the current caution.' },
+      },
+    ],
+    button: 'Hide this caution',
+    message: 'Power-safety evidence changed; review the current caution.',
+  },
+]) {
+  browserTest(`Power safety ${scenario.name} keeps the banner and re-enables its action`, async (t) => {
+    let requestIndex = 0;
+    const harness = await startHarness(async (path) => {
+      if (path !== '/api/v1/power-safety/repair' && path !== '/api/v1/power-safety/acknowledge') return;
+      const response = scenario.responses[requestIndex++];
+      return json(response.body, response.status);
+    }, powerSafetyFixture);
+    const browser = await chromium.launch({ executablePath: chrome, headless: true });
+    const page = await browser.newPage();
+    t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+    await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Repair power safety' }).click();
+    if (scenario.responses.length > 1) {
+      await page.getByRole('button', { name: 'Hide this caution' }).click();
+    }
+    await page.waitForFunction(
+      (expected) => document.querySelector('[data-power-safety-banner] [role="status"]')?.textContent === expected,
+      scenario.message,
+    );
+
+    assert.equal(await page.locator('[data-power-safety-banner]').count(), 1);
+    assert.equal(await page.getByRole('button', { name: scenario.button }).isEnabled(), true);
+    assert.equal(requestIndex, scenario.responses.length);
+  });
 }
 
 browserTest('Remote Controls keep Dashboard and Reload labelled, tappable and wired at a narrow panel width', async (t) => {

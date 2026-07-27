@@ -989,6 +989,7 @@ class PaneldService : Service() {
             context = this,
             power = power,
             screenOffMechanism = profile.screenOff.name.lowercase(),
+            directRootExpected = profile.appCanSu,
         )
 
         autoSleep = AutoSleepController(
@@ -1149,6 +1150,7 @@ class PaneldService : Service() {
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
             powerSafety = { powerSafety.assess(config.keepAwake, config.preventIdleDim) },
+            freshPowerSafetyRepairCapability = powerSafety::repairCapabilityFresh,
             onRepairPowerSafety = ::repairPowerSafety,
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },

@@ -455,7 +455,7 @@ assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am
 MOCK_POWER_SAFETY=caution run_provision "$MOCK_TARGET" --verify
 assert_success "a caution power classification remains advisory"
 assert_contains 'panel power safety: caution.*only one observed power guard' "power caution explains the bounded risk"
-assert_contains 'explicit repair.*/configure#cfg-keep_awake' "power caution points to the admitted repair"
+assert_contains 'Use Repair when offered.*explicitly hidden' "power caution distinguishes repairable from healthy app-only states"
 assert_not_contains '^adb .* shell settings put|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "power warning verification never repairs settings"
 
 MOCK_POWER_SAFETY=unknown run_provision "$MOCK_TARGET" --verify
@@ -465,7 +465,7 @@ assert_contains 'panel power safety: unknown.*did not establish an effective gua
 MOCK_POWER_SAFETY=at_risk run_provision "$MOCK_TARGET" --verify
 assert_failure "an at-risk power classification fails verification"
 assert_contains 'panel power safety: at risk.*screen-off can leave this panel unreachable' "at-risk power explains the reachability failure"
-assert_contains 'Repair power safety action.*/configure#cfg-keep_awake' "at-risk power gives the explicit recovery path"
+assert_contains 'use Repair when offered.*manual guidance' "at-risk power gives capability-aware recovery guidance"
 assert_not_contains '^adb .* shell settings put|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "at-risk verification reports without mutating power settings"
 
 MOCK_POWER_SAFETY=missing run_provision "$MOCK_TARGET" --verify

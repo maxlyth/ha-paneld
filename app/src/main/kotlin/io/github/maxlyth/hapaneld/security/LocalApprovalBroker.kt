@@ -21,6 +21,7 @@ internal enum class SensitiveOperation(val label: String) {
     DASHBOARD_STORAGE_CLEAR("Clear dashboard browsing data"),
     DISPLAY_CONFIGURATION("Change display sizing"),
     POWER_CONFIGURATION("Change panel power safety guards"),
+    POWER_SAFETY_ACKNOWLEDGEMENT("Hide one exact power safety caution"),
 }
 
 internal data class PendingApproval(

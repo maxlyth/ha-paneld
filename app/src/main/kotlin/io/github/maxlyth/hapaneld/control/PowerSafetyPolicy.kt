@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
+import java.security.MessageDigest
+
 /** Android power observations that are safe to expose in diagnostics and HTTP responses. */
 data class PowerSafetyObservation(
     val keepAwakeConfigured: Boolean,
@@ -33,6 +35,124 @@ data class PowerSafetyAssessment(
     val action: String,
 ) {
     val warning: Boolean get() = level != PowerRiskLevel.SAFE
+}
+
+/** Exact system-power mutation capability. Helper/Shizuku do not count until they expose typed verbs. */
+enum class PowerRepairCapability(val wireValue: String) {
+    DIRECT_ROOT("direct_root"),
+    /** This profile normally supports direct app su, but the live probe is currently failing. */
+    DEGRADED("degraded"),
+    /** App-owned guards can still be repaired; Android global/Doze mutation is unavailable. */
+    APP_ONLY("app_only"),
+}
+
+enum class PowerSafetyAdvisoryAction(val wireValue: String) {
+    NONE("none"),
+    REPAIR("repair"),
+    ACKNOWLEDGE("acknowledge"),
+    MANUAL_ONLY("manual_only"),
+}
+
+enum class PowerSafetyAcknowledgementDecision {
+    ACCEPT,
+    MALFORMED,
+    STALE,
+    NOT_ACKNOWLEDGEABLE,
+}
+
+data class PowerSafetyAdvisory(
+    val assessment: PowerSafetyAssessment,
+    val repairCapability: PowerRepairCapability,
+    val action: PowerSafetyAdvisoryAction,
+    /** Non-null only for the exact healthy, caution-only state that may be acknowledged. */
+    val acknowledgementFingerprint: String?,
+    val acknowledged: Boolean,
+) {
+    val repairActionable: Boolean get() = action == PowerSafetyAdvisoryAction.REPAIR
+    val acknowledgeable: Boolean get() = action == PowerSafetyAdvisoryAction.ACKNOWLEDGE
+    val bannerVisible: Boolean get() = assessment.warning && !acknowledged
+}
+
+/**
+ * Presentation admission for one observed assessment. Acknowledgement never changes risk truth: it only
+ * suppresses browser banners for one exact, healthy app-guarded caution that has no supported mutator.
+ */
+object PowerSafetyAdvisoryPolicy {
+    private val acknowledgementFingerprintPattern = Regex("[0-9a-f]{64}")
+
+    fun isAcknowledgementFingerprint(value: String): Boolean =
+        value.matches(acknowledgementFingerprintPattern)
+
+    fun evaluate(
+        assessment: PowerSafetyAssessment,
+        repairCapability: PowerRepairCapability,
+        acknowledgedFingerprint: String?,
+    ): PowerSafetyAdvisory {
+        val observation = assessment.observation
+        val appGuard = observation.keepAwakeConfigured && observation.wakeLockHeld &&
+            (!observation.wifiLockRequired || observation.wifiLockHeld)
+        val timeoutGuard = observation.preventIdleDimConfigured &&
+            observation.screenOffTimeoutMs == Int.MAX_VALUE
+        val appRepairNeeded = !appGuard || !timeoutGuard
+        val acknowledgeable = assessment.level == PowerRiskLevel.CAUTION &&
+            !appRepairNeeded && repairCapability == PowerRepairCapability.APP_ONLY
+        val action = when {
+            assessment.level == PowerRiskLevel.SAFE -> PowerSafetyAdvisoryAction.NONE
+            appRepairNeeded -> PowerSafetyAdvisoryAction.REPAIR
+            repairCapability != PowerRepairCapability.APP_ONLY -> PowerSafetyAdvisoryAction.REPAIR
+            acknowledgeable -> PowerSafetyAdvisoryAction.ACKNOWLEDGE
+            else -> PowerSafetyAdvisoryAction.MANUAL_ONLY
+        }
+        val fingerprint = if (acknowledgeable) fingerprint(assessment, repairCapability) else null
+        return PowerSafetyAdvisory(
+            assessment = assessment,
+            repairCapability = repairCapability,
+            action = action,
+            acknowledgementFingerprint = fingerprint,
+            acknowledged = fingerprint != null && fingerprint == acknowledgedFingerprint,
+        )
+    }
+
+    internal fun fingerprint(
+        assessment: PowerSafetyAssessment,
+        repairCapability: PowerRepairCapability,
+    ): String {
+        val o = assessment.observation
+        val canonical = listOf(
+            "power-safety-ack-v1",
+            assessment.level.wireValue,
+            repairCapability.wireValue,
+            assessment.reasonCodes.distinct().sorted().joinToString(","),
+            o.keepAwakeConfigured,
+            o.wakeLockHeld,
+            o.wifiLockRequired,
+            o.wifiLockHeld,
+            o.preventIdleDimConfigured,
+            o.screenOffTimeoutMs,
+            o.pluggedMask,
+            o.stayOnWhilePluggedIn,
+            o.deviceIdleMode,
+            o.ignoringBatteryOptimizations,
+            o.screenOffMechanism,
+        ).joinToString("|")
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+    }
+
+    /** Exact, presentation-only admission. A stale request cannot suppress newer risk evidence. */
+    fun admitAcknowledgement(
+        requestedFingerprint: String,
+        current: PowerSafetyAdvisory,
+    ): PowerSafetyAcknowledgementDecision = when {
+        !isAcknowledgementFingerprint(requestedFingerprint) ->
+            PowerSafetyAcknowledgementDecision.MALFORMED
+        !current.acknowledgeable || current.acknowledgementFingerprint == null ->
+            PowerSafetyAcknowledgementDecision.NOT_ACKNOWLEDGEABLE
+        requestedFingerprint != current.acknowledgementFingerprint ->
+            PowerSafetyAcknowledgementDecision.STALE
+        else -> PowerSafetyAcknowledgementDecision.ACCEPT
+    }
 }
 
 /**
@@ -105,7 +225,7 @@ object PowerSafetyPolicy {
             observation = observation,
             reasonCodes = reasons.distinct(),
             summary = summary,
-            action = "Use Repair power safety to enable the app CPU/Wi-Fi locks and, when direct root control is available, Android stay-awake and Doze exemption. The repair never reboots the panel.",
+            action = "Review the observed power guards. Android stay-awake and Doze changes require direct root; power-safety actions never reboot the panel.",
         )
     }
 

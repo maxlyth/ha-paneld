@@ -17,6 +17,7 @@ class PowerSafetyPolicyTest {
         stayOnMask: Int? = 1,
         idle: Boolean? = false,
         exempt: Boolean? = false,
+        interactive: Boolean? = true,
     ) = PowerSafetyObservation(
         keepAwakeConfigured = keepAwake,
         wakeLockHeld = wakeLock,
@@ -24,7 +25,7 @@ class PowerSafetyPolicyTest {
         wifiLockHeld = wifiLock,
         preventIdleDimConfigured = preventIdleDim,
         screenOffTimeoutMs = timeoutMs,
-        interactive = true,
+        interactive = interactive,
         pluggedMask = pluggedMask,
         stayOnWhilePluggedIn = stayOnMask,
         deviceIdleMode = idle,
@@ -134,6 +135,108 @@ class PowerSafetyPolicyTest {
                 safe,
                 listOf(PowerRepairStepStatus.ALREADY, PowerRepairStepStatus.FAILED),
             ),
+        )
+    }
+
+    @Test fun `healthy app-only caution is exactly acknowledgeable and remains truthful`() {
+        val assessment = PowerSafetyPolicy.assess(observation(stayOnMask = 0, exempt = false))
+        val offered = PowerSafetyAdvisoryPolicy.evaluate(assessment, PowerRepairCapability.APP_ONLY, null)
+
+        assertEquals(PowerRiskLevel.CAUTION, assessment.level)
+        assertEquals(PowerSafetyAdvisoryAction.ACKNOWLEDGE, offered.action)
+        assertTrue(offered.acknowledgeable)
+        assertEquals(64, offered.acknowledgementFingerprint?.length)
+        assertTrue(offered.bannerVisible)
+
+        val hidden = PowerSafetyAdvisoryPolicy.evaluate(
+            assessment,
+            PowerRepairCapability.APP_ONLY,
+            offered.acknowledgementFingerprint,
+        )
+        assertTrue(hidden.acknowledged)
+        assertFalse(hidden.bannerVisible)
+        assertEquals(PowerRiskLevel.CAUTION, hidden.assessment.level)
+    }
+
+    @Test fun `acknowledgement fingerprint ignores reason order and volatile screen interaction`() {
+        val base = PowerSafetyPolicy.assess(observation(stayOnMask = 0, exempt = false))
+        val first = PowerSafetyAdvisoryPolicy.fingerprint(base, PowerRepairCapability.APP_ONLY)
+        val reordered = PowerSafetyAdvisoryPolicy.fingerprint(
+            base.copy(reasonCodes = base.reasonCodes.reversed() + base.reasonCodes.first()),
+            PowerRepairCapability.APP_ONLY,
+        )
+        val screenOff = PowerSafetyAdvisoryPolicy.fingerprint(
+            base.copy(observation = base.observation.copy(interactive = false)),
+            PowerRepairCapability.APP_ONLY,
+        )
+
+        assertEquals(first, reordered)
+        assertEquals(first, screenOff)
+    }
+
+    @Test fun `causal evidence or repair capability changes re-arm the caution`() {
+        val base = PowerSafetyPolicy.assess(observation(stayOnMask = 0, exempt = false))
+        val fingerprint = PowerSafetyAdvisoryPolicy.fingerprint(base, PowerRepairCapability.APP_ONLY)
+
+        assertFalse(
+            fingerprint == PowerSafetyAdvisoryPolicy.fingerprint(
+                base.copy(observation = base.observation.copy(pluggedMask = 2)),
+                PowerRepairCapability.APP_ONLY,
+            ),
+        )
+        assertFalse(
+            fingerprint == PowerSafetyAdvisoryPolicy.fingerprint(base, PowerRepairCapability.DIRECT_ROOT),
+        )
+    }
+
+    @Test fun `repair routes and elevated uncertainty cannot be acknowledged`() {
+        val caution = PowerSafetyPolicy.assess(observation(stayOnMask = 0, exempt = false))
+        assertEquals(
+            PowerSafetyAdvisoryAction.REPAIR,
+            PowerSafetyAdvisoryPolicy.evaluate(caution, PowerRepairCapability.DIRECT_ROOT, null).action,
+        )
+        assertEquals(
+            PowerSafetyAdvisoryAction.REPAIR,
+            PowerSafetyAdvisoryPolicy.evaluate(caution, PowerRepairCapability.DEGRADED, null).action,
+        )
+        val missingAppGuard = PowerSafetyPolicy.assess(observation(wakeLock = false, stayOnMask = 0))
+        assertEquals(
+            PowerSafetyAdvisoryAction.REPAIR,
+            PowerSafetyAdvisoryPolicy.evaluate(missingAppGuard, PowerRepairCapability.APP_ONLY, null).action,
+        )
+        val unknown = PowerSafetyPolicy.assess(observation(pluggedMask = null, stayOnMask = null))
+        assertEquals(
+            PowerSafetyAdvisoryAction.MANUAL_ONLY,
+            PowerSafetyAdvisoryPolicy.evaluate(unknown, PowerRepairCapability.APP_ONLY, null).action,
+        )
+        val atRisk = PowerSafetyPolicy.assess(observation(idle = true, stayOnMask = 0))
+        assertEquals(
+            PowerSafetyAdvisoryAction.MANUAL_ONLY,
+            PowerSafetyAdvisoryPolicy.evaluate(atRisk, PowerRepairCapability.APP_ONLY, null).action,
+        )
+    }
+
+    @Test fun `acknowledgement admission rejects malformed stale and no-longer-eligible requests`() {
+        val caution = PowerSafetyPolicy.assess(observation(stayOnMask = 0, exempt = false))
+        val current = PowerSafetyAdvisoryPolicy.evaluate(caution, PowerRepairCapability.APP_ONLY, null)
+        val fingerprint = requireNotNull(current.acknowledgementFingerprint)
+
+        assertEquals(
+            PowerSafetyAcknowledgementDecision.MALFORMED,
+            PowerSafetyAdvisoryPolicy.admitAcknowledgement("bad", current),
+        )
+        assertEquals(
+            PowerSafetyAcknowledgementDecision.STALE,
+            PowerSafetyAdvisoryPolicy.admitAcknowledgement("0".repeat(64), current),
+        )
+        assertEquals(
+            PowerSafetyAcknowledgementDecision.ACCEPT,
+            PowerSafetyAdvisoryPolicy.admitAcknowledgement(fingerprint, current),
+        )
+        val repairable = PowerSafetyAdvisoryPolicy.evaluate(caution, PowerRepairCapability.DIRECT_ROOT, null)
+        assertEquals(
+            PowerSafetyAcknowledgementDecision.NOT_ACKNOWLEDGEABLE,
+            PowerSafetyAdvisoryPolicy.admitAcknowledgement(fingerprint, repairable),
         )
     }
 }

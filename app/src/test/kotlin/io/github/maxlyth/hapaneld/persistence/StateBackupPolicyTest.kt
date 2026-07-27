@@ -56,6 +56,7 @@ class StateBackupPolicyTest {
             row("profile-calibration"),
             row("performance-binding"),
             row("shizuku-consent"),
+            row("power-safety-acknowledgement"),
         )
         assertEquals(rows, StateBackupPolicy.restorableRows(rows, samePanel = true))
         assertEquals(

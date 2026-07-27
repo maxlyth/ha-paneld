@@ -14,12 +14,20 @@ class PowerSafetyController(
     private val power: PowerController,
     private val root: RootShell = Su,
     private val screenOffMechanism: String,
+    private val directRootExpected: Boolean = false,
 ) {
     private val app = context.applicationContext
     private val powerManager = app.getSystemService(Context.POWER_SERVICE) as PowerManager
 
     fun assess(keepAwakeConfigured: Boolean, preventIdleDimConfigured: Boolean): PowerSafetyAssessment =
         PowerSafetyPolicy.assess(observe(keepAwakeConfigured, preventIdleDimConfigured))
+
+    /** Fresh harmless probe for an explicit control request. Never call this from passive page rendering. */
+    fun repairCapabilityFresh(): PowerRepairCapability = when {
+        runCatching(root::available).getOrDefault(false) -> PowerRepairCapability.DIRECT_ROOT
+        directRootExpected -> PowerRepairCapability.DEGRADED
+        else -> PowerRepairCapability.APP_ONLY
+    }
 
     fun observe(keepAwakeConfigured: Boolean, preventIdleDimConfigured: Boolean): PowerSafetyObservation {
         val locks = power.safetyState()
@@ -83,7 +91,8 @@ class PowerSafetyController(
             }
         }
 
-        val hasRoot = runCatching(root::available).getOrDefault(false)
+        val capability = repairCapabilityFresh()
+        val hasRoot = capability == PowerRepairCapability.DIRECT_ROOT
         val privilegedStayOnBefore = if (hasRoot) readStayOnPrivileged() else null
         val stayBaseline = before.stayOnWhilePluggedIn ?: privilegedStayOnBefore
         var verifiedStayOn: Int? = stayBaseline
@@ -148,7 +157,7 @@ class PowerSafetyController(
             preventIdleDim = timeoutStep,
             stayOnWhilePluggedIn = stayStep,
             dozeExemption = dozeStep,
-            privilegedPowerControl = if (hasRoot) "direct_root" else "unavailable",
+            privilegedPowerControl = capability.wireValue,
             assessment = after,
         )
     }
