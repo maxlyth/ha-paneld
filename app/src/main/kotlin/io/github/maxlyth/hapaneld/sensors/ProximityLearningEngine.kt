@@ -536,7 +536,7 @@ internal class ProximityLearningEngine(
         if (candidateActive) {
             processCandidate(raw, now, label)
             if (candidateActive) {
-                if (candidateContradictsModel || relearning) {
+                if ((candidateContradictsModel && candidateDepartureQualified) || relearning) {
                     currentLevel = null
                     currentPresence = null
                     currentHealth = HealthStatus.MODEL_SHIFT
@@ -572,7 +572,7 @@ internal class ProximityLearningEngine(
                 contradicts = contradicts,
                 continuousEvidence = continuousEvidence,
             )
-            if (contradicts) {
+            if (contradicts && candidateDepartureQualified) {
                 relearning = true
                 currentLevel = null
                 currentPresence = null
@@ -616,7 +616,7 @@ internal class ProximityLearningEngine(
         excursionWriteIndex = 0
         recordExcursionValue(raw)
         farStableSince = UNSET_TIME
-        if (contradicts) relearning = true
+        if (contradicts && candidateDepartureQualified) relearning = true
     }
 
     private fun processCandidate(raw: Float, now: Long, label: GuidedLabel) {
@@ -643,7 +643,11 @@ internal class ProximityLearningEngine(
         val episodeEvidenceAt = if (candidateReturnSince != UNSET_TIME) candidateReturnSince else now
         if (episodeEvidenceAt - candidateStartedAt > policy.maximumGestureMs) candidateTimedOut = true
         val peakLevel = if (modelReady && !candidateContradictsModel) normalized(candidatePeakRaw) else 100
-        if (candidateTimedOut && modelReady && !candidateContradictsModel && peakLevel < MODEL_SHIFT_NEAR_CEILING) {
+        if (
+            candidateTimedOut && modelReady && !candidateContradictsModel &&
+            peakLevel < MODEL_SHIFT_NEAR_CEILING &&
+            candidateHasMeaningfulSpan()
+        ) {
             // A bounded near gesture can be partial; a held mid-range value is more likely a shifted
             // baseline/range. Suppress fleet output first, then require a much longer hold to rebase.
             relearning = true
@@ -678,6 +682,10 @@ internal class ProximityLearningEngine(
             return
         }
 
+        // Dense streams must prove that an opposite-direction departure persists before the
+        // current model is failed closed. Sub-dwell pulses are rejected on their sustained return.
+        if (candidateContradictsModel && candidateDepartureQualified) relearning = true
+
         // A fully-near correctly directed hold remains presence. Opposite polarity or a prolonged
         // sub-near plateau is behavioral-epoch evidence and may become a new far baseline.
         if (
@@ -705,14 +713,8 @@ internal class ProximityLearningEngine(
     }
 
     private fun completeCandidate(returnRaw: Float, episodeEndedAt: Long, observedAt: Long) {
-        val gate = departureGate(modelReady)
         val priorSpan = if (farRaw.isFinite() && nearRaw.isFinite()) abs(nearRaw - farRaw) else 0f
-        val minimumMeaningful = if (candidateContradictsModel && priorSpan > 0f) {
-            max(gate * 1.25f, priorSpan * CONTRADICTORY_MINIMUM_SPAN_FRACTION)
-        } else {
-            max(gate * 1.25f, guidedDepartureGate())
-        }
-        if (candidatePeakDelta < minimumMeaningful && !candidateGuidedNear) {
+        if (!candidateHasMeaningfulSpan()) {
             cancelCandidate(restoreReadyModel = true)
             if (modelReady) {
                 currentHealth = HealthStatus.HEALTHY
@@ -862,6 +864,20 @@ internal class ProximityLearningEngine(
         } else {
             updateFarArm(observedAt, currentLevel!!)
         }
+    }
+
+    /** Keep the timeout and return paths on one admission threshold. A candidate too small to
+     * become a completed episode must not fail the published model while it is still in flight. */
+    private fun candidateHasMeaningfulSpan(): Boolean {
+        if (candidateGuidedNear) return true
+        val gate = departureGate(modelReady)
+        val priorSpan = if (farRaw.isFinite() && nearRaw.isFinite()) abs(nearRaw - farRaw) else 0f
+        val minimumMeaningful = if (candidateContradictsModel && priorSpan > 0f) {
+            max(gate * 1.25f, priorSpan * CONTRADICTORY_MINIMUM_SPAN_FRACTION)
+        } else {
+            max(gate * 1.25f, guidedDepartureGate())
+        }
+        return candidatePeakDelta >= minimumMeaningful
     }
 
     private fun completeContradictoryCandidate(returnRaw: Float, episodeEndedAt: Long, observedAt: Long) {

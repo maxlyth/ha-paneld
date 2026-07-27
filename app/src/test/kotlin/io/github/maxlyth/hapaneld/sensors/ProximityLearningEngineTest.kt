@@ -447,6 +447,58 @@ class ProximityLearningEngineTest {
         assertNull(engine.snapshot())
     }
 
+    @Test fun hallFarSidePlateauTooSmallForAnEpisodeNeverDropsAvailability() {
+        val engine = restoredHallEngine()
+
+        var now = 1_000L
+        while (now <= 5_500L) {
+            val output = engine.observe(48f, now)
+            assertEquals("health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("presence at $now", false, output.presence)
+            assertTrue("level at $now", output.normalizedLevel != null)
+            now += 50L
+        }
+        while (now <= 5_850L) {
+            val output = engine.observe(37.8244f, now)
+            assertEquals("return health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("return presence at $now", false, output.presence)
+            now += 50L
+        }
+
+        assertEquals(LearningStatus.READY, engine.current().learning)
+        assertEquals(119, engine.current().completedExcursions)
+        assertEquals(Polarity.NEAR_IS_HIGHER, engine.current().polarity)
+        assertTrue(engine.snapshot() != null)
+    }
+
+    @Test fun hallSubDwellOppositeTailNeverDropsAvailability() {
+        val engine = restoredHallEngine()
+        var now = 1_000L
+        for (raw in floatArrayOf(25.875f, 33.75f, 38.25f, 32.625f, 37.8244f, 37.8244f, 37.8244f)) {
+            val output = engine.observe(raw, now)
+            assertEquals("learning at $now", LearningStatus.READY, output.learning)
+            assertEquals("health at $now", HealthStatus.HEALTHY, output.health)
+            assertEquals("presence at $now", false, output.presence)
+            assertTrue("level at $now", output.normalizedLevel != null)
+            now += 50L
+        }
+
+        assertEquals(119, engine.current().completedExcursions)
+        assertEquals(Polarity.NEAR_IS_HIGHER, engine.current().polarity)
+        assertTrue(engine.snapshot() != null)
+    }
+
+    @Test fun hallSustainedOppositeTailStillFailsClosedAfterDenseEvidenceDwell() {
+        val engine = restoredHallEngine()
+        var output = engine.current()
+        for (now in 1_000L..1_250L step 50L) output = engine.observe(25.875f, now)
+
+        assertEquals(LearningStatus.RELEARNING, output.learning)
+        assertEquals(HealthStatus.MODEL_SHIFT, output.health)
+        assertNull(output.presence)
+        assertNull(output.normalizedLevel)
+    }
+
     @Test fun repeatedCompressedExcursionsSafelyRelearnTheRangeWithoutFalseGestures() {
         val engine = ProximityLearningEngine()
         assertTrue(engine.warmSeed(ProximityLearningEngine.WarmSeed(100f, 0f, Mode.GRADED)))
@@ -966,6 +1018,24 @@ class ProximityLearningEngineTest {
         engine.observe(far, startAt + 200)
         engine.observe(far, startAt + 300)
         assertEquals(LearningStatus.READY, engine.current().learning)
+    }
+
+    private fun restoredHallEngine(): ProximityLearningEngine {
+        val engine = ProximityLearningEngine(ProximityLearningRuntime.learningPolicy(sparseSource = false))
+        assertTrue(
+            engine.restore(
+                ProximityLearningEngine.Snapshot(
+                    farRaw = 37.8244f,
+                    nearRaw = 69.0891f,
+                    noise = 1.392f,
+                    mode = Mode.GRADED,
+                    polarity = Polarity.NEAR_IS_HIGHER,
+                    completedExcursions = 119,
+                ),
+            ),
+        )
+        verifySeed(engine, far = 37.8244f, startAt = 0)
+        return engine
     }
 
     private val quantizedFarValues = floatArrayOf(19f, 20f, 21f, 20f)
