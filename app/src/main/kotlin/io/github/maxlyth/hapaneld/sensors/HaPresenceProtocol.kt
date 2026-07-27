@@ -128,8 +128,7 @@ internal object HaPresenceProtocol {
             ?: entityResponse.optJSONArray("result")
             ?: throw HaProtocolException("Home Assistant entity registry is incomplete")
 
-        val panelDevice = panelDevice(devices, androidId, panelId)
-        val panelDeviceId = registryId(panelDevice, "id", "device_id")
+        val panelDeviceIds = panelDeviceIds(devices, androidId, panelId)
         val panelAreaId = panelArea.id
         val panelAreaName = panelArea.name
 
@@ -164,7 +163,7 @@ internal object HaPresenceProtocol {
             // projection is not an independent room source and may contain a large retained transition
             // burst, so feeding it back through Area history duplicates evidence and can saturate the
             // bounded history bootstrap.
-            if (deviceId == panelDeviceId) continue
+            if (deviceId in panelDeviceIds) continue
             val effectiveArea = row.optString("ai").ifBlank { row.optString("area_id") }
                 .trim().lowercase(Locale.ROOT).ifBlank { deviceAreas[deviceId].orEmpty() }
             if (effectiveArea != panelAreaId) continue
@@ -361,6 +360,18 @@ internal object HaPresenceProtocol {
             if (tuple.length() == 2 && tuple.optString(0) == domain && tuple.optString(1) == identifier) return true
         }
         return false
+    }
+
+    private fun panelDeviceIds(devices: List<JSONObject>, androidId: String, panelId: String): Set<String> {
+        val immutable = androidId.trim().takeIf(String::isNotEmpty)?.let { "ha-paneld-aid-$it" }
+        val legacy = "ha-paneld-${panelId.trim()}"
+        val matches = devices.filter { device ->
+            immutable != null && hasIdentifier(device, "mqtt", immutable) || hasIdentifier(device, "mqtt", legacy)
+        }
+        if (matches.isEmpty()) throw HaProtocolException("Home Assistant panel device match is missing")
+        return matches.mapNotNullTo(linkedSetOf()) { registryIdOrNull(it, "id", "device_id") }
+            .takeIf(Set<String>::isNotEmpty)
+            ?: throw HaProtocolException("Home Assistant panel device has no valid id")
     }
 
     private fun panelDevice(devices: List<JSONObject>, androidId: String, panelId: String): JSONObject {

@@ -121,6 +121,33 @@ class HaPresenceProtocolTest {
         assertEquals(HaPresenceValue.OFF, projection.candidates.single().value)
     }
 
+    @Test fun `configured Area excludes every duplicate legacy panel device without guessing fallback Area`() {
+        val devices = response(JSONArray()
+            .put(device("legacy-panel-one", "office", "ha-paneld-panel"))
+            .put(device("legacy-panel-two", "office", "ha-paneld-panel"))
+            .put(device("motion-device", "office", "motion-id")))
+        val areas = response(JSONArray().put(JSONObject().put("area_id", "office").put("name", "Office")))
+        val entities = JSONObject().put("result", JSONObject().put("entities", JSONArray()
+            .put(JSONObject().put("ei", "binary_sensor.panel_one").put("di", "legacy-panel-one").put("pl", "mqtt"))
+            .put(JSONObject().put("ei", "binary_sensor.panel_two").put("di", "legacy-panel-two").put("pl", "mqtt"))
+            .put(JSONObject().put("ei", "binary_sensor.office_motion").put("di", "motion-device").put("pl", "mqtt"))))
+        val states = JSONArray()
+            .put(state("binary_sensor.panel_one", "on", "occupancy"))
+            .put(state("binary_sensor.panel_two", "on", "occupancy"))
+            .put(state("binary_sensor.office_motion", "off", "motion"))
+
+        val projection = HaPresenceProtocol.projectArea(
+            devices, areas, entities, states, "abc", "panel", preferredAreaName = "Office",
+        )
+
+        assertEquals(listOf("binary_sensor.office_motion"), projection.candidates.map { it.entityId })
+        val fallbackFailure = runCatching {
+            HaPresenceProtocol.projectPanelArea(devices, areas, "abc", "panel")
+        }.exceptionOrNull()
+        assertTrue(fallbackFailure is HaProtocolException)
+        assertTrue(fallbackFailure?.message.orEmpty().contains("ambiguous"))
+    }
+
     @Test fun `malformed unrelated device rows do not abort Area projection`() {
         val devices = response(JSONArray()
             .put(device("panel-device", "kitchen", "ha-paneld-aid-abc"))
