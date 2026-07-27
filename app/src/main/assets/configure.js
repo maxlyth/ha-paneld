@@ -1226,17 +1226,59 @@
     return String(value == null ? "unknown" : value).replace(/_/g, " ").replace(/^./, function (c) { return c.toUpperCase(); });
   }
 
-  function autoSleepSummaryText() {
-    var status = autoSleepStatus || {};
+  function autoSleepSummaryModel(status) {
+    status = status || {};
     var areaName = status.area_name != null ? status.area_name : status.areaName;
+    var area = String(areaName || "").trim() || "not learned";
     var leaseMs = status.learned_lease_ms != null ? status.learned_lease_ms : status.learnedLeaseMs;
     var lease = typeof leaseMs === "number" && isFinite(leaseMs) ? Math.round(leaseMs / 60000) + " min" : "not learned";
     var count = status.source_count != null ? status.source_count : status.sourceCount;
     var suppressed = status.manual_suppression === true || status.manualSuppression === true;
-    return "Home Assistant Area: " + (String(areaName || "").trim() || "not learned") +
-      " · Phase: " + autoSleepHuman(status.phase) + " · Reason: " + autoSleepHuman(status.reason) +
-      " · Learned delay: " + lease + " · Sources: " + (count == null ? 0 : count) +
-      " · Manual screen override: " + (suppressed ? "active" : "inactive");
+    var phase = autoSleepHuman(status.phase);
+    var reason = autoSleepHuman(status.reason);
+    var sources = count == null ? 0 : count;
+    var override = suppressed ? "active" : "inactive";
+    return {
+      lines: [
+        "Home Assistant Area: " + area,
+        "Phase: " + phase,
+        "Reason: " + reason,
+        "Delay: " + lease + " · Sources: " + sources,
+        "Manual override: " + override
+      ],
+      accessible: "Home Assistant Area: " + area + " · Phase: " + phase + " · Reason: " + reason +
+        " · Learned delay: " + lease + " · Sources: " + sources + " · Manual screen override: " + override
+    };
+  }
+
+  function autoSleepLoadingSummaryModel() {
+    return { lines: ["Loading…", "", "", "", ""], accessible: "Loading…" };
+  }
+
+  function setAutoSleepSummary(summary, announcement, model) {
+    var lines = summary.querySelectorAll(".auto-sleep-summary-line");
+    for (var index = 0; index < lines.length; index += 1) {
+      var nextLine = model.lines[index] || "";
+      if (lines[index].textContent !== nextLine) lines[index].textContent = nextLine;
+    }
+    if (summary.getAttribute("title") !== model.accessible) summary.setAttribute("title", model.accessible);
+    if (announcement.textContent !== model.accessible) announcement.textContent = model.accessible;
+  }
+
+  function autoSleepSummaryNode() {
+    return el("small", { id: "auto-sleep-summary", class: "auto-sleep-summary", "aria-hidden": "true" }, [
+      el("span", { class: "auto-sleep-summary-line" }),
+      el("span", { class: "auto-sleep-summary-line" }),
+      el("span", { class: "auto-sleep-summary-line" }),
+      el("span", { class: "auto-sleep-summary-line" }),
+      el("span", { class: "auto-sleep-summary-line" })
+    ]);
+  }
+
+  function autoSleepSummaryAnnouncementNode() {
+    return el("span", {
+      id: "auto-sleep-summary-announcement", class: "sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true"
+    });
   }
 
   function autoSleepPrerequisiteText() {
@@ -1376,15 +1418,18 @@
       el("div", { class: "auto-sleep-chart-content" }),
       el("div", { class: "auto-sleep-loading-overlay", role: "status", "aria-live": "polite", text: "Preparing activity history…" })
     ]);
+    var summary = autoSleepSummaryNode();
+    var announcement = autoSleepSummaryAnnouncementNode();
+    setAutoSleepSummary(summary, announcement, autoSleepStatus ? autoSleepSummaryModel(autoSleepStatus) : autoSleepLoadingSummaryModel());
     var panel = el("div", { class: "autobright-panel", id: "auto-sleep-status" }, [
-      el("div", { class: "autobright-head" }, [
+      el("div", { class: "autobright-head auto-sleep-head" }, [
       el("div", {}, [
-          el("strong", { text: "Auto-sleep activity" }),
-          el("small", { id: "auto-sleep-summary", text: autoSleepLoading ? "Loading…" : autoSleepSummaryText() }),
-          el("small", { text: "When exposed, open the Auto-sleep activity binary sensor in Home Assistant for its history timeline." })
+          el("strong", { text: "Auto-sleep activity" })
         ]),
         el("div", { class: "autobright-actions" }, [windows])
       ]),
+      summary,
+      announcement,
       chart,
       el("div", { class: "autobright-legend auto-sleep-legend" }, [
         el("span", { class: "detected", text: "Detected / Awake" }),
@@ -1403,12 +1448,11 @@
 
   function updateAutoSleepSummary() {
     var summary = document.getElementById("auto-sleep-summary");
-    if (!summary) return;
-    // A readiness refresh must not replace a settled, wrapping summary with a much shorter loading
-    // label. Apart from being less informative, that changes the card height on narrow panels. The
-    // loading copy is useful only before the first status response exists.
-    var next = autoSleepLoading && !autoSleepStatus ? "Loading…" : autoSleepSummaryText();
-    if (summary.textContent !== next) summary.textContent = next;
+    var announcement = document.getElementById("auto-sleep-summary-announcement");
+    if (!summary || !announcement) return;
+    // Five fixed rows keep the chart origin stable while status values change. Loading occupies the
+    // same geometry before the first response; later readiness refreshes retain the settled values.
+    setAutoSleepSummary(summary, announcement, autoSleepStatus ? autoSleepSummaryModel(autoSleepStatus) : autoSleepLoadingSummaryModel());
   }
 
   function autoSleepHistoryMessage() {

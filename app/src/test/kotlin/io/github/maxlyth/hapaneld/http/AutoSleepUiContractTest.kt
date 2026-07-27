@@ -17,8 +17,8 @@ class AutoSleepUiContractTest {
         assertTrue("status must include policy phase and reason", "Phase:" in source && "Reason:" in source)
         assertTrue("status must include learned delay and source count", "Learned delay:" in source && "Sources:" in source)
         assertTrue("manual screen authority must be visible", "Manual screen override:" in source)
-        assertTrue(
-            "the HA history visualization must be discoverable from the activity card",
+        assertFalse(
+            "obsolete Home Assistant history guidance must not clutter the on-panel replay",
             "When exposed, open the Auto-sleep activity binary sensor in Home Assistant for its history timeline." in source,
         )
         assertTrue("status belongs only to the enabled form", "values.auto_sleep === \"true\"" in fieldLoop)
@@ -90,9 +90,9 @@ class AutoSleepUiContractTest {
                 "scheduleAutoSleepReadiness(retryAfterFailure);" in statusLoad,
         )
         assertTrue(
-            "background readiness must retain a settled summary instead of changing card height",
-            "autoSleepLoading && !autoSleepStatus ? \"Loading…\" : autoSleepSummaryText()" in source &&
-                "if (summary.textContent !== next)" in source,
+            "status refresh must retain fixed summary rows instead of changing chart geometry",
+            "setAutoSleepSummary(summary, announcement, autoSleepStatus ? autoSleepSummaryModel(autoSleepStatus) : autoSleepLoadingSummaryModel())" in source &&
+                "if (lines[index].textContent !== nextLine)" in source,
         )
         assertTrue(
             "background Area checks must retain the settled prerequisite text",
@@ -142,7 +142,7 @@ class AutoSleepUiContractTest {
             "OAuth success must invalidate and reload the replay",
             "invalidateAutoSleepData(true);" in oauthSuccess && "setTimeout(loadAutoSleepData, 0);" in oauthSuccess,
         )
-        val summary = source.substringAfter("function autoSleepSummaryText() {").substringBefore("function autoSleepPanel() {")
+        val summary = source.substringAfter("function autoSleepSummaryModel(status) {").substringBefore("function autoSleepPanel() {")
         assertTrue(
             "learned Home Assistant Area must lead the activity summary",
             summary.indexOf("Home Assistant Area:") in 0 until summary.indexOf("Phase:"),
@@ -281,6 +281,17 @@ class AutoSleepUiContractTest {
                 ".auto-sleep-loading-overlay{position:absolute;inset:0" in css,
         )
         assertFalse("the loading overlay must not blur a retained chart raster", "backdrop-filter" in css)
+        assertTrue(
+            "status rows must have invariant height and never wrap into the chart",
+            ".auto-sleep-summary{display:grid;grid-template-rows:repeat(5,1.35em);height:6.75em" in css &&
+                ".auto-sleep-summary-line{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" in css,
+        )
+        assertTrue(
+            "the visible summary and its atomic live announcement must be separate",
+            "id: \"auto-sleep-summary\", class: \"auto-sleep-summary\", \"aria-hidden\": \"true\"" in source &&
+                "id: \"auto-sleep-summary-announcement\", class: \"sr-only\", role: \"status\"" in source &&
+                "if (announcement.textContent !== model.accessible) announcement.textContent = model.accessible" in source,
+        )
     }
 
     private fun asset(name: String): File {
