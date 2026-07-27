@@ -80,7 +80,7 @@ class AutoSleepUiContractTest {
         assertTrue(
             "a blank-Area terminal failure must not be mistaken for an Area transition",
             "function autoSleepAreaTransitioning(value)" in source &&
-                "return !!expected && !!actual && actual !== expected;" in source &&
+                "return !!expected && !!actual && !autoSleepAreaMatchesName(value, expected);" in source &&
                 "autoSleepAreaTransitioning(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus)" in statusLoad,
         )
         assertTrue(
