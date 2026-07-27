@@ -254,6 +254,7 @@ object DiagReader {
         capabilityRows: List<Cap>,
         displaySizing: DisplaySizingEvidence? = null,
         storage: StorageHealthSnapshot = StorageHealthSnapshot.UNCHECKED,
+        powerSafety: io.github.maxlyth.hapaneld.control.PowerSafetyAssessment? = null,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
         val routes = privilege
@@ -285,6 +286,7 @@ object DiagReader {
             )
         }
         appendLine(HealthAudit.storage(storage).diagnosticLine())
+        powerSafety?.let { appendLine(PowerSafetyPresentation.diagnosticLine(it)) }
         evdevRequestDescription(profile)?.let { requested ->
             appendLine("[evdev] requested=$requested state=${evdev.state.name.lowercase()} mode=${evdev.mode?.name?.lowercase() ?: "none"} error=${evdev.lastError ?: "-"}")
         }

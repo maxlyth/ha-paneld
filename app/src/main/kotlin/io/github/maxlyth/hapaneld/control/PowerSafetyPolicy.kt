@@ -1,0 +1,162 @@
+package io.github.maxlyth.hapaneld.control
+
+/** Android power observations that are safe to expose in diagnostics and HTTP responses. */
+data class PowerSafetyObservation(
+    val keepAwakeConfigured: Boolean,
+    val wakeLockHeld: Boolean,
+    val wifiLockRequired: Boolean,
+    val wifiLockHeld: Boolean,
+    val preventIdleDimConfigured: Boolean,
+    val screenOffTimeoutMs: Int?,
+    val interactive: Boolean?,
+    /** Android BatteryManager plugged bit mask; zero means Android reports no external power. */
+    val pluggedMask: Int?,
+    /** Android's global stay_on_while_plugged_in bit mask. */
+    val stayOnWhilePluggedIn: Int?,
+    val deviceIdleMode: Boolean?,
+    val ignoringBatteryOptimizations: Boolean?,
+    val screenOffMechanism: String,
+)
+
+enum class PowerRiskLevel(val wireValue: String) {
+    SAFE("safe"),
+    CAUTION("caution"),
+    AT_RISK("at_risk"),
+    UNKNOWN("unknown"),
+}
+
+data class PowerSafetyAssessment(
+    val level: PowerRiskLevel,
+    val observation: PowerSafetyObservation,
+    val reasonCodes: List<String>,
+    val summary: String,
+    val action: String,
+) {
+    val warning: Boolean get() = level != PowerRiskLevel.SAFE
+}
+
+/**
+ * Conservative reachability classification. It deliberately assesses combinations of effective guards;
+ * no individual Android setting is presented as proof against OEM-specific suspend behaviour.
+ */
+object PowerSafetyPolicy {
+    fun assess(observation: PowerSafetyObservation): PowerSafetyAssessment {
+        val reasons = buildList {
+            if (!observation.keepAwakeConfigured) add("keep_awake_disabled")
+            else if (!observation.wakeLockHeld) add("wake_lock_not_held")
+            if (observation.wifiLockRequired && !observation.wifiLockHeld) add("wifi_lock_not_held")
+            if (!observation.preventIdleDimConfigured) add("prevent_idle_dim_disabled")
+            when (observation.screenOffTimeoutMs) {
+                null -> add("screen_timeout_unknown")
+                Int.MAX_VALUE -> Unit
+                else -> add("native_screen_timeout_finite")
+            }
+            if (observation.deviceIdleMode == true) add("device_idle_active")
+            when (observation.ignoringBatteryOptimizations) {
+                false -> add("doze_not_exempt")
+                null -> add("doze_exemption_unknown")
+                true -> Unit
+            }
+            when (observation.pluggedMask) {
+                null -> add("power_source_unknown")
+                0 -> add("power_source_reports_unplugged")
+                else -> Unit
+            }
+            when (stayAwakeEffective(observation)) {
+                false -> add(if (observation.stayOnWhilePluggedIn == 0) "stay_on_disabled" else "stay_on_misses_source")
+                null -> add("stay_on_effect_unknown")
+                true -> Unit
+            }
+        }
+
+        val appGuard = observation.keepAwakeConfigured && observation.wakeLockHeld &&
+            (!observation.wifiLockRequired || observation.wifiLockHeld)
+        val nativeTimeoutGuard = observation.preventIdleDimConfigured &&
+            observation.screenOffTimeoutMs == Int.MAX_VALUE
+        val dozeGuard = observation.ignoringBatteryOptimizations == true
+        val stayAwakeGuard = stayAwakeEffective(observation) == true
+        val knownSystemGuard = dozeGuard || (nativeTimeoutGuard && stayAwakeGuard)
+        val unknownRequiredProbe = observation.pluggedMask == null ||
+            observation.stayOnWhilePluggedIn == null ||
+            observation.screenOffTimeoutMs == null ||
+            observation.deviceIdleMode == null ||
+            observation.ignoringBatteryOptimizations == null
+
+        val level = when {
+            observation.deviceIdleMode == true && !dozeGuard -> PowerRiskLevel.AT_RISK
+            appGuard && knownSystemGuard -> PowerRiskLevel.SAFE
+            appGuard -> if (unknownRequiredProbe) PowerRiskLevel.UNKNOWN else PowerRiskLevel.CAUTION
+            knownSystemGuard -> PowerRiskLevel.CAUTION
+            unknownRequiredProbe -> PowerRiskLevel.UNKNOWN
+            else -> PowerRiskLevel.AT_RISK
+        }
+        val summary = when (level) {
+            PowerRiskLevel.SAFE ->
+                "Panel reachability has the required app power locks and a positively observed Android power guard."
+            PowerRiskLevel.CAUTION ->
+                "Panel reachability currently depends on only one observed power guard."
+            PowerRiskLevel.AT_RISK ->
+                "The panel can suspend or enter Doze after screen-off, making HTTP, MQTT, and background work unreachable."
+            PowerRiskLevel.UNKNOWN ->
+                "Power safety could not be established because one or more Android power probes were unavailable or ambiguous."
+        }
+        return PowerSafetyAssessment(
+            level = level,
+            observation = observation,
+            reasonCodes = reasons.distinct(),
+            summary = summary,
+            action = "Use Repair power safety to enable the app CPU/Wi-Fi locks and, when direct root control is available, Android stay-awake and Doze exemption. The repair never reboots the panel.",
+        )
+    }
+
+    fun stayAwakeEffective(observation: PowerSafetyObservation): Boolean? {
+        val plugged = observation.pluggedMask ?: return null
+        val stayOn = observation.stayOnWhilePluggedIn ?: return null
+        if (plugged == 0) return false
+        return plugged and stayOn != 0
+    }
+}
+
+enum class PowerRepairStepStatus(val wireValue: String) {
+    ALREADY("already"),
+    APPLIED("applied"),
+    UNAVAILABLE("unavailable"),
+    FAILED("failed"),
+}
+
+data class PowerSafetyRepairResult(
+    val status: String,
+    val keepAwake: PowerRepairStepStatus,
+    val preventIdleDim: PowerRepairStepStatus,
+    val stayOnWhilePluggedIn: PowerRepairStepStatus,
+    val dozeExemption: PowerRepairStepStatus,
+    val privilegedPowerControl: String,
+    val assessment: PowerSafetyAssessment,
+) {
+    val complete: Boolean get() = status == "repaired"
+}
+
+/** Pure decisions used by the Android repair controller and directly covered by JVM tests. */
+internal object PowerSafetyRepairPolicy {
+    const val STANDARD_PLUG_MASK = 1 or 2 or 4 or 8
+
+    fun stayOnTarget(baseline: Int?): Int? = baseline?.or(STANDARD_PLUG_MASK)
+
+    fun verifiedMutationStatus(effectiveAfter: Boolean): PowerRepairStepStatus =
+        if (effectiveAfter) PowerRepairStepStatus.APPLIED else PowerRepairStepStatus.FAILED
+
+    fun dozeMutationCommand(packageName: String, cmdAvailable: Boolean, dumpsysAvailable: Boolean): String? {
+        require(packageName.matches(Regex("[A-Za-z0-9_.]{1,255}")))
+        return when {
+            cmdAvailable -> "cmd deviceidle whitelist +$packageName"
+            dumpsysAvailable -> "dumpsys deviceidle whitelist +$packageName"
+            else -> null
+        }
+    }
+
+    fun resultStatus(assessment: PowerSafetyAssessment, steps: List<PowerRepairStepStatus>): String = when {
+        assessment.level == PowerRiskLevel.SAFE && PowerRepairStepStatus.FAILED !in steps -> "repaired"
+        steps.firstOrNull() == PowerRepairStepStatus.FAILED -> "failed"
+        else -> "partial"
+    }
+}

@@ -42,6 +42,7 @@ import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
+import io.github.maxlyth.hapaneld.control.PowerSafetyController
 import io.github.maxlyth.hapaneld.control.PrivilegeRoute
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.NavigateController
@@ -760,6 +761,7 @@ class PaneldService : Service() {
     private lateinit var cpu: CpuController
     private lateinit var adb: AdbController
     private lateinit var power: PowerController
+    private lateinit var powerSafety: PowerSafetyController
     private lateinit var profile: DeviceProfile
     private lateinit var profileRegistry: RuntimeProfileRegistry
     private lateinit var passiveProfileProbe: AndroidPassiveProfileProbe
@@ -982,6 +984,11 @@ class PaneldService : Service() {
         cpu = CpuController(profile)
         adb = AdbController(config)
         power = PowerController(this)
+        powerSafety = PowerSafetyController(
+            context = this,
+            power = power,
+            screenOffMechanism = profile.screenOff.name.lowercase(),
+        )
 
         autoSleep = AutoSleepController(
             context = this,
@@ -1139,6 +1146,8 @@ class PaneldService : Service() {
             effectiveBrightness = { brightness.getBrightness() },
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
+            powerSafety = { powerSafety.assess(config.keepAwake, config.preventIdleDim) },
+            onRepairPowerSafety = ::repairPowerSafety,
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
             // Captures the FIELD, not a snapshot, so it follows reconfigure()'s bridge reassignment.
@@ -2005,7 +2014,7 @@ class PaneldService : Service() {
             },
             // Wakelock/Wi-Fi-lock intent vs reality — a panel that should be keep-awake but isn't
             // holding the lock is a strong hint for stalled-idle-connection reports.
-            "Keep panel responsive" to if (config.keepAwake) (if (power.isHeld()) "on · wakelock held" else "on · wakelock NOT held") else "off",
+            "Keep panel responsive" to if (config.keepAwake) (if (power.isHeld()) "on · power locks held" else "on · power lock NOT held") else "off",
             "Prevent idle dim" to preventIdleDimDiagnostic(config.preventIdleDim, brightness.screenOffTimeoutMs()),
             "Android dashboard lock" to if (config.kioskLock) "on" else "off",
             "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
@@ -3104,6 +3113,21 @@ class PaneldService : Service() {
         if (::navbar.isInitialized) navbar.closeAdmission()
         if (::screen.isInitialized) screen.closeAdmission()
     }
+
+    /** Explicit power-safety repair. This is referenced by the HTTP server during startup but can execute
+     * only after admission on an IO dispatcher, behind the service replacement fence. */
+    private fun repairPowerSafety() = powerSafety.repair(
+        readKeepAwakeConfigured = { config.keepAwake },
+        readPreventIdleDimConfigured = { config.preventIdleDim },
+        persistKeepAwake = {
+            config.setKeepAwake(true)
+            config.keepAwake
+        },
+        applyPreventIdleDim = {
+            config.setPreventIdleDim(true)
+            config.preventIdleDim && brightness.applyPreventIdleDim(true, config).effective
+        },
+    )
 
     override fun onDestroy() {
         // Android invokes this on the main thread. All deliberate waits below consume one deadline so

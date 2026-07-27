@@ -72,7 +72,23 @@ class PowerController(context: Context) {
         return complete
     }
 
-    fun isHeld(): Boolean = wl?.isHeld == true
+    /** Both locks required for the configured reachability guard. Wi-Fi is not required only when this
+     * Android build exposes no WifiManager at all. */
+    fun safetyState(): PowerLockState = PowerLockState(
+        wakeLockHeld = runCatching { wl?.isHeld == true }.getOrDefault(false),
+        wifiLockRequired = wifi != null,
+        wifiLockHeld = runCatching { wifiLock?.isHeld == true }.getOrDefault(false),
+    )
+
+    fun isHeld(): Boolean = safetyState().effective
 
     companion object { private const val TAG = "ha-paneld:keepawake" }
+}
+
+data class PowerLockState(
+    val wakeLockHeld: Boolean,
+    val wifiLockRequired: Boolean,
+    val wifiLockHeld: Boolean,
+) {
+    val effective: Boolean get() = wakeLockHeld && (!wifiLockRequired || wifiLockHeld)
 }

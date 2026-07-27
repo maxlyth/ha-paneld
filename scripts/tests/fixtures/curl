@@ -26,6 +26,10 @@ for arg in "$@"; do
   esac
 done
 
+emit_body() {
+  if [ -n "$output_file" ]; then printf "$@" > "$output_file"; else printf "$@"; fi
+}
+
 case "$url" in
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-helper-v*-*.sha256.sig)
     [ -n "$output_file" ] || exit 2
@@ -188,8 +192,26 @@ JSON
     [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
     printf 'ha-paneld test health\n'
     ;;
+  */api/v1/power-safety/state)
+    case "${MOCK_POWER_SAFETY:-safe}" in
+      missing) exit 22 ;;
+      malformed) emit_body '{' ;;
+      truncated-safe) emit_body 'safe{' ;;
+      garbage-safe) emit_body 'garbage safe' ;;
+      duplicate-safe) emit_body 'safe safe' ;;
+      control-safe) emit_body 's\033afe\n' ;;
+      nul-safe) emit_body 's\000afe\n' ;;
+      *) emit_body '%s\n' "${MOCK_POWER_SAFETY:-safe}" ;;
+    esac
+    ;;
   */api/v1/status)
     storage_health="${MOCK_STORAGE_HEALTH:-healthy}"
+    power_safety="${MOCK_POWER_SAFETY:-safe}"
+    case "$power_safety" in
+      missing) power_json="" ;;
+      malformed) power_json=',"power_safety":{' ;;
+      *) power_json=',"power_safety":{"state":"'"$power_safety"'","summary":"fixture power summary","action":"fixture power action"}' ;;
+    esac
     case "$storage_health" in
       transport-fail) exit 22 ;;
       legacy|legacy-json) printf '{"version":"legacy fixture"}\n' ;;
@@ -201,18 +223,18 @@ JSON
         attempts=$((attempts + 1))
         printf '%s\n' "$attempts" > "$attempts_file"
         if [ "$attempts" -lt 3 ]; then
-          printf '{"storage_health":{"state":"unchecked"}}\n'
+          printf '{"storage_health":{"state":"unchecked"}%s}\n' "$power_json"
         else
-          printf '{"storage_health":{"state":"healthy"}}\n'
+          printf '{"storage_health":{"state":"healthy"}%s}\n' "$power_json"
         fi
         ;;
-      always-unchecked) printf '{"storage_health":{"state":"unchecked"}}\n' ;;
+      always-unchecked) printf '{"storage_health":{"state":"unchecked"}%s}\n' "$power_json" ;;
       healthy|unchecked|warning|critical|database_failure)
-        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}}\n' \
-          "$storage_health"
+        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}%s}\n' \
+          "$storage_health" "$power_json"
         ;;
-      missing-state) printf '{"storage_health":{"summary":"fixture storage summary"}}\n' ;;
-      *) printf '{"storage_health":{"state":"%s"}}\n' "$storage_health" ;;
+      missing-state) printf '{"storage_health":{"summary":"fixture storage summary"}%s}\n' "$power_json" ;;
+      *) printf '{"storage_health":{"state":"%s"}%s}\n' "$storage_health" "$power_json" ;;
     esac
     ;;
   */api/v1/provisioning/plan.txt)

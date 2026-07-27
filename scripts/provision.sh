@@ -579,6 +579,8 @@ print_next_step() {
 
 STORAGE_HEALTH_RESULT=""
 STORAGE_HEALTH_STATE=""
+POWER_SAFETY_RESULT=""
+POWER_SAFETY_STATE=""
 
 # Read the small status contract without adding jq as a fleet-host dependency. A successful response
 # without storage_health is distinguishable only as a legacy build until this run installs a current
@@ -632,6 +634,32 @@ read_storage_health_for_verify() {
   done
 }
 
+# Read the app-owned power classification. Bash deliberately does not reconstruct this from raw Android
+# settings: the app combines its live wake-lock state, native timeout, reported source, stay-on mask and
+# Doze observations. Missing/legacy data is never called safe.
+read_power_safety() {
+  local body token_hex
+  POWER_SAFETY_RESULT="transport"
+  POWER_SAFETY_STATE=""
+  body="$(mktemp)" || { POWER_SAFETY_RESULT="malformed"; return 0; }
+  if ! curl -fsS --max-time 5 -o "$body" "$URL/api/v1/power-safety/state" 2>/dev/null; then
+    rm -f "$body"
+    return 0
+  fi
+  # Validate exact response bytes before Bash command substitution or terminal sanitization can discard
+  # NUL/control bytes. Only one controlled token, with the app's optional final LF, can produce green.
+  token_hex="$(od -An -tx1 "$body" 2>/dev/null | tr -d ' \n')"
+  rm -f "$body"
+  case "$token_hex" in
+    73616665|736166650a) POWER_SAFETY_STATE="safe" ;;
+    63617574696f6e|63617574696f6e0a) POWER_SAFETY_STATE="caution" ;;
+    61745f7269736b|61745f7269736b0a) POWER_SAFETY_STATE="at_risk" ;;
+    756e6b6e6f776e|756e6b6e6f776e0a) POWER_SAFETY_STATE="unknown" ;;
+    *) POWER_SAFETY_RESULT="malformed"; return 0 ;;
+  esac
+  POWER_SAFETY_RESULT="valid"
+}
+
 # Known destructive-risk states block every requested mutation before release resolution, backup,
 # helper changes, APK install, settings writes, or config import. Successful absence remains compatible
 # with an older app; transport failure is allowed only when Android proves this is a fresh install.
@@ -681,6 +709,7 @@ verify() {
   local health diag cfg rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
   health="$(curl -fsS --max-time 5 "$URL/health" 2>/dev/null || true)"
   read_storage_health_for_verify
+  read_power_safety
   diag="$(curl -fsS --max-time 25 "$URL/api/v1/diag" 2>/dev/null || true)"
   if [ -z "$diag" ] && [ -n "$health" ] && [ "$VERIFY_DIRECT_GRANTS" != 1 ]; then
     warn "the agent is healthy but diagnostics are still starting; retrying once"
@@ -759,6 +788,32 @@ verify() {
       echo "   ${RED}✗ storage health: unrecognised state '${STORAGE_HEALTH_STATE}'.${X}"
       echo "     ${D}Update this provisioner or inspect $URL/api/v1/status before relying on storage verification.${X}"
       rc=1
+      ;;
+  esac
+  case "$POWER_SAFETY_RESULT:$POWER_SAFETY_STATE" in
+    valid:safe)
+      echo "   ${GRN}✓${X} panel power safety: safe"
+      ;;
+    valid:caution)
+      echo "   ${YEL}⚠ panel power safety: caution — reachability depends on only one observed power guard.${X}"
+      echo "     ${D}Review the exact observations and explicit repair at $URL/configure#cfg-keep_awake.${X}"
+      ;;
+    valid:at_risk)
+      echo "   ${RED}✗ panel power safety: at risk — screen-off can leave this panel unreachable.${X}"
+      echo "     ${D}Use the explicit Repair power safety action at $URL/configure#cfg-keep_awake, then re-run verification.${X}"
+      rc=1
+      ;;
+    valid:unknown)
+      echo "   ${YEL}⚠ panel power safety: unknown — Android power probes did not establish an effective guard.${X}"
+      echo "     ${D}Inspect $URL/api/v1/diag and the Configure warning; unknown is not treated as safe.${X}"
+      ;;
+    transport:)
+      echo "   ${YEL}⚠ panel power safety: status unavailable.${X}"
+      echo "     ${D}Restore $URL/api/v1/power-safety/state and re-run verification; no repair was attempted.${X}"
+      ;;
+    malformed:*|unknown:*)
+      echo "   ${YEL}⚠ panel power safety: unrecognised status; not treating it as safe.${X}"
+      echo "     ${D}Inspect $URL/api/v1/status and update the provisioner or app before relying on this result.${X}"
       ;;
   esac
   if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then

@@ -117,6 +117,7 @@ run_provision() {
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_STORAGE_HEALTH="${MOCK_STORAGE_HEALTH:-healthy}" \
+  MOCK_POWER_SAFETY="${MOCK_POWER_SAFETY:-safe}" \
   MOCK_VERIFY="${MOCK_VERIFY:-ok}" \
   MOCK_EXPORT="${MOCK_EXPORT:-ok}" \
   MOCK_CONFIG="${MOCK_CONFIG:-ok}" \
@@ -418,10 +419,44 @@ run_provision "$MOCK_TARGET" --verify
 assert_success "verify-only succeeds for a healthy panel"
 assert_contains 'Detected panel: Test Panel' "verify-only displays the app-owned hardware profile guidance"
 assert_contains 'storage health: healthy' "verify-only reports healthy storage"
+assert_contains 'panel power safety: safe' "verify-only reports the app-owned power classification"
 assert_log_contains '^curl .* /api/v1/status$|^curl .*http://panel\.test:8888/api/v1/status$' "verify-only reads the shared storage-health status"
+assert_log_contains '^curl .* /api/v1/power-safety/state$|^curl .*http://panel\.test:8888/api/v1/power-safety/state$' "verify-only reads the one-token app-owned power state"
 assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://panel\.test:8888/api/v1/provisioning/plan\.txt$' "verify-only reads the provisioning plan"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
+
+MOCK_POWER_SAFETY=caution run_provision "$MOCK_TARGET" --verify
+assert_success "a caution power classification remains advisory"
+assert_contains 'panel power safety: caution.*only one observed power guard' "power caution explains the bounded risk"
+assert_contains 'explicit repair.*/configure#cfg-keep_awake' "power caution points to the admitted repair"
+assert_not_contains '^adb .* shell settings put|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "power warning verification never repairs settings"
+
+MOCK_POWER_SAFETY=unknown run_provision "$MOCK_TARGET" --verify
+assert_success "unknown power probes remain an explicit warning"
+assert_contains 'panel power safety: unknown.*did not establish an effective guard' "unknown power probes are not reported safe"
+
+MOCK_POWER_SAFETY=at_risk run_provision "$MOCK_TARGET" --verify
+assert_failure "an at-risk power classification fails verification"
+assert_contains 'panel power safety: at risk.*screen-off can leave this panel unreachable' "at-risk power explains the reachability failure"
+assert_contains 'Repair power safety action.*/configure#cfg-keep_awake' "at-risk power gives the explicit recovery path"
+assert_not_contains '^adb .* shell settings put|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "at-risk verification reports without mutating power settings"
+
+MOCK_POWER_SAFETY=missing run_provision "$MOCK_TARGET" --verify
+assert_success "a legacy build without power status remains verifiable"
+assert_contains 'panel power safety: status unavailable' "legacy power status is not invented"
+assert_contains 'power-safety/state.*no repair was attempted' "legacy power status remains read-only"
+
+MOCK_POWER_SAFETY=malformed run_provision "$MOCK_TARGET" --verify
+assert_success "malformed power status remains an explicit advisory warning"
+assert_contains 'panel power safety: unrecognised status; not treating it as safe' "malformed power status is not reported safe"
+
+for malformed_safe in truncated-safe garbage-safe duplicate-safe control-safe nul-safe; do
+  MOCK_POWER_SAFETY="$malformed_safe" run_provision "$MOCK_TARGET" --verify
+  assert_success "$malformed_safe power status remains an explicit advisory warning"
+  assert_contains 'panel power safety: unrecognised status; not treating it as safe' "$malformed_safe power status is never reported safe"
+  assert_not_contains 'panel power safety: safe' "$LAST_OUTPUT" "$malformed_safe power status cannot produce a green result"
+done
 
 MOCK_STORAGE_HEALTH=unchecked run_provision "$MOCK_TARGET" --verify
 assert_success "verify-only accepts storage health before the first scheduled check"

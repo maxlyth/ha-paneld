@@ -49,12 +49,19 @@ class HardenedControlContractTest {
         assertRouteAuthorizesBefore("/dashboard/clear-storage", "clearStorageGate.claim()")
         assertRouteAuthorizesBefore("/companion/repair-url", "onRepairCompanionUrl()")
         assertRouteAuthorizesBefore("/display/density", "density.reset()")
+        assertRouteAuthorizesBefore("/power-safety/repair", "onRepairPowerSafety()")
         assertRouteAuthorizesBefore("/tame", "updateTameSelection")
         assertRouteAuthorizesBefore("/action", "respondRemoteAdmission(")
 
         val tame = route("/tame")
         assertTrue(tame.contains("tame.recommendedSelections(tameProfileCandidates)"))
         assertTrue(tame.contains("SensitiveOperation.PACKAGE_TAME"))
+
+        val power = route("/power-safety/repair")
+        assertTrue(power.contains("SensitiveOperation.POWER_CONFIGURATION"))
+        assertTrue(power.contains("sha256Hex(ByteArray(0))"))
+        assertFalse(power.contains("reboot("))
+        assertFalse(power.contains("fireAndForget"))
     }
 
     @Test fun mqttFreshInstallsRebootAndPolicyExpansionRemainApprovalGated() {

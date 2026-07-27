@@ -62,6 +62,7 @@ class HardenedApprovalAssetContractTest {
             "POST /api/v1/action",
             "POST /api/v1/tame",
             "POST /api/v1/display/density",
+            "POST /api/v1/power-safety/repair",
         )
         protected.forEach { route ->
             val (method, path) = route.split(" ", limit = 2)
@@ -109,6 +110,11 @@ class HardenedApprovalAssetContractTest {
         assertTrue(configure.contains("fetch(\"/api/v1/config\""))
         assertTrue(configure.contains("fetch(\"/api/v1/dashboard/clear-storage\""))
         assertTrue(configure.contains("e && e.message ? e.message"))
+
+        val powerSafety = asset("power-safety.js")
+        assertTrue(powerSafety.contains("body.error === 'approval-required'"))
+        assertTrue(powerSafety.contains("form[data-power-safety-repair]"))
+        assertTrue(powerSafety.contains("method: 'POST'"))
 
         val profiles = asset("profiles.js")
         val fetch = profiles.substringAfter("function jsonFetch").substringBefore("function yamlFetch")

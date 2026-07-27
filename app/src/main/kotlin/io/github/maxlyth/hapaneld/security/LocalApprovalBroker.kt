@@ -19,6 +19,7 @@ internal enum class SensitiveOperation(val label: String) {
     COMPANION_REPAIR("Repair Companion configuration"),
     DASHBOARD_STORAGE_CLEAR("Clear dashboard browsing data"),
     DISPLAY_CONFIGURATION("Change display sizing"),
+    POWER_CONFIGURATION("Repair panel power safety"),
 }
 
 internal data class PendingApproval(

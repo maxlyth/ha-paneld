@@ -45,6 +45,8 @@ import io.github.maxlyth.hapaneld.control.DisplaySizingObservation
 import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.PrivilegeRoute
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
+import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
+import io.github.maxlyth.hapaneld.control.PowerSafetyRepairResult
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.control.TameController
@@ -800,6 +802,10 @@ class PaneldServer internal constructor(
     // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
     // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
+    // One read-only Android power assessment shared by every user and diagnostic surface.
+    private val powerSafety: () -> PowerSafetyAssessment,
+    // Explicit repair only. Per-step readback decides whether the result is complete.
+    private val onRepairPowerSafety: () -> PowerSafetyRepairResult,
     // Bounded EFR32 health snapshot, or null when this panel has no radio gateway.
     private val radioStatus: () -> ZigbeeHealthSnapshot? = { null },
     /**
@@ -1842,6 +1848,50 @@ class PaneldServer internal constructor(
                             ContentType.Application.Json,
                         )
                     }
+                    get("/power-safety") {
+                        call.respondText(
+                            PowerSafetyPresentation.json(powerSafety()),
+                            ContentType.Application.Json,
+                        )
+                    }
+                    get("/power-safety/state") {
+                        call.respondText(powerSafety().level.wireValue + "\n", ContentType.Text.Plain)
+                    }
+                    post("/power-safety/repair") {
+                        if (!authorizeSensitive(
+                                call,
+                                SensitiveOperation.POWER_CONFIGURATION,
+                                exactHttpApprovalPayload(call, sha256Hex(ByteArray(0))),
+                                "Enable and verify panel power-safety guards",
+                            )
+                        ) return@post
+                        val result = withContext(Dispatchers.IO) { onRepairPowerSafety() }
+                        snapInvalidate()
+                        val failed = result.status == "failed"
+                        val wantsJson = call.request.headers[HttpHeaders.Accept]
+                            ?.contains("application/json", ignoreCase = true) == true
+                        if (wantsJson) {
+                            call.respondText(
+                                PowerSafetyPresentation.repairJson(result),
+                                ContentType.Application.Json,
+                                if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK,
+                            )
+                        } else {
+                            val message = when (result.status) {
+                                "repaired" -> "Power safety repaired and verified."
+                                "partial" -> "Power safety repair was partial; review the remaining warning."
+                                else -> "Power safety repair failed; no reboot was attempted."
+                            }
+                            call.respondText(
+                                configMutationHtml(message).replace(
+                                    "url=/configure",
+                                    "url=/configure#cfg-keep_awake",
+                                ),
+                                ContentType.Text.Html,
+                                if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK,
+                            )
+                        }
+                    }
                     // Dismiss a component update from the DASHBOARD banner only (per-version; re-surfaces when
                     // a newer release ships). The Install tab still lists it. See Config.ignoreUpdate.
                     post("/updates/ignore") {
@@ -2796,7 +2846,8 @@ class PaneldServer internal constructor(
 ${navBar(active)}</div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
-$extraScripts<script src="/assets/switcher.js"></script>
+$extraScripts<script src="/assets/power-safety.js"></script>
+<script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
@@ -2876,6 +2927,7 @@ $proximityScript"""
     }
 
     private fun configureSetupBanners(): String {
+        val power = PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true)
         // Someone landing on the full settings wall mid-commissioning (an old bookmark, the QR from a
         // build that pointed here) should learn the guided path exists — once setup completes this line
         // vanishes with the rest of the wizard surface.
@@ -2889,16 +2941,16 @@ $proximityScript"""
         // rendered on the dashboard; surfacing it here too costs nothing and keeps one authority.
         val mqtt = snapStaleOk().facts["MQTT"] ?: "disabled"
         SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let { progress ->
-            return resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
+            return power + resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
         }
         if (haSignInNeededForEffectiveDashboard()) {
-            return resume + """<div class="setup">🏠 <b>MQTT is configured. Next: Home Assistant sign-in.</b> """ +
+            return power + resume + """<div class="setup">🏠 <b>MQTT is configured. Next: Home Assistant sign-in.</b> """ +
                 """ha-paneld's built-in renderer is selected. Use Browser sign-in in the Home Assistant connection """ +
                 """card below, or complete the sign-in shown on the panel.</div>"""
         }
         val noRenderer = healthFindings(healthInputs(), "", emptyList()).any { it.kind == HealthAudit.Kind.NO_RENDERER }
-        if (!noRenderer) return resume
-        return resume + """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's """ +
+        if (!noRenderer) return power + resume
+        return power + resume + """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's """ +
             """built-in renderer in the Dashboard card below or configure another dashboard package. Until then, """ +
             """this panel won't display a dashboard. <small>(ha-paneld itself runs fine without one.)</small></div>"""
     }
@@ -3059,7 +3111,8 @@ $proximityScript"""
         val canInstallCompanion = installer
         // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
-        val extra = adHocWarnings(management, companion, inlineRepair = true)
+        val extra = PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true) +
+            adHocWarnings(management, companion, inlineRepair = true)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
         val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty()) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
@@ -3349,6 +3402,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String {
         val management = snapStaleOk()
+        val powerAssessment = powerSafety()
         val companion = companionServersStaleOk()
         val radio = radioStatus()
         val storage = HealthAudit.storage(storageHealth())
@@ -3377,6 +3431,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             zigbeeWarning(z)?.let(warns::add)
         }
         storage.warningHtml()?.let(warns::add)
+        PowerSafetyPresentation.statusWarningHtml(powerAssessment)?.let(warns::add)
         runCatching(mdnsWarning).getOrNull()?.let(warns::add)
         warns.addAll(findings.map { statusWarning(it) })
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
@@ -3389,7 +3444,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             JSONObject(it.mqttAttributes()).put("state", it.state.wireValue).toString()
         } ?: "null"
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
-            "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}}"
+            "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
+            "\"power_safety\":${PowerSafetyPresentation.json(powerAssessment)}}"
     }
 
     /** A health finding as a one-line HTML warning for GET /api/v1/status (no Ignore button; updates keep
@@ -3609,6 +3665,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 management.fontScale,
             ),
             storage = storageHealth(),
+            powerSafety = powerSafety(),
         )
     }
 
@@ -3767,7 +3824,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Order: storage/database safety first, then actively-broken render states, render findings
         // (WebView / renderer / updates), and finally the needs-config setup notice. On the dashboard the
         // ad-hoc warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
-        return storage.bannerHtml() + adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
+        return storage.bannerHtml() + PowerSafetyPresentation.bannerHtml(powerSafety(), inlineRepair = true) +
+            adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
             findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + mqttProgress + setup
     }
 
@@ -7691,6 +7749,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         message: String? = null,
     ): String {
         fun s(v: String) = Json.str(v)
+        val powerAssessment = powerSafety()
         val mutation = mutationStatus?.let {
             "\"ok\":${rejected.isEmpty()}," +
                 "\"status\":${s(it)}," +
@@ -7725,6 +7784,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"ha_auth\":{\"configured\":${config.haToken.isNotEmpty() || config.haRefreshToken.isNotEmpty()},\"oauth\":${config.haRefreshToken.isNotEmpty()}}," +
             "\"version\":${s(Config.VERSION)}," +
             "\"proximity\":${sensors.proximityJson()}," +
+            "\"power_safety\":${PowerSafetyPresentation.json(powerAssessment)}," +
             // Registry-driven current values + per-key HA-exposure flags for the Configure form.
             "\"settings\":${settingsValuesJson()}," +
             "\"ha_expose\":${haExposeJson()}," +

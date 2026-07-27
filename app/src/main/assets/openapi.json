@@ -41,6 +41,32 @@
           "summary": { "type": "string" },
           "action": { "type": "string" }
         }
+      },
+      "PowerSafety": {
+        "type": "object",
+        "description": "Conservative app-owned assessment of panel reachability after screen-off. A guard needed to establish safety is never inferred from an unavailable probe, and no individual setting is treated as proof against OEM suspend behaviour.",
+        "required": ["state", "warning", "summary", "action", "reason_codes", "keep_awake_configured", "wake_lock_held", "wifi_lock_required", "wifi_lock_held", "prevent_idle_dim_configured", "screen_off_timeout_ms", "interactive", "power_source", "plugged_mask", "stay_on_while_plugged_in", "stay_on_effective", "device_idle", "doze_exempt", "screen_off_mechanism"],
+        "properties": {
+          "state": { "type": "string", "enum": ["safe", "caution", "at_risk", "unknown"] },
+          "warning": { "type": "boolean" },
+          "summary": { "type": "string" },
+          "action": { "type": "string" },
+          "reason_codes": { "type": "array", "items": { "type": "string" } },
+          "keep_awake_configured": { "type": "boolean" },
+          "wake_lock_held": { "type": "boolean" },
+          "wifi_lock_required": { "type": "boolean" },
+          "wifi_lock_held": { "type": "boolean" },
+          "prevent_idle_dim_configured": { "type": "boolean" },
+          "screen_off_timeout_ms": { "type": "integer", "nullable": true },
+          "interactive": { "type": "boolean", "nullable": true },
+          "power_source": { "type": "string", "description": "Android-reported source only; android_reports_unplugged does not claim the panel is physically unplugged." },
+          "plugged_mask": { "type": "integer", "nullable": true },
+          "stay_on_while_plugged_in": { "type": "integer", "nullable": true },
+          "stay_on_effective": { "type": "boolean", "nullable": true },
+          "device_idle": { "type": "boolean", "nullable": true },
+          "doze_exempt": { "type": "boolean", "nullable": true },
+          "screen_off_mechanism": { "type": "string" }
+        }
       }
     },
     "responses": {
@@ -64,7 +90,10 @@
         "responses": { "200": { "description": "playing" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
-    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix, Zigbee gateway health and storage/SQLite health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "Health warnings plus structured component snapshots. storage_health is always present and starts as unchecked until the startup observation completes.", "content": { "application/json": { "schema": { "type": "object", "required": ["warnings", "capabilities", "zigbee_gateway", "storage_health"], "properties": { "warnings": { "type": "array", "items": { "type": "string", "description": "Ready-to-render trusted HTML warning" } }, "capabilities": { "type": "array", "items": { "type": "object" } }, "zigbee_gateway": { "type": "object", "nullable": true }, "storage_health": { "$ref": "#/components/schemas/StorageHealth" } } } } } }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
+    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix, Zigbee gateway, storage and power-safety health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "Health warnings plus structured component snapshots. storage_health and power_safety are always present; unavailable power probes produce unknown rather than safe.", "content": { "application/json": { "schema": { "type": "object", "required": ["warnings", "capabilities", "zigbee_gateway", "storage_health", "power_safety"], "properties": { "warnings": { "type": "array", "items": { "type": "string", "description": "Ready-to-render trusted HTML warning" } }, "capabilities": { "type": "array", "items": { "type": "object" } }, "zigbee_gateway": { "type": "object", "nullable": true }, "storage_health": { "$ref": "#/components/schemas/StorageHealth" }, "power_safety": { "$ref": "#/components/schemas/PowerSafety" } } } } } }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
+    "/api/v1/power-safety": { "get": { "summary": "Read the bounded panel power-safety assessment and sanitized observations", "tags": ["status"], "responses": { "200": { "description": "Current app-owned power-safety assessment", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PowerSafety" } } } } } } },
+    "/api/v1/power-safety/state": { "get": { "summary": "Read only the power-safety state as one terminal-safe token", "tags": ["status"], "responses": { "200": { "description": "Exactly one of safe, caution, at_risk or unknown followed by a newline", "content": { "text/plain": { "schema": { "type": "string", "enum": ["safe", "caution", "at_risk", "unknown"] } } } } } } },
+    "/api/v1/power-safety/repair": { "post": { "summary": "Explicitly enable and read back supported panel power-safety guards; never reboots", "tags": ["control"], "responses": { "200": { "description": "Repair completed or partially completed. The response reports each step as already, applied, unavailable or failed, plus the post-repair assessment." }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "503": { "description": "The app wake-lock repair failed; no reboot was attempted" } } } },
     "/api/v1/setup": { "get": { "summary": "What setup still needs before this panel can show a dashboard, and the single next step", "tags": ["status"], "responses": { "200": { "description": "{complete, next|null, panel:{id,name}, steps:[{stage,status,blocking,detail}], discovery:{outcome,reason,explanation}}. In-memory reads only, so it is safe to poll while a step is in flight; no-store." }, "403": { "description": "Cross-origin or unverifiable browser request refused" } } } },
     "/api/v1/setup/identity": { "post": { "summary": "Record that a human saw and accepted the panel identity during guided setup", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Not a setting: never on the Configure form, in bundles, or as an HA entity" } } } },
     "/api/v1/setup/home-dashboard": { "post": { "summary": "Record that the guided-setup dashboard question was answered, including choosing the account's default", "tags": ["status"], "responses": { "200": { "description": "{ok:true}. Records the answer only; the dashboard itself is an ordinary POST /api/v1/config home_dashboard beforehand" } } } },
