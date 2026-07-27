@@ -31,7 +31,7 @@
   var autoSleepReadinessDelayMs = 1000, autoSleepHistoryRetryDelayMs = 5000;
   var autoSleepPrerequisite = { eligible: false, phase: "checking", area_name: "" };
   var autoSleepPrerequisiteRequest = 0, autoSleepPrerequisiteTimer = null;
-  var autoSleepAssignedAreaName = "";
+  var autoSleepAssignedAreaName = "", autoSleepAreaGeneration = 0;
   var haOauthButton = null, haOauthStatus = null, haOauthLinks = null;
   var haOauthAuthorizationUrl = "", haOauthTargetUrl = "";
   var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
@@ -1289,17 +1289,31 @@
         var phase = String(autoSleepPrerequisite.phase || "unavailable").toLowerCase();
         var nextAreaName = autoSleepPrerequisite.area_name != null ? autoSleepPrerequisite.area_name : autoSleepPrerequisite.areaName;
         nextAreaName = phase === "assigned" && autoSleepPrerequisite.eligible === true ? String(nextAreaName || "").trim() : "";
-        if (nextAreaName && autoSleepAssignedAreaName && nextAreaName !== autoSleepAssignedAreaName) {
+        var initialAreaMismatch = nextAreaName && !autoSleepAssignedAreaName && (
+          autoSleepStatus && !autoSleepAreaMatchesName(autoSleepStatus, nextAreaName) ||
+          autoSleepHistory && !autoSleepAreaMatchesName(autoSleepHistory, nextAreaName)
+        );
+        if (nextAreaName && (initialAreaMismatch || autoSleepAssignedAreaName && nextAreaName !== autoSleepAssignedAreaName)) {
           autoSleepAssignedAreaName = nextAreaName;
-          invalidateAutoSleepData(true);
+          autoSleepAreaGeneration++;
+          autoSleepSourceUpdating = Object.create(null);
+          // The completed replay is still useful as a stable placeholder while the new Area is
+          // discovered. Fence its requests, but keep its DOM beneath the busy overlay until the
+          // replacement history is complete; clearing it here makes the whole card collapse and
+          // expand through an empty state before every Area refresh.
+          invalidateAutoSleepData();
           autoSleepHistoryWaiting = values.auto_sleep === "true";
           autoSleepHistoryWaitingMessage = autoSleepHistoryWaiting ? "Preparing activity history…" : "";
-          updateAutoSleepHistory(true);
+          updateAutoSleepHistory();
           if (values.auto_sleep === "true") loadAutoSleepData();
         } else if (nextAreaName) {
           autoSleepAssignedAreaName = nextAreaName;
         }
         if (phase === "unassigned") {
+          if (autoSleepAssignedAreaName) {
+            autoSleepAreaGeneration++;
+            autoSleepSourceUpdating = Object.create(null);
+          }
           autoSleepAssignedAreaName = "";
           convergeAutoSleepOffForMissingArea();
         }
@@ -1381,11 +1395,22 @@
     return autoSleepHistoryLoading || autoSleepHistoryWaiting || autoSleepLoading;
   }
 
+  function autoSleepAreaMatchesName(value, expected) {
+    var actual = value && (value.area_name != null ? value.area_name : value.areaName);
+    return String(actual || "").trim() === String(expected || "").trim();
+  }
+
+  function autoSleepAreaMatches(value) {
+    var expected = String(autoSleepAssignedAreaName || "").trim();
+    if (!expected) return true;
+    return autoSleepAreaMatchesName(value, expected);
+  }
+
   function autoSleepHistoryReady(status) {
     var phase = String(status && status.phase || "").toLowerCase();
     var count = status && (status.source_count != null ? status.source_count : status.sourceCount);
     var discovered = status && (status.discovered_source_count != null ? status.discovered_source_count : status.discoveredSourceCount);
-    return status && status.enabled === true &&
+    return status && status.enabled === true && autoSleepAreaMatches(status) &&
       (phase === "live" && Number(count) > 0 || phase === "no_included_sources" && Number(discovered) > 0);
   }
 
@@ -1440,7 +1465,9 @@
     areaKey = String(areaKey || "").trim();
     if (!areaKey || !sourceKey || autoSleepSourceUpdating[sourceKey]) return;
     var included = source.included !== false;
-    autoSleepSourceUpdating[sourceKey] = true;
+    var updateGeneration = autoSleepAreaGeneration;
+    var updateToken = {};
+    autoSleepSourceUpdating[sourceKey] = updateToken;
     autoSleepHistoryWaiting = true;
     autoSleepHistoryWaitingMessage = "Preparing activity history…";
     autoSleepHistoryError = "";
@@ -1453,10 +1480,12 @@
       if (!response.ok) { var error = new Error("HTTP " + response.status); error.status = response.status; throw error; }
       return response.json().catch(function () { return {}; });
     }).then(function () {
+      if (updateGeneration !== autoSleepAreaGeneration || autoSleepSourceUpdating[sourceKey] !== updateToken) return;
       delete autoSleepSourceUpdating[sourceKey];
       invalidateAutoSleepData();
       loadAutoSleepData();
     }).catch(function (error) {
+      if (updateGeneration !== autoSleepAreaGeneration || autoSleepSourceUpdating[sourceKey] !== updateToken) return;
       delete autoSleepSourceUpdating[sourceKey];
       autoSleepHistoryWaiting = false;
       autoSleepHistoryWaitingMessage = "";
@@ -1635,6 +1664,9 @@
         if (!body || body.available === false) {
           var unavailable = new Error("unavailable"); unavailable.detail = body && body.detail; throw unavailable;
         }
+        if (!autoSleepAreaMatches(body)) {
+          var staleArea = new Error("stale area"); staleArea.detail = "sources_changed"; throw staleArea;
+        }
         autoSleepHistory = body;
         receivedHistory = true;
         succeeded = true;
@@ -1642,7 +1674,6 @@
         autoSleepHistoryRetryDelayMs = 5000;
       }).catch(function (error) {
         if (request !== autoSleepHistoryRequest) return;
-        if (typeof window !== "undefined" && window.configCardSizeGeometryInvalid) window.configCardSizeGeometryInvalid();
         if (error && error.status >= 400 && error.status < 500) {
           autoSleepHistoryError = "History request failed (HTTP " + error.status + ").";
         }
@@ -1675,7 +1706,10 @@
       }).then(function () {
         if (request !== autoSleepHistoryRequest) return;
         autoSleepHistoryLoading = false; updateAutoSleepHistory(receivedHistory);
-        if (succeeded && typeof window !== "undefined" && window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
+        if ((succeeded || !retryAutomatically) && typeof window !== "undefined" && window.configCardSizeSourceReady) {
+          window.configCardSizeSourceReady("autoSleep");
+          if (window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
+        }
         if (retryAutomatically) scheduleAutoSleepReadiness(true);
       });
   }
@@ -1709,38 +1743,32 @@
     autoSleepHistoryError = "";
     updateAutoSleepSummary();
     updateAutoSleepHistory();
-    var request = ++autoSleepRequest, succeeded = false;
+    var request = ++autoSleepRequest;
     fetch("/api/v1/auto-sleep", { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) { var statusError = new Error("status"); statusError.status = response.status; throw statusError; }
         return response.json();
       })
       .then(function (body) {
-      if (request !== autoSleepRequest) return;
-      autoSleepStatus = body || { available: false, phase: "unavailable" };
-      succeeded = true;
-    }).catch(function (error) {
-      if (request !== autoSleepRequest) return;
-      if (typeof window !== "undefined" && window.configCardSizeGeometryInvalid) window.configCardSizeGeometryInvalid();
-      autoSleepStatus = error && error.status >= 400 && error.status < 500 ?
-        { available: false, phase: "status_failed", reason: "status_http", status_code: error.status, source_count: 0, manual_suppression: false } :
-        { available: false, phase: "unavailable", reason: "request_failed", source_count: 0, manual_suppression: false };
-    }).then(function () {
+        if (request !== autoSleepRequest) return;
+        autoSleepStatus = body || { available: false, phase: "unavailable" };
+      }).catch(function (error) {
+        if (request !== autoSleepRequest) return;
+        autoSleepStatus = error && error.status >= 400 && error.status < 500 ?
+          { available: false, phase: "status_failed", reason: "status_http", status_code: error.status, source_count: 0, manual_suppression: false } :
+          { available: false, phase: "unavailable", reason: "request_failed", source_count: 0, manual_suppression: false };
+      }).then(function () {
       if (request !== autoSleepRequest) return;
       autoSleepLoading = false;
       updateAutoSleepSummary();
-      if (succeeded && typeof window !== "undefined" && window.configCardSizeSourceReady) {
-        window.configCardSizeSourceReady("autoSleep");
-        if (window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
-      }
       if (autoSleepHistoryReady(autoSleepStatus)) {
         autoSleepHistoryWaiting = false;
         autoSleepHistoryWaitingMessage = "";
         autoSleepHistoryError = "";
         loadAutoSleepHistory();
-      } else if (autoSleepHistoryPreparing(autoSleepStatus) || String(autoSleepStatus && autoSleepStatus.reason) === "request_failed") {
+      } else if (!autoSleepAreaMatches(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) || String(autoSleepStatus && autoSleepStatus.reason) === "request_failed") {
         autoSleepHistoryWaiting = true;
-        autoSleepHistoryWaitingMessage = autoSleepHistoryPreparing(autoSleepStatus) ?
+        autoSleepHistoryWaitingMessage = !autoSleepAreaMatches(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) ?
           "Preparing activity history…" : "Waiting for auto-sleep status…";
         autoSleepHistoryError = "";
         updateAutoSleepHistory();
@@ -1750,6 +1778,10 @@
         autoSleepHistoryWaitingMessage = "";
         autoSleepHistoryError = autoSleepHistoryTerminalMessage(autoSleepStatus);
         updateAutoSleepHistory();
+        if (typeof window !== "undefined" && window.configCardSizeSourceReady) {
+          window.configCardSizeSourceReady("autoSleep");
+          if (window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
+        }
       }
     });
   }
@@ -1944,6 +1976,21 @@
   function render() {
     var root = document.getElementById("cfg-groups");
     var proximityCard = document.querySelector("#cfg-proximity-learning");
+    var retainedAutoSleepPanel = document.getElementById("auto-sleep-status");
+    if (!retainedAutoSleepPanel || !retainedAutoSleepPanel.parentNode || typeof retainedAutoSleepPanel.contains !== "function") retainedAutoSleepPanel = null;
+    var retainedAutoSleepFocus = retainedAutoSleepPanel && retainedAutoSleepPanel.contains(document.activeElement) ? document.activeElement : null;
+    var retainedAutoSleepScroll = retainedAutoSleepPanel && retainedAutoSleepPanel.querySelector(".auto-sleep-source-scroll");
+    var retainedAutoSleepScrollTop = retainedAutoSleepScroll ? retainedAutoSleepScroll.scrollTop : 0;
+    var retainedAutoSleepPageX = retainedAutoSleepPanel ? (window.pageXOffset || 0) : 0;
+    var retainedAutoSleepPageY = retainedAutoSleepPanel ? (window.pageYOffset || 0) : 0;
+    var autoSleepParking = null;
+    if (retainedAutoSleepPanel) {
+      // render() rebuilds unrelated Configure cards after asynchronous probes. Keep the activity
+      // subtree connected while that happens so its chart, scroll and focus do not flash away.
+      autoSleepParking = el("div", { hidden: "", "aria-hidden": "true" });
+      root.parentNode.insertBefore(autoSleepParking, root.nextSibling);
+      autoSleepParking.appendChild(retainedAutoSleepPanel);
+    }
     if (haPickerCleanup) haPickerCleanup();
     haOauthButton = null; haOauthStatus = null; haOauthLinks = null;
     root.innerHTML = "";
@@ -1983,12 +2030,15 @@
       var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       card.setAttribute("data-config-group", g);
       card.setAttribute("data-layout-key", configLayoutKey(g));
+      // When preserving the activity subtree, connect its destination before moving the subtree
+      // out of the parking node. That avoids even a synchronous detach/blur during this rebuild.
+      if (retainedAutoSleepPanel && g === "Behaviour") root.appendChild(card);
       fields.forEach(function (f) {
         if (!shouldRenderRow(f)) return;
         card.appendChild(row(f));
         if (g === "Behaviour" && f.key === "auto_sleep") card.appendChild(autoSleepPrerequisiteNode());
         if (g === "Behaviour" && f.key === "auto_sleep" && values.auto_sleep === "true") {
-          card.appendChild(autoSleepPanel());
+          card.appendChild(retainedAutoSleepPanel || autoSleepPanel());
           if (!autoSleepStatus && !autoSleepLoading) setTimeout(loadAutoSleepData, 0);
         }
         if (g === "Home Assistant connection" && f.key === "ha_url") card.appendChild(haOAuthRow());
@@ -2040,13 +2090,24 @@
           el("div", { class: "fctl" }, [btn, st]),
         ]));
       }
-      root.appendChild(card);
+      if (!card.parentNode) root.appendChild(card);
+      if (retainedAutoSleepPanel && card.contains(retainedAutoSleepPanel)) {
+        updateAutoSleepSummary();
+        updateAutoSleepHistory();
+      }
     });
     if (proximityCard) {
       root.insertBefore(proximityCard, root.querySelector('[data-config-group="Logging"]'));
     }
     document.getElementById("cfg-status").style.display = shown ? "none" : "block";
     if (!shown) document.getElementById("cfg-status").textContent = "No settings in this view.";
+    if (retainedAutoSleepFocus && retainedAutoSleepFocus.isConnected && document.activeElement !== retainedAutoSleepFocus) {
+      try { retainedAutoSleepFocus.focus({ preventScroll: true }); }
+      catch (_) { retainedAutoSleepFocus.focus(); }
+    }
+    if (retainedAutoSleepScroll && retainedAutoSleepScroll.isConnected) retainedAutoSleepScroll.scrollTop = retainedAutoSleepScrollTop;
+    if (retainedAutoSleepPanel && window.scrollTo) window.scrollTo(retainedAutoSleepPageX, retainedAutoSleepPageY);
+    if (autoSleepParking) autoSleepParking.remove();
     if (window.CardSizeMemory) window.CardSizeMemory.restore("cfg-groups");
     focusHash();
     scheduleConfigColumnAlignment();
@@ -2226,6 +2287,8 @@
       // clears the old user's name and performs a fresh no-store current-user probe below.
       if (haConnectionChanged) {
         haUserStatus = { phase: "unknown" };
+        autoSleepAreaGeneration++;
+        autoSleepSourceUpdating = Object.create(null);
         invalidateAutoSleepData(true);
         autoSleepAssignedAreaName = "";
         autoSleepPrerequisiteRequest++;
@@ -2409,6 +2472,8 @@
         values.ha_token = "";
         savedValues.ha_token = "";
         haOauthTargetUrl = "";
+        autoSleepAreaGeneration++;
+        autoSleepSourceUpdating = Object.create(null);
         invalidateAutoSleepData(true);
         autoSleepAssignedAreaName = "";
         autoSleepPrerequisiteRequest++;

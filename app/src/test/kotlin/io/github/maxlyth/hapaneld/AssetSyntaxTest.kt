@@ -80,7 +80,7 @@ class AssetSyntaxTest {
               throw new Error('unterminated '+name);
             }
             vm.runInThisContext([
-              'autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepHistoryTerminalMessage',
+              'autoSleepAreaMatchesName','autoSleepAreaMatches','autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepHistoryTerminalMessage',
               'scheduleAutoSleepReadiness','loadAutoSleepHistory','invalidateAutoSleepHistory',
               'invalidateAutoSleepData','autoSleepDisplayedHours','loadAutoSleepData'
             ].map(take).join('\n'));
@@ -89,6 +89,7 @@ class AssetSyntaxTest {
             global.autoSleepHistory=null;global.autoSleepHistoryLoading=false;global.autoSleepHistoryError='';
             global.autoSleepHistoryRequest=0;global.autoSleepHistoryHours=6;global.autoSleepHistoryWaiting=false;
             global.autoSleepHistoryWaitingMessage='';global.autoSleepHistoryReadyTimer=null;
+            global.autoSleepAssignedAreaName='';
             global.autoSleepReadinessDelayMs=1000;global.autoSleepHistoryRetryDelayMs=5000;
             global.updateAutoSleepSummary=()=>{};global.updateAutoSleepHistory=()=>{};
             const timers=[];let timerId=0;

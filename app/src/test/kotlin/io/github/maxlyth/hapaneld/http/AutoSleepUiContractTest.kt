@@ -54,10 +54,18 @@ class AutoSleepUiContractTest {
         assertTrue("timeline must provide an accessible description", "auto-sleep-chart-description" in source && "aria-describedby" in source)
         val statusLoad = source.substringAfter("function loadAutoSleepData() {")
             .substringBefore("var autoSleepResizeTimer")
+        val historyLoad = source.substringAfter("function loadAutoSleepHistory() {")
+            .substringBefore("function invalidateAutoSleepHistory")
         assertTrue(
             "history must wait for typed status readiness",
             statusLoad.indexOf("fetch(\"/api/v1/auto-sleep\"") in 0 until
                 statusLoad.indexOf("if (autoSleepHistoryReady(autoSleepStatus))"),
+        )
+        assertTrue(
+            "status and history must belong to the currently assigned Area before replacing the chart",
+            "function autoSleepAreaMatches(value)" in source &&
+                "status.enabled === true && autoSleepAreaMatches(status)" in source &&
+                "if (!autoSleepAreaMatches(body))" in historyLoad,
         )
         assertTrue(
             "ready status must automatically load history",
@@ -73,6 +81,10 @@ class AutoSleepUiContractTest {
             "temporary source and transport races must recover automatically",
             listOf("runtime_unavailable", "sources_changed", "history_transport", "history_unavailable")
                 .all { "\"$it\"" in source } && "retryAutomatically" in source,
+        )
+        assertFalse(
+            "status and history refreshes must not release retained card geometry while retrying",
+            "configCardSizeGeometryInvalid" in statusLoad || "configCardSizeGeometryInvalid" in historyLoad,
         )
         assertFalse("fixed startup retry exhaustion must not return", "autoSleepHistoryReadyAttempts" in source)
         assertFalse("history must not require a retry button", "auto-sleep-retry" in source)
@@ -133,11 +145,30 @@ class AutoSleepUiContractTest {
                 "if (!shouldReplace)" in source,
         )
         assertTrue(
+            "unrelated Configure renders must keep the activity subtree connected",
+            "var retainedAutoSleepPanel = document.getElementById(\"auto-sleep-status\")" in source &&
+                "autoSleepParking.appendChild(retainedAutoSleepPanel)" in source &&
+                "if (retainedAutoSleepPanel && g === \"Behaviour\") root.appendChild(card)" in source &&
+                "card.appendChild(retainedAutoSleepPanel || autoSleepPanel())" in source &&
+                "if (autoSleepParking) autoSleepParking.remove()" in source,
+        )
+        assertTrue(
+            "retained chart renders must restore both nested and page scroll after focus",
+            "retainedAutoSleepScrollTop" in source && "retainedAutoSleepPageY" in source &&
+                "window.scrollTo(retainedAutoSleepPageX, retainedAutoSleepPageY)" in source,
+        )
+        assertTrue(
             "retained source handlers and ARIA state must follow current busy state rather than a captured render value",
             "function sourceInteractionBlocked()" in source &&
                 "autoSleepSourceUpdating[sourceKey] || autoSleepHistoryBusy()" in source &&
                 "if (!sourceInteractionBlocked()) toggleAutoSleepSource(source)" in source &&
                 "row.setAttribute(\"aria-disabled\", retainedBusy ? \"true\" : \"false\")" in source,
+        )
+        assertTrue(
+            "source mutation callbacks must not overwrite a newer Area generation",
+            "var updateGeneration = autoSleepAreaGeneration" in source &&
+                "updateGeneration !== autoSleepAreaGeneration" in source &&
+                "autoSleepSourceUpdating[sourceKey] !== updateToken" in source,
         )
         assertFalse(
             "terminal history errors must not delete the retained snapshot",
@@ -174,10 +205,16 @@ class AutoSleepUiContractTest {
             "role: \"switch\", tabindex: \"0\"" in source &&
                 "autoSleepPrerequisite.eligible !== true) return" in source,
         )
+        val areaRefresh = source.substringAfter("var initialAreaMismatch =")
+            .substringBefore("} else if (nextAreaName) {")
         assertTrue(
-            "Area changes must retire stale replay and confirmed removal must converge the enabled UI off",
-            "nextAreaName !== autoSleepAssignedAreaName" in source &&
-                "invalidateAutoSleepData(true);" in source &&
+            "Area changes must fence stale requests while retaining the completed replay until its replacement is ready",
+            "autoSleepAreaMatchesName" in areaRefresh &&
+                "autoSleepAreaGeneration++;" in areaRefresh &&
+                "invalidateAutoSleepData();" in areaRefresh &&
+                "updateAutoSleepHistory();" in areaRefresh &&
+                "invalidateAutoSleepData(true);" !in areaRefresh &&
+                "updateAutoSleepHistory(true);" !in areaRefresh &&
                 "function convergeAutoSleepOffForMissingArea()" in source &&
                 "savedValues.auto_sleep = \"false\"" in source,
         )

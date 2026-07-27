@@ -56,13 +56,14 @@ function deferred() {
   return { promise, resolve };
 }
 
-function autoSleepHistory({ included = true, label = 'Office ceiling motion', hours = 6, laneCount = 1 } = {}) {
+function autoSleepHistory({ included = true, label = 'Office ceiling motion', hours = 6, laneCount = 1, areaName = 'Office', areaKey = 'a'.repeat(64) } = {}) {
   const end = Date.now();
   const start = end - hours * 60 * 60 * 1000;
   return {
     available: true,
     hours,
-    area_key: 'a'.repeat(64),
+    area_name: areaName,
+    area_key: areaKey,
     window_start_epoch_ms: start,
     window_end_epoch_ms: end,
     segments: [{ start_epoch_ms: start, end_epoch_ms: end, output: included ? 'hold_awake' : 'allow_sleep' }],
@@ -1046,16 +1047,21 @@ browserTest('Auto-sleep requires an assigned Area before OFF can be switched ON'
 browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snapshot atomically', async (t) => {
   const sourcePost = deferred();
   const refreshedHistory = deferred();
+  const homeDashboards = deferred();
   let historyCalls = 0;
   const requestedHistoryHours = [];
   let sourcePosts = 0;
-  const schema = [{ key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true }];
+  const schema = [
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+    { key: 'friendly_name', label: 'Panel name', group: 'System', type: 'STRING', available: true },
+  ];
   const harness = await startHarness((path, request) => {
     if (path === '/api/v1/config/schema') return json(schema);
-    if (path === '/api/v1/config') return json({ settings: { auto_sleep: 'true' }, ha_expose: {}, ha_auth: { configured: true } });
+    if (path === '/api/v1/config') return json({ settings: { auto_sleep: 'true', friendly_name: 'Panel' }, ha_expose: {}, ha_auth: { configured: true } });
     if (path === '/api/v1/apps') return json({ apps: [] });
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/home-dashboards') return homeDashboards.promise;
     if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
     if (path === '/api/v1/auto-sleep') return json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 1 });
     if (path === '/api/v1/auto-sleep/source' && request.method === 'POST') { sourcePosts++; return sourcePost.promise; }
@@ -1083,15 +1089,24 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
   assert.equal(await track.getAttribute('title'), 'Click to suppress this source');
   assert.equal(await sourceRow.getAttribute('title'), null);
   assert.equal(await sourceRow.locator('.auto-sleep-interval').getAttribute('title'), null);
-  const before = await page.evaluate(() => {
-    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
-    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
-    return { height: chart.height, legendY: legend.y };
-  });
+  const oldPanel = await page.locator('#auto-sleep-status').elementHandle();
+  const oldChart = await page.locator('#auto-sleep-chart').elementHandle();
+  const oldContent = await page.locator('.auto-sleep-chart-content').elementHandle();
   const oldSnapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
   const oldScroll = await page.locator('.auto-sleep-source-scroll').elementHandle();
   await sourceRow.focus();
   await oldScroll.evaluate((node) => { node.scrollTop = 75; });
+  const beforePageY = await page.evaluate(() => {
+    document.body.style.minHeight = '2000px';
+    window.scrollTo(0, 400);
+    return window.pageYOffset;
+  });
+  const before = await page.evaluate(() => {
+    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
+  });
 
   await sourceRow.press('Enter');
   const overlay = page.locator('.auto-sleep-loading-overlay');
@@ -1101,12 +1116,32 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
   assert.equal(await oldSnapshot.evaluate((node) => node.isConnected), true);
   assert.equal(await oldScroll.evaluate((node) => node.isConnected && node.scrollTop), 75);
   assert.equal(await sourceRow.evaluate((node) => document.activeElement === node), true);
+  assert.equal(await page.evaluate(() => window.pageYOffset), beforePageY);
   const duringPost = await page.evaluate(() => {
     const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
     const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
-    return { height: chart.height, legendY: legend.y };
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
   });
   assert.deepEqual(duringPost, before);
+
+  // An unrelated asynchronous Configure probe may legitimately rebuild other cards while the
+  // source update is pending. The activity subtree itself must stay connected and unchanged.
+  homeDashboards.resolve(json({ items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }], default: {} }));
+  await page.waitForTimeout(50);
+  assert.equal(await oldPanel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
+  assert.equal(await oldChart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
+  assert.equal(await oldContent.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
+  assert.equal(await oldSnapshot.evaluate((node) => node.isConnected), true);
+  assert.equal(await oldScroll.evaluate((node) => node.isConnected && node.scrollTop), 75);
+  assert.equal(await sourceRow.evaluate((node) => document.activeElement === node), true);
+  assert.equal(await page.evaluate(() => window.pageYOffset), beforePageY);
+  assert.deepEqual(await page.evaluate(() => {
+    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
+  }), before);
 
   sourcePost.resolve(json({ updated: true }));
   for (let attempt = 0; attempt < 20 && historyCalls < 2; attempt++) await page.waitForTimeout(25);
@@ -1122,7 +1157,8 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
   assert.deepEqual(await page.evaluate(() => {
     const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
     const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
-    return { height: chart.height, legendY: legend.y };
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
   }), before);
 
   refreshedHistory.resolve(json(autoSleepHistory({ included: false, hours: 24, laneCount: 20 })));
@@ -1158,7 +1194,7 @@ browserTest('Auto-sleep restores its cached chart synchronously when disabled an
     if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
     if (path === '/api/v1/auto-sleep') {
       statusCalls++;
-      return statusCalls === 1 ? json({ enabled: true, available: true, phase: 'live', source_count: 1 }) : reenabledStatus.promise;
+      return statusCalls === 1 ? json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 1 }) : reenabledStatus.promise;
     }
     if (path === '/api/v1/auto-sleep/history') {
       historyCalls++;
@@ -1209,7 +1245,7 @@ browserTest('Auto-sleep restores its cached chart synchronously when disabled an
   }), stableGeometry);
   assert.equal(await chart.locator('.auto-sleep-loading-overlay').count(), 1);
 
-  reenabledStatus.resolve(json({ enabled: true, available: true, phase: 'live', source_count: 1 }));
+  reenabledStatus.resolve(json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 1 }));
   for (let attempt = 0; attempt < 20 && historyCalls < 2; attempt++) await page.waitForTimeout(25);
   assert.equal(historyCalls, 2);
   reenabledHistory.resolve(json(autoSleepHistory({ label: 'Office ceiling motion refreshed' })));
@@ -1227,7 +1263,7 @@ browserTest('Auto-sleep source failure keeps the exact focused and scrolled char
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
     if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
-    if (path === '/api/v1/auto-sleep') return json({ enabled: true, available: true, phase: 'live', source_count: 20 });
+    if (path === '/api/v1/auto-sleep') return json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 20 });
     if (path === '/api/v1/auto-sleep/history') return json(autoSleepHistory({ laneCount: 20 }));
     if (path === '/api/v1/auto-sleep/source' && request.method === 'POST') return failedSourcePost.promise;
   });
@@ -1252,11 +1288,108 @@ browserTest('Auto-sleep source failure keeps the exact focused and scrolled char
   assert.equal(await row.evaluate((node) => document.activeElement === node), true);
 });
 
-browserTest('Auto-sleep Area refresh clears A on B and converges unassigned to off without losing edits', async (t) => {
+for (const staleSourceOutcome of ['success', 'failure']) {
+  browserTest(`Auto-sleep ignores stale source ${staleSourceOutcome} after an Area transition`, async (t) => {
+    let areaName = 'Office';
+    let statusCalls = 0;
+    let historyCalls = 0;
+    const sourcePost = deferred();
+    const studioStatus = deferred();
+    const studioHistory = deferred();
+    const schema = [{ key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true }];
+    const harness = await startHarness((path, request) => {
+      if (path === '/api/v1/config/schema') return json(schema);
+      if (path === '/api/v1/config') return json({ settings: { auto_sleep: 'true' }, ha_expose: {}, ha_auth: { configured: true } });
+      if (path === '/api/v1/apps') return json({ apps: [] });
+      if (path === '/api/v1/radio') return json({ present: false });
+      if (path === '/api/v1/proximity') return json({ present: false });
+      if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: areaName });
+      if (path === '/api/v1/auto-sleep') {
+        statusCalls++;
+        return statusCalls === 1
+          ? json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 1 })
+          : studioStatus.promise;
+      }
+      if (path === '/api/v1/auto-sleep/history') {
+        historyCalls++;
+        return historyCalls === 1 ? json(autoSleepHistory()) : studioHistory.promise;
+      }
+      if (path === '/api/v1/auto-sleep/source' && request.method === 'POST') return sourcePost.promise;
+    });
+    const browser = await chromium.launch({ executablePath: chrome, headless: true });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(2_000);
+    t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+    await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+    const row = page.locator('.auto-sleep-lane.source').first();
+    await row.waitFor();
+    await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Office', { exact: true }).waitFor();
+    const snapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
+    await row.press('Enter');
+    await page.locator('.auto-sleep-loading-overlay').waitFor({ state: 'visible' });
+
+    areaName = 'Studio';
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Studio', { exact: true }).waitFor();
+    for (let attempt = 0; attempt < 20 && statusCalls < 2; attempt++) await page.waitForTimeout(25);
+    assert.equal(statusCalls, 2);
+    sourcePost.resolve(staleSourceOutcome === 'success' ? json({ updated: true }) : json({ error: 'failed' }, 500));
+    await page.waitForTimeout(100);
+    assert.equal(statusCalls, 2);
+    assert.equal(historyCalls, 1);
+    assert.equal(await snapshot.evaluate((node) => node.isConnected), true);
+    assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), true);
+    assert.equal(await page.getByText(/Could not update this activity source/).count(), 0);
+
+    studioStatus.resolve(json({ enabled: true, available: true, phase: 'live', area_name: 'Studio', source_count: 1 }));
+    for (let attempt = 0; attempt < 20 && historyCalls < 2; attempt++) await page.waitForTimeout(25);
+    studioHistory.resolve(json(autoSleepHistory({ label: 'Studio motion', areaName: 'Studio' })));
+    await page.getByText('Studio motion').waitFor();
+  });
+}
+
+browserTest('Auto-sleep replaces stale startup history when the first Area prerequisite arrives', async (t) => {
+  const prerequisite = deferred();
+  let statusCalls = 0;
+  let historyCalls = 0;
+  const schema = [{ key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true }];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { auto_sleep: 'true' }, ha_expose: {}, ha_auth: { configured: true } });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/auto-sleep/prerequisite') return prerequisite.promise;
+    if (path === '/api/v1/auto-sleep') {
+      statusCalls++;
+      return json({ enabled: true, available: true, phase: 'live', area_name: statusCalls === 1 ? 'Area A' : 'Area B', source_count: 1 });
+    }
+    if (path === '/api/v1/auto-sleep/history') {
+      historyCalls++;
+      return json(autoSleepHistory({ label: historyCalls === 1 ? 'Area A motion' : 'Area B motion', areaName: historyCalls === 1 ? 'Area A' : 'Area B' }));
+    }
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.getByText('Area A motion').waitFor();
+  const staleSnapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
+
+  prerequisite.resolve(json({ eligible: true, phase: 'assigned', area_name: 'Area B' }));
+  await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Area B', { exact: true }).waitFor();
+  await page.getByText('Area B motion').waitFor();
+  assert.equal(statusCalls, 2);
+  assert.equal(historyCalls, 2);
+  assert.equal(await staleSnapshot.evaluate((node) => node.isConnected), false);
+  assert.equal(await page.getByText('Area A motion').count(), 0);
+});
+
+browserTest('Auto-sleep Area refresh retains A until B is complete and converges unassigned to off without losing edits', async (t) => {
   let areaName = 'Area A';
   let statusCalls = 0;
   let historyCalls = 0;
-  const areaBStatus = deferred();
   const areaBHistory = deferred();
   const schema = [
     { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
@@ -1273,11 +1406,12 @@ browserTest('Auto-sleep Area refresh clears A on B and converges unassigned to o
       : json({ eligible: false, phase: 'unassigned', area_name: null });
     if (path === '/api/v1/auto-sleep') {
       statusCalls++;
-      return statusCalls === 1 ? json({ enabled: true, available: true, phase: 'live', area_name: 'Area A', source_count: 1 }) : areaBStatus.promise;
+      return json({ enabled: true, available: true, phase: 'live', area_name: statusCalls <= 2 ? 'Area A' : 'Area B', source_count: 1 });
     }
     if (path === '/api/v1/auto-sleep/history') {
       historyCalls++;
-      return historyCalls === 1 ? json(autoSleepHistory({ label: 'Area A motion' })) : areaBHistory.promise;
+      if (historyCalls <= 2) return json(autoSleepHistory({ label: 'Area A motion', areaName: 'Area A' }));
+      return areaBHistory.promise;
     }
   });
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
@@ -1287,19 +1421,53 @@ browserTest('Auto-sleep Area refresh clears A on B and converges unassigned to o
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   await page.getByText('Area A motion').waitFor();
   await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Area A', { exact: true }).waitFor();
+  const areaAPanel = await page.locator('#auto-sleep-status').elementHandle();
+  const areaAChart = await page.locator('#auto-sleep-chart').elementHandle();
+  const areaAContent = await page.locator('.auto-sleep-chart-content').elementHandle();
   const areaASnapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
+  const beforeAreaChange = await page.evaluate(() => {
+    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
+  });
 
   areaName = 'Area B';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Area B', { exact: true }).waitFor();
   assert.equal(statusCalls, 2);
   await page.locator('.auto-sleep-loading-overlay').waitFor({ state: 'visible' });
-  assert.equal(await areaASnapshot.evaluate((node) => node.isConnected), false);
-  assert.equal(await page.getByText('Area A motion').count(), 0);
-  areaBStatus.resolve(json({ enabled: true, available: true, phase: 'live', area_name: 'Area B', source_count: 1 }));
-  for (let attempt = 0; attempt < 20 && historyCalls < 2; attempt++) await page.waitForTimeout(25);
-  areaBHistory.resolve(json(autoSleepHistory({ label: 'Area B motion' })));
+  assert.equal(await areaAPanel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
+  assert.equal(await areaAChart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
+  assert.equal(await areaAContent.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
+  assert.equal(await areaASnapshot.evaluate((node) => node.isConnected), true);
+  assert.equal(await page.getByText('Area A motion').count(), 1);
+  assert.deepEqual(await page.evaluate(() => {
+    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
+  }), beforeAreaChange);
+  assert.equal(historyCalls, 1);
+  for (let attempt = 0; attempt < 80 && historyCalls < 2; attempt++) await page.waitForTimeout(25);
+  assert.equal(historyCalls, 2);
+  assert.equal(await areaASnapshot.evaluate((node) => node.isConnected), true);
+  assert.equal(await page.getByText('Area A motion').count(), 1);
+  for (let attempt = 0; attempt < 240 && historyCalls < 3; attempt++) await page.waitForTimeout(25);
+  assert.equal(historyCalls, 3);
+  areaBHistory.resolve(json(autoSleepHistory({ label: 'Area B motion', areaName: 'Area B' })));
   await page.getByText('Area B motion').waitFor();
+  await page.locator('.auto-sleep-loading-overlay').waitFor({ state: 'hidden' });
+  assert.equal(await areaASnapshot.evaluate((node) => node.isConnected), false);
+  assert.equal(await areaAPanel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
+  assert.equal(await areaAChart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
+  assert.equal(await areaAContent.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
+  assert.deepEqual(await page.evaluate(() => {
+    const chart = document.querySelector('#auto-sleep-chart').getBoundingClientRect();
+    const legend = document.querySelector('.auto-sleep-legend').getBoundingClientRect();
+    const system = document.querySelector('[data-config-group="System"]').getBoundingClientRect();
+    return { height: chart.height, legendY: legend.y, systemY: system.y };
+  }), beforeAreaChange);
 
   await page.locator('#cfg-friendly_name input').fill('Unsaved panel name');
   areaName = null;
