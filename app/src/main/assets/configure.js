@@ -2117,16 +2117,27 @@
             "&protocol=" + encodeURIComponent(values.log_ship_protocol || "");
           sinkBtn.disabled = true;
           setSinkStatus("Testing…", false);
-          fetch("/api/v1/config/probe-log-sink?" + query, { cache: "no-store" })
+          // POST, not GET: this transmits a record to a caller-named host, so it rides the same
+          // state-changing admission as every other mutating endpoint.
+          fetch("/api/v1/config/probe-log-sink", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: query
+          })
             .then(function (r) { return r.json(); })
             .then(function (p) {
               sinkBtn.disabled = false;
               var where = (p.host || host) + ":" + (p.port || "");
+              var look = p.marker ? " Look for “" + p.marker + "” in your collector." : "";
               if (p.ok && p.delivered === false) {
-                setSinkStatus("Sent to " + where + ". UDP is unacknowledged — look for “" + p.marker +
-                  "” in your collector to confirm it arrived.", false);
+                setSinkStatus("Sent a test record to " + where + ". UDP is unacknowledged, so the " +
+                  "panel cannot tell you it arrived." + look, false);
               } else if (p.ok) {
-                setSinkStatus("Connected to " + where + ".", true);
+                setSinkStatus(where + " accepted a test record." + look, false);
+              } else if (String(p.error || "").indexOf("http-") === 0) {
+                setSinkStatus(where + " rejected the test record with HTTP " + p.status +
+                  ". It is listening, but it is not accepting this format.", false);
               } else if (p.error === "no-host") {
                 setSinkStatus("Set a sink host first.", true);
               } else if (p.error === "unresolvable") {

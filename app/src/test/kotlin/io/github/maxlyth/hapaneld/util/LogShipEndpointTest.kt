@@ -99,6 +99,26 @@ class LogShipEndpointTest {
         )
     }
 
+    @Test fun ipv6LiteralsAreRebracketedForUrlUse() {
+        // resolve() strips the brackets because InetAddress and Socket want the bare address, but a
+        // URL needs them back — "http://::1:514/" cannot be parsed into an address and a port.
+        assertEquals("[::1]", LogShipEndpoint.urlHost("::1"))
+        assertEquals("[fd31::118:1]", LogShipEndpoint.urlHost("fd31::118:1"))
+        // Already-bracketed input must not be double-wrapped, and a name or IPv4 is left alone.
+        assertEquals("[::1]", LogShipEndpoint.urlHost("[::1]"))
+        assertEquals("collector.lan", LogShipEndpoint.urlHost("collector.lan"))
+        assertEquals("172.31.0.118", LogShipEndpoint.urlHost("172.31.0.118"))
+    }
+
+    @Test fun anIpv6HttpSinkRoundTripsIntoAParseableUrl() {
+        val ep = resolve("http://[::1]:8080", protocol = HTTP)
+        assertEquals("::1", ep.host)
+        assertEquals(8080, ep.port)
+        val url = java.net.URL("http://${LogShipEndpoint.urlHost(ep.host)}:${ep.port}/")
+        assertEquals("::1", url.host.trim('[', ']'))
+        assertEquals(8080, url.port)
+    }
+
     @Test fun ipv4LiteralsAreUntouched() {
         assertEquals(LogShipEndpoint.Endpoint("172.31.0.118", 514, SYSLOG_UDP), resolve("172.31.0.118"))
         assertEquals(

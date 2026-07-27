@@ -89,7 +89,14 @@ function usage () {
 `)
 }
 
-const counts = { udp: 0, tcp: 0, http: 0, parsed: 0, unparsed: 0 }
+const counts = { udp: 0, tcp: 0, http: 0, parsed: 0, unparsed: 0, overlong: 0 }
+
+// This listens on every interface by default, so a sender that never terminates a frame — a broken
+// client, or a stream that is not syslog at all — must not be able to grow memory without limit.
+// Both caps are far above any real record: the UDP transport truncates at 1 KiB, and a batched
+// NDJSON POST is bounded by the shipper's own queue.
+const MAX_FRAME_BYTES = 256 * 1024
+const MAX_BODY_BYTES = 8 * 1024 * 1024
 
 function stamp () {
   return new Date().toISOString().replace('T', ' ').slice(0, 23)
@@ -133,7 +140,7 @@ function report (transport, from, buffer, opts) {
   if (opts.quiet) {
     process.stdout.write(
       `\rudp=${counts.udp} tcp=${counts.tcp} http=${counts.http} ` +
-      `parsed=${counts.parsed} unparsed=${counts.unparsed}   `,
+      `parsed=${counts.parsed} unparsed=${counts.unparsed} overlong=${counts.overlong}   `,
     )
     return
   }
@@ -210,6 +217,19 @@ function startTcp (opts) {
         for (const frame of frames) {
           if (frame.length) report('tcp', from, Buffer.from(frame, 'utf8'), opts)
         }
+        // Nothing delimited the buffer within the cap, so this is not newline-framed syslog.
+        // Drop the connection rather than accumulate: keeping it would only defer the same verdict.
+        if (Buffer.byteLength(pending, 'utf8') > MAX_FRAME_BYTES) {
+          counts.overlong++
+          if (!opts.quiet) {
+            process.stdout.write(
+              `${stamp()} TCP ${from} OVERLONG FRAME — no newline within ${MAX_FRAME_BYTES} bytes; ` +
+              `closing. Is the sender using newline framing?\n`,
+            )
+          }
+          pending = ''
+          socket.destroy()
+        }
       })
       socket.on('error', () => socket.destroy())
     })
@@ -223,11 +243,32 @@ function startHttp (opts) {
     const server = http.createServer((req, res) => {
       const from = `${req.socket.remoteAddress}:${req.socket.remotePort}`
       const chunks = []
-      req.on('data', (c) => chunks.push(c))
+      let size = 0
+      let refused = false
+      req.on('data', (c) => {
+        if (refused) return
+        size += c.length
+        if (size > MAX_BODY_BYTES) {
+          // Answer 413 rather than buffering an unbounded body from an unauthenticated LAN peer.
+          refused = true
+          counts.overlong++
+          if (!opts.quiet) {
+            process.stdout.write(
+              `${stamp()} HTTP ${from} BODY TOO LARGE — over ${MAX_BODY_BYTES} bytes; refused 413\n`,
+            )
+          }
+          res.writeHead(413).end()
+          req.destroy()
+          return
+        }
+        chunks.push(c)
+      })
       req.on('end', () => {
+        if (refused) return
         reportNdjson(from, Buffer.concat(chunks).toString('utf8'), opts)
         res.writeHead(204).end()
       })
+      req.on('error', () => { refused = true })
     })
     server.on('error', reject)
     server.listen(opts.http, opts.bind, () => resolve(server))
@@ -309,7 +350,7 @@ async function main () {
   const summarise = () => {
     process.stdout.write(
       `\nudp=${counts.udp} tcp=${counts.tcp} http=${counts.http} ` +
-      `parsed=${counts.parsed} unparsed=${counts.unparsed}\n`,
+      `parsed=${counts.parsed} unparsed=${counts.unparsed} overlong=${counts.overlong}\n`,
     )
     process.exit(0)
   }

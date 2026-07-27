@@ -12,7 +12,7 @@
 
 ### Added
 
-- **A "Test sink" button on the Configure tab's Logging card** checks the collector from the panel's own network, which is the only vantage point that counts, and does it without saving first so a typo can be caught before it is committed. For TCP and HTTP it reports a real connection. For UDP it sends one marked record and hands back the marker to search for in your collector, which is as much as that transport can honestly confirm.
+- **A "Test sink" button on the Configure tab's Logging card** checks the collector from the panel's own network, which is the only vantage point that counts, and does it without saving first so a typo can be caught before it is committed. It sends one real, marked record in whatever format you have selected — an RFC5424 frame for syslog, an NDJSON POST for HTTP — rather than merely opening a connection, because a connection succeeds against any listening port and so cannot tell your collector from something else that happens to be there. You always get the marker back, so you can search for it in the collector; over UDP that search is the only confirmation possible, and the panel says so instead of claiming delivery.
 
 - **A standalone receiver for checking log shipping end to end**, at `tools/logship-receiver/`. It is a single dependency-free Node script that listens for syslog over UDP and TCP and for NDJSON over HTTP at the same time, prints a full breakdown of every record, and says so loudly when something does not parse — the failure a real collector performs in silence. Run it with `--self-test` first to rule out your own machine.
 

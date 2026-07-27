@@ -511,7 +511,7 @@ private class HttpLogSink(
     target: LogShipTarget,
     private val encode: (String) -> String,
 ) : LogSink {
-    private val url = "http://${target.host}:${target.port}/"
+    private val url = "http://${LogShipEndpoint.urlHost(target.host)}:${target.port}/"
     @Volatile private var closed = false
     private var connection: HttpURLConnection? = null
 

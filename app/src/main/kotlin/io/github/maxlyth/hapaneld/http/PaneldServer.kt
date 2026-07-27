@@ -1361,11 +1361,14 @@ class PaneldServer internal constructor(
                         val body = withContext(Dispatchers.IO) { probeBrokerJson(url) }
                         call.respondText(body, ContentType.Application.Json)
                     }
-                    get("/config/probe-log-sink") {
-                        // Same pre-flight idea as probe-broker, from the panel's own network vantage.
-                        // Read-only for the stream transports; the UDP case sends ONE marked datagram,
-                        // because a connectionless transport gives no other evidence it can be reached.
-                        val params = call.request.queryParameters
+                    post("/config/probe-log-sink") {
+                        // Same pre-flight idea as probe-broker, from the panel's own network vantage,
+                        // but deliberately a POST rather than a GET: unlike the broker probe this one
+                        // TRANSMITS a caller-supplied record to a caller-supplied host and port, which
+                        // is neither safe nor idempotent, and as a GET it would be a CSRF-reachable
+                        // packet emitter aimed at the panel's LAN. POST puts it behind the shared
+                        // state-changing OriginGuard admission applied to every mutating route.
+                        val params = receiveBoundedFormParameters(call) ?: return@post
                         val body = withContext(Dispatchers.IO) {
                             probeLogSinkJson(
                                 host = params["host"] ?: config.logShipHost,
@@ -5550,14 +5553,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     }
 
     /**
-     * See GET /config/probe-log-sink. Bounded: one DNS resolve plus one 2s connect, or for UDP one
-     * datagram.
+     * See POST /config/probe-log-sink. Bounded: one DNS resolve plus one 2s connect and exactly one
+     * marked record, in the real wire format of the selected transport.
      *
-     * UDP deliberately reports `delivered:false` even on success. A datagram send that returns
-     * without error proves only that the panel handed it to the network — nothing about arrival —
-     * and reporting that as "ok" would recreate in the UI exactly the false confidence this whole
-     * change exists to remove. The caller gets a marker string to search for in their collector,
-     * which is the only honest confirmation available for a connectionless transport.
+     * Every transport transmits. An earlier revision reported a bare TCP `connect()` as success, but
+     * a connect succeeds against *any* listening socket — an MQTT broker, an SSH daemon, a mistyped
+     * port belonging to something else entirely — so "Connected" asserted a working log sink on
+     * evidence that could not distinguish one. Writing a real RFC5424 frame or a real NDJSON POST is
+     * the cheapest check that actually discriminates.
+     *
+     * `delivered` says whether the transport itself confirmed anything. UDP is always false: a send
+     * that returns without error proves only that the panel handed the datagram to the network, and
+     * calling that success would rebuild in the UI the very false confidence this change removes.
+     * Every transport returns the marker regardless, because searching the collector for it is the
+     * only end-to-end confirmation that exists.
      *
      * Takes [panelId] as a parameter rather than reading `config`, so it stays free of instance state
      * and can be exercised the same way [probeBrokerJson] is, without the Android-backed server graph.
@@ -5570,33 +5579,70 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"protocol\":${jsonStr(ep.protocol)}"
         val resolved = runCatching { java.net.InetAddress.getByName(ep.host) }.getOrNull()
             ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
-        val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)}"
+        val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
+        val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)},\"marker\":${jsonStr(marker)}"
+        val name = panelId.ifBlank { "panel" }
+        val timestamp = probeTimestamp()
 
-        if (ep.protocol == LogShipEndpoint.SYSLOG_UDP) {
-            val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
-            val frame = "<14>1 ${probeTimestamp()} ${panelId.ifBlank { "panel" }} ha-paneld - - - $marker"
-            val bytes = frame.toByteArray(Charsets.UTF_8)
-            val sent = runCatching {
-                java.net.DatagramSocket().use {
-                    it.connect(resolved, ep.port)
-                    it.send(java.net.DatagramPacket(bytes, bytes.size, resolved, ep.port))
-                }
-                true
-            }.getOrDefault(false)
-            return if (sent) {
-                "{\"ok\":true,\"delivered\":false,\"marker\":${jsonStr(marker)},$body}"
-            } else {
-                "{\"ok\":false,\"error\":\"send-failed\",$body}"
+        fun failure(error: String) = "{\"ok\":false,\"error\":${jsonStr(error)},$body}"
+
+        return when (ep.protocol) {
+            LogShipEndpoint.SYSLOG_UDP -> {
+                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker"
+                    .toByteArray(Charsets.UTF_8)
+                runCatching {
+                    java.net.DatagramSocket().use {
+                        it.connect(resolved, ep.port)
+                        it.send(java.net.DatagramPacket(frame, frame.size, resolved, ep.port))
+                    }
+                }.fold(
+                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
+                    onFailure = { failure("send-failed") },
+                )
             }
-        }
-
-        val reachable = runCatching {
-            java.net.Socket().use { it.connect(java.net.InetSocketAddress(resolved, ep.port), 2_000); true }
-        }.getOrDefault(false)
-        return if (reachable) {
-            "{\"ok\":true,\"delivered\":true,$body}"
-        } else {
-            "{\"ok\":false,\"error\":\"unreachable\",$body}"
+            LogShipEndpoint.HTTP -> {
+                val record = "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
+                    "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
+                runCatching {
+                    val url = java.net.URL(
+                        "http://${LogShipEndpoint.urlHost(ep.host)}:${ep.port}/",
+                    )
+                    (url.openConnection() as java.net.HttpURLConnection).run {
+                        requestMethod = "POST"
+                        connectTimeout = 2_000
+                        readTimeout = 2_000
+                        doOutput = true
+                        setRequestProperty("Content-Type", "application/x-ndjson")
+                        try {
+                            outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
+                            responseCode
+                        } finally {
+                            disconnect()
+                        }
+                    }
+                }.fold(
+                    onSuccess = { code ->
+                        if (code in 200..299) "{\"ok\":true,\"delivered\":true,\"status\":$code,$body}"
+                        else "{\"ok\":false,\"error\":\"http-$code\",\"status\":$code,$body}"
+                    },
+                    onFailure = { failure("unreachable") },
+                )
+            }
+            else -> {
+                val frame = "<14>1 $timestamp $name ha-paneld - - - $marker\n"
+                runCatching {
+                    java.net.Socket().use { socket ->
+                        socket.connect(java.net.InetSocketAddress(resolved, ep.port), 2_000)
+                        socket.getOutputStream().apply {
+                            write(frame.toByteArray(Charsets.UTF_8))
+                            flush()
+                        }
+                    }
+                }.fold(
+                    onSuccess = { "{\"ok\":true,\"delivered\":true,$body}" },
+                    onFailure = { failure("unreachable") },
+                )
+            }
         }
     }
 

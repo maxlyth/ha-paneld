@@ -43,6 +43,14 @@ object LogShipEndpoint {
     /** Canonical protocol for any stored or user-supplied value; unrecognised input takes the default. */
     fun protocol(raw: String): String = known(raw) ?: DEFAULT_PROTOCOL
 
+    /**
+     * The host as it must appear inside a URL. [resolve] strips IPv6 brackets because that is what
+     * `InetAddress` and `Socket` want, but a URL needs them back or `http://::1:514/` is ambiguous
+     * nonsense — the parser cannot tell the address's colons from the port separator.
+     */
+    fun urlHost(host: String): String =
+        if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+
     /** Short transport word for status text: `udp://host:514` reads better than `syslog-udp://…`. */
     fun scheme(protocol: String): String = when (protocol) {
         SYSLOG_UDP -> "udp"
