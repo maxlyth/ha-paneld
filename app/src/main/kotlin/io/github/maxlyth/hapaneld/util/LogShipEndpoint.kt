@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.util
 
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URI
 import java.util.Locale
 
@@ -50,6 +52,27 @@ object LogShipEndpoint {
      */
     fun urlHost(host: String): String =
         if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+
+    /**
+     * Candidate sink addresses in the order they should be tried: **IPv4 first**, then IPv6.
+     *
+     * This is deliberately the opposite of the MQTT bridge's IPv6-first preference, because the two
+     * have opposite feedback. MQTT learns — a failed connect flips the preference and the working
+     * family is persisted. UDP syslog cannot learn: a datagram sent to an address whose service is
+     * not listening succeeds locally and vanishes, so the wrong first choice is a permanent, silent
+     * failure with no signal to correct it.
+     *
+     * Proven on hardware 2026-07-27: a collector name with both A and AAAA records resolved to a
+     * global IPv6 address, the panel reported a successful UDP send, and nothing ever arrived; the
+     * same collector by IPv4 literal worked on every transport. LAN log collectors are IPv4 in
+     * practice, so IPv4-first is the ordering that fails least often — and where the transport does
+     * give feedback (TCP, HTTP) the caller walks the whole list rather than trusting this order.
+     *
+     * An IPv6-only collector is unaffected: it resolves to AAAA records only, so IPv6 is all there
+     * is to choose.
+     */
+    fun orderedCandidates(addresses: List<InetAddress>): List<InetAddress> =
+        addresses.filterIsInstance<Inet4Address>() + addresses.filterNot { it is Inet4Address }
 
     /** Short transport word for status text: `udp://host:514` reads better than `syslog-udp://…`. */
     fun scheme(protocol: String): String = when (protocol) {

@@ -40,10 +40,18 @@ internal class BoundedDnsResolver(
     )
 
     @Throws(IOException::class)
-    fun resolveOne(host: String, timeoutMs: Long): InetAddress {
+    fun resolveOne(host: String, timeoutMs: Long): InetAddress = resolveAll(host, timeoutMs).first()
+
+    /**
+     * Every address the name resolves to, so a caller that can retry is not stuck with whichever
+     * record the platform happened to return first. A dual-stack name whose service listens on only
+     * one family is otherwise a total, silent failure.
+     */
+    @Throws(IOException::class)
+    fun resolveAll(host: String, timeoutMs: Long): List<InetAddress> {
         val future = try {
-            executor.submit<InetAddress> {
-                lookup(host).firstOrNull() ?: throw UnknownHostException(host)
+            executor.submit<List<InetAddress>> {
+                lookup(host).toList().ifEmpty { throw UnknownHostException(host) }
             }
         } catch (e: RejectedExecutionException) {
             throw IOException("DNS resolver busy for $host", e)
@@ -78,4 +86,8 @@ internal object BoundedDns {
 
     @Throws(IOException::class)
     fun resolveOne(host: String, timeoutMs: Long): InetAddress = resolver.resolveOne(host, timeoutMs)
+
+    @Throws(IOException::class)
+    fun resolveAll(host: String, timeoutMs: Long): List<InetAddress> =
+        resolver.resolveAll(host, timeoutMs)
 }

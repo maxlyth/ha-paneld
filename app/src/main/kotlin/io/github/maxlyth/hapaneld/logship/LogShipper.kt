@@ -438,21 +438,50 @@ private class TcpSyslogLogSink(
     private val target: LogShipTarget,
     private val encode: (String) -> String,
 ) : LogSink {
-    private val socket = Socket()
+    // A java.net.Socket is single-use: a failed connect leaves it unusable, so each candidate needs
+    // its own. Volatile because close() can arrive from another thread mid-connect.
+    @Volatile private var socket: Socket? = null
+    @Volatile private var closed = false
 
     override fun connect() {
-        val resolved = BoundedDns.resolveOne(target.host, LogShipper.DNS_TIMEOUT_MS)
-        socket.connect(InetSocketAddress(resolved, target.port), LogShipper.NETWORK_TIMEOUT_MS)
-        socket.tcpNoDelay = true
+        // A stream transport reports failure, so walk every resolved address rather than trusting
+        // the first: a dual-stack name whose collector listens on one family only must still work.
+        var last: IOException? = null
+        for (candidate in LogShipEndpoint.orderedCandidates(
+            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
+        )) {
+            if (closed) throw IOException("closed")
+            val attempt = Socket()
+            // Publish before connecting: closing the run must be able to break a connect that is
+            // still blocking, which is how stop() unblocks a worker parked on an unreachable sink.
+            socket = attempt
+            if (closed) {
+                runCatching { attempt.close() }
+                throw IOException("closed")
+            }
+            try {
+                attempt.connect(InetSocketAddress(candidate, target.port), LogShipper.NETWORK_TIMEOUT_MS)
+                attempt.tcpNoDelay = true
+                return
+            } catch (e: IOException) {
+                runCatching { attempt.close() }
+                last = e
+            }
+        }
+        throw last ?: IOException("no address resolved for ${target.host}")
     }
 
     override fun send(lines: List<String>) {
-        val out = socket.getOutputStream()
+        val active = socket ?: throw IOException("tcp sink used before connect")
+        val out = active.getOutputStream()
         for (line in lines) out.write(encode(line).toByteArray(Charsets.UTF_8))
         out.flush()
     }
 
-    override fun close() = socket.close()
+    override fun close() {
+        closed = true
+        runCatching { socket?.close() }
+    }
 }
 
 /**
@@ -470,10 +499,18 @@ private class UdpSyslogLogSink(
     private var address: InetAddress? = null
 
     override fun connect() {
-        val resolved = BoundedDns.resolveOne(target.host, LogShipper.DNS_TIMEOUT_MS)
+        // UDP has no failure signal to fall back on: a datagram sent to an address whose collector
+        // is not listening succeeds locally and vanishes. Ordering is therefore the only lever, so
+        // take the first candidate rather than "the first the platform happened to return".
+        val resolved = LogShipEndpoint.orderedCandidates(
+            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
+        ).first()
         socket.connect(resolved, target.port)
         address = resolved
     }
+
+    /** The address datagrams are actually going to, so the status line can name it. */
+    fun resolvedAddress(): InetAddress? = address
 
     override fun send(lines: List<String>) {
         val destination = address ?: throw IOException("udp sink used before connect")
@@ -511,15 +548,37 @@ internal fun truncateUtf8(text: String, maxBytes: Int): ByteArray {
 }
 
 private class HttpLogSink(
-    target: LogShipTarget,
+    private val target: LogShipTarget,
     private val encode: (String) -> String,
 ) : LogSink {
-    private val url = "http://${LogShipEndpoint.urlHost(target.host)}:${target.port}/"
     @Volatile private var closed = false
     private var connection: HttpURLConnection? = null
 
+    // Resolved at connect and pinned for the run, so every POST targets the one address proven to
+    // answer. Leaving the hostname in the URL would also hand HttpURLConnection its own unbounded
+    // second lookup, which is exactly what the bounded resolver exists to prevent.
+    @Volatile private var url: String = ""
+
     override fun connect() {
         if (closed) throw IOException("closed")
+        // HTTP reports failure, so walk the candidates and keep the first that answers at all.
+        var last: IOException? = null
+        for (candidate in LogShipEndpoint.orderedCandidates(
+            BoundedDns.resolveAll(target.host, LogShipper.DNS_TIMEOUT_MS),
+        )) {
+            if (closed) throw IOException("closed")
+            val attempt = "http://${LogShipEndpoint.urlHost(candidate.hostAddress)}:${target.port}/"
+            try {
+                Socket().use {
+                    it.connect(InetSocketAddress(candidate, target.port), LogShipper.NETWORK_TIMEOUT_MS)
+                }
+                url = attempt
+                return
+            } catch (e: IOException) {
+                last = e
+            }
+        }
+        throw last ?: IOException("no address resolved for ${target.host}")
     }
 
     override fun send(lines: List<String>) {

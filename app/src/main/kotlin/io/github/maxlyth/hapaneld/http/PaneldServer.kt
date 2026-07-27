@@ -5636,8 +5636,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (ep.port !in 1..65535) return """{"ok":false,"error":"invalid-port"}"""
         val head = "\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
             "\"protocol\":${jsonStr(ep.protocol)}"
-        val resolved = runCatching { BoundedDns.resolveOne(ep.host, LOG_SINK_DNS_TIMEOUT_MS) }.getOrNull()
+        // Same ordering the shipper uses, so the probe exercises the address real traffic will take
+        // rather than whichever record the platform returned first.
+        val candidates = runCatching {
+            LogShipEndpoint.orderedCandidates(BoundedDns.resolveAll(ep.host, LOG_SINK_DNS_TIMEOUT_MS))
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
             ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
+        val resolved = candidates.first()
         val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
         val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)},\"marker\":${jsonStr(marker)}"
         val name = panelId.ifBlank { "panel" }
@@ -5662,24 +5667,36 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             LogShipEndpoint.HTTP -> {
                 val record = "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
                     "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
+                // Walk every candidate, exactly as the shipper does: reporting "unreachable" for a
+                // sink the shipper would have reached on a later address would be a false verdict.
                 runCatching {
-                    // Connect to the already-resolved address. Reusing the hostname here would ask
-                    // HttpURLConnection to perform a second, unbounded DNS lookup.
-                    val url = java.net.URL("http://${LogShipEndpoint.urlHost(resolved.hostAddress)}:${ep.port}/")
-                    (url.openConnection() as java.net.HttpURLConnection).run {
-                        requestMethod = "POST"
-                        connectTimeout = 2_000
-                        readTimeout = 2_000
-                        doOutput = true
-                        setRequestProperty("Host", "${LogShipEndpoint.urlHost(ep.host)}:${ep.port}")
-                        setRequestProperty("Content-Type", "application/x-ndjson")
+                    var last: Exception? = null
+                    for (candidate in candidates) {
+                        // Connect to the already-resolved address. Reusing the hostname here would
+                        // ask HttpURLConnection to perform a second, unbounded DNS lookup.
+                        val url = java.net.URL(
+                            "http://${LogShipEndpoint.urlHost(candidate.hostAddress)}:${ep.port}/",
+                        )
                         try {
-                            outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
-                            responseCode
-                        } finally {
-                            disconnect()
+                            return@runCatching (url.openConnection() as java.net.HttpURLConnection).run {
+                                requestMethod = "POST"
+                                connectTimeout = 2_000
+                                readTimeout = 2_000
+                                doOutput = true
+                                setRequestProperty("Host", "${LogShipEndpoint.urlHost(ep.host)}:${ep.port}")
+                                setRequestProperty("Content-Type", "application/x-ndjson")
+                                try {
+                                    outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
+                                    responseCode
+                                } finally {
+                                    disconnect()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            last = e
                         }
                     }
+                    throw last ?: java.io.IOException("no address resolved for ${ep.host}")
                 }.fold(
                     onSuccess = { code ->
                         if (code in 200..299) "{\"ok\":true,\"delivered\":true,\"status\":$code,$body}"
@@ -5691,13 +5708,23 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             else -> {
                 val frame = "<14>1 $timestamp $name ha-paneld - - - $marker\n"
                 runCatching {
-                    java.net.Socket().use { socket ->
-                        socket.connect(java.net.InetSocketAddress(resolved, ep.port), 2_000)
-                        socket.getOutputStream().apply {
-                            write(frame.toByteArray(Charsets.UTF_8))
-                            flush()
+                    // Walk every candidate, exactly as the shipper does.
+                    var last: Exception? = null
+                    for (candidate in candidates) {
+                        try {
+                            java.net.Socket().use { socket ->
+                                socket.connect(java.net.InetSocketAddress(candidate, ep.port), 2_000)
+                                socket.getOutputStream().apply {
+                                    write(frame.toByteArray(Charsets.UTF_8))
+                                    flush()
+                                }
+                            }
+                            return@runCatching
+                        } catch (e: Exception) {
+                            last = e
                         }
                     }
+                    throw last ?: java.io.IOException("no address resolved for ${ep.host}")
                 }.fold(
                     // A completed socket write is not collector acknowledgement. Only seeing the
                     // marker at the collector proves that the receiving application accepted it.
