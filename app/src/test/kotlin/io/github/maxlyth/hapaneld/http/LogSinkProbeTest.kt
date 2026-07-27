@@ -58,7 +58,7 @@ class LogSinkProbeTest {
             val result = probe(host = "127.0.0.1", port = listener.localPort, protocol = "syslog-tcp")
 
             assertTrue(result.toString(), result.getBoolean("ok"))
-            assertTrue("a stream transport does confirm the write", result.getBoolean("delivered"))
+            assertFalse("a socket write is not collector acknowledgement", result.getBoolean("delivered"))
             assertEquals("syslog-tcp", result.getString("protocol"))
             assertEquals("127.0.0.1", result.getString("resolved"))
             assertFalse(result.has("error"))

@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.BoundedDns
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -394,6 +395,7 @@ class LogShipper internal constructor(
         private const val POLL_SECONDS = 5L
         private const val SINK_BACKOFF_MS = 5_000L
         internal const val NETWORK_TIMEOUT_MS = 5_000
+        internal const val DNS_TIMEOUT_MS = 2_000L
 
         /**
          * RFC5426 obliges a receiver to accept only 480 bytes and recommends 2048; 1024 stays well
@@ -439,7 +441,8 @@ private class TcpSyslogLogSink(
     private val socket = Socket()
 
     override fun connect() {
-        socket.connect(InetSocketAddress(target.host, target.port), LogShipper.NETWORK_TIMEOUT_MS)
+        val resolved = BoundedDns.resolveOne(target.host, LogShipper.DNS_TIMEOUT_MS)
+        socket.connect(InetSocketAddress(resolved, target.port), LogShipper.NETWORK_TIMEOUT_MS)
         socket.tcpNoDelay = true
     }
 
@@ -467,7 +470,7 @@ private class UdpSyslogLogSink(
     private var address: InetAddress? = null
 
     override fun connect() {
-        val resolved = InetAddress.getByName(target.host)
+        val resolved = BoundedDns.resolveOne(target.host, LogShipper.DNS_TIMEOUT_MS)
         socket.connect(resolved, target.port)
         address = resolved
     }

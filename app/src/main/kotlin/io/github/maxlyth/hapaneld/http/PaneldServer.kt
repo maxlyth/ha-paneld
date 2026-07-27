@@ -88,6 +88,7 @@ import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.BoundedDns
 import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
@@ -1369,10 +1370,18 @@ class PaneldServer internal constructor(
                         // packet emitter aimed at the panel's LAN. POST puts it behind the shared
                         // state-changing OriginGuard admission applied to every mutating route.
                         val params = receiveBoundedFormParameters(call) ?: return@post
+                        val port = selectLogSinkProbePort(params["port"], config.logShipPort)
+                        if (port == null) {
+                            call.respondText(
+                                """{"ok":false,"error":"invalid-port"}""",
+                                ContentType.Application.Json,
+                            )
+                            return@post
+                        }
                         val body = withContext(Dispatchers.IO) {
                             probeLogSinkJson(
                                 host = params["host"] ?: config.logShipHost,
-                                port = params["port"]?.toIntOrNull() ?: config.logShipPort,
+                                port = port,
                                 protocol = params["protocol"] ?: config.logShipProtocol,
                                 panelId = config.panelId,
                             )
@@ -5577,7 +5586,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (ep.port !in 1..65535) return """{"ok":false,"error":"invalid-port"}"""
         val head = "\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
             "\"protocol\":${jsonStr(ep.protocol)}"
-        val resolved = runCatching { java.net.InetAddress.getByName(ep.host) }.getOrNull()
+        val resolved = runCatching { BoundedDns.resolveOne(ep.host, LOG_SINK_DNS_TIMEOUT_MS) }.getOrNull()
             ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
         val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
         val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)},\"marker\":${jsonStr(marker)}"
@@ -5604,14 +5613,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 val record = "{\"timestamp\":\"$timestamp\",\"host\":${jsonStr(name)}," +
                     "\"app\":\"ha-paneld\",\"message\":${jsonStr(marker)}}"
                 runCatching {
-                    val url = java.net.URL(
-                        "http://${LogShipEndpoint.urlHost(ep.host)}:${ep.port}/",
-                    )
+                    // Connect to the already-resolved address. Reusing the hostname here would ask
+                    // HttpURLConnection to perform a second, unbounded DNS lookup.
+                    val url = java.net.URL("http://${LogShipEndpoint.urlHost(resolved.hostAddress)}:${ep.port}/")
                     (url.openConnection() as java.net.HttpURLConnection).run {
                         requestMethod = "POST"
                         connectTimeout = 2_000
                         readTimeout = 2_000
                         doOutput = true
+                        setRequestProperty("Host", "${LogShipEndpoint.urlHost(ep.host)}:${ep.port}")
                         setRequestProperty("Content-Type", "application/x-ndjson")
                         try {
                             outputStream.use { it.write(record.toByteArray(Charsets.UTF_8)) }
@@ -5639,7 +5649,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         }
                     }
                 }.fold(
-                    onSuccess = { "{\"ok\":true,\"delivered\":true,$body}" },
+                    // A completed socket write is not collector acknowledgement. Only seeing the
+                    // marker at the collector proves that the receiving application accepted it.
+                    onSuccess = { "{\"ok\":true,\"delivered\":false,$body}" },
                     onFailure = { failure("unreachable") },
                 )
             }
@@ -7722,6 +7734,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val LOG_SINK_DNS_TIMEOUT_MS = 2_000L
         private const val HARDENED_APPROVAL_TEXT =
             "Requires physical on-panel approval for this action when Hardened mode is enabled."
         private const val HARDENED_CONDITIONAL_APPROVAL_TEXT =
