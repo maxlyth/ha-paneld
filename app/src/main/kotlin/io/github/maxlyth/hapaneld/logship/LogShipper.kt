@@ -548,11 +548,8 @@ private fun postAcrossCandidates(
     deadline: NetworkDeadline,
     publish: ((Socket?) -> Unit)?,
 ): LogSinkProbeResult {
-    var last: Exception? = null
-    var lastCandidate: InetAddress? = null
-    var lastStatus: Int? = null
+    var lastResult: LogSinkProbeResult? = null
     for (candidate in candidates) {
-        lastCandidate = candidate
         val socket = Socket()
         publish?.invoke(socket)
         var timeout: java.util.concurrent.ScheduledFuture<*>? = null
@@ -580,19 +577,17 @@ private fun postAcrossCandidates(
                 ?: throw IOException("empty HTTP response")
             val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull()
                 ?: throw IOException("invalid HTTP response")
-            lastStatus = status
             if (status in 200..299) return LogSinkProbeResult(true, true, candidate, status = status)
-            last = IOException("HTTP $status")
+            lastResult = LogSinkProbeResult(false, false, candidate, "http-$status", status)
         } catch (e: Exception) {
-            last = e
+            lastResult = LogSinkProbeResult(false, false, candidate, e.message ?: "unreachable")
         } finally {
             timeout?.cancel(false)
             publish?.invoke(null)
             runCatching { socket.close() }
         }
     }
-    val error = if (lastStatus != null) "http-$lastStatus" else last?.message ?: "unreachable"
-    return LogSinkProbeResult(false, false, lastCandidate, error, lastStatus)
+    return lastResult ?: LogSinkProbeResult(false, false, null, "unreachable")
 }
 
 /** RFC6587 non-transparent framing: newline-delimited RFC5424 frames on a stream. */

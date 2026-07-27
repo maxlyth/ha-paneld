@@ -147,6 +147,25 @@ class LogShipAddressFamilyTest {
     }
 
     @Test(timeout = 5_000)
+    fun httpStatusDoesNotLeakOntoLaterTransportFailure() {
+        val first = InetAddress.getByName("127.0.0.2")
+        val second = InetAddress.getByName("127.0.0.3")
+        ServerSocket(0, 4, first).use { rejected ->
+            serveHttp(rejected, 503, ArrayBlockingQueue(1))
+            val result = NetworkLogSinkFactory.probe(
+                LogShipTarget("collector.example", rejected.localPort, LogShipEndpoint.HTTP, "panel"),
+                "{}".toByteArray(),
+                LogAddressResolver { _, _ -> listOf(first, second) },
+                1_000,
+            )
+            assertTrue(result.toString(), !result.ok)
+            assertEquals(second, result.candidate)
+            assertEquals(null, result.status)
+            assertTrue(result.toString(), result.error != "http-503")
+        }
+    }
+
+    @Test(timeout = 5_000)
     fun httpCloseInterruptsActivePost() {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { listener ->
             val accepted = ArrayBlockingQueue<Socket>(1)
