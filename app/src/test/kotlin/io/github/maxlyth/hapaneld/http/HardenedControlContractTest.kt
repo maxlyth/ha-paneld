@@ -123,21 +123,24 @@ class HardenedControlContractTest {
             server.indexOf("private fun updateTameSelection"),
         )
         assertTrue(configPost.contains("PowerSafetyMutationPolicy.requestsSafetyReduction("))
-        assertTrue(configPost.contains("powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION"))
-        assertTrue(configPost.indexOf("powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION") <
+        assertTrue(configPost.contains("ConfigSensitiveAdmission.authorize("))
+        assertTrue(configPost.contains("SensitiveOperation.POWER_CONFIGURATION"))
+        assertTrue(configPost.contains("exactHttpApprovalPayload(call, p.canonicalDigest())"))
+        assertTrue(configPost.contains("separate-sensitive-changes"))
+        assertTrue(configPost.indexOf("ConfigSensitiveAdmission.authorize(") <
             configPost.indexOf("InstallProgress.startConfigMutation()"))
-        assertTrue(configPost.indexOf("authorizeSensitive(") < configPost.indexOf("InstallProgress.startConfigMutation()"))
 
         val handler = mqtt.substring(
             mqtt.indexOf("private fun handlePreventIdleDim"),
             mqtt.indexOf("private fun handleTouchSound"),
         )
-        assertTrue(handler.contains("PowerSafetyMutationPolicy.allowPreventIdleDimTransition("))
-        assertTrue(handler.indexOf("allowPreventIdleDimTransition(") < handler.indexOf("config.setPreventIdleDim(on)"))
-        assertTrue(handler.indexOf("stateConverger.reconcile") < handler.indexOf("config.setPreventIdleDim(on)"))
+        assertTrue(handler.contains("PowerSafetyMutationPolicy.parseGuardSwitch(payload)"))
+        assertTrue(handler.contains("SensitiveOperation.POWER_CONFIGURATION"))
+        assertTrue(handler.contains("\"prevent_idle_dim\\u0000${'$'}payload\""))
+        assertTrue(handler.indexOf("authorizeMqttSensitive(") < handler.indexOf("config.setPreventIdleDim(on)"))
 
         val dispatch = mqtt.substring(mqtt.indexOf("private fun dispatchSetting"), mqtt.indexOf("// ---- discovery ----"))
-        assertTrue(dispatch.contains("handlePreventIdleDim(onOff, approvalRequired = sensitiveApprovalRequired)"))
+        assertTrue(dispatch.contains("if (sensitiveApprovalRequired) value else onOff"))
     }
 
     @Test fun securityModesAreNamedRelaxedAndHardenedInternallyAndOnPanel() {

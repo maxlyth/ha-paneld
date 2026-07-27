@@ -4671,26 +4671,47 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             requestedPreventIdleDim = p["prevent_idle_dim"]?.let(SettingValue::parseBool),
         )
         val privilegedOperation = when {
-            powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION
             tamePackagesChanged -> SensitiveOperation.PACKAGE_TAME
             softwareAuthorityChanged -> SensitiveOperation.APK_INSTALL
             else -> null
         }
-        if (privilegedOperation != null && !authorizeSensitive(
-                call,
-                privilegedOperation,
-                exactHttpApprovalPayload(call, p.canonicalDigest()),
-                when {
-                    powerSafetyReduction && (tamePackagesChanged || softwareAuthorityChanged) ->
-                        "Reduce panel power safety and apply other privileged configuration changes"
-                    powerSafetyReduction -> "Disable a panel power-safety guard"
-                    tamePackagesChanged && softwareAuthorityChanged ->
-                        "Change vendor package state and software installation policy"
-                    tamePackagesChanged -> "Change the persistent vendor package blocklist"
-                    else -> "Allow automatic software installation or apply an active update channel"
-                },
-            )
-        ) return
+        val sensitiveOperations = buildList {
+            if (powerSafetyReduction) add(SensitiveOperation.POWER_CONFIGURATION)
+            privilegedOperation?.let(::add)
+        }
+        val approvalPayload = exactHttpApprovalPayload(call, p.canonicalDigest())
+        when (ConfigSensitiveAdmission.authorize(
+            hardenedSecurityEnabled = config.hardenedSecurityEnabled,
+            loopbackPeer = isLoopbackPeer(call.request.origin.remoteAddress),
+            requestedOperations = sensitiveOperations,
+            authorize = { operation ->
+                authorizeSensitive(
+                    call,
+                    operation,
+                    approvalPayload,
+                    when (operation) {
+                        SensitiveOperation.POWER_CONFIGURATION -> "Disable a panel power-safety guard"
+                        SensitiveOperation.PACKAGE_TAME -> when {
+                            tamePackagesChanged && softwareAuthorityChanged ->
+                                "Change vendor package state and software installation policy"
+                            else -> "Change the persistent vendor package blocklist"
+                        }
+                        else -> "Allow automatic software installation or apply an active update channel"
+                    },
+                )
+            },
+        )) {
+            ConfigSensitiveAdmissionResult.SEPARATE_SENSITIVE_CHANGES -> {
+                call.respondText(
+                    """{"ok":false,"error":"separate-sensitive-changes","message":"Save power-safety reductions separately from vendor-package or software-installation policy changes."}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+            ConfigSensitiveAdmissionResult.DENIED -> return
+            ConfigSensitiveAdmissionResult.AUTHORIZED -> Unit
+        }
         val configMutationTicket = InstallProgress.startConfigMutation()
         if (configMutationTicket == null) {
             respondConfigMutation(

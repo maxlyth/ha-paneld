@@ -125,4 +125,33 @@ class LocalApprovalBrokerTest {
         assertEquals(first, reordered)
         assertFalse(first == oneName)
     }
+
+    @Test
+    fun powerApprovalIsExactPeerPayloadBoundAndOneShot() {
+        val broker = ApprovalBroker(random = SecureRandom())
+        val payload = "prevent_idle_dim\u0000OFF"
+        val pending = broker.request(SensitiveOperation.POWER_CONFIGURATION, "mqtt", payload, "disable guard")
+        assertTrue(broker.approve(pending.second))
+
+        assertEquals(
+            ApprovalBroker.Decision.PENDING,
+            broker.request(SensitiveOperation.POWER_CONFIGURATION, "other", payload, "disable guard").first,
+        )
+        assertEquals(
+            ApprovalBroker.Decision.PENDING,
+            broker.request(SensitiveOperation.POWER_CONFIGURATION, "mqtt", "prevent_idle_dim\u0000off", "disable guard").first,
+        )
+        assertEquals(
+            ApprovalBroker.Decision.PENDING,
+            broker.request(SensitiveOperation.PACKAGE_TAME, "mqtt", payload, "disable guard").first,
+        )
+        assertEquals(
+            ApprovalBroker.Decision.APPROVED,
+            broker.request(SensitiveOperation.POWER_CONFIGURATION, "mqtt", payload, "disable guard").first,
+        )
+        assertEquals(
+            ApprovalBroker.Decision.PENDING,
+            broker.request(SensitiveOperation.POWER_CONFIGURATION, "mqtt", payload, "disable guard").first,
+        )
+    }
 }

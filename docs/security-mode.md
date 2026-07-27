@@ -59,7 +59,10 @@ Hardened mode requires on-panel approval before a network client can:
 - play media fetched from a remote URL;
 - reboot the panel;
 - repair Home Assistant Companion configuration or clear the built-in dashboard's browsing data; or
-- change system display density or font scaling.
+- change system display density or font scaling; or
+- disable the configured keep-awake or prevent-idle-dim reachability guard through Configure or Home Assistant.
+
+A remote Hardened Configure request must save a power-safety reduction separately from package-taming or software-installation policy changes because those actions require different approval classes. Relaxed-mode and loopback combined saves remain direct.
 
 Hardened mode rejects non-loopback tap injection rather than allowing it to approve its own pending requests. It also refuses to enable classic network ADB, Android Wireless debugging or the LAN WebView developer-tools relay. Switch the panel back to Relaxed mode locally before using those remote-control paths.
 

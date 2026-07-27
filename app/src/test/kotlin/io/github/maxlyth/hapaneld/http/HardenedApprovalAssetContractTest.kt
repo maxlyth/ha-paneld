@@ -80,6 +80,7 @@ class HardenedApprovalAssetContractTest {
         val configConflict = paths.getJSONObject("/api/v1/config").getJSONObject("post")
             .getJSONObject("responses").getJSONObject("409").getString("description")
         assertTrue(configConflict.contains("network ADB cannot be enabled"))
+        assertTrue(configConflict.contains("saved separately"))
 
         val inspectResponses = paths.getJSONObject("/api/v1/inspect/start").getJSONObject("post")
             .getJSONObject("responses")
@@ -110,6 +111,8 @@ class HardenedApprovalAssetContractTest {
         assertTrue(configure.contains("fetch(\"/api/v1/config\""))
         assertTrue(configure.contains("fetch(\"/api/v1/dashboard/clear-storage\""))
         assertTrue(configure.contains("e && e.message ? e.message"))
+        assertTrue(configure.contains("keep_awake: true"))
+        assertTrue(configure.contains("prevent_idle_dim: true"))
 
         val powerSafety = asset("power-safety.js")
         assertTrue(powerSafety.contains("body.error === 'approval-required'"))

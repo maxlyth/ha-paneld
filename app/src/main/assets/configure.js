@@ -58,7 +58,8 @@
   window.configCardSizeGeometryInvalid = configCardGeometryInvalid;
   var HARDENED_APPROVAL_SETTING_KEYS = {
     self_update: true, update_channel: true, companion_auto_update: true,
-    companion_update_channel: true, webview_auto_update: true
+    companion_update_channel: true, webview_auto_update: true,
+    keep_awake: true, prevent_idle_dim: true
   };
 
   function approvalMessage(body) {

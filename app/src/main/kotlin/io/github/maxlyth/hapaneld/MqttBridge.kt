@@ -2201,17 +2201,21 @@ internal class MqttBridge(
     }
 
     private fun handlePreventIdleDim(payload: String, approvalRequired: Boolean = true) {
-        val on = payload.trim().equals("ON", ignoreCase = true)
-        if (!PowerSafetyMutationPolicy.allowPreventIdleDimTransition(
-                hardened = config.hardenedSecurityEnabled,
-                current = config.preventIdleDim,
-                requested = on,
-                approvalRequired = approvalRequired,
+        val on = requireNotNull(PowerSafetyMutationPolicy.parseGuardSwitch(payload)) {
+            "prevent_idle_dim accepts only ON or OFF"
+        }
+        if (approvalRequired && PowerSafetyMutationPolicy.requestsSafetyReduction(
+                keepAwake = config.keepAwake,
+                requestedKeepAwake = null,
+                preventIdleDim = config.preventIdleDim,
+                requestedPreventIdleDim = on,
             )
         ) {
-            Log.w(TAG, "rejecting MQTT prevent_idle_dim safety reduction while Hardened mode is active")
-            stateConverger.reconcile("prevent_idle_dim", force = true)
-            return
+            authorizeMqttSensitive(
+                SensitiveOperation.POWER_CONFIGURATION,
+                "prevent_idle_dim\u0000$payload",
+                "Disable the panel's native screen-timeout guard from Home Assistant",
+            )
         }
         config.setPreventIdleDim(on)
         brightness.applyPreventIdleDim(on, config)
@@ -2816,7 +2820,10 @@ internal class MqttBridge(
         when (key) {
             "wake_on_wave" -> handleWakeOnWave(onOff)
             "auto_sleep" -> handleAutoSleep(onOff)
-            "prevent_idle_dim" -> handlePreventIdleDim(onOff, approvalRequired = sensitiveApprovalRequired)
+            "prevent_idle_dim" -> handlePreventIdleDim(
+                if (sensitiveApprovalRequired) value else onOff,
+                approvalRequired = sensitiveApprovalRequired,
+            )
             "watchdog_enabled" -> handleWatchdog(onOff)
             "kiosk_lock" -> handleKiosk(onOff)
             "silence_boot_chime" -> handleSilenceBootChime(onOff)

@@ -172,15 +172,10 @@ internal object PowerSafetyMutationPolicy {
         (keepAwake && requestedKeepAwake == false) ||
             (preventIdleDim && requestedPreventIdleDim == false)
 
-    /**
-     * MQTT has no trustworthy physical-approval retry channel. An HTTP config request that already
-     * completed exact-request approval passes [approvalRequired] as false when it reuses this live
-     * setting path; direct broker commands retain the default true value.
-     */
-    fun allowPreventIdleDimTransition(
-        hardened: Boolean,
-        current: Boolean,
-        requested: Boolean,
-        approvalRequired: Boolean,
-    ): Boolean = !hardened || !approvalRequired || requested || !current
+    /** Malformed broker payloads must never collapse into a safety-reducing OFF transition. */
+    fun parseGuardSwitch(payload: String): Boolean? = when {
+        payload.trim().equals("ON", ignoreCase = true) -> true
+        payload.trim().equals("OFF", ignoreCase = true) -> false
+        else -> null
+    }
 }
