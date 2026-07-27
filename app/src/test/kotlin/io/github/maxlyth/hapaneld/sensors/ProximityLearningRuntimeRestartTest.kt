@@ -22,6 +22,7 @@ class ProximityLearningRuntimeRestartTest {
         }
         assertTrue(backing.row?.ready == true)
         assertTrue(backing.row?.snapshotJson?.contains("\"farRaw\":37.8244") == true)
+        assertEquals(0L, runtime.wakeEvidenceGenerationForTest())
 
         val shifted = runtime.observe(HALL_BOOT_TAIL, 30_350L)
         assertNull(shifted.near)
@@ -39,6 +40,7 @@ class ProximityLearningRuntimeRestartTest {
 
         assertAvailable(runtime.observe(HALL_BOOT_TAIL, 0L, sparseReporting = true), runtime)
         assertAvailable(runtime.tick(29_999L, sparseReporting = true), runtime)
+        assertEquals(0L, runtime.wakeEvidenceGenerationForTest())
         val shifted = runtime.tick(30_000L, sparseReporting = true)
 
         assertNull(shifted.near)
