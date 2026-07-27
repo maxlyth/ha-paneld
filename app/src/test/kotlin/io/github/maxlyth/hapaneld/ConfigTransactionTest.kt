@@ -1735,19 +1735,31 @@ class ConfigTransactionTest {
         }
     }
 
-    @Test fun failedDefaultMigrationRetriesWithoutChangingEffectiveExistingValue() {
-        val failed = fakePreferences(initial = mapOf("panel_id" to "existing"), commitSucceeds = false)
-        val config = Config(failed.instance)
+    @Test fun failedDefaultMigrationKeepsUdpInMemoryThenRetriesDurablyAndIdempotently() {
+        val prefs = fakePreferences(initial = mapOf("panel_id" to "existing"), commitSucceeds = false)
+        val config = Config(prefs.instance)
 
         config.migrateLogShipTcpDefault()
 
-        assertFalse(failed.values.containsKey("device_local_log_ship_tcp_default_migrated_v1"))
-        assertEquals("syslog-tcp", config.logShipProtocol)
+        assertFalse(prefs.values.containsKey("device_local_log_ship_tcp_default_migrated_v1"))
+        assertFalse(prefs.values.containsKey("log_ship_protocol"))
+        assertEquals("syslog-udp", config.logShipProtocol)
+
+        prefs.commitsSucceed.set(true)
+        config.migrateLogShipTcpDefault()
+        assertEquals(true, prefs.values["device_local_log_ship_tcp_default_migrated_v1"])
+        assertEquals("syslog-udp", prefs.values["log_ship_protocol"])
+        assertEquals("syslog-udp", config.logShipProtocol)
+
+        val afterRetry = prefs.values.toMap()
+        config.migrateLogShipTcpDefault()
+        assertEquals(afterRetry, prefs.values)
     }
 
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,
+        val commitsSucceed: java.util.concurrent.atomic.AtomicBoolean,
     )
 
     private fun profile(
@@ -1766,6 +1778,7 @@ class ConfigTransactionTest {
         commitSucceeds: Boolean = true,
     ): FakePreferences {
         val values = initial.toMutableMap()
+        val commitsSucceed = java.util.concurrent.atomic.AtomicBoolean(commitSucceeds)
         lateinit var prefs: SharedPreferences
         prefs = Proxy.newProxyInstance(
             SharedPreferences::class.java.classLoader,
@@ -1780,16 +1793,19 @@ class ConfigTransactionTest {
                 "getFloat" -> values[args!![0]] as? Float ?: args[1]
                 "getBoolean" -> values[args!![0]] as? Boolean ?: args[1]
                 "contains" -> values.containsKey(args!![0])
-                "edit" -> fakeEditor(values, commitSucceeds)
+                "edit" -> fakeEditor(values) { commitsSucceed.get() }
                 "registerOnSharedPreferenceChangeListener", "unregisterOnSharedPreferenceChangeListener" -> null
                 "toString" -> "FakeSharedPreferences"
                 else -> error("unexpected SharedPreferences call: ${method.name}")
             }
         } as SharedPreferences
-        return FakePreferences(prefs, values)
+        return FakePreferences(prefs, values, commitsSucceed)
     }
 
-    private fun fakeEditor(values: MutableMap<String, Any?>, commitSucceeds: Boolean): SharedPreferences.Editor {
+    private fun fakeEditor(
+        values: MutableMap<String, Any?>,
+        commitSucceeds: () -> Boolean,
+    ): SharedPreferences.Editor {
         val writes = LinkedHashMap<String, Any?>()
         val removals = LinkedHashSet<String>()
         var clear = false
@@ -1810,15 +1826,16 @@ class ConfigTransactionTest {
                 }
                 method.name == "clear" -> editor.also { clear = true; writes.clear(); removals.clear() }
                 method.name == "commit" -> {
-                    if (commitSucceeds) {
+                    val succeeds = commitSucceeds()
+                    if (succeeds) {
                         if (clear) values.clear()
                         removals.forEach(values::remove)
                         values.putAll(writes)
                     }
-                    commitSucceeds
+                    succeeds
                 }
                 method.name == "apply" -> {
-                    if (commitSucceeds) {
+                    if (commitSucceeds()) {
                         if (clear) values.clear()
                         removals.forEach(values::remove)
                         values.putAll(writes)

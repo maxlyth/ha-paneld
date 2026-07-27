@@ -119,6 +119,7 @@ class Config private constructor(
 
     private val wakeOnWaveEpoch = AtomicLong()
     private val haOAuthAttemptEpoch = AtomicLong()
+    @Volatile private var logShipAbsentProtocolFallback: String? = null
 
     constructor(context: Context) : this(
         AppState.preferences(context, "config", "ha-paneld"),
@@ -155,14 +156,19 @@ class Config private constructor(
     internal fun migrateLogShipTcpDefault() = synchronized(CONFIG_LOCK) {
         if (prefs.getBoolean(LOG_SHIP_TCP_DEFAULT_MIGRATION_PREF, false)) return@synchronized
         val preExisting = prefs.all.isNotEmpty()
-        prefs.edit()
+        val preserveUdp = preExisting && !prefs.contains("log_ship_protocol")
+        // Establish process truth before attempting durability. A failed SQLite/preferences commit must
+        // not silently retarget this running upgraded panel to TCP while the absent marker waits to retry.
+        if (preserveUdp) logShipAbsentProtocolFallback = LogShipEndpoint.SYSLOG_UDP
+        val committed = prefs.edit()
             .putBoolean(LOG_SHIP_TCP_DEFAULT_MIGRATION_PREF, true)
             .apply {
-                if (preExisting && !prefs.contains("log_ship_protocol")) {
+                if (preserveUdp) {
                     putString("log_ship_protocol", LogShipEndpoint.SYSLOG_UDP)
                 }
             }
             .commit()
+        if (committed) logShipAbsentProtocolFallback = null
         Unit
     }
 
@@ -1655,7 +1661,12 @@ class Config private constructor(
      * "syslog-udp" (RFC5426, what a stock collector listens for on 514) or "http" (NDJSON POST). Normalized on read so a value
      * stored by an older build — where "syslog" meant TCP — resolves to one of the canonical three.
      */
-    val logShipProtocol: String get() = LogShipEndpoint.protocol(stringPref("log_ship_protocol"))
+    val logShipProtocol: String
+        get() = LogShipEndpoint.protocol(
+            prefs.getString("log_ship_protocol", null)
+                ?: logShipAbsentProtocolFallback
+                ?: specOf("log_ship_protocol").default,
+        )
     /** True only when shipping is enabled AND a sink host is configured. */
     val logShipActive: Boolean get() = logShipEnabled && logShipHost.isNotBlank()
     fun setLogShipping(enabled: Boolean, host: String, port: Int, protocol: String) {
