@@ -482,6 +482,19 @@ class SystemControllerTest {
         assertEquals(listOf("am start -n $OWN/.DashboardActivity"), root.ran)
     }
 
+    @Test fun launchHomeBlankAutoUsesBuiltinEvenWhenForeignRendererIsInstalled() {
+        val env = FakeSystemEnv(
+            installed = setOf(MIN),
+            launchers = mapOf(MIN to "$MIN/.Main"),
+        )
+        val (c, root, _) = sc(env, daemon = null, su = true)
+
+        c.launchHome("")
+
+        assertEquals("Auto retains the built-in renderer authority", listOf("am start -n $OWN/.DashboardActivity"), root.ran)
+        assertFalse("Auto must not silently select the installed foreign renderer", root.ran.any { it.contains(MIN) })
+    }
+
     @Test fun launchHomeFallsToDirectStartWhenPrivilegedFails() {
         // Non-builtin home launch shares the single launch mechanism: when neither daemon nor su can
         // start the resolved dashboard component, it degrades to a direct (pre-BAL) start.

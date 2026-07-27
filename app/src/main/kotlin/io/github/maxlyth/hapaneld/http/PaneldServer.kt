@@ -1034,6 +1034,11 @@ class PaneldServer internal constructor(
                     "recents" -> interactive.recents()
                     "launcher" -> { system.launchLauncher(config.launcherPackage); true }
                     "admin_launcher" -> { system.launchAdminLauncher(); true }
+                    // Preserve renderer selection in SystemController: blank Auto, built-in and an
+                    // explicit foreign package all share this foreground-only route. Recovery stays
+                    // deliberately separate below so a remote Dashboard tap never reloads it.
+                    "dashboard" -> { system.launchHome(config.dashboardPackage); true }
+                    "reload" -> { system.reloadDashboard(config.dashboardPackage); true }
                     "reboot" -> { system.reboot(); true }
                     "volup" -> { volume.step(up = true); true }
                     "voldn" -> { volume.step(up = false); true }
@@ -4090,15 +4095,17 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // touch panel, so add a visible note that accurately reflects the remaining navigation routes.
         val rootNote = if (!checking && !rootOk)
             """<div class="setup rootlock" style="margin:0 0 8px">🔒 Launcher, Admin launcher and Reboot need root — disabled on this panel. ${navigation.rootlessNote}</div>""" else ""
-        return """$rootNote<div class="ctlrow" style="display:flex;gap:8px;flex-wrap:wrap">
+        return """$rootNote<div class="ctlrow">
  ${pbtn("back", "←<span class=\"lbl\"> Back</span>", navigation.backEnabled, ControlAvailability.INPUT_REQUIREMENT)}
  ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", navigation.recentsEnabled, navigation.recentsRequirement)}
  ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", "margin-left:auto", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
+ ${pbtn("dashboard", "⌂<span class=\"lbl\"> Dashboard</span>", !checking, "")}
  ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "a rooted panel")}
 </div>
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+<div class="ctlrow ctlrow-secondary">
  ${pbtn("voldn", "Vol −", !checking, "")}
  ${pbtn("volup", "Vol +", !checking, "")}
+ ${pbtn("reload", "↻ Reload", !checking, "", "border-color:#7a6330;color:#f5cf82")}
  ${pbtn("reboot", "⟳ Reboot", rootOk, "a rooted panel", "margin-left:auto;border-color:#7a3a2a;color:#f5a08a")}
 </div>"""
     }
@@ -7861,7 +7868,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         private const val REMOTE_TAP_CAPTURE_TIMEOUT_MS = 45_000L
         private const val REMOTE_TAP_CAPTURE_RESPONSE_TIMEOUT_MS = 60_000L
         private val REMOTE_ACTIONS = setOf(
-            "back", "recents", "launcher", "admin_launcher", "reboot", "volup", "voldn",
+            "back", "recents", "launcher", "admin_launcher", "dashboard", "reload", "reboot", "volup", "voldn",
         )
         private val OPAQUE_AUTO_SLEEP_KEY = Regex("^[a-f0-9]{64}$")
 

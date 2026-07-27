@@ -251,12 +251,13 @@ function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNo
  c.style.minHeight=hint?hint+'px':(c._hwm?c._hwm+'px':'');}
 window.addEventListener('resize',function(){['smtbl','streamtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 
-// Controls panel: collapse the labelled action buttons (Back/Recents/Launcher/Admin) to icons-only when
-// the row would wrap to 2 lines. Force one line, check overflow, toggle .collapsed. Runs on load, resize,
-// and after the controls re-render (hydrate + the 2s status refresh).
+// Controls panel: at compact desktop widths collapse the labelled action row to icons-only when it would
+// wrap. A narrow panel (600px or below) uses the CSS two-column, 48px labelled grid instead so Dashboard remains
+// recognisable. Runs on load, resize, and after controls re-render (hydrate + the 2s status refresh).
 function fitControls(){
  var row=document.querySelector('#ctlzone .ctlrow');
  if(!row)return;
+ if(window.matchMedia&&window.matchMedia('(max-width:600px)').matches){row.classList.remove('collapsed');return;}
  row.classList.remove('collapsed');                 // show labels, let it wrap naturally
  var btn=row.querySelector('.pbtn');
  var oneLine=btn?btn.offsetHeight:32;
@@ -300,7 +301,8 @@ scheduleDashboardColumnAlignment();
 
 // Build watch moved to the shared /assets/buildwatch.js (loaded by EVERY page, not just the dashboard).
 
-// Controls card actions: POST /action a=<back|recents|home|reboot|volup|voldn>. Reboot confirms first.
+// Controls card actions: POST /action a=<back|recents|launcher|admin_launcher|dashboard|reload|reboot|volup|voldn>.
+// Dashboard only foregrounds the effective renderer; Reload is the separate recovery action. Reboot confirms first.
 function controlMessage(text){var zone=document.getElementById('ctlzone');if(!zone)return;
  var note=document.getElementById('ctlmsg');if(!note){note=document.createElement('p');note.id='ctlmsg';note.className='note';note.setAttribute('role','status');note.setAttribute('aria-live','polite');zone.appendChild(note);}note.textContent=text||'';}
 function act(a){if(a==='reboot'){

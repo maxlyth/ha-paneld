@@ -145,9 +145,13 @@ button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-s
 button:disabled{background:var(--disabled-bg);border-color:var(--border);color:var(--disabled-fg);cursor:not-allowed}
 input:disabled,select:disabled{background:var(--disabled-bg);color:var(--disabled-fg);cursor:not-allowed}
 .locked{opacity:.6}
-/* Controls panel: when the action row would wrap to 2 lines, collapse the labelled buttons to icons only
-   (info.js measures the row height + toggles .collapsed). */
+/* Controls panel: on compact desktop widths collapse the navigation labels to icons; a narrow panel
+   (600px or below) instead receives a labelled two-column grid so Dashboard stays recognisable and every
+   remote action retains a comfortable touch target. */
+.ctlrow{display:flex;gap:8px;flex-wrap:wrap}
+.ctlrow-secondary{margin-top:8px}
 .ctlrow.collapsed .lbl{display:none}
+@media (max-width:600px){.ctlrow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.ctlrow .pbtn{box-sizing:border-box;min-height:48px;margin-left:0!important;text-align:center}.ctlrow .lbl{display:inline}}
 .setup{background:var(--setup-bg);border:1px solid var(--setup-bd);border-radius:8px;padding:12px 14px;margin:10px 0!important;color:var(--setup-fg);font-size:.92rem}
 .setup a{color:var(--setup-link);font-weight:600}
 /* Severity: crit = render-blocking (WebView too old, no dashboard, crash-loop, blank internal_url) —

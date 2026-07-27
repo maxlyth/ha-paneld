@@ -91,6 +91,25 @@ function screenshotFixture({ hardened = false, supported = true } = {}) {
     <script>window.CardColumnAlignment={attach:()=>()=>{}};</script>${dialogShim}<script src="/info.js"></script></body></html>`;
 }
 
+function controlsFixture() {
+  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="/info.css"></head><body data-hardened="0">
+    <canvas id="perfchart" width="600" height="96"></canvas><canvas id="respchart" width="600" height="150"></canvas>
+    <table id="perf"></table><table id="smtbl"></table><table id="streamtbl"></table><table id="topproc"></table><table id="noisyentities"></table>
+    <small id="smhdr"></small><small id="perfage"></small><small id="sensage"></small><small id="insthdr"></small><table id="senstbl"></table><p id="insthint"></p>
+    <div class="card" style="max-width:100%;padding:8px"><div id="ctlzone"><div class="ctlrow">
+      <button class="pbtn" onclick="act('back')">←<span class="lbl"> Back</span></button>
+      <button class="pbtn" onclick="act('recents')">▢<span class="lbl"> Recents</span></button>
+      <button class="pbtn" onclick="act('launcher')">⊞<span class="lbl"> Launcher</span></button>
+      <button class="pbtn" onclick="act('dashboard')">⌂<span class="lbl"> Dashboard</span></button>
+      <button class="pbtn" onclick="act('admin_launcher')">⚙<span class="lbl"> Admin launcher</span></button>
+    </div><div class="ctlrow ctlrow-secondary">
+      <button class="pbtn" onclick="act('voldn')">Vol −</button><button class="pbtn" onclick="act('volup')">Vol +</button>
+      <button class="pbtn" onclick="act('reload')">↻ Reload</button><button class="pbtn" onclick="act('reboot')">⟳ Reboot</button>
+    </div></div></div>
+    <div id="dashboard-cards"></div><script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/info.js"></script></body></html>`;
+}
+
 function cardMemoryFixture(cold) {
   return `<!doctype html><html><head><style>
     #dashboard-cards{width:820px}.card{box-sizing:border-box;width:400px;min-height:80px;border:1px solid transparent;padding:10px}
@@ -166,6 +185,52 @@ function screenshotRoutes(options = {}) {
     if (path === '/api/v1/inspect') return json({ status: 'needs-root', running: false, port: 9222 });
   };
 }
+
+browserTest('Remote Controls keep Dashboard and Reload labelled, tappable and wired at a narrow panel width', async (t) => {
+  const calls = [];
+  let actionsReceived;
+  const bothActions = new Promise((resolve) => { actionsReceived = resolve; });
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/action') {
+      calls.push({ method: request.method, body: await requestBody(request) });
+      if (calls.length === 2) actionsReceived();
+      return { status: 202, body: 'accepted\n' };
+    }
+    if (path === '/api/v1/perf') return json({});
+    if (path === '/api/v1/sensors') return json({});
+    if (path === '/api/v1/inspect') return json({ status: 'needs-root', running: false, port: 9222 });
+  }, controlsFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 360, height: 720 } });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  for (const width of [360, 480]) {
+    await page.setViewportSize({ width, height: 720 });
+    const geometry = await page.locator('#ctlzone').evaluate((zone) => {
+      document.documentElement.style.fontSize = '20px'; fitControls();
+      return {
+        overflow: zone.scrollWidth > zone.clientWidth,
+        collapsed: zone.querySelector('.ctlrow').classList.contains('collapsed'),
+        buttons: Array.from(zone.querySelectorAll('.pbtn')).map((button) => ({ text: button.textContent.trim(), height: button.getBoundingClientRect().height })),
+      };
+    });
+
+    assert.equal(geometry.overflow, false, `${width}px Controls must not introduce horizontal scrolling`);
+    assert.equal(geometry.collapsed, false, `${width}px Controls keep their action labels visible`);
+    assert.ok(geometry.buttons.every((button) => button.height >= 48), `every ${width}px narrow control needs a 48px touch target: ${JSON.stringify(geometry.buttons)}`);
+    assert.ok(geometry.buttons.some((button) => button.text.includes('Dashboard')));
+    assert.ok(geometry.buttons.some((button) => button.text.includes('Reload')));
+  }
+
+  await page.getByRole('button', { name: /Dashboard/ }).click();
+  await page.getByRole('button', { name: /Reload/ }).click();
+  await bothActions;
+  assert.deepEqual(calls, [
+    { method: 'POST', body: 'a=dashboard' },
+    { method: 'POST', body: 'a=reload' },
+  ]);
+});
 
 browserTest('Top processes switches between CPU and resident RAM rankings', async (t) => {
   const routes = screenshotRoutes({ perf: {
