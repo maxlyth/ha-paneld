@@ -373,6 +373,9 @@ internal class ProximityLearningRuntime(
 
     internal fun hasPendingWakeInvalidation(): Boolean = pendingWakeInvalidation.get() != null
 
+    @Synchronized
+    internal fun wakeEvidenceGenerationForTest(): Long = view.wakeEvidenceGeneration
+
     /** Learned signal-shape capability, independent of current source health. A fingerprint-matching
      *  binary or graded model remains evidence for reporting; relearn/model-shift resets it to false. */
     @Synchronized
@@ -921,7 +924,26 @@ internal interface ProximityModelStore : AutoCloseable {
     fun clearProximityLearning(fingerprint: String)
 }
 
-private class SqliteProximityModelStore(
+internal class SqliteProximityModelStore(
+    private val store: ProximityModelStore,
+) : ProximityModelStore {
+    constructor(store: EntityCatalogStore) : this(EntityCatalogProximityModelStore(store))
+
+    override fun readProximityModel(fingerprint: String) = store.readProximityModel(fingerprint)
+
+    override fun writeProximityBatch(
+        model: EntityCatalogStore.ProximityModelRow,
+        rollups: List<EntityCatalogStore.ProximityRollupRow>,
+        episodes: List<EntityCatalogStore.ProximityEpisodeRow>,
+        now: Long,
+    ) = store.writeProximityBatch(model, rollups, episodes, now)
+
+    override fun clearProximityLearning(fingerprint: String) = store.clearProximityLearning(fingerprint)
+
+    override fun close() = store.close()
+}
+
+private class EntityCatalogProximityModelStore(
     private val store: EntityCatalogStore,
 ) : ProximityModelStore {
     override fun readProximityModel(fingerprint: String) = store.readProximityModel(fingerprint)
