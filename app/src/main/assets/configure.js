@@ -2090,6 +2090,67 @@
           el("div", { class: "fctl" }, [btn, st]),
         ]));
       }
+      // Logging card action: ask the panel to reach the sink from its OWN network vantage — the only
+      // one that matters, and the one you cannot check from the browser. UDP has no delivery signal,
+      // so its verdict deliberately stops at "sent" and hands back a marker to grep for; claiming
+      // more would recreate the false confidence that made this feature look like it worked.
+      if (g === "Logging") {
+        var sinkStatus = el("span", { class: "muted" });
+        var sinkTimer = null;
+        function setSinkStatus(text, transient) {
+          if (sinkTimer) clearTimeout(sinkTimer);
+          sinkTimer = null;
+          sinkStatus.textContent = text;
+          if (transient) sinkTimer = setTimeout(function () {
+            sinkTimer = null;
+            sinkStatus.textContent = "";
+          }, 12000);
+        }
+        var sinkBtn = el("button", { class: "pbtn", text: "Test sink" });
+        sinkBtn.onclick = function () {
+          // `values` tracks every keystroke, so this probes what is on screen rather than what was
+          // last saved — the point is to catch a typo before committing it.
+          var host = String(values.log_ship_host || "").trim();
+          if (!host) { setSinkStatus("Set a sink host first.", true); return; }
+          var query = "host=" + encodeURIComponent(host) +
+            "&port=" + encodeURIComponent(values.log_ship_port || 514) +
+            "&protocol=" + encodeURIComponent(values.log_ship_protocol || "");
+          sinkBtn.disabled = true;
+          setSinkStatus("Testing…", false);
+          fetch("/api/v1/config/probe-log-sink?" + query, { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (p) {
+              sinkBtn.disabled = false;
+              var where = (p.host || host) + ":" + (p.port || "");
+              if (p.ok && p.delivered === false) {
+                setSinkStatus("Sent to " + where + ". UDP is unacknowledged — look for “" + p.marker +
+                  "” in your collector to confirm it arrived.", false);
+              } else if (p.ok) {
+                setSinkStatus("Connected to " + where + ".", true);
+              } else if (p.error === "no-host") {
+                setSinkStatus("Set a sink host first.", true);
+              } else if (p.error === "unresolvable") {
+                setSinkStatus("“" + (p.host || host) + "” doesn’t resolve on the panel’s network.", false);
+              } else if (p.error === "unreachable") {
+                setSinkStatus("Nothing is listening at " + where + ". A collector set up for UDP will " +
+                  "refuse TCP — check the protocol as well as the port.", false);
+              } else {
+                setSinkStatus("Test failed (" + (p.error || "unknown") + ").", false);
+              }
+            })
+            .catch(function () {
+              sinkBtn.disabled = false;
+              setSinkStatus("Test failed (network).", false);
+            });
+        };
+        card.appendChild(el("div", { class: "frow" }, [
+          el("div", { class: "flabel" }, [
+            el("span", { text: "Check the sink" }),
+            el("small", { text: "Reach the collector from the panel, without saving." }),
+          ]),
+          el("div", { class: "fctl" }, [sinkBtn, sinkStatus]),
+        ]));
+      }
       if (!card.parentNode) root.appendChild(card);
       if (retainedAutoSleepPanel && card.contains(retainedAutoSleepPanel)) {
         updateAutoSleepSummary();

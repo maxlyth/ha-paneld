@@ -94,6 +94,7 @@ import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import io.github.maxlyth.hapaneld.util.isLocalSource
 import io.github.maxlyth.hapaneld.util.isLoopbackPeer
 import io.github.maxlyth.hapaneld.util.isRoutable
@@ -1358,6 +1359,21 @@ class PaneldServer internal constructor(
                         // Read-only: resolves and touches a TCP port, changes nothing.
                         val url = call.request.queryParameters["url"].orEmpty()
                         val body = withContext(Dispatchers.IO) { probeBrokerJson(url) }
+                        call.respondText(body, ContentType.Application.Json)
+                    }
+                    get("/config/probe-log-sink") {
+                        // Same pre-flight idea as probe-broker, from the panel's own network vantage.
+                        // Read-only for the stream transports; the UDP case sends ONE marked datagram,
+                        // because a connectionless transport gives no other evidence it can be reached.
+                        val params = call.request.queryParameters
+                        val body = withContext(Dispatchers.IO) {
+                            probeLogSinkJson(
+                                host = params["host"] ?: config.logShipHost,
+                                port = params["port"]?.toIntOrNull() ?: config.logShipPort,
+                                protocol = params["protocol"] ?: config.logShipProtocol,
+                                panelId = config.panelId,
+                            )
+                        }
                         call.respondText(body, ContentType.Application.Json)
                     }
                     get("/config/discovery") {
@@ -5532,6 +5548,62 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"resolved\":${jsonStr(resolved)}" +
             if (reachable) "}" else ",\"error\":\"unreachable\"}"
     }
+
+    /**
+     * See GET /config/probe-log-sink. Bounded: one DNS resolve plus one 2s connect, or for UDP one
+     * datagram.
+     *
+     * UDP deliberately reports `delivered:false` even on success. A datagram send that returns
+     * without error proves only that the panel handed it to the network — nothing about arrival —
+     * and reporting that as "ok" would recreate in the UI exactly the false confidence this whole
+     * change exists to remove. The caller gets a marker string to search for in their collector,
+     * which is the only honest confirmation available for a connectionless transport.
+     *
+     * Takes [panelId] as a parameter rather than reading `config`, so it stays free of instance state
+     * and can be exercised the same way [probeBrokerJson] is, without the Android-backed server graph.
+     */
+    private fun probeLogSinkJson(host: String, port: Int, protocol: String, panelId: String): String {
+        val ep = LogShipEndpoint.resolve(host, port, protocol)
+        if (ep.host.isBlank()) return """{"ok":false,"error":"no-host"}"""
+        if (ep.port !in 1..65535) return """{"ok":false,"error":"invalid-port"}"""
+        val head = "\"host\":${jsonStr(ep.host)},\"port\":${ep.port}," +
+            "\"protocol\":${jsonStr(ep.protocol)}"
+        val resolved = runCatching { java.net.InetAddress.getByName(ep.host) }.getOrNull()
+            ?: return "{\"ok\":false,\"error\":\"unresolvable\",$head}"
+        val body = "$head,\"resolved\":${jsonStr(resolved.hostAddress)}"
+
+        if (ep.protocol == LogShipEndpoint.SYSLOG_UDP) {
+            val marker = "ha-paneld-sink-probe-${System.currentTimeMillis().toString(36)}"
+            val frame = "<14>1 ${probeTimestamp()} ${panelId.ifBlank { "panel" }} ha-paneld - - - $marker"
+            val bytes = frame.toByteArray(Charsets.UTF_8)
+            val sent = runCatching {
+                java.net.DatagramSocket().use {
+                    it.connect(resolved, ep.port)
+                    it.send(java.net.DatagramPacket(bytes, bytes.size, resolved, ep.port))
+                }
+                true
+            }.getOrDefault(false)
+            return if (sent) {
+                "{\"ok\":true,\"delivered\":false,\"marker\":${jsonStr(marker)},$body}"
+            } else {
+                "{\"ok\":false,\"error\":\"send-failed\",$body}"
+            }
+        }
+
+        val reachable = runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(resolved, ep.port), 2_000); true }
+        }.getOrDefault(false)
+        return if (reachable) {
+            "{\"ok\":true,\"delivered\":true,$body}"
+        } else {
+            "{\"ok\":false,\"error\":\"unreachable\",$body}"
+        }
+    }
+
+    private fun probeTimestamp(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(java.util.Date())
 
     /**
      * The single owner of the HA-canonical area rule: adopt what Home Assistant reports, or push a pending
