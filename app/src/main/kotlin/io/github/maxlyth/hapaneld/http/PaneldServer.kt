@@ -46,6 +46,7 @@ import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.PrivilegeRoute
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
+import io.github.maxlyth.hapaneld.control.PowerSafetyMutationPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyRepairResult
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
@@ -4663,7 +4664,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val tamePackagesChanged = p["tame_vendor_packages"]?.split(' ')?.filter(String::isNotBlank)?.toSet()
             ?.let { requested -> requested != config.tameVendorPackages.toSet() } == true
         val softwareAuthorityChanged = requestsSoftwareInstallAuthority { p[it] }
+        val powerSafetyReduction = PowerSafetyMutationPolicy.requestsSafetyReduction(
+            keepAwake = config.keepAwake,
+            requestedKeepAwake = p["keep_awake"]?.let(SettingValue::parseBool),
+            preventIdleDim = config.preventIdleDim,
+            requestedPreventIdleDim = p["prevent_idle_dim"]?.let(SettingValue::parseBool),
+        )
         val privilegedOperation = when {
+            powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION
             tamePackagesChanged -> SensitiveOperation.PACKAGE_TAME
             softwareAuthorityChanged -> SensitiveOperation.APK_INSTALL
             else -> null
@@ -4673,6 +4681,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 privilegedOperation,
                 exactHttpApprovalPayload(call, p.canonicalDigest()),
                 when {
+                    powerSafetyReduction && (tamePackagesChanged || softwareAuthorityChanged) ->
+                        "Reduce panel power safety and apply other privileged configuration changes"
+                    powerSafetyReduction -> "Disable a panel power-safety guard"
                     tamePackagesChanged && softwareAuthorityChanged ->
                         "Change vendor package state and software installation policy"
                     tamePackagesChanged -> "Change the persistent vendor package blocklist"

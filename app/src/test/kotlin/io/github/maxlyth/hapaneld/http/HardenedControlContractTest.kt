@@ -117,6 +117,29 @@ class HardenedControlContractTest {
         assertTrue(relay.contains("if (Config(ctx).hardenedSecurityEnabled) return \"failed\""))
     }
 
+    @Test fun powerSafetyReductionsAuthorizeBeforeConfigMutationAndMqttCannotBypassApproval() {
+        val configPost = server.substring(
+            server.indexOf("private suspend fun handleConfigPost"),
+            server.indexOf("private fun updateTameSelection"),
+        )
+        assertTrue(configPost.contains("PowerSafetyMutationPolicy.requestsSafetyReduction("))
+        assertTrue(configPost.contains("powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION"))
+        assertTrue(configPost.indexOf("powerSafetyReduction -> SensitiveOperation.POWER_CONFIGURATION") <
+            configPost.indexOf("InstallProgress.startConfigMutation()"))
+        assertTrue(configPost.indexOf("authorizeSensitive(") < configPost.indexOf("InstallProgress.startConfigMutation()"))
+
+        val handler = mqtt.substring(
+            mqtt.indexOf("private fun handlePreventIdleDim"),
+            mqtt.indexOf("private fun handleTouchSound"),
+        )
+        assertTrue(handler.contains("PowerSafetyMutationPolicy.allowPreventIdleDimTransition("))
+        assertTrue(handler.indexOf("allowPreventIdleDimTransition(") < handler.indexOf("config.setPreventIdleDim(on)"))
+        assertTrue(handler.indexOf("stateConverger.reconcile") < handler.indexOf("config.setPreventIdleDim(on)"))
+
+        val dispatch = mqtt.substring(mqtt.indexOf("private fun dispatchSetting"), mqtt.indexOf("// ---- discovery ----"))
+        assertTrue(dispatch.contains("handlePreventIdleDim(onOff, approvalRequired = sensitiveApprovalRequired)"))
+    }
+
     @Test fun securityModesAreNamedRelaxedAndHardenedInternallyAndOnPanel() {
         val config = source("Config.kt")
         assertTrue(config.contains("enum class SecurityMode { RELAXED, HARDENED }"))

@@ -160,3 +160,27 @@ internal object PowerSafetyRepairPolicy {
         else -> "partial"
     }
 }
+
+/** Admission decisions shared by HTTP configuration and broker-originated live settings. */
+internal object PowerSafetyMutationPolicy {
+    fun requestsSafetyReduction(
+        keepAwake: Boolean,
+        requestedKeepAwake: Boolean?,
+        preventIdleDim: Boolean,
+        requestedPreventIdleDim: Boolean?,
+    ): Boolean =
+        (keepAwake && requestedKeepAwake == false) ||
+            (preventIdleDim && requestedPreventIdleDim == false)
+
+    /**
+     * MQTT has no trustworthy physical-approval retry channel. An HTTP config request that already
+     * completed exact-request approval passes [approvalRequired] as false when it reuses this live
+     * setting path; direct broker commands retain the default true value.
+     */
+    fun allowPreventIdleDimTransition(
+        hardened: Boolean,
+        current: Boolean,
+        requested: Boolean,
+        approvalRequired: Boolean,
+    ): Boolean = !hardened || !approvalRequired || requested || !current
+}

@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.control.BrightnessController
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.LedEffectController
 import io.github.maxlyth.hapaneld.control.LedCommandPolicy
+import io.github.maxlyth.hapaneld.control.PowerSafetyMutationPolicy
 import io.github.maxlyth.hapaneld.hardware.LedEffects
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.LatestDispatcher
@@ -2199,8 +2200,19 @@ internal class MqttBridge(
         stateConverger.reconcile("auto_sleep", force = true)
     }
 
-    private fun handlePreventIdleDim(payload: String) {
+    private fun handlePreventIdleDim(payload: String, approvalRequired: Boolean = true) {
         val on = payload.trim().equals("ON", ignoreCase = true)
+        if (!PowerSafetyMutationPolicy.allowPreventIdleDimTransition(
+                hardened = config.hardenedSecurityEnabled,
+                current = config.preventIdleDim,
+                requested = on,
+                approvalRequired = approvalRequired,
+            )
+        ) {
+            Log.w(TAG, "rejecting MQTT prevent_idle_dim safety reduction while Hardened mode is active")
+            stateConverger.reconcile("prevent_idle_dim", force = true)
+            return
+        }
         config.setPreventIdleDim(on)
         brightness.applyPreventIdleDim(on, config)
         stateConverger.reconcile("prevent_idle_dim", force = true)
@@ -2804,7 +2816,7 @@ internal class MqttBridge(
         when (key) {
             "wake_on_wave" -> handleWakeOnWave(onOff)
             "auto_sleep" -> handleAutoSleep(onOff)
-            "prevent_idle_dim" -> handlePreventIdleDim(onOff)
+            "prevent_idle_dim" -> handlePreventIdleDim(onOff, approvalRequired = sensitiveApprovalRequired)
             "watchdog_enabled" -> handleWatchdog(onOff)
             "kiosk_lock" -> handleKiosk(onOff)
             "silence_boot_chime" -> handleSilenceBootChime(onOff)
