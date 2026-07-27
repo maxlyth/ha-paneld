@@ -36,7 +36,7 @@ jobs:
       contents: read
       security-events: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -133,7 +133,7 @@ jobs:
     outputs:
       input-manifest-sha256: ${{ steps.manifest.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -178,7 +178,7 @@ jobs:
           npm run sbom -- --output ../../release-input/profile-editor-runtime.cdx.json
 
       - name: Set up JDK 17
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: '17'
@@ -410,7 +410,7 @@ jobs:
           (cd release-input && sha256sum --check MANIFEST.sha256)
 
       - name: Set up JDK 17
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
           java-version: '17'
@@ -554,20 +554,20 @@ jobs:
 
       - name: Attest release asset provenance
         continue-on-error: true
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: dist/*
 
       - name: Attest Android and Gradle runtime SBOM
         continue-on-error: true
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.android_sbom_name }}
 
       - name: Attest profile-editor runtime SBOM
         continue-on-error: true
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.profile_editor_sbom_name }}
