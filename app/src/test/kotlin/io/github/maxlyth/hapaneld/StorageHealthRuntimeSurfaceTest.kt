@@ -188,6 +188,17 @@ class StorageHealthRuntimeSurfaceTest {
         assertTrue(service.contains("NotificationManager.IMPORTANCE_HIGH"))
         assertTrue(service.contains(".setOnlyAlertOnce(true)"))
         assertTrue(service.contains(".setSilent(true)"))
+        val storageHealthNotification = service.substring(
+            service.indexOf("private fun updateStorageHealthNotification"),
+            service.indexOf("private fun notificationChannel"),
+        )
+        assertTrue(
+            storageHealthNotification.contains(
+                "storageHealthDestination.setClass(this, ConfigActivity::class.java)",
+            ),
+        )
+        assertTrue(storageHealthNotification.contains("PendingIntent.FLAG_IMMUTABLE"))
+        assertTrue(storageHealthNotification.contains("storageHealthDestination,"))
         assertTrue(service.contains("NotificationChannel(channelId, \"ha-paneld\", NotificationManager.IMPORTANCE_MIN)"))
         assertTrue(service.contains("private const val NOTIF_ID = 1"))
         assertTrue(service.contains("private const val STORAGE_HEALTH_NOTIF_ID = 2"))

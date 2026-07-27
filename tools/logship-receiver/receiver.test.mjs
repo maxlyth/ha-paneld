@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { report, reportNdjson, terminalSafe } from './receiver.mjs'
+import { parseSyslog, report, reportNdjson, terminalSafe } from './receiver.mjs'
 
 function captureStdout (action) {
   const original = process.stdout.write
@@ -44,4 +44,29 @@ test('argument errors cannot inject terminal controls', () => {
   assert.equal(result.status, 2)
   assert.match(result.stderr, /\\x1b\[2J/)
   assert.doesNotMatch(result.stderr, /\u001b/)
+})
+
+test('RFC5424 parser handles adjacent structured-data elements and escaped brackets', () => {
+  const parsed = parseSyslog('<14>1 now host app proc msg [meta value="a\\]b"][more key="value"] payload')
+  assert.deepEqual(parsed, {
+    ok: true,
+    facility: 'user',
+    severity: 'info',
+    pri: 14,
+    version: 1,
+    timestamp: 'now',
+    hostname: 'host',
+    appName: 'app',
+    procId: 'proc',
+    msgId: 'msg',
+    structuredData: '[meta value="a\\]b"][more key="value"]',
+    message: 'payload',
+  })
+})
+
+test('RFC5424 parser rejects adversarial structured data in linear time', () => {
+  const frame = `<14>1 now host app proc msg ${'[]'.repeat(100_000)}!`
+  const started = performance.now()
+  assert.equal(parseSyslog(frame).ok, false)
+  assert.ok(performance.now() - started < 1_000, 'malformed structured data should be rejected promptly')
 })

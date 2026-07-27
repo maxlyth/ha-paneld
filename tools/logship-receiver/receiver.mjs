@@ -35,7 +35,8 @@ const FACILITIES = [
 const SEVERITIES = ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']
 
 // RFC5424 §6: <PRI>VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP SD [SP MSG]
-const RFC5424 = /^<(\d{1,3})>(\d) (\S+) (\S+) (\S+) (\S+) (\S+) (\[.*?\](?:\[.*?\])*|-)(?: ([\s\S]*))?$/
+// Parse structured data with a cursor rather than a backtracking expression. Besides accepting an
+// escaped closing bracket inside an SD element, this keeps hostile or malformed frames linear-time.
 
 function parseArgs (argv) {
   const opts = {
@@ -124,24 +125,82 @@ function stamp () {
 }
 
 /** Split a raw datagram or stream chunk into an RFC5424 breakdown, or explain why it is not one. */
-function parseSyslog (raw) {
-  const match = RFC5424.exec(raw)
-  if (!match) return { ok: false, raw }
-  const pri = Number(match[1])
+export function parseSyslog (raw) {
+  if (raw[0] !== '<') return { ok: false, raw }
+
+  const priEnd = raw.indexOf('>', 1)
+  if (priEnd < 2 || priEnd > 4) return { ok: false, raw }
+  const priText = raw.slice(1, priEnd)
+  for (const digit of priText) {
+    if (digit < '0' || digit > '9') return { ok: false, raw }
+  }
+  const pri = Number(priText)
   if (pri > 191) return { ok: false, raw, why: `PRI ${pri} is out of range` }
+
+  let cursor = priEnd + 1
+  const versionCode = raw.charCodeAt(cursor)
+  if (versionCode < 0x30 || versionCode > 0x39 || raw[cursor + 1] !== ' ') {
+    return { ok: false, raw }
+  }
+  const version = versionCode - 0x30
+  cursor += 2
+
+  const fields = []
+  for (let field = 0; field < 5; field++) {
+    const end = raw.indexOf(' ', cursor)
+    if (end <= cursor) return { ok: false, raw }
+    const value = raw.slice(cursor, end)
+    if (/\s/.test(value)) return { ok: false, raw }
+    fields.push(value)
+    cursor = end + 1
+  }
+
+  const structuredDataStart = cursor
+  if (raw[cursor] === '-') {
+    cursor++
+  } else if (raw[cursor] === '[') {
+    while (raw[cursor] === '[') {
+      cursor++
+      let escaped = false
+      let closed = false
+      while (cursor < raw.length) {
+        const char = raw[cursor++]
+        if (char === '\n' || char === '\r') return { ok: false, raw }
+        if (escaped) {
+          escaped = false
+        } else if (char === '\\') {
+          escaped = true
+        } else if (char === ']') {
+          closed = true
+          break
+        }
+      }
+      if (!closed) return { ok: false, raw }
+    }
+  } else {
+    return { ok: false, raw }
+  }
+
+  const structuredData = raw.slice(structuredDataStart, cursor)
+  let message = ''
+  if (cursor < raw.length) {
+    if (raw[cursor] !== ' ') return { ok: false, raw }
+    message = raw.slice(cursor + 1)
+  }
+
   return {
     ok: true,
     facility: FACILITIES[pri >> 3] ?? `facility${pri >> 3}`,
     severity: SEVERITIES[pri & 7],
     pri,
-    version: Number(match[2]),
-    timestamp: match[3],
-    hostname: match[4],
-    appName: match[5],
-    procId: match[6],
-    msgId: match[7],
-    structuredData: match[8],
-    message: match[9] ?? '',
+    version,
+    timestamp: fields[0],
+    hostname: fields[1],
+    appName: fields[2],
+    procId: fields[3],
+    msgId: fields[4],
+    structuredData,
+    message,
   }
 }
 

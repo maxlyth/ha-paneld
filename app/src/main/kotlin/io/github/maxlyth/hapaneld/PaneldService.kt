@@ -3033,12 +3033,15 @@ class PaneldService : Service() {
                         },
                     )
                 }
+                val storageHealthDestination = Intent()
+                storageHealthDestination.setClass(this, ConfigActivity::class.java)
+                storageHealthDestination
+                    .putExtra("path", "/")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 val contentIntent = PendingIntent.getActivity(
                     this,
                     STORAGE_HEALTH_NOTIF_ID,
-                    Intent(this, ConfigActivity::class.java)
-                        .putExtra("path", "/")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    storageHealthDestination,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )
                 val notification = NotificationCompat.Builder(this, STORAGE_HEALTH_CHANNEL_ID)
