@@ -63,4 +63,38 @@ class InstallProgressTest {
         assertFalse(JSONObject(InstallProgress.json()).has("result"))
         InstallProgress.finish(next, "done")
     }
+
+    @Test fun destructiveOperationAndConfigureMutationCannotOverlap() {
+        val restore = InstallProgress.start("Restore")!!
+        try {
+            assertNull(InstallProgress.startConfigMutation())
+        } finally {
+            InstallProgress.finish(restore, "done")
+        }
+
+        val configure = InstallProgress.startConfigMutation()!!
+        try {
+            assertFalse(InstallProgress.running)
+            assertNull(InstallProgress.start("Restore"))
+            assertNull(InstallProgress.startConfigMutation())
+        } finally {
+            InstallProgress.finishConfigMutation(configure)
+        }
+
+        val next = InstallProgress.start("Restore")!!
+        InstallProgress.finish(next, "done")
+    }
+
+    @Test fun staleConfigureReleaseCannotClearNewerOwner() {
+        val first = InstallProgress.startConfigMutation()!!
+        InstallProgress.finishConfigMutation(first)
+        val second = InstallProgress.startConfigMutation()!!
+
+        InstallProgress.finishConfigMutation(first)
+        assertNull(InstallProgress.start("Restore"))
+
+        InstallProgress.finishConfigMutation(second)
+        val restore = InstallProgress.start("Restore")!!
+        InstallProgress.finish(restore, "done")
+    }
 }

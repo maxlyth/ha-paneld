@@ -4605,6 +4605,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 },
             )
         ) return
+        val configMutationTicket = InstallProgress.startConfigMutation()
+        if (configMutationTicket == null) {
+            respondConfigMutation(
+                call,
+                "operation-busy",
+                emptyList(),
+                emptyList(),
+                emptyList(),
+                "Another panel operation is in progress. Wait for it to finish, then save again.",
+                HttpStatusCode.Conflict,
+            )
+            return
+        }
+        try {
         lateinit var mutationPlan: DirectConfigMutationPlan
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
@@ -5011,6 +5025,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             pendingMessage ?: onboardingSignInMessage,
             if (livePending.isEmpty()) HttpStatusCode.OK else HttpStatusCode.Accepted,
         )
+        } finally {
+            InstallProgress.finishConfigMutation(configMutationTicket)
+        }
     }
 
     private data class OnboardingConfigPost(

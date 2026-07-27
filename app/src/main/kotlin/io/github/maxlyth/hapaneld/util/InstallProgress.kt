@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
  */
 object InstallProgress {
     class Ticket internal constructor(internal val id: Long)
+    class ConfigMutationTicket internal constructor(internal val id: Long)
 
     enum class Outcome(val wireValue: String) {
         SUCCEEDED("succeeded"),
@@ -42,11 +43,12 @@ object InstallProgress {
     @Volatile private var result: OperationResult? = null
     private var generation = 0L
     private var active: Ticket? = null
+    private var activeConfigMutation: ConfigMutationTicket? = null
 
     /** Claim the operation lane for [component]. Returns null if another owner is already in flight. */
     @Synchronized
     fun start(component: String): Ticket? {
-        if (running) return null
+        if (running || activeConfigMutation != null) return null
         val ticket = Ticket(++generation)
         active = ticket
         this.component = component
@@ -54,6 +56,23 @@ object InstallProgress {
         this.result = null
         this.running = true
         return ticket
+    }
+
+    /**
+     * Claim the same process-wide operation lane for an ordinary Configure mutation without exposing it
+     * as an install/restore progress operation. A destructive operation already in flight must make the
+     * save fail visibly rather than apply a value that the older operation then restores from its archive.
+     */
+    @Synchronized
+    fun startConfigMutation(): ConfigMutationTicket? {
+        if (running || activeConfigMutation != null) return null
+        return ConfigMutationTicket(++generation).also { activeConfigMutation = it }
+    }
+
+    /** Release a Configure claim only when [ticket] still owns it. */
+    @Synchronized
+    fun finishConfigMutation(ticket: ConfigMutationTicket) {
+        if (activeConfigMutation == ticket) activeConfigMutation = null
     }
 
     /** Record [result] only if [ticket] still owns the single progress slot. */

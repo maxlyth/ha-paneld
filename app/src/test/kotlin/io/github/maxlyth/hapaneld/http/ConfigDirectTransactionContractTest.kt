@@ -32,6 +32,23 @@ class ConfigDirectTransactionContractTest {
         assertFalse(handler.contains("snapInvalidate()\n        onReconfigure()"))
     }
 
+    @Test fun `direct save owns operation lane across persistence dispatch and response`() {
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleConfigPost"),
+            source.indexOf("private fun recordLiveApplyOutcome"),
+        )
+        val admission = handler.indexOf("InstallProgress.startConfigMutation()")
+        val persistence = handler.indexOf("config.applyBatch")
+        val dispatch = handler.indexOf("for ((key, raw) in mutationPlan.changedLive)")
+        val release = handler.indexOf("InstallProgress.finishConfigMutation(configMutationTicket)")
+
+        assertTrue(admission in 0 until persistence)
+        assertTrue(persistence < dispatch)
+        assertTrue(dispatch < release)
+        assertTrue(handler.contains("\"operation-busy\""))
+        assertTrue(handler.contains("HttpStatusCode.Conflict"))
+    }
+
     @Test fun `json and html responses share explicit applied pending rejected outcome`() {
         val responder = source.substring(
             source.indexOf("private suspend fun respondConfigMutation"),

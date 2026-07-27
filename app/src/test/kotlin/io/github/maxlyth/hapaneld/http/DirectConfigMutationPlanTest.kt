@@ -25,6 +25,43 @@ class DirectConfigMutationPlanTest {
         assertFalse(plan.requiresReconfigure)
     }
 
+    @Test fun `touch only execution cannot acquire any broad replay owner or restore itself`() {
+        val original = linkedMapOf(
+            "touch_sound" to "true",
+            "navbar_mode" to "Off",
+            "auto_sleep" to "true",
+        )
+        val plan = planDirectConfigMutation(
+            posted = mapOf("touch_sound" to "false"),
+            before = original,
+        )
+        val forbiddenOwners = setOf(
+            "tame_vendor_packages",
+            "kiosk_lock",
+            "watchdog_enabled",
+            "silence_boot_chime",
+            "brightness",
+            "prevent_idle_dim",
+            "dashboard_package",
+            "home_dashboard",
+            "auto_sleep",
+            "navbar_mode",
+        )
+        val applied = original.toMutableMap()
+        val dispatches = ArrayList<String>()
+        plan.changedLive.forEach { (key, value) ->
+            dispatches += key
+            applied[key] = value
+        }
+
+        assertEquals(listOf("touch_sound"), dispatches)
+        assertTrue(plan.changedKeys.intersect(forbiddenOwners).isEmpty())
+        assertFalse(plan.requiresReconfigure)
+        assertEquals("false", applied["touch_sound"])
+        assertEquals("Off", applied["navbar_mode"])
+        assertEquals("true", applied["auto_sleep"])
+    }
+
     @Test fun `unchanged auto sleep is a true no-op with no broad reconfigure`() {
         val plan = planDirectConfigMutation(
             posted = mapOf("auto_sleep" to "false"),
