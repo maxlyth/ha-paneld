@@ -70,7 +70,13 @@ jobs:
       - name: Build app and instrumentation APKs
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
-      - name: Run non-Shizuku instrumentation tests
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run core instrumentation tests
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api-level }}
@@ -81,4 +87,4 @@ jobs:
           script: |
             adb install app/build/outputs/apk/debug/app-debug.apk
             adb install app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w -e notClass io.github.maxlyth.hapaneld.shizuku.ShizukuIntegrationTest io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner
+            adb shell am instrument -w -e annotation io.github.maxlyth.hapaneld.CoreInstrumentation io.github.maxlyth.hapaneld.test/androidx.test.runner.AndroidJUnitRunner

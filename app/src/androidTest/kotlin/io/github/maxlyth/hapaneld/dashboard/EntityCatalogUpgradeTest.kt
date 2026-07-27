@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -12,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** Exercises Android SQLite's actual upgrade path; schema-plan string tests cannot prove this. */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class EntityCatalogUpgradeTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()

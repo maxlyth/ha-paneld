@@ -1,12 +1,14 @@
 package io.github.maxlyth.hapaneld.sensors
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /** Runs the HA wire-format timestamp parser on the device's actual java.time implementation. */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class HaTimestampAndroidTest {
     @Test fun offsetTimestampParsesOnFleetApiFloor() {

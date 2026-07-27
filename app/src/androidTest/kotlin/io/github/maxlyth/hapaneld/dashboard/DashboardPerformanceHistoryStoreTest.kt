@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.dashboard
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +11,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class DashboardPerformanceHistoryStoreTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()

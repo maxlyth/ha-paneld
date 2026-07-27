@@ -5,6 +5,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -28,6 +29,7 @@ import org.junit.runner.RunWith
  * indexes and foreign keys) rather than raw `sqlite_master` text, because `ALTER TABLE ADD COLUMN`
  * legitimately leaves different DDL text for an identical schema.
  */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class EntityCatalogSchemaParityTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()

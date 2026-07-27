@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import java.io.File
 import org.junit.After
@@ -17,6 +18,7 @@ import org.junit.runner.RunWith
  * End-to-end proof of the crisis path: a database this build cannot open is set aside, a fresh one is
  * created, and configuration comes back on its own instead of the owner losing their dashboard.
  */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class ConfigVaultRecoveryTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()

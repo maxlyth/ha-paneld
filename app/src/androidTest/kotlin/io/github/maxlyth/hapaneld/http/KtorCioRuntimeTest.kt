@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO as ClientCio
@@ -18,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** Proves the production Ktor engine and client can load and exchange bytes on the fleet API floor. */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class KtorCioRuntimeTest {
     @Test fun cioServerAndClientRunOnAndroid() = runBlocking {

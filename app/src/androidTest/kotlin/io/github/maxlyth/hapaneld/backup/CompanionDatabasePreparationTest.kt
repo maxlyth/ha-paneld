@@ -4,6 +4,7 @@ import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -11,6 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class CompanionDatabasePreparationTest {
     private val cacheDir: File

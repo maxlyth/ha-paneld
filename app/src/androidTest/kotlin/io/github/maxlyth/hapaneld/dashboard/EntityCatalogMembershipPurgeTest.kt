@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -18,6 +19,7 @@ import org.junit.runner.RunWith
  * These tests pin both halves of the fix: derived rows for purged entities are reclaimed, and rows that
  * carry explicit user intent, or that simply have no entity row yet, are not touched.
  */
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class EntityCatalogMembershipPurgeTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()

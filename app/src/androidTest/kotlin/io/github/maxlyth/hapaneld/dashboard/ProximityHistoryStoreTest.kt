@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.dashboard
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.CoreInstrumentation
 import io.github.maxlyth.hapaneld.sensors.ProximityLearningRuntime
 import io.github.maxlyth.hapaneld.sensors.ProximityWakeInvalidationAuthority
 import io.github.maxlyth.hapaneld.sensors.ProximityWakeInvalidationJournal
@@ -18,6 +19,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
+@CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class ProximityHistoryStoreTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()

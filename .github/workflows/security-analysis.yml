@@ -73,7 +73,7 @@ jobs:
 
       - name: Build Android sources for analysis
         if: matrix.language == 'java-kotlin'
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --no-build-cache --stacktrace
 
       - name: Build helper sources for analysis
         if: matrix.language == 'c-cpp'
