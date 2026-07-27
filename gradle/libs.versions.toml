@@ -25,7 +25,7 @@ junit = "4.13.2"
 orgJson = "20260719"
 # 3.x raises the library bytecode floor from Java 8 to Java 11; retain 2.10 until it has separate
 # oldest-Android runtime qualification rather than coupling that risk to the build-tool migration.
-snakeyamlEngine = "2.10"
+snakeyamlEngine = "3.0.1"
 shizuku = "13.1.5"
 cyclonedx = "3.3.0"
 
