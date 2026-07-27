@@ -2212,7 +2212,7 @@
           ]),
           el("div", { class: "fctl" }, [liveState]),
         ]));
-        (function pollLogShipStatus() {
+        function pollLogShipStatus() {
           if (!liveState.isConnected) return;   // card was re-rendered; this poller is stale
           fetch("/api/v1/logship/status", { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -2228,7 +2228,10 @@
               liveState.textContent = "State unavailable.";
               setTimeout(pollLogShipStatus, 15000);
             });
-        })();
+        }
+        // The card is attached below after all group-specific rows are built. Starting synchronously
+        // here sees isConnected=false and would retire the only poller before its first request.
+        setTimeout(pollLogShipStatus, 0);
       }
       if (!card.parentNode) root.appendChild(card);
       if (retainedAutoSleepPanel && card.contains(retainedAutoSleepPanel)) {

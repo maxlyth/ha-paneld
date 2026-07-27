@@ -22,6 +22,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +50,13 @@ internal data class LogShipConfigSnapshot(
 
 /** A target belongs to one run; live preference reads never change a run underneath its worker. */
 internal data class LogShipTarget(val host: String, val port: Int, val protocol: String, val panelId: String)
+
+/** Dedicated, cheap control-plane projection of the synchronized shipper generation. */
+internal data class LogShipStatusProjection(
+    val enabled: Boolean,
+    val configured: Boolean,
+    val text: String,
+)
 
 /** A transport is created inert, attached to its run, and only then allowed to block in [connect]. */
 internal interface LogSink : AutoCloseable {
@@ -234,18 +242,32 @@ class LogShipper internal constructor(
         run = null
     }
 
-    /** One-line status for the info page and diagnostics. */
-    fun statusText(): String {
+    /** Live state from the current generation, serialized with start/reconfigure/stop. */
+    internal fun status(): LogShipStatusProjection = synchronized(lock) {
         val config = configSnapshot()
-        if (!config.enabled) return "off"
-        if (config.host.isBlank()) return "enabled · no host set"
-        val current = synchronized(lock) { run }
-        val target = current?.target ?: config.targetOrNull()!!
+        val current = run
+        val configured = config.enabled && config.host.isNotBlank()
+        if (current == null && !config.enabled) {
+            return@synchronized LogShipStatusProjection(false, false, "off")
+        }
+        if (current == null && config.host.isBlank()) {
+            return@synchronized LogShipStatusProjection(config.enabled, false, "enabled · no host set")
+        }
+        val target = current?.target ?: config.targetOrNull()
+            ?: return@synchronized LogShipStatusProjection(config.enabled, configured, "disconnected")
         val status = current?.status() ?: LogShipRun.Status(false, 0, 0, null)
-        return "${LogShipEndpoint.scheme(target.protocol)}://${target.host}:${target.port} · " +
-            liveness(target, status) +
-            " · sent=${status.sent}${if (status.dropped > 0) " dropped=${status.dropped}" else ""}"
+        val host = LogShipEndpoint.displayHost(target.host)
+        LogShipStatusProjection(
+            enabled = config.enabled,
+            configured = configured,
+            text = "${LogShipEndpoint.scheme(target.protocol)}://$host:${target.port} · " +
+                liveness(target, status) +
+                " · sent=${status.sent}${if (status.dropped > 0) " dropped=${status.dropped}" else ""}",
+        )
     }
+
+    /** One-line compatibility projection for the info page and diagnostics. */
+    fun statusText(): String = status().text
 
     /**
      * UDP has no connection and no acknowledgement, so it must never claim to be "connected" — that
@@ -269,7 +291,11 @@ class LogShipper internal constructor(
         try {
             candidate.bindSubscription(subscribeCapture(candidate::offer))
             candidate.bindJob(scope.launch(Dispatchers.IO) { shipLoop(candidate) })
-            Log.i(TAG, "started → ${LogShipEndpoint.scheme(target.protocol)}://${target.host}:${target.port}")
+            Log.i(
+                TAG,
+                "started → ${LogShipEndpoint.scheme(target.protocol)}://" +
+                    "${LogShipEndpoint.displayHost(target.host)}:${target.port}",
+            )
         } catch (e: Exception) {
             run = null
             candidate.close()
@@ -337,7 +363,8 @@ class LogShipper internal constructor(
                     run.markFailure(reason)
                     Log.w(
                         TAG,
-                        "${LogShipEndpoint.scheme(target.protocol)} ${target.host}:${target.port}: $reason",
+                        "${LogShipEndpoint.scheme(target.protocol)} " +
+                            "${LogShipEndpoint.displayHost(target.host)}:${target.port}: $reason",
                     )
                     if (isActive) delay(SINK_BACKOFF_MS)
                 }
@@ -358,8 +385,14 @@ class LogShipper internal constructor(
      */
     private fun describeFailure(e: Throwable, host: String): String {
         val message = e.message?.trim().orEmpty()
-        if (message.isNotEmpty() && !message.equals(host, ignoreCase = true)) return message
-        return "${e.javaClass.simpleName} ($host)"
+        if (e is UnknownHostException || message.startsWith("$host:")) {
+            val detail = LogShipEndpoint.displayFailure(message, host)
+            return "${e.javaClass.simpleName}${detail.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""}"
+        }
+        if (message.isNotEmpty() && !message.equals(host, ignoreCase = true)) {
+            return LogShipEndpoint.displayFailure(message, host)
+        }
+        return "${e.javaClass.simpleName} (${LogShipEndpoint.displayHost(host)})"
     }
 
     private fun timestamp(): String = synchronized(rfc3339) { rfc3339.format(Date()) }

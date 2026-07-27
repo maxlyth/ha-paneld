@@ -1701,6 +1701,50 @@ class ConfigTransactionTest {
         assertEquals(true, prefs.values["device_local_setup_home_dashboard_migrated_v2"])
     }
 
+    @Test fun freshConfigTakesTcpDefaultWithoutMaterialisingAnOldTransport() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        config.migrateLogShipTcpDefault()
+
+        assertEquals("syslog-tcp", config.logShipProtocol)
+        assertFalse(prefs.values.containsKey("log_ship_protocol"))
+        assertEquals(true, prefs.values["device_local_log_ship_tcp_default_migrated_v1"])
+    }
+
+    @Test fun upgradedAbsentProtocolKeepsItsPreviousEffectiveUdpTransport() {
+        val prefs = fakePreferences(initial = mapOf("panel_id" to "existing-panel"))
+        val config = Config(prefs.instance)
+
+        config.migrateLogShipTcpDefault()
+        config.migrateLogShipTcpDefault()
+
+        assertEquals("syslog-udp", config.logShipProtocol)
+        assertEquals("syslog-udp", prefs.values["log_ship_protocol"])
+    }
+
+    @Test fun migrationNeverRewritesExplicitLogShipProtocols() {
+        listOf("syslog-udp", "syslog-tcp", "http", "syslog").forEach { protocol ->
+            val prefs = fakePreferences(initial = mapOf("panel_id" to "existing", "log_ship_protocol" to protocol))
+            val config = Config(prefs.instance)
+
+            config.migrateLogShipTcpDefault()
+
+            assertEquals(protocol, prefs.values["log_ship_protocol"])
+            assertEquals(if (protocol == "syslog") "syslog-tcp" else protocol, config.logShipProtocol)
+        }
+    }
+
+    @Test fun failedDefaultMigrationRetriesWithoutChangingEffectiveExistingValue() {
+        val failed = fakePreferences(initial = mapOf("panel_id" to "existing"), commitSucceeds = false)
+        val config = Config(failed.instance)
+
+        config.migrateLogShipTcpDefault()
+
+        assertFalse(failed.values.containsKey("device_local_log_ship_tcp_default_migrated_v1"))
+        assertEquals("syslog-tcp", config.logShipProtocol)
+    }
+
     private data class FakePreferences(
         val instance: SharedPreferences,
         val values: MutableMap<String, Any?>,

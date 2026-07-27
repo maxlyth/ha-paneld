@@ -1765,3 +1765,45 @@ browserTest('Auto-sleep Area refresh retains A until B is complete and converges
   assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Unsaved panel name');
   assert.equal(await page.locator('#savebtn').isEnabled(), true);
 });
+
+browserTest('Logging Current state polls live failure and recovery without rebuilding the card', async (t) => {
+  let statusCalls = 0;
+  let recovered = false;
+  const schema = [
+    { key: 'log_ship_enabled', label: 'Ship logs', group: 'Logging', type: 'BOOL', available: true },
+    { key: 'log_ship_host', label: 'Sink host', group: 'Logging', type: 'STRING', available: true },
+    { key: 'log_ship_port', label: 'Sink port', group: 'Logging', type: 'INT', available: true, min: 1, max: 65535 },
+    { key: 'log_ship_protocol', label: 'Protocol', group: 'Logging', type: 'ENUM', available: true,
+      options: ['syslog-udp', 'syslog-tcp', 'http'] },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { log_ship_enabled: true, log_ship_host: 'collector.lan', log_ship_port: 514,
+        log_ship_protocol: 'syslog-tcp' },
+      ha_expose: {}, ha_auth: { configured: false },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/logship/status') {
+      statusCalls++;
+      return !recovered
+        ? json({ enabled: true, configured: true, text: 'tcp://collector.lan:514 · disconnected (connection refused) · sent=0' })
+        : json({ enabled: true, configured: true, text: 'tcp://collector.lan:514 · connected · sent=1' });
+    }
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(7_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.evaluate(() => window.cfgTab(true));
+  const state = page.locator('[data-config-group="Logging"] .frow').filter({ hasText: 'Current state' });
+  await state.getByText(/disconnected \(connection refused\)/).waitFor();
+  const card = await page.locator('[data-config-group="Logging"]').elementHandle();
+  recovered = true;
+  await state.getByText(/connected · sent=1/).waitFor();
+  assert.ok(statusCalls >= 2);
+  assert.equal(await card.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Logging"]')), true);
+});

@@ -788,6 +788,7 @@ class PaneldService : Service() {
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
         // Must run BEFORE ensurePanelId and before any renderer starts: it decides, once, whether this panel
         // predates the entity-filter question, and a panel that predates it must never be held to answer it.
+        config.migrateLogShipTcpDefault()
         config.migrateSetupQuestionsForExistingInstall()
         config.ensurePanelId()      // materialize the generated identity before MQTT/mDNS snapshot it
         updateForegroundStatus("Starting…")
@@ -1143,6 +1144,7 @@ class PaneldService : Service() {
             tame = tame, tameProfileCandidates = profile.tameVendorCandidates,
             // Live log viewer sources (Logs tab). System is gated on Su.available() per request.
             logApp = logCaptureApp, logSystem = logCaptureSystem,
+            logShipStatus = logShipper::status,
             effectiveBrightness = { brightness.getBrightness() },
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },

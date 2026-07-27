@@ -143,6 +143,29 @@ class Config private constructor(
         prefs.unregisterOnSharedPreferenceChangeListener(listener)
     }
 
+    /**
+     * One-shot transition to the TCP fresh-install default.
+     *
+     * The previous build resolved an absent `log_ship_protocol` as UDP. Changing the registry default
+     * alone would therefore retarget every upgraded absent-key configuration. An entirely empty store is
+     * a genuinely fresh install and takes the new TCP default; any pre-existing store keeps its prior
+     * effective UDP value by materialising it before the marker is committed. Explicit values are never
+     * rewritten. A failed commit leaves the marker absent so the migration retries next process start.
+     */
+    internal fun migrateLogShipTcpDefault() = synchronized(CONFIG_LOCK) {
+        if (prefs.getBoolean(LOG_SHIP_TCP_DEFAULT_MIGRATION_PREF, false)) return@synchronized
+        val preExisting = prefs.all.isNotEmpty()
+        prefs.edit()
+            .putBoolean(LOG_SHIP_TCP_DEFAULT_MIGRATION_PREF, true)
+            .apply {
+                if (preExisting && !prefs.contains("log_ship_protocol")) {
+                    putString("log_ship_protocol", LogShipEndpoint.SYSLOG_UDP)
+                }
+            }
+            .commit()
+        Unit
+    }
+
     val httpPort: Int get() = prefs.getInt("http_port", DEFAULT_PORT)
 
     /**
@@ -2023,6 +2046,8 @@ class Config private constructor(
         private const val SETUP_ENTITY_FILTER_ANSWERED_PREF = "device_local_setup_entity_filter_answered"
         private const val SETUP_HOME_DASHBOARD_CHOSEN_PREF = "device_local_setup_home_dashboard_chosen"
         private const val SETUP_QUESTION_MIGRATION_PREF = "device_local_setup_questions_migrated_v1"
+        private const val LOG_SHIP_TCP_DEFAULT_MIGRATION_PREF =
+            "device_local_log_ship_tcp_default_migrated_v1"
         private const val SETUP_HOME_DASHBOARD_MIGRATION_PREF = "device_local_setup_home_dashboard_migrated_v2"
         private const val HA_AREA_USER_OVERRIDE_PREF = "device_local_ha_area_user_override"
         private const val SETUP_RENDER_ATTESTED_PREF = "device_local_setup_render_attested"

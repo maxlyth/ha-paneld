@@ -72,6 +72,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreOutcome
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
 import io.github.maxlyth.hapaneld.logship.LogCapture
+import io.github.maxlyth.hapaneld.logship.LogShipStatusProjection
 import io.github.maxlyth.hapaneld.logship.LogShipTarget
 import io.github.maxlyth.hapaneld.logship.NetworkLogSinkFactory
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -827,6 +828,10 @@ internal data class ConfigDiscoverySuggestions(
 private const val SETUP_PRESENCE_HEADER = "X-ha-paneld-setup-presence"
 private const val SETUP_PRESENCE_ACTIVE = "active"
 
+internal fun logShipStatusJson(status: LogShipStatusProjection): String =
+    "{\"enabled\":${status.enabled},\"configured\":${status.configured}," +
+        "\"text\":${Json.str(status.text)}}"
+
 class PaneldServer internal constructor(
     private val config: Config,
     private val cacheDir: File,
@@ -862,6 +867,11 @@ class PaneldServer internal constructor(
     // full logcat via su, gated on Su.available() at request time. Null → the viewer 404s.
     private val logApp: LogCapture? = null,
     private val logSystem: LogCapture? = null,
+    // Dedicated synchronized shipper state. Never route this through the broad management cache: the
+    // Configure card polls specifically to observe connection failure and recovery as they happen.
+    private val logShipStatus: () -> LogShipStatusProjection = {
+        LogShipStatusProjection(config.logShipEnabled, config.logShipActive, "unavailable")
+    },
     // EFFECTIVE backlight (sysfs actual_brightness via BrightnessController, cached) — the sensors
     // endpoint + Live-state row report what the hardware is doing, not just the Android setting.
     private val effectiveBrightness: () -> Int = { -1 },
@@ -1446,14 +1456,7 @@ class PaneldServer internal constructor(
                         // Passive read of what the shipper is actually doing, for the Configure card.
                         // Distinct from probe-log-sink, which transmits: this one only reports, so it
                         // is safe to poll while a page is open.
-                        val facts = snapStaleOk().facts
-                        val text = facts["Log shipping"].orEmpty()
-                        call.respondText(
-                            "{\"enabled\":${config.logShipEnabled}," +
-                                "\"configured\":${config.logShipActive}," +
-                                "\"text\":${jsonStr(text)}}",
-                            ContentType.Application.Json,
-                        )
+                        call.respondText(logShipStatusJson(logShipStatus()), ContentType.Application.Json)
                     }
                     get("/config/probe-broker") {
                         // Pre-flight from the PANEL's network vantage — the only one that matters — so

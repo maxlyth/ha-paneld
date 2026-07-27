@@ -4,6 +4,7 @@ import io.github.maxlyth.hapaneld.util.LogShipEndpoint.HTTP
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint.SYSLOG_TCP
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint.SYSLOG_UDP
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class LogShipEndpointTest {
@@ -41,6 +42,17 @@ class LogShipEndpointTest {
         assertEquals("udp", LogShipEndpoint.scheme(SYSLOG_UDP))
         assertEquals("tcp", LogShipEndpoint.scheme(SYSLOG_TCP))
         assertEquals("http", LogShipEndpoint.scheme(HTTP))
+    }
+
+    @Test fun statusHostAndFailureRenderingNeverExposeAuthorityCredentials() {
+        assertEquals("collector.lan", LogShipEndpoint.displayHost("operator:super-secret@collector.lan"))
+        assertEquals("collector.lan", LogShipEndpoint.displayHost("operator:super-secret@collector.lan?token=also-secret"))
+        val rendered = LogShipEndpoint.displayFailure(
+            "operator:super-secret@collector.lan refused connection",
+            "operator:super-secret@collector.lan",
+        )
+        assertEquals("collector.lan refused connection", rendered)
+        assertFalse(rendered.contains("super-secret"))
     }
 
     // ---- host resolution --------------------------------------------------------------------------

@@ -90,6 +90,19 @@ object LogShipEndpoint {
         else -> "tcp"
     }
 
+    /** Host text safe for status, diagnostics and logs; authority credentials are never rendered. */
+    fun displayHost(host: String): String {
+        val raw = host.trim()
+        val withoutUserInfo = raw.substringAfterLast('@')
+        return withoutUserInfo.substringBefore('?').substringBefore('#').ifBlank { "<redacted>" }
+    }
+
+    /** Remove the configured authority from transport errors before they cross a reporting boundary. */
+    fun displayFailure(message: String, host: String): String {
+        val safeHost = displayHost(host)
+        return message.replace(host, safeHost).replace(host.trim(), safeHost)
+    }
+
     /**
      * Resolve what the user actually typed into the free-text host box against the separately stored
      * port and protocol. People paste a scheme or a `host:port` in there, and taking that literally is

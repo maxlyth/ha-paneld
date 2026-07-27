@@ -316,10 +316,14 @@ case "$LOG_PROTO" in
   ""|syslog-udp|syslog-tcp|http|syslog|udp|tcp) ;;
   *)
     echo "${RED}✗ --log-proto must be syslog-udp, syslog-tcp, or http (got: $LOG_PROTO).${X}" >&2
-    echo "   syslog-udp is the default and is what a stock collector listens for on port 514." >&2
+    echo "   syslog-tcp is the default because connection failures are observable; choose syslog-udp explicitly for a UDP-only collector." >&2
     exit 2
     ;;
 esac
+# A host enables shipping. Materialise the fresh-install default instead of relying on whatever
+# fallback the installed app inherited, so this command has one durable and truthful meaning on both
+# fresh and upgraded panels. Explicit aliases remain server-normalized for compatibility.
+if [ -n "$LOG_HOST" ] && [ -z "$LOG_PROTO" ]; then LOG_PROTO=syslog-tcp; fi
 
 # Every credential/config POST has both a connection deadline and an end-to-end deadline. Keep the
 # values overridable for unusually slow LANs and deterministic regression tests, but never allow an

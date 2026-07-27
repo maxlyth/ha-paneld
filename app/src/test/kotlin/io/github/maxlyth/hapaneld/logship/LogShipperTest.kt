@@ -170,6 +170,52 @@ class LogShipperTest {
         }
     }
 
+    @Test fun dedicatedStatusReportsFailureThenRecoveryWithoutLeakingAuthorityCredentials() {
+        val executor = Executors.newSingleThreadExecutor()
+        val dispatcher = executor.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val capture = FakeCapture()
+        val generations = AtomicInteger()
+        val shipper = LogShipper(
+            configSnapshot = { snapshot(host = "operator:super-secret@collector.lan") },
+            scope = scope,
+            subscribeCapture = capture::subscribe,
+            sinkFactory = LogSinkFactory { _, _ ->
+                if (generations.getAndIncrement() == 0) {
+                    object : LogSink {
+                        override fun connect() = Unit
+                        override fun send(lines: List<String>) {
+                            throw IOException("operator:super-secret@collector.lan refused connection")
+                        }
+                        override fun close() = Unit
+                    }
+                } else {
+                    RecordingSink()
+                }
+            },
+        )
+        try {
+            shipper.start()
+            capture.emit("trigger failure")
+            await { "refused connection" in shipper.status().text }
+            val failed = shipper.status()
+            assertTrue(failed.enabled)
+            assertTrue(failed.configured)
+            assertTrue(failed.text.contains("collector.lan"))
+            assertFalse(failed.text.contains("super-secret"))
+
+            await(timeoutMs = 8_000) { " · connected · " in shipper.status().text }
+            val recovered = shipper.status()
+            assertTrue(recovered.text.contains(" · connected · "))
+            assertFalse(recovered.text.contains("refused connection"))
+        } finally {
+            shipper.stop()
+            scope.cancel()
+            dispatcher.close()
+            executor.shutdownNow()
+        }
+    }
+
     @Test fun queuedLinesShipAsOneMeasuredBoundedBatch() {
         val executor = Executors.newSingleThreadExecutor()
         val dispatcher = executor.asCoroutineDispatcher()

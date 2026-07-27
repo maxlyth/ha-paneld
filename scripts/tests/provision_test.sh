@@ -354,6 +354,27 @@ done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
+# A host-only logging request has one durable meaning on fresh and upgraded panels: explicit TCP.
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --log-host collector.test
+assert_success "log host without protocol provisions successfully"
+if grep -Fq -- 'log_ship_protocol=syslog-tcp' "$MOCK_CALL_LOG"; then
+  pass "log host without protocol persists the TCP default"
+else
+  fail_test "log host without protocol persists the TCP default"
+fi
+
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --log-host collector.test --log-proto syslog-udp
+assert_success "explicit UDP log transport provisions successfully"
+if grep -Fq -- 'log_ship_protocol=syslog-udp' "$MOCK_CALL_LOG"; then
+  pass "explicit UDP log transport remains explicit"
+else
+  fail_test "explicit UDP log transport remains explicit"
+fi
+
+run_provision "$MOCK_TARGET" --log-proto invalid
+assert_failure "invalid log transport is rejected before panel contact"
+assert_contains 'syslog-tcp is the default' "invalid transport guidance names the TCP default"
+
 run_provision "$MOCK_TARGET" --export "$EXPORT"
 assert_success "export-only succeeds"
 if [ -s "$EXPORT" ]; then pass "export-only writes a non-empty bundle"; else fail_test "export-only writes a non-empty bundle"; fi
