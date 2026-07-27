@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Prepare the reconciled `0.9.6-rc2` integration line from the published rc1 source and verified post-release CI fixes.
+
 ## v0.9.6-rc1 - 2026-07-27
 
 The 0.9.6 release of ha-paneld is on track to be the largest to date, and I have been working night and day to get it out the door. Previously, I was careful to list the major changes so that testers could evaluate new features, but this time there are hundreds, and trying to annotate every one has long since stopped being viable.
