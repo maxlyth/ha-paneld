@@ -6,6 +6,9 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
 import io.github.maxlyth.hapaneld.DashboardAuth
+import io.github.maxlyth.hapaneld.HaAuthOwner
+import io.github.maxlyth.hapaneld.HaAuthSnapshot
+import io.github.maxlyth.hapaneld.stableOwner
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
@@ -23,6 +26,7 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -33,6 +37,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -45,6 +50,113 @@ import java.io.InterruptedIOException
 import java.io.Reader
 import java.util.concurrent.atomic.AtomicLong
 
+internal data class HomeDashboardCatalog(
+    /** True only when the authenticated dashboard-list request completed; empty items can then mean zero. */
+    val queried: Boolean = false,
+    val items: List<EntityLearningProtocol.HomeDashboardChoice> = emptyList(),
+    val userDefault: String? = null,
+    val systemDefault: String? = null,
+    val default: EntityLearningProtocol.HomeDashboardDefault = EntityLearningProtocol.HomeDashboardDefault(),
+)
+
+/** One process-local answer shared by the renderer and entity scanner for the same HA authority. */
+internal class HomeDashboardResolutionAuthority {
+    internal data class Key(
+        val baseUrl: String,
+        val authOwner: HaAuthOwner,
+        val configuredPath: String,
+    )
+
+    private data class Cached(
+        val key: Key,
+        val resolution: EntityLearningProtocol.HomeDashboardResolution,
+    )
+
+    private val mutex = Mutex()
+    private var cached: Cached? = null
+
+    suspend fun resolve(
+        key: Key,
+        stillCurrent: () -> Boolean,
+        read: suspend () -> EntityLearningProtocol.HomeDashboardResolution?,
+    ): EntityLearningProtocol.HomeDashboardResolution? = mutex.withLock {
+        cached?.takeIf { it.key == key }?.resolution?.takeIf { stillCurrent() } ?: run {
+            if (!stillCurrent()) return@withLock null
+            val resolution = read() ?: return@withLock null
+            if (!stillCurrent()) return@withLock null
+            // A true zero is authoritative only for that read. The recovery screen explicitly tells
+            // the user to create/grant a dashboard and retry, so NONE must not make that retry inert.
+            if (resolution.path != null) cached = Cached(key, resolution)
+            resolution
+        }
+    }
+}
+
+internal data class OwnedAuthenticatedHomeDashboardAuthority(
+    val key: HomeDashboardResolutionAuthority.Key,
+    val credentialFingerprint: String,
+)
+
+/** Bind a returned access token to the exact stable credential owner that authorized the request. */
+internal fun ownedAuthenticatedHomeDashboardAuthority(
+    baseUrl: String,
+    configuredPath: String,
+    ownerBeforeAuthentication: HaAuthOwner,
+    snapshotAfterAuthentication: HaAuthSnapshot,
+    returnedAccessToken: String,
+): OwnedAuthenticatedHomeDashboardAuthority? {
+    val ownerAfter = snapshotAfterAuthentication.stableOwner()
+    if (ownerAfter != ownerBeforeAuthentication || snapshotAfterAuthentication.accessToken != returnedAccessToken) {
+        return null
+    }
+    return OwnedAuthenticatedHomeDashboardAuthority(
+        HomeDashboardResolutionAuthority.Key(baseUrl, ownerAfter, configuredPath),
+        EntityLearningProtocol.hash(
+            listOf(
+                snapshotAfterAuthentication.url,
+                snapshotAfterAuthentication.accessToken,
+                snapshotAfterAuthentication.refreshToken,
+                snapshotAfterAuthentication.tokenExpiry.toString(),
+                snapshotAfterAuthentication.clientId,
+            ).joinToString("\u0000"),
+        ),
+    )
+}
+
+/** Parse one authenticated HA WebSocket session without touching entity-learning state or scan APIs. */
+internal suspend fun readHomeDashboardCatalog(
+    request: suspend (JSONObject) -> JSONObject,
+): HomeDashboardCatalog {
+    val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
+        ?: error("Home Assistant current-user response missing result")
+    val isAdmin = user.optBoolean("is_admin") || user.optBoolean("is_owner")
+    // Render admission needs the complete authenticated set. Treat a rejected/failed panel list as an
+    // unavailable catalog rather than misclassifying built-in defaults as out-of-list or reporting a
+    // false zero-dashboard result.
+    val panels = request(JSONObject().put("type", "get_panels")).optJSONObject("result")
+        ?: error("Home Assistant panel list missing result")
+    val dashboards = request(JSONObject().put("type", "lovelace/dashboards/list"))
+        .optJSONArray("result") ?: error("Home Assistant dashboard list missing result")
+    // These commands are part of the renderer's supported HA floor. A missing default_panel means
+    // "no default"; a rejected command or untyped result means the catalog read was incomplete and
+    // must retry instead of silently choosing a lower-precedence dashboard.
+    val userData = request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
+        .optJSONObject("result") ?: error("Home Assistant user-default response missing result")
+    val systemData = request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
+        .optJSONObject("result") ?: error("Home Assistant system-default response missing result")
+    val userDefault = userData.optJSONObject("value")?.optString("default_panel")
+    val systemDefault = systemData.optJSONObject("value")?.optString("default_panel")
+    val choices = EntityLearningProtocol.panelDashboardChoices(panels, isAdmin) +
+        EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin)
+    return HomeDashboardCatalog(
+        queried = true,
+        items = choices,
+        userDefault = userDefault,
+        systemDefault = systemDefault,
+        default = EntityLearningProtocol.homeDashboardDefault(userDefault, systemDefault, choices),
+    )
+}
+
 /** Owns catalog synchronization, automatic set promotion and the HTTP/UI query surface. */
 class EntityLearningManager(
     context: Context,
@@ -55,6 +167,9 @@ class EntityLearningManager(
 ) {
     private val store = EntityCatalogStore(context.applicationContext)
     private val syncMutex = Mutex()
+    // Process-owned rather than service-instance-owned: DashboardActivity can survive a same-process
+    // service replacement, so its renderer and the successor manager's scanner must retain one answer.
+    private val homeDashboardAuthority = EntityLearningRuntime.homeDashboardAuthority
     private val effectGeneration = AtomicLong(0)
     private val telemetryWriteBarrier = EntityTelemetryWriteBarrier(effectGeneration::get)
     @Volatile private var syncJob: Job? = null
@@ -65,7 +180,6 @@ class EntityLearningManager(
     @Volatile private var bootstrapBlockingIssues = 0
     @Volatile private var resetBootstrapPending = false
     @Volatile private var dynamicExpressionsJson = "[]"
-    @Volatile private var frontendDefaultPanel: String? = null
     private var promotionWindowStart = 0L
     private var promotionsInWindow = 0
     private val telemetryStoreGate = EntityTelemetryStoreGate()
@@ -458,7 +572,7 @@ class EntityLearningManager(
 
         val dashboardCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_DASHBOARD_FETCH_PARSE)
         val ws = try {
-            fetchDashboardAndRegistry(snapshot.baseUrl, snapshot.authToken, snapshot.dashboardPath).also {
+            fetchDashboardAndRegistry(snapshot).also {
                 dashboardCost.work(
                     units = it.metadata.size.toLong(),
                     // String length is the allocation-free work-size proxy used by the other browser
@@ -1163,30 +1277,14 @@ class EntityLearningManager(
             effectGeneration.incrementAndGet()
             promotionJob?.cancel()
             promotionJob = null
-            frontendDefaultPanel = null
             if (cancelSync) {
                 syncJob = supersedeEntityLearningSync(syncJob) { syncRerunReason = null }
             }
         }
     }
 
-    /** Return HA's configured default dashboard path for an empty/blank `homeDashboard` entry. */
-    fun resolvedHomeDashboardPath(homeDashboard: String): String =
-        if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
-            val known = frontendDefaultPanel.orEmpty().ifBlank { null } ?: return ""
-            EntityLearningProtocol.dashboardUrlPath(homeDashboard, known)
-        } else {
-            homeDashboard
-        }
-
-    /** The dashboard list plus the account's server-side default, from one WebSocket session. */
-    data class HomeDashboardCatalog(
-        val items: List<EntityLearningProtocol.HomeDashboardChoice> = emptyList(),
-        val default: EntityLearningProtocol.HomeDashboardDefault = EntityLearningProtocol.HomeDashboardDefault(),
-    )
-
     /** Fetch dashboards visible to the signed-in HA user without starting an entity scan. */
-    suspend fun homeDashboardChoices(): List<EntityLearningProtocol.HomeDashboardChoice> =
+    internal suspend fun homeDashboardChoices(): List<EntityLearningProtocol.HomeDashboardChoice> =
         homeDashboardCatalog().items
 
     /**
@@ -1196,40 +1294,47 @@ class EntityLearningManager(
      * where Home Assistant ≥ 2025.12 persists the profile picker's choice). Failures reduce to an empty
      * catalog — the caller must treat that as "could not ask", never as "no dashboards".
      */
-    suspend fun homeDashboardCatalog(): HomeDashboardCatalog = withContext(Dispatchers.IO) {
+    internal suspend fun homeDashboardCatalog(
+        stillCurrent: () -> Boolean = { true },
+    ): HomeDashboardCatalog = withContext(Dispatchers.IO) {
+        if (!stillCurrent()) return@withContext HomeDashboardCatalog()
         val base = config.haUrl.trim().trimEnd('/')
         if (base.isBlank()) return@withContext HomeDashboardCatalog()
-        val auth = DashboardAuth.forConfig(config)
+        val auth = DashboardAuth.forConfig(config, stillCurrent = stillCurrent)
         val token = auth.session?.accessToken ?: return@withContext HomeDashboardCatalog()
         runCatching {
             var catalog = HomeDashboardCatalog()
             withHaSocket(base, token) { request ->
-                val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
-                val isAdmin = user?.optBoolean("is_admin") == true || user?.optBoolean("is_owner") == true
-                val panels = runCatching {
-                    request(JSONObject().put("type", "get_panels")).optJSONObject("result")
-                }.getOrNull()
-                val dashboards = request(JSONObject().put("type", "lovelace/dashboards/list"))
-                    .optJSONArray("result") ?: JSONArray()
-                // Same user → system fallback order the scan path uses; each read is individually
-                // best-effort because an older core may not know these commands.
-                val userDefault = runCatching {
-                    request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
-                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
-                }.getOrNull()
-                val systemDefault = if (userDefault.isNullOrBlank()) runCatching {
-                    request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
-                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
-                }.getOrNull() else null
-                catalog = HomeDashboardCatalog(
-                    items = EntityLearningProtocol.panelDashboardChoices(panels, isAdmin) +
-                        EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin),
-                    default = EntityLearningProtocol.homeDashboardDefault(userDefault, systemDefault),
-                )
+                catalog = readHomeDashboardCatalog(request)
             }
+            check(stillCurrent()) { "home-dashboard authority changed during catalog read" }
             catalog
         }.getOrDefault(HomeDashboardCatalog())
     }
+
+    /** Resolve from the authenticated legal list without initializing or reading entity-learning state. */
+    internal suspend fun resolveHomeDashboard(
+        homeDashboard: String,
+        stillCurrent: () -> Boolean = { true },
+    ): EntityLearningProtocol.HomeDashboardResolution? = homeDashboardAuthority.resolve(
+        homeDashboardAuthorityKey(homeDashboard),
+        stillCurrent,
+    ) {
+        val catalog = homeDashboardCatalog(stillCurrent)
+        if (!catalog.queried) null else EntityLearningProtocol.resolveHomeDashboard(
+            homeDashboard,
+            catalog.userDefault,
+            catalog.systemDefault,
+            catalog.items,
+        )
+    }
+
+    private fun homeDashboardAuthorityKey(homeDashboard: String) =
+        HomeDashboardResolutionAuthority.Key(
+            baseUrl = config.haUrl.trim().trimEnd('/'),
+            authOwner = config.haAuthSnapshot().stableOwner(),
+            configuredPath = homeDashboard.trim(),
+        )
 
     /** The area registry, this panel's device row, and what the signed-in account may do about it. */
     data class HaAreaCatalog(
@@ -1348,15 +1453,16 @@ class EntityLearningManager(
             }.getOrDefault(false)
         }
 
-    private fun credentialFingerprint(): String = EntityLearningProtocol.hash(
-        listOf(
-            config.haUrl,
-            config.haToken,
-            config.haRefreshToken,
-            config.haTokenExpiry.toString(),
-            config.haClientId,
-        ).joinToString("\u0000"),
-    )
+    private fun credentialFingerprint(): String {
+        val snapshot = config.haAuthSnapshot()
+        return ownedAuthenticatedHomeDashboardAuthority(
+            snapshot.url.trim().trimEnd('/'),
+            config.homeDashboard.trim(),
+            snapshot.stableOwner(),
+            snapshot,
+            snapshot.accessToken,
+        )?.credentialFingerprint ?: error("credential snapshot changed while reading")
+    }
 
     private fun currentEffectState(): EntityLearningEffectState = EntityLearningEffectState(
         origin = runCatching { normalizedOrigin(config.haUrl) }.getOrDefault(""),
@@ -1380,23 +1486,39 @@ class EntityLearningManager(
         val base = config.haUrl.trim().trimEnd('/')
         require(base.isNotBlank()) { "Home Assistant URL is not configured" }
         val origin = normalizedOrigin(base)
+        val configuredHomeDashboard = config.homeDashboard.trim()
         val path = dashboardPath()
         val legacyKey = EntityLearningProtocol.hash(origin)
         val selected = config.prepareDashboardEntityInstance(origin, path, legacyKey)
             ?: error("failed to prepare entity-learning target")
         val targetKey = config.dashboardEntityTargetKey
+        val ownerBeforeAuthentication = config.haAuthSnapshot().stableOwner()
         val stillCurrent = {
             generation == effectGeneration.get() &&
                 runCatching { normalizedOrigin(config.haUrl) }.getOrNull() == origin &&
-                dashboardPath() == path && config.dashboardEntityInstanceKey == selected &&
+                config.haAuthSnapshot().stableOwner() == ownerBeforeAuthentication &&
+                config.homeDashboard.trim() == configuredHomeDashboard && dashboardPath() == path &&
+                config.dashboardEntityInstanceKey == selected &&
                 config.dashboardEntityTargetKey == targetKey
         }
         val auth = DashboardAuth.forConfig(config, stillCurrent = stillCurrent)
         val token = auth.session?.accessToken
             ?: error(if (auth.rejected) "Home Assistant credential rejected" else "Home Assistant token unavailable")
         check(stillCurrent()) { "entity-learning target changed during authentication" }
+        val ownedAuthSnapshot = config.haAuthSnapshot()
+        val authenticatedAuthority = ownedAuthenticatedHomeDashboardAuthority(
+            base,
+            configuredHomeDashboard,
+            ownerBeforeAuthentication,
+            ownedAuthSnapshot,
+            token,
+        ) ?: error("Home Assistant credential changed during authentication")
+        check(config.haAuthSnapshot() == ownedAuthSnapshot) {
+            "Home Assistant credential changed after authentication"
+        }
         return AuthenticatedTarget(
-            generation, base, origin, path, legacyKey, selected, targetKey, token, credentialFingerprint(),
+            generation, base, origin, configuredHomeDashboard, path, legacyKey, selected, targetKey,
+            token, authenticatedAuthority.credentialFingerprint, authenticatedAuthority.key,
         )
     }
 
@@ -1423,7 +1545,14 @@ class EntityLearningManager(
             state.targetKey == target.targetKey && state.dashboardPath == target.dashboardPath &&
             state.credentialFingerprint == target.credentialFingerprint
         ) { "entity-learning target or credential changed before scan" }
-        return EntityLearningSyncSnapshot(target.generation, target.baseUrl, target.authToken, state)
+        return EntityLearningSyncSnapshot(
+            target.generation,
+            target.baseUrl,
+            target.authToken,
+            target.configuredHomeDashboard,
+            target.homeDashboardAuthorityKey,
+            state,
+        )
     }
 
     private fun capturePromotionSnapshot(instance: String, path: String): EntityLearningPromotionSnapshot {
@@ -1437,12 +1566,14 @@ class EntityLearningManager(
         val generation: Long,
         val baseUrl: String,
         val origin: String,
+        val configuredHomeDashboard: String,
         val dashboardPath: String,
         val legacyKey: String,
         val instanceKey: String,
         val targetKey: String,
         val authToken: String,
         val credentialFingerprint: String,
+        val homeDashboardAuthorityKey: HomeDashboardResolutionAuthority.Key,
     )
 
     private data class WsSnapshot(
@@ -1500,26 +1631,34 @@ class EntityLearningManager(
         }
     }
 
-    private suspend fun fetchDashboardAndRegistry(base: String, token: String, homeDashboard: String): WsSnapshot {
+    private suspend fun fetchDashboardAndRegistry(snapshot: EntityLearningSyncSnapshot): WsSnapshot {
+        val base = snapshot.baseUrl
+        val token = snapshot.authToken
+        val homeDashboard = snapshot.configuredHomeDashboard
         var configJson: String? = null
         val metadata = mutableMapOf<String, String>()
         var areaRegistryEntities: Map<String, Set<String>> = emptyMap()
         var registryMetadataComplete = false
         withHaSocket(base, token) { request ->
-            val defaultPanel = if (EntityLearningProtocol.usesFrontendDefaultPanel(homeDashboard)) {
-                val userDefault = runCatching {
-                    request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
-                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
-                }.getOrNull()
-                val systemDefault = if (userDefault.isNullOrBlank()) runCatching {
-                    request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
-                        .optJSONObject("result")?.optJSONObject("value")?.optString("default_panel")
-                }.getOrNull() else null
-                EntityLearningProtocol.frontendDefaultPanel(userDefault, systemDefault).also {
-                    frontendDefaultPanel = it
-                }
-            } else null
-            val urlPath = EntityLearningProtocol.dashboardUrlPath(homeDashboard, defaultPanel)
+            // The scanner and renderer must never independently choose different defaults. The first
+            // complete authenticated resolution owns this HA/config authority until that authority
+            // changes; every scan consumes the exact same legal dashboard path.
+            val resolved = homeDashboardAuthority.resolve(
+                snapshot.homeDashboardAuthorityKey,
+                stillCurrent = {
+                    config.homeDashboard.trim() == snapshot.configuredHomeDashboard &&
+                        snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())
+                },
+            ) {
+                val catalog = readHomeDashboardCatalog(request)
+                EntityLearningProtocol.resolveHomeDashboard(
+                    homeDashboard,
+                    catalog.userDefault,
+                    catalog.systemDefault,
+                    catalog.items,
+                )
+            }?.path ?: error("Home Assistant reported no legal dashboard")
+            val urlPath = EntityLearningProtocol.dashboardUrlPath(resolved)
             val command = JSONObject().put("type", "lovelace/config")
             if (urlPath.isNotBlank()) command.put("url_path", urlPath)
             val response = request(command)
@@ -2220,6 +2359,8 @@ internal data class EntityLearningSyncSnapshot(
     val generation: Long,
     val baseUrl: String,
     val authToken: String,
+    val configuredHomeDashboard: String,
+    val homeDashboardAuthorityKey: HomeDashboardResolutionAuthority.Key,
     val state: EntityLearningEffectState,
 ) {
     val instanceKey get() = state.instanceKey
@@ -2584,9 +2725,21 @@ internal fun previewEntitySubscription(
 
 /** Process-local rendezvous between the service-owned learner and DashboardActivity's JS bridge. */
 object EntityLearningRuntime {
+    internal val homeDashboardAuthority = HomeDashboardResolutionAuthority()
     @Volatile private var current: EntityLearningManager? = null
-    fun attach(manager: EntityLearningManager) { current = manager }
-    fun detach(manager: EntityLearningManager) { if (current === manager) current = null }
+    @Volatile private var attachment = CompletableDeferred<EntityLearningManager>()
+
+    @Synchronized fun attach(manager: EntityLearningManager) {
+        current = manager
+        attachment.complete(manager)
+    }
+
+    @Synchronized fun detach(manager: EntityLearningManager) {
+        if (current === manager) {
+            current = null
+            attachment = CompletableDeferred()
+        }
+    }
     fun recordAccessBatch(text: String) { current?.recordAccessBatch(text) }
     fun recordMetricBatch(text: String) { current?.recordMetricBatch(text) }
     fun performanceSummaryJson(): String = current?.performanceSummaryJson() ?: "[]"
@@ -2603,8 +2756,18 @@ object EntityLearningRuntime {
         val catalog = manager.catalogCount() ?: return "Step 1 of 3 · Reading your entities…"
         return "Step 2 of 3 · Building the filtered set from $catalog entities"
     }
-    fun resolvedHomeDashboardPath(homeDashboard: String): String =
-        current?.resolvedHomeDashboardPath(homeDashboard) ?: homeDashboard
+    /** Await service attachment, then perform a scan-independent authenticated dashboard resolution. */
+    suspend fun resolveHomeDashboard(
+        homeDashboard: String,
+        stillCurrent: () -> Boolean = { true },
+    ): EntityLearningProtocol.HomeDashboardResolution? {
+        // Service ownership can legitimately wait behind a predecessor's bounded teardown. The activity
+        // scope cancels this await on destruction; an arbitrary short timeout would strand a healthy
+        // same-process restart on a manual Retry screen before its new owner has had a chance to attach.
+        val manager = current ?: withTimeoutOrNull(45_000L) { attachment.await() } ?: return null
+        val resolved = manager.resolveHomeDashboard(homeDashboard, stillCurrent)
+        return resolved.takeIf { current === manager && stillCurrent() }
+    }
     fun canIgnoreBlockingIssues(): Boolean = current?.canIgnoreAllBlockingIssues() ?: false
     fun ignoreBlockingIssues(): Boolean = current?.ignoreAllBlockingIssues() ?: false
     fun disableAutomaticFilter(): Boolean = current?.setEnabled(false) ?: false

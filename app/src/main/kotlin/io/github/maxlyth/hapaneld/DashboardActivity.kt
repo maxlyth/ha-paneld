@@ -130,6 +130,32 @@ private data class V2BridgeDocument(
     val filterLease: EntityFilterTelemetry.Lease?,
 )
 
+internal data class HomeDashboardResolutionOwner(
+    val authOwner: HaAuthOwner,
+    val configuredPath: String,
+)
+
+/** Owns the only scan-independent dashboard-list result allowed to admit the renderer. */
+internal class HomeDashboardResolutionAttemptGate {
+    data class Ticket(val epoch: Long, val owner: HomeDashboardResolutionOwner)
+
+    @Volatile private var current: Ticket? = null
+    private var nextEpoch = 0L
+
+    @Synchronized fun start(owner: HomeDashboardResolutionOwner): Ticket =
+        Ticket(++nextEpoch, owner).also { current = it }
+
+    fun owns(ticket: Ticket, currentOwner: HomeDashboardResolutionOwner): Boolean =
+        current == ticket && ticket.owner == currentOwner
+
+    @Synchronized fun invalidate() { current = null }
+}
+
+private data class OwnedHomeDashboardResolution(
+    val owner: HomeDashboardResolutionOwner,
+    val resolution: EntityLearningProtocol.HomeDashboardResolution,
+)
+
 internal class EntityFilterRetryPolicy(
     private val delaysMs: LongArray = longArrayOf(30_000L, 120_000L, 600_000L),
 ) {
@@ -229,6 +255,16 @@ class DashboardActivity : AppCompatActivity() {
     private var compatibilityJob: Job? = null
     private var compatibilityCheckingOwner: DashboardV2CompatibilityOwner? = null
     private var compatibilityReadyUrl: String? = null
+    private var homeDashboardJob: Job? = null
+    private var homeDashboardCheckingOwner: HomeDashboardResolutionOwner? = null
+    private var homeDashboardResolution: OwnedHomeDashboardResolution? = null
+    private val homeDashboardAttempts = HomeDashboardResolutionAttemptGate()
+    private val homeDashboardRetryPolicy = DashboardRetryPolicy()
+    private val homeDashboardRetry = Runnable {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched) return@Runnable
+        invalidateHomeDashboardResolution(resetRetry = false)
+        buildAndLoad(Config(this))
+    }
 
     /** Endpoint the on-panel Home Assistant sign-in is currently showing, so a relaunch does not restart it. */
     private var signInShownForUrl: String? = null
@@ -467,6 +503,7 @@ class DashboardActivity : AppCompatActivity() {
     override fun onDestroy() {
         destroyed = true
         compatibilityAttempts.invalidate()
+        homeDashboardAttempts.invalidate()
         activityScope.cancel()
         if (::activityConfig.isInitialized) activityConfig.unregisterChangeListener(rendererPowerListener)
         wakeMediaRecovery.close()
@@ -1083,6 +1120,14 @@ class DashboardActivity : AppCompatActivity() {
             }
         }
         val normalizedUrl = config.haUrl.trim().trimEnd('/')
+        if (haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)) {
+            if (signInShownForUrl == normalizedUrl && web != null) {
+                Log.i(TAG, "on-panel sign-in still pending — keeping the live sign-in WebView")
+            } else {
+                buildAndLoad(config)
+            }
+            return
+        }
         // Credentials arrived while the on-panel sign-in was showing — typically because the user signed
         // in from a browser instead, but also provisioning or a token restore. The current WebView is the
         // bare sign-in page: its client only permits the OAuth navigation and it carries no dashboard
@@ -1108,6 +1153,18 @@ class DashboardActivity : AppCompatActivity() {
             compatibilityReadyUrl = null
             compatibilityAttempts.invalidate()
             unlatchAuth("Home Assistant endpoint change")
+            retryPolicy.reset()
+            interstitialShown = false
+            teardownWeb()
+            configureEntityFilter(config)
+            buildAndLoad(config)
+            return
+        }
+        val activeHomeDashboardOwner = homeDashboardResolution?.owner ?: homeDashboardCheckingOwner
+        if (activeHomeDashboardOwner != null && activeHomeDashboardOwner != homeDashboardOwner(config)) {
+            Log.i(TAG, "dashboard authority changed — resolving the authenticated dashboard list again")
+            invalidateHomeDashboardResolution()
+            unlatchAuth("dashboard authority change")
             retryPolicy.reset()
             interstitialShown = false
             teardownWeb()
@@ -1343,6 +1400,13 @@ class DashboardActivity : AppCompatActivity() {
         // Ignore only the registration callback when the activity started online. If it started without
         // a default network, its first onAvailable is the boot-time Wi-Fi arrival and must recover now.
         if (networkRecovery?.onAvailable() != true) return
+        if (signInShownForUrl != null) {
+            // The physical sign-in view has no V2 bus document or handshake. Let its ordinary browser
+            // connection recover; routing it through dashboard reload/watchdog machinery can erase a
+            // partially typed password and can never satisfy the dashboard handshake.
+            Log.i(TAG, "network regained during on-panel sign-in — leaving the live sign-in page intact")
+            return
+        }
         if (web == null) {
             val waitMs = (SystemClock.elapsedRealtime() - waitingStartedAt).coerceAtLeast(0L)
             if (waitingStartedAt > 0L) Config(this).setLastNetworkWaitMs(waitMs)
@@ -1352,6 +1416,9 @@ class DashboardActivity : AppCompatActivity() {
             waitingProgress = null
             main.removeCallbacks(waitingTick)
             retryPolicy.reset()
+            if (homeDashboardCheckingOwner != null) {
+                invalidateHomeDashboardResolution(resetRetry = false)
+            }
             buildAndLoad(Config(this))
             if (!screenAwake) scheduleDarkSettle()
             return
@@ -1719,7 +1786,11 @@ class DashboardActivity : AppCompatActivity() {
     )
 
     private fun resolvedHomeDashboard(config: Config): String =
-        EntityLearningRuntime.resolvedHomeDashboardPath(config.homeDashboard).ifBlank { "/" }
+        homeDashboardResolution
+            ?.takeIf { it.owner == homeDashboardOwner(config) }
+            ?.resolution
+            ?.path
+            ?: error("home dashboard used before authenticated resolution")
 
     // Publish foreground state so SystemController.dashboardState can drive the watchdog + kiosk
     // return-loop from an in-process signal instead of a root pidof/dumpsys probe.
@@ -1863,6 +1934,7 @@ class DashboardActivity : AppCompatActivity() {
                 addView(Button(this@DashboardActivity).apply {
                     text = label
                     setOnClickListener {
+                        invalidateHomeDashboardResolution()
                         compatibilityCheckingOwner = null
                         compatibilityReadyUrl = null
                         compatibilityAttempts.invalidate()
@@ -1952,7 +2024,7 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         if (compatibilityReadyUrl == url) {
-            buildCompatibleAndLoad(config)
+            resolveHomeDashboardAndLoad(config)
             return
         }
         if (compatibilityCheckingOwner == owner && compatibilityJob?.isActive == true) return
@@ -1988,7 +2060,7 @@ class DashboardActivity : AppCompatActivity() {
                     }
                     compatibilityReadyUrl = url
                     v2Handshake.reset()
-                    buildCompatibleAndLoad(currentConfig)
+                    buildAndLoad(currentConfig)
                 }
                 is DashboardV2Admission.Blocked -> when (val blocked = admission.result) {
                     is DashboardV2ProbeResult.UnsupportedHa -> {
@@ -2120,6 +2192,86 @@ class DashboardActivity : AppCompatActivity() {
             normalizedUrl = config.haUrl.trim().trimEnd('/'),
             authOwner = config.haAuthSnapshot().stableOwner(),
         )
+
+    private fun homeDashboardOwner(config: Config): HomeDashboardResolutionOwner =
+        HomeDashboardResolutionOwner(
+            authOwner = config.haAuthSnapshot().stableOwner(),
+            configuredPath = config.homeDashboard.trim(),
+        )
+
+    private fun invalidateHomeDashboardResolution(resetRetry: Boolean = true) {
+        homeDashboardJob?.cancel()
+        homeDashboardJob = null
+        homeDashboardCheckingOwner = null
+        homeDashboardResolution = null
+        homeDashboardAttempts.invalidate()
+        main.removeCallbacks(homeDashboardRetry)
+        if (resetRetry) homeDashboardRetryPolicy.reset()
+    }
+
+    /** Resolve before WebView creation; entity learning may be disabled or may never have scanned. */
+    private fun resolveHomeDashboardAndLoad(config: Config) {
+        val owner = homeDashboardOwner(config)
+        homeDashboardResolution?.takeIf { it.owner == owner }?.let { owned ->
+            if (owned.resolution.path == null) {
+                showV2CompatibilityScreen(
+                    "No Home Assistant dashboards available",
+                    "The signed-in account cannot access any legal dashboards. Create or grant access to " +
+                        "a dashboard in Home Assistant, then retry.",
+                )
+            } else {
+                buildCompatibleAndLoad(config)
+            }
+            return
+        }
+        if (homeDashboardCheckingOwner == owner && homeDashboardJob?.isActive == true) return
+        main.removeCallbacks(homeDashboardRetry)
+        homeDashboardJob?.cancel()
+        val ticket = homeDashboardAttempts.start(owner)
+        homeDashboardCheckingOwner = owner
+        showV2CompatibilityScreen(
+            "Selecting the Home Assistant dashboard",
+            "Checking the signed-in account’s dashboard list and defaults before opening the renderer.",
+            retryLabel = null,
+        )
+        homeDashboardJob = activityScope.launch {
+            val resolution = withContext(Dispatchers.IO) {
+                EntityLearningRuntime.resolveHomeDashboard(owner.configuredPath) {
+                    !destroyed && BuiltinDashboard.ownsActivity(activityOwner) &&
+                        homeDashboardAttempts.owns(ticket, homeDashboardOwner(Config(this@DashboardActivity)))
+                }
+            }
+            val currentConfig = Config(this@DashboardActivity)
+            val currentOwner = homeDashboardOwner(currentConfig)
+            if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) ||
+                !homeDashboardAttempts.owns(ticket, currentOwner)
+            ) return@launch
+            homeDashboardCheckingOwner = null
+            if (resolution == null) {
+                val delay = homeDashboardRetryPolicy.connectionFailureDelay(wasConnected = false)
+                homeDashboardRetryPolicy.afterRetry()
+                main.postDelayed(homeDashboardRetry, delay)
+                showV2CompatibilityScreen(
+                    "Home Assistant dashboard list unavailable",
+                    "The panel could not read the signed-in account’s dashboards. Check the Home Assistant " +
+                        "connection and credentials; it will retry automatically.",
+                )
+                return@launch
+            }
+            homeDashboardRetryPolicy.reset()
+            homeDashboardResolution = OwnedHomeDashboardResolution(currentOwner, resolution)
+            if (resolution.path == null) {
+                showV2CompatibilityScreen(
+                    "No Home Assistant dashboards available",
+                    "The signed-in account cannot access any legal dashboards. Create or grant access to " +
+                        "a dashboard in Home Assistant, then retry.",
+                )
+            } else {
+                Log.i(TAG, "home dashboard resolved source=${resolution.source} path=${resolution.path}")
+                buildCompatibleAndLoad(currentConfig)
+            }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildCompatibleAndLoad(config: Config) {

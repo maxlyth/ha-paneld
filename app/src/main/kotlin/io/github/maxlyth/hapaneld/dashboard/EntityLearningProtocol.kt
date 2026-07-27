@@ -29,6 +29,14 @@ object EntityLearningProtocol {
      */
     data class HomeDashboardDefault(val explicit: Boolean = false, val path: String = "")
 
+    enum class HomeDashboardSource { EXPLICIT, USER_DEFAULT, SYSTEM_DEFAULT, FIRST_LEGAL, NONE }
+
+    /** One authenticated, list-validated renderer decision. A null path means HA reported no legal dashboards. */
+    data class HomeDashboardResolution(
+        val path: String? = null,
+        val source: HomeDashboardSource = HomeDashboardSource.NONE,
+    )
+
     data class BrowserObserverCosts(
         val frames: Long,
         val entities: Long,
@@ -235,28 +243,13 @@ object EntityLearningProtocol {
         .isBlank()
 
     /**
-     * Mirror the backend-visible portion of the Home Assistant frontend's default-panel chain.
-     * A browser-local legacy default may still override [FRONTEND_FALLBACK_PANEL] in old profiles;
-     * selecting the built-in Home panel here is deliberately fail-closed because it has no Lovelace
-     * configuration for the static learner to scan.
+     * Return the Lovelace WebSocket dashboard URL path for an already list-validated renderer route.
+     * Empty selects ordinary Lovelace; non-Lovelace dashboards name their URL-path segment.
      */
-    fun frontendDefaultPanel(userDefault: String?, systemDefault: String?): String =
-        userDefault?.takeIf(String::isNotBlank)
-            ?: systemDefault?.takeIf(String::isNotBlank)
-            ?: FRONTEND_FALLBACK_PANEL
-
-    /**
-     * Return the Lovelace WebSocket dashboard URL path, where an empty result selects ordinary
-     * Lovelace. [defaultPanel] is considered only when [homeDashboard] is blank/root and is treated
-     * as untrusted frontend user data.
-     */
-    fun dashboardUrlPath(homeDashboard: String, defaultPanel: String? = null): String {
-        if (!usesFrontendDefaultPanel(homeDashboard)) {
-            val first = homeDashboard.trim().substringBefore('?').substringBefore('#')
-                .trim('/').substringBefore('/')
-            return first.takeUnless { it.isBlank() || it == "lovelace" }.orEmpty()
-        }
-        return sanitizedDefaultPanelPath(defaultPanel)
+    fun dashboardUrlPath(homeDashboard: String): String {
+        val first = homeDashboard.trim().substringBefore('?').substringBefore('#')
+            .trim('/').substringBefore('/')
+        return first.takeUnless { it.isBlank() || it == "lovelace" }.orEmpty()
     }
 
     /**
@@ -307,12 +300,57 @@ object EntityLearningProtocol {
      * real default EXISTS, and the legal path it names. A malformed value is treated as absent rather than
      * passed through — the picker must only ever preselect a value it could itself have offered.
      */
-    fun homeDashboardDefault(userDefault: String?, systemDefault: String?): HomeDashboardDefault {
-        val raw = userDefault?.trim().orEmpty().ifBlank { systemDefault?.trim().orEmpty() }
-        if (raw.isBlank()) return HomeDashboardDefault()
-        val segment = raw.substringBefore('?').substringBefore('#').trim('/').substringBefore('/')
-        if (segment == "null" || !DASHBOARD_PATH_SEGMENT.matches(segment)) return HomeDashboardDefault()
-        return HomeDashboardDefault(explicit = true, path = "/$segment")
+    fun homeDashboardDefault(
+        userDefault: String?,
+        systemDefault: String?,
+        legalChoices: List<HomeDashboardChoice>,
+    ): HomeDashboardDefault {
+        val resolution = resolveHomeDashboard(
+            homeDashboard = "",
+            userDefault = userDefault,
+            systemDefault = systemDefault,
+            legalChoices = legalChoices,
+            allowFirstLegalFallback = false,
+        )
+        return resolution.path?.let { HomeDashboardDefault(explicit = true, path = it) }
+            ?: HomeDashboardDefault()
+    }
+
+    /**
+     * Resolve the renderer target strictly against the dashboards visible to the authenticated user.
+     * Explicit routes retain their view/query/fragment, but membership is checked by dashboard root
+     * (`/lovelace/0` belongs to `/lovelace`; `/office/view` belongs to `/office`). Defaults are untrusted
+     * profile data and are independently checked so a stale user value cannot suppress a legal system
+     * value. The final fallback is the first legal choice in Home Assistant's supplied order.
+     */
+    fun resolveHomeDashboard(
+        homeDashboard: String,
+        userDefault: String?,
+        systemDefault: String?,
+        legalChoices: List<HomeDashboardChoice>,
+        allowFirstLegalFallback: Boolean = true,
+    ): HomeDashboardResolution {
+        val legal = legalChoices.mapNotNullTo(linkedSetOf()) { dashboardRoot(it.path) }
+        fun admitted(raw: String?, preserveRoute: Boolean): String? {
+            val candidate = normalizedDashboardCandidate(raw, preserveRoute) ?: return null
+            return candidate.takeIf { dashboardRoot(it) in legal }
+        }
+
+        if (!usesFrontendDefaultPanel(homeDashboard)) {
+            admitted(homeDashboard, preserveRoute = true)?.let {
+                return HomeDashboardResolution(it, HomeDashboardSource.EXPLICIT)
+            }
+        }
+        admitted(userDefault, preserveRoute = false)?.let {
+            return HomeDashboardResolution(it, HomeDashboardSource.USER_DEFAULT)
+        }
+        admitted(systemDefault, preserveRoute = false)?.let {
+            return HomeDashboardResolution(it, HomeDashboardSource.SYSTEM_DEFAULT)
+        }
+        if (allowFirstLegalFallback) legalChoices.firstOrNull { dashboardRoot(it.path) in legal }?.let {
+            return HomeDashboardResolution(it.path, HomeDashboardSource.FIRST_LEGAL)
+        }
+        return HomeDashboardResolution()
     }
 
     /** Accept only well-formed `mdi:` icon names; anything else renders as the client-side fallback. */
@@ -325,14 +363,43 @@ object EntityLearningProtocol {
     private val PANEL_DASHBOARD_ORDER = listOf("home", "light", "security", "climate", "energy", "maintenance")
     private val MDI_ICON_NAME = Regex("^mdi:[a-z0-9-]+$")
 
-    private fun sanitizedDefaultPanelPath(defaultPanel: String?): String {
-        val value = defaultPanel?.trim().orEmpty()
-        if (value.isBlank() || value.startsWith("//") || '\\' in value || URL_SCHEME.containsMatchIn(value)) return ""
-        val first = value.substringBefore('?').substringBefore('#').trim('/').substringBefore('/')
-        return first.takeIf { it != "lovelace" && it != "null" && DASHBOARD_PATH_SEGMENT.matches(it) }.orEmpty()
+    private fun normalizedDashboardCandidate(raw: String?, preserveRoute: Boolean): String? {
+        val value = raw?.trim().orEmpty()
+        if (value.isBlank() || value.startsWith("//") || '\\' in value || value.any(Char::isISOControl) ||
+            URL_SCHEME.containsMatchIn(value)
+        ) return null
+        val routeEnd = listOf(value.indexOf('?'), value.indexOf('#')).filter { it >= 0 }.minOrNull() ?: value.length
+        val route = value.substring(0, routeEnd).trim('/')
+        val segments = route.split('/').filter(String::isNotBlank)
+        val root = segments.firstOrNull()
+        if (root == null || root == "null" || !DASHBOARD_PATH_SEGMENT.matches(root)) return null
+        if (preserveRoute && segments.drop(1).any { !safeDashboardSuffixSegment(it) }) return null
+        return if (preserveRoute) "/$route${value.substring(routeEnd)}" else "/${segments.first()}"
     }
 
-    internal const val FRONTEND_FALLBACK_PANEL = "home"
+    /** Chromium canonicalizes percent-encoded dot/slash segments before navigation; reject them here. */
+    private fun safeDashboardSuffixSegment(segment: String): Boolean {
+        val decoded = StringBuilder(segment.length)
+        var index = 0
+        while (index < segment.length) {
+            val char = if (segment[index] == '%') {
+                if (index + 2 >= segment.length) return false
+                val byte = segment.substring(index + 1, index + 3).toIntOrNull(16) ?: return false
+                index += 3
+                byte.toChar()
+            } else {
+                segment[index].also { index++ }
+            }
+            if (char == '/' || char == '\\' || char.isISOControl()) return false
+            decoded.append(char)
+        }
+        return decoded.toString() !in setOf(".", "..")
+    }
+
+    private fun dashboardRoot(value: String): String? {
+        val candidate = normalizedDashboardCandidate(value, preserveRoute = false) ?: return null
+        return candidate
+    }
 
     fun canonical(value: Any): String = when (value) {
         is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { key ->

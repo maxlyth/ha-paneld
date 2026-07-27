@@ -1411,7 +1411,7 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
 
   // An unrelated asynchronous Configure probe may legitimately rebuild other cards while the
   // source update is pending. The activity subtree itself must stay connected and unchanged.
-  homeDashboards.resolve(json({ items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }], default: {} }));
+  homeDashboards.resolve(json({ queried: true, items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }], default: {} }));
   await page.waitForTimeout(50);
   assert.equal(await oldPanel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
   assert.equal(await oldChart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);

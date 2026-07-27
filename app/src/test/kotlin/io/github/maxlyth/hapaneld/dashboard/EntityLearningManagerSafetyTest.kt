@@ -347,7 +347,18 @@ class EntityLearningManagerSafetyTest {
 
     @Test fun syncSnapshotRejectsEveryTargetPolicyAndCredentialChange() {
         val original = state()
-        val snapshot = EntityLearningSyncSnapshot(7, "https://ha.example", "token", original)
+        val snapshot = EntityLearningSyncSnapshot(
+            7,
+            "https://ha.example",
+            "token",
+            original.dashboardPath,
+            HomeDashboardResolutionAuthority.Key(
+                "https://ha.example",
+                io.github.maxlyth.hapaneld.HaAuthOwner("https://ha.example", "refresh", "client", ""),
+                original.dashboardPath,
+            ),
+            original,
+        )
 
         assertTrue(snapshot.matchesCurrent(7, original))
         assertFalse(snapshot.matchesCurrent(8, original))

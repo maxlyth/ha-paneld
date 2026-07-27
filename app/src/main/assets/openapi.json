@@ -294,7 +294,7 @@
     },
     "/api/v1/config/home-dashboards": {
       "get": { "summary": "List Home Assistant dashboards available to the signed-in user", "tags": ["config"],
-        "responses": { "200": { "description": "{items: [{path, title, icon, group}], default: {explicit, path}} — built-in panel dashboards then user dashboards in Home Assistant order; default reports the account's server-side default dashboard" } } }
+        "responses": { "200": { "description": "{queried, items: [{path, title, icon, group}], default: {explicit, path}} — queried distinguishes an authenticated zero-dashboard result from a failed lookup; built-in panel dashboards then user dashboards in Home Assistant order; default reports the first legal account or system default" } } }
     },
     "/api/v1/config/ha-area": {
       "get": { "summary": "Home Assistant areas, this panel device's current area, and whether the signed-in account may move it", "tags": ["config"],

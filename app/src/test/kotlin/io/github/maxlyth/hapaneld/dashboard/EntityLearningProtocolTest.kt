@@ -480,42 +480,92 @@ class EntityLearningProtocolTest {
         assertEquals("sample-panel", EntityLearningProtocol.dashboardUrlPath("/sample-panel/dash"))
         assertEquals("", EntityLearningProtocol.dashboardUrlPath("/lovelace/0"))
         assertFalse(EntityLearningProtocol.usesFrontendDefaultPanel("/lovelace/0"))
-        assertEquals(
-            "",
-            EntityLearningProtocol.dashboardUrlPath("/lovelace/0", defaultPanel = "/different-panel/view"),
-        )
     }
 
-    @Test fun blankOrRootDashboardUsesSanitizedFrontendDefaultPanel() {
+    @Test fun blankOrRootDashboardRequiresAuthenticatedResolution() {
         for (configured in listOf("", "   ", "/", " /?kiosk ", "/#view")) {
             assertTrue(EntityLearningProtocol.usesFrontendDefaultPanel(configured))
-            assertEquals(
-                "wall-panel",
-                EntityLearningProtocol.dashboardUrlPath(configured, defaultPanel = "/wall-panel/main?kiosk"),
-            )
         }
     }
 
-    @Test fun frontendDefaultPanelMatchesBackendVisibleFrontendFallbackOrder() {
-        assertEquals(
-            "user-panel",
-            EntityLearningProtocol.frontendDefaultPanel("user-panel", "system-panel"),
+    @Test fun deterministicHomeDashboardResolutionUsesOnlyAuthenticatedLegalChoices() {
+        val legal = listOf(
+            EntityLearningProtocol.HomeDashboardChoice("/lovelace", "Overview"),
+            EntityLearningProtocol.HomeDashboardChoice("/office", "Office"),
+            EntityLearningProtocol.HomeDashboardChoice("/energy", "Energy"),
         )
         assertEquals(
-            "system-panel",
-            EntityLearningProtocol.frontendDefaultPanel("", "system-panel"),
-        )
-        assertEquals(
-            "home",
-            EntityLearningProtocol.frontendDefaultPanel(null, null),
-        )
-        assertEquals(
-            "home",
-            EntityLearningProtocol.dashboardUrlPath(
-                "/",
-                EntityLearningProtocol.frontendDefaultPanel(null, null),
+            EntityLearningProtocol.HomeDashboardResolution(
+                "/office/view?kiosk=1#main",
+                EntityLearningProtocol.HomeDashboardSource.EXPLICIT,
+            ),
+            EntityLearningProtocol.resolveHomeDashboard(
+                "/office/view?kiosk=1#main", "lovelace", "energy", legal,
             ),
         )
+        assertEquals(
+            "/office/Upper%20Floor?panel=Wall#main",
+            EntityLearningProtocol.resolveHomeDashboard(
+                "/office/Upper%20Floor?panel=Wall#main", null, null, legal,
+            ).path,
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardResolution(
+                "/lovelace", EntityLearningProtocol.HomeDashboardSource.USER_DEFAULT,
+            ),
+            EntityLearningProtocol.resolveHomeDashboard("/deleted/view", "lovelace", "energy", legal),
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardResolution(
+                "/energy", EntityLearningProtocol.HomeDashboardSource.SYSTEM_DEFAULT,
+            ),
+            EntityLearningProtocol.resolveHomeDashboard("", "stale-user", "energy", legal),
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardResolution(
+                "/lovelace", EntityLearningProtocol.HomeDashboardSource.FIRST_LEGAL,
+            ),
+            EntityLearningProtocol.resolveHomeDashboard("", null, "stale-system", legal),
+        )
+        assertEquals(
+            EntityLearningProtocol.HomeDashboardResolution(),
+            EntityLearningProtocol.resolveHomeDashboard("/office/view", "office", "energy", emptyList()),
+        )
+    }
+
+    @Test fun malformedDashboardCandidatesNeverEscapeTheAuthenticatedLegalList() {
+        val legal = listOf(
+            EntityLearningProtocol.HomeDashboardChoice("/office", "Office"),
+            EntityLearningProtocol.HomeDashboardChoice("/energy", "Energy"),
+        )
+        val malformed = listOf(
+            "https://ha.example/wall-panel",
+            "//ha.example/wall-panel",
+            "../wall-panel",
+            "wall%2fpanel",
+            "wall\\panel",
+            "null",
+        )
+        for (candidate in malformed) {
+            assertEquals(
+                EntityLearningProtocol.HomeDashboardSource.USER_DEFAULT,
+                EntityLearningProtocol.resolveHomeDashboard(candidate, "office", "energy", legal).source,
+            )
+            assertEquals(
+                EntityLearningProtocol.HomeDashboardSource.SYSTEM_DEFAULT,
+                EntityLearningProtocol.resolveHomeDashboard("", candidate, "energy", legal).source,
+            )
+            assertEquals(
+                EntityLearningProtocol.HomeDashboardSource.FIRST_LEGAL,
+                EntityLearningProtocol.resolveHomeDashboard("", null, candidate, legal).source,
+            )
+        }
+        for (traversal in listOf("/office/%2e%2e/evil", "/office/%2Foutside")) {
+            assertEquals(
+                EntityLearningProtocol.HomeDashboardSource.USER_DEFAULT,
+                EntityLearningProtocol.resolveHomeDashboard(traversal, "office", "energy", legal).source,
+            )
+        }
     }
 
     @Test fun homeDashboardChoicesPreserveHaOrderAndHideAdminOnlyDashboards() {
@@ -587,51 +637,26 @@ class EntityLearningProtocolTest {
         // Since HA 2025.12 the default dashboard is per-user server data (user overrides system). Setup
         // demotes "follow the account's default" when neither layer names one, because the effective
         // default is then HA's own fallback — rarely what a wall panel should show.
+        val legal = listOf(
+            EntityLearningProtocol.HomeDashboardChoice("/energy", "Energy"),
+            EntityLearningProtocol.HomeDashboardChoice("/office", "Office"),
+        )
         assertEquals(
             EntityLearningProtocol.HomeDashboardDefault(explicit = true, path = "/energy"),
-            EntityLearningProtocol.homeDashboardDefault("energy", null),
+            EntityLearningProtocol.homeDashboardDefault("energy", null, legal),
         )
         assertEquals(
             EntityLearningProtocol.HomeDashboardDefault(explicit = true, path = "/office"),
-            EntityLearningProtocol.homeDashboardDefault("", "office"),
+            EntityLearningProtocol.homeDashboardDefault("", "office", legal),
         )
         assertEquals(
             EntityLearningProtocol.HomeDashboardDefault(),
-            EntityLearningProtocol.homeDashboardDefault(null, null),
+            EntityLearningProtocol.homeDashboardDefault(null, null, legal),
         )
-        // Malformed values are treated as absent — the picker may only preselect what it could offer.
+        // Malformed and out-of-list user values are rejected; a legal system value remains eligible.
         assertEquals(
-            EntityLearningProtocol.HomeDashboardDefault(),
-            EntityLearningProtocol.homeDashboardDefault("https://evil", "  "),
-        )
-    }
-
-    @Test fun missingInvalidOrOrdinaryFrontendDefaultFallsBackToLovelace() {
-        val invalidDefaults = listOf(
-            null,
-            "",
-            "/",
-            "lovelace",
-            "/lovelace/0",
-            "https://ha.example/wall-panel",
-            "//ha.example/wall-panel",
-            "../wall-panel",
-            "wall%2fpanel",
-            "wall\\panel",
-            "null",
-        )
-        for (defaultPanel in invalidDefaults) {
-            assertEquals("", EntityLearningProtocol.dashboardUrlPath("/", defaultPanel))
-        }
-    }
-
-    @Test fun explicitConfiguredDashboardAlwaysWinsOverFrontendDefault() {
-        assertEquals(
-            "configured-panel",
-            EntityLearningProtocol.dashboardUrlPath(
-                "/configured-panel/view?kiosk",
-                defaultPanel = "/different-panel/view",
-            ),
+            EntityLearningProtocol.HomeDashboardDefault(explicit = true, path = "/office"),
+            EntityLearningProtocol.homeDashboardDefault("https://evil", "office", legal),
         )
     }
 

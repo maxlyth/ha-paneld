@@ -9,7 +9,7 @@
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
   var haSourceItems = [], haSourceRequest = 0, haSourceTimer = null;
-  var homeDashboardItems = [], homeDashboardRequest = 0;
+  var homeDashboardItems = [], homeDashboardRequest = 0, homeDashboardQueried = false;
   // A per-load, owner-safe seed supplied by the config response. The endpoint is still fetched every
   // render so a failed query, credential change or Home Assistant area edit can recover immediately.
   var haAreaSeed = null, haAreaSeedGeneration = 0, haAreaCatalogRequest = 0, haAreaUserOverride = false;
@@ -407,8 +407,10 @@
     if (f.picker === "ha_dashboard") {
       var currentDashboard = v == null ? "" : v;
       var dashboardSelect = el("select", { class: "pkgsel" });
-      var autoOption = el("option", { value: "", text: homeDashboardDefault.explicit
-        ? "Auto — follow this account’s default" : "Auto — no default set for this account" });
+      var autoText = !homeDashboardQueried ? "Auto — dashboard list unavailable"
+        : (homeDashboardDefault.explicit
+          ? "Auto — follow this account’s default" : "Auto — no default set for this account");
+      var autoOption = el("option", { value: "", text: autoText });
       dashboardSelect.appendChild(autoOption);
       var dashboardPaths = { "": true };
       var groupHosts = {};
@@ -438,6 +440,17 @@
         values[f.key] = dashboardSelect.value;
         setDirty(f.key);
       });
+      if (!homeDashboardQueried) {
+        return el("div", {}, [dashboardSelect,
+          el("small", { class: "hd-area-note", text:
+            "Couldn’t fetch this account’s dashboard list from Home Assistant yet. Try again after the connection recovers." })]);
+      }
+      if (!homeDashboardItems.length) {
+        dashboardSelect.disabled = true;
+        return el("div", {}, [dashboardSelect,
+          el("small", { class: "hd-area-note", text:
+            "This account cannot access any dashboards. Create one or grant access in Home Assistant." })]);
+      }
       if (!homeDashboardDefault.explicit && !currentDashboard) {
         // The demotion rule, in native terms: Auto still exists but the field says why picking a real
         // dashboard is the recommendation when the account carries no server-side default.
@@ -2469,14 +2482,17 @@
         explicit: !!(body && body.default && body.default.explicit),
         path: String(body && body.default && body.default.path || "").trim(),
       };
+      var nextQueried = !!(body && body.queried);
       var changed = next.length !== homeDashboardItems.length || next.some(function (dashboard, index) {
         var previous = homeDashboardItems[index];
         return !previous || dashboard.path !== previous.path || dashboard.title !== previous.title ||
           dashboard.icon !== previous.icon || dashboard.group !== previous.group;
-      }) || nextDefault.explicit !== homeDashboardDefault.explicit || nextDefault.path !== homeDashboardDefault.path;
+      }) || nextDefault.explicit !== homeDashboardDefault.explicit || nextDefault.path !== homeDashboardDefault.path ||
+        nextQueried !== homeDashboardQueried;
       if (!changed) return;
       homeDashboardItems = next;
       homeDashboardDefault = nextDefault;
+      homeDashboardQueried = nextQueried;
       render();
       configCardGeometryChanged();
     }).catch(function () {});

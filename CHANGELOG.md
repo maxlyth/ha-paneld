@@ -6,6 +6,8 @@
 
 ### Fixed
 
+- **Automatic Home dashboard selection is now deterministic.** A blank setting resolves only from the signed-in account's legal dashboard list: its user default, then the system default, then the first available dashboard. It no longer depends on the entity scanner, and startup or reconnect failures retry instead of silently opening an invented or inaccessible route.
+
 - **A failed settings save is no longer allowed to look successful.** Configuration saves through the control plane remain invisible until the SQLite transaction is durable; if the write fails, the previous settings and listeners stay in place, the request fails, and a retry starts from the last known-good state.
 
 - **TPA10 room temperature, humidity and proximity reporting recover correctly again.** The Android climate sensors now remain active long enough for the helper-backed CHT8305 readings to refresh, without bringing back the retired duplicate Home Assistant entities. The continuously streaming proximity sensor no longer gets disrupted by periodic on-change re-registration, and ordinary sub-dwell noise no longer makes its Home Assistant entity briefly unavailable; a genuinely stalled stream or sustained model contradiction still fails closed and enters bounded recovery.

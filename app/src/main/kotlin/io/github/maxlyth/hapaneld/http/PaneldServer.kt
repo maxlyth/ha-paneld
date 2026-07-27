@@ -60,7 +60,6 @@ import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
-import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
 import io.github.maxlyth.hapaneld.dashboard.SchemaReconcileAction
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.LedMechanism
@@ -1419,7 +1418,10 @@ class PaneldServer internal constructor(
                         // pickers demote "follow the account's default" and recommend nominating one.
                         val default = "{\"explicit\":${catalog.default.explicit}," +
                             "\"path\":${jsonStr(catalog.default.path)}}"
-                        call.respondText("{\"items\":[$items],\"default\":$default}", ContentType.Application.Json)
+                        call.respondText(
+                            "{\"queried\":${catalog.queried},\"items\":[$items],\"default\":$default}",
+                            ContentType.Application.Json,
+                        )
                     }
                     get("/config/ha-area") {
                         // Registry LISTS are readable by any authenticated HA user; `admin` tells the
@@ -3555,7 +3557,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Unset home_dashboard = reload/boot land on whatever HA's frontend picks. On this path,
         // resolve the HA user's profile default (or the system fallback) in-band so the UI shows
         // a concrete target instead of an abstract description.
-        put("home_dashboard", EntityLearningRuntime.resolvedHomeDashboardPath("").ifBlank { "HA default view" })
+        put("home_dashboard", "HA default view")
     }
 
     private fun dashboardRendererAutoLabel(resolved: String): String =

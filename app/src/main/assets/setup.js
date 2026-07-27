@@ -731,7 +731,7 @@
     fetch("/api/v1/config/home-dashboards", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (c) { hdCatalog = c; paintHomeDashboards(); })
-      .catch(function () { hdCatalog = { items: [], default: { explicit: false, path: "" } }; paintHomeDashboards(); });
+      .catch(function () { hdCatalog = { queried: false, items: [], default: { explicit: false, path: "" } }; paintHomeDashboards(); });
     fetch("/api/v1/config/ha-area", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (a) { hdArea = a; paintHomeDashboardArea(); })
@@ -787,8 +787,7 @@
     var items = (hdCatalog && hdCatalog.items) || [];
     var def = (hdCatalog && hdCatalog.default) || { explicit: false, path: "" };
     host.textContent = "";
-    if (!items.length) {
-      // Empty means "could not ask Home Assistant", never "no dashboards" — HA always has at least one.
+    if (!hdCatalog || !hdCatalog.queried) {
       host.appendChild(el("div", { class: "setup info" }, [
         el("b", { text: "Couldn’t fetch the dashboard list from Home Assistant yet. " }),
         document.createTextNode("That can happen right after signing in. "),
@@ -799,6 +798,11 @@
           loadHomeDashboardCatalog();
         } }),
         document.createTextNode(" — or continue with the account’s default below."),
+      ]));
+    } else if (!items.length) {
+      host.appendChild(el("div", { class: "setup problem" }, [
+        el("b", { text: "This account cannot access any Home Assistant dashboards. " }),
+        document.createTextNode("Create a dashboard or grant this account access, then try again."),
       ]));
     }
     var current = typed.home_dashboard !== undefined ? typed.home_dashboard
@@ -851,7 +855,8 @@
     var chosen = typed.home_dashboard !== undefined ? typed.home_dashboard
       : (journey.home_dashboard && journey.home_dashboard.value ||
         (hdCatalog === null ? undefined : (def.explicit ? def.path : undefined)));
-    b.disabled = chosen === undefined;
+    var noDashboards = !!(hdCatalog && hdCatalog.queried && !(hdCatalog.items || []).length);
+    b.disabled = chosen === undefined || noDashboards;
     b.textContent = chosen === "" ? "Follow the account’s default" : "Use this dashboard";
   }
 
