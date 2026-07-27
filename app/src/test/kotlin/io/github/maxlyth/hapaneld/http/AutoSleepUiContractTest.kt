@@ -184,10 +184,23 @@ class AutoSleepUiContractTest {
                 "root.innerHTML = \"\"" !in source,
         )
         assertTrue(
-            "retained chart renders must restore both nested and page scroll after focus",
-            "retainedAutoSleepScrollTop" in source && "retainedAutoSleepPageY" in source &&
-                "window.scrollTo(retainedAutoSleepPageX, retainedAutoSleepPageY)" in source,
+            "retained chart renders must restore nested scroll and preserve the visible card's viewport anchor",
+            "retainedAutoSleepScrollTop" in source &&
+                "var retainedAutoSleepViewportAnchor = retainedBehaviourCard ? configViewportAnchor(retainedAutoSleepPanel) : null" in source &&
+                "restoreConfigViewportAnchor(retainedAutoSleepViewportAnchor)" in source &&
+                "window.matchMedia(\"(max-width: 857px)\")" in source &&
+                "var beforeY = window.pageYOffset || 0" in source &&
+                "window.scrollTo(window.pageXOffset || 0, beforeY + delta)" in source,
         )
+        val renderTail = source.substringAfter("if (autoSleepParking) autoSleepParking.remove();")
+            .substringBefore("focusHash();")
+        assertTrue(
+            "visible retained renders must settle card-size hints before correcting the viewport",
+            renderTail.indexOf("window.CardSizeMemory.invalidate(\"cfg-groups\")") >= 0 &&
+                renderTail.indexOf("restoreConfigViewportAnchor(retainedAutoSleepViewportAnchor)") >
+                renderTail.indexOf("window.CardSizeMemory.invalidate(\"cfg-groups\")"),
+        )
+        assertFalse("retained renders must not reset scrollY to a stale pre-render value", "retainedAutoSleepPageY" in source)
         assertTrue(
             "retained source handlers and ARIA state must follow current busy state rather than a captured render value",
             "function sourceInteractionBlocked()" in source &&
@@ -255,6 +268,12 @@ class AutoSleepUiContractTest {
             "Automatically wake the panel when activity is detected and switch the screen off after the learned delay." in source,
         )
         val css = asset("info.css").readText()
+        assertTrue(
+            "narrow Configure renders must have a transaction-scoped exact-layout escape",
+            "@media (max-width:857px){#cfg-groups.config-viewport-anchored>.card{content-visibility:visible}}" in css &&
+                "root.classList.toggle(\"config-viewport-anchored\", !!retainedAutoSleepViewportAnchor)" in source &&
+                "root.classList.remove(\"config-viewport-anchored\")" in source,
+        )
         val historyRule = css.substringAfter(".auto-sleep-history{").substringBefore("}")
         assertTrue("timeline must fill the column without an outer card", "width:100%" in historyRule)
         assertFalse(

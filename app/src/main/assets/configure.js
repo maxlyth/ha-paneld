@@ -2125,6 +2125,73 @@
     });
   }
 
+  function configViewportAnchor(node) {
+    if (!node || !node.isConnected || typeof node.getBoundingClientRect !== "function") return null;
+    if (window.matchMedia && !window.matchMedia("(max-width: 857px)").matches) return null;
+    var rect = node.getBoundingClientRect();
+    var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (!isFinite(rect.top) || !isFinite(rect.bottom) || rect.height <= 0 || viewportHeight <= 0 ||
+        rect.bottom <= 0 || rect.top >= viewportHeight) return null;
+    return { node: node, top: rect.top };
+  }
+
+  function restoreConfigViewportAnchor(anchor) {
+    if (!anchor || !anchor.node.isConnected || !window.scrollTo) return;
+    // The browser may already have applied some native scroll anchoring while cards above this one
+    // were reconciled. Compensate from the CURRENT scroll position so both mechanisms converge on
+    // the same viewport coordinate instead of resetting scrollY to its stale pre-render value. A
+    // scroll can itself change which one-column cards content-visibility considers onscreen, so
+    // force and settle that layout synchronously before paint rather than correcting it later.
+    for (var attempt = 0; attempt < 8; attempt += 1) {
+      var top = anchor.node.getBoundingClientRect().top;
+      var delta = top - anchor.top;
+      if (!isFinite(delta) || Math.abs(delta) <= 0.5) return;
+      var beforeY = window.pageYOffset || 0;
+      window.scrollTo(window.pageXOffset || 0, beforeY + delta);
+      if ((window.pageYOffset || 0) === beforeY) return;
+    }
+  }
+
+  var configExactLayoutReleaseTimer = null;
+  var configExactLayoutRoot = null;
+  var configExactLayoutCompensationCancelled = false;
+  function scheduleConfigExactLayoutRelease(root, anchor) {
+    if (configExactLayoutReleaseTimer) clearTimeout(configExactLayoutReleaseTimer);
+    configExactLayoutReleaseTimer = null;
+    configExactLayoutRoot = anchor ? root : null;
+    configExactLayoutCompensationCancelled = false;
+    if (!anchor) return;
+    configExactLayoutReleaseTimer = setTimeout(function () {
+      configExactLayoutReleaseTimer = null;
+      configExactLayoutRoot = null;
+      if (!root.isConnected || !root.classList.contains("config-viewport-anchored")) return;
+      root.classList.remove("config-viewport-anchored");
+      if (!configExactLayoutCompensationCancelled) restoreConfigViewportAnchor(anchor);
+      configExactLayoutCompensationCancelled = false;
+    }, 1400);
+  }
+
+  function cancelConfigExactLayoutCompensation() {
+    // Keep exact layout until the bounded release, but never let its final scroll correction compete
+    // with navigation the user has started since the render.
+    if (configExactLayoutReleaseTimer) configExactLayoutCompensationCancelled = true;
+  }
+  if (document.addEventListener) {
+    ["pointerdown", "touchstart", "wheel", "keydown"].forEach(function (type) {
+      document.addEventListener(type, cancelConfigExactLayoutCompensation, true);
+    });
+  }
+  if (window.addEventListener) {
+    window.addEventListener("pagehide", function () {
+      if (configExactLayoutReleaseTimer) clearTimeout(configExactLayoutReleaseTimer);
+      configExactLayoutReleaseTimer = null;
+      configExactLayoutCompensationCancelled = true;
+      var root = configExactLayoutRoot || document.getElementById("cfg-groups");
+      configExactLayoutRoot = null;
+      if (root) root.classList.remove("config-viewport-anchored");
+    });
+  }
+
   function render() {
     var root = document.getElementById("cfg-groups");
     var proximityCard = document.querySelector("#cfg-proximity-learning");
@@ -2157,8 +2224,12 @@
     var retainedAutoSleepFocus = retainedAutoSleepPanel && retainedAutoSleepPanel.contains(document.activeElement) ? document.activeElement : null;
     var retainedAutoSleepScroll = retainedAutoSleepPanel && retainedAutoSleepPanel.querySelector(".auto-sleep-source-scroll");
     var retainedAutoSleepScrollTop = retainedAutoSleepScroll ? retainedAutoSleepScroll.scrollTop : 0;
-    var retainedAutoSleepPageX = retainedAutoSleepPanel ? (window.pageXOffset || 0) : 0;
-    var retainedAutoSleepPageY = retainedAutoSleepPanel ? (window.pageYOffset || 0) : 0;
+    var retainedAutoSleepViewportAnchor = retainedBehaviourCard ? configViewportAnchor(retainedAutoSleepPanel) : null;
+    // Fresh off-screen cards normally use content-visibility's intrinsic placeholder until a later
+    // frame. If Behaviour is already being viewed, that delayed replacement would relocate it after
+    // this render has finished. Lay out this transaction's cards exactly; the narrow-screen lazy
+    // optimization remains active whenever the auto-sleep panel is outside the viewport.
+    root.classList.toggle("config-viewport-anchored", !!retainedAutoSleepViewportAnchor);
     var autoSleepParking = null;
     if (retainedAutoSleepPanel && !retainedBehaviourCard) {
       // render() rebuilds unrelated Configure cards after asynchronous probes. Keep the activity
@@ -2374,9 +2445,16 @@
       catch (_) { retainedAutoSleepFocus.focus(); }
     }
     if (retainedAutoSleepScroll && retainedAutoSleepScroll.isConnected) retainedAutoSleepScroll.scrollTop = retainedAutoSleepScrollTop;
-    if (retainedAutoSleepPanel && window.scrollTo) window.scrollTo(retainedAutoSleepPageX, retainedAutoSleepPageY);
     if (autoSleepParking) autoSleepParking.remove();
-    if (window.CardSizeMemory) window.CardSizeMemory.restore("cfg-groups");
+    if (window.CardSizeMemory) {
+      if (retainedAutoSleepViewportAnchor) window.CardSizeMemory.invalidate("cfg-groups");
+      else window.CardSizeMemory.restore("cfg-groups");
+    }
+    restoreConfigViewportAnchor(retainedAutoSleepViewportAnchor);
+    // Keep exact layout through the card-memory settle window. The bounded release restores normal
+    // lazy rendering after the latest asynchronous result; direct user input cancels compensation so
+    // a late timer can never pull the viewport away from a scroll or key navigation in progress.
+    scheduleConfigExactLayoutRelease(root, retainedAutoSleepViewportAnchor);
     focusHash();
     scheduleConfigColumnAlignment();
   }

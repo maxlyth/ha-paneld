@@ -87,6 +87,57 @@ function autoSleepHistory({ included = true, label = 'Office ceiling motion', ho
   };
 }
 
+function autoSleepHydrationSchema() {
+  const field = (key, group, type = 'STRING', extra = {}) => ({
+    key, group, type, label: key.replaceAll('_', ' '), available: true,
+    options: type === 'ENUM' ? ['Off', 'On'] : [],
+    ...extra,
+  });
+  return [
+    field('panel_id', 'Identity'), field('friendly_name', 'Identity'), field('manufacturer', 'Identity'),
+    field('model', 'Identity'), field('ha_area', 'Identity', 'STRING', { picker: 'ha_area' }),
+    field('mqtt_broker', 'MQTT'), field('mqtt_user', 'MQTT'), field('mqtt_password', 'MQTT', 'PASSWORD'),
+    field('auto_sleep', 'Behaviour', 'BOOL'), field('navbar_mode', 'Behaviour', 'ENUM'),
+    field('wake_on_wave', 'Behaviour', 'BOOL'), field('kiosk_lock', 'Behaviour', 'BOOL'),
+    field('watchdog_enabled', 'Behaviour', 'BOOL'), field('touch_sound', 'Behaviour', 'BOOL'),
+    field('silence_boot_chime', 'Behaviour', 'BOOL'),
+    field('dark_mode', 'Display', 'BOOL'),
+    field('auto_brightness_ha_entity', 'Display', 'STRING', { picker: 'ha_illuminance' }),
+    field('auto_brightness', 'Display', 'BOOL'), field('auto_brightness_minimum_percent', 'Display', 'INT'),
+    field('auto_brightness_sensitivity', 'Display', 'INT'),
+    field('cpu_governor', 'System', 'ENUM'), field('zigbee_router', 'System', 'BOOL'),
+    field('prevent_idle_dim', 'Behaviour', 'BOOL'), field('keep_awake', 'Behaviour', 'BOOL'),
+    field('dashboard_package', 'Dashboard', 'STRING', { picker: 'renderer' }),
+    field('dashboard_entity_learning', 'Dashboard', 'BOOL'),
+    field('home_dashboard', 'Dashboard', 'STRING', { picker: 'ha_dashboard' }),
+    field('dashboard_fullscreen', 'Dashboard', 'BOOL'), field('dashboard_native_kiosk', 'Dashboard', 'BOOL'),
+    field('dashboard_idle_return_min', 'Dashboard', 'INT'), field('ha_url', 'Dashboard'),
+    field('ha_token', 'Dashboard', 'PASSWORD'), field('dashboard_zoom', 'Dashboard', 'INT'),
+    field('self_update', 'System', 'BOOL'), field('update_channel', 'System', 'ENUM'),
+    field('webview_auto_update', 'System', 'BOOL'), field('launcher_package', 'System'),
+    field('network_adb', 'System', 'BOOL'),
+    field('log_ship_enabled', 'Logging', 'BOOL'), field('log_ship_host', 'Logging'),
+    field('log_ship_port', 'Logging', 'INT'), field('log_ship_protocol', 'Logging', 'ENUM'),
+    field('screen', 'Sensors', 'INT'), field('volume', 'Sensors', 'INT'), field('illuminance', 'Sensors', 'INT'),
+    field('proximity', 'Sensors', 'BOOL'), field('proximity_level', 'Sensors', 'INT'),
+    field('auto_sleep_activity', 'Sensors', 'BOOL'),
+    field('diag_ip', 'Diagnostics'), field('diag_cpu', 'Diagnostics', 'INT'),
+    field('diag_memory', 'Diagnostics', 'INT'), field('diag_soc_temp', 'Diagnostics', 'FLOAT'),
+    field('diag_boot', 'Diagnostics'), field('diag_wifi_rssi', 'Diagnostics', 'INT'),
+  ];
+}
+
+function autoSleepHydrationSettings(source) {
+  return {
+    panel_id: 'panel-office', friendly_name: 'Office panel', manufacturer: 'Panel maker', model: 'Panel model',
+    ha_area: 'Office', mqtt_broker: 'mqtt.example', mqtt_user: 'panel', mqtt_password: '',
+    ha_url: 'https://ha.example', ha_token: '', home_dashboard: '',
+    dashboard_package: 'builtin', dashboard_zoom: '100', auto_sleep: 'true', touch_sound: 'false',
+    auto_brightness: 'true', auto_brightness_ha_entity: source, auto_brightness_minimum_percent: '10',
+    auto_brightness_sensitivity: '50', log_ship_enabled: 'false',
+  };
+}
+
 function screenshotFixture({ hardened = false, supported = true } = {}) {
   const dialogShim = supported ? '' : '<script>HTMLDialogElement.prototype.showModal=undefined;</script>';
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1327,21 +1378,11 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   const sleepStatus = deferred();
   const source = 'sensor.office_illuminance';
   const revision = 'office-source';
-  const schema = [
-    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
-    { key: 'touch_sound', label: 'Touch sound', group: 'Behaviour', type: 'BOOL', available: true },
-    { key: 'auto_brightness', label: 'Adaptive brightness', group: 'Display', type: 'BOOL', available: true },
-    { key: 'auto_brightness_ha_entity', label: 'Ambient source', group: 'Display', type: 'STRING', available: true },
-    { key: 'ha_url', label: 'Home Assistant URL', group: 'Dashboard', type: 'STRING', available: true },
-    { key: 'home_dashboard', label: 'Home dashboard', group: 'Dashboard', type: 'STRING', picker: 'ha_dashboard', available: true },
-  ];
+  const schema = autoSleepHydrationSchema();
   const harness = await startHarness((path) => {
     if (path === '/api/v1/config/schema') return json(schema);
     if (path === '/api/v1/config') return json({
-      settings: {
-        auto_sleep: 'true', touch_sound: 'false', auto_brightness: 'true', auto_brightness_ha_entity: source,
-        ha_url: 'https://ha.example', home_dashboard: '',
-      },
+      settings: autoSleepHydrationSettings(source),
       ha_expose: {}, ha_auth: { configured: true, oauth: true },
     });
     if (path === '/api/v1/apps') return json({ apps: [] });
@@ -1361,6 +1402,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   page.setDefaultTimeout(3_000);
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.addStyleTag({ content: ':root{font-size:24px!important}html,body,#cfg-groups{overflow-anchor:none!important}' });
   await page.locator('#auto-sleep-summary-announcement').waitFor();
   assert.equal(await page.locator('#auto-sleep-summary-announcement').textContent(), 'Loading…');
   await page.evaluate(() => {
@@ -1412,15 +1454,46 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   const snapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
   const settledSummary = await page.locator('#auto-sleep-summary').textContent();
   const settledArea = await page.locator('#auto-sleep-prerequisite-status').textContent();
+  const originalDashboardCard = await page.locator('[data-config-group="Dashboard"]').elementHandle();
+  const originalDisplayCard = await page.locator('[data-config-group="Display"]').elementHandle();
+  assert.deepEqual(await page.locator('#cfg-groups > [data-config-group]').evaluateAll((cards) =>
+    cards.map((card) => card.getAttribute('data-config-group'))), [
+    'Identity', 'MQTT', 'Home Assistant connection', 'Dashboard', 'Built-in renderer', 'Behaviour', 'Display',
+    'System', 'Sensors', 'Diagnostics', 'Logging',
+  ]);
+  await page.locator('#auto-sleep-status').evaluate((panelNode) => panelNode.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('#auto-sleep-status').evaluate((panelNode) => {
+    const rect = panelNode.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  }), true);
+  assert.equal(await page.locator('#auto-sleep-chart').evaluate((chartNode) => {
+    const rect = chartNode.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  }), true);
   await page.evaluate(() => {
     const card = document.querySelector('[data-config-group="Behaviour"]');
     const panelNode = document.querySelector('#auto-sleep-status');
+    const chartNode = document.querySelector('#auto-sleep-chart');
     const overlay = document.querySelector('.auto-sleep-loading-overlay');
     const initialRect = panelNode.getBoundingClientRect();
+    const initialCardRect = card.getBoundingClientRect();
+    const initialChartRect = chartNode.getBoundingClientRect();
+    const initialScrollY = window.scrollY;
     window.__autoSleepPaintAudit = {
       cardRemoved: 0, panelParkedHidden: 0, overlayShown: 0, frames: 0,
       replacedFrames: 0, disconnectedFrames: 0, hiddenFrames: 0, invisibleFrames: 0,
+      cardViewportMissFrames: 0, panelViewportMissFrames: 0, chartViewportMissFrames: 0,
       maxXDelta: 0, maxYDelta: 0, maxWidthDelta: 0, maxHeightDelta: 0,
+      maxCardYDelta: 0, maxChartYDelta: 0, maxChartRelativeYDelta: 0,
+      minScrollY: initialScrollY, maxScrollY: initialScrollY,
+      minDocumentY: initialRect.y + initialScrollY, maxDocumentY: initialRect.y + initialScrollY,
+      scrollCorrectionCalls: 0,
+    };
+    const nativeScrollTo = window.scrollTo.bind(window);
+    window.scrollTo = (...args) => {
+      window.__autoSleepPaintAudit.scrollCorrectionCalls++;
+      return nativeScrollTo(...args);
     };
     window.__autoSleepPaintSampling = true;
     const sample = () => {
@@ -1434,10 +1507,23 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
       const style = getComputedStyle(panelNode);
       if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) audit.invisibleFrames++;
       const rect = panelNode.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+      const chartRect = chartNode.getBoundingClientRect();
+      if (cardRect.bottom <= 0 || cardRect.top >= window.innerHeight) audit.cardViewportMissFrames++;
+      if (rect.bottom <= 0 || rect.top >= window.innerHeight) audit.panelViewportMissFrames++;
+      if (chartRect.bottom <= 0 || chartRect.top >= window.innerHeight) audit.chartViewportMissFrames++;
       audit.maxXDelta = Math.max(audit.maxXDelta, Math.abs(rect.x - initialRect.x));
       audit.maxYDelta = Math.max(audit.maxYDelta, Math.abs(rect.y - initialRect.y));
       audit.maxWidthDelta = Math.max(audit.maxWidthDelta, Math.abs(rect.width - initialRect.width));
       audit.maxHeightDelta = Math.max(audit.maxHeightDelta, Math.abs(rect.height - initialRect.height));
+      audit.maxCardYDelta = Math.max(audit.maxCardYDelta, Math.abs(cardRect.y - initialCardRect.y));
+      audit.maxChartYDelta = Math.max(audit.maxChartYDelta, Math.abs(chartRect.y - initialChartRect.y));
+      audit.maxChartRelativeYDelta = Math.max(audit.maxChartRelativeYDelta,
+        Math.abs((chartRect.y - rect.y) - (initialChartRect.y - initialRect.y)));
+      audit.minScrollY = Math.min(audit.minScrollY, window.scrollY);
+      audit.maxScrollY = Math.max(audit.maxScrollY, window.scrollY);
+      audit.minDocumentY = Math.min(audit.minDocumentY, rect.y + window.scrollY);
+      audit.maxDocumentY = Math.max(audit.maxDocumentY, rect.y + window.scrollY);
       requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
@@ -1461,18 +1547,19 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   });
 
   homeDashboards.resolve(json({
-    queried: true, items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }], default: { explicit: false, path: '' },
+    queried: true, items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }],
+    default: { explicit: true, path: 'overview' },
   }));
   await page.waitForFunction(() => Array.from(document.querySelectorAll('#cfg-home_dashboard option')).some((option) => option.textContent.includes('Overview')));
   await page.waitForTimeout(150);
-  await page.locator('#cfg-touch_sound [role=switch]').click();
-  assert.equal(await page.locator('#cfg-touch_sound [role=switch]').getAttribute('aria-checked'), 'true');
   brightnessStatus.resolve(json({
     available: true, state: 'enabled', sourceAvailable: true, entityId: source, latestLux: 42, sourceRevision: revision,
   }));
   brightnessHistory.resolve(json({ points: [], sourceRevision: revision, latestEpochMinute: Math.floor(Date.now() / 60000) }));
   await page.locator('#auto-brightness-learning').getByText(`enabled · Source: ${source}`).waitFor();
-  await page.waitForTimeout(200);
+  await page.waitForFunction(() => document.querySelector('#cfg-groups').classList.contains('config-viewport-anchored'));
+  await page.evaluate(() => document.dispatchEvent(new WheelEvent('wheel', { bubbles: true })));
+  await page.waitForTimeout(1600);
   await page.evaluate(() => { window.__autoSleepPaintSampling = false; });
 
   assert.equal(await behaviourCard.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Behaviour"]')), true);
@@ -1480,6 +1567,12 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   assert.equal(await chart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
   assert.equal(await content.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
   assert.equal(await snapshot.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-snapshot')), true);
+  assert.equal(await originalDashboardCard.evaluate((node) => node.isConnected), false,
+    'delayed Home Dashboard result did not exercise an upstream card render');
+  assert.equal(await originalDisplayCard.evaluate((node) => node.isConnected), false,
+    'delayed adaptive-brightness result did not exercise an upstream card render');
+  assert.equal(await page.locator('#cfg-groups').evaluate((root) => root.classList.contains('config-viewport-anchored')), false);
+  assert.equal(await page.locator('[data-config-group="Dashboard"]').evaluate((card) => getComputedStyle(card).contentVisibility), 'auto');
   assert.equal(await page.locator('#auto-sleep-summary').textContent(), settledSummary);
   assert.equal(await page.locator('#auto-sleep-prerequisite-status').textContent(), settledArea);
   assert.equal(await page.locator('.auto-sleep-loading-overlay').isVisible(), false);
@@ -1493,6 +1586,9 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
     disconnectedFrames: paintAudit.disconnectedFrames,
     hiddenFrames: paintAudit.hiddenFrames,
     invisibleFrames: paintAudit.invisibleFrames,
+    cardViewportMissFrames: paintAudit.cardViewportMissFrames,
+    panelViewportMissFrames: paintAudit.panelViewportMissFrames,
+    chartViewportMissFrames: paintAudit.chartViewportMissFrames,
   }, {
     cardRemoved: 0,
     panelParkedHidden: 0,
@@ -1501,11 +1597,107 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
     disconnectedFrames: 0,
     hiddenFrames: 0,
     invisibleFrames: 0,
+    cardViewportMissFrames: 0,
+    panelViewportMissFrames: 0,
+    chartViewportMissFrames: 0,
   });
   assert.ok(paintAudit.maxXDelta <= 0.5, `panel x moved by ${paintAudit.maxXDelta}px`);
-  assert.ok(paintAudit.maxYDelta <= 0.5, `panel y moved by ${paintAudit.maxYDelta}px`);
+  assert.ok(paintAudit.maxYDelta <= 0.5,
+    `panel y moved by ${paintAudit.maxYDelta}px: ${JSON.stringify(paintAudit)}`);
   assert.ok(paintAudit.maxWidthDelta <= 0.5, `panel width changed by ${paintAudit.maxWidthDelta}px`);
   assert.ok(paintAudit.maxHeightDelta <= 0.5, `panel height changed by ${paintAudit.maxHeightDelta}px`);
+  assert.ok(paintAudit.maxCardYDelta <= 0.5, `Behaviour card y moved by ${paintAudit.maxCardYDelta}px`);
+  assert.ok(paintAudit.maxChartYDelta <= 0.5, `chart y moved by ${paintAudit.maxChartYDelta}px`);
+  assert.ok(paintAudit.maxChartRelativeYDelta <= 0.5,
+    `chart moved within the panel by ${paintAudit.maxChartRelativeYDelta}px`);
+  assert.ok(paintAudit.scrollCorrectionCalls >= 1,
+    `expected an app-owned viewport correction, got ${paintAudit.scrollCorrectionCalls}`);
+  assert.ok(paintAudit.scrollCorrectionCalls <= 4,
+    `viewport correction did not converge promptly (${paintAudit.scrollCorrectionCalls} scroll calls)`);
+  assert.ok(paintAudit.maxDocumentY - paintAudit.minDocumentY >= 10,
+    `fixture did not exercise upstream layout movement (${paintAudit.maxDocumentY - paintAudit.minDocumentY}px)`);
+  assert.ok(paintAudit.maxScrollY - paintAudit.minScrollY >= 10,
+    `viewport was not compensated for upstream movement (${paintAudit.maxScrollY - paintAudit.minScrollY}px)`);
+});
+
+browserTest('Auto-sleep hydration does not scroll toward an off-screen Behaviour card', async (t) => {
+  const homeDashboards = deferred();
+  const source = 'sensor.office_illuminance';
+  const revision = 'office-source';
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(autoSleepHydrationSchema());
+    if (path === '/api/v1/config') return json({
+      settings: autoSleepHydrationSettings(source), ha_expose: {}, ha_auth: { configured: true, oauth: true },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/discovery') return json({});
+    if (path === '/api/v1/config/home-dashboards') return homeDashboards.promise;
+    if (path === '/api/v1/ha/oauth/status') return json({ phase: 'connected', display_name: 'Panel User' });
+    if (path === '/api/v1/auto-brightness') return json({
+      available: true, state: 'enabled', sourceAvailable: true, entityId: source, latestLux: 42, sourceRevision: revision,
+    });
+    if (path === '/api/v1/auto-brightness/history') {
+      return json({ points: [], sourceRevision: revision, latestEpochMinute: Math.floor(Date.now() / 60000) });
+    }
+    if (path === '/api/v1/auto-sleep/prerequisite') return json({ eligible: true, phase: 'assigned', area_name: 'Office' });
+    if (path === '/api/v1/auto-sleep') return json({ enabled: true, available: true, phase: 'live', area_name: 'Office', source_count: 1 });
+    if (path === '/api/v1/auto-sleep/history') return json(autoSleepHistory({ hours: 24 }));
+  }, configureVisualFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 900 } });
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('.auto-sleep-lane.source').waitFor();
+  await page.locator('#auto-brightness-learning').getByText(`enabled · Source: ${source}`).waitFor();
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+  assert.equal(await page.locator('#auto-sleep-status').evaluate((panelNode) =>
+    panelNode.getBoundingClientRect().top >= window.innerHeight), true);
+
+  const beforeScrollY = await page.evaluate(() => window.scrollY);
+  await page.evaluate(() => {
+    const panel = document.querySelector('#auto-sleep-status');
+    window.__offscreenAutoSleepAudit = {
+      active: true, frames: 0, minScrollY: window.scrollY, maxScrollY: window.scrollY,
+      onscreenFrames: 0, exactLayoutFrames: 0, originalPanel: panel,
+    };
+    const sample = () => {
+      const audit = window.__offscreenAutoSleepAudit;
+      if (!audit.active) return;
+      const rect = panel.getBoundingClientRect();
+      audit.frames++;
+      audit.minScrollY = Math.min(audit.minScrollY, window.scrollY);
+      audit.maxScrollY = Math.max(audit.maxScrollY, window.scrollY);
+      if (rect.bottom > 0 && rect.top < window.innerHeight) audit.onscreenFrames++;
+      if (document.querySelector('#cfg-groups').classList.contains('config-viewport-anchored')) audit.exactLayoutFrames++;
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  homeDashboards.resolve(json({
+    queried: true, items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }],
+    default: { explicit: true, path: 'overview' },
+  }));
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('#cfg-home_dashboard option'))
+    .some((option) => option.textContent.includes('Overview')));
+  await page.waitForTimeout(1600);
+  const offscreenAudit = await page.evaluate(() => {
+    window.__offscreenAutoSleepAudit.active = false;
+    const audit = window.__offscreenAutoSleepAudit;
+    return { ...audit, samePanel: audit.originalPanel === document.querySelector('#auto-sleep-status') };
+  });
+  assert.ok(offscreenAudit.frames >= 10);
+  assert.equal(offscreenAudit.samePanel, true);
+  assert.equal(offscreenAudit.onscreenFrames, 0);
+  assert.equal(offscreenAudit.exactLayoutFrames, 0);
+  assert.equal(offscreenAudit.minScrollY, beforeScrollY);
+  assert.equal(offscreenAudit.maxScrollY, beforeScrollY);
+  assert.equal(await page.evaluate(() => window.scrollY), beforeScrollY);
+  assert.equal(await page.locator('#cfg-groups').evaluate((root) => root.classList.contains('config-viewport-anchored')), false);
+  assert.equal(await page.locator('#auto-sleep-status').evaluate((panelNode) =>
+    panelNode.getBoundingClientRect().top >= window.innerHeight), true);
 });
 
 browserTest('Auto-sleep blank-Area discovery failure is terminal without cold-chart reflow', async (t) => {
