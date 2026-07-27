@@ -4,6 +4,22 @@
 
 - Prepare the reconciled `0.9.6-rc2` integration line from the published rc1 source and verified post-release CI fixes.
 
+### Fixed
+
+- **Log shipping can now actually reach a standard syslog collector.** Until now the syslog transport only ever spoke TCP, while the port defaulted to 514 — which is a UDP port on essentially every collector. The out-of-the-box configuration therefore could not work: panels reported `connection refused`, and putting `udp://` in the host box made things worse, because the whole string was treated as a hostname and the resulting warning quoted the destination without naming any fault. **Protocol** is now a choice of **syslog-udp** (the new default, and what a stock collector listens for), **syslog-tcp** or **http**. Panels that explicitly selected the old `syslog` value keep TCP and are unaffected.
+
+- **Failures say what went wrong.** A sink that cannot be resolved, refuses the connection, or rejects a batch now reports the actual fault on the info page and in `/diag` instead of repeating the address back at you. Over UDP the status deliberately reads `sending (UDP is unacknowledged)` rather than `connected`, because a connectionless transport cannot tell you the records arrived — a silently discarded stream would otherwise look exactly like a healthy one.
+
+### Added
+
+- **A "Test sink" button on the Configure tab's Logging card** checks the collector from the panel's own network, which is the only vantage point that counts, and does it without saving first so a typo can be caught before it is committed. For TCP and HTTP it reports a real connection. For UDP it sends one marked record and hands back the marker to search for in your collector, which is as much as that transport can honestly confirm.
+
+- **A standalone receiver for checking log shipping end to end**, at `tools/logship-receiver/`. It is a single dependency-free Node script that listens for syslog over UDP and TCP and for NDJSON over HTTP at the same time, prints a full breakdown of every record, and says so loudly when something does not parse — the failure a real collector performs in silence. Run it with `--self-test` first to rule out your own machine.
+
+### Upgrade notes
+
+- Anything typed into **Sink host** is now interpreted the way you would expect: `udp://collector`, `collector:1514` and `[::1]:514` all select the transport and port they name. If you had worked around the old behaviour by putting a scheme in the host box, that value now does the right thing rather than failing to resolve.
+
 ## v0.9.6-rc1 - 2026-07-27
 
 The 0.9.6 release of ha-paneld is on track to be the largest to date, and I have been working night and day to get it out the door. Previously, I was careful to list the major changes so that testers could evaluate new features, but this time there are hundreds, and trying to annotate every one has long since stopped being viable.
