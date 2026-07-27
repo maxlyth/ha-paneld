@@ -22,6 +22,7 @@ import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.DurableVisibilityPreferences
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import io.github.maxlyth.hapaneld.util.SystemProps
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1603,16 +1604,23 @@ class Config private constructor(
     /** Sink host (the log collector to ship to). Empty => shipping stays inert regardless of the flag. */
     val logShipHost: String get() = stringPref("log_ship_host")
     val logShipPort: Int get() = intPref("log_ship_port")
-    /** Transport: "syslog" (TCP, RFC5424) or "http" (NDJSON POST). */
-    val logShipProtocol: String get() = stringPref("log_ship_protocol")
+    /**
+     * Transport: "syslog-udp" (RFC5426, the default and what a stock collector listens for on 514),
+     * "syslog-tcp" (RFC5424 over a stream) or "http" (NDJSON POST). Normalized on read so a value
+     * stored by an older build — where "syslog" meant TCP — resolves to one of the canonical three.
+     */
+    val logShipProtocol: String get() = LogShipEndpoint.protocol(stringPref("log_ship_protocol"))
     /** True only when shipping is enabled AND a sink host is configured. */
     val logShipActive: Boolean get() = logShipEnabled && logShipHost.isNotBlank()
     fun setLogShipping(enabled: Boolean, host: String, port: Int, protocol: String) {
+        // A user who types a scheme or a host:port into the host box means it, so resolve the three
+        // fields together rather than storing "udp://collector" as a literal hostname.
+        val endpoint = LogShipEndpoint.resolve(host, port, protocol)
         edit {
             putBoolean("log_ship_enabled", enabled)
-            putString("log_ship_host", host.trim())
-            putInt("log_ship_port", port)
-            putString("log_ship_protocol", protocol.trim().lowercase(Locale.ROOT).ifBlank { "syslog" })
+            putString("log_ship_host", endpoint.host)
+            putInt("log_ship_port", endpoint.port)
+            putString("log_ship_protocol", endpoint.protocol)
         }
     }
     // Desired Zigbee-router state, persisted so the gateway can be auto-started on boot when nothing
@@ -1853,6 +1861,9 @@ class Config private constructor(
         SettingType.FLOAT -> prefs.getFloat(spec.key, spec.defaultFloat()).toString()
         else -> when (spec.key) {
             "navbar_mode" -> navbarMode
+            // A pre-UDP panel has the retired "syslog" spelling on disk. Canonicalize here so the
+            // Configure select, the export bundle and the revision diff all see a declared option.
+            "log_ship_protocol" -> logShipProtocol
             else -> prefs.getString(spec.key, spec.default) ?: spec.default
         }
     }

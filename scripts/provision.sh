@@ -8,7 +8,7 @@
 #   scripts/provision.sh <panel-ip:5555> [APK] \
 #       [--id PANEL_ID] [--mqtt tcp://host:1883] [--mqtt-user U] [--mqtt-pass P] [--apk PATH] \
 #       [--mqtt-pass-file FILE]         # preferred: keep the password out of process arguments
-#       [--log-host HOST] [--log-port N] [--log-proto syslog|http]   # forward logcat to an aggregator
+#       [--log-host HOST] [--log-port N] [--log-proto syslog-udp|syslog-tcp|http]  # forward logcat to an aggregator
 #       [--shizuku]                    # non-root enhanced access; still needs local approval
 #   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed). For a normal
 #   install, follow the Browser sign-in URL printed after verification. Advanced non-interactive use:
@@ -175,7 +175,7 @@ while [ "${1:-}" ]; do
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
-    --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog (default) | http
+    --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog-udp (default) | syslog-tcp | http
     --log-off) LOG_ENABLE=false; shift ;;     # disable log shipping
     --ha-url) HA_URL="$2"; shift 2 ;;         # Home Assistant URL for the built-in WebView renderer
     --ha-token) HA_TOKEN="$2"; HA_TOKEN_SOURCE_COUNT=$((HA_TOKEN_SOURCE_COUNT + 1)); shift 2 ;;     # compatibility: visible in the invoking process argv
@@ -310,6 +310,16 @@ if [ "$BUILTIN" = 1 ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
   echo "   Run without --builtin, then open the printed guided-setup URL and select the Built-in renderer." >&2
   exit 2
 fi
+# Reject an unknown transport here rather than after the panel has been contacted. `syslog` is the
+# retired spelling of `syslog-tcp` and stays accepted so older provisioning commands keep working.
+case "$LOG_PROTO" in
+  ""|syslog-udp|syslog-tcp|http|syslog|udp|tcp) ;;
+  *)
+    echo "${RED}✗ --log-proto must be syslog-udp, syslog-tcp, or http (got: $LOG_PROTO).${X}" >&2
+    echo "   syslog-udp is the default and is what a stock collector listens for on port 514." >&2
+    exit 2
+    ;;
+esac
 
 # Every credential/config POST has both a connection deadline and an end-to-end deadline. Keep the
 # values overridable for unusually slow LANs and deterministic regression tests, but never allow an

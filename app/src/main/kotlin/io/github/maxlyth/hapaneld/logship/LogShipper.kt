@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,7 +15,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.IOException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
@@ -36,7 +40,9 @@ internal data class LogShipConfigSnapshot(
 ) {
     fun targetOrNull(): LogShipTarget? {
         if (!enabled || host.isBlank()) return null
-        return LogShipTarget(host, port, if (protocol == "http") "http" else "syslog", panelId)
+        val endpoint = LogShipEndpoint.resolve(host, port, protocol)
+        if (endpoint.host.isBlank()) return null
+        return LogShipTarget(endpoint.host, endpoint.port, endpoint.protocol, panelId)
     }
 }
 
@@ -124,10 +130,10 @@ internal class LogShipRun(
         lastError = null
     }
 
-    fun markFailure(error: Throwable) {
+    fun markFailure(reason: String) {
         if (!open) return
         connected = false
-        lastError = error.message ?: error.javaClass.simpleName
+        lastError = reason
     }
 
     fun recordSent(count: Int) {
@@ -187,7 +193,7 @@ class LogShipper internal constructor(
                 enabled = config.logShipEnabled,
                 host = config.logShipHost,
                 port = config.logShipPort,
-                protocol = config.logShipProtocol.ifBlank { "syslog" },
+                protocol = config.logShipProtocol,
                 panelId = config.panelId,
             )
         },
@@ -235,9 +241,20 @@ class LogShipper internal constructor(
         val current = synchronized(lock) { run }
         val target = current?.target ?: config.targetOrNull()!!
         val status = current?.status() ?: LogShipRun.Status(false, 0, 0, null)
-        return "${target.protocol}://${target.host}:${target.port} · " +
-            (if (status.connected) "connected" else "disconnected${status.lastError?.let { " ($it)" } ?: ""}") +
+        return "${LogShipEndpoint.scheme(target.protocol)}://${target.host}:${target.port} · " +
+            liveness(target, status) +
             " · sent=${status.sent}${if (status.dropped > 0) " dropped=${status.dropped}" else ""}"
+    }
+
+    /**
+     * UDP has no connection and no acknowledgement, so it must never claim to be "connected" — that
+     * word would assert a delivery guarantee the transport cannot make, and a silently-black-holed
+     * sink would read exactly like a healthy one.
+     */
+    private fun liveness(target: LogShipTarget, status: LogShipRun.Status): String {
+        if (!status.connected) return "disconnected${status.lastError?.let { " ($it)" } ?: ""}"
+        if (target.protocol != LogShipEndpoint.SYSLOG_UDP) return "connected"
+        return if (status.sent > 0) "sending (UDP is unacknowledged)" else "ready (UDP is unacknowledged)"
     }
 
     private fun startLocked(target: LogShipTarget) {
@@ -251,7 +268,7 @@ class LogShipper internal constructor(
         try {
             candidate.bindSubscription(subscribeCapture(candidate::offer))
             candidate.bindJob(scope.launch(Dispatchers.IO) { shipLoop(candidate) })
-            Log.i(TAG, "started → ${target.protocol}://${target.host}:${target.port}")
+            Log.i(TAG, "started → ${LogShipEndpoint.scheme(target.protocol)}://${target.host}:${target.port}")
         } catch (e: Exception) {
             run = null
             candidate.close()
@@ -261,9 +278,11 @@ class LogShipper internal constructor(
 
     private suspend fun CoroutineScope.shipLoop(run: LogShipRun) {
         val target = run.target
-        val batchMax =
-            if (featureCosts.recordingEnabled || target.protocol == "http") BATCH_MAX else 1
-        val encode: (String) -> String = if (target.protocol == "http") {
+        // Batching is a property of the transport, not of whether cost metrics happen to be recording.
+        // Draining what is already queued never adds latency — the poll after the first line does not
+        // block — so there is no reason for the two to have ever been coupled.
+        val batchMax = BATCH_MAX
+        val encode: (String) -> String = if (target.protocol == LogShipEndpoint.HTTP) {
             { line -> jsonEvent(line, target.panelId) }
         } else {
             { line -> syslogFrame(line, target.panelId) }
@@ -278,7 +297,9 @@ class LogShipper internal constructor(
                 }
                 sink = candidate
                 candidate.connect()
-                if (target.protocol == "syslog") run.markConnected()
+                // Syslog has no application handshake, so a completed connect (or, for UDP, a
+                // successful name resolution) is the only positive signal the transport ever gives.
+                if (target.protocol != LogShipEndpoint.HTTP) run.markConnected()
                 while (isActive && run.isOpen()) {
                     val batch = run.takeBatch(batchMax, POLL_SECONDS)
                     if (batch.isEmpty()) continue
@@ -311,8 +332,12 @@ class LogShipper internal constructor(
                 // Closing a run deliberately breaks its transport. Do not leak that expected exception
                 // into a replacement generation's newly captured log stream.
                 if (run.isOpen()) {
-                    run.markFailure(e)
-                    Log.w(TAG, "${target.protocol} ${target.host}:${target.port}: ${e.message}")
+                    val reason = describeFailure(e, target.host)
+                    run.markFailure(reason)
+                    Log.w(
+                        TAG,
+                        "${LogShipEndpoint.scheme(target.protocol)} ${target.host}:${target.port}: $reason",
+                    )
                     if (isActive) delay(SINK_BACKOFF_MS)
                 }
             } finally {
@@ -322,6 +347,18 @@ class LogShipper internal constructor(
                 }
             }
         }
+    }
+
+    /**
+     * A failure reason a reader can act on. `Socket.connect` on an unresolved address throws
+     * `UnknownHostException` whose message *is* the hostname, so the warning used to render as
+     * "syslog collector:514: collector" — it named the destination and no fault whatsoever. Any
+     * message that uninformative is replaced by the exception type.
+     */
+    private fun describeFailure(e: Throwable, host: String): String {
+        val message = e.message?.trim().orEmpty()
+        if (message.isNotEmpty() && !message.equals(host, ignoreCase = true)) return message
+        return "${e.javaClass.simpleName} ($host)"
     }
 
     private fun timestamp(): String = synchronized(rfc3339) { rfc3339.format(Date()) }
@@ -358,6 +395,13 @@ class LogShipper internal constructor(
         private const val SINK_BACKOFF_MS = 5_000L
         internal const val NETWORK_TIMEOUT_MS = 5_000
 
+        /**
+         * RFC5426 obliges a receiver to accept only 480 bytes and recommends 2048; 1024 stays well
+         * inside any Ethernet path MTU so a long line is truncated here rather than silently dropped
+         * by a middlebox that will not fragment it.
+         */
+        internal const val UDP_DATAGRAM_MAX_BYTES = 1024
+
         private const val FACILITY_USER = 1
         private const val SEV_CRIT = 2
         private const val SEV_ERROR = 3
@@ -372,13 +416,23 @@ class LogShipper internal constructor(
     }
 }
 
-/** Production transports. Creation never blocks; [LogSink.connect] begins only after run attachment. */
-private object NetworkLogSinkFactory : LogSinkFactory {
+/**
+ * Production transports. Creation never blocks; [LogSink.connect] begins only after run attachment.
+ * Internal rather than private so the transport tests can put real bytes on a real loopback socket —
+ * an in-memory fake sink cannot tell TCP from UDP, which is how a TCP-only "syslog" transport aimed
+ * at the UDP default port passed every test it had.
+ */
+internal object NetworkLogSinkFactory : LogSinkFactory {
     override fun create(target: LogShipTarget, encode: (String) -> String): LogSink =
-        if (target.protocol == "http") HttpLogSink(target, encode) else SyslogLogSink(target, encode)
+        when (target.protocol) {
+            LogShipEndpoint.HTTP -> HttpLogSink(target, encode)
+            LogShipEndpoint.SYSLOG_UDP -> UdpSyslogLogSink(target, encode)
+            else -> TcpSyslogLogSink(target, encode)
+        }
 }
 
-private class SyslogLogSink(
+/** RFC6587 non-transparent framing: newline-delimited RFC5424 frames on a stream. */
+private class TcpSyslogLogSink(
     private val target: LogShipTarget,
     private val encode: (String) -> String,
 ) : LogSink {
@@ -396,6 +450,61 @@ private class SyslogLogSink(
     }
 
     override fun close() = socket.close()
+}
+
+/**
+ * RFC5426 UDP syslog: one datagram per message, no framing delimiter, and no delivery signal at all.
+ *
+ * [connect] resolves the name and connects the socket, which buys the only two failure signals UDP
+ * offers — a resolution error up front, and the kernel surfacing ICMP port-unreachable on a later
+ * send instead of discarding every datagram in silence.
+ */
+private class UdpSyslogLogSink(
+    private val target: LogShipTarget,
+    private val encode: (String) -> String,
+) : LogSink {
+    private val socket = DatagramSocket()
+    private var address: InetAddress? = null
+
+    override fun connect() {
+        val resolved = InetAddress.getByName(target.host)
+        socket.connect(resolved, target.port)
+        address = resolved
+    }
+
+    override fun send(lines: List<String>) {
+        val destination = address ?: throw IOException("udp sink used before connect")
+        for (line in lines) {
+            // The trailing newline is stream framing (RFC6587). Inside a datagram the length is the
+            // frame, so it is pure noise — and several collectors surface it as a trailing blank line.
+            val bytes = truncateUtf8(encode(line).trimEnd('\n'), LogShipper.UDP_DATAGRAM_MAX_BYTES)
+            socket.send(DatagramPacket(bytes, bytes.size, destination, target.port))
+        }
+    }
+
+    override fun close() = socket.close()
+}
+
+/** Marks a line the datagram cap cut short, so a truncated record can never be read as a whole one. */
+private const val TRUNCATION_MARK = "…"
+
+/**
+ * Encode [text] into at most [maxBytes] UTF-8 bytes, cutting on a character boundary. Splitting a
+ * multi-byte sequence would corrupt the frame rather than just its tail: a receiver that fails to
+ * decode the datagram discards the whole record, losing the part that fitted too.
+ */
+internal fun truncateUtf8(text: String, maxBytes: Int): ByteArray {
+    val bytes = text.toByteArray(Charsets.UTF_8)
+    if (bytes.size <= maxBytes) return bytes
+    val mark = TRUNCATION_MARK.toByteArray(Charsets.UTF_8)
+    // A continuation byte is 10xxxxxx; step back to the start of the sequence it belongs to.
+    fun boundary(limit: Int): Int {
+        var end = limit.coerceIn(0, bytes.size)
+        while (end > 0 && (bytes[end].toInt() and 0xC0) == 0x80) end--
+        return end
+    }
+    if (maxBytes <= mark.size) return bytes.copyOf(boundary(maxBytes))
+    return bytes.copyOf(boundary(maxBytes - mark.size)) + mark
 }
 
 private class HttpLogSink(

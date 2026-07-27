@@ -55,7 +55,7 @@ class ConfigAccessorDefaultCoherenceTest {
         assertEquals("Off", c.navbarMode)
         assertEquals("stable", c.companionUpdateChannel)
         assertEquals("stable", c.updateChannel)
-        assertEquals("syslog", c.logShipProtocol)
+        assertEquals("syslog-udp", c.logShipProtocol)
 
         // Booleans that default true.
         listOf(

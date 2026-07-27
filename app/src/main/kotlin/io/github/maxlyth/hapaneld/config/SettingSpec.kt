@@ -154,6 +154,10 @@ data class SettingSpec(
     // amplification bound. Individual specs may tighten this conservative default.
     val maxChars: Int = 16 * 1024,
     val options: List<String> = emptyList(), // ENUM choices
+    // Retired ENUM spellings → their replacement, resolved before the options match. Renaming a
+    // choice would otherwise make every older config bundle, MQTT command and provision.sh
+    // invocation fail validation outright instead of importing to the value the user meant.
+    val aliases: Map<String, String> = emptyMap(),
     val picker: String? = null,              // dynamic picker for a STRING field ("package" → installed-apps dropdown)
     val ha: HaEntity? = null,                // discovery descriptor, or null if never an HA entity
     // Per-panel default for the expose-to-HA pip. Defaults to FALSE: a setting is local-only (HTTP UI)
