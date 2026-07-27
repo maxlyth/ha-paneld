@@ -125,6 +125,85 @@ class HomeDashboardCatalogTest {
         }
     }
 
+    @Test fun `legal explicit dashboard does not invoke lower priority defaults`() = runTest {
+        val commands = mutableListOf<String>()
+        val resolution = readHomeDashboardResolution({ command ->
+            val type = command.getString("type")
+            commands += type
+            when (type) {
+                "auth/current_user" -> result(JSONObject().put("is_admin", false))
+                "get_panels" -> result(JSONObject())
+                "lovelace/dashboards/list" -> result(JSONArray().put(
+                    JSONObject().put("url_path", "office").put("title", "Office"),
+                ))
+                else -> error("lower-priority command must not run: $type")
+            }
+        }, "/office/view?kiosk=1")
+
+        assertEquals(EntityLearningProtocol.HomeDashboardSource.EXPLICIT, resolution.source)
+        assertEquals("/office/view?kiosk=1", resolution.path)
+        assertEquals(
+            listOf("auth/current_user", "get_panels", "lovelace/dashboards/list"),
+            commands,
+        )
+    }
+
+    @Test fun `legal user default does not invoke system default`() = runTest {
+        val commands = mutableListOf<String>()
+        val resolution = readHomeDashboardResolution({ command ->
+            val type = command.getString("type")
+            commands += type
+            when (type) {
+                "auth/current_user" -> result(JSONObject().put("is_admin", false))
+                "get_panels" -> result(JSONObject())
+                "lovelace/dashboards/list" -> result(JSONArray().put(
+                    JSONObject().put("url_path", "office").put("title", "Office"),
+                ))
+                "frontend/get_user_data" -> result(JSONObject().put(
+                    "value", JSONObject().put("default_panel", "office"),
+                ))
+                else -> error("lower-priority command must not run: $type")
+            }
+        }, "")
+
+        assertEquals(EntityLearningProtocol.HomeDashboardSource.USER_DEFAULT, resolution.source)
+        assertEquals("/office", resolution.path)
+        assertEquals(
+            listOf("auth/current_user", "get_panels", "lovelace/dashboards/list", "frontend/get_user_data"),
+            commands,
+        )
+    }
+
+    @Test fun `invalid explicit and out of list user default continue to system then first legal`() = runTest {
+        val commands = mutableListOf<String>()
+        suspend fun resolve(systemDefault: String?) = readHomeDashboardResolution({ command ->
+            val type = command.getString("type")
+            commands += type
+            when (type) {
+                "auth/current_user" -> result(JSONObject().put("is_admin", false))
+                "get_panels" -> result(JSONObject())
+                "lovelace/dashboards/list" -> result(JSONArray()
+                    .put(JSONObject().put("url_path", "first").put("title", "First"))
+                    .put(JSONObject().put("url_path", "system").put("title", "System")))
+                "frontend/get_user_data" -> result(JSONObject().put(
+                    "value", JSONObject().put("default_panel", "deleted"),
+                ))
+                "frontend/get_system_data" -> result(JSONObject().put(
+                    "value", JSONObject().apply { systemDefault?.let { put("default_panel", it) } },
+                ))
+                else -> error("unexpected command $type")
+            }
+        }, "https://invalid.example/dashboard")
+
+        val system = resolve("system")
+        assertEquals(EntityLearningProtocol.HomeDashboardSource.SYSTEM_DEFAULT, system.source)
+        assertEquals("/system", system.path)
+        val first = resolve("missing")
+        assertEquals(EntityLearningProtocol.HomeDashboardSource.FIRST_LEGAL, first.source)
+        assertEquals("/first", first.path)
+        assertEquals(2, commands.count { it == "frontend/get_system_data" })
+    }
+
     @Test fun `renderer and scanner share one resolution until authenticated authority changes`() = runTest {
         val authority = HomeDashboardResolutionAuthority()
         val ownerA = HaAuthOwner("https://ha", "refresh-a", "client", "")

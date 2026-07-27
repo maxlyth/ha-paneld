@@ -123,10 +123,14 @@ internal fun ownedAuthenticatedHomeDashboardAuthority(
     )
 }
 
-/** Parse one authenticated HA WebSocket session without touching entity-learning state or scan APIs. */
-internal suspend fun readHomeDashboardCatalog(
+private data class AuthenticatedHomeDashboardChoices(
+    val items: List<EntityLearningProtocol.HomeDashboardChoice>,
+)
+
+/** Read only the authenticated legal set shared by catalog display and renderer resolution. */
+private suspend fun readAuthenticatedHomeDashboardChoices(
     request: suspend (JSONObject) -> JSONObject,
-): HomeDashboardCatalog {
+): AuthenticatedHomeDashboardChoices {
     val user = request(JSONObject().put("type", "auth/current_user")).optJSONObject("result")
         ?: error("Home Assistant current-user response missing result")
     val isAdmin = user.optBoolean("is_admin") || user.optBoolean("is_owner")
@@ -137,17 +141,28 @@ internal suspend fun readHomeDashboardCatalog(
         ?: error("Home Assistant panel list missing result")
     val dashboards = request(JSONObject().put("type", "lovelace/dashboards/list"))
         .optJSONArray("result") ?: error("Home Assistant dashboard list missing result")
-    // These commands are part of the renderer's supported HA floor. A missing default_panel means
-    // "no default"; a rejected command or untyped result means the catalog read was incomplete and
-    // must retry instead of silently choosing a lower-precedence dashboard.
-    val userData = request(JSONObject().put("type", "frontend/get_user_data").put("key", "core"))
-        .optJSONObject("result") ?: error("Home Assistant user-default response missing result")
-    val systemData = request(JSONObject().put("type", "frontend/get_system_data").put("key", "core"))
-        .optJSONObject("result") ?: error("Home Assistant system-default response missing result")
-    val userDefault = userData.optJSONObject("value")?.optString("default_panel")
-    val systemDefault = systemData.optJSONObject("value")?.optString("default_panel")
     val choices = EntityLearningProtocol.panelDashboardChoices(panels, isAdmin) +
         EntityLearningProtocol.homeDashboardChoices(dashboards, isAdmin)
+    return AuthenticatedHomeDashboardChoices(choices)
+}
+
+private suspend fun readHomeDashboardDefault(
+    request: suspend (JSONObject) -> JSONObject,
+    command: String,
+    label: String,
+): String? {
+    val result = request(JSONObject().put("type", command).put("key", "core"))
+        .optJSONObject("result") ?: error("Home Assistant $label response missing result")
+    return result.optJSONObject("value")?.optString("default_panel")
+}
+
+/** Parse one complete catalog for configuration UI without touching entity-learning state or scan APIs. */
+internal suspend fun readHomeDashboardCatalog(
+    request: suspend (JSONObject) -> JSONObject,
+): HomeDashboardCatalog {
+    val choices = readAuthenticatedHomeDashboardChoices(request).items
+    val userDefault = readHomeDashboardDefault(request, "frontend/get_user_data", "user-default")
+    val systemDefault = readHomeDashboardDefault(request, "frontend/get_system_data", "system-default")
     return HomeDashboardCatalog(
         queried = true,
         items = choices,
@@ -155,6 +170,27 @@ internal suspend fun readHomeDashboardCatalog(
         systemDefault = systemDefault,
         default = EntityLearningProtocol.homeDashboardDefault(userDefault, systemDefault, choices),
     )
+}
+
+/** Resolve in authority order; lower-priority commands cannot block an already legal answer. */
+internal suspend fun readHomeDashboardResolution(
+    request: suspend (JSONObject) -> JSONObject,
+    homeDashboard: String,
+): EntityLearningProtocol.HomeDashboardResolution {
+    val choices = readAuthenticatedHomeDashboardChoices(request).items
+    val explicit = EntityLearningProtocol.resolveHomeDashboard(
+        homeDashboard, null, null, choices, allowFirstLegalFallback = false,
+    )
+    if (explicit.source == EntityLearningProtocol.HomeDashboardSource.EXPLICIT) return explicit
+
+    val userDefault = readHomeDashboardDefault(request, "frontend/get_user_data", "user-default")
+    val user = EntityLearningProtocol.resolveHomeDashboard(
+        homeDashboard, userDefault, null, choices, allowFirstLegalFallback = false,
+    )
+    if (user.source == EntityLearningProtocol.HomeDashboardSource.USER_DEFAULT) return user
+
+    val systemDefault = readHomeDashboardDefault(request, "frontend/get_system_data", "system-default")
+    return EntityLearningProtocol.resolveHomeDashboard(homeDashboard, userDefault, systemDefault, choices)
 }
 
 /** Owns catalog synchronization, automatic set promotion and the HTTP/UI query surface. */
@@ -1320,13 +1356,26 @@ class EntityLearningManager(
         homeDashboardAuthorityKey(homeDashboard),
         stillCurrent,
     ) {
-        val catalog = homeDashboardCatalog(stillCurrent)
-        if (!catalog.queried) null else EntityLearningProtocol.resolveHomeDashboard(
-            homeDashboard,
-            catalog.userDefault,
-            catalog.systemDefault,
-            catalog.items,
-        )
+        homeDashboardResolution(homeDashboard, stillCurrent)
+    }
+
+    private suspend fun homeDashboardResolution(
+        homeDashboard: String,
+        stillCurrent: () -> Boolean,
+    ): EntityLearningProtocol.HomeDashboardResolution? = withContext(Dispatchers.IO) {
+        if (!stillCurrent()) return@withContext null
+        val base = config.haUrl.trim().trimEnd('/')
+        if (base.isBlank()) return@withContext null
+        val auth = DashboardAuth.forConfig(config, stillCurrent = stillCurrent)
+        val token = auth.session?.accessToken ?: return@withContext null
+        runCatching {
+            var resolution: EntityLearningProtocol.HomeDashboardResolution? = null
+            withHaSocket(base, token) { request ->
+                resolution = readHomeDashboardResolution(request, homeDashboard)
+            }
+            check(stillCurrent()) { "home-dashboard authority changed during resolution" }
+            resolution
+        }.getOrNull()
     }
 
     private fun homeDashboardAuthorityKey(homeDashboard: String) =
@@ -1650,13 +1699,7 @@ class EntityLearningManager(
                         snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())
                 },
             ) {
-                val catalog = readHomeDashboardCatalog(request)
-                EntityLearningProtocol.resolveHomeDashboard(
-                    homeDashboard,
-                    catalog.userDefault,
-                    catalog.systemDefault,
-                    catalog.items,
-                )
+                readHomeDashboardResolution(request, homeDashboard)
             }?.path ?: error("Home Assistant reported no legal dashboard")
             val urlPath = EntityLearningProtocol.dashboardUrlPath(resolved)
             val command = JSONObject().put("type", "lovelace/config")
