@@ -120,7 +120,7 @@ class LogShipEndpointTest {
         // Already-bracketed input must not be double-wrapped, and a name or IPv4 is left alone.
         assertEquals("[::1]", LogShipEndpoint.urlHost("[::1]"))
         assertEquals("collector.lan", LogShipEndpoint.urlHost("collector.lan"))
-        assertEquals("172.31.0.118", LogShipEndpoint.urlHost("172.31.0.118"))
+        assertEquals("192.0.2.118", LogShipEndpoint.urlHost("192.0.2.118"))
     }
 
     @Test fun anIpv6HttpSinkRoundTripsIntoAParseableUrl() {
@@ -133,10 +133,10 @@ class LogShipEndpointTest {
     }
 
     @Test fun ipv4LiteralsAreUntouched() {
-        assertEquals(LogShipEndpoint.Endpoint("172.31.0.118", 514, SYSLOG_TCP), resolve("172.31.0.118"))
+        assertEquals(LogShipEndpoint.Endpoint("192.0.2.118", 514, SYSLOG_TCP), resolve("192.0.2.118"))
         assertEquals(
-            LogShipEndpoint.Endpoint("172.31.0.118", 1514, SYSLOG_TCP),
-            resolve("172.31.0.118:1514"),
+            LogShipEndpoint.Endpoint("192.0.2.118", 1514, SYSLOG_TCP),
+            resolve("192.0.2.118:1514"),
         )
     }
 

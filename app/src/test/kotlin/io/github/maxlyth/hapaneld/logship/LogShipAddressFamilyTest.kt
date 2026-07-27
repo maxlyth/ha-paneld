@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class LogShipAddressFamilyTest {
 
-    private val v4: InetAddress = InetAddress.getByName("172.31.0.118")
-    private val v6: InetAddress = InetAddress.getByName("2a02:6b67:ea01:3a00::1")
+    private val v4: InetAddress = InetAddress.getByName("192.0.2.118")
+    private val v6: InetAddress = InetAddress.getByName("2001:db8::1")
 
     @Test fun ipv4IsTriedBeforeIpv6() {
         // The exact resolution order the panel saw: AAAA records first.

@@ -1998,9 +1998,8 @@ MOCK_SETUP=ha_credentials run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a panel awaiting Home Assistant sign-in completes provisioning"
 assert_contains 'Next: sign in to Home Assistant.*/setup' "the sign-in step is named only once the panel is actually ready for it"
 
-# Observed on Office Dash 2026-07-27: the live journey carries a home_dashboard stage that postdates
-# the original wording table. The generic fallback kept the output correct, which is the design
-# working — but a stage the panel actually blocks on deserves to be named.
+# A live journey can carry a home_dashboard stage that postdates the original wording table. The
+# generic fallback keeps the output correct, but a stage the panel actually blocks on should be named.
 MOCK_SETUP=home_dashboard run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a panel awaiting a dashboard choice completes provisioning"
 assert_contains 'Next: choose which Home Assistant dashboard to show.*/setup' "the dashboard-choice step is named specifically"
