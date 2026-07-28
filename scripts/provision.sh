@@ -337,11 +337,18 @@ PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-30}"
 PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-60}"
 APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-300}"
 APP_LAUNCH_COMMAND_TIMEOUT_SECONDS="${APP_LAUNCH_COMMAND_TIMEOUT_SECONDS:-15}"
+# How long the agent may take to answer /health after a launch route is issued. Separate from the
+# launch command deadline above: issuing the intent is fast, but the FIRST start after an upgrade
+# does schema migration and catalog work, which on a slow panel with a large store runs into
+# minutes. Panels in #74 were serving ~2 minutes after provisioning had already declared failure.
+APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-20}"
+APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-180}"
 STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-6}"
 STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-2}"
 for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
     PANEL_POST_CONNECT_TIMEOUT_SECONDS PANEL_POST_TIMEOUT_SECONDS PANEL_RESTORE_TIMEOUT_SECONDS \
-    APK_INSTALL_TIMEOUT_SECONDS APP_LAUNCH_COMMAND_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
+    APK_INSTALL_TIMEOUT_SECONDS APP_LAUNCH_COMMAND_TIMEOUT_SECONDS APP_LAUNCH_PROBE_SECONDS \
+    APP_HEALTH_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
   timeout_value="${!timeout_name}"
   case "$timeout_value" in
     ''|*[!0-9]*|0)
@@ -3694,12 +3701,20 @@ fi
 # remains authoritative: after one bounded LAUNCHER attempt and bounded health wait, advance to the
 # distinct direct-component compatibility route. Invoke the absolute adb executable under the existing
 # deadline owner rather than nesting the general adb wrapper's process group.
+# Wait up to $1 seconds for the agent to answer. Deliberately does NOT relaunch while waiting: a
+# repeat launch during first-run migration restarts the very work being waited on.
 wait_for_launch_health() {
-  local attempt=0
-  while [ "$attempt" -lt 15 ]; do
-    attempt=$((attempt + 1))
+  local budget="$1" waited=0 announced=0
+  while [ "$waited" -lt "$budget" ]; do
     curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0
+    # Say why the wait is long rather than sitting silent; an operator watching a fleet roll should
+    # not have to guess whether the panel is starting or hung.
+    if [ "$announced" = 0 ] && [ "$waited" -ge "$APP_LAUNCH_PROBE_SECONDS" ]; then
+      announced=1
+      echo "   ${D}still starting — the first launch after an upgrade migrates the database; allowing up to ${budget}s${X}"
+    fi
     sleep 1
+    waited=$((waited + 1))
   done
   return 1
 }
@@ -3717,12 +3732,16 @@ launch_and_wait() {
       ;;
     *) return 2 ;;
   esac
-  wait_for_launch_health
+  wait_for_launch_health "$2"
 }
 step "▶️  starting" "the panel agent"
-if ! launch_and_wait launcher; then
-  step "▶️  re-starting" "${D}launcher did not produce a healthy agent — trying the direct route${X}"
-  launch_and_wait direct || { warn "web server still not answering on $URL — provisioning is incomplete."
+# The launcher route gets a SHORT probe so the common fast path stays fast; only if that does not
+# answer do we escalate to the direct component and then wait out the full budget. Splitting the two
+# is the fix for #74: the previous shape gave each route the same brief poll, so the whole tolerance
+# was ~30s and panels that needed ~2 minutes were reported as failures while they were still starting.
+if ! launch_and_wait launcher "$APP_LAUNCH_PROBE_SECONDS"; then
+  step "▶️  re-starting" "${D}launcher did not answer yet — trying the direct route${X}"
+  launch_and_wait direct "$APP_HEALTH_TIMEOUT_SECONDS" || { warn "web server still not answering on $URL after ${APP_HEALTH_TIMEOUT_SECONDS}s — provisioning is incomplete."
                        echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
                        PROVISION_FAILED=1; }
 fi

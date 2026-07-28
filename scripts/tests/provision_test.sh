@@ -117,6 +117,9 @@ run_provision() {
   fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
+  MOCK_HEALTH_READY_AFTER="${MOCK_HEALTH_READY_AFTER:-3}" \
+  APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-1}" \
+  APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-3}" \
   MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
   MOCK_LAUNCHER_START="${MOCK_LAUNCHER_START:-ok}" \
   MOCK_LAUNCHER_PID_FILE="${MOCK_LAUNCHER_PID_FILE:-}" \
@@ -3083,3 +3086,22 @@ if [ "$failures" -ne 0 ]; then
   printf '%d assertion(s) failed\n' "$failures" >&2
   exit 1
 fi
+
+# ── #74: a slow first start is not a failed start ───────────────────────────────────────────────
+# A panel can need about two minutes to answer after an upgrade while it is still migrating. The
+# launch route and the health budget must stay separate, and the shipped default must be long.
+default_health_budget="$(sed -n 's/^APP_HEALTH_TIMEOUT_SECONDS="\${APP_HEALTH_TIMEOUT_SECONDS:-\([0-9]*\)}"/\1/p' "$PROVISION")"
+if [ "${default_health_budget:-0}" -ge 120 ]; then
+  pass "the shipped health budget tolerates a multi-minute first start (${default_health_budget}s)"
+else
+  fail_test "the shipped health budget tolerates a multi-minute first start (got '${default_health_budget}')"
+fi
+
+MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel that answers only after a delay still provisions"
+assert_not_contains 'provisioning is incomplete' "$LAST_OUTPUT" "a late-starting panel is not reported as incomplete"
+
+MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a genuinely dead agent still fails after the budget expires"
+assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
