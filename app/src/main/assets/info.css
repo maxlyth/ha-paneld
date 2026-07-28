@@ -80,16 +80,8 @@ h2 small{text-transform:none;letter-spacing:0;color:var(--ok-dim);font-weight:40
    SCOPED to the single-column regime only (<858px = one ~400px column): in multi-column it would feed
    placeholder heights to the browser's column balancer and unbalance the layout — the bug this replaces. */
 @media (max-width:857px){.wrap{padding:8px}.card{margin-bottom:10px;content-visibility:auto;contain-intrinsic-size:auto 300px}}
-/* …but NOT on the Dashboard wall, which owns its card footprints outright (see card-size-memory.js).
-   Measured on the offline harness: the fixed 300px estimate under-ran 16 of the 17 real Dashboard cards at
-   480px, so the document was ~413px too short and a reload restored the scroll onto the wrong content —
-   -413px at 480px, -612px at 360px, -341px at 833px, i.e. the cards landed ABOVE where they belong. It also
-   hid the real heights from CardSizeMemory, which then stored 330px (the placeholder itself) for every
-   off-screen card, so the estimator and the memory defeated each other. One owner, real heights, no estimate.
-   Note the threshold above is not the true one-column boundary: .cards is columns:400px with an 18px gap, so
-   a second column needs 818px of content box — 834px of viewport at the 8px padding THIS query applies (the
-   857px figure came from the 20px padding it replaces). 834-857px is therefore a two-column masonry running
-   these single-column-only placeholders; that band still affects the Configure and Install walls. */
+/* The Dashboard owns its card footprints through card-size-memory.js. A fixed off-screen placeholder
+   corrupts both restored scroll placement and learned card sizes, so the Dashboard always uses real heights. */
 @media (max-width:857px){#dashboard-cards>.card{content-visibility:visible;contain-intrinsic-size:auto}}
 /* Configure can replace cards above an already-visible Auto-sleep activity panel as independent HA
    startup results arrive. During that bounded render transaction the real upstream heights must be

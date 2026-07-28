@@ -83,8 +83,8 @@ android {
     // See docs/local-builds.md.
     signingConfigs {
         // Committed debug keystore keeps secretless CI and emulator artifacts deterministic. These
-        // artifacts are test-only and must never be deployed to a managed panel. Maintainer builds
-        // with keystore.properties use the release signing config for both variants below.
+        // artifacts are test-only. Local builds with keystore.properties use the configured release
+        // signing key for both variants below.
         getByName("debug") {
             storeFile = rootProject.file("gradle/debug.keystore")
             storePassword = "android"
@@ -110,8 +110,8 @@ android {
 
     buildTypes {
         debug {
-            // A maintainer checkout with the private release key produces one signer across debug
-            // and release artifacts as a maintainer convenience. Secretless public checkouts retain
+            // A checkout with a configured private release key produces one signer across debug and
+            // release artifacts. Secretless public checkouts retain
             // the deterministic debug signer and still produce a normal installable development APK.
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             // Keep production ABIs unchanged while allowing the optional Shizuku integration job to

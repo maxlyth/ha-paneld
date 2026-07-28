@@ -278,12 +278,7 @@ class LogShipperTest {
         }
     }
 
-    /**
-     * An address embedded in the host field must still route, but the status no longer restates it
-     *. Note the config fields can still disagree with such a host — that is
-     * a separate config-write defect; routing is proved here by the target handed
-     * to the sink factory.
-     */
+    /** An address embedded in the host field still determines the route without appearing in status text. */
     @Test fun anEmbeddedSchemeAndPortStillRouteButAreNotRestatedInTheStatus() {
         val routed = AtomicReference<LogShipTarget?>(null)
         val executor = Executors.newSingleThreadExecutor()

@@ -152,9 +152,9 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 
 ## Status & roadmap
 
-**Latest release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
+**Latest stable release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
 
-**Release candidate — 0.9.6-rc2 (under test):** panels now warn about storage, database and Android power conditions that could make them unreliable, with a verified power-safety repair where the platform supports it. Log shipping is testable from the panel and supports syslog over TCP or UDP as well as HTTP, while dashboard controls, automatic sleep, sensor continuity, durable settings changes and installer recovery have all received reliability work. This label describes the current candidate in source; it is not a published release until the matching GitHub prerelease exists.
+**Current release candidate — 0.9.6-rc3 (under test):** panels now recover from interrupted rooted upgrades and silently stalled LAN discovery, while the Dashboard keeps its restored position and no longer jumps after loading on narrow screens. RC3 builds on the storage, database, Android power, automatic-sleep, sensor and settings reliability work in the earlier 0.9.6 candidates. It remains a prerelease while testing continues.
 
 **Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
 
@@ -187,7 +187,7 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 - **Application runtime** — [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) and [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
 - **HTTP and Home Assistant WebSocket** — [Ktor](https://github.com/ktorio/ktor) CIO server, client and WebSocket modules provide coroutine I/O without a thread per connection.
 - **MQTT** — [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client) supplies the MQTT 5 client and pure-Java NIO transport, keeping the APK ABI-agnostic.
-- **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` with reliable TXT records across supported Android API levels.
+- **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` for Home Assistant discovery and the multi-panel switcher. ha-paneld checks its own advertisement and rebuilds a silently stalled responder with bounded retries, then warns if automatic recovery is exhausted.
 - **Runtime profiles** — [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) parses YAML 1.2 profile documents, while [CodeMirror](https://codemirror.net/) and its [YAML language package](https://github.com/codemirror/lang-yaml) provide the in-browser profile editor.
 - **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
 

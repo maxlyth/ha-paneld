@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,6 +68,15 @@ class ApiRouteSpecContractTest {
         assertTrue("JSON bodies must be selectable", "'application/json'" in source)
         assertTrue("YAML bodies must be selectable", "'application/yaml'" in source)
         assertTrue("binary restore/APK bodies must use a file input", "file.type='file'" in source)
+    }
+
+    @Test fun peersSpecDescribesThePersistentRosterWithoutAnIgnoredRefreshParameter() {
+        val peers = JSONObject(asset("openapi.json").readText())
+            .getJSONObject("paths")
+            .getJSONObject("/api/v1/peers")
+            .getJSONObject("get")
+        assertTrue(peers.getString("summary").contains("persistent roster"))
+        assertFalse(peers.has("parameters"))
     }
 
     @Test fun installConfigImportConsumesPreviewHash() {

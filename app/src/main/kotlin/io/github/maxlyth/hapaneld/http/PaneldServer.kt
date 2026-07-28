@@ -3028,12 +3028,8 @@ class PaneldServer internal constructor(
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
 ${navBar(active)}</div>
-<!-- switcher.js owns the topbar's final height: it collapses the tab bar to the hamburger and hides header
-     items that would overflow. It is loaded HERE, during parse, immediately after the markup it measures and
-     before any page content — not with the tail scripts. As a tail script it arrived after first paint, so
-     .nav{flex-wrap:wrap} painted three wrapped tab rows and the whole card wall then snapped 81px upward
-     (measured: topbar 127.86px -> 46.86px, wall top 151.86px -> 70.86px, CLS 0.084 at 360/480/600px and 0
-     at >=700px where the bar never collapses). It only touches #pswitch/.hdr/.nav/#navburger, all above. -->
+<!-- Load switcher.js immediately after the header it measures so responsive collapse finishes before page
+     content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
 <script src="/assets/switcher.js"></script>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body

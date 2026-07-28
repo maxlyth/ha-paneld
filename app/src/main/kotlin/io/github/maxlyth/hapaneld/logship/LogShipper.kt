@@ -266,12 +266,10 @@ class LogShipper internal constructor(
         val target = current?.target ?: config.targetOrNull()
             ?: return@synchronized LogShipStatusProjection(config.enabled, configured, "disconnected")
         val status = current?.status() ?: LogShipRun.Status(false, 0, 0, null)
-        // The destination is deliberately absent. The settings state where
-        // logs go; this line states only what the settings cannot — whether the sink is accepting
-        // anything, and how much has gone. An earlier revision restated `scheme://host:port` because
-        // a scheme or port embedded in log_ship_host can override the separate Protocol and Port
-        // fields, leaving them lying about the effective target. That is a real config-write defect
-        //; it is not a reason to repeat the destination on every line.
+        // The destination is deliberately absent. The settings state where logs go; this line states
+        // only what they cannot — whether the sink is accepting anything, and how much has gone. A
+        // scheme or port embedded in log_ship_host can override the separate Protocol and Port fields,
+        // so repeating either the configured fields or resolved target here would be misleading.
         // "Lines" is spelled out because the counter is a message count, not a byte volume.
         LogShipStatusProjection(
             enabled = config.enabled,

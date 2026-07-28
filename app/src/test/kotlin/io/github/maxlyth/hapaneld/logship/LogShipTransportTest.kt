@@ -431,11 +431,7 @@ class LogShipTransportTest {
         }
     }
 
-    /**
-     * The status line states what the settings cannot — whether the sink is accepting anything — and
-     * never restates where logs go. The raw transport message names the
-     * address it failed to reach, so a failing sink is where a destination would leak back in.
-     */
+    /** Raw transport failures can name their destination, so status must project a destination-free reason. */
     @Test(timeout = 20_000)
     fun aFailingSinkNeverPutsTheDestinationBackIntoTheStatus() {
         val dead = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }

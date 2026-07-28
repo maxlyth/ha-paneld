@@ -96,6 +96,8 @@ scripts/provision.sh <panel-ip:5555> \
 
 `--allow-unsigned-helper` is an explicit acknowledgement that the root helper embedded in a local APK is controlled by the local builder rather than authenticated as a published release. It is required whenever a local APK is provisioned to a panel with a usable root or helper path, including a first helper installation. A genuinely unrooted panel skips helper work. Official `--latest` and `--prerelease` installs continue to authenticate their release helper automatically and do not use this flag.
 
+Local `--apk` provisioning also requires Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. Before any upgrade backup or mutation, the provisioner verifies that the APK contains the ha-paneld package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key; add `--require-release-signer` only when the local file is expected to carry the official ha-paneld release certificate.
+
 The profile-aware plan reports when selected drivers require the helper. Many rk3576 / PX30 panels can also run `su` in-app, while sandbox-walled rooted panels use the helper as their privileged control path for features such as screen-off, density, CPU governor, screenshots, performance data, buttons and LEDs. A genuinely unrooted panel continues with its standard Android capabilities unless its profile declares a separately documented alternate for one exact feature.
 
 ## Provisioning the built-in dashboard renderer
@@ -157,6 +159,8 @@ scripts/update-fleet.sh --jobs 2 --latest -- 192.168.1.10 192.168.1.11:5555
 ```
 
 Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically. `HAPANELD_FLEET_JOBS` sets the default concurrency when `--jobs` is omitted; the command-line option takes precedence.
+
+Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The fleet wrapper authenticates one APK package, signer and SHA-256 digest before starting any panel worker. An APK downloaded through `--latest` or `--prerelease` must carry the official release certificate; a supplied self-built APK may use its builder's consistent signer unless `--require-release-signer` is requested.
 
 ## Bootstrapping adb (Tuya TPA10 / Smatek panels)
 

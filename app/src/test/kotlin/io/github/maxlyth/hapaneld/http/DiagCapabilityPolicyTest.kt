@@ -62,17 +62,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(source.contains("""tcard("behavtbl", "Behaviour", s?.let { behaviourRowsHtml(it) })"""))
     }
 
-    /**
-     * The live log-shipping status belongs to Runtime diagnostics, beside the other live transport row
-     * ("MQTT connection / auth timing") — not to the Behaviour card, which states configuration.
-     *
-     * This is a regression test for a status that reached no page at all. The Behaviour card renders
-     * through [settingRowHtml], which resolves a BOOL spec to "on"/"off" BEFORE it consults the value
-     * formatter, so the formatter that was supposed to substitute the live status for `log_ship_enabled`
-     * was unreachable: two rc3 panels rendered "Ship logs: on" while the status string was computed
-     * every snapshot and discarded. Runtime diagnostics renders facts verbatim with no type switch in
-     * the path, so the failure cannot recur there.
-     */
+    /** Runtime diagnostics owns live transport state; Behaviour reports the configured on/off setting. */
     @Test fun liveLogShippingStatusIsARuntimeDiagnosticsFactNotABehaviourSetting() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
         val contextKeys = Regex("""private val CONTEXT_KEYS = listOf\(([^)]*)\)""")

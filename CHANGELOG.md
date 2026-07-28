@@ -1,24 +1,26 @@
 # Changelog
 
-## Unreleased
-
 ## v0.9.6-rc3 - 2026-07-28
 
-### Changed
+### Important changes — please read before upgrading
 
-- **Runtime diagnostics now describe local-state synchronization and log-shipping status more clearly.** Status output distinguishes configured destinations from transport errors and keeps diagnostic state aligned with the running service.
-
-- **Remote Controls dashboard actions are more predictable.** Dashboard navigation and reload behavior have clearer boundaries and broader regression coverage.
+**RC3 makes panels recover from failures that previously required a restart or could block every later upgrade.** After the breadth of RC1 and RC2, I have deliberately kept this release candidate focused on problems found while panels were running and being upgraded. The Dashboard now stays where you left it, local discovery can repair itself when it silently stalls, and an interrupted rooted upgrade can recover without leaving the panel permanently unprovisionable. I would particularly like testers to leave panels running long enough to exercise discovery and to report any upgrade that still cannot recover cleanly.
 
 ### Fixed
 
-- **The Dashboard no longer shifts or reopens in the wrong place on small panels.** The page settled into the wrong position in opposite directions depending on the panel's width — too high on narrow screens, too low on wider ones — and the whole page jumped once shortly after loading on a narrow panel. Card positions are now decided once, from measured sizes rather than estimates, so the Dashboard opens where you left it and stops moving under your finger. No action is needed on upgrade.
+- **Interrupted rooted upgrades no longer leave a panel permanently unprovisionable.** An upgrade that rolled back successfully could leave its recovery journal behind, causing every later provisioning attempt to fail in exactly the same way. RC3 recognises the restored state, completes the rollback and allows the next attempt to proceed normally.
 
-- **mDNS advertising now recovers when an apparently active responder silently stops answering.** Recovery is tied to the current network generation so an obsolete repair cannot replace a newer binding.
+- **LAN panel discovery recovers when its mDNS responder silently stalls.** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted.
 
-- **Log shipping no longer invents a configured destination when reporting transport failures.** Diagnostic output remains useful without exposing unrelated or misleading endpoint details.
+- **The Dashboard no longer shifts or reopens in the wrong place on small panels.** Restored placement no longer drifts onto the wrong cards, and the narrow-screen header no longer causes the page to jump shortly after loading. The Dashboard opens where you left it and stops moving under your finger.
 
-- **Installer rollback finalization now handles system and systemless recovery journals consistently.** Completed recovery state is reconciled instead of leaving an older journal to block later upgrades.
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
+
+- If an earlier interrupted upgrade repeatedly reports that a prior helper and APK upgrade cannot be reconciled, use the RC3 provisioning script and APK, then rerun the same installation command. Do not manually remove the recovery journal.
+
+- Local `--apk` and all fleet installation paths now require Android Build-Tools (`apksigner` and `aapt` or `aapt2`) so the APK package and signer can be authenticated before the upgrade begins. Public self-build users may keep their own consistent signer; fleet runs that download an official release additionally require the official release certificate.
 
 ## v0.9.6-rc2 - 2026-07-27
 

@@ -1,9 +1,9 @@
 # Releasing ha-paneld
 
-A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/workflows/release.yml) then builds, signs and publishes the APK and both supported root-helper binaries, taking the human-readable notes from the matching `CHANGELOG.md` section. Run this checklist **before** tagging.
+A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/workflows/release.yml) then verifies the already-green exact source, builds, signs and publishes the APK and both supported root-helper binaries, taking the human-readable notes from the matching `CHANGELOG.md` section. Run this checklist **before** tagging.
 
 > [!IMPORTANT]
-> **Releases are contenders until approved.** Pushing a tag publishes a GitHub release (and a CI run) that persists publicly — so prepare and verify a release *before* tagging, and **tag only on explicit approval**. Pushing dev commits to `main` is fine; the **tag push is the gate**. Don't eager-tag and then force-move the tag to absorb late fixes — fold late changes into the still-untagged contender instead. (Force-moving a published tag rewrites a release others may have pulled.)
+> **Releases are contenders until approved.** Pushing a tag starts the public Release workflow and publishes the resulting GitHub release if its gates pass, so prepare and verify a release *before* tagging and **tag only on explicit approval**. Pushing dev commits to `main` is fine; the **tag push is the gate**. Don't eager-tag and then force-move the tag to absorb late fixes — fold late changes into the still-untagged contender instead. (Force-moving a published tag rewrites a release others may have pulled.)
 
 ## Pre-tag checklist
 
@@ -27,7 +27,7 @@ A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/wo
    Group entries under **Added / Changed / Fixed / Docs** (only the groups with content) — see the format note at the top of `CHANGELOG.md`.
 3. **Version bump** — `app/build.gradle.kts` `versionName` matches the tag and `versionCode` is incremented. (A higher `versionCode` lets panels `install -r` in place.) Confirm the dynamic release badge in `README.md` still points at this repository's GitHub releases; no version edit is needed for the badge itself.
 4. **Docs** — any new capability has a matching `docs/` entry (hardware page, recipe, etc.).
-5. **Build + sanity-test** on at least one real panel (`scripts/update-fleet.sh --apk <built.apk> -- <ip>`).
+5. **Build + sanity-test** on at least one real panel. Local APK and fleet paths require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. For an official-signer artifact, use `scripts/update-fleet.sh --require-release-signer --apk <built.apk> -- <ip>`; for a self-built artifact on a rooted panel, use `scripts/provision.sh <ip> --apk <built.apk> --allow-unsigned-helper`.
    - For a rooted panel and local APK, provisioning extracts the ABI-matched helper embedded in that exact APK. It treats the APK and helper as one compatibility unit and refuses to replace the APK unless the running helper reports the embedded source-derived build identity and required protocol.
    - Before tagging, wait for the final `main` CI and Security workflows for the exact contender commit to complete successfully. The tag workflow requires the latest successful Android build, host contracts, dependency-integrity, privileged-helper and CodeQL checks for that source commit, rejects open CodeQL alerts, and independently creates the release inputs from a clean checkout of the exact tag.
 6. **Authorship / no-secrets gate** — verify that commit authors and trailers are intentional and that the published history contains no keystore or credentials. Scan the pending commits before pushing.
@@ -41,6 +41,6 @@ git tag vX.Y.Z && git push origin vX.Y.Z   # CI builds, signs, publishes the rel
 
 ## After release
 
-- Roll the fleet: `scripts/update-fleet.sh --latest -- <ip> <ip> …` (installs **and** launches each panel — a bare `adb install -r` loop leaves them installed-but-dead).
+- Roll a stable release with `scripts/update-fleet.sh --latest -- <ip> <ip> …`, or a release candidate with `scripts/update-fleet.sh --prerelease -- <ip> <ip> …` (both install **and** launch each panel — a bare `adb install -r` loop leaves them installed-but-dead).
 - Confirm the release contains both `ha-paneld-helper-<tag>-armeabi-v7a` and `ha-paneld-helper-<tag>-arm64-v8a`, with a `.sha256` and `.sha256.sig` beside each. The provisioner fails closed before APK replacement if the selected helper or proof is absent.
 - Confirm panels report the new version and reappear in HA.

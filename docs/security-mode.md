@@ -95,3 +95,5 @@ scripts/provision.sh <panel-ip:5555> \
 ```
 
 The flag applies only to the helper embedded in a local APK. Local APK provisioning requires it whenever the panel exposes a usable root or helper path, including a first helper installation. A genuinely unrooted panel skips helper work. The flag does not weaken verification for official release downloads.
+
+Local APK and fleet provisioning also authenticate the application separately from its embedded helper. Android SDK Build-Tools must provide `apksigner` and either `aapt` or `aapt2`; the provisioner requires the ha-paneld package and exactly one valid signer before an upgrade begins. A self-built APK may use the builder's consistent signing key. `--require-release-signer` additionally pins the official ha-paneld release certificate and should be used only when that is the expected signer; it does not turn a self-built APK into an official release.

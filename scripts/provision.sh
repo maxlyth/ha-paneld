@@ -58,7 +58,7 @@ Common operations:
   --no-tame                Deprecated compatibility no-op; guidance is never auto-applied
   --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --allow-unsigned-helper  Developer-only: allow a privileged helper from an unsigned local APK
-  --require-release-signer Maintainer/fleet policy: reject a local APK unless it uses the official release certificate
+  --require-release-signer Reject a local APK unless it uses the official ha-paneld release certificate
   --mqtt-pass-file FILE    Read the MQTT password from a private text file
   --ha-token-file FILE     Read the Home Assistant token from a private text file
   --ha-pass-file FILE      Read the Home Assistant login password from a private text file
@@ -174,7 +174,7 @@ while [ "${1:-}" ]; do
     --no-tame) shift ;;   # deprecated compatibility no-op; profile recommendations are report-only
     --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
-    --require-release-signer) REQUIRE_RELEASE_SIGNER=1; shift ;; # official managed-fleet app signer policy
+    --require-release-signer) REQUIRE_RELEASE_SIGNER=1; shift ;; # pin the official ha-paneld app signer
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog-tcp (default) | syslog-udp | http
@@ -1283,7 +1283,7 @@ verify_release_apk() {
     else
       fail "Android Build-Tools are required to verify a local APK signer" \
         "Install apksigner and retry. Nothing was backed up, installed, started, or privileged." \
-        "Self-built APKs may use their developer signer; managed-fleet runs add --require-release-signer."
+        "Self-built APKs may use their developer signer; official-release deployments add --require-release-signer."
     fi
   else
     signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \

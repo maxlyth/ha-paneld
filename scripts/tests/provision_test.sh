@@ -1451,9 +1451,9 @@ assert_success "self-built local APK with one developer signer remains installab
 
 MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
   run_provision "$MOCK_TARGET" --apk "$APK" --require-release-signer --no-tame
-assert_failure "managed-fleet local APK with a debug or foreign signer fails closed"
+assert_failure "official-signer policy rejects a debug or foreign local APK"
 assert_contains 'release APK signer mismatch' "local signer failure names the trust violation"
-assert_contains 'This run requires the official release signer' "local signer failure states the managed-fleet invariant"
+assert_contains 'This run requires the official release signer' "local signer failure states the official-signer requirement"
 assert_not_contains 'config/export|ha-paneld-db-snapshot|/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "local signer failure stops before backup, helper staging, or APK replacement"
 
 MOCK_ADDITIONAL_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
@@ -2171,8 +2171,8 @@ assert_failure "fleet updates refuse a bulk configuration erase"
 assert_contains 'not available for fleet updates' "the fleet refusal names the safe alternative"
 assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused fleet erase never reaches any panel"
 
-# Maintainer fleet policy is enforced once before workers start. The public default still accepts one
-# consistent developer signer; --require-release-signer pins only the private maintainer fleet.
+# Official-signer policy is enforced once before workers start. The default still accepts one consistent
+# developer signer; --require-release-signer pins the official ha-paneld release certificate.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-wrong-signer-output.txt"
 MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
@@ -3023,11 +3023,8 @@ if grep -Fq 'hybrid_matches_recorded() {' "$PROVISION" && \
 else
   fail_test "hybrid rollback finalizes against the journaled state even when target bytes are unchanged"
 fi
-# Issue #76: the guarantee above held for hybrid only. system and systemless finalized through
-# `[ "$(classify_*)" = PRE_SWAP ]`, and those classifiers deliberately resolve the no-op-upgrade tie
-# in favour of TARGET so a successful install can commit. A same-helper upgrade that rolled back was
-# therefore restored on the panel but never finalized: the journal survived, every retry reproduced
-# it, and the panel became unprovisionable. Reproduced on hardware before this changed.
+# System and systemless rollback finalization must compare the journaled state directly because their
+# classifiers deliberately resolve unchanged target bytes in favour of a successful commit.
 if grep -Fq 'system_matches_recorded() {' "$PROVISION" && \
    grep -Fq 'elif system_matches_recorded; then' "$PROVISION" && \
    grep -Fq 'system_matches_recorded || return 1' "$PROVISION" && \

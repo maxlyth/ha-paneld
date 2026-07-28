@@ -22,12 +22,13 @@ class LogShipStatusContractTest {
         assertFalse(route.contains("managementProjection"))
     }
 
-    @Test fun openApiPromisesLiveUncachedAndSecretSafeStatus() {
+    @Test fun openApiPromisesLiveDestinationSafeStatus() {
         val paths = JSONObject(File("src/main/assets/openapi.json").readText()).getJSONObject("paths")
         val operation = paths.getJSONObject("/api/v1/logship/status").getJSONObject("get")
         val description = operation.getJSONObject("responses").getJSONObject("200").getString("description")
         assertTrue(operation.getString("summary").contains("Live synchronized"))
-        assertTrue(description.contains("uncached"))
-        assertTrue(description.contains("credentials are redacted"))
+        assertTrue(operation.getString("summary").contains("Dashboard Runtime diagnostics"))
+        assertTrue(description.contains("Passive live read"))
+        assertTrue(description.contains("without repeating the destination"))
     }
 }

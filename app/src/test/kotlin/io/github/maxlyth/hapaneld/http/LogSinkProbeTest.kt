@@ -13,7 +13,7 @@ import org.junit.Test
 import sun.misc.Unsafe
 
 /**
- * Covers GET /api/v1/config/probe-log-sink without constructing the Android-backed server graph,
+ * Covers POST /api/v1/config/probe-log-sink without constructing the Android-backed server graph,
  * the same way [BrokerProbeAdversarialTest] covers the broker probe.
  *
  * The behaviour worth pinning is the honesty of the UDP verdict: a datagram that leaves the panel

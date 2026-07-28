@@ -188,7 +188,7 @@ if [ "$have_apk" = 0 ]; then
 fi
 
 # Authenticate the one fleet artifact before starting any panel worker. Self-built fleets may use one
-# consistent developer signer; official managed-fleet runs add --require-release-signer and pin the
+# consistent developer signer; official-release deployments add --require-release-signer and pin the
 # public release-certificate fingerprint without exposing any private signing material.
 if [ "$have_apk" = 1 ]; then
   APK=""

@@ -312,8 +312,8 @@
         "responses": { "200": { "description": "{ok, host, port, resolved?, error?: invalid-url|unresolvable|unreachable}. Read-only; advisory — the wizard offers save-anyway on failure" } } }
     },
     "/api/v1/logship/status": {
-      "get": { "summary": "Live synchronized, redacted log-shipping summary for the Dashboard Behaviour card", "tags": ["status"],
-        "responses": { "200": { "description": "{enabled, configured, text}. Passive and uncached; authority credentials are redacted from text. Unlike probe-log-sink it transmits nothing, so it is safe to poll while a page is open" } } }
+      "get": { "summary": "Live synchronized, redacted log-shipping summary for Dashboard Runtime diagnostics", "tags": ["status"],
+        "responses": { "200": { "description": "{enabled, configured, text}. Passive live read; text reports transport state and sent or dropped line counts without repeating the destination. Unlike probe-log-sink it transmits nothing, so it is safe to poll while a page is open" } } }
     },
     "/api/v1/config/probe-log-sink": {
       "post": { "summary": "Pre-flight the log sink from the panel's network: DNS resolve, then transmit exactly one marked record in the selected transport's real wire format", "tags": ["config"],
@@ -500,7 +500,7 @@
       "get": { "summary": "Download the detailed local entity catalog and evidence without credentials", "tags": ["performance"], "responses": { "200": { "description": "ha-paneld-entity-catalog JSON" } } }
     },
     "/api/v1/sensors": { "get": { "summary": "Live sensor readings (light, proximity, temperature, humidity) plus volume percent and raw screen brightness — independent of HA exposure settings", "tags": ["sensors"], "responses": { "200": { "description": "live values JSON" } } } },
-    "/api/v1/peers": { "get": { "summary": "ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "parameters": [ { "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh mDNS browse instead of the ~10s cache" } ], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
+    "/api/v1/peers": { "get": { "summary": "Current persistent roster of ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
     "/api/v1/diag": { "get": { "summary": "Terse plain-text diagnostics dump (hardware, firmware, boot security, app database and privilege/node probes)", "tags": ["status"], "responses": { "200": { "description": "Redacted text/plain report that omits configured identifiers and secrets; review before posting publicly" } } } },
     "/api/v1/info": { "get": { "summary": "Dashboard hydration payload — the probe-backed facts/value/capability fragments as ready-to-inject HTML (cached snapshot, single-flight)", "tags": ["status"], "responses": { "200": { "description": "{banners, shot, controls, cards} JSON" } } } },
     "/api/v1/logs/stream": {
@@ -531,9 +531,9 @@
     },
     "/api/v1/screenshot.png": { "get": { "summary": "Live panel screenshot (root screencap or the helper daemon); usable as an HA camera still_image_url", "tags": ["control"], "responses": { "200": { "description": "PNG; browsers must pass same-origin Fetch Metadata admission" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" }, "503": { "description": "screenshot-unavailable" } } } },
     "/api/v1/action": {
-      "post": { "summary": "On-screen nav action", "tags": ["control"],
+      "post": { "summary": "Bounded panel control action", "tags": ["control"],
         "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["a"], "properties": { "a": { "type": "string", "enum": ["back", "recents", "launcher", "admin_launcher", "dashboard", "reload", "reboot", "volup", "voldn"] } } } } } },
-        "responses": { "202": { "description": "Routine action accepted into the bounded control lane. In Hardened mode, non-loopback Reload and Reboot requests instead return approval-required until the identical request from the same peer is physically approved and retried; loopback requests retain routine admission.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "409": { "description": "control queue busy" }, "503": { "description": "control plane stopping" } } }
+        "responses": { "202": { "description": "Routine action accepted into the bounded control lane. In Hardened mode, non-loopback Reload and Reboot requests instead return approval-required until the identical request from the same peer is physically approved and retried; loopback requests retain routine admission.", "content": { "text/plain": { "schema": { "type": "string" } }, "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } }, "400": { "description": "bad-action" }, "408": { "description": "request timeout" }, "409": { "description": "control queue busy" }, "413": { "description": "request too large" }, "503": { "description": "control plane stopping" } } }
     },
     "/api/v1/input": {
       "post": { "summary": "Inject a tap at device pixel (x,y) through the live root, accessibility, or Shizuku route", "tags": ["control"],

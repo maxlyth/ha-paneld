@@ -2598,15 +2598,8 @@ browserTest('Logging Configure card omits sink actions and Dashboard-owned live 
 // ---------------------------------------------------------------------------
 // Dashboard card-wall placement contract.
 //
-// The regression these cover: on narrow viewports the Dashboard card wall was displaced in opposite
-// directions — above the correct position below 858px (content-visibility's fixed 300px
-// contain-intrinsic-size under-ran 16 of 17 real cards, leaving the document ~413px short so a reload
-// restored the scroll onto the wrong content) and below it above 858px (a synthetic `resize` broadcast
-// disturbed CardSizeMemory mid-load). A third defect moved the whole wall 81px on every narrow load,
-// because switcher.js was a tail script and the tab bar painted wrapped before it collapsed.
-//
-// None of the existing rigs could see any of it: the CLS matrix fixture has no .topbar/.nav/#bannerzone
-// at all, and no rig samples a width between 480 and 900 or reloads a scrolled page. These do both.
+// Covers restored scroll placement, responsive-header first paint and peer updates across the
+// single-column and multi-column boundary.
 const DASHBOARD_WIDTHS = [360, 480, 600, 700, 800, 833, 834, 857, 858, 900];
 const DASHBOARD_TOPBAR_GAP = 16;   // info.css .topbar{margin-bottom:16px} — the one bar-to-content gap
 
@@ -2728,7 +2721,7 @@ browserTest('dashboard topbar height is final at first paint, so the wall never 
     const cls = await page.evaluate('window.__shifts.reduce((a, b) => a + b, 0)');
     // An animation frame can land before the header script executes without anything being painted, so
     // the sampled heights are diagnostic only. The property that matters — and the one the tail-loaded
-    // script broke — is that nothing MOVES after paint. Tail-loaded measured 0.083-0.086 at 360/480/600.
+    // The header must settle before first paint rather than shifting the page afterward.
     assert.ok(cls < 0.02,
       `${width}px: layout shift ${cls} — the wall moved after paint; topbar heights seen ${JSON.stringify(seen)}`);
     await context.close();
