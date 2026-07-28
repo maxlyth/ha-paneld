@@ -3088,13 +3088,16 @@ MOCK_DIRECT_START=fail MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIM
 assert_success "a failed direct start still waits out the health budget"
 
 # Exactly one direct start. A second launch restarts the first-run migration being waited on.
-MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+# MOCK_STOPPED_STATE + an ineffective launcher forces the escalation. Without that the launcher
+# answers during the probe and this passes with zero direct launches, proving nothing.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective APP_HEALTH_TIMEOUT_SECONDS=20 \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an ineffective launcher escalates to the direct route and still provisions"
 direct_starts="$(grep -c 'shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity' "$MOCK_CALL_LOG" || true)"
-if [ "$direct_starts" -le 1 ]; then
-  pass "the agent is never relaunched more than once while it is starting ($direct_starts direct starts)"
+if [ "$direct_starts" -eq 1 ]; then
+  pass "the direct route is issued exactly once while the agent is starting"
 else
-  fail_test "the agent is never relaunched more than once while it is starting ($direct_starts direct starts)"
+  fail_test "the direct route is issued exactly once while the agent is starting (saw $direct_starts)"
 fi
 
 # A hanging launcher command must not consume the health budget with it.
@@ -3120,6 +3123,7 @@ assert_not_contains 'provisioning is incomplete' "$LAST_OUTPUT" "a late-starting
 MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "a genuinely dead agent still fails after the budget expires"
 assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
+
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then

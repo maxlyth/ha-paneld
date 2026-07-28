@@ -3704,17 +3704,22 @@ fi
 # Wait up to $1 seconds for the agent to answer. Deliberately does NOT relaunch while waiting: a
 # repeat launch during first-run migration restarts the very work being waited on.
 wait_for_launch_health() {
-  local budget="$1" announced=0 started="$SECONDS" elapsed=0
-  # Bound by REAL elapsed time, not loop iterations. Each pass costs up to the curl timeout plus the
-  # sleep, so counting iterations let a "180s" budget run for several times that.
-  while [ "$elapsed" -lt "$budget" ]; do
-    curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0
-    if [ "$announced" = 0 ] && [ "$elapsed" -ge "$APP_LAUNCH_PROBE_SECONDS" ]; then
+  local budget="$1" announced=0 deadline remaining probe
+  # Bound by a real DEADLINE, and never start work that would cross it: checking elapsed only at the
+  # top of the loop let a final curl plus sleep overrun the budget by their combined cost.
+  deadline=$(( SECONDS + budget ))
+  while :; do
+    remaining=$(( deadline - SECONDS ))
+    [ "$remaining" -gt 0 ] || break
+    probe=2
+    [ "$remaining" -ge "$probe" ] || probe="$remaining"
+    curl -fsS --max-time "$probe" "$URL/health" >/dev/null 2>&1 && return 0
+    if [ "$announced" = 0 ] && [ $(( budget - (deadline - SECONDS) )) -ge "$APP_LAUNCH_PROBE_SECONDS" ]; then
       announced=1
       echo "   ${D}still starting — the first launch after an upgrade migrates the database; allowing up to ${budget}s${X}"
     fi
+    [ $(( deadline - SECONDS )) -gt 0 ] || break
     sleep 1
-    elapsed=$(( SECONDS - started ))
   done
   return 1
 }
