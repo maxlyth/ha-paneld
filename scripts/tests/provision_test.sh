@@ -3081,12 +3081,6 @@ else
   fail_test "release signing fails before publication when installer trust keys drift from the keystore"
 fi
 
-printf '1..%d\n' "$((passes + failures))"
-if [ "$failures" -ne 0 ]; then
-  printf '%d assertion(s) failed\n' "$failures" >&2
-  exit 1
-fi
-
 # ── #74: a slow first start is not a failed start ───────────────────────────────────────────────
 # A panel can need about two minutes to answer after an upgrade while it is still migrating. The
 # launch route and the health budget must stay separate, and the shipped default must be long.
@@ -3105,3 +3099,9 @@ assert_not_contains 'provisioning is incomplete' "$LAST_OUTPUT" "a late-starting
 MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "a genuinely dead agent still fails after the budget expires"
 assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
+
+printf '1..%d\n' "$((passes + failures))"
+if [ "$failures" -ne 0 ]; then
+  printf '%d assertion(s) failed\n' "$failures" >&2
+  exit 1
+fi
