@@ -47,7 +47,7 @@ Diffing the two images: **only `ro.product.version` and the relay class differ.*
 
 ## Relays — `strelay` / `st_relay` class (root)
 
-ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<panel>_relay2`, gated on the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the first concrete panel for the [built-in relay roadmap item](../../README.md#status--roadmap).
+ha-paneld exposes the two mains relays as `switch.<panel>_relay1` / `switch.<panel>_relay2`, gated on the presence of the relay sysfs class (so the entities appear only on a panel that has it). This is the first concrete panel for the [built-in relay roadmap item](../roadmap.md#planned).
 
 > [!NOTE]
 > **The class name is firmware-dependent** (see [Firmware versions](#firmware-versions)): `st_relay` on the initial 1.0.2 image, `strelay` on 1.1.0 and later. ha-paneld probes **both** names since **0.8.2** and uses whichever the panel exposes (reporter-confirmed, [#3](https://github.com/maxlyth/ha-paneld/issues/3)).
