@@ -191,6 +191,13 @@ JSON
   */health)
     # `slow` models the #74 shape: the agent is starting and answers only after N probes. It must be
     # a success, not a failure — the panels in that report were serving ~2 minutes later untouched.
+    # BOUNDED hang: consumes the probe's --max-time and then returns, so the deadline overrun is
+    # measurable without the suite inheriting an unbounded wait. An earlier unbounded version made
+    # every health call in the run block and pushed the suite past ten minutes.
+    if [ "${MOCK_HEALTH:-ok}" = "hang" ]; then
+      /bin/sleep "${MOCK_HEALTH_HANG_SECONDS:-3}"
+      exit 22
+    fi
     if [ "${MOCK_HEALTH:-ok}" = "slow" ]; then
       probe_file="${MOCK_STATE_DIR:?}/health-probes"
       probes=0; [ ! -f "$probe_file" ] || probes="$(cat "$probe_file")"

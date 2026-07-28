@@ -114,6 +114,10 @@ A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
+# Whether the panel agent ever answered /health. Every mutation after the launch step is gated on
+# this: writing configuration into a panel that never came up cannot be verified, and may land in
+# a half-started agent.
+AGENT_HEALTHY=0
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""; AUTO_EXPORT_FILE=""
 CONFIG_BACKUP_DIR="${HAPANELD_CONFIG_BACKUP_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/ha-paneld/config-backups}"
@@ -3743,16 +3747,19 @@ start_panel_agent() {
 
 step "▶️  starting" "the panel agent"
 start_panel_agent launcher || true
-if ! wait_for_launch_health "$APP_LAUNCH_PROBE_SECONDS"; then
+if wait_for_launch_health "$APP_LAUNCH_PROBE_SECONDS"; then
+  AGENT_HEALTHY=1
+else
   # Escalate ONCE, and only while the agent is still not answering: a second start restarts the
   # first-run database migration that the long wait exists to accommodate. A failed start command
   # does not skip the wait — the launcher route may already have the agent coming up.
   step "▶️  re-starting" "${D}launcher did not answer yet — trying the direct route${X}"
   start_panel_agent direct || true
-  wait_for_launch_health "$APP_HEALTH_TIMEOUT_SECONDS" || {
+  if wait_for_launch_health "$APP_HEALTH_TIMEOUT_SECONDS"; then AGENT_HEALTHY=1; else
     warn "web server still not answering on $URL after ${APP_HEALTH_TIMEOUT_SECONDS}s — provisioning is incomplete."
     echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
-    PROVISION_FAILED=1; }
+    PROVISION_FAILED=1
+  fi
 fi
 if [ "$PROVISION_FAILED" = 0 ]; then
   show_provisioning_plan 1 "${D}waiting for the installed app to resolve this panel${X}" \
@@ -3764,6 +3771,20 @@ fi
 # revocable refresh token rather than a 10-year access token. Sets HA_TOKEN/HA_REFRESH/HA_EXPIRY.
 # JSON string escaping for the hand-built login bodies: a quote or backslash in a username/password
 # would otherwise produce malformed JSON and a baffling login failure.
+# Refuse to write to a panel whose agent never answered. Before this, a health timeout still fell
+# through to the configuration POST and the restore import: the run would push settings, or import a
+# whole config bundle, into an agent that had not come up — unverifiable at best, and landing in a
+# half-started process at worst.
+require_healthy_agent() {
+  # Explicit `if`, never `[ … ] && return 0`: under `set -e` a false test fails the whole AND-list
+  # and kills the function before the guard can report anything.
+  if [ "$AGENT_HEALTHY" = 1 ]; then return 0; fi
+  fail "refusing to $1 — the panel agent never answered on $URL" \
+    "The APK and helper are installed, but the agent did not become healthy within ${APP_HEALTH_TIMEOUT_SECONDS}s, so nothing can confirm a write landed." \
+    "No configuration was written and no bundle was imported." \
+    "Bring the panel up (check $URL in a browser), then re-run the same command to apply the configuration."
+}
+
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
@@ -3859,6 +3880,7 @@ fi
 [ -n "$LOG_PROTO" ]  && ARGS+=(--data-urlencode "log_ship_protocol=$LOG_PROTO")
 PLAN_REFRESH_NEEDED=0
 if [ ${#ARGS[@]} -gt 0 ]; then
+  require_healthy_agent "write configuration"
   PLAN_REFRESH_NEEDED=1
   step "⚙️  configuring" "${D}panel_id / MQTT / renderer / log shipping${X}"
   if CFG_ERR="$(curl -fsS --connect-timeout "$PANEL_POST_CONNECT_TIMEOUT_SECONDS" \
@@ -3879,6 +3901,7 @@ MQTT_PASS=""; HA_TOKEN=""; HA_REFRESH=""; HA_PASS=""
 # everything incl. device-scoped keys (same-panel recovery / like-for-like replacement); --restore-fleet
 # applies only PORTABLE non-secret keys (cross-panel deployment).
 if [ -n "$RESTORE_FILE" ]; then
+  require_healthy_agent "import a configuration bundle"
   PLAN_REFRESH_NEEDED=1
   MODE_Q=""; [ "$RESTORE_MODE" = "fleet" ] && MODE_Q="?mode=fleet"
   step "📦 restoring config" "${D}$RESTORE_FILE (${RESTORE_MODE})${X}"

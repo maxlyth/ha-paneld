@@ -106,7 +106,9 @@ run_provision() {
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
-  rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts"
+  # The slow-health probe counter is per-run state; leaving it behind made one test's outcome
+  # depend on how many health probes an earlier test happened to make.
+  rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
   rm -f "$TMP/package-stopped"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
@@ -118,6 +120,7 @@ run_provision() {
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_HEALTH_READY_AFTER="${MOCK_HEALTH_READY_AFTER:-3}" \
+  MOCK_HEALTH_HANG_SECONDS="${MOCK_HEALTH_HANG_SECONDS:-3}" \
   APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-1}" \
   APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-3}" \
   MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
@@ -3124,6 +3127,26 @@ MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk
 assert_failure "a genuinely dead agent still fails after the budget expires"
 assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
 
+
+# ── #74: nothing may mutate a panel whose agent never answered ──────────────────────────────────
+# A health timeout used to fall through to the configuration POST and the restore import, so the run
+# wrote settings — or imported a whole bundle — into an agent that had not come up.
+# A package that stays stopped fails health at the LAUNCH step specifically, leaving the earlier
+# steps intact. MOCK_HEALTH=fail cannot be used here: it breaks health for the whole run, so the
+# provisioner dies before the launch step and the gate under test is never reached.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --id post-timeout-panel --mqtt tcp://broker.test:1883
+assert_failure "a panel whose agent never answered fails the run"
+assert_contains 'refusing to write configuration' "the run says why it refused to write"
+assert_not_contains 'X POST .*api/v1/config$' "$MOCK_CALL_LOG" "no configuration is written after a health timeout"
+
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --restore "$RESTORE"
+assert_failure "a restore into an unanswering panel fails the run"
+assert_contains 'refusing to import a configuration bundle' "the run says why it refused to import"
+assert_not_contains 'api/v1/config/import' "$MOCK_CALL_LOG" "no bundle is imported after a health timeout"
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
