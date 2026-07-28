@@ -3081,6 +3081,27 @@ else
   fail_test "release signing fails before publication when installer trust keys drift from the keystore"
 fi
 
+# A failed direct-start COMMAND must not skip the health wait: the launcher route may already have
+# the agent coming up, and aborting there is how a starting panel gets called a failure.
+MOCK_DIRECT_START=fail MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a failed direct start still waits out the health budget"
+
+# Exactly one direct start. A second launch restarts the first-run migration being waited on.
+MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+direct_starts="$(grep -c 'shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity' "$MOCK_CALL_LOG" || true)"
+if [ "$direct_starts" -le 1 ]; then
+  pass "the agent is never relaunched more than once while it is starting ($direct_starts direct starts)"
+else
+  fail_test "the agent is never relaunched more than once while it is starting ($direct_starts direct starts)"
+fi
+
+# A hanging launcher command must not consume the health budget with it.
+MOCK_LAUNCHER_START=block APP_LAUNCH_COMMAND_TIMEOUT_SECONDS=2 APP_HEALTH_TIMEOUT_SECONDS=3 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a hanging launcher command is bounded and the run still completes"
+
 # ── #74: a slow first start is not a failed start ───────────────────────────────────────────────
 # A panel can need about two minutes to answer after an upgrade while it is still migrating. The
 # launch route and the health budget must stay separate, and the shipped default must be long.

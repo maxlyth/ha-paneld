@@ -3704,24 +3704,26 @@ fi
 # Wait up to $1 seconds for the agent to answer. Deliberately does NOT relaunch while waiting: a
 # repeat launch during first-run migration restarts the very work being waited on.
 wait_for_launch_health() {
-  local budget="$1" waited=0 announced=0
-  while [ "$waited" -lt "$budget" ]; do
+  local budget="$1" announced=0 started="$SECONDS" elapsed=0
+  # Bound by REAL elapsed time, not loop iterations. Each pass costs up to the curl timeout plus the
+  # sleep, so counting iterations let a "180s" budget run for several times that.
+  while [ "$elapsed" -lt "$budget" ]; do
     curl -fsS --max-time 2 "$URL/health" >/dev/null 2>&1 && return 0
-    # Say why the wait is long rather than sitting silent; an operator watching a fleet roll should
-    # not have to guess whether the panel is starting or hung.
-    if [ "$announced" = 0 ] && [ "$waited" -ge "$APP_LAUNCH_PROBE_SECONDS" ]; then
+    if [ "$announced" = 0 ] && [ "$elapsed" -ge "$APP_LAUNCH_PROBE_SECONDS" ]; then
       announced=1
       echo "   ${D}still starting — the first launch after an upgrade migrates the database; allowing up to ${budget}s${X}"
     fi
     sleep 1
-    waited=$((waited + 1))
+    elapsed=$(( SECONDS - started ))
   done
   return 1
 }
 
-launch_and_wait() {
-  local route="$1"
-  case "$route" in
+# Issuing a start and waiting for health are separate concerns. Keeping them in one function meant a
+# failed start COMMAND skipped the health wait entirely, even though an earlier route may already
+# have the agent starting.
+start_panel_agent() {
+  case "$1" in
     launcher)
       run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell \
         monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || return 1
@@ -3732,18 +3734,20 @@ launch_and_wait() {
       ;;
     *) return 2 ;;
   esac
-  wait_for_launch_health "$2"
 }
+
 step "▶️  starting" "the panel agent"
-# The launcher route gets a SHORT probe so the common fast path stays fast; only if that does not
-# answer do we escalate to the direct component and then wait out the full budget. Splitting the two
-# is the fix for #74: the previous shape gave each route the same brief poll, so the whole tolerance
-# was ~30s and panels that needed ~2 minutes were reported as failures while they were still starting.
-if ! launch_and_wait launcher "$APP_LAUNCH_PROBE_SECONDS"; then
+start_panel_agent launcher || true
+if ! wait_for_launch_health "$APP_LAUNCH_PROBE_SECONDS"; then
+  # Escalate ONCE, and only while the agent is still not answering: a second start restarts the
+  # first-run database migration that the long wait exists to accommodate. A failed start command
+  # does not skip the wait — the launcher route may already have the agent coming up.
   step "▶️  re-starting" "${D}launcher did not answer yet — trying the direct route${X}"
-  launch_and_wait direct "$APP_HEALTH_TIMEOUT_SECONDS" || { warn "web server still not answering on $URL after ${APP_HEALTH_TIMEOUT_SECONDS}s — provisioning is incomplete."
-                       echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
-                       PROVISION_FAILED=1; }
+  start_panel_agent direct || true
+  wait_for_launch_health "$APP_HEALTH_TIMEOUT_SECONDS" || {
+    warn "web server still not answering on $URL after ${APP_HEALTH_TIMEOUT_SECONDS}s — provisioning is incomplete."
+    echo "   ${D}Open $URL in a browser. If it loads there, this computer cannot reach the panel's :8888 port (firewall/VLAN).${X}"
+    PROVISION_FAILED=1; }
 fi
 if [ "$PROVISION_FAILED" = 0 ]; then
   show_provisioning_plan 1 "${D}waiting for the installed app to resolve this panel${X}" \
