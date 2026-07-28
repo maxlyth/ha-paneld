@@ -14,7 +14,7 @@ class ControlAvailabilityTest {
 
         assertTrue(result.backEnabled)
         assertTrue(result.recentsEnabled)
-        assertTrue(result.rootlessNote.contains("Back, Recents, volume still work"))
+        assertTrue(result.rootlessNote.contains("Back, Recents still work"))
     }
 
     @Test fun accessibilityAloneStillEnablesBackAndRecents() {
@@ -53,7 +53,7 @@ class ControlAvailabilityTest {
         assertFalse(result.recentsEnabled)
         assertTrue(result.recentsRequirement.contains("absent on this panel"))
         assertFalse(result.rootlessNote.contains("Recents"))
-        assertTrue(result.rootlessNote.contains("Back, volume still work"))
+        assertTrue(result.rootlessNote.contains("Back still works"))
     }
 
     @Test fun missingInputOnFirmwareWithoutOverviewUsesSingularBackGuidance() {

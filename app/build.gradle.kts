@@ -12,6 +12,8 @@ plugins {
 
 val featureCostsEnabled = providers.gradleProperty("featureCosts").orNull
     ?.toBooleanStrictOrNull() ?: true
+val keystoreProps = rootProject.file("keystore.properties")
+val hasReleaseSigning = keystoreProps.exists()
 
 val helperIdentityFiles = rootProject.fileTree("helper/src") {
     include("*.c", "*.h", "*.def")
@@ -51,8 +53,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the release line/candidate; publication remains a separate explicit action.
-        versionCode = 508
-        versionName = "0.9.6-rc2"
+        versionCode = 513
+        versionName = "0.9.6-rc3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
@@ -79,13 +81,10 @@ android {
     // CI has no such file: it builds an unsigned release APK and post-signs with apksigner from Actions
     // secrets, so this is a no-op there. NEVER commit keystore.properties or the .jks (both gitignored).
     // See docs/local-builds.md.
-    val keystoreProps = rootProject.file("keystore.properties")
-    val hasReleaseSigning = keystoreProps.exists()
-
     signingConfigs {
-        // Committed debug keystore so every CI build is signed identically — lets `install -r`
-        // update a panel in place without uninstalling (which a device-admin install otherwise
-        // blocks). A debug keystore is not a secret; password is the conventional "android".
+        // Committed debug keystore keeps secretless CI and emulator artifacts deterministic. These
+        // artifacts are test-only and must never be deployed to a managed panel. Maintainer builds
+        // with keystore.properties use the release signing config for both variants below.
         getByName("debug") {
             storeFile = rootProject.file("gradle/debug.keystore")
             storePassword = "android"
@@ -111,9 +110,9 @@ android {
 
     buildTypes {
         debug {
-            // A maintainer checkout with the private release key must produce one signer across
-            // debug and release artifacts so either build type can upgrade the managed fleet.
-            // Secretless CI/checkouts retain the committed deterministic debug key fallback.
+            // A maintainer checkout with the private release key produces one signer across debug
+            // and release artifacts as a maintainer convenience. Secretless public checkouts retain
+            // the deterministic debug signer and still produce a normal installable development APK.
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             // Keep production ABIs unchanged while allowing the optional Shizuku integration job to
             // install the real app/native library on an x86_64 Android emulator.

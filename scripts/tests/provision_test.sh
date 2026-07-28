@@ -1439,6 +1439,29 @@ fi
 
 # Official release assets are authenticated before the first install, launch, or privilege grant
 # whenever Android Build-Tools are present. The fixtures expose both apksigner and aapt.
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "local APK with the pinned release signer and package is accepted"
+assert_contains 'verified.*local signed APK' "local APK verification reports its signer"
+assert_log_contains '^apksigner verify --print-certs ' "local APK verification invokes apksigner"
+assert_log_contains '^aapt dump badging ' "local APK verification inspects the package name"
+
+MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "self-built local APK with one developer signer remains installable"
+
+MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --require-release-signer --no-tame
+assert_failure "managed-fleet local APK with a debug or foreign signer fails closed"
+assert_contains 'release APK signer mismatch' "local signer failure names the trust violation"
+assert_contains 'This run requires the official release signer' "local signer failure states the managed-fleet invariant"
+assert_not_contains 'config/export|ha-paneld-db-snapshot|/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "local signer failure stops before backup, helper staging, or APK replacement"
+
+MOCK_ADDITIONAL_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "multi-signed local APK fails closed"
+assert_contains 'release APK signer count mismatch' "multi-signed local APK names the signer-count violation"
+assert_not_contains 'config/export|ha-paneld-db-snapshot|/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "multi-signed local APK stops before backup, helper staging, or APK replacement"
+
 run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_success "release APK with the pinned signer and package is accepted"
 assert_contains 'authenticated.*v0\.9\.2-rc3' "release verification reports the signed checksum authentication"
@@ -2147,6 +2170,79 @@ LAST_STATUS=$?
 assert_failure "fleet updates refuse a bulk configuration erase"
 assert_contains 'not available for fleet updates' "the fleet refusal names the safe alternative"
 assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused fleet erase never reaches any panel"
+
+# Maintainer fleet policy is enforced once before workers start. The public default still accepts one
+# consistent developer signer; --require-release-signer pins only the private maintainer fleet.
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-wrong-signer-output.txt"
+MOCK_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet release policy rejects a foreign signer before workers start"
+assert_contains 'does not use the required release signer' "fleet foreign-signer failure names the policy"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet foreign-signer failure starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-multiple-signers-output.txt"
+MOCK_ADDITIONAL_RELEASE_CERT=0000000000000000000000000000000000000000000000000000000000000000 \
+  bash "$UPDATE_FLEET" --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet preflight rejects a multi-signed APK"
+assert_contains 'must have exactly one signer' "fleet multi-signer failure names the invariant"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet multi-signer failure starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-wrong-package-output.txt"
+MOCK_RELEASE_PACKAGE=example.foreign bash "$UPDATE_FLEET" --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet preflight rejects a foreign package"
+assert_contains 'fleet APK package mismatch' "fleet package failure names the mismatch"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet package failure starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-unverifiable-apk-output.txt"
+MOCK_LOCAL_APK_VERIFY_FAIL=1 bash "$UPDATE_FLEET" --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet preflight rejects an unverifiable local APK"
+assert_contains 'fleet APK signature verification failed' "fleet unverifiable APK names the failure"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet unverifiable APK starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-missing-apk-output.txt"
+bash "$UPDATE_FLEET" --apk "$TMP/does-not-exist.apk" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet preflight rejects a missing explicit APK"
+assert_contains 'fleet APK is missing or empty' "fleet missing APK names the failure"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing APK starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-missing-signer-tool-output.txt"
+PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet release policy fails closed without apksigner"
+assert_contains 'apksigner is required for fleet deployment' "fleet missing-tool failure names apksigner"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-tool failure starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+SIGNER_ONLY_FIXTURES="$TMP/signer-only-fixtures"
+mkdir -p "$SIGNER_ONLY_FIXTURES"
+ln -s "$FIXTURES/apksigner" "$SIGNER_ONLY_FIXTURES/apksigner"
+LAST_OUTPUT="$TMP/fleet-missing-aapt-output.txt"
+PATH="$SIGNER_ONLY_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "fleet release policy fails closed without aapt"
+assert_contains 'aapt or aapt2 is required for fleet deployment' "fleet missing-tool failure names aapt"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-aapt failure starts no panel worker"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-duplicate-apk-output.txt"
+bash "$UPDATE_FLEET" --apk "$APK" --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_status 2 "fleet preflight rejects duplicate APK selectors"
+assert_contains '--apk may be supplied only once' "fleet duplicate APK failure names the conflict"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet duplicate APK failure starts no panel worker"
 
 # Builds older than the setup endpoint keep working guidance, derived from config alone.
 MOCK_SETUP=missing run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -2926,6 +3022,27 @@ if grep -Fq 'hybrid_matches_recorded() {' "$PROVISION" && \
   pass "hybrid rollback finalizes against the journaled state even when target bytes are unchanged"
 else
   fail_test "hybrid rollback finalizes against the journaled state even when target bytes are unchanged"
+fi
+# Issue #76: the guarantee above held for hybrid only. system and systemless finalized through
+# `[ "$(classify_*)" = PRE_SWAP ]`, and those classifiers deliberately resolve the no-op-upgrade tie
+# in favour of TARGET so a successful install can commit. A same-helper upgrade that rolled back was
+# therefore restored on the panel but never finalized: the journal survived, every retry reproduced
+# it, and the panel became unprovisionable. Reproduced on hardware before this changed.
+if grep -Fq 'system_matches_recorded() {' "$PROVISION" && \
+   grep -Fq 'elif system_matches_recorded; then' "$PROVISION" && \
+   grep -Fq 'system_matches_recorded || return 1' "$PROVISION" && \
+   ! grep -Fq '[ "$(classify_system)" = PRE_SWAP ] || return 1' "$PROVISION"; then
+  pass "system rollback finalizes against the journaled state even when target bytes are unchanged"
+else
+  fail_test "system rollback finalizes against the journaled state even when target bytes are unchanged"
+fi
+if grep -Fq 'systemless_matches_recorded() {' "$PROVISION" && \
+   grep -Fq 'elif systemless_matches_recorded; then' "$PROVISION" && \
+   grep -Fq 'systemless_matches_recorded || return 1' "$PROVISION" && \
+   ! grep -Fq '[ "$(classify_systemless)" = PRE_SWAP ] || return 1' "$PROVISION"; then
+  pass "systemless rollback finalizes against the journaled state even when target bytes are unchanged"
+else
+  fail_test "systemless rollback finalizes against the journaled state even when target bytes are unchanged"
 fi
 if grep -Fq 'helper_build_id="$(helper/source-id.sh)"' "$RELEASE_WORKFLOW" && \
    grep -Fq -- '-DHAPANELD_BUILD_ID=' "$RELEASE_WORKFLOW" && \

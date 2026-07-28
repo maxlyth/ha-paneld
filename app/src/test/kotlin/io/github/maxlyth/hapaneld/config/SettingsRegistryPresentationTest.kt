@@ -39,6 +39,14 @@ class SettingsRegistryPresentationTest {
         assertTrue(help.contains("Android Home app"))
     }
 
+    @Test fun logShippingHelpNamesTheOnlySourceThatLeavesThePanel() {
+        assertEquals(
+            "Forward ha-paneld's own process log — not the full system log — to a central sink " +
+                "(LAN-only, tokens and passwords redacted).",
+            SettingsRegistry.spec("log_ship_enabled")!!.help,
+        )
+    }
+
     @Test fun navbarModeIsAHomeAssistantSelectWithAConfigureSyncControl() {
         val spec = SettingsRegistry.spec("navbar_mode")!!
         assertFalse(spec.haExposedByDefault)

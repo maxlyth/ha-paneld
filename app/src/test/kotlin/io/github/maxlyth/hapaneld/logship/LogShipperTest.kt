@@ -22,6 +22,11 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class LogShipperTest {
+    @Test fun trafficSummaryNamesPositivePluralAndMultiDropCounts() {
+        assertEquals("2 lines sent · 3 dropped", logShipTrafficText(sent = 2, dropped = 3))
+        assertEquals("1 line sent", logShipTrafficText(sent = 1, dropped = 0))
+    }
+
     private class FakeCapture {
         val subscriptions = AtomicInteger()
         val closes = AtomicInteger()
@@ -64,11 +69,15 @@ class LogShipperTest {
         }
     }
 
-    private fun snapshot(host: String = "first", panelId: String = "panel-a") = LogShipConfigSnapshot(
+    private fun snapshot(
+        host: String = "first",
+        panelId: String = "panel-a",
+        protocol: String = "syslog",
+    ) = LogShipConfigSnapshot(
         enabled = true,
         host = host,
         port = 514,
-        protocol = "syslog",
+        protocol = protocol,
         panelId = panelId,
     )
 
@@ -161,7 +170,7 @@ class LogShipperTest {
             shipper.start()
             capture.emit("lost")
             assertTrue(sendAttempted.await(2, TimeUnit.SECONDS))
-            await { "dropped=1" in shipper.statusText() }
+            await { "1 dropped" in shipper.statusText() }
         } finally {
             shipper.stop()
             scope.cancel()
@@ -197,17 +206,118 @@ class LogShipperTest {
         try {
             shipper.start()
             capture.emit("trigger failure")
-            await { "refused connection" in shipper.status().text }
+            await { shipper.status().text.startsWith("disconnected (") }
             val failed = shipper.status()
             assertTrue(failed.enabled)
             assertTrue(failed.configured)
-            assertTrue(failed.text.contains("collector.lan"))
-            assertFalse(failed.text.contains("super-secret"))
+            // Credentials cannot leak through a status that carries no destination at all — a
+            // stronger guarantee than redacting them out of an address it still printed.
+            assertFalse(failed.text, failed.text.contains("super-secret"))
+            assertFalse(failed.text, failed.text.contains("collector.lan"))
+            assertFalse(failed.text, failed.text.contains("operator"))
 
-            await(timeoutMs = 8_000) { " · connected · " in shipper.status().text }
+            await(timeoutMs = 8_000) { shipper.status().text.startsWith("connected") }
             val recovered = shipper.status()
-            assertTrue(recovered.text.contains(" · connected · "))
+            // "disconnected" also contains "connected"; the prefix is the only safe discriminator.
+            assertTrue(recovered.text, recovered.text.startsWith("connected"))
+            assertTrue(recovered.text.contains(" lines sent"))
             assertFalse(recovered.text.contains("refused connection"))
+        } finally {
+            shipper.stop()
+            scope.cancel()
+            dispatcher.close()
+            executor.shutdownNow()
+        }
+    }
+
+    /**
+     * An HTTP sink names the request URL in its error, and that URL may carry userinfo credentials.
+     * Only the matched status token may reach the status line — an earlier revision returned the whole
+     * message whenever it matched an HTTP status, which put the destination and any credential straight
+     * back into a line that exists to omit them.
+     */
+    @Test fun anHttpFailureExposesOnlyTheStatusTokenNotTheRequestUrlOrItsCredentials() {
+        val executor = Executors.newSingleThreadExecutor()
+        val dispatcher = executor.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val capture = FakeCapture()
+        val shipper = LogShipper(
+            configSnapshot = { snapshot(host = "operator:super-secret@collector.lan", protocol = "http") },
+            scope = scope,
+            subscribeCapture = capture::subscribe,
+            sinkFactory = LogSinkFactory { _, _ ->
+                object : LogSink {
+                    override fun connect() = Unit
+                    override fun send(lines: List<String>) {
+                        throw IOException(
+                            "HTTP 401 for https://operator:super-secret@collector.lan/ingest?token=abc123",
+                        )
+                    }
+                    override fun close() = Unit
+                }
+            },
+        )
+        try {
+            shipper.start()
+            capture.emit("trigger http failure")
+            await { shipper.status().text.startsWith("disconnected (") }
+            val text = shipper.status().text
+
+            assertTrue(text, text.contains("HTTP 401"))
+            assertFalse(text, text.contains("super-secret"))
+            assertFalse(text, text.contains("operator"))
+            assertFalse(text, text.contains("collector.lan"))
+            assertFalse(text, text.contains("token=abc123"))
+            assertFalse(text, text.contains("https://"))
+            assertFalse(text, text.contains("/ingest"))
+        } finally {
+            shipper.stop()
+            scope.cancel()
+            dispatcher.close()
+            executor.shutdownNow()
+        }
+    }
+
+    /**
+     * An address embedded in the host field must still route, but the status no longer restates it
+     *. Note the config fields can still disagree with such a host — that is
+     * a separate config-write defect; routing is proved here by the target handed
+     * to the sink factory.
+     */
+    @Test fun anEmbeddedSchemeAndPortStillRouteButAreNotRestatedInTheStatus() {
+        val routed = AtomicReference<LogShipTarget?>(null)
+        val executor = Executors.newSingleThreadExecutor()
+        val dispatcher = executor.asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        val capture = FakeCapture()
+        val shipper = LogShipper(
+            configSnapshot = {
+                LogShipConfigSnapshot(
+                    enabled = true,
+                    host = "udp://collector.lan:1514",
+                    port = 514,
+                    protocol = "syslog-tcp",
+                    panelId = "panel-a",
+                )
+            },
+            scope = scope,
+            subscribeCapture = capture::subscribe,
+            sinkFactory = LogSinkFactory { target, _ ->
+                routed.set(target)
+                RecordingSink()
+            },
+        )
+        try {
+            shipper.start()
+            await { routed.get() != null }
+            val status = shipper.statusText()
+            val target = requireNotNull(routed.get())
+            assertEquals("collector.lan", target.host)
+            assertEquals(1514, target.port)
+            assertEquals("syslog-udp", target.protocol)
+            assertFalse(status, "collector.lan" in status)
+            assertFalse(status, "1514" in status)
+            assertFalse(status, "udp://" in status)
         } finally {
             shipper.stop()
             scope.cancel()

@@ -37,7 +37,9 @@ function configureVisualFixture() {
   </body></html>`;
 }
 
-async function startHarness(routes, pageFixture = fixture) {
+// assetDelayMs models a real panel, where a referenced script arrives some time after the document. On
+// localhost every asset is instant, which hides whether a script runs before or after first paint.
+async function startHarness(routes, pageFixture = fixture, assetDelayMs = 0) {
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://panel.test').pathname;
     if (path === '/') return response.end(pageFixture());
@@ -45,9 +47,11 @@ async function startHarness(routes, pageFixture = fixture) {
       response.setHeader('content-type', 'application/javascript; charset=utf-8');
       return response.end(await readFile(join(root, path.slice(1)), 'utf8'));
     }
-    if (path === '/assets/card-size-memory.js' || path === '/assets/card-column-alignment.js') {
+    if (path.startsWith('/assets/') && path.endsWith('.js')) {
       response.setHeader('content-type', 'application/javascript; charset=utf-8');
-      return response.end(await readFile(join(root, path.slice('/assets/'.length)), 'utf8'));
+      const body = await readFile(join(root, path.slice('/assets/'.length)), 'utf8');
+      if (assetDelayMs) await new Promise((resolve) => setTimeout(resolve, assetDelayMs));
+      return response.end(body);
     }
     if (path === '/info.css') {
       response.setHeader('content-type', 'text/css');
@@ -156,7 +160,7 @@ function screenshotFixture({ hardened = false, supported = true } = {}) {
 }
 
 function controlsFixture() {
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="stylesheet" href="/info.css"></head><body data-hardened="0">
     <canvas id="perfchart" width="600" height="96"></canvas><canvas id="respchart" width="600" height="150"></canvas>
     <table id="perf"></table><table id="smtbl"></table><table id="streamtbl"></table><table id="topproc"></table><table id="noisyentities"></table>
@@ -165,10 +169,9 @@ function controlsFixture() {
       <button class="pbtn" onclick="act('back')">←<span class="lbl"> Back</span></button>
       <button class="pbtn" onclick="act('recents')">▢<span class="lbl"> Recents</span></button>
       <button class="pbtn" onclick="act('launcher')">⊞<span class="lbl"> Launcher</span></button>
-      <button class="pbtn" onclick="act('dashboard')">⌂<span class="lbl"> Dashboard</span></button>
       <button class="pbtn" onclick="act('admin_launcher')">⚙<span class="lbl"> Admin launcher</span></button>
     </div><div class="ctlrow ctlrow-secondary">
-      <button class="pbtn" onclick="act('voldn')">Vol −</button><button class="pbtn" onclick="act('volup')">Vol +</button>
+      <button class="pbtn" onclick="act('dashboard')">⌂<span class="lbl"> Dashboard</span></button>
       <button class="pbtn" onclick="act('reload')">↻ Reload</button><button class="pbtn" onclick="act('reboot')">⟳ Reboot</button>
     </div></div></div>
     <div id="dashboard-cards"></div><script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/info.js"></script></body></html>`;
@@ -438,19 +441,23 @@ browserTest('Remote Controls keep Dashboard and Reload labelled, tappable and wi
       return {
         overflow: zone.scrollWidth > zone.clientWidth,
         collapsed: zone.querySelector('.ctlrow').classList.contains('collapsed'),
-        buttons: Array.from(zone.querySelectorAll('.pbtn')).map((button) => ({ text: button.textContent.trim(), height: button.getBoundingClientRect().height })),
+        buttons: Array.from(zone.querySelectorAll('.pbtn')).map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { text: button.textContent.trim(), width: rect.width, height: rect.height };
+        }),
+        secondaryButtons: Array.from(zone.querySelectorAll('.ctlrow-secondary .pbtn')).map((button) => button.textContent.trim()),
       };
     });
 
     assert.equal(geometry.overflow, false, `${width}px Controls must not introduce horizontal scrolling`);
     assert.equal(geometry.collapsed, false, `${width}px Controls keep their action labels visible`);
-    assert.ok(geometry.buttons.every((button) => button.height >= 48), `every ${width}px narrow control needs a 48px touch target: ${JSON.stringify(geometry.buttons)}`);
-    assert.ok(geometry.buttons.some((button) => button.text.includes('Dashboard')));
-    assert.ok(geometry.buttons.some((button) => button.text.includes('Reload')));
+    assert.ok(geometry.buttons.every((button) => button.width >= 48 && button.height >= 48), `every ${width}px narrow control needs a 48x48px touch target: ${JSON.stringify(geometry.buttons)}`);
+    assert.deepEqual(geometry.secondaryButtons.slice(0, 2), ['⌂ Dashboard', '↻ Reload']);
+    assert.ok(geometry.buttons.every((button) => !button.text.startsWith('Vol ')), 'volume actions are absent from the Controls card');
   }
 
-  await page.getByRole('button', { name: /Dashboard/ }).click();
-  await page.getByRole('button', { name: /Reload/ }).click();
+  await page.getByRole('button', { name: '⌂ Dashboard', exact: true }).click();
+  await page.getByRole('button', { name: '↻ Reload', exact: true }).click();
   await bothActions;
   assert.deepEqual(calls, [
     { method: 'POST', body: 'a=dashboard' },
@@ -2549,9 +2556,8 @@ browserTest('Auto-sleep Area refresh retains A until B is complete and converges
   assert.equal(await page.locator('#savebtn').isEnabled(), true);
 });
 
-browserTest('Logging Current state polls live failure and recovery without rebuilding the card', async (t) => {
+browserTest('Logging Configure card omits sink actions and Dashboard-owned live state', async (t) => {
   let statusCalls = 0;
-  let recovered = false;
   const schema = [
     { key: 'log_ship_enabled', label: 'Ship logs', group: 'Logging', type: 'BOOL', available: true },
     { key: 'log_ship_host', label: 'Sink host', group: 'Logging', type: 'STRING', available: true },
@@ -2571,9 +2577,7 @@ browserTest('Logging Current state polls live failure and recovery without rebui
     if (path === '/api/v1/proximity') return json({ present: false });
     if (path === '/api/v1/logship/status') {
       statusCalls++;
-      return !recovered
-        ? json({ enabled: true, configured: true, text: 'tcp://collector.lan:514 · disconnected (connection refused) · sent=0' })
-        : json({ enabled: true, configured: true, text: 'tcp://collector.lan:514 · connected · sent=1' });
+      return json({ enabled: true, configured: true, text: 'tcp://collector.lan:514 · connected · 1 line sent' });
     }
   });
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
@@ -2582,11 +2586,185 @@ browserTest('Logging Current state polls live failure and recovery without rebui
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   await page.evaluate(() => window.cfgTab(true));
-  const state = page.locator('[data-config-group="Logging"] .frow').filter({ hasText: 'Current state' });
-  await state.getByText(/disconnected \(connection refused\)/).waitFor();
-  const card = await page.locator('[data-config-group="Logging"]').elementHandle();
-  recovered = true;
-  await state.getByText(/connected · sent=1/).waitFor();
-  assert.ok(statusCalls >= 2);
-  assert.equal(await card.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Logging"]')), true);
+  const card = page.locator('[data-config-group="Logging"]');
+  await card.waitFor();
+  assert.equal(await card.getByText('Check the sink', { exact: true }).count(), 0);
+  assert.equal(await card.getByRole('button', { name: 'Test sink' }).count(), 0);
+  assert.equal(await card.getByText('Current state', { exact: true }).count(), 0);
+  await page.waitForTimeout(50);
+  assert.equal(statusCalls, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard card-wall placement contract.
+//
+// The regression these cover: on narrow viewports the Dashboard card wall was displaced in opposite
+// directions — above the correct position below 858px (content-visibility's fixed 300px
+// contain-intrinsic-size under-ran 16 of 17 real cards, leaving the document ~413px short so a reload
+// restored the scroll onto the wrong content) and below it above 858px (a synthetic `resize` broadcast
+// disturbed CardSizeMemory mid-load). A third defect moved the whole wall 81px on every narrow load,
+// because switcher.js was a tail script and the tab bar painted wrapped before it collapsed.
+//
+// None of the existing rigs could see any of it: the CLS matrix fixture has no .topbar/.nav/#bannerzone
+// at all, and no rig samples a width between 480 and 900 or reloads a scrolled page. These do both.
+const DASHBOARD_WIDTHS = [360, 480, 600, 700, 800, 833, 834, 857, 858, 900];
+const DASHBOARD_TOPBAR_GAP = 16;   // info.css .topbar{margin-bottom:16px} — the one bar-to-content gap
+
+function dashboardFixture() {
+  const cards = Array.from({ length: 14 }, (_, index) => `
+    <div class="card" data-layout-key="probe-${index}"><h2>Card ${index}</h2>
+    <div class="probe-body" style="height:96px">card ${index}</div></div>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="/info.css"></head><body data-hydrate="1"><div class="wrap">
+    <div class="topbar"><div class="hdr">
+      <button id="navburger" class="navburger pbtn" aria-label="Menu">&#9776;</button>
+      <h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span>
+      <small id="pswitch" data-self-id="probe" data-self-name="Probe Panel"><span class="sep">&middot;</span>Probe Panel</small></h1>
+      <span style="display:flex;gap:10px;align-items:center"><a class="gh" href="#"><svg viewBox="0 0 16 16"></svg></a></span></div>
+    <nav class="nav"><a href="/" class="active">Dashboard</a><a href="/configure">Configure</a><a href="/entities">Entities</a>
+    <a href="/install">Install</a><a href="/profiles">Profile</a><a href="/logs">Logs</a><a href="/fleet">Fleet</a></nav></div>
+    <script src="/assets/switcher.js"></script>
+    <div id="bannerzone"></div>
+    <div class="cards" id="dashboard-cards" data-card-size-page="dashboard" data-card-size-epoch="1" data-card-size-restore="1">${cards}</div>
+    <script src="/assets/card-size-memory.js"></script>
+    <script src="/assets/card-column-alignment.js"></script>
+    <script>
+      // Stand in for /api/v1/info: replace card bodies and the banner well after first paint, exactly as
+      // hydration does, so the contract is asserted across that transition rather than only at rest.
+      window.__hydrated = false;
+      setTimeout(function () {
+        document.querySelectorAll('#dashboard-cards .probe-body').forEach(function (body, index) {
+          body.style.height = (300 + (index % 7) * 70) + 'px';
+        });
+        if (window.CardSizeMemory) window.CardSizeMemory.settle('dashboard-cards', 40);
+        window.__hydrated = true;
+      }, 250);
+    </script>
+  </div></body></html>`;
+}
+
+// Must run at document-start: the whole point is to observe the topbar BEFORE the header fit runs.
+// Sampling from a body-end script would start after switcher.js and could never see a late collapse.
+const DASHBOARD_OBSERVER = `
+  window.__frames = []; window.__shifts = [];
+  try { new PerformanceObserver((list) => { for (const entry of list.getEntries()) {
+    if (!entry.hadRecentInput) window.__shifts.push(entry.value); } })
+    .observe({ type: 'layout-shift', buffered: true }); } catch (_) {}
+  (function tick() { const bar = document.querySelector('.topbar');
+    if (bar) window.__frames.push(Math.round(bar.getBoundingClientRect().height * 100) / 100);
+    if (window.__frames.length < 240) requestAnimationFrame(tick); })();
+`;
+
+const READ_WALL = `(() => {
+  const wrap = document.querySelector('.wrap');
+  const topbar = document.querySelector('.topbar');
+  const banner = document.getElementById('bannerzone');
+  const root = document.getElementById('dashboard-cards');
+  const abs = (el) => el.getBoundingClientRect().top + window.scrollY;
+  const cards = Array.from(root.children).filter((n) => n.classList.contains('card') && n.style.display !== 'none');
+  const lefts = [...new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left)))];
+  const padTop = parseFloat(getComputedStyle(wrap).paddingTop) || 0;
+  return {
+    predicted: abs(wrap) + padTop + topbar.getBoundingClientRect().height + ${DASHBOARD_TOPBAR_GAP}
+      + banner.getBoundingClientRect().height,
+    firstCardTop: abs(cards[0]),
+    columns: lefts.length,
+    topbarHeight: Math.round(topbar.getBoundingClientRect().height * 100) / 100,
+    publishedTopbar: getComputedStyle(document.documentElement).getPropertyValue('--topbar-h').trim(),
+    estimatedCards: cards.filter((c) => getComputedStyle(c).contentVisibility === 'auto').length,
+    cardCount: cards.length,
+  };
+})()`;
+
+browserTest('dashboard card wall sits at one computed coordinate at every width, before and after hydration', async (t) => {
+  const harness = await startHarness(() => null, dashboardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  for (const width of DASHBOARD_WIDTHS) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    for (const run of ['cold', 'warm']) {           // warm reuses the context, so a snapshot exists
+      const page = await context.newPage();
+      await page.goto(harness.url, { waitUntil: 'load' });
+
+      const before = await page.evaluate(READ_WALL);
+      assert.ok(Math.abs(before.firstCardTop - before.predicted) <= 1,
+        `${width}px ${run}: wall top ${before.firstCardTop} is not the computed coordinate ${before.predicted} before hydration`);
+
+      await page.waitForFunction('window.__hydrated === true');
+      await page.waitForTimeout(400);
+      const after = await page.evaluate(READ_WALL);
+      assert.ok(Math.abs(after.firstCardTop - after.predicted) <= 1,
+        `${width}px ${run}: wall top ${after.firstCardTop} is not the computed coordinate ${after.predicted} after hydration`);
+
+      // The single-column-only estimator must never be live on this wall — that mismatch is what made
+      // 834-857px (a genuinely two-column masonry) run single-column placeholder heights.
+      assert.equal(after.estimatedCards, 0,
+        `${width}px ${run}: ${after.estimatedCards}/${after.cardCount} Dashboard cards still use an estimated intrinsic size`);
+
+      // The topbar height is measured and published, never a frozen literal.
+      assert.equal(after.publishedTopbar, `${after.topbarHeight}px`,
+        `${width}px ${run}: --topbar-h is "${after.publishedTopbar}" but the bar measures ${after.topbarHeight}px`);
+      await page.close();
+    }
+    await context.close();
+  }
+});
+
+browserTest('dashboard topbar height is final at first paint, so the wall never snaps', async (t) => {
+  const harness = await startHarness(() => null, dashboardFixture, 120);
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  for (const width of [360, 480, 600, 700, 900]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    await context.addInitScript(DASHBOARD_OBSERVER);
+    const page = await context.newPage();
+    await page.goto(harness.url, { waitUntil: 'load' });
+    await page.waitForFunction('window.__hydrated === true');
+    await page.waitForTimeout(300);
+    const seen = await page.evaluate('[...new Set(window.__frames)]');
+    const cls = await page.evaluate('window.__shifts.reduce((a, b) => a + b, 0)');
+    // An animation frame can land before the header script executes without anything being painted, so
+    // the sampled heights are diagnostic only. The property that matters — and the one the tail-loaded
+    // script broke — is that nothing MOVES after paint. Tail-loaded measured 0.083-0.086 at 360/480/600.
+    assert.ok(cls < 0.02,
+      `${width}px: layout shift ${cls} — the wall moved after paint; topbar heights seen ${JSON.stringify(seen)}`);
+    await context.close();
+  }
+});
+
+browserTest('dashboard scroll position survives a reload at every narrow width', async (t) => {
+  const harness = await startHarness(() => null, dashboardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  for (const width of DASHBOARD_WIDTHS) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    await page.goto(harness.url, { waitUntil: 'load' });
+    await page.waitForFunction('window.__hydrated === true');
+    await page.waitForTimeout(400);
+
+    const key = 'probe-10';
+    const read = `(() => { const el = document.querySelector('[data-layout-key="${key}"]');
+      return { viewportTop: Math.round(el.getBoundingClientRect().top * 100) / 100 }; })()`;
+    const target = await page.evaluate(`(() => { const el = document.querySelector('[data-layout-key="${key}"]');
+      const bar = document.querySelector('.topbar').getBoundingClientRect().height;
+      return Math.round(el.getBoundingClientRect().top + window.scrollY - bar); })()`);
+    await page.evaluate(`window.scrollTo(0, ${target})`);
+    await page.waitForTimeout(200);
+    const before = await page.evaluate(read);
+
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction('window.__hydrated === true');
+    await page.waitForTimeout(400);
+    const after = await page.evaluate(read);
+
+    const drift = Math.round((after.viewportTop - before.viewportTop) * 100) / 100;
+    assert.ok(Math.abs(drift) <= 2,
+      `${width}px: reload displaced the wall by ${drift}px (was -413px at 480px, +38px at 900px before the fix)`);
+    await context.close();
+  }
 });

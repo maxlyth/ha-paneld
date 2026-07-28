@@ -66,8 +66,13 @@
     el.appendChild(sep);
     el.appendChild(sel);
     // The dropdown changes the header width vs the plain "· name" text — re-run the responsive header
-    // fit (tab collapse + overflow hide) now that the final header content is in place.
-    window.dispatchEvent(new Event('resize'));
+    // fit (tab collapse + overflow hide) now that the final header content is in place. Call the header
+    // authority directly: broadcasting a synthetic `resize` also drove every unrelated resize listener —
+    // the card-column aligner, CardSizeMemory's release(), the info.js high-water-mark reset and
+    // fitControls() — at whatever moment /api/v1/peers happened to resolve, and only on a multi-panel LAN.
+    // That made card geometry depend on peer-discovery timing, which is why the displacement was
+    // reproducible but inconsistent. This header re-fit is a header concern and stays one.
+    if (window.PanelHeaderFit) window.PanelHeaderFit.refit();
   }
 
   function selfIndex(sel) {
@@ -125,7 +130,20 @@
     }
   }
 
-  function fitAll() { fitNav(); fitHeader(); }   // nav first — the hamburger changes the header's width
+  // The sticky topbar's height is decided here and nowhere else — it depends on whether the tab bar
+  // collapsed, which depends on the rendered tab labels, so no media query can state it. Publish the
+  // measured value so anything that has to sit below the bar reads one live number instead of keeping its
+  // own frozen guess (profiles.css carried `top:91px`/`83px`, an 8px step where the padding step is 12px,
+  // and neither accounted for the ~40px the collapse removes).
+  function publishTopbarHeight() {
+    var bar = document.querySelector('.topbar');
+    if (!bar || !document.documentElement.style.setProperty) return;
+    var h = Math.round(bar.getBoundingClientRect().height * 100) / 100;
+    if (h > 0) document.documentElement.style.setProperty('--topbar-h', h + 'px');
+  }
+
+  function fitAll() { fitNav(); fitHeader(); publishTopbarHeight(); }   // nav first — the hamburger changes the header's width
+  window.PanelHeaderFit = { refit: fitAll };
 
   if (burger) {
     burger.setAttribute('aria-expanded', 'false');

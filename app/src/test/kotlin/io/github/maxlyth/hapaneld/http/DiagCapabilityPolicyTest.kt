@@ -56,9 +56,39 @@ class DiagCapabilityPolicyTest {
 
     @Test fun behaviourCardOwnsConfiguredRuntimeBehaviourWithoutPanelInfoDuplicates() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        assertTrue(source.contains(""""Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar", "Log shipping""""))
+        assertTrue(source.contains(""""Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar","""))
         assertTrue(source.contains(""""silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled""""))
         assertTrue(source.contains(""""watchdog_enabled", "kiosk_lock", "touch_sound""""))
+        assertTrue(source.contains("""tcard("behavtbl", "Behaviour", s?.let { behaviourRowsHtml(it) })"""))
+    }
+
+    /**
+     * The live log-shipping status belongs to Runtime diagnostics, beside the other live transport row
+     * ("MQTT connection / auth timing") — not to the Behaviour card, which states configuration.
+     *
+     * This is a regression test for a status that reached no page at all. The Behaviour card renders
+     * through [settingRowHtml], which resolves a BOOL spec to "on"/"off" BEFORE it consults the value
+     * formatter, so the formatter that was supposed to substitute the live status for `log_ship_enabled`
+     * was unreachable: two rc3 panels rendered "Ship logs: on" while the status string was computed
+     * every snapshot and discarded. Runtime diagnostics renders facts verbatim with no type switch in
+     * the path, so the failure cannot recur there.
+     */
+    @Test fun liveLogShippingStatusIsARuntimeDiagnosticsFactNotABehaviourSetting() {
+        val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val contextKeys = Regex("""private val CONTEXT_KEYS = listOf\(([^)]*)\)""")
+            .find(source)?.groupValues?.get(1).orEmpty()
+        val behaviourFactKeys = Regex("""private val BEHAVIOUR_FACT_KEYS = setOf\(([^)]*)\)""")
+            .find(source)?.groupValues?.get(1).orEmpty()
+
+        assertTrue("Log shipping must be a Runtime diagnostics row", contextKeys.contains(""""Log shipping""""))
+        assertFalse("Log shipping must not be claimed by the Behaviour card", behaviourFactKeys.contains(""""Log shipping""""))
+
+        // No formatter may be attached to a BOOL setting — settingRowHtml would silently ignore it.
+        assertFalse(source.contains("dashboardLogShipValue"))
+        assertTrue(source.contains("settingRowHtml(key, s.live, caps, hints, areaFormatter)"))
+
+        // The off state is suppressed rather than shown twice; Behaviour's "Ship logs" already says it.
+        assertTrue(source.contains("""key == "Log shipping" && it == LOG_SHIP_STATUS_OFF"""))
     }
 
     @Test fun noisyStateEntitiesUseAColumnarTableInsteadOfRepeatedLabels() {

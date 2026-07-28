@@ -301,7 +301,7 @@ scheduleDashboardColumnAlignment();
 
 // Build watch moved to the shared /assets/buildwatch.js (loaded by EVERY page, not just the dashboard).
 
-// Controls card actions: POST /action a=<back|recents|launcher|admin_launcher|dashboard|reload|reboot|volup|voldn>.
+// Controls card actions: POST /action a=<back|recents|launcher|admin_launcher|dashboard|reload|reboot>.
 // Dashboard only foregrounds the effective renderer; Reload is the separate recovery action. Reboot confirms first.
 function controlMessage(text){var zone=document.getElementById('ctlzone');if(!zone)return;
  var note=document.getElementById('ctlmsg');if(!note){note=document.createElement('p');note.id='ctlmsg';note.className='note';note.setAttribute('role','status');note.setAttribute('aria-live','polite');zone.appendChild(note);}note.textContent=text||'';}

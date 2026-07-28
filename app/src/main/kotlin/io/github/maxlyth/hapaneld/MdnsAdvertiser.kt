@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.util.RetirableMutationGate
 import io.github.maxlyth.hapaneld.util.interruptAndJoin
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.shutdownNowAndAwait
+import io.github.maxlyth.hapaneld.util.submit
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -18,10 +19,13 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.UUID
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceEvent
 import javax.jmdns.ServiceInfo
@@ -51,6 +55,20 @@ class MdnsAdvertiser(
     // The LAN address JmDNS is actually bound to. A panel's IPv4 arrives asynchronously (DHCP) and can
     // change later, so [start] compares this against the live address before keeping an advertisement.
     @Volatile private var boundIp: String? = null
+    // The latest address explicitly supplied by the default-network owner. Recovery may recreate only
+    // this topology; process-wide interface enumeration is never authoritative on multi-homed panels.
+    private val topology = MdnsTopology()
+    @Volatile private var advertisedInstanceName: String? = null
+    private val liveness = MdnsLivenessPolicy()
+    private data class RecoveryRequest(
+        val dns: JmDNS?,
+        val generation: Long,
+        val epoch: Long,
+        val boundIp: String,
+        val reason: String,
+        val reservation: MdnsRecoveryReservation,
+    )
+    private val recoveryScheduler = LatestScheduledTask("ha-paneld-mdns-recovery")
 
     private fun newResolver() = ThreadPoolExecutor(
         RESOLVE_WORKERS, RESOLVE_WORKERS, 0L, TimeUnit.MILLISECONDS,
@@ -68,14 +86,14 @@ class MdnsAdvertiser(
     private val peerListener = object : ServiceListener {
         override fun serviceAdded(event: ServiceEvent) {
             // Resolve OFF the JmDNS packet thread (getServiceInfo blocks) so we never stall mDNS processing.
-            val dns = jmdns ?: return
+            val dns = event.dns.takeIf { it === jmdns } ?: return
             val type = event.type
             val name = event.name
             val executor = resolver ?: return
             try {
                 executor.execute {
                     runCatching { dns.getServiceInfo(type, name, RESOLVE_MS) }.getOrNull()?.let {
-                        if (browsing && jmdns === dns) record(it, name)
+                        record(it, name, dns)
                     }
                 }
             } catch (_: RejectedExecutionException) {
@@ -84,17 +102,17 @@ class MdnsAdvertiser(
         }
 
         override fun serviceResolved(event: ServiceEvent) {
-            event.info?.let { record(it, event.name) } // some JmDNS paths deliver the resolved info directly
+            event.info?.let { record(it, event.name, event.dns) } // some paths resolve directly
         }
 
         override fun serviceRemoved(event: ServiceEvent) {
-            peerMap.remove(event.name)
+            if (browsing && jmdns === event.dns) peerMap.remove(event.name)
         }
     }
 
     /** Fold a resolved mDNS record into the roster (needs a resolved IPv4 to be navigable). */
-    private fun record(info: ServiceInfo, fallbackName: String) {
-        if (!browsing) return
+    private fun record(info: ServiceInfo, fallbackName: String, expectedDns: JmDNS) {
+        if (!browsing || jmdns !== expectedDns) return
         val p = toPeer(
             instanceName = info.name ?: fallbackName,
             txtName = info.getPropertyString("name"),
@@ -111,31 +129,59 @@ class MdnsAdvertiser(
         if (existing == null && peerMap.size >= MAX_PEERS) return
         val newHasName = p.name != p.panelId
         val oldHasName = existing != null && existing.name != existing.panelId
-        if (existing == null || newHasName || !oldHasName) peerMap[p.panelId] = p
+        if (browsing && jmdns === expectedDns && (existing == null || newHasName || !oldHasName)) {
+            peerMap[p.panelId] = p
+        }
     }
 
     /**
      * Blocking network setup — call off the main thread.
      *
      * Safe to call after network changes: an already healthy advertisement is left alone, while a
-     * changed LAN address is rebound. This deliberately does not add a periodic recovery policy; the
-     * network callback is the bounded, relevant trigger for a DHCP-start or address-change failure.
+     * changed LAN address is rebound. Silent responder stalls are handled separately by the bounded
+     * liveness supervisor; network changes still reset that circuit because they start a fresh topology.
      */
-    fun start(lanIp: String? = localIpv4()) {
-        ownerGate.runIfOpen(Unit) start@{
+    fun start(lanIp: String?) {
+        val request = topology.request(lanIp)
+        if (request.changed) {
+            cancelRecovery()
+            liveness.onStarted(true)
+        }
+        start(lanIp, resetLivenessBudget = request.changed, expectedEpoch = request.epoch)
+    }
+
+    /** Bootstrap before ConnectivityManager has delivered the first authoritative default-network address. */
+    fun start() {
+        val current = topology.snapshot()
+        if (current.lanIp == null) start(localIpv4()) else ensureStarted()
+    }
+
+    /** Retry creation for the already-authoritative topology without enumerating another interface. */
+    fun ensureStarted() {
+        val current = topology.snapshot()
+        start(current.lanIp, resetLivenessBudget = false, expectedEpoch = current.epoch)
+    }
+
+    private fun start(lanIp: String?, resetLivenessBudget: Boolean, expectedEpoch: Long): Boolean =
+        ownerGate.runIfOpen(false) start@{
+            if (!topology.matches(expectedEpoch, lanIp)) return@start false
             if (lanIp == null) {
                 // ha-paneld can start before DHCP completes. Advertising loopback is worse than waiting:
                 // peers cannot reach it and JmDNS joins multicast on `lo`, not the LAN interface.
+                if (jmdns != null || lock != null) stopResources(MonotonicDeadline(OWNER_STOP_MS))
                 Log.i(TAG, "mDNS advertise deferred — no LAN IPv4 yet")
-                return@start
+                return@start false
             }
             if (jmdns != null || lock != null) {
-                if (!mdnsRebindRequired(boundIp, lanIp, browsing)) return@start
+                if (!mdnsRebindRequired(boundIp, lanIp, browsing)) {
+                    if (resetLivenessBudget) liveness.onStarted(true)
+                    return@start true
+                }
                 Log.i(TAG, "mDNS address changed or advertiser stopped (bound=$boundIp lan=$lanIp); rebinding")
-                if (!stopResources(MonotonicDeadline(OWNER_STOP_MS))) return@start
+                if (!stopResources(MonotonicDeadline(OWNER_STOP_MS))) return@start false
                 // A teardown that could not drain still owns its socket. A later network event can retry;
                 // never stack a second responder on top of it.
-                if (jmdns != null) return@start
+                if (jmdns != null) return@start false
             }
             if (resolver?.isShutdown != false) resolver = newResolver()
             try {
@@ -147,6 +193,10 @@ class MdnsAdvertiser(
                 }
                 val addr = InetAddress.getByName(lanIp)
                 val dns = JmDNS.create(addr, runtimePanelId)
+                dns.setDelegate { failedDns, _ ->
+                    requestRecovery(failedDns, "JmDNS could not recover its multicast socket", terminal = true)
+                }
+                val generationProbeToken = UUID.randomUUID().toString()
                 val props = mapOf(
                     "ver" to Config.VERSION,
                     "caps" to "tts",
@@ -154,6 +204,7 @@ class MdnsAdvertiser(
                     // Friendly name so a peer's fleet switcher can label this panel nicely (falls back to the
                     // instance name = panel_id on older panels that don't advertise it). Additive TXT key.
                     "name" to runtimeFriendlyName.ifBlank { runtimePanelId },
+                    "probe" to generationProbeToken,
                 )
                 val info = ServiceInfo.create(
                     Config.MDNS_SERVICE_TYPE,
@@ -166,6 +217,8 @@ class MdnsAdvertiser(
                 jmdns = dns
                 boundIp = lanIp
                 dns.registerService(info)
+                // JmDNS may rename a colliding instance during registration; monitor the actual name.
+                advertisedInstanceName = info.name ?: runtimePanelId
                 // Start the persistent peer browse (powers the header switcher) — begins querying immediately
                 // and keeps the roster fresh in the background, so a UI read is instant + complete.
                 browsing = true
@@ -187,44 +240,166 @@ class MdnsAdvertiser(
                                 cost.outcome(FeatureCostOutcome.CANCELLED)
                                 break
                             }
-                            services.forEach { record(it, it.name ?: "") }
+                            services.forEach { record(it, it.name ?: "", dns) }
                         } catch (failure: Exception) {
                             cost.outcome(FeatureCostOutcome.FAILURE)
                         } finally {
                             cost.close()
+                        }
+                        if (!mdnsRunCurrent(browseGeneration, generation, browsing, jmdns === dns)) break
+                        when (probeMdnsService(
+                                lanIp, advertisedInstanceName ?: runtimePanelId,
+                                Config.MDNS_SERVICE_TYPE, generationProbeToken,
+                            )
+                        ) {
+                            MdnsProbeResult.VISIBLE -> liveness.observeSelf(true, monotonicMs())
+                            MdnsProbeResult.MISSING -> {
+                                liveness.observeSelf(false, monotonicMs())?.let { reservation ->
+                                    submitRecovery(
+                                        dns,
+                                        "own advertisement absent from $DEAD_SWEEPS consecutive on-wire probes",
+                                        reservation,
+                                    )
+                                }
+                            }
+                            MdnsProbeResult.UNAVAILABLE -> Unit
+                            MdnsProbeResult.INCONCLUSIVE -> Unit
                         }
                     }
                     if (refreshThread === worker) refreshThread = null
                 }.apply { isDaemon = true; name = "mdns-peer-refresh" }
                 refreshThread = worker
                 worker.start()
+                liveness.onStarted(resetLivenessBudget)
                 Log.i(TAG, "advertising ${Config.MDNS_SERVICE_TYPE} as $runtimePanelId @ $addr:$runtimeHttpPort")
+                true
             } catch (e: Exception) {
                 Log.w(TAG, "mDNS advertise failed", e)
                 stopResources(MonotonicDeadline(OWNER_STOP_MS))
+                false
             }
         }
+
+    /** Queue recovery off JmDNS and refresh threads; neither may tear down a responder it owns. */
+    private fun requestRecovery(dns: JmDNS, reason: String, terminal: Boolean) {
+        if (dns !== jmdns || !browsing) return
+        if (!terminal) return
+        liveness.observeTerminalFailure(monotonicMs(), reason)?.let { submitRecovery(dns, reason, it) }
+    }
+
+    private fun submitRecovery(
+        dns: JmDNS?,
+        reason: String,
+        reservation: MdnsRecoveryReservation,
+        expectedEpoch: Long? = null,
+        expectedIp: String? = null,
+    ) {
+        val currentTopology = topology.snapshot()
+        if (expectedEpoch != null &&
+            (currentTopology.epoch != expectedEpoch || currentTopology.lanIp != expectedIp)
+        ) {
+            liveness.cancelPending(reservation.token)
+            return
+        }
+        val ip = currentTopology.lanIp ?: run {
+            liveness.cancelPending()
+            return
+        }
+        val request = RecoveryRequest(
+            dns, browseGeneration.get(), currentTopology.epoch, ip, reason, reservation,
+        )
+        if (!recoveryScheduler.scheduleIf(
+            admitted = {
+                topology.matches(request.epoch, request.boundIp) &&
+                    liveness.isCurrent(request.reservation.token)
+            },
+            task = {
+                runCatching { recover(request) }
+                    .onFailure { Log.e(TAG, "mDNS recovery worker failed", it) }
+            },
+            delayMs = reservation.delayMs,
+        )) liveness.cancelPending(request.reservation.token)
+    }
+
+    /** Full teardown and recreation, serialized with network rebind, reconfigure, stop and retirement. */
+    private fun recover(request: RecoveryRequest) {
+        if (!liveness.isCurrent(request.reservation.token)) return
+        val outcome = runMdnsRecoveryTransaction(
+            gate = ownerGate,
+            admitted = {
+                val currentTopology = topology.snapshot()
+                liveness.isCurrent(request.reservation.token) && mdnsRecoveryStillCurrent(
+                    request.epoch, currentTopology.epoch, request.boundIp, currentTopology.lanIp,
+                    request.generation, browseGeneration.get(), request.dns === jmdns,
+                )
+            },
+            onAdmitted = { Log.w(TAG, "mDNS liveness recovery: ${request.reason}") },
+            teardown = {
+                request.dns == null || stopResources(MonotonicDeadline(OWNER_STOP_MS))
+            },
+            restart = {
+                start(request.boundIp, resetLivenessBudget = false, expectedEpoch = request.epoch)
+            },
+            stillCurrent = {
+                topology.matches(request.epoch, request.boundIp) &&
+                    liveness.isCurrent(request.reservation.token)
+            },
+        )
+        val failure = when (outcome) {
+            MdnsRecoveryOutcome.TEARDOWN_FAILED -> "responder teardown did not drain"
+            MdnsRecoveryOutcome.RESTART_FAILED -> "responder recreation failed"
+            else -> null
+        }
+        if (failure != null && topology.matches(request.epoch, request.boundIp)) {
+            liveness.recoveryFailed(request.reservation.token, monotonicMs(), failure)?.let { delay ->
+                submitRecovery(jmdns, failure, delay, request.epoch, request.boundIp)
+            }
+        } else liveness.recoveryFinished(request.reservation.token)
     }
 
     /** Stop the current advertisement while still allowing a later network-recovery restart. */
-    fun stop() = ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
+    fun stop() {
+        topology.stop()
+        cancelRecovery()
+        liveness.cancelPending()
+        ownerGate.runExclusive { stopResources(MonotonicDeadline(OWNER_STOP_MS)) }
+    }
+
+    private fun cancelRecovery() {
+        recoveryScheduler.cancel()
+    }
 
     /** Advertiser state for the operator-visible status warning. Never throws. */
     fun health(): MdnsHealth = MdnsHealth(
         advertising = jmdns != null && browsing,
         boundIp = boundIp,
         lanIp = localIpv4(),
+        liveness = liveness.snapshot(),
     )
+
+    /** Host-free, fixed-cardinality projection for `/diag` and the System card. */
+    fun statusPublic(): String {
+        val health = health()
+        val live = health.liveness
+        val responder = if (health.advertising) "advertising" else "stopped"
+        return "$responder · ${live.state.name.lowercase()} · misses=${live.consecutiveMisses} · " +
+            "recoveries=${live.recoveryAttempts} · retry=${live.retryAfterMs}ms"
+    }
 
     /** Permanently close this runtime generation so a late recovery callback cannot resurrect it. */
     internal fun retire(deadline: MonotonicDeadline): CompletableFuture<Boolean> {
         ownerGate.closeAdmission()
+        topology.stop()
+        cancelRecovery()
+        liveness.cancelPending()
         retirement.get()?.let { return it }
         val result = CompletableFuture<Boolean>()
         if (!retirement.compareAndSet(null, result)) return checkNotNull(retirement.get())
         Thread {
             try {
-                result.complete(ownerGate.runExclusive { stopResources(deadline) })
+                val recoveryDrained = recoveryScheduler.closeAndJoin(deadline.remainingMs())
+                val responderStopped = ownerGate.runExclusive { stopResources(deadline) }
+                result.complete(recoveryDrained && responderStopped)
             } catch (failure: Throwable) {
                 result.completeExceptionally(failure)
             }
@@ -250,6 +425,7 @@ class MdnsAdvertiser(
         // is already installed; a failed drain selects the process boundary instead of a successor.
         if (!complete || deadline.remainingMs() <= 0L) return false
         val activeDns = jmdns
+        runCatching { activeDns?.setDelegate(null) }
         runCatching { activeDns?.removeServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
         runCatching { activeDns?.unregisterAllServices() }
         if (activeDns != null && runCatching { activeDns.close() }.isFailure) {
@@ -257,6 +433,7 @@ class MdnsAdvertiser(
         }
         jmdns = null
         boundIp = null
+        advertisedInstanceName = null
         peerMap.clear()
         val activeLock = lock
         if (activeLock != null && runCatching { activeLock.release() }.isFailure) {
@@ -370,6 +547,7 @@ class MdnsAdvertiser(
      * immutable runtime identity, so a newer config cannot relabel the retiring generation. Never throws.
      */
     fun browsePeers(): List<Peer> {
+        if (!browsing) return emptyList()
         val selfId = runtimePanelId
         val selfIp = localIpv4()
         val selfName = runtimeFriendlyName.ifBlank { selfId }
@@ -451,6 +629,7 @@ class MdnsAdvertiser(
         private const val MAX_PEERS = 64
         private const val REFRESH_MS = 60_000L // periodic re-browse interval (name refresh / gap fill)
         private const val LIST_MS = 3000L // dns.list resolve budget per refresh sweep
+        private const val DEAD_SWEEPS = 3
         private const val OWNER_STOP_MS = 2_000L
         private const val HA_SERVICE_TYPE = "_home-assistant._tcp.local."
         private const val MAX_HA_BROWSE_MS = 5_000L
@@ -463,6 +642,7 @@ data class MdnsHealth(
     val advertising: Boolean,
     val boundIp: String?,
     val lanIp: String?,
+    val liveness: MdnsLivenessSnapshot = MdnsLivenessSnapshot(),
 )
 
 /** A concise status warning for an advertiser that is absent or bound to an obsolete LAN address. */
@@ -475,7 +655,247 @@ internal fun mdnsHealthWarning(health: MdnsHealth): String? = when {
     health.boundIp != health.lanIp ->
         "⚠ <b>Panel discovery (mDNS) has a stale address</b> (${health.boundIp}, now ${health.lanIp}) — " +
             "other panels cannot reach this one from their switcher until it rebinds."
+    health.liveness.state == MdnsLivenessState.EXHAUSTED ->
+        "⚠ <b>Panel discovery (mDNS) is unresponsive</b> — automatic recovery stopped after " +
+            "${health.liveness.recoveryAttempts} attempts (${health.liveness.lastReason ?: "no response"}). " +
+            "Reconnect the panel to the network or restart ha-paneld."
+    health.liveness.state == MdnsLivenessState.RECOVERING ->
+        "⚠ <b>Panel discovery (mDNS) is recovering</b> — ${health.liveness.lastReason ?: "no response"}."
     else -> null
+}
+
+enum class MdnsLivenessState { HEALTHY, RECOVERING, EXHAUSTED }
+
+data class MdnsLivenessSnapshot(
+    val state: MdnsLivenessState = MdnsLivenessState.HEALTHY,
+    val consecutiveMisses: Int = 0,
+    val recoveryAttempts: Int = 0,
+    val lastReason: String? = null,
+    val retryAfterMs: Long = 0L,
+)
+
+internal data class MdnsRecoveryReservation(val delayMs: Long, val token: Long)
+
+/**
+ * Pure synchronized circuit for the responder watchdog. A successful active query must contain this
+ * process's own registered service; peers may legitimately be absent. Three consecutive self misses are
+ * required before recovery. A healthy self observation or a fresh network topology resets the budget.
+ */
+internal class MdnsLivenessPolicy(
+    private val deadSweeps: Int = 3,
+    private val maxAttempts: Int = 3,
+    private val backoffMs: LongArray = longArrayOf(0L, 60_000L, 300_000L),
+) {
+    private var misses = 0
+    private var attempts = 0
+    private var retryAtMs = 0L
+    private var state = MdnsLivenessState.HEALTHY
+    private var reason: String? = null
+    private var recoveryPending = false
+    private var reservationToken = 0L
+
+    init {
+        require(deadSweeps > 0 && maxAttempts > 0 && backoffMs.isNotEmpty())
+        require(backoffMs.all { it >= 0L })
+    }
+
+    @Synchronized fun onStarted(resetBudget: Boolean) {
+        misses = 0
+        if (resetBudget) resetHealthy()
+    }
+
+    @Synchronized fun observeSelf(visible: Boolean, nowMs: Long): MdnsRecoveryReservation? {
+        if (visible) {
+            resetHealthy()
+            return null
+        }
+        misses++
+        if (misses < deadSweeps) return null
+        return reserveRecovery(nowMs, "own advertisement missing from $misses active queries")
+    }
+
+    @Synchronized fun observeTerminalFailure(nowMs: Long, failure: String): MdnsRecoveryReservation? =
+        reserveRecovery(nowMs, failure)
+
+    @Synchronized fun isCurrent(token: Long): Boolean = recoveryPending && reservationToken == token
+
+    @Synchronized fun recoveryFinished(token: Long = reservationToken) {
+        if (recoveryPending && reservationToken == token) recoveryPending = false
+    }
+
+    /** Advance the retry circuit only when this exact reservation still owns it. */
+    @Synchronized fun recoveryFailed(
+        token: Long,
+        nowMs: Long,
+        failure: String,
+    ): MdnsRecoveryReservation? {
+        if (!recoveryPending || reservationToken != token) return null
+        recoveryPending = false
+        return reserveRecovery(nowMs, failure)
+    }
+
+    @Synchronized fun cancelPending(token: Long? = null) {
+        if (token != null && (!recoveryPending || reservationToken != token)) return
+        recoveryPending = false
+        reservationToken++
+    }
+
+    @Synchronized fun snapshot(nowMs: Long = monotonicMs()): MdnsLivenessSnapshot = MdnsLivenessSnapshot(
+        state = state,
+        consecutiveMisses = misses,
+        recoveryAttempts = attempts,
+        lastReason = reason,
+        retryAfterMs = (retryAtMs - nowMs).coerceAtLeast(0L),
+    )
+
+    private fun reserveRecovery(nowMs: Long, failure: String): MdnsRecoveryReservation? {
+        reason = failure
+        if (recoveryPending) return null
+        if (attempts >= maxAttempts) {
+            state = MdnsLivenessState.EXHAUSTED
+            return null
+        }
+        val delay = backoffMs[attempts.coerceAtMost(backoffMs.lastIndex)]
+        attempts++
+        misses = 0
+        retryAtMs = saturatingAdd(nowMs, delay)
+        state = MdnsLivenessState.RECOVERING
+        recoveryPending = true
+        reservationToken++
+        return MdnsRecoveryReservation(delay, reservationToken)
+    }
+
+    private fun resetHealthy() {
+        misses = 0
+        attempts = 0
+        retryAtMs = 0L
+        state = MdnsLivenessState.HEALTHY
+        reason = null
+        recoveryPending = false
+        reservationToken++
+    }
+}
+
+internal fun saturatingAdd(left: Long, right: Long): Long =
+    if (right > 0L && left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
+
+internal fun monotonicMs(): Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+
+internal data class MdnsTopologySnapshot(val epoch: Long, val lanIp: String?, val changed: Boolean = false)
+
+/** Default-network authority. Duplicate callbacks preserve the current recovery generation and budget. */
+internal class MdnsTopology {
+    private var epoch = 0L
+    private var lanIp: String? = null
+
+    @Synchronized fun request(requestedIp: String?): MdnsTopologySnapshot {
+        val changed = requestedIp != lanIp
+        if (changed) {
+            epoch++
+            lanIp = requestedIp
+        }
+        return MdnsTopologySnapshot(epoch, lanIp, changed)
+    }
+
+    @Synchronized fun stop(): MdnsTopologySnapshot {
+        epoch++
+        lanIp = null
+        return MdnsTopologySnapshot(epoch, null, true)
+    }
+
+    @Synchronized fun snapshot(): MdnsTopologySnapshot = MdnsTopologySnapshot(epoch, lanIp)
+
+    @Synchronized fun matches(expectedEpoch: Long, expectedIp: String?): Boolean =
+        epoch == expectedEpoch && lanIp == expectedIp
+}
+
+internal fun mdnsRecoveryStillCurrent(
+    expectedEpoch: Long,
+    currentEpoch: Long,
+    expectedIp: String,
+    currentIp: String?,
+    expectedGeneration: Long,
+    currentGeneration: Long,
+    ownsResponder: Boolean,
+): Boolean = expectedEpoch == currentEpoch && expectedIp == currentIp &&
+    expectedGeneration == currentGeneration && ownsResponder
+
+internal enum class MdnsRecoveryOutcome {
+    NOT_ADMITTED, TEARDOWN_FAILED, READY_TO_RESTART, RESTARTED, RESTART_FAILED, SUPERSEDED,
+}
+
+/** The production teardown/restart transaction. Stop/rebind invalidates topology before waiting on [gate]. */
+internal fun runMdnsRecoveryTransaction(
+    gate: RetirableMutationGate,
+    admitted: () -> Boolean,
+    onAdmitted: () -> Unit = {},
+    teardown: () -> Boolean,
+    restart: () -> Boolean,
+    stillCurrent: () -> Boolean,
+): MdnsRecoveryOutcome {
+    val teardownOutcome = gate.runIfOpen(MdnsRecoveryOutcome.NOT_ADMITTED) {
+        if (!admitted()) return@runIfOpen MdnsRecoveryOutcome.NOT_ADMITTED
+        onAdmitted()
+        if (teardown()) MdnsRecoveryOutcome.READY_TO_RESTART else MdnsRecoveryOutcome.TEARDOWN_FAILED
+    }
+    if (teardownOutcome != MdnsRecoveryOutcome.READY_TO_RESTART) return teardownOutcome
+    if (restart()) return MdnsRecoveryOutcome.RESTARTED
+    return if (stillCurrent()) MdnsRecoveryOutcome.RESTART_FAILED else MdnsRecoveryOutcome.SUPERSEDED
+}
+
+/** Replaceable delayed task: cancelling an old backoff never occupies the sole worker or delays fresh work. */
+internal class LatestScheduledTask(threadName: String) {
+    private val executor = ScheduledThreadPoolExecutor(1) { task ->
+        Thread(task, threadName).apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+    private var pending: ScheduledFuture<*>? = null
+    private var generation = 0L
+    private var runningThread: Thread? = null
+
+    fun schedule(task: () -> Unit, delayMs: Long): Boolean = scheduleIf({ true }, task, delayMs)
+
+    /** Validate and replace atomically so an obsolete submit cannot displace newer scheduled work. */
+    @Synchronized fun scheduleIf(admitted: () -> Boolean, task: () -> Unit, delayMs: Long): Boolean {
+        if (executor.isShutdown || !admitted()) return false
+        pending?.cancel(true)
+        runningThread?.takeIf { it !== Thread.currentThread() }?.interrupt()
+        val taskGeneration = ++generation
+        pending = try {
+            executor.schedule(
+                {
+                    synchronized(this) {
+                        if (generation == taskGeneration) pending = null
+                        runningThread = Thread.currentThread()
+                    }
+                    try {
+                        task()
+                    } finally {
+                        synchronized(this) {
+                            if (runningThread === Thread.currentThread()) runningThread = null
+                        }
+                    }
+                },
+                delayMs.coerceAtLeast(0L),
+                TimeUnit.MILLISECONDS,
+            )
+        } catch (_: RejectedExecutionException) {
+            return false
+        }
+        return true
+    }
+
+    @Synchronized fun cancel() {
+        pending?.cancel(true)
+        pending = null
+        runningThread?.takeIf { it !== Thread.currentThread() }?.interrupt()
+        generation++
+    }
+
+    fun closeAndJoin(timeoutMs: Long): Boolean {
+        cancel()
+        executor.shutdownNow()
+        return executor.awaitTermination(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+    }
 }
 
 /** True when an existing JmDNS instance must be replaced for the current LAN address. */

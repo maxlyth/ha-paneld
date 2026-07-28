@@ -2021,7 +2021,7 @@ class PaneldService : Service() {
             "Keep panel responsive" to if (config.keepAwake) (if (power.isHeld()) "on · power locks held" else "on · power lock NOT held") else "off",
             "Prevent idle dim" to preventIdleDimDiagnostic(config.preventIdleDim, brightness.screenOffTimeoutMs()),
             "Android dashboard lock" to if (config.kioskLock) "on" else "off",
-            "mDNS" to "${config.panelId} ${Config.MDNS_SERVICE_TYPE}",
+            "mDNS" to mdns.statusPublic(),
             "Platform" to profile.displayName,
             "SoC" to (profile.soc?.displayText() ?: profile.socClass),
             "Model" to profile.panelModelLabel(pv),
@@ -2779,7 +2779,7 @@ class PaneldService : Service() {
                                 rebuild = RebuildAttempt(
                                     runtimeGeneration = watchedRuntime.generation,
                                     completion = runtime.reconnect(watchedRuntime) { target ->
-                                        if (target.mqtt.state == "discovering") target.mdns.start()
+                                        if (target.mqtt.state == "discovering") target.mdns.ensureStarted()
                                         // Family selection already belongs to the watchdog admission above.
                                         // The worker owns transport replacement only and must never flip twice.
                                         outcome.set(target.mqtt.reconnect(recoveryTicket))

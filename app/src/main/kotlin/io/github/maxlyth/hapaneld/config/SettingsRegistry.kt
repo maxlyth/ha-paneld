@@ -450,7 +450,10 @@ object SettingsRegistry {
         SettingSpec(
             key = "log_ship_enabled", type = SettingType.BOOL, group = "Logging",
             label = "Ship logs", default = "false", scope = Scope.DEVICE,
-            help = "Forward this panel's own logcat to a central sink (LAN-only, redacted).",
+            // "its own logcat" was ambiguous: the Logs tab offers App and System sources, so it read
+            // as though both were shipped. Only ha-paneld's own process log leaves the panel.
+            help = "Forward ha-paneld's own process log — not the full system log — to a central sink " +
+                "(LAN-only, tokens and passwords redacted).",
         ),
         SettingSpec(
             key = "log_ship_host", type = SettingType.STRING, group = "Logging",

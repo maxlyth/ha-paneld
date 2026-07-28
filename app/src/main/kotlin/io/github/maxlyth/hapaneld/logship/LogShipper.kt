@@ -58,6 +58,16 @@ internal data class LogShipStatusProjection(
     val text: String,
 )
 
+/** Status text for a feature that is switched off — the one value the dashboard suppresses. */
+internal const val LOG_SHIP_STATUS_OFF = "off"
+
+/** Matches an HTTP status in a transport error so the code alone can be lifted out of the message. */
+private val HTTP_STATUS = Regex("""http[ -](\d{3})""")
+
+internal fun logShipTrafficText(sent: Long, dropped: Long): String =
+    "$sent ${if (sent == 1L) "line" else "lines"} sent" +
+        if (dropped > 0) " · $dropped dropped" else ""
+
 /** A transport is created inert, attached to its run, and only then allowed to block in [connect]. */
 internal interface LogSink : AutoCloseable {
     fun connect()
@@ -248,7 +258,7 @@ class LogShipper internal constructor(
         val current = run
         val configured = config.enabled && config.host.isNotBlank()
         if (current == null && !config.enabled) {
-            return@synchronized LogShipStatusProjection(false, false, "off")
+            return@synchronized LogShipStatusProjection(false, false, LOG_SHIP_STATUS_OFF)
         }
         if (current == null && config.host.isBlank()) {
             return@synchronized LogShipStatusProjection(config.enabled, false, "enabled · no host set")
@@ -256,13 +266,18 @@ class LogShipper internal constructor(
         val target = current?.target ?: config.targetOrNull()
             ?: return@synchronized LogShipStatusProjection(config.enabled, configured, "disconnected")
         val status = current?.status() ?: LogShipRun.Status(false, 0, 0, null)
-        val host = LogShipEndpoint.displayHost(target.host)
+        // The destination is deliberately absent. The settings state where
+        // logs go; this line states only what the settings cannot — whether the sink is accepting
+        // anything, and how much has gone. An earlier revision restated `scheme://host:port` because
+        // a scheme or port embedded in log_ship_host can override the separate Protocol and Port
+        // fields, leaving them lying about the effective target. That is a real config-write defect
+        //; it is not a reason to repeat the destination on every line.
+        // "Lines" is spelled out because the counter is a message count, not a byte volume.
         LogShipStatusProjection(
             enabled = config.enabled,
             configured = configured,
-            text = "${LogShipEndpoint.scheme(target.protocol)}://$host:${target.port} · " +
-                liveness(target, status) +
-                " · sent=${status.sent}${if (status.dropped > 0) " dropped=${status.dropped}" else ""}",
+            text = liveness(target, status) +
+                " · ${logShipTrafficText(status.sent, status.dropped)}",
         )
     }
 
@@ -275,9 +290,32 @@ class LogShipper internal constructor(
      * sink would read exactly like a healthy one.
      */
     private fun liveness(target: LogShipTarget, status: LogShipRun.Status): String {
-        if (!status.connected) return "disconnected${status.lastError?.let { " ($it)" } ?: ""}"
+        if (!status.connected) return "disconnected${status.lastError?.let { " (${shortReason(it)})" } ?: ""}"
         if (target.protocol != LogShipEndpoint.SYSLOG_UDP) return "connected"
         return if (status.sent > 0) "sending (UDP is unacknowledged)" else "ready (UDP is unacknowledged)"
+    }
+
+    /**
+     * A short, destination-free reason for the status line.
+     *
+     * The raw transport message names the address it failed to reach — `failed to connect to
+     * /192.0.2.118 (port 514) …` — which would put the destination straight back into a status line
+     * that deliberately omits it. Mapping to a small fixed vocabulary cannot leak one by construction,
+     * and reads better than a raw exception string. The full message is still logged, and the Logs tab
+     * still shows it.
+     */
+    private fun shortReason(reason: String): String {
+        val r = reason.lowercase(Locale.ROOT)
+        return when {
+            "unknownhost" in r || "not resolve" in r || "no address" in r -> "host not found"
+            "refused" in r -> "connection refused"
+            "timed out" in r || "timeout" in r -> "timed out"
+            "unreachable" in r -> "network unreachable"
+            // Only the matched status token is emitted — never the surrounding message. An HTTP failure
+            // routinely quotes the request URL, and a sink URL may carry userinfo credentials, so
+            // returning the raw text here would defeat the whole point of a destination-free status.
+            else -> HTTP_STATUS.find(r)?.let { "HTTP ${it.groupValues[1]}" } ?: "send failed"
+        }
     }
 
     private fun startLocked(target: LogShipTarget) {

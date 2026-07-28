@@ -145,10 +145,17 @@ PANELS=("${NORMALIZED[@]}")
 # Resolve a single APK for the whole fleet. If --apk was passed through, reuse it; otherwise download
 # the latest signed release ONCE and convert the pass-through args to --apk for every panel.
 have_apk=0
+apk_arg_count=0
 want_prerelease=0
-for ((i=0; i<${#PARGS[@]}; i++)); do [ "${PARGS[$i]}" = "--apk" ] && have_apk=1; done
+require_release_signer=0
+for ((i=0; i<${#PARGS[@]}; i++)); do
+  if [ "${PARGS[$i]}" = "--apk" ]; then have_apk=1; apk_arg_count=$((apk_arg_count + 1)); fi
+done
+[ "$apk_arg_count" -le 1 ] || { echo "${RED}--apk may be supplied only once${X}" >&2; exit 2; }
 for a in "${PARGS[@]}"; do case "$a" in --prerelease|--pre) want_prerelease=1 ;; esac; done
+for a in "${PARGS[@]}"; do case "$a" in --require-release-signer) require_release_signer=1 ;; esac; done
 if [ "$have_apk" = 0 ]; then
+  require_release_signer=1
   dir="$(mktemp -d)"; TEMP_PATHS+=("$dir")
   if [ "$want_prerelease" = 1 ]; then channel="latest release, including pre-releases"; else channel="latest stable release"; fi
   echo "${B}⬇️  fetching $channel (once for the fleet)${X}"
@@ -179,6 +186,50 @@ if [ "$have_apk" = 0 ]; then
   PARGS=("${NEW[@]}" --apk "$APK" --release-tag "$tag")
   echo "   ${GRN}✓${X} ${D}$(basename "$APK")${X}${tag:+ · $tag}"
 fi
+
+# Authenticate the one fleet artifact before starting any panel worker. Self-built fleets may use one
+# consistent developer signer; official managed-fleet runs add --require-release-signer and pin the
+# public release-certificate fingerprint without exposing any private signing material.
+if [ "$have_apk" = 1 ]; then
+  APK=""
+  for ((i=0; i<${#PARGS[@]}; i++)); do
+    if [ "${PARGS[$i]}" = "--apk" ] && [ $((i + 1)) -lt ${#PARGS[@]} ]; then APK="${PARGS[$((i + 1))]}"; break; fi
+  done
+fi
+[ -n "${APK:-}" ] && [ -s "$APK" ] || { echo "${RED}fleet APK is missing or empty: ${APK:-unspecified}${X}" >&2; exit 1; }
+find_build_tool() {
+  local name="$1" found="" root candidate
+  found="$(command -v "$name" 2>/dev/null || true)"
+  if [ -n "$found" ]; then printf '%s\n' "$found"; return 0; fi
+  for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+    [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
+    for candidate in "$root"/build-tools/*/"$name"; do [ -x "$candidate" ] && found="$candidate"; done
+  done
+  [ -n "$found" ] && printf '%s\n' "$found"
+}
+APKSIGNER="$(find_build_tool apksigner || true)"
+AAPT="$(find_build_tool aapt || find_build_tool aapt2 || true)"
+[ -n "$APKSIGNER" ] || { echo "${RED}apksigner is required for fleet deployment${X}" >&2; exit 1; }
+[ -n "$AAPT" ] || { echo "${RED}aapt or aapt2 is required for fleet deployment${X}" >&2; exit 1; }
+signer_output="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null)" || { echo "${RED}fleet APK signature verification failed${X}" >&2; exit 1; }
+signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
+signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
+RELEASE_CERT_SHA256="ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339"
+[ "$signer_count" = 1 ] || {
+  echo "${RED}fleet APK must have exactly one signer${X}" >&2
+  echo "Got: ${signer_lines:-no signer} (count=$signer_count)" >&2
+  exit 1
+}
+if [ "$require_release_signer" = 1 ] && [ "$signer_lines" != "$RELEASE_CERT_SHA256" ]; then
+  echo "${RED}fleet APK does not use the required release signer${X}" >&2
+  echo "Expected: $RELEASE_CERT_SHA256" >&2
+  echo "Got: $signer_lines" >&2
+  exit 1
+fi
+package_name="$("$AAPT" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
+[ "$package_name" = "io.github.maxlyth.hapaneld" ] || { echo "${RED}fleet APK package mismatch: ${package_name:-unavailable}${X}" >&2; exit 1; }
+apk_sha256="$(sha256sum "$APK" | awk '{print $1}')"
+echo "${GRN}✓${X} fleet artifact signer ${signer_lines:0:12}… · sha256 $apk_sha256"
 
 run_dir="$(mktemp -d)"; TEMP_PATHS+=("$run_dir")
 targets=()

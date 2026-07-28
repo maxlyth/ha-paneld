@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "ha-paneld",
-    "version": "0.9.6-rc2",
+    "version": "0.9.6-rc3",
     "description": "Local HTTP control API for the ha-paneld Home Assistant dashboard app. Plain HTTP on the LAN. Relaxed mode keeps the trusted-LAN workflow. Optional Hardened mode requires physical access for selected high-impact remote requests: someone must approve them on the panel's screen, and they cannot be approved remotely. The canonical machine API lives under /api/v1; the pre-0.8.5 flat paths respond 308 Permanent Redirect to their /api/v1 homes (method + body preserved). Exceptions: GET /health and POST /play are also served directly at the root for plain-curl automations and monitors."
   },
   "servers": [{ "url": "/" }],
@@ -312,7 +312,7 @@
         "responses": { "200": { "description": "{ok, host, port, resolved?, error?: invalid-url|unresolvable|unreachable}. Read-only; advisory — the wizard offers save-anyway on failure" } } }
     },
     "/api/v1/logship/status": {
-      "get": { "summary": "Live synchronized, redacted log-shipping summary for the Configure card", "tags": ["status"],
+      "get": { "summary": "Live synchronized, redacted log-shipping summary for the Dashboard Behaviour card", "tags": ["status"],
         "responses": { "200": { "description": "{enabled, configured, text}. Passive and uncached; authority credentials are redacted from text. Unlike probe-log-sink it transmits nothing, so it is safe to poll while a page is open" } } }
     },
     "/api/v1/config/probe-log-sink": {

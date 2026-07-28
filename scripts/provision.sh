@@ -58,6 +58,7 @@ Common operations:
   --no-tame                Deprecated compatibility no-op; guidance is never auto-applied
   --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --allow-unsigned-helper  Developer-only: allow a privileged helper from an unsigned local APK
+  --require-release-signer Maintainer/fleet policy: reject a local APK unless it uses the official release certificate
   --mqtt-pass-file FILE    Read the MQTT password from a private text file
   --ha-token-file FILE     Read the Home Assistant token from a private text file
   --ha-pass-file FILE      Read the Home Assistant login password from a private text file
@@ -110,7 +111,7 @@ RELEASE_HELPER_BUILD_ID=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
@@ -173,6 +174,7 @@ while [ "${1:-}" ]; do
     --no-tame) shift ;;   # deprecated compatibility no-op; profile recommendations are report-only
     --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
+    --require-release-signer) REQUIRE_RELEASE_SIGNER=1; shift ;; # official managed-fleet app signer policy
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
     --log-proto) LOG_PROTO="$2"; shift 2 ;;   # syslog-tcp (default) | syslog-udp | http
@@ -1171,7 +1173,7 @@ download_latest() {
   step "⬇️  downloaded" "${D}$(basename "$APK")${X} ${B}${tag:-latest}${X}"
 }
 
-# Pick the APK: explicit --apk wins; else the local build (unless --latest); else download the latest release.
+# Pick the APK: explicit --apk wins; else the local development build (unless --latest); else download the latest release.
 resolve_apk() {
   if [ -n "$APK" ]; then :
   elif [ "$LATEST" = 1 ]; then download_latest
@@ -1264,21 +1266,39 @@ verify_release_checksum() {
 }
 
 verify_release_apk() {
-  [ -n "$APK_RELEASE_TAG" ] || return 0
-  local expected_name signer_tool signer_output signer package_tool package_name
-  expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
-  [ "$(basename "$APK")" = "$expected_name" ] || fail "release APK filename does not match its tag" \
-    "Expected $expected_name for $APK_RELEASE_TAG; nothing was installed."
-  verify_release_checksum
+  local expected_name signer_tool signer_output signer signer_lines signer_count package_tool package_name="" artifact_label
+  if [ -n "$APK_RELEASE_TAG" ]; then
+    expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
+    [ "$(basename "$APK")" = "$expected_name" ] || fail "release APK filename does not match its tag" \
+      "Expected $expected_name for $APK_RELEASE_TAG; nothing was installed."
+    verify_release_checksum
+    artifact_label="$APK_RELEASE_TAG"
+  else
+    artifact_label="local signed APK"
+  fi
   signer_tool="$(find_android_build_tool apksigner || true)"
   if [ -z "$signer_tool" ]; then
-    warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+    if [ -n "$APK_RELEASE_TAG" ] && [ "$REQUIRE_RELEASE_SIGNER" != 1 ]; then
+      warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+    else
+      fail "Android Build-Tools are required to verify a local APK signer" \
+        "Install apksigner and retry. Nothing was backed up, installed, started, or privileged." \
+        "Self-built APKs may use their developer signer; managed-fleet runs add --require-release-signer."
+    fi
   else
     signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
-      "The downloaded APK was not installed. Check GitHub access and retry."
-    signer="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
-    [ "$signer" = "$RELEASE_CERT_SHA256" ] || fail "release APK signer mismatch" \
-      "Expected $RELEASE_CERT_SHA256" "Got      ${signer:-unavailable}" "Nothing was installed, started, or privileged."
+      "The APK was not installed. Check that it is a valid signed APK and retry."
+    signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p')"
+    signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
+    [ "$signer_count" = 1 ] || fail "release APK signer count mismatch" \
+      "Expected exactly one signer; got $signer_count. Nothing was backed up, installed, started, or privileged."
+    signer="$(printf '%s\n' "$signer_lines" | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
+    if [ -n "$APK_RELEASE_TAG" ] || [ "$REQUIRE_RELEASE_SIGNER" = 1 ]; then
+      [ "$signer" = "$RELEASE_CERT_SHA256" ] || fail "release APK signer mismatch" \
+        "Expected $RELEASE_CERT_SHA256" "Got      ${signer:-unavailable}" \
+        "This run requires the official release signer. Nothing was installed, started, or privileged." \
+        "No configuration backup or helper transaction was started."
+    fi
   fi
   package_tool="$(find_android_build_tool aapt || true)"
   [ -n "$package_tool" ] || package_tool="$(find_android_build_tool aapt2 || true)"
@@ -1286,8 +1306,11 @@ verify_release_apk() {
     package_name="$("$package_tool" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
     [ "$package_name" = "$PKG" ] || fail "release APK package mismatch" \
       "Expected $PKG" "Got      ${package_name:-unavailable}" "Nothing was installed, started, or privileged."
+  elif [ -z "$APK_RELEASE_TAG" ] || [ "$REQUIRE_RELEASE_SIGNER" = 1 ]; then
+    fail "Android Build-Tools are required to verify a local APK package" \
+      "Install aapt or aapt2 and retry. Nothing was backed up, installed, started, or privileged."
   fi
-  step "🛡️  verified" "${D}$APK_RELEASE_TAG · package ${package_name:-confirmed after install} · signer ${RELEASE_CERT_SHA256:0:12}…${X}"
+  step "🛡️  verified" "${D}$artifact_label · package ${package_name:-authenticated release asset} · signer ${signer:-$RELEASE_CERT_SHA256}${X}"
 }
 
 verify_release_helper() {
@@ -2042,8 +2065,17 @@ live_matches_recorded_or_target() {
   fi
 }
 
-classify_system() {
+system_matches_recorded() {
   marker=/system/bin/.hapaneld-helper-upgrade
+  live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
+    live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" &&
+    live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd "$marker" &&
+    live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc "$marker" &&
+    live_matches_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
+    live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"
+}
+
+classify_system() {
   # A no-op helper upgrade can match both the recorded old state and the desired target. Prefer
   # TARGET so a successful APK install can commit instead of stranding its recovery journal.
   if hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper &&
@@ -2052,26 +2084,25 @@ classify_system() {
        [ ! -e /vendor/etc/init/hapaneld-helper.rc ] &&
        [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
     echo TARGET
-  elif live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
-     live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" &&
-     live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd "$marker" &&
-     live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc "$marker" &&
-     live_matches_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
-     live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
+  elif system_matches_recorded; then
     echo PRE_SWAP
   else
     echo UNKNOWN
   fi
 }
 
-classify_systemless() {
+systemless_matches_recorded() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
+  live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
+    live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"
+}
+
+classify_systemless() {
   if hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
        hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh &&
        [ ! -e /vendor/etc/init/hapaneld-helper.rc ]; then
     echo TARGET
-  elif live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
-     live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"; then
+  elif systemless_matches_recorded; then
     echo PRE_SWAP
   else
     echo UNKNOWN
@@ -2576,7 +2607,12 @@ finalize_rollback_system() {
   mount -o rw,remount / 2>/dev/null
   mount -o rw,remount /system 2>/dev/null
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
-  [ "$(classify_system)" = PRE_SWAP ] || return 1
+  # Do not use classify_system here: a no-op helper update can be both TARGET and the exact
+  # journaled pre-swap state, and the classifier deliberately prefers TARGET so a successful APK
+  # install can commit. Demanding PRE_SWAP from it meant a rollback of a same-helper upgrade could
+  # never be finalized — the device rolled back, the journal survived, and every retry repeated it
+  # until the panel could not be provisioned at all. Finalization proves the pre-swap state directly.
+  system_matches_recorded || return 1
   rm -f "$marker" || return 1
   sync || return 1
   rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
@@ -2592,7 +2628,9 @@ finalize_rollback_system() {
 finalize_rollback_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
-  [ "$(classify_systemless)" = PRE_SWAP ] || return 1
+  # Same reasoning as finalize_rollback_system: prove the journaled pre-swap state directly rather
+  # than through a classifier that resolves the no-op-upgrade tie in favour of TARGET.
+  systemless_matches_recorded || return 1
   rm -f "$marker" || return 1
   sync || return 1
   rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \

@@ -34,7 +34,7 @@ You don't need to configure signing to build and run ha-paneld.
 
 Two cases:
 
-- **Dev / fork builds** are signed with the **committed `debug.keystore`** (password `android`). It's in the repo on purpose — not a secret — so every build (yours, mine, CI's) shares one signature. That's what lets `install -r` update a panel in place without uninstalling. Just build and install.
+- **Dev / fork debug builds** use the committed `debug.keystore` (password `android`) and remain directly installable without maintainer secrets. Fork maintainers may configure and consistently retain their own private release key for devices they manage. The official maintainer fleet separately requires the official release signer.
 - **Official releases** are signed with a private key held in GitHub Actions secrets (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`). The release workflow fails closed if any credential is absent; it never publishes a debug-signed APK as a release. Forks can still build and install the normal debug APK through local builds or CI, or configure their own four signing secrets before creating tagged releases.
 
 > [!IMPORTANT]

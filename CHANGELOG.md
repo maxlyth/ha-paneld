@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+## v0.9.6-rc3 - 2026-07-28
+
+### Changed
+
+- **Runtime diagnostics now describe local-state synchronization and log-shipping status more clearly.** Status output distinguishes configured destinations from transport errors and keeps diagnostic state aligned with the running service.
+
+- **Remote Controls dashboard actions are more predictable.** Dashboard navigation and reload behavior have clearer boundaries and broader regression coverage.
+
+### Fixed
+
+- **The Dashboard no longer shifts or reopens in the wrong place on small panels.** The page settled into the wrong position in opposite directions depending on the panel's width — too high on narrow screens, too low on wider ones — and the whole page jumped once shortly after loading on a narrow panel. Card positions are now decided once, from measured sizes rather than estimates, so the Dashboard opens where you left it and stops moving under your finger. No action is needed on upgrade.
+
+- **mDNS advertising now recovers when an apparently active responder silently stops answering.** Recovery is tied to the current network generation so an obsolete repair cannot replace a newer binding.
+
+- **Log shipping no longer invents a configured destination when reporting transport failures.** Diagnostic output remains useful without exposing unrelated or misleading endpoint details.
+
+- **Installer rollback finalization now handles system and systemless recovery journals consistently.** Completed recovery state is reconciled instead of leaving an older journal to block later upgrades.
+
 ## v0.9.6-rc2 - 2026-07-27
 
 ### Important changes — please read before upgrading

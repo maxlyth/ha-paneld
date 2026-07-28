@@ -6,9 +6,15 @@ case "$*" in
   *ha-paneld-v*-manual-setup-required.apk*)
     [ "${MOCK_RELEASE_VERIFY_FAIL:-0}" = 0 ] || exit 1
     printf 'Signer #1 certificate SHA-256 digest: %s\n' "${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}"
+    [ -z "${MOCK_ADDITIONAL_RELEASE_CERT:-}" ] || printf 'Signer #2 certificate SHA-256 digest: %s\n' "$MOCK_ADDITIONAL_RELEASE_CERT"
     ;;
-  *)
+  *shizuku*)
     [ "${MOCK_SHIZUKU_TRUSTED:-0}" = 1 ] || exit 1
     printf 'Signer #1 certificate SHA-256 digest: 268b5590e868fb08bae7e0ac413564cd1ff88f5ccff74af9dbd0dc918e30db30\n'
+    ;;
+  *)
+    [ "${MOCK_LOCAL_APK_VERIFY_FAIL:-0}" = 0 ] || exit 1
+    printf 'Signer #1 certificate SHA-256 digest: %s\n' "${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}"
+    [ -z "${MOCK_ADDITIONAL_RELEASE_CERT:-}" ] || printf 'Signer #2 certificate SHA-256 digest: %s\n' "$MOCK_ADDITIONAL_RELEASE_CERT"
     ;;
 esac

@@ -75,6 +75,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileBackup
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreOutcome
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestorePlan
 import io.github.maxlyth.hapaneld.device.profile.ProfileBackupRestoreResult
+import io.github.maxlyth.hapaneld.logship.LOG_SHIP_STATUS_OFF
 import io.github.maxlyth.hapaneld.logship.LogCapture
 import io.github.maxlyth.hapaneld.logship.LogShipStatusProjection
 import io.github.maxlyth.hapaneld.logship.LogShipTarget
@@ -871,8 +872,8 @@ class PaneldServer internal constructor(
     // full logcat via su, gated on Su.available() at request time. Null → the viewer 404s.
     private val logApp: LogCapture? = null,
     private val logSystem: LogCapture? = null,
-    // Dedicated synchronized shipper state. Never route this through the broad management cache: the
-    // Configure card polls specifically to observe connection failure and recovery as they happen.
+    // Dedicated synchronized shipper state. Never route this through the broad management cache:
+    // callers and the Dashboard projection need connection failure and recovery as they happen.
     private val logShipStatus: () -> LogShipStatusProjection = {
         LogShipStatusProjection(config.logShipEnabled, config.logShipActive, "unavailable")
     },
@@ -1460,7 +1461,7 @@ class PaneldServer internal constructor(
                         )
                     }
                     get("/logship/status") {
-                        // Passive read of what the shipper is actually doing, for the Configure card.
+                        // Passive read of what the shipper is actually doing, including Dashboard state.
                         // Distinct from probe-log-sink, which transmits: this one only reports, so it
                         // is safe to poll while a page is open.
                         call.respondText(logShipStatusJson(logShipStatus()), ContentType.Application.Json)
@@ -3027,10 +3028,16 @@ class PaneldServer internal constructor(
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="Menu">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
 ${navBar(active)}</div>
+<!-- switcher.js owns the topbar's final height: it collapses the tab bar to the hamburger and hides header
+     items that would overflow. It is loaded HERE, during parse, immediately after the markup it measures and
+     before any page content — not with the tail scripts. As a tail script it arrived after first paint, so
+     .nav{flex-wrap:wrap} painted three wrapped tab rows and the whole card wall then snapped 81px upward
+     (measured: topbar 127.86px -> 46.86px, wall top 151.86px -> 70.86px, CLS 0.084 at 360/480/600px and 0
+     at >=700px where the bar never collapses). It only touches #pswitch/.hdr/.nav/#navburger, all above. -->
+<script src="/assets/switcher.js"></script>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
 $extraScripts<script src="/assets/power-safety.js"></script>
-<script src="/assets/switcher.js"></script>
 <script src="/assets/buildwatch.js"></script>
 </div></body></html>"""
     }
@@ -3694,6 +3701,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val spec = SettingsRegistry.spec(key) ?: return null
         if (!spec.availableWhen(caps)) return null
         val raw = effectiveValue(spec, live)
+        // NOTE the ordering: secret and BOOL specs resolve before [valueFormatter] is consulted, so a
+        // formatter attached to one of those keys is dead code. Live state that needs a formatter does
+        // not belong on a setting row at all — put it on a fact row (see CONTEXT_KEYS).
         val shown = when {
             spec.secret -> if (raw.isNotEmpty()) "set" else "—"
             spec.type == SettingType.BOOL -> if (raw.toBoolean()) "on" else "off"
@@ -3953,10 +3963,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val CONTEXT_KEYS = listOf(
-        "MQTT state", "State convergence", "App database", "Security mode", "Audio playback",
+        "MQTT state", "State convergence", "Local-state sync", "App database", "Security mode", "Audio playback",
+        "Log shipping",
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
-        "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar", "Log shipping",
+        "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
     )
     // Rows whose values are DECLARED by the DeviceProfile, so wrong data points a contributor straight
     // at the fix: Platform/SoC=profile identity, LED=ledMechanism, sensor tech=proximityTech/lightTech,
@@ -3968,7 +3979,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private fun contextRowsHtml(s: Snap, h: HealthInputs): String {
         val rows = CONTEXT_KEYS.mapNotNull { key ->
-            s.facts[key]?.let { value ->
+            // Log shipping earns a live row only while it is on; when it is off the Behaviour card's
+            // "Ship logs" already says so, and a permanent "off" here is noise.
+            s.facts[key]?.takeUnless { key == "Log shipping" && it == LOG_SHIP_STATUS_OFF }?.let { value ->
                 val label = if (key == "MQTT state") "MQTT connection / auth timing" else key
                 "<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>"
             }
@@ -4203,23 +4216,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         keys.mapNotNull { key ->
             // A deliberately overridden area must say so wherever the value is shown — at rest it is
             // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
-            // "Ship logs: true" is worthless when the sink is refusing — enabled-and-failing looked
-            // exactly like enabled-and-working, so a basic misconfiguration was invisible on every
-            // surface. The status string was already being computed into the facts map and then
-            // discarded here; show it instead of the bare flag.
             val areaFormatter: ((String) -> String)? =
                 if (key == "ha_area" && config.haAreaUserOverride) { raw -> "$raw (local override)" } else null
-            val shipFormatter: ((String) -> String)? =
-                if (key == "log_ship_enabled") { raw ->
-                    if (SettingValue.parseBool(raw) == true) {
-                        s.facts["Log shipping"]?.takeIf { it.isNotBlank() } ?: raw
-                    } else {
-                        raw
-                    }
-                } else {
-                    null
-                }
-            settingRowHtml(key, s.live, caps, hints, areaFormatter ?: shipFormatter)
+            settingRowHtml(key, s.live, caps, hints, areaFormatter)
         }
     }.joinToString("\n")
 
@@ -4274,8 +4273,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  hydration swaps in the capability-gated real state. */
     private fun controlsHtml(s: Snap?): String {
         // Controls buttons: render but DISABLE (not hide, not silently-broken) when the action's capability
-        // is missing — back/recents accept Accessibility or Shizuku input; launcher/reboot need root;
-        // volume always works.
+        // is missing — back/recents accept Accessibility or Shizuku input; launcher/reboot need root.
         val a11yOk = s?.facts?.get("Nav actions (a11y)") == "yes"
         val navigation = ControlAvailability.navigation(
             accessibilityReady = a11yOk,
@@ -4316,12 +4314,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
  ${pbtn("back", "←<span class=\"lbl\"> Back</span>", navigation.backEnabled, ControlAvailability.INPUT_REQUIREMENT)}
  ${pbtn("recents", "▢<span class=\"lbl\"> Recents</span>", navigation.recentsEnabled, navigation.recentsRequirement)}
  ${pbtn("launcher", "⊞<span class=\"lbl\"> Launcher</span>", rootOk, "a rooted panel", "margin-left:auto", disabledTitle = if (hasDistinctLauncher) null else "No separate launcher on this panel — same as Admin launcher")}
- ${pbtn("dashboard", "⌂<span class=\"lbl\"> Dashboard</span>", !checking, "")}
  ${pbtn("admin_launcher", "⚙<span class=\"lbl\"> Admin launcher</span>", rootOk, "a rooted panel")}
 </div>
 <div class="ctlrow ctlrow-secondary">
- ${pbtn("voldn", "Vol −", !checking, "")}
- ${pbtn("volup", "Vol +", !checking, "")}
+ ${pbtn("dashboard", "⌂<span class=\"lbl\"> Dashboard</span>", !checking, "")}
  ${pbtn("reload", "↻ Reload", !checking, "", "border-color:#7a6330;color:#f5cf82")}
  ${pbtn("reboot", "⟳ Reboot", rootOk, "a rooted panel", "margin-left:auto;border-color:#7a3a2a;color:#f5a08a")}
 </div>"""

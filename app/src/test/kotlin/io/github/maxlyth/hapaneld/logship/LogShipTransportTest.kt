@@ -303,13 +303,15 @@ class LogShipTransportTest {
                 harness.start()
                 harness.emit(logcatLine("I", "status probe"))
                 await { receiver.datagrams.isNotEmpty() }
-                await { "sent=1" in harness.shipper.statusText() }
+                await { "1 line sent" in harness.shipper.statusText() }
 
                 val status = harness.shipper.statusText()
                 // "connected" would assert a delivery guarantee UDP cannot make; a black-holed sink
                 // would then be indistinguishable from a healthy one.
                 assertFalse("UDP must not report a connection: $status", "connected" in status)
-                assertTrue(status, status.startsWith("udp://127.0.0.1:${receiver.port} · "))
+                // The destination is stated by the settings, not repeated here.
+                assertFalse(status, "127.0.0.1" in status)
+                assertFalse(status, "udp://" in status)
                 assertTrue(status, "unacknowledged" in status)
             }
         }
@@ -325,6 +327,7 @@ class LogShipTransportTest {
                 harness.emit(logcatLine("E", "alpha"))
                 harness.emit(logcatLine("I", "beta"))
                 await { receiver.text().count { it == '\n' } >= 2 }
+                await { "2 lines sent" in harness.shipper.statusText() }
 
                 val frames = receiver.text().split("\n").filter { it.isNotBlank() }.map(::parseRfc5424)
                 assertEquals(2, frames.size)
@@ -389,7 +392,7 @@ class LogShipTransportTest {
             Harness(LogShipEndpoint.HTTP, receiver.port).use { harness ->
                 harness.start()
                 harness.emit(logcatLine("I", "rejected"))
-                await { "dropped=1" in harness.shipper.statusText() }
+                await { "1 dropped" in harness.shipper.statusText() }
 
                 val status = harness.shipper.statusText()
                 // The batch already left the bounded queue, so a rejection is real data loss and the
@@ -421,7 +424,31 @@ class LogShipTransportTest {
                 "the reason merely repeated the destination: $status",
                 reason.equals(host, ignoreCase = true),
             )
-            assertTrue("the reason must name the fault: $status", "UnknownHost" in reason)
+            // The fault is now named in plain words rather than by exception class, so the status
+            // cannot carry a destination; "host not found" still says what went wrong.
+            assertEquals("host not found", reason)
+            assertFalse("the status must not carry the destination: $status", host in status)
+        }
+    }
+
+    /**
+     * The status line states what the settings cannot — whether the sink is accepting anything — and
+     * never restates where logs go. The raw transport message names the
+     * address it failed to reach, so a failing sink is where a destination would leak back in.
+     */
+    @Test(timeout = 20_000)
+    fun aFailingSinkNeverPutsTheDestinationBackIntoTheStatus() {
+        val dead = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
+        Harness(LogShipEndpoint.SYSLOG_TCP, dead).use { harness ->
+            harness.start()
+            harness.emit(logcatLine("I", "no destination in status"))
+            await { failureReason(harness.shipper.statusText()) != null }
+
+            val status = harness.shipper.statusText()
+            assertFalse(status, "127.0.0.1" in status)
+            assertFalse(status, dead.toString() in status)
+            assertFalse(status, "tcp://" in status)
+            assertTrue(status, status.startsWith("disconnected (connection refused)"))
         }
     }
 
@@ -433,7 +460,7 @@ class LogShipTransportTest {
             harness.start()
             harness.emit(logcatLine("I", "refused"))
             await { failureReason(harness.shipper.statusText()) != null }
-            assertTrue(harness.shipper.statusText(), "sent=0" in harness.shipper.statusText())
+            assertTrue(harness.shipper.statusText(), "0 lines sent" in harness.shipper.statusText())
         }
     }
 
