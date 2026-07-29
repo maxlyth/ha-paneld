@@ -61,6 +61,7 @@ import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthState
 import io.github.maxlyth.hapaneld.control.observePrivilegedRoutes
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
+import io.github.maxlyth.hapaneld.dashboard.readThenClose
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
@@ -6698,8 +6699,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
             // Best-effort: a database that will not read must not cost the owner the rest of the backup,
             // which still carries the validated config projection.
-            val stateRows = runCatching { EntityCatalogStore(appContext).use { it.exportAppState() } }
-                .getOrDefault(emptyList())
+            // Not `use { }`: SQLiteOpenHelper only implements AutoCloseable from API 29, so `use`
+            // compiles against the current compileSdk yet throws ClassCastException at runtime on
+            // Android 8.1 — and behind this getOrDefault the failure would be silent, a backup with
+            // no app_state entry and nothing reported. readThenClose also isolates the close, so a
+            // store that exported successfully but failed to close still contributes its rows.
+            val stateRows = runCatching {
+                readThenClose(EntityCatalogStore(appContext), { it.close() }) { it.exportAppState() }
+            }.getOrDefault(emptyList())
             val state = stateRows.takeIf { it.isNotEmpty() }?.let { rows ->
                 textEntry(
                     STATE_BACKUP_ENTRY,
