@@ -3788,6 +3788,10 @@ require_healthy_agent() {
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 if [ -n "$HA_USER" ] && [ -n "$HA_PASS" ]; then
+  # Minting happens against Home Assistant, not the panel, so it is a side effect OUTSIDE this
+  # device: a token minted for a panel that never came up cannot be delivered and is left behind in
+  # HA as a dangling credential the user has to find and revoke. Gate it like the panel writes.
+  require_healthy_agent "mint a Home Assistant token"
   step "🔑  HA login" "${D}minting a refresh token for $HA_USER (password stays on this machine)${X}"
     # Every curl / grep-extract below is `|| true`-guarded: under set -euo pipefail a failed request or
     # a no-match grep pipeline would abort the whole provisioning run BEFORE the warn lines could

@@ -3148,6 +3148,15 @@ assert_failure "a restore into an unanswering panel fails the run"
 assert_contains 'refusing to import a configuration bundle' "the run says why it refused to import"
 assert_not_contains 'api/v1/config/import' "$MOCK_CALL_LOG" "no bundle is imported after a health timeout"
 
+# Minting is a side effect on Home Assistant, not on the panel: a token minted for a panel that never
+# came up cannot be delivered and is left behind as a dangling credential to find and revoke.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --ha-url https://ha.test --ha-user u --ha-pass p
+assert_failure "a panel that never answered does not get a token minted for it"
+assert_contains 'refusing to mint a Home Assistant token' "the run says which side effect it refused"
+assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Home Assistant after a health timeout"
+
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
   printf '%d assertion(s) failed\n' "$failures" >&2
