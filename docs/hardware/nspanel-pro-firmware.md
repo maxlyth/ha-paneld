@@ -1,9 +1,9 @@
 # Sonoff NSPanel Pro — firmware & flashing
 
-How Sonoff NSPanel Pro OTA firmware is distributed, how to verify a download URL, and the update procedure hardware-verified through 4.4.0 with a CDN-verified extension to 4.6.0.
+How Sonoff NSPanel Pro OTA firmware is distributed, how to verify a download URL, and the update procedure hardware-verified through 4.4.0, with CDN-verified extensions past it.
 
 > [!NOTE]
-> The **live, community-maintained version index** — every verified OTA URL for 86P and 120P, with sizes and CDN indices — lives in a GitHub Discussion, because it changes faster than this repo's release cycle and takes community contributions: **[NSPanel Pro firmware — OTA URL index](https://github.com/maxlyth/ha-paneld/discussions/7)**. This page is the stable scheme + how-to; the Discussion is the current list.
+> The **community-maintained version index** — every verified OTA URL for 86P and 120P, with sizes and CDN indices — lives in a GitHub Discussion, because it changes faster than this repo's release cycle and takes community contributions: **[NSPanel Pro firmware — OTA URL index](https://github.com/maxlyth/ha-paneld/discussions/7)**. This page is the stable scheme and how-to; the Discussion carries the per-version link list. That Discussion body is regenerated from `tools/firmware-index/*.dat` by the scheduled monitor, so it can lag this repo until that job next runs successfully — when the two disagree, the `.dat` files are the authority.
 
 Two physically distinct models, each on its **own** CDN channel — do not cross them:
 
@@ -22,7 +22,7 @@ Diff:      https://global-otadl2bsy.coolkit.cc/<channel>/rom-diff/<INDEX>/<diff>
 ```
 
 - `<INDEX>` is a **per-build serial, NOT sequential** by version — it must be discovered/recorded per image. For `rom-diff` the index is per *target* version (all diffs onto the same target share one index).
-- The CDN returns **403** for any object that doesn't exist (no directory listing). A real object returns **206** to a range request, with the total size and the ZIP magic `50 4b 03 04` ("PK..").
+- A real object returns **206** to a range request, with the total size and the ZIP magic `50 4b 03 04` ("PK.."). Anything else returns **403** — but that only means *nothing is at the exact path you tried*. There is no directory listing and `<INDEX>` cannot be derived from the version, so a failed probe rules out one filename at one index, never the existence of a build.
 
 Verify any candidate cheaply, without downloading the whole image:
 
@@ -33,20 +33,22 @@ curl -sS -r 0-3 -L "<url>" | od -An -tx1     # 50 4b 03 04 = real ZIP
 
 ## Update-path rule — hardware-verified through 4.4.0
 
-From ~3.0.0 (86P) / ~3.5.0 (120P) onward, the on-device updater is incremental-only for most builds. The exception is **4.0.12**: it is distributed **full-ROM-only** (no inbound diff exists on either channel) and is accepted on-device as a checkpoint. CDN inspection indicates this candidate two-step path to the newest listed release:
+From ~3.0.0 (86P) / ~3.5.0 (120P) onward, the on-device updater is incremental-only for most builds. The exception is **4.0.12**: it is distributed **full-ROM-only** (no inbound diff was found on either channel) and is accepted on-device as a checkpoint. From a 3.x or early-4.0.x build, CDN inspection indicates this candidate two-step path:
 
 ```text
-<your 3.x / 4.0.x build> → 4.0.12 (FULL ROM) → 4.6.0 (diff)
+<your 3.x / 4.0.x build> → 4.0.12 (FULL ROM) → <target> (diff)
 ```
 
-Verified on a 120P: **3.7.1 → 4.0.12 full ROM (applied directly) → 4.4.0 diff**. 4.4.0 was the current target at the time. Project CDN inspection found a `4.0.12→4.6.0` diff for each original model, but that extension has not been live-flash verified here. 4.6.0 is the newest release in [Sonoff's public changelog](https://sonoff.tech/en-us/blogs/news/sonoff-nspanel-pro-version-update-information-and-faq). The intermediate 4.0.10 diff is **not** needed. The intervening **4.5.3** release was a ROM diff on 120P but an APK-only update on 86P; no separate full ROM past 4.0.12 has been found.
+The 4.0.12 step is **not** universal. Which targets are reachable in one hop depends on the model and on the version the panel starts from: several releases carry inbound diffs from 4.4.0, 4.5.1, 4.5.3 or 4.6.0 as well as from 4.0.12, so a panel already past the checkpoint often needs no round trip through it. Some releases are APK-only and carry no ROM diff at all, and a release can be a ROM diff on one model and APK-only on the other — the **4.5.3** release is a ROM diff on 120P but an APK-only update on 86P, and **4.6.2** is indexed as an app-only update with no ROM diff on either channel. The per-model diff tables in the firmware index Discussion list every inbound diff that has been verified, and are the authority on the route; the intermediate 4.0.10 diff is **not** needed.
+
+Verified on a 120P: **3.7.1 → 4.0.12 full ROM (applied directly) → 4.4.0 diff**. 4.4.0 was the target at the time, and nothing past it has been live-flash verified by this project — later diffs are CDN-verified only. For the most recently indexed releases no vendor documentation was found when this page was last checked (2026-07-29): [Sonoff's public changelog](https://sonoff.tech/en-us/blogs/news/sonoff-nspanel-pro-version-update-information-and-faq) documents up to **4.6.0**, 4.6.2 was located only by probing the CDN, and 4.7.0 is discussed only in an [eWeLink user feedback thread](https://forum.ewelink.cc/t/nspanel-pro-v4-7-0-feeback/208789) — a discussion thread, not a release announcement and not official release notes. Absence from the index means not-found-by-probe — the CDN cannot be listed, so it is never proof a build does not exist.
 
 > [!WARNING]
-> **Community reports describe restart loops on 4.5.1 / 4.5.2** (~10–60 min intervals, both 86P and 120P). Sonoff lists 4.6.0 after those releases but does not label 4.6.0 “Stable”. Verify it on one panel before deploying widely; **4.0.12** remains the conservative full-ROM checkpoint to pin. See the firmware index Discussion for current community evidence.
+> **Community reports describe restart loops on 4.5.1 / 4.5.2** (~10–60 min intervals, both 86P and 120P). For **4.7.0**, the user feedback thread contains reports of sub-device connectivity trouble after updating, some resolved by a reboot and others described as continuing. This project has not reproduced or quantified them, so treat them as unverified user reports rather than a known regression. Verify any of these on one panel before deploying widely; **4.0.12** remains the conservative full-ROM checkpoint to pin. The firmware index Discussion carries the current community evidence, regenerated from this repo's index whenever the scheduled monitor next runs.
 
 ## Flashing a panel (hardware-verified through 4.4.0)
 
-This fully remote root + `adb` method (no USB needed) was used on a 120P from 3.7.1 through 4.0.12 to 4.4.0. The same package shape and CDN inspection establish the documented 4.6.0 diff path, but that final step has not been recorded as live flash evidence here. The method works because the panel's `/data` is unencrypted (`getprop ro.crypto.state` → `unsupported`), so recovery can apply the on-device ZIP via a block map. Recovery has **no network adb**, which is why this command-file method is used rather than `adb sideload`.
+This fully remote root + `adb` method (no USB needed) was used on a 120P from 3.7.1 through 4.0.12 to 4.4.0. The same package shape and CDN inspection establish the diff paths indexed past 4.4.0, but no step past 4.4.0 has been recorded as live flash evidence here. The method works because the panel's `/data` is unencrypted (`getprop ro.crypto.state` → `unsupported`), so recovery can apply the on-device ZIP via a block map. Recovery has **no network adb**, which is why this command-file method is used rather than `adb sideload`.
 
 In every block, `DEV=<PANEL_IP>:5555` and the panel is rooted (`su` works).
 
@@ -76,10 +78,10 @@ In every block, `DEV=<PANEL_IP>:5555` and the panel is rooted (`su` works).
 
    The panel leaves adb, shows a recovery progress UI applying the package (~5 min for the full ROM, ~13 min for a diff), then reboots to Android on its own.
 
-4. **Verify before considering a newer diff.** Reconnect and check `getprop ro.product.version`. Repeating steps 2–3 with the `4.0.12→4.4.0` diff follows the hardware-verified procedure. The available `4.0.12→4.6.0` diff has only been verified as a valid CDN package by this project; applying it is an experimental step that should first be tried on one recoverable panel. See the firmware index Discussion for the current CDN URL and evidence status.
+4. **Verify before considering a newer diff.** Reconnect and check `getprop ro.product.version`. Repeating steps 2–3 with the `4.0.12→4.4.0` diff follows the hardware-verified procedure. The diffs indexed past 4.4.0 have only been verified as valid CDN packages by this project; applying one is an experimental step that should first be tried on one recoverable panel. See the firmware index Discussion for the CDN URLs and evidence status.
 
 **What survives:** `/data` is not touched by these OTAs — apps, settings, adb/USB-debugging, an installed modern WebView, and ha-paneld (including its boot auto-start) all persist. A factory reset would wipe them; this method does not.
 
 ## Provenance
 
-- CDN scheme + indices verified via range-GET against `global-otadl2bsy.coolkit.cc`; the chain through 4.4.0 was flash-verified on a 120P, while the 4.6.0 extension is CDN-verified.
+- CDN scheme + indices verified via range-GET against `global-otadl2bsy.coolkit.cc`; the chain through 4.4.0 was flash-verified on a 120P, while the diffs indexed past it are CDN-verified only.
