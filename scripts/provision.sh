@@ -71,6 +71,8 @@ EOF
 cleanup_provision_resources() {
   if type stop_root_helper_apk_install >/dev/null 2>&1; then stop_root_helper_apk_install; fi
   if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard; fi
+  # Issue #76: reclaim this run's disposable staging on EVERY exit path, not only after a commit.
+  if type cleanup_root_helper_staging >/dev/null 2>&1; then cleanup_root_helper_staging; fi
   [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR"
   SHIZUKU_DIR=""
   [ -z "${SECRET_DIR:-}" ] || rm -rf "$SECRET_DIR"
@@ -1028,7 +1030,19 @@ probe_su_uncached() {
 }
 
 probe_su() {
-  if [ -n "$SU_FORM" ]; then [ "$SU_FORM" != none ]; return; fi
+  # The cached status is returned explicitly because of bash's trap rule for `return`: "If return is
+  # executed by a trap handler, the last command used to determine the status is the last command
+  # executed before the trap handler was invoked" — and that applies equally to a bare `return` in a
+  # function the handler calls. So the old cached branch reported the run's pending (failing) exit
+  # status instead of the test above it, silently no-opping every root command a failing run's exit
+  # handler issued. The provisioner suite pins both directions of this semantics executably. Without
+  # this fix the exit-path staging reclamation cannot work at all.
+  local cached
+  if [ -n "$SU_FORM" ]; then
+    [ "$SU_FORM" != none ]
+    cached=$?
+    return "$cached"
+  fi
   local result="" status timeout="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}"
   case "$timeout" in ''|*[!0-9]*|0) timeout=45 ;; esac
   PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$timeout"
@@ -1706,9 +1720,46 @@ run_root_helper_transaction() {
   run_root 'txn='"$ROOT_HELPER_TRANSACTION_PATH"'; expected='"$ROOT_HELPER_TRANSACTION_SHA256"'; owner=$(stat -c %u:%g $txn 2>/dev/null || toybox stat -c %u:%g $txn 2>/dev/null) || exit 1; [ $owner = 0:0 ] || exit 1; actual=$(sha256sum $txn 2>/dev/null || toybox sha256sum $txn 2>/dev/null) || exit 1; [ ${actual%% *} = $expected ] || exit 1; sh $txn '"$action $transaction_id $target_apk $target_build $target_helper"
 }
 
+# Reclaim only this run's own staging. Issue #76: this ran solely after a successful commit, so
+# every failure between staging and commit retained one protected transaction script plus one staged
+# bundle, and the next run minted a fresh identity instead of replacing them.
+#
+# Deleting staging cannot strand a panel: every mutating verb finishes reading its @STAGED_*@ inputs
+# before its first destructive step, so a missing input can only cause an early, clean failure —
+# never a half-applied transaction. The recovery journal is deliberately NOT touched; it and the
+# .hapaneld-recovery copies are the transaction's durable record, and a later reconcile reads them
+# with its own freshly staged files, never with these.
+#
+# Every path is validated against the transaction identity rather than trusted from the globals, so
+# an exit before staging cannot turn an unset variable into a destructive privileged `rm`. Best
+# effort by design: the exit may be caused by a dead transport, anything left behind is removed by
+# the next transaction's sweep on the panel, and `warn` is deliberately not used because it sets
+# PROVISION_FAILED — a successful run must stay successful.
 cleanup_root_helper_staging() {
-  run_root 'rm -f '"${ROOT_HELPER_STAGED_HELPER:-/dev/null} ${ROOT_HELPER_STAGED_RC:-/dev/null} ${ROOT_HELPER_STAGED_HYBRID_RC:-/dev/null} ${ROOT_HELPER_STAGED_SERVICE:-/dev/null} ${ROOT_HELPER_STAGED_TRANSACTION:-/dev/null} $ROOT_HELPER_TRANSACTION_PATH" \
-    >/dev/null 2>&1 || true
+  local id="$ROOT_HELPER_TRANSACTION_ID" paths="" candidate
+  printf '%s\n' "$id" | grep -Eq '^[0-9a-f]{32}$' || return 0
+  for candidate in "$ROOT_HELPER_STAGED_HELPER" "$ROOT_HELPER_STAGED_RC" "$ROOT_HELPER_STAGED_HYBRID_RC" \
+      "$ROOT_HELPER_STAGED_SERVICE" "$ROOT_HELPER_STAGED_TRANSACTION" "$ROOT_HELPER_TRANSACTION_PATH"; do
+    case "$candidate" in
+      "/data/local/tmp/hapaneld-helper-$id"|"/data/local/tmp/hapaneld-helper-$id."*) ;;
+      "/data/adb/hapaneld/.helper-transaction-$id-"*) ;;
+      *) continue ;;
+    esac
+    paths="$paths $candidate"
+  done
+  [ -n "$paths" ] || return 0
+  paths="$paths /data/adb/hapaneld/.helper-probe-$id"
+  # A promotion interrupted between the copy and the rename leaves `<transaction>.new` behind and
+  # nothing else names it — but append it only when the transaction path is the one this identity
+  # owns: unguarded, an exit before that path is set would put a relative `.new` into a privileged
+  # `rm -f`.
+  case "$ROOT_HELPER_TRANSACTION_PATH" in
+    "/data/adb/hapaneld/.helper-transaction-$id-"*) paths="$paths $ROOT_HELPER_TRANSACTION_PATH.new" ;;
+  esac
+  if ! run_root 'rm -f'"$paths" >/dev/null 2>&1; then
+    echo "   ${YEL}note${X} could not reclaim this run's root-helper staging on the panel;" >&2
+    echo "   the next provisioning transaction against this panel removes it automatically" >&2
+  fi
 }
 
 root_helper_transaction_record() {
@@ -2181,6 +2232,56 @@ acquire_helper_lock() {
   fi
   echo $$ > "$lock/pid" || { rm -rf "$lock"; return 1; }
   trap 'rm -rf /dev/.hapaneld-helper-transaction.lock' 0 1 2 3 15
+}
+
+# Issue #76: a run that failed between staging and commit left its id-named staging behind forever,
+# one protected transaction script plus one staged bundle per attempt, and the host's exit-path
+# reclamation cannot reach a panel whose transport already died. So, first thing under the
+# transaction lock, remove every id-named staging artifact that is not owned by this transaction,
+# not named by the verb argument, and not referenced by a recovery journal. Staged files are only
+# ever read by the script instance that owns or names them — a later reconcile reads the journal and
+# the .hapaneld-recovery copies together with its OWN freshly staged files — so everything else is
+# disposable by definition, including staging this same fix could not reclaim on earlier runs.
+#
+# The lock serializes this against every managed and standalone-manual transaction (both use
+# /dev/.hapaneld-helper-transaction.lock). A concurrent provisioner that loses freshly pushed
+# staging to this sweep fails early and cleanly at its own prologue reads, before its first
+# destructive step — never mid-transaction.
+#
+# Fail closed twice over: a journal whose TRANSACTION_ID cannot be read as exactly 32 hex characters
+# aborts the whole sweep rather than guess what that journal references, and a name whose id segment
+# is not exactly 32 hex characters is left alone — which also keeps the standalone daemon
+# installer's dot-separated hapaneld-helper.probe-* staging out of reach. Best effort on removal: a
+# file that cannot be removed is clutter for the next transaction, never a verb failure.
+sweep_disposable_staging() {
+  keep=" @TRANSACTION_ID@ $transaction_id "
+  for journal in /system/bin/.hapaneld-helper-upgrade /data/adb/hapaneld/.helper-upgrade.marker \
+      /data/adb/hapaneld/.helper-hybrid-upgrade.marker; do
+    # A marker path that exists but is not a plain regular file — a symlink (broken or not), a
+    # directory, a fifo — is a journal whose references cannot be trusted; refuse the whole sweep
+    # rather than guess what it protects.
+    if [ -L "$journal" ]; then return 0; fi
+    if [ -e "$journal" ] && [ ! -f "$journal" ]; then return 0; fi
+    [ -f "$journal" ] || continue
+    journaled=$(sed -n 's/^TRANSACTION_ID=//p' "$journal" 2>/dev/null)
+    case "$journaled" in ''|*[!0-9a-f]*) return 0 ;; esac
+    [ "${#journaled}" -eq 32 ] || return 0
+    keep="$keep$journaled "
+  done
+  for staged in /data/local/tmp/hapaneld-helper-* /data/adb/hapaneld/.helper-probe-* \
+      /data/adb/hapaneld/.helper-transaction-*; do
+    [ -e "$staged" ] || [ -L "$staged" ] || continue
+    case "$staged" in
+      /data/local/tmp/hapaneld-helper-*) id=${staged#/data/local/tmp/hapaneld-helper-}; id=${id%%.*} ;;
+      /data/adb/hapaneld/.helper-probe-*) id=${staged#/data/adb/hapaneld/.helper-probe-} ;;
+      *) id=${staged#/data/adb/hapaneld/.helper-transaction-}; id=${id%%-*} ;;
+    esac
+    case "$id" in ''|*[!0-9a-f]*) continue ;; esac
+    [ "${#id}" -eq 32 ] || continue
+    case "$keep" in *" $id "*) continue ;; esac
+    rm -f "$staged" 2>/dev/null
+  done
+  return 0
 }
 
 helper_journal_state() {
@@ -2778,6 +2879,8 @@ transaction_id=${2:-}
 target_apk=${3:-}
 target_build=${4:-}
 target_helper=${5:-}
+
+sweep_disposable_staging
 
 case "${1:-}" in
   install-system) install_system ;;

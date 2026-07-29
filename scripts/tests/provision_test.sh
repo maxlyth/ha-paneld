@@ -3157,6 +3157,326 @@ assert_failure "a panel that never answered does not get a token minted for it"
 assert_contains 'refusing to mint a Home Assistant token' "the run says which side effect it refused"
 assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Home Assistant after a health timeout"
 
+# ── #76: root-helper staging must not accumulate across failing runs ────────────────────────────
+# The fixture models the panel's id-named staging as real files that survive run_provision's reset,
+# because a real panel's /data/local/tmp and /data/adb/hapaneld do. Counts are exact, never bounds —
+# a bound like -le 1 is also satisfied by a run that never staged anything.
+DEVICE_ADB_STATE_DIR="$TMP/device-data-adb-hapaneld"
+count_device_artifacts() { find "$DEVICE_ADB_STATE_DIR" -maxdepth 1 -name "$1" 2>/dev/null | wc -l | tr -d ' '; }
+assert_count() {
+  actual="$1"; expected="$2"; description="$3"
+  if [ "$actual" -eq "$expected" ] 2>/dev/null; then pass "$description"
+  else fail_test "$description (expected $expected, got ${actual:-nothing})"; fi
+}
+
+# A successful run leaves no staging behind.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "baseline transactional run for staging accounting succeeds"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "the successful run really staged a bundle (guards the counts below against vacuity)"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "a successful run leaves no staged bundle files"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "a successful run leaves no protected transaction record"
+
+# Issue #76 itself: repeated failing runs accrued one protected transaction record plus one staged
+# bundle per attempt. Reclamation now runs from the EXIT trap, and these counts also pin the
+# probe_su cached-branch fix: inside a trap a bare `return` reports the shell's pending (failing)
+# exit status, which silently no-opped every root command the handler issued — reverting that fix
+# makes these counts nonzero.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+for _ in 1 2 3; do
+  MOCK_HELPER_INSTALL=fail \
+    run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+done
+assert_failure "a helper install failure still fails the run"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "each failing run really staged a bundle (guards the counts below against vacuity)"
+# These runs send no signals, so any reclamation observed is by construction the ORDINARY EXIT trap
+# issuing a fresh privileged rm through the unmodified production run_root → adb() →
+# run_with_deadline chain after the run's failing step — not a signal handler and not an extracted
+# copy of the cleanup.
+assert_log_contains 'rm -f .*hapaneld-helper-[0-9a-f]{32}' "the EXIT-trap reclamation rm went through the production adb wrapper in a signal-free failing run"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "three failing runs accrue no staged bundle files"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "three failing runs accrue no protected transaction records"
+
+# Executable substantiation of the probe_su comment, in both directions: the cached branch's old
+# bare-return form leaks the shell's pending exit status when the function runs inside an EXIT trap,
+# and the explicit-status form is immune. Either assertion fails if bash's trap-return semantics
+# were ever different from what the comment claims.
+bare_return_form="$(bash -c 'f() { if [ -n "$V" ]; then [ "$V" != none ]; return; fi; }; h() { if f; then echo CACHE-HONOURED; else echo PENDING-STATUS-LEAKED; fi; }; trap h EXIT; V=su0join; exit 1')"
+if [ "$bare_return_form" = PENDING-STATUS-LEAKED ]; then
+  pass "a bare return inside an EXIT trap reports the pending exit status, not the preceding test (the defect probe_su guards against)"
+else
+  fail_test "a bare return inside an EXIT trap reports the pending exit status, not the preceding test (got: $bare_return_form)"
+fi
+explicit_return_form="$(bash -c 'f() { local c; if [ -n "$V" ]; then [ "$V" != none ]; c=$?; return "$c"; fi; }; h() { if f; then echo CACHE-HONOURED; else echo PENDING-STATUS-LEAKED; fi; }; trap h EXIT; V=su0join; exit 1')"
+if [ "$explicit_return_form" = CACHE-HONOURED ]; then
+  pass "the explicit-status form probe_su now uses is immune to trap-context status leakage"
+else
+  fail_test "the explicit-status form probe_su now uses is immune to trap-context status leakage (got: $explicit_return_form)"
+fi
+
+# The reclamation rm rides run_root, whose quoting differs per su dialect; prove the contract under
+# the sh -c dialect as well as the default join style the runs above used.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+MOCK_SU_DIALECT=shc MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a helper install failure still fails the run under the sh -c su dialect"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "the sh -c dialect run really staged a bundle (guards the count below against vacuity)"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "a failing run reclaims its staging under the sh -c su dialect"
+
+# Reclamation must also run from the SIGNAL path, not only plain exit: a provisioner killed while
+# blocked in adb install has pushed its bundle and promoted its transaction record, and the signal
+# handler — which never reaches the post-commit cleanup — must reclaim both. The journal marker is
+# deliberately not part of this claim; it is the durable record reconcile needs.
+for reclaim_signal in TERM INT; do
+  case "$reclaim_signal" in TERM) expected_signal_status=143 ;; INT) expected_signal_status=130 ;; esac
+  rm -rf "$DEVICE_ADB_STATE_DIR"
+  : > "$MOCK_CALL_LOG"
+  signal_install_pid_file="$TMP/reclaim-$reclaim_signal-install.pid"
+  signal_output="$TMP/reclaim-$reclaim_signal-output.txt"
+  # Job control is required for the INT case: a plain async job in a non-interactive shell starts
+  # with SIGINT ignored, and a trap on a signal ignored at entry never arms — the provisioner would
+  # ignore the kill instead of running its handler. Under set -m the child gets its own process
+  # group with default dispositions, which is also how production's own deadline wrapper runs it.
+  set -m
+  MOCK_APK_INSTALL=block \
+  MOCK_APK_INSTALL_PID_FILE="$signal_install_pid_file" \
+  MOCK_STATE_DIR="$TMP" \
+    bash "$PROVISION" "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame \
+      > "$signal_output" 2>&1 &
+  signal_provision_pid=$!
+  set +m
+  signal_ready=0
+  signal_attempt=0
+  while [ "$signal_attempt" -lt 200 ]; do
+    if [ -s "$signal_install_pid_file" ]; then signal_ready=1; break; fi
+    /bin/sleep 0.05
+    signal_attempt=$((signal_attempt + 1))
+  done
+  if [ "$signal_ready" -eq 1 ]; then
+    pass "$reclaim_signal reclamation scenario reaches the blocked install with staging in place"
+  else
+    LAST_OUTPUT="$signal_output"
+    fail_test "$reclaim_signal reclamation scenario reaches the blocked install with staging in place"
+  fi
+  assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 5 "the staged bundle exists before $reclaim_signal arrives (guards the counts below against vacuity)"
+  kill "-$reclaim_signal" "$signal_provision_pid" 2>/dev/null || true
+  if wait "$signal_provision_pid"; then signal_status=0; else signal_status=$?; fi
+  if [ "$signal_status" -eq "$expected_signal_status" ]; then
+    pass "$reclaim_signal exits the provisioner with its signal status"
+  else
+    LAST_OUTPUT="$signal_output"
+    fail_test "$reclaim_signal exits the provisioner with its signal status (got $signal_status)"
+  fi
+  assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "$reclaim_signal-interrupted run reclaims its staged bundle from the signal handler"
+  assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "$reclaim_signal-interrupted run reclaims its protected transaction record from the signal handler"
+done
+
+# Reclamation is scoped to the run's OWN identity: a concurrent provisioner's staging must survive.
+# The panel-side sweep that would remove a genuinely orphaned identity runs inside the device
+# transaction script, which the fixture deliberately does not emulate — it is executed for real in
+# the sandbox below instead, because a fixture model can agree with a test and disagree with
+# production.
+FOREIGN_STAGING_ID="0123456789abcdef0123456789abcdef"
+mkdir -p "$DEVICE_ADB_STATE_DIR"
+: > "$DEVICE_ADB_STATE_DIR/hapaneld-helper-$FOREIGN_STAGING_ID"
+: > "$DEVICE_ADB_STATE_DIR/.helper-transaction-$FOREIGN_STAGING_ID-$(printf '%064d' 7)"
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "a run with a concurrent provisioner's staging present succeeds"
+assert_count "$(count_device_artifacts "hapaneld-helper-$FOREIGN_STAGING_ID")" 1 "host reclamation never touches another run's staged bundle"
+assert_count "$(count_device_artifacts ".helper-transaction-$FOREIGN_STAGING_ID-*")" 1 "host reclamation never touches another run's transaction record"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 1 "the run's own staging is still reclaimed alongside the survivor"
+rm -rf "$DEVICE_ADB_STATE_DIR"
+
+# A reclamation the transport refuses must not change the run's outcome, must say so, and must name
+# the mechanism that recovers the leftovers (the next transaction's panel-side sweep).
+MOCK_STAGING_CLEANUP=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "a successful provision stays successful when staging reclamation fails"
+assert_contains "could not reclaim this run's root-helper staging" "a failed reclamation is reported, not silent"
+assert_contains 'next provisioning transaction .* removes it automatically' "the report names the recovery mechanism"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 5 "the unreclaimed bundle really was left behind (the report is about something real)"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 1 "the unreclaimed transaction record really was left behind"
+rm -rf "$DEVICE_ADB_STATE_DIR"
+
+# A run that refuses before executing any transaction still reclaims what it staged.
+MOCK_VENDOR_RC_STATE=unexpected \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "an unexpected vendor rc still refuses the run"
+assert_log_contains 'rm -f .*hapaneld-helper-[0-9a-f]{32}' "exit-path reclamation still runs in the pre-promotion window (guards the check below against vacuity)"
+
+# The .new guard defends a state no end-to-end scenario reaches — any run that survives long enough
+# to stage files has already derived the record path too — so the shipped cleanup is executed
+# directly in that state: identity valid, record path still empty. Unguarded, the appended
+# "$path.new" becomes a RELATIVE `.new` inside a privileged rm. The promoted state is asserted
+# positively as well, so deleting the append outright cannot pass either.
+CLEANUP_PROBE_ID="eeee5555eeee5555eeee5555eeee5555"
+CLEANUP_PROBE_SHA="$(printf '%064d' 2)"
+CLEANUP_SRC="$(sed -n '/^cleanup_root_helper_staging()/,/^}/p' "$PROVISION")"
+if printf '%s\n' "$CLEANUP_SRC" | grep -q 'cleanup_root_helper_staging()'; then
+  pass "the shipped cleanup function was extracted (an empty probe must not pass by doing nothing)"
+else
+  fail_test "the shipped cleanup function was extracted (an empty probe must not pass by doing nothing)"
+fi
+run_cleanup_probe() {
+  local record_path="$1" capture="$TMP/cleanup-probe-capture"
+  : > "$capture"
+  /bin/bash -uc "
+    YEL=''; X=''
+    run_root() { printf '%s\n' \"\$1\" >> '$capture'; }
+    $CLEANUP_SRC
+    ROOT_HELPER_TRANSACTION_ID='$CLEANUP_PROBE_ID'
+    ROOT_HELPER_STAGED_HELPER='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID'
+    ROOT_HELPER_STAGED_RC='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.rc'
+    ROOT_HELPER_STAGED_HYBRID_RC='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.hrc'
+    ROOT_HELPER_STAGED_SERVICE='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.svc'
+    ROOT_HELPER_STAGED_TRANSACTION='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.txn'
+    ROOT_HELPER_TRANSACTION_PATH='$record_path'
+    cleanup_root_helper_staging"
+  CLEANUP_PROBE_COMMAND="$(cat "$capture")"
+}
+run_cleanup_probe ""
+case "$CLEANUP_PROBE_COMMAND" in
+  *"hapaneld-helper-$CLEANUP_PROBE_ID"*) pass "pre-promotion cleanup still names the staged bundle (guards the check below against vacuity)" ;;
+  *) fail_test "pre-promotion cleanup still names the staged bundle (guards the check below against vacuity)" ;;
+esac
+if printf '%s\n' "$CLEANUP_PROBE_COMMAND" | grep -Eq '(^| )\.new( |$)'; then
+  fail_test "an exit before promotion never passes a relative .new to the privileged rm"
+else
+  pass "an exit before promotion never passes a relative .new to the privileged rm"
+fi
+run_cleanup_probe "/data/adb/hapaneld/.helper-transaction-$CLEANUP_PROBE_ID-$CLEANUP_PROBE_SHA"
+case "$CLEANUP_PROBE_COMMAND" in
+  *".helper-transaction-$CLEANUP_PROBE_ID-$CLEANUP_PROBE_SHA.new"*) pass "a promoted record's .new leftover is reclaimed once the path is owned" ;;
+  *) fail_test "a promoted record's .new leftover is reclaimed once the path is owned" ;;
+esac
+
+# ── #76: the panel-side sweep, executed from the shipped script ─────────────────────────────────
+# The sweep is lifted from the transaction-script heredoc exactly as generation ships it, its
+# @TRANSACTION_ID@ placeholder substituted the same way production's sed does, its absolute path
+# roots mechanically redirected into a sandbox, and the real function body run under /bin/sh. No
+# emulation is involved; the glob, the keep-set and the fail-closed journal parse are the shipped
+# ones.
+SWEEP_OWN_ID="aaaa1111aaaa1111aaaa1111aaaa1111"
+SWEEP_SRC="$(awk '/^  cat > "\$transaction_file" <<'\''EOF'\''$/{f=1;next} f&&/^EOF$/{exit} f' "$PROVISION" \
+  | sed -n '/^sweep_disposable_staging()/,/^}/p' \
+  | sed -e "s/@TRANSACTION_ID@/$SWEEP_OWN_ID/g" \
+        -e 's|/data/|${SWEEP_ROOT}/data/|g' -e 's|/system/|${SWEEP_ROOT}/system/|g')"
+if printf '%s\n' "$SWEEP_SRC" | grep -q 'sweep_disposable_staging()' &&
+   printf '%s\n' "$SWEEP_SRC" | grep -Fq "$SWEEP_OWN_ID"; then
+  pass "the shipped sweep function was extracted and substituted (an empty harness must not pass by doing nothing)"
+else
+  fail_test "the shipped sweep function was extracted and substituted (an empty harness must not pass by doing nothing)"
+fi
+
+run_sweep() {
+  SWEEP_ROOT="$1" transaction_id="$2" /bin/sh -uc "$SWEEP_SRC
+sweep_disposable_staging"
+}
+mk_sweep_tree() {
+  SWEEP_TREE="$TMP/sweep-tree"
+  rm -rf "$SWEEP_TREE"
+  mkdir -p "$SWEEP_TREE/data/local/tmp" "$SWEEP_TREE/data/adb/hapaneld" "$SWEEP_TREE/system/bin"
+}
+assert_swept() {
+  if [ -e "$SWEEP_TREE/$1" ] || [ -L "$SWEEP_TREE/$1" ]; then fail_test "$2 (still present: $1)"
+  else pass "$2"; fi
+}
+assert_kept() {
+  if [ -e "$SWEEP_TREE/$1" ] || [ -L "$SWEEP_TREE/$1" ]; then pass "$2"
+  else fail_test "$2 (missing: $1)"; fi
+}
+
+SWEEP_STALE_ID="bbbb2222bbbb2222bbbb2222bbbb2222"
+SWEEP_ARG_ID="cccc3333cccc3333cccc3333cccc3333"
+SWEEP_JOURNAL_ID="dddd4444dddd4444dddd4444dddd4444"
+SWEEP_SHA="$(printf '%064d' 1)"
+
+# Disposable, protected and namespaced artifacts side by side in one tree.
+mk_sweep_tree
+for suffix in '' .rc .txn; do : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID$suffix"; done
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-probe-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA"
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA.new"
+ln -s /nonexistent "$SWEEP_TREE/data/adb/hapaneld/.helper-probe-$SWEEP_JOURNAL_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID.txn"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper.probe-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-deadbeef"
+if run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID"; then pass "the shipped sweep runs cleanly"; else fail_test "the shipped sweep runs cleanly"; fi
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a stale staged bundle is swept"
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID.rc" "a stale bundle sidecar is swept"
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID.txn" "a stale staged transaction script is swept"
+assert_swept "data/adb/hapaneld/.helper-probe-$SWEEP_STALE_ID" "a stale probe is swept"
+assert_swept "data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA" "a stale protected transaction record is swept"
+assert_swept "data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA.new" "an interrupted promotion's .new leftover is swept"
+assert_swept "data/adb/hapaneld/.helper-probe-$SWEEP_JOURNAL_ID" "a broken symlink still occupying a staging path is swept"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID.txn" "the sweeping transaction's own staging is kept"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID" "the identity named by the verb argument is kept"
+assert_kept "data/local/tmp/hapaneld-helper.probe-$SWEEP_STALE_ID" "the standalone daemon installer's dot-separated staging is out of reach"
+assert_kept "data/local/tmp/hapaneld-helper-deadbeef" "a name without a full 32-hex identity is left alone"
+
+# A recovery journal protects the staging it references — on every journal marker path, including
+# the /system one.
+for journal_path in "data/adb/hapaneld/.helper-upgrade.marker" "system/bin/.hapaneld-helper-upgrade"; do
+  mk_sweep_tree
+  printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=%s\n' "$SWEEP_JOURNAL_ID" > "$SWEEP_TREE/$journal_path"
+  : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_JOURNAL_ID"
+  : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+  run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+  assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_JOURNAL_ID" "staging referenced by the ${journal_path##*/} journal is kept"
+  assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "unreferenced staging is still swept while that journal exists"
+done
+
+# A journal whose identity cannot be read is a journal whose references are unknown: the sweep must
+# refuse to act at all rather than guess.
+mk_sweep_tree
+printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=not-a-valid-identity\n' > "$SWEEP_TREE/data/adb/hapaneld/.helper-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a malformed journal identity aborts the whole sweep"
+
+# A marker path that exists but is not a plain regular file aborts the sweep too — even a symlink
+# pointing at a perfectly valid marker, because a journal is written as a root-owned regular file
+# and anything else at that path is not a state the sweep may interpret.
+mk_sweep_tree
+printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=%s\n' "$SWEEP_JOURNAL_ID" > "$SWEEP_TREE/data/adb/hapaneld/real-marker-target"
+ln -s "$SWEEP_TREE/data/adb/hapaneld/real-marker-target" "$SWEEP_TREE/data/adb/hapaneld/.helper-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a symlink journal marker aborts the whole sweep even when its target is valid"
+mk_sweep_tree
+mkdir "$SWEEP_TREE/data/adb/hapaneld/.helper-hybrid-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a directory at a journal marker path aborts the whole sweep"
+
+# ── #76: staged inputs are consumed before the first destructive step ───────────────────────────
+# Both reclamation paths rest on this ordering: a verb that loses its staged inputs can only fail
+# early and cleanly, never mid-mutation. Pinned against the shipped heredoc per mutating verb: the
+# last @STAGED_*@ read must precede the first destructive operation — helper retirement (stop/pkill),
+# any move onto a live path or journal marker (mv -f), any restore of recorded state
+# (restore_or_remove), and any rm -f of a live path. Two rm -f forms are deliberately NOT
+# destructive: removing `*.hapaneld-recovery` copies (they belong to an already-concluded
+# transaction, and only after helper_journal_state proved no journal references them) and removing
+# the verb's own `$probe` staging before re-creating it. Both line numbers must exist: a verb where
+# either side is unmatched fails rather than passing vacuously.
+DEVICE_HEREDOC="$TMP/device-heredoc.sh"
+awk '/^  cat > "\$transaction_file" <<'\''EOF'\''$/{f=1;next} f&&/^EOF$/{exit} f' "$PROVISION" > "$DEVICE_HEREDOC"
+for verb in install_system install_systemless install_hybrid rollback_system rollback_systemless rollback_hybrid; do
+  ordering="$(awk -v verb="$verb" '
+    $0 == verb"() {" {inside=1}
+    inside && /@STAGED_[A-Z_]*@/ {last_read=NR}
+    inside && !first_destruct && (/^  stop hapaneld_helper/ || /^  pkill -x hapaneld-helper/ || /^  mv -f / || /^  restore_or_remove / || (/^  rm -f / && !/hapaneld-recovery/ && !/\$probe/)) {first_destruct=NR}
+    inside && /^\}/ {print last_read+0, first_destruct+0; exit}
+  ' "$DEVICE_HEREDOC")"
+  last_read="${ordering%% *}"; first_destruct="${ordering##* }"
+  if [ "${last_read:-0}" -gt 0 ] && [ "${first_destruct:-0}" -gt 0 ] && [ "$last_read" -lt "$first_destruct" ]; then
+    pass "$verb consumes its staged inputs before its first destructive step (read $last_read < destroy $first_destruct)"
+  else
+    fail_test "$verb consumes its staged inputs before its first destructive step (read ${last_read:-none}, destroy ${first_destruct:-none})"
+  fi
+done
+
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
   printf '%d assertion(s) failed\n' "$failures" >&2

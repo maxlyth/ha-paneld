@@ -52,6 +52,49 @@ emit_db_snapshot_stage() {
   fi
 }
 
+# Model the panel's id-named staging as real files. The journal was modelled as boolean flag files
+# that the harness reset before every run, so no test could observe staging carried between runs —
+# that blind spot is why Issue #76's accumulation was invisible to a green suite. Both halves of a
+# run's staging are modelled: the protected transaction record in /data/adb/hapaneld AND the pushed
+# bundle in /data/local/tmp, flattened by basename into one directory.
+DEVICE_ADB_DIR="$STATE_DIR/device-data-adb-hapaneld"
+
+device_adb_paths() {
+  printf '%s' "$1" \
+    | grep -oE '/data/(adb/hapaneld/\.helper-(transaction|probe)|local/tmp/hapaneld-helper)-[0-9a-f]+(-[0-9a-f]+)?(\.[a-z]+)?' \
+    || true
+}
+
+model_device_adb_dir() {
+  local text="$1" path
+  case "$text" in
+    *'echo TRANSACTION_READY'*|*'echo PROBE_READY'*)
+      [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] || return 0
+      mkdir -p "$DEVICE_ADB_DIR" || return 0
+      for path in $(device_adb_paths "$text"); do
+        : > "$DEVICE_ADB_DIR/${path##*/}"
+      done
+      # The promotion command names both <record>.new and <record>; its mv -f leaves only the
+      # final record, so a phantom .new must not survive in the model.
+      rm -f "$DEVICE_ADB_DIR"/.helper-transaction-*.new
+      return 0
+      ;;
+  esac
+  case "$text" in
+    *'rm -f '*)
+      for path in $(device_adb_paths "$text"); do
+        rm -f "$DEVICE_ADB_DIR/${path##*/}"
+      done
+      # A glob in a privileged rm expands on the panel; expand it in the model too, or a too-broad
+      # wildcard cleanup would sail past the identity-scoping survival contracts.
+      for pattern in $(printf '%s' "$text" | grep -oE '/data/(adb/hapaneld/\.helper-[a-z]+|local/tmp/hapaneld-helper)-[0-9a-f-]*\*' || true); do
+        base="${pattern##*/}"
+        rm -f "$DEVICE_ADB_DIR/${base%\*}"* 2>/dev/null || true
+      done
+      ;;
+  esac
+}
+
 if [ "${1:-}" = "connect" ]; then
   exit 0
 fi
@@ -83,6 +126,13 @@ case "${1:-}" in
     [ "${MOCK_ROOT:-1}" = 1 ]
     ;;
   push)
+    # A pushed staged input becomes a real modelled file, so its later reclamation is observable.
+    for pushed in "$@"; do
+      case "$pushed" in
+        /data/local/tmp/hapaneld-helper-*)
+          mkdir -p "$DEVICE_ADB_DIR" && : > "$DEVICE_ADB_DIR/${pushed##*/}" ;;
+      esac
+    done
     ;;
   pull)
     [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
@@ -137,6 +187,14 @@ case "${1:-}" in
   shell)
     shift
     command_text="$*"
+    # Reclamation transport failure: the run's own outcome must not change, and the notice must be
+    # honest about what happens next (the panel-side sweep removes the leftovers).
+    if [ "${MOCK_STAGING_CLEANUP:-ok}" = fail ] &&
+       printf '%s' "$command_text" | grep -Eq 'rm -f[^|]*(hapaneld-helper-[0-9a-f]{32}|\.helper-transaction-)'; then
+      printf 'rm: permission denied\n' >&2
+      exit 1
+    fi
+    model_device_adb_dir "$command_text"
     case "$command_text" in
       "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
         case "${MOCK_LAUNCHER_START:-ok}" in
