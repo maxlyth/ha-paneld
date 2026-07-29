@@ -58,7 +58,7 @@ class MdnsHealthTest {
         )
     }
 
-    @Test fun networkCallbacksRevalidateMdnsIndependentlyOfMqttState() {
+    @Test fun networkCallbacksFeedTheStartupSafeMdnsReconcilerIndependentlyOfMqttState() {
         val service = File("src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt").readText()
         val available = service.substring(
             service.indexOf("override fun onAvailable"),
@@ -68,10 +68,31 @@ class MdnsHealthTest {
             service.indexOf("override fun onLinkPropertiesChanged"),
             service.indexOf("override fun onCapabilitiesChanged"),
         )
+        val lost = service.substring(
+            service.indexOf("override fun onLost"),
+            service.indexOf("runCatching { cm.registerDefaultNetworkCallback"),
+        )
+        val running = service.substring(
+            service.indexOf("ServiceStartupDisposition.RUNNING ->"),
+            service.indexOf("ServiceStartupDisposition.PROFILE_ACTIVATION_ROLLBACK ->"),
+        )
+        val replacementComplete = service.substring(
+            service.indexOf("if (!completed) {"),
+            service.indexOf("} catch (e: InterruptedException)"),
+        )
 
-        assertTrue(available.contains("revalidateMdns(observed, defaultNetworkIpv4"))
+        assertTrue(available.contains("mdnsRuntimeReconciler.networkChanged("))
+        assertTrue(available.contains("cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address }"))
+        assertTrue(available.indexOf("mdnsRuntimeReconciler.networkChanged(") < available.indexOf("runtime.observe() ?: return"))
         assertTrue(linkChange.contains("if (network != defaultNetwork) return"))
-        assertTrue(linkChange.contains("revalidateMdns(observed, defaultNetworkIpv4"))
+        assertTrue(linkChange.contains("mdnsRuntimeReconciler.networkChanged("))
+        assertTrue(linkChange.contains("linkProperties.linkAddresses.map { it.address }"))
+        assertTrue(linkChange.indexOf("mdnsRuntimeReconciler.networkChanged(") < linkChange.indexOf("runtime.observe() ?: return"))
+        assertTrue(lost.contains("mdnsRuntimeReconciler.networkLost()"))
+        assertTrue(running.contains("mdnsRuntimeReconciler.runtimeRunning()"))
+        assertTrue(replacementComplete.contains("mdnsRuntimeReconciler.runtimeRunning()"))
+        assertTrue(service.contains("mdnsRuntimeReconciler = MdnsRuntimeReconciler(runtime, ::revalidateMdns)"))
+        assertTrue(service.contains("current.value.mdns.start(request.lanIp)"))
         assertTrue(service.contains("LatestDispatcher.singleSlot<MdnsRevalidation>"))
         assertFalse(service.contains("it.mdns.start()\n                            it.mqtt.reconnect()"))
     }

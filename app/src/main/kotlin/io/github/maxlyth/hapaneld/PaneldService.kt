@@ -708,6 +708,7 @@ class PaneldService : Service() {
         },
         onFailure = { failure -> Log.w(TAG, "mDNS revalidation failed", failure) },
     )
+    private lateinit var mdnsRuntimeReconciler: MdnsRuntimeReconciler<NetworkRuntime>
     // MQTT watchdog runs on a DEDICATED thread (not Dispatchers.IO), so slow/contended su can't starve it.
     @Volatile private var mqttWatchdogAlive = false
     @Volatile private var mqttWatchdog: OwnedThread? = null
@@ -1078,6 +1079,7 @@ class PaneldService : Service() {
                 operation = { performNetworkReconfigure(this) },
             ),
         )
+        mdnsRuntimeReconciler = MdnsRuntimeReconciler(runtime, ::revalidateMdns)
         rendererPreparation = RendererPreparationCoordinator(
             builtinPackage = SystemController.BUILTIN_DASHBOARD,
             state = { RendererPreparationState(
@@ -1801,7 +1803,12 @@ class PaneldService : Service() {
             if (!completed) {
                 operationCost.outcome(FeatureCostOutcome.REJECTED)
                 if (executionDeadline.remainingMs() > 0L) requestNetworkRecovery()
-            } else obligationsCompleted = true
+            } else {
+                obligationsCompleted = true
+                // A default-network callback can also land while replacement owns the unobservable
+                // RECONFIGURING state. Reconcile its retained topology against the published successor.
+                mdnsRuntimeReconciler.runtimeRunning()
+            }
         } catch (e: InterruptedException) {
             cost?.outcome(FeatureCostOutcome.CANCELLED)
             Thread.currentThread().interrupt()
@@ -2611,6 +2618,9 @@ class PaneldService : Service() {
         Thread({
             when (awaitServiceStartup(startup, startupActivationGeneration)) {
                 ServiceStartupDisposition.RUNNING -> {
+                    // DHCP may have arrived while ServiceRuntimeOwner was STARTING, when callbacks cannot
+                    // borrow a runtime observation. Replay their latest topology after RUNNING is published.
+                    mdnsRuntimeReconciler.runtimeRunning()
                     startupRecoveryPrefs.edit().clear().commit()
                     updateForegroundStatus("Listening on :${config.httpPort}")
                 }
@@ -2902,10 +2912,12 @@ class PaneldService : Service() {
             override fun onAvailable(network: Network) {
                 defaultNetwork = network
                 observeTransport(network, cm.getNetworkCapabilities(network))
+                mdnsRuntimeReconciler.networkChanged(
+                    cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address },
+                )
                 val observed = runtime.observe() ?: return
                 val target = observed.value.mqtt
                 target.refreshDiscoveryAddress()
-                revalidateMdns(observed, defaultNetworkIpv4(cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address }))
                 when (networkAvailableAction(target.state, target.configuredBroker)) {
                     NetworkAvailableAction.NONE -> Unit
                     NetworkAvailableAction.RECONNECT -> {
@@ -2923,10 +2935,11 @@ class PaneldService : Service() {
 
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
                 if (network != defaultNetwork) return
+                mdnsRuntimeReconciler.networkChanged(
+                    linkProperties.linkAddresses.map { it.address },
+                )
                 val observed = runtime.observe() ?: return
                 observed.value.mqtt.refreshDiscoveryAddress()
-                // This covers the DHCP address arriving after service boot and later address changes.
-                revalidateMdns(observed, defaultNetworkIpv4(linkProperties.linkAddresses.map { it.address }))
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
@@ -2936,6 +2949,7 @@ class PaneldService : Service() {
             override fun onLost(network: Network) {
                 if (network != defaultNetwork) return
                 observeTransport(network, null)
+                mdnsRuntimeReconciler.networkLost()
                 defaultNetwork = null
             }
         }
