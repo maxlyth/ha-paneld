@@ -121,6 +121,8 @@ run_provision() {
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_HEALTH_READY_AFTER="${MOCK_HEALTH_READY_AFTER:-3}" \
   MOCK_HEALTH_HANG_SECONDS="${MOCK_HEALTH_HANG_SECONDS:-3}" \
+  MOCK_HEALTH_HANG_PID_FILE="${MOCK_HEALTH_HANG_PID_FILE:-}" \
+  MOCK_HEALTH_HANG_DONE_FILE="${MOCK_HEALTH_HANG_DONE_FILE:-}" \
   APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-1}" \
   APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-3}" \
   MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
@@ -3127,6 +3129,74 @@ MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk
 assert_failure "a genuinely dead agent still fails after the budget expires"
 assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
 
+# A health probe that never answers must consume only curl's remaining-budget clamp. This exercises
+# the blocking shape rather than treating an immediate fixture failure as deadline coverage.
+HEALTH_HANG_PID_FILE="$TMP/health-hang.pids"
+HEALTH_HANG_DONE_FILE="$TMP/health-hang.done"
+HEALTH_HANG_STATUS_FILE="$TMP/health-hang.status"
+rm -f "$HEALTH_HANG_PID_FILE" "$HEALTH_HANG_DONE_FILE" "$HEALTH_HANG_STATUS_FILE"
+(
+  MOCK_HEALTH=hang \
+  MOCK_HEALTH_HANG_SECONDS=30 \
+  MOCK_HEALTH_HANG_PID_FILE="$HEALTH_HANG_PID_FILE" \
+  MOCK_HEALTH_HANG_DONE_FILE="$HEALTH_HANG_DONE_FILE" \
+  APP_LAUNCH_PROBE_SECONDS=2 \
+  APP_HEALTH_TIMEOUT_SECONDS=1 \
+    run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  printf '%s\n' "$LAST_STATUS" > "$HEALTH_HANG_STATUS_FILE"
+) &
+health_run_pid=$!
+health_hang_ready=0
+health_hang_attempt=0
+while [ "$health_hang_attempt" -lt 500 ]; do
+  if [ -s "$HEALTH_HANG_PID_FILE" ]; then health_hang_ready=1; break; fi
+  kill -0 "$health_run_pid" 2>/dev/null || break
+  /bin/sleep 0.01
+  health_hang_attempt=$((health_hang_attempt + 1))
+done
+first_fixture_pid="$(awk 'NR == 1 {print $1}' "$HEALTH_HANG_PID_FILE" 2>/dev/null)"
+first_sleep_pid="$(awk 'NR == 1 {print $2}' "$HEALTH_HANG_PID_FILE" 2>/dev/null)"
+if [ "$health_hang_ready" = 1 ] && kill -0 "$first_fixture_pid" 2>/dev/null && \
+   kill -0 "$first_sleep_pid" 2>/dev/null && [ ! -s "$HEALTH_HANG_DONE_FILE" ]; then
+  pass "MOCK_HEALTH=hang observably blocks inside its bounded probe"
+else
+  fail_test "MOCK_HEALTH=hang observably blocks inside its bounded probe"
+fi
+wait "$health_run_pid"
+LAST_OUTPUT="$TMP/output.txt"
+LAST_STATUS="$(cat "$HEALTH_HANG_STATUS_FILE")"
+assert_failure "a hanging health probe fails through the normal bounded health path"
+assert_contains 'still not answering .* after 1s' "a hanging health probe reports the configured final budget"
+direct_start_line="$(grep -n 'shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+post_direct_health_calls="$(awk -v start="$direct_start_line" 'NR > start && /^curl .*\/health$/ {count++} END {print count+0}' "$MOCK_CALL_LOG")"
+if [ "$post_direct_health_calls" -eq 2 ]; then
+  pass "the direct route is followed by exactly two total health checks"
+else
+  fail_test "the direct route is followed by exactly two total health checks (saw $post_direct_health_calls)"
+fi
+post_direct_health_line="$(awk -v start="$direct_start_line" 'NR > start && /^curl .*\/health$/ {print}' "$MOCK_CALL_LOG")"
+post_direct_launch_probes="$(printf '%s\n' "$post_direct_health_line" | grep -Ec '^curl .*--max-time 1 .*\/health$' || true)"
+post_direct_status_checks="$(printf '%s\n' "$post_direct_health_line" | grep -Ec '^curl .*--max-time 5 .*\/health$' || true)"
+if [ "$post_direct_launch_probes" -eq 1 ] && [ "$post_direct_status_checks" -eq 1 ]; then
+  pass "post-direct health calls are exactly one launch probe and one bounded status check"
+else
+  fail_test "post-direct health calls are exactly one launch probe and one bounded status check (saw $post_direct_launch_probes/1s, $post_direct_status_checks/5s)"
+fi
+if [ -s "$HEALTH_HANG_PID_FILE" ] && cmp -s "$HEALTH_HANG_PID_FILE" "$HEALTH_HANG_DONE_FILE"; then
+  pass "every hanging health probe completed its bounded wait"
+else
+  fail_test "every hanging health probe completed its bounded wait"
+fi
+health_process_leaked=0
+while read -r fixture_pid sleep_pid _; do
+  kill -0 "$fixture_pid" 2>/dev/null && health_process_leaked=1
+  kill -0 "$sleep_pid" 2>/dev/null && health_process_leaked=1
+done < "$HEALTH_HANG_PID_FILE"
+if [ "$health_process_leaked" = 0 ]; then
+  pass "hanging health probes leave no fixture or sleep process behind"
+else
+  fail_test "hanging health probes leave no fixture or sleep process behind"
+fi
 
 # ── #74: nothing may mutate a panel whose agent never answered ──────────────────────────────────
 # A health timeout used to fall through to the configuration POST and the restore import, so the run
@@ -3417,7 +3487,9 @@ assert_kept "data/local/tmp/hapaneld-helper-deadbeef" "a name without a full 32-
 
 # A recovery journal protects the staging it references — on every journal marker path, including
 # the /system one.
-for journal_path in "data/adb/hapaneld/.helper-upgrade.marker" "system/bin/.hapaneld-helper-upgrade"; do
+for journal_path in "data/adb/hapaneld/.helper-upgrade.marker" \
+                    "data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+                    "system/bin/.hapaneld-helper-upgrade"; do
   mk_sweep_tree
   printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=%s\n' "$SWEEP_JOURNAL_ID" > "$SWEEP_TREE/$journal_path"
   : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_JOURNAL_ID"
@@ -3462,6 +3534,70 @@ assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a directory at a j
 # either side is unmatched fails rather than passing vacuously.
 DEVICE_HEREDOC="$TMP/device-heredoc.sh"
 awk '/^  cat > "\$transaction_file" <<'\''EOF'\''$/{f=1;next} f&&/^EOF$/{exit} f' "$PROVISION" > "$DEVICE_HEREDOC"
+
+# Execute the complete emitted script through its production lock -> sweep -> verb dispatch path.
+# Direct function extraction above proves sweep semantics; this binds those semantics to the actual
+# entry point so deleting or moving the production call cannot leave the suite green.
+DISPATCH_SCRIPT="$TMP/device-dispatch.sh"
+sed -e "s/@TRANSACTION_ID@/$SWEEP_OWN_ID/g" \
+    -e 's|/data/|${SWEEP_ROOT}/data/|g' \
+    -e 's|/system/|${SWEEP_ROOT}/system/|g' \
+    -e 's|/vendor/|${SWEEP_ROOT}/vendor/|g' \
+    -e 's|/dev/.hapaneld-helper-transaction.lock|${SWEEP_ROOT}/dev/.hapaneld-helper-transaction.lock|g' \
+    "$DEVICE_HEREDOC" > "$DISPATCH_SCRIPT"
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID"
+dispatch_output="$TMP/device-dispatch-output"
+if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$dispatch_output" 2>&1; then
+  pass "the complete emitted transaction script dispatches a production verb"
+else
+  LAST_OUTPUT="$dispatch_output"
+  fail_test "the complete emitted transaction script dispatches a production verb"
+fi
+if [ "$(tail -n 1 "$dispatch_output")" = "LIVE_STATE=PRE_SWAP" ]; then
+  pass "production dispatch executes the selected discover-system verb"
+else
+  LAST_OUTPUT="$dispatch_output"
+  fail_test "production dispatch executes the selected discover-system verb"
+fi
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "production transaction dispatch reaches the staging sweep"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID" "production dispatch keeps the emitted transaction identity"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID" "production dispatch keeps the argv transaction identity"
+assert_swept "dev/.hapaneld-helper-transaction.lock" "production dispatch releases its transaction lock"
+
+# A live owner must reject before the sweep. This proves the top-level order, not merely that the
+# successful path eventually leaves no lock directory behind.
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock" "$SWEEP_TREE/vendor"
+printf '%s\n' "$$" > "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock/pid"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+busy_output="$TMP/device-dispatch-busy-output"
+if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$busy_output" 2>&1; then
+  busy_status=0
+else
+  busy_status=$?
+fi
+if [ "$busy_status" -eq 75 ] && [ "$(tail -n 1 "$busy_output")" = "TRANSACTION_BUSY" ]; then
+  pass "a live-owned transaction lock returns TRANSACTION_BUSY with status 75"
+else
+  LAST_OUTPUT="$busy_output"
+  fail_test "a live-owned transaction lock returns TRANSACTION_BUSY with status 75 (got $busy_status)"
+fi
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a live-owned transaction lock rejects before staging sweep"
+assert_kept "dev/.hapaneld-helper-transaction.lock" "failed lock admission preserves the live owner's lock"
+if [ "$(cat "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock/pid")" = "$$" ]; then
+  pass "failed lock admission preserves the live owner's identity"
+else
+  fail_test "failed lock admission preserves the live owner's identity"
+fi
+
 for verb in install_system install_systemless install_hybrid rollback_system rollback_systemless rollback_hybrid; do
   ordering="$(awk -v verb="$verb" '
     $0 == verb"() {" {inside=1}

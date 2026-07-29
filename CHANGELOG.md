@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **Provisioning now handles slow first starts without proceeding against an unavailable panel.** Upgrades allow additional time for database migration and startup, while configuration writes, restores and Home Assistant token creation remain blocked until the panel responds successfully.
+
+- **Interrupted rooted upgrades no longer accumulate temporary helper files.** Provisioning removes its staging files on success, failure or interruption, and later runs safely reclaim leftovers from earlier attempts.
+
 - **LAN discovery now starts reliably when a panel boots before DHCP finishes.** Network-address updates received while the service is still starting are retained and applied as soon as the runtime is ready, instead of mDNS remaining stopped until the app is restarted.
 
 - **Backups taken on Android 8.1 panels now include the panel's stored application state again.** A runtime incompatibility on older Android meant the backup bundle silently omitted its `app_state` entry on those devices — the backup completed and reported success, and your settings still restored from the bundle's own configuration section, but the panel's stored application state did not come back with it. Backups now capture that state on every supported Android version. If you rely on `.hpb` backups from an Android 8.1 panel, take a fresh backup after upgrading.

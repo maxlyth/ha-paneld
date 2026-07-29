@@ -8,6 +8,8 @@ output_file=""
 want_output_file=0
 write_format=""
 want_write_format=0
+max_time=""
+want_max_time=0
 for arg in "$@"; do
   if [ "$want_output_file" = 1 ]; then
     output_file="$arg"
@@ -19,9 +21,15 @@ for arg in "$@"; do
     want_write_format=0
     continue
   fi
+  if [ "$want_max_time" = 1 ]; then
+    max_time="$arg"
+    want_max_time=0
+    continue
+  fi
   case "$arg" in
     -o|--output) want_output_file=1 ;;
     -w|--write-out) want_write_format=1 ;;
+    --max-time) want_max_time=1 ;;
     http://*|https://*) url="$arg" ;;
   esac
 done
@@ -195,8 +203,20 @@ JSON
     # measurable without the suite inheriting an unbounded wait. An earlier unbounded version made
     # every health call in the run block and pushed the suite past ten minutes.
     if [ "${MOCK_HEALTH:-ok}" = "hang" ]; then
-      /bin/sleep "${MOCK_HEALTH_HANG_SECONDS:-3}"
-      exit 22
+      case "$max_time" in ''|*[!0-9]*|0) exit 2 ;; esac
+      hang_seconds="${MOCK_HEALTH_HANG_SECONDS:-30}"
+      case "$hang_seconds" in ''|*[!0-9]*|0) exit 2 ;; esac
+      [ "$hang_seconds" -ge "$max_time" ] || exit 2
+      /bin/sleep "$max_time" &
+      sleep_pid=$!
+      if [ -n "${MOCK_HEALTH_HANG_PID_FILE:-}" ]; then
+        printf '%s %s %s\n' "$$" "$sleep_pid" "$max_time" >> "$MOCK_HEALTH_HANG_PID_FILE"
+      fi
+      wait "$sleep_pid"
+      if [ -n "${MOCK_HEALTH_HANG_DONE_FILE:-}" ]; then
+        printf '%s %s %s\n' "$$" "$sleep_pid" "$max_time" >> "$MOCK_HEALTH_HANG_DONE_FILE"
+      fi
+      exit 28
     fi
     if [ "${MOCK_HEALTH:-ok}" = "slow" ]; then
       probe_file="${MOCK_STATE_DIR:?}/health-probes"
