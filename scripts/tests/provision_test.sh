@@ -2218,11 +2218,8 @@ assert_failure "a truncated pull stops the upgrade"
 assert_contains 'bytes but the panel captured' "a truncated pull is refused by the byte comparison"
 assert_marker_absent "a truncated pull never claims a captured snapshot"
 
-# Staging cleanup is best-effort by design (maintainer scope ruling 2026-07-30): a proven capture
-# keeps its verdict whatever happens to the panel-side staging afterwards — the file on this host IS
-# the restore point. The survivor custody layer (durable retained-artifact records, dialect-rendered
-# recovery commands, tri-state absence verification) was deliberately descoped; its worked
-# implementation is preserved at 01206ebc.
+# Staging cleanup is best-effort: a proven capture keeps its verdict if the transport cannot remove
+# the uniquely named panel-side staging afterwards, because the host file is the restore point.
 reset_db_txn_state
 MOCK_DB_CLEANUP=retained run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a retained staging directory does not revoke a proven capture"
@@ -2299,6 +2296,15 @@ if [ "$(grep -c 'SNAPSHOT_TXN_HOST_DB="\$base.db"' "$PROVISION")" -eq 1 ] &&
    grep -q 'for stale in "\${SNAPSHOT_TXN_HOST_DB:-}" "\${SNAPSHOT_TXN_HOST_RECEIPT:-}"' "$PROVISION"; then
   pass "the database and its receipt are registered as one cleanup unit, in separate unsplittable variables"
 else fail_test "the database and its receipt are registered as one cleanup unit, in separate unsplittable variables"; fi
+receipt_guard_line="$(grep -n 'if \[ -e "\$receipt" \] || \[ -L "\$receipt" \]; then' "$PROVISION" | cut -d: -f1)"
+receipt_owner_line="$(grep -n 'SNAPSHOT_TXN_HOST_RECEIPT="\$receipt"' "$PROVISION" | cut -d: -f1)"
+if [ -n "$receipt_guard_line" ] && [ -n "$receipt_owner_line" ] && [ "$receipt_guard_line" -lt "$receipt_owner_line" ]; then
+  pass "a pre-existing receipt is refused before this run claims ownership"
+else fail_test "a pre-existing receipt is refused before this run claims ownership"; fi
+if grep -q '\[ "\$SNAPSHOT_TXN_HOST_DB_WORK" -ef "\$SNAPSHOT_TXN_HOST_DB_TARGET" \]' "$PROVISION" &&
+   grep -q '\[ "\$SNAPSHOT_TXN_HOST_RECEIPT_WORK" -ef "\$SNAPSHOT_TXN_HOST_RECEIPT_TARGET" \]' "$PROVISION"; then
+  pass "publication-window cleanup removes final paths only when their working hardlink proves ownership"
+else fail_test "publication-window cleanup removes final paths only when their working hardlink proves ownership"; fi
 
 # The one-line installer forwards its argv to the downloaded provisioner unfiltered, so the escape
 # reaches it; pinned on the exact invocation.

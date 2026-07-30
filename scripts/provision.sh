@@ -125,6 +125,8 @@ ALLOW_MISSING_DB_SNAPSHOT=0
 DB_SUPPORTED_USER_VERSION_MIN=1
 DB_SUPPORTED_USER_VERSION_MAX=14
 SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
+SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
+SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 # Whether the panel agent ever answered /health. Every mutation after the launch step is gated on
@@ -3364,6 +3366,25 @@ check_data_capacity() {
 # hold the exit open.
 discard_db_snapshot_txn() {
   local stale
+  # Keep each temporary hardlink until its final name is registered. If a signal lands after ln but
+  # before registration, inode identity proves whether this run created the final path; an unrelated
+  # pre-existing destination is never removed.
+  if [ -n "${SNAPSHOT_TXN_HOST_DB_WORK:-}" ]; then
+    if [ -n "${SNAPSHOT_TXN_HOST_DB_TARGET:-}" ] &&
+       [ "$SNAPSHOT_TXN_HOST_DB_WORK" -ef "$SNAPSHOT_TXN_HOST_DB_TARGET" ]; then
+      rm -f "$SNAPSHOT_TXN_HOST_DB_TARGET" 2>/dev/null || true
+    fi
+    rm -f "$SNAPSHOT_TXN_HOST_DB_WORK" 2>/dev/null || true
+  fi
+  if [ -n "${SNAPSHOT_TXN_HOST_RECEIPT_WORK:-}" ]; then
+    if [ -n "${SNAPSHOT_TXN_HOST_RECEIPT_TARGET:-}" ] &&
+       [ "$SNAPSHOT_TXN_HOST_RECEIPT_WORK" -ef "$SNAPSHOT_TXN_HOST_RECEIPT_TARGET" ]; then
+      rm -f "$SNAPSHOT_TXN_HOST_RECEIPT_TARGET" 2>/dev/null || true
+    fi
+    rm -f "$SNAPSHOT_TXN_HOST_RECEIPT_WORK" 2>/dev/null || true
+  fi
+  SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
+  SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
   # The database and its receipt are registered in their own variables (never one word-split
   # string) and removed together: a signal in the publication window can never leave a receipt
   # describing a file that is gone, or a file no receipt admits to. A host survivor is named in
@@ -3378,10 +3399,8 @@ discard_db_snapshot_txn() {
   SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
   if [ -n "${SNAPSHOT_TXN_REMOTE:-}" ]; then
     stale="$SNAPSHOT_TXN_REMOTE"; SNAPSHOT_TXN_REMOTE=""
-    # Best-effort by design (maintainer scope ruling 2026-07-30): the staging is owner-only,
-    # uniquely named so no later run can collide with it, and confined to panel-local tmp.
-    # Verifying its absence over the very transport whose failure usually brought us here is the
-    # custody layer this lane deliberately descoped; the || true is that decision, not an accident.
+    # Staging is owner-only, uniquely named so no later run can collide with it, and confined to
+    # panel-local tmp. Cleanup remains best-effort because the transport may already be unavailable.
     run_root "rm -rf $stale ${stale}-script" >/dev/null 2>&1 || true
   fi
 }
@@ -3459,10 +3478,8 @@ snapshot_panel_database() {
   # impossible rather than unlikely, because the loser of a staging collision must never remove the
   # winner's in-flight capture. With 128 bits of /dev/urandom in the name, the registered path
   # cannot denote another run's staging, which is why registration may precede creation below.
-  # Concurrency custody beyond the script's own stage_exists refusal — ordering games between
-  # simultaneous installer runs against one panel — is deliberately out of scope (maintainer
-  # ruling 2026-07-30): the project supports one installer run per panel at a time, the same
-  # ruling already applied to the root-helper transaction lock.
+  # The supported operating model is one installer run per panel at a time. The script still refuses
+  # a staging collision rather than touching a path it did not create.
   local txn_capture_id
   txn_capture_id="$(host_transaction_id)" || { snapshot_txn_refuse "could not create a unique capture identity" "Check host access to /dev/urandom, then retry."; return 0; }
   stage="/data/local/tmp/.hapaneld-db-txn.$txn_capture_id"
@@ -3612,6 +3629,7 @@ EOF2
   fi
   mv "$pull_tmp" "$pull_tmp.break-glass.db" && pull_tmp="$pull_tmp.break-glass.db"
   SNAPSHOT_TXN_HOST_DB="$pull_tmp"
+  SNAPSHOT_TXN_HOST_DB_WORK="$pull_tmp"
   if ! run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/ha-paneld.db" "$pull_tmp" >/dev/null 2>&1 || [ ! -s "$pull_tmp" ]; then
     snapshot_txn_refuse "the verified snapshot could not be pulled from the panel" "Check adb connectivity to $TARGET, then re-run."
     return 0
@@ -3628,12 +3646,14 @@ EOF2
   fi
   # ln is the no-replace publication: it fails atomically if anything appeared at the destination
   # since the check above, and never follows a symlink into overwriting something else.
+  SNAPSHOT_TXN_HOST_DB_TARGET="$base.db"
   if ! ln "$pull_tmp" "$base.db" 2>/dev/null; then
     snapshot_txn_refuse "the snapshot could not be published exclusively at $base.db" "Check the backup directory, then re-run."
     return 0
   fi
-  rm -f "$pull_tmp" 2>/dev/null || true
   SNAPSHOT_TXN_HOST_DB="$base.db"
+  rm -f "$pull_tmp" 2>/dev/null || true
+  SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
   # Everything the receipt will claim is re-read from the PUBLISHED file, so the receipt binds the
   # bytes a later reader will actually find, not the working copy they came from.
   pulled_bytes="$(wc -c < "$base.db" | tr -d ' ')"
@@ -3656,7 +3676,6 @@ EOF2
   # can exist before the claim is proven. Built exclusively, published atomically, non-regular
   # destinations refused.
   receipt="$base.backup-receipt.txt"
-  SNAPSHOT_TXN_HOST_RECEIPT="$receipt"
   if [ -e "$receipt" ] || [ -L "$receipt" ]; then
     snapshot_txn_refuse "the receipt destination $receipt already exists" "Move it aside by hand, then re-run."
     return 0
@@ -3668,7 +3687,9 @@ EOF2
     snapshot_txn_refuse "could not create the receipt working file beside $receipt" "Check that the backup directory is writable."
     return 0
   fi
-  {
+  SNAPSHOT_TXN_HOST_RECEIPT_WORK="$receipt_tmp"
+  SNAPSHOT_TXN_HOST_RECEIPT_TARGET="$receipt"
+  if ! {
     printf 'receipt_version=2\n'
     printf 'database=%s\n' "$base.db"
     printf 'database_bytes=%s\n' "$pulled_bytes"
@@ -3682,14 +3703,19 @@ EOF2
     printf 'capture_binary=%s\n' "$mf_sqlite"
     printf 'capture_script_sha256=%s\n' "$script_sha"
     printf 'settings_export=%s\n' "${AUTO_EXPORT_FILE:-${EXPORT_FILE:-none}}"
-  } > "$receipt_tmp" && chmod 600 "$receipt_tmp" && ln "$receipt_tmp" "$receipt" 2>/dev/null && rm -f "$receipt_tmp" || {
-    rm -f "$receipt_tmp" 2>/dev/null
+  } > "$receipt_tmp" || ! chmod 600 "$receipt_tmp"; then
+    snapshot_txn_refuse "the receipt working file could not be written" "Check that $CONFIG_BACKUP_DIR is writable."
+    return 0
+  fi
+  if ! ln "$receipt_tmp" "$receipt" 2>/dev/null; then
     snapshot_txn_refuse "the receipt could not be published" "Check that $CONFIG_BACKUP_DIR is writable."
     return 0
-  }
-  # Cleanup is best-effort by design (maintainer scope ruling 2026-07-30): the capture is already
-  # proven and keeps its verdict — the file on this host IS the restore point. The staging is
-  # owner-only and uniquely named, so a survivor is inert; the || true records that decision.
+  fi
+  SNAPSHOT_TXN_HOST_RECEIPT="$receipt"
+  rm -f "$receipt_tmp" 2>/dev/null || true
+  SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
+  # Cleanup is best-effort after a proven capture: the host file remains the restore point even if
+  # the uniquely named, owner-only panel staging cannot be removed over a failing transport.
   run_root "rm -f ${stage}-script && rm -rf $stage" >/dev/null 2>&1 || true
   SNAPSHOT_TXN_REMOTE=""
   SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
