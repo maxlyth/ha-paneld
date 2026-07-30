@@ -31,7 +31,7 @@ Shelly's current range spans several distinct Android platforms. Firmware codena
 
 The Wall Display is an **Android device**, not an ESP-based embedded product like Shelly Gen1/Gen2 switches. It runs a custom Android launcher app called "Stargate".
 
-The original Wall Display, X2, X1i/X2i and XL are not one interchangeable hardware class: they use MT6580, SC7731E, RK3326-S and RK3566 respectively. The shared OTA channels describe package compatibility, not a shared SoC. Available firmware images are `userdebug` builds, so `adb root` may be possible *if* an ADB connection can be established, but no user-facing route has been verified.
+The original Wall Display, X2, X1i/X2i and XL are not one interchangeable hardware class: they use MT6580, SC7731E, RK3326-S and RK3566 respectively. The shared OTA channels describe package compatibility, not a shared SoC. The legacy image targets a `userdebug` base build, so `adb root` may be possible there *if* an ADB connection can be established, but no user-facing route has been verified; the modern image carries no build fingerprint, so the same cannot be claimed for it. See *Access model* below.
 
 Shelly documents temperature and humidity sensing on the original and X2, and ambient-light sensing on the original, X2, X1i, X2i and XL. X2, X1i and X2i have documented proximity sensing; the XL has a motion sensor. Their exact components and app-independent Android access paths have not been established. Relay count is model- and base-dependent, and no app-accessible standard Android relay interface has been established.
 
@@ -71,7 +71,11 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 > [!WARNING]
 > **There is no user-facing adb or root access exposed on Shelly Wall Display devices.** Shelly does not surface Developer options, `adb`, or `su` to end users. This is the primary constraint on any ha-paneld integration.
 
-**A caveat worth probing:** both the legacy and modern firmware are **userdebug** builds (confirmed from the OTA build fingerprints). On a userdebug build, `adb root` *succeeds* — so **if** an `adb` connection can be established (e.g. Developer options can be reached, or a service-mode/USB path exists), full root and the daemon become available. This has not been tested on a unit; it's the most promising avenue for a deeper ha-paneld integration and is worth investigating before assuming the device is fully closed.
+**A caveat worth probing, but only on legacy hardware.** The legacy OTA declares its target build in `META-INF/com/android/metadata`, and at firmware 2.7.3 that is still `alps/full_k400_mt6580_32_n/k400_mt6580_32_n:7.0/NRD90M/vXD100008:userdebug/test-keys`. On a userdebug build `adb root` *succeeds*, so **if** an `adb` connection can be established, root and the daemon become available. Two limits on that evidence: the fingerprint describes the device's **base OS image**, whose timestamp is 2022-11-14 and which the app-only OTA does not change; and no `adb` route has been verified on a unit.
+
+**It does not extend to the modern track.** The WallDisplayV2 package ships **no build fingerprint at all** — there is no `META-INF/com/android/metadata`, and no `userdebug`, `test-keys`, `release-keys` or `ro.build.fingerprint` string anywhere outside the bundled APKs (checked at 2.7.3). Its updater-script reads `ro.build.product` and `ro.build.version.incremental` for logging only. So the **retail modern OTA** evidences no build type either way, and Shelly states that production devices ship the `user` build type with ADB and developer facilities disabled by default.
+
+One qualification, so the scope is exact: an archived **partition** image (not part of either retail OTA track) identifies itself as Android 11 `userdebug`. Its SKU-to-codename filing is unreliable and its display platform contradicts the current retail specification, so it is evidence about that image, not about what modern retail units run. Treat modern hardware as closed unless a live unit shows otherwise.
 
 **What the closed-by-default posture means for ha-paneld:**
 - Without an `adb` foothold, the daemon (`hapaneld-helper`) cannot be installed — no privileged path to `/system`.
@@ -234,7 +238,7 @@ Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-dis
 | Field | `shelly-wall-display` (legacy) | `shelly-wall-display-v2` (modern) | Source |
 |---|---|---|---|
 | `soc_class` | currently MT6580, but the X2 is SC7731E | currently PX30/rk3326, but X1i/X2i are RK3326-S and XL is RK3566 | official model pages; OTA fingerprints |
-| `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (but userdebug — see *Access model*) |
+| `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (legacy targets a userdebug base build; modern is unevidenced — see *Access model*) |
 | `hardware.led.mechanism` | `none` | `none` | current profile declaration; not verified across every model |
 | `hardware.screen_off` | `brightness-zero` | `brightness-zero` | no privileged screen-off path |
 | `hardware.relay_base` | absent | absent | relay operation is routed through the HA Shelly integration; no app-accessible standard path established |
@@ -249,7 +253,7 @@ Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-dis
 - Whether Android `SensorManager` exposes each documented ambient-light or motion/proximity sensor.
 - `platform.has_recents` per model (the Stargate home image may suppress overview).
 - Display density defaults and an appropriate `provisioning.display.density` per model.
-- Whether an `adb` foothold + `adb root` is reachable on the userdebug build (would unlock the daemon).
+- Whether an `adb` foothold + `adb root` is reachable on the legacy userdebug base build (would unlock the daemon). For modern hardware the prior question is what build type it actually runs, which the OTA does not reveal.
 - Whether ha-paneld's HTTP service (`:8888`) is reachable from the LAN (depends on the device's firewall).
 
 ---
