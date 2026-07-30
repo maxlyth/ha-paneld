@@ -127,6 +127,7 @@ DB_SUPPORTED_USER_VERSION_MAX=14
 SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
 SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
 SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
+SNAPSHOT_TXN_DEFERRED_SIGNAL=""
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 # Whether the panel agent ever answered /health. Every mutation after the launch step is gated on
@@ -3362,6 +3363,20 @@ check_data_capacity() {
 # dies between the script succeeding and the post-pull cleanup: the script cannot clean up state it
 # already handed over. Removal rides the production adb() deadline wrapper, so a dead panel cannot
 # hold the exit open.
+snapshot_txn_defer_host_signals() {
+  SNAPSHOT_TXN_DEFERRED_SIGNAL=""
+  trap 'SNAPSHOT_TXN_DEFERRED_SIGNAL=130' INT
+  trap 'SNAPSHOT_TXN_DEFERRED_SIGNAL=143' TERM
+}
+
+snapshot_txn_restore_host_signals() {
+  local deferred="$SNAPSHOT_TXN_DEFERRED_SIGNAL"
+  SNAPSHOT_TXN_DEFERRED_SIGNAL=""
+  trap 'handle_provision_signal 130' INT
+  trap 'handle_provision_signal 143' TERM
+  [ -z "$deferred" ] || handle_provision_signal "$deferred"
+}
+
 discard_db_snapshot_txn() {
   local stale
   # Keep each temporary hardlink until its final name is registered. If a signal lands after ln but
@@ -3621,14 +3636,24 @@ EOF2
   # The working file is created in the destination's own directory — never a TMPDIR fallback, which
   # can sit on another filesystem where the no-replace ln publication below cannot work at all.
   local pull_tmp
+  snapshot_txn_defer_host_signals
   pull_tmp="$(mktemp "$(dirname "$base.db")/.pull.XXXXXX" 2>/dev/null)" || pull_tmp=""
+  if [ -n "$pull_tmp" ]; then
+    SNAPSHOT_TXN_HOST_DB="$pull_tmp"
+    SNAPSHOT_TXN_HOST_DB_WORK="$pull_tmp"
+    if mv "$pull_tmp" "$pull_tmp.break-glass.db"; then
+      pull_tmp="$pull_tmp.break-glass.db"
+      SNAPSHOT_TXN_HOST_DB="$pull_tmp"
+      SNAPSHOT_TXN_HOST_DB_WORK="$pull_tmp"
+    else
+      pull_tmp=""
+    fi
+  fi
+  snapshot_txn_restore_host_signals
   if [ -z "$pull_tmp" ]; then
     snapshot_txn_refuse "could not create a working file beside $base.db" "Check that the backup directory is writable."
     return 0
   fi
-  mv "$pull_tmp" "$pull_tmp.break-glass.db" && pull_tmp="$pull_tmp.break-glass.db"
-  SNAPSHOT_TXN_HOST_DB="$pull_tmp"
-  SNAPSHOT_TXN_HOST_DB_WORK="$pull_tmp"
   if ! run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/ha-paneld.db" "$pull_tmp" >/dev/null 2>&1 || [ ! -s "$pull_tmp" ]; then
     snapshot_txn_refuse "the verified snapshot could not be pulled from the panel" "Check adb connectivity to $TARGET, then re-run."
     return 0
@@ -3681,13 +3706,17 @@ EOF2
   fi
   # The working file is created in the destination's own directory — never a TMPDIR fallback, which
   # can sit on another filesystem where the no-replace ln publication below cannot work at all.
+  snapshot_txn_defer_host_signals
   receipt_tmp="$(mktemp "$(dirname "$receipt")/.receipt.XXXXXX" 2>/dev/null)" || receipt_tmp=""
+  if [ -n "$receipt_tmp" ]; then
+    SNAPSHOT_TXN_HOST_RECEIPT_WORK="$receipt_tmp"
+    SNAPSHOT_TXN_HOST_RECEIPT_TARGET="$receipt"
+  fi
+  snapshot_txn_restore_host_signals
   if [ -z "$receipt_tmp" ]; then
     snapshot_txn_refuse "could not create the receipt working file beside $receipt" "Check that the backup directory is writable."
     return 0
   fi
-  SNAPSHOT_TXN_HOST_RECEIPT_WORK="$receipt_tmp"
-  SNAPSHOT_TXN_HOST_RECEIPT_TARGET="$receipt"
   if ! {
     printf 'receipt_version=2\n'
     printf 'database=%s\n' "$base.db"

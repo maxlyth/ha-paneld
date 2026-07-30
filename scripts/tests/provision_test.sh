@@ -2305,6 +2305,12 @@ if grep -q '\[ "\$SNAPSHOT_TXN_HOST_DB_WORK" -ef "\$SNAPSHOT_TXN_HOST_DB_TARGET"
    grep -q '\[ "\$SNAPSHOT_TXN_HOST_RECEIPT_WORK" -ef "\$SNAPSHOT_TXN_HOST_RECEIPT_TARGET" \]' "$PROVISION"; then
   pass "publication-window cleanup removes final paths only when their working hardlink proves ownership"
 else fail_test "publication-window cleanup removes final paths only when their working hardlink proves ownership"; fi
+if [ "$(grep -c 'snapshot_txn_defer_host_signals' "$PROVISION")" -eq 3 ] &&
+   [ "$(grep -c 'snapshot_txn_restore_host_signals' "$PROVISION")" -eq 3 ] &&
+   grep -q 'SNAPSHOT_TXN_HOST_DB_WORK="\$pull_tmp"' "$PROVISION" &&
+   grep -q 'SNAPSHOT_TXN_HOST_RECEIPT_WORK="\$receipt_tmp"' "$PROVISION"; then
+  pass "temporary creation defers signals until database and receipt ownership are registered"
+else fail_test "temporary creation defers signals until database and receipt ownership are registered"; fi
 
 # The one-line installer forwards its argv to the downloaded provisioner unfiltered, so the escape
 # reaches it; pinned on the exact invocation.
