@@ -2311,6 +2311,11 @@ if [ "$(grep -c 'snapshot_txn_defer_host_signals' "$PROVISION")" -eq 3 ] &&
    grep -q 'SNAPSHOT_TXN_HOST_RECEIPT_WORK="\$receipt_tmp"' "$PROVISION"; then
   pass "temporary creation defers signals until database and receipt ownership are registered"
 else fail_test "temporary creation defers signals until database and receipt ownership are registered"; fi
+restore_handler_line="$(grep -n "trap 'handle_provision_signal 130' INT" "$PROVISION" | tail -1 | cut -d: -f1)"
+read_deferred_line="$(grep -n 'deferred="\$SNAPSHOT_TXN_DEFERRED_SIGNAL"' "$PROVISION" | cut -d: -f1)"
+if [ -n "$restore_handler_line" ] && [ -n "$read_deferred_line" ] && [ "$restore_handler_line" -lt "$read_deferred_line" ]; then
+  pass "real signal handlers are restored before the deferred signal is read or cleared"
+else fail_test "real signal handlers are restored before the deferred signal is read or cleared"; fi
 
 # The one-line installer forwards its argv to the downloaded provisioner unfiltered, so the escape
 # reaches it; pinned on the exact invocation.

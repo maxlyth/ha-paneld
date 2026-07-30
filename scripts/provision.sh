@@ -3370,10 +3370,11 @@ snapshot_txn_defer_host_signals() {
 }
 
 snapshot_txn_restore_host_signals() {
-  local deferred="$SNAPSHOT_TXN_DEFERRED_SIGNAL"
-  SNAPSHOT_TXN_DEFERRED_SIGNAL=""
+  local deferred
   trap 'handle_provision_signal 130' INT
   trap 'handle_provision_signal 143' TERM
+  deferred="$SNAPSHOT_TXN_DEFERRED_SIGNAL"
+  SNAPSHOT_TXN_DEFERRED_SIGNAL=""
   [ -z "$deferred" ] || handle_provision_signal "$deferred"
 }
 
