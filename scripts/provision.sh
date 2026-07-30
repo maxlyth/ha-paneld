@@ -1465,30 +1465,121 @@ host_transaction_id() {
   printf '%s\n' "$id"
 }
 
-ensure_root_path() {
-  probe_su && return 0
-  [ "$SU_PROBE_TIMED_OUT" = 0 ] || fail "root-access inspection timed out" \
-    "adb or a privilege prompt did not respond within ${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}s." \
-    "Nothing was installed. Restore adb responsiveness, dismiss any on-panel root prompt, then re-run."
+# A negative root probe is only accepted from a transport that proves it is still alive to answer:
+# a probe whose transport died mid-question looks identical to a genuine "no", and acting on an
+# unproven negative would treat an unknown capability as a decided one.
+probe_transport_alive() {
+  local deadline="${1:-15}" probe_alive
+  probe_alive="$(run_with_deadline "$deadline" "$ADB_COMMAND" -s "$TARGET" shell echo HAPANELD_TRANSPORT_ALIVE 2>/dev/null | tr -d '\r')" || probe_alive=""
+  case "$probe_alive" in
+    *HAPANELD_TRANSPORT_ALIVE*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
-  # Userdebug panels may expose root only after `adb root`. Unsupported production builds reject this
-  # harmlessly; a successful restart briefly drops the transport, so reconnect before probing again.
-  adb -s "$TARGET" root >/dev/null 2>&1 || true
-  sleep 1
-  adb connect "$TARGET" >/dev/null 2>&1 || true
+# The panel's root capability is decided ONCE, before anything consumes it. resolve_root_route is
+# called from the main flow ahead of the database capture; the capture gate and the helper/APK
+# mutation both act on the stored verdict, so they cannot disagree, and no later phase re-asks a
+# question the panel might answer differently a second time. The whole decision — first probe,
+# `adb root` escalation where the probe said no (userdebug panels may expose root only after
+# `adb root`; unsupported production builds reject it harmlessly; a successful restart briefly
+# drops the transport, so reconnect before probing again), and the reprobe — runs under one
+# aggregate deadline (ROOT_RESOLVE_TIMEOUT_SECONDS, default 90s), each step spending only the
+# remaining budget. Verdicts:
+#   rooted            — a working root route; SU_FORM holds it for run_root
+#   unrooted          — a PROVEN "no": every probe completed and the transport proved it was
+#                       still alive to answer
+#   unknown-timeout   — a probe or the whole sequence ran out of time; capability undecided
+#   unknown-transport — the transport died mid-question; capability undecided
+# Consumers fail closed on both unknown verdicts: an undecided panel is exactly the one whose
+# transport could recover into root a moment after a skip or a helperless install.
+ROOT_ROUTE_VERDICT=""
+min_deadline() {
+  if [ "$1" -le "$2" ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi
+}
+resolve_root_route() {
+  local budget="${ROOT_RESOLVE_TIMEOUT_SECONDS:-90}" start="$SECONDS" remaining
+  case "$budget" in ''|*[!0-9]*|0) budget=90 ;; esac
+  local saved_probe_timeout="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}" probe_timeout
+  case "$saved_probe_timeout" in ''|*[!0-9]*|0) saved_probe_timeout=45 ;; esac
+  probe_timeout="$saved_probe_timeout"
+  [ "$probe_timeout" -le "$budget" ] || probe_timeout="$budget"
+  PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$probe_timeout"
+  if probe_su; then
+    PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$saved_probe_timeout"
+    ROOT_ROUTE_VERDICT=rooted
+    return 0
+  fi
+  PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$saved_probe_timeout"
+  if [ "$SU_PROBE_TIMED_OUT" = 1 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
+  remaining=$((budget - (SECONDS - start)))
+  if [ "$remaining" -le 0 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
+  if ! probe_transport_alive "$(min_deadline 15 "$remaining")"; then
+    ROOT_ROUTE_VERDICT=unknown-transport
+    return 0
+  fi
+  remaining=$((budget - (SECONDS - start)))
+  if [ "$remaining" -le 0 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
+  run_with_deadline "$remaining" "$ADB_COMMAND" -s "$TARGET" root >/dev/null 2>&1 || true
+  # A wait never STARTS past the deadline; a started one-second wait may overrun it by at most
+  # that one quantum, which the resolver's unit contract asserts.
+  remaining=$((budget - (SECONDS - start)))
+  [ "$remaining" -le 0 ] || sleep 1
+  remaining=$((budget - (SECONDS - start)))
+  if [ "$remaining" -gt 0 ]; then
+    run_with_deadline "$remaining" "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+  fi
   local state="" attempt=0
   while [ "$attempt" -lt 8 ]; do
     attempt=$((attempt + 1))
-    state="$(adb devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    remaining=$((budget - (SECONDS - start)))
+    [ "$remaining" -gt 0 ] || break
+    state="$(run_with_deadline "$remaining" "$ADB_COMMAND" devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')" || state=""
     [ "$state" = device ] && break
-    sleep 1
+    remaining=$((budget - (SECONDS - start)))
+    [ "$remaining" -le 0 ] || sleep 1
   done
+  remaining=$((budget - (SECONDS - start)))
+  if [ "$remaining" -le 0 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
   SU_FORM=""
-  probe_su && return 0
-  [ "$SU_PROBE_TIMED_OUT" = 0 ] || fail "root-access inspection timed out after adb root" \
-    "The panel reconnected, but its root route did not answer within ${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}s." \
-    "Nothing was installed. Check adb and any on-panel privilege prompt, then re-run."
-  return 1
+  probe_timeout="$saved_probe_timeout"
+  [ "$probe_timeout" -le "$remaining" ] || probe_timeout="$remaining"
+  PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$probe_timeout"
+  if probe_su; then
+    PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$saved_probe_timeout"
+    ROOT_ROUTE_VERDICT=rooted
+    return 0
+  fi
+  PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$saved_probe_timeout"
+  if [ "$SU_PROBE_TIMED_OUT" = 1 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
+  remaining=$((budget - (SECONDS - start)))
+  if [ "$remaining" -le 0 ]; then
+    ROOT_ROUTE_VERDICT=unknown-timeout
+    return 0
+  fi
+  # The liveness recheck spends only what is left, never more than its own 15s ceiling: a positive
+  # allowance must not quietly reopen an exhausted aggregate budget.
+  if probe_transport_alive "$(min_deadline 15 "$remaining")"; then
+    ROOT_ROUTE_VERDICT=unrooted
+    return 0
+  fi
+  ROOT_ROUTE_VERDICT=unknown-transport
+  return 0
 }
 
 helper_daemon_reply() {
@@ -1899,18 +1990,21 @@ install_root_helper() {
       "adb did not return the panel ABI. Nothing was installed; restore adb responsiveness, then re-run."
   fi
 
-  # A working in-app su route is a read-only probe. If that is absent, authenticate official helper
-  # bytes before attempting `adb root`, so no downloaded privileged payload is trusted after a panel
-  # privilege transition. Local builds are already operator-controlled and are resolved only if the
-  # root-ADB attempt succeeds.
-  probe_su && root_ready=1
-  [ "$SU_PROBE_TIMED_OUT" = 0 ] || fail "root-access inspection timed out" \
-    "adb or a privilege prompt did not respond within ${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}s." \
-    "Nothing was installed. Restore adb responsiveness, dismiss any on-panel root prompt, then re-run."
+  # The run's one root-route verdict, resolved before the capture gate, governs every release
+  # flavour below. An undecided route cannot reach this phase — the main-flow mutation gate stops
+  # it before pm clear — but this phase must still never silently treat an undecided route as
+  # rootless, so the unknown arm fails closed as defense in depth.
+  case "$ROOT_ROUTE_VERDICT" in
+    rooted) root_ready=1 ;;
+    unrooted) ;;
+    *)
+      fail "the panel's root route could not be determined before the helper phase" \
+        "Its root probe or adb-root escalation did not produce an answer, so the panel's capability is unknown." \
+        "Nothing was installed. Restore adb responsiveness on $TARGET, dismiss any on-panel privilege prompt, then re-run." ;;
+  esac
   case "$abi" in
     armeabi-v7a|arm64-v8a) ;;
     *)
-      if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
       if [ "$root_ready" = 0 ]; then
         echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
         return 0
@@ -1931,14 +2025,28 @@ install_root_helper() {
         "The release may be incomplete or GitHub may be unavailable. No panel changes were made."
     fi
     verify_release_helper "$helper" "$APK_RELEASE_TAG" "$abi"
-    if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
   elif [ -n "$APK_RELEASE_TAG" ]; then
     # Releases before the helper became a sealed release asset retain their historical direct-su
     # behaviour. Current releases always enter the authenticated branch above.
+    if [ "$root_ready" = 1 ]; then
+      # This flavour performs no helper transaction that would exercise the root route before the
+      # APK replace, so the cached rooted verdict is confirmed live here — by proving the
+      # PRIVILEGED property (uid=0), not an echo: for the adbd-root form a plain echo answers from
+      # any adbd, rooted or not. A proven route that no longer answers as root fails closed
+      # WITHOUT reclassification: the one decision stands; the panel is refusing to honour it.
+      local root_live
+      root_live="$(run_root "id" 2>/dev/null | tr -d '\r')" || root_live=""
+      case "$root_live" in
+        *uid=0*) : ;;
+        *)
+          fail "the panel's proven root route stopped answering before the legacy helper flow" \
+            "The route the run proved earlier no longer answers as root, so the panel's live state is unknown." \
+            "Nothing was installed. Re-run once adb and any on-panel root prompt are responsive again." ;;
+      esac
+    fi
     echo "   ${YEL}ℹ${X} $APK_RELEASE_TAG predates automatic root-helper assets"
     return 0
   else
-    if [ "$root_ready" = 0 ] && ensure_root_path; then root_ready=1; fi
     if [ "$root_ready" = 0 ]; then
       echo "   ${YEL}ℹ${X} no root path available — continuing without the root helper"
       return 0
@@ -3462,30 +3570,43 @@ snapshot_panel_database() {
   if ! printf '%s\n' "$pm_path_out" | grep -q '^package:'; then
     return 0
   fi
-  if ! probe_su; then
-    # POSITIVE tri-state: "no root route" must be the panel's answer, not the probe's absence. A
-    # probe that timed out has established nothing, and a probe whose transport died mid-question
-    # looks identical to a genuine "no" — so a negative is only accepted after the transport proves
-    # it is still alive to answer. Skipping on an unproven negative would silently drop the restore
-    # point on exactly the panel that is misbehaving.
-    if [ "${SU_PROBE_TIMED_OUT:-0}" = 1 ]; then
-      snapshot_txn_refuse "the panel's root route could not be determined (the probe timed out)" \
-        "Check adb responsiveness on $TARGET, then re-run."
-      return 0
-    fi
-    local probe_alive
-    probe_alive="$(run_with_deadline 15 "$ADB_COMMAND" -s "$TARGET" shell echo HAPANELD_TRANSPORT_ALIVE 2>/dev/null | tr -d '\r')" || probe_alive=""
-    case "$probe_alive" in
-      *HAPANELD_TRANSPORT_ALIVE*) : ;;
-      *)
-        snapshot_txn_refuse "the panel's root route could not be determined (the transport failed during the probe)" \
+  # The run's one root-route verdict, resolved before this gate, decides the capture. Both unknown
+  # verdicts refuse: a probe that never answered or a transport that died mid-question looks
+  # exactly like a genuine "no root", and could recover minutes later, just in time for the
+  # mutation — skipping on an undecided answer would silently drop the restore point on exactly
+  # the panel that is misbehaving. The empty-verdict arm is an internal invariant guard: the main
+  # flow resolves the route before any capture, and an unresolved route must never read as "no".
+  # Positive guard: ONLY a verdict of exactly "rooted" proceeds to the capture. Written this way so
+  # that deleting or mis-editing any arm below cannot let an unhandled verdict fall through into a
+  # capture — the structure, not the completeness of the case, is what keeps this closed.
+  if [ "$ROOT_ROUTE_VERDICT" != rooted ]; then
+    case "$ROOT_ROUTE_VERDICT" in
+      unrooted)
+        # No root route means /data/data is unreachable by design; the settings export above remains
+        # the only capture. This is a capability boundary, not a failure to reach a reachable
+        # database — and it is a PROVEN "no", resolved once for the whole run, so the mutation
+        # phases act on this same answer and can never proceed as root after this skip.
+        echo "   ${D}data-store snapshot: skipped — this panel has no root route, so only settings could be saved${X}"
+        return 0
+        ;;
+      unknown-timeout)
+        snapshot_txn_refuse "the panel's root route could not be determined (its probe or adb-root escalation never answered in time)" \
+          "Check adb responsiveness on $TARGET, then re-run."
+        return 0
+        ;;
+      unknown-transport)
+        snapshot_txn_refuse "the panel's root route could not be determined (its transport failed during root discovery)" \
           "Check adb connectivity to $TARGET, then re-run."
         return 0
         ;;
+      *)
+        snapshot_txn_refuse "the panel's root route was never resolved before the capture gate" \
+          "This is an installer defect; please report it."
+        return 0
+        ;;
     esac
-    # No root route means /data/data is unreachable by design; the settings export above remains the
-    # only capture. This is a capability boundary, not a failure to reach a reachable database.
-    echo "   ${D}data-store snapshot: skipped — this panel has no root route, so only settings could be saved${X}"
+    # Unreachable: every arm above returns. Present so that a future edit which drops an arm skips
+    # the capture rather than taking it.
     return 0
   fi
   db_source="/data/data/$PKG/databases/ha-paneld.db"
@@ -3860,11 +3981,30 @@ version_guard
 # helper or APK can mutate the panel. Existing panels fail closed if the export cannot be made.
 auto_export_before_upgrade
 
+# Decide the panel's root capability ONCE, before anything consumes it: the capture gate below and
+# the helper/APK mutation later act on this same verdict, so a "no" that lets the capture skip is
+# the same "no" the mutation proceeds under, and an undecided route stops both. On userdebug
+# panels this performs the run's only `adb root` escalation.
+resolve_root_route
+
 # Then the canonical store itself, where a root route allows it. Fail-closed like the export above:
 # a rooted panel that cannot produce a verified database restore point stops the run, and only the
 # explicit --allow-missing-db-snapshot escape admits it. Rootless panels are a capability boundary,
 # not a failure, and are skipped with a notice.
 snapshot_panel_database
+
+# THE mutation gate for an undecided route. The capture above may refuse on an unknown verdict and
+# --allow-missing-db-snapshot may admit that refusal, but the escape accepts a missing SNAPSHOT —
+# it never authorises mutating a panel whose capability is undecided. Every panel-changing step of
+# the run — pm clear, helper transactions, the APK replace, permission grants, accessibility,
+# persist-adb, vendor taming — sits after this line, so this single stop governs them all.
+case "$ROOT_ROUTE_VERDICT" in
+  rooted|unrooted) ;;
+  *)
+    fail "the panel's root route could not be determined" \
+      "Its root probe or adb-root escalation did not produce an answer, so the panel's capability is unknown." \
+      "No setting, configuration, helper or APK was changed. Restore adb responsiveness on $TARGET, dismiss any on-panel privilege prompt, then re-run." ;;
+esac
 
 reset_panel_config
 

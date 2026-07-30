@@ -2106,7 +2106,7 @@ assert_marker_absent() {
   if grep -qx 'HAPANELD_SNAPSHOT_RESULT=captured' "$LAST_OUTPUT"; then fail_test "$1 (unexpected captured marker)"
   else pass "$1"; fi
 }
-reset_db_txn_state() { rm -rf "$TMP/db-txn-sandbox" "$TMP"/db-txn-script*; rm -f "$TMP"/auto-backups/*.break-glass* 2>/dev/null; }
+reset_db_txn_state() { rm -rf "$TMP/db-txn-sandbox" "$TMP"/db-txn-script*; rm -f "$TMP"/auto-backups/*.break-glass* "$TMP/adb-root-escalated" "$TMP/bare-id-count" 2>/dev/null; }
 
 reset_db_txn_state
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -2223,9 +2223,252 @@ assert_marker_absent "a rootless skip never claims a captured snapshot"
 reset_db_txn_state
 MOCK_ROOT=0 MOCK_SNAPSHOT_TRANSPORT=dead run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "a transport that dies during root discovery stops the upgrade"
-assert_contains 'transport failed during the probe' "the dead-transport refusal is named"
+assert_contains 'transport failed during root discovery' "the dead-transport refusal is named"
 assert_marker_absent "a dead-transport probe never claims a captured snapshot"
 reset_db_txn_state
+
+# The rootless "no" above is also not the mutation path's answer: install_root_helper escalates via
+# `adb root` (ensure_root_path) before touching the panel, so a userdebug panel that answers
+# uid=2000 until `adb root` would have been mutated as root moments after a "no root route" skip.
+# The capture gate performs the same escalation first: the panel that CAN be captured IS captured.
+rm -f "$TMP/adb-root-escalated"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an upgrade on a userdebug panel whose root appears only after adb root succeeds"
+assert_marker_captured "the post-escalation capture emits the exact whole-line captured marker"
+assert_not_contains 'no root route' "$LAST_OUTPUT" "escalated root is never reported as a rootless skip"
+root_line="$(grep -En '^adb -s [^ ]+ root$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+push_line="$(grep -En 'push .*/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$root_line" ] && [ -n "$push_line" ] && [ "$root_line" -lt "$push_line" ]; then
+  pass "the capture gate itself performed the adb-root escalation before pushing the capture script"
+else
+  fail_test "the capture gate itself performed the adb-root escalation before pushing the capture script (root=${root_line:-none} push=${push_line:-none})"
+fi
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# Escalation that ends in an unanswerable probe is an unproven root route, not a "no": refuse,
+# naming the post-escalation probe, instead of mutating a panel whose capability is unknown.
+PRIVILEGE_INSPECTION_TIMEOUT_SECONDS=1 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_hang \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a probe that hangs after adb root stops the upgrade"
+assert_contains 'never answered in time' "the post-escalation timeout refusal is named"
+assert_marker_absent "a hung post-escalation probe never claims a captured snapshot"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# A transport that dies in the adbd restart answers exactly like a genuine "no root": the
+# post-escalation negative is only accepted from a transport that proves it is still alive.
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a transport that dies after adb root stops the upgrade"
+assert_contains 'transport failed during root discovery' "the post-escalation dead-transport refusal is named"
+assert_marker_absent "a post-escalation dead transport never claims a captured snapshot"
+assert_log_contains '^adb -s [^ ]+ root$' "the drop is observed AFTER a real escalation, not on the pre-escalation path"
+alive_probes="$(grep -Ec 'shell echo HAPANELD_TRANSPORT_ALIVE' "$MOCK_CALL_LOG" || true)"
+if [ "$alive_probes" -eq 2 ]; then
+  pass "the post-escalation liveness recheck is what observed the dead transport"
+else
+  fail_test "the post-escalation liveness recheck is what observed the dead transport (got $alive_probes liveness probes)"
+fi
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The escalation is ONE decision per run: a proven "no" at the capture gate is the same "no" the
+# helper install acts on, so a rootless run issues exactly one adb-root attempt — a second attempt
+# minutes later could answer differently and recreate the skip-then-mutate hazard the gate closes.
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a rootless upgrade still succeeds under the single-decision escalation"
+root_calls="$(grep -Ec '^adb -s [^ ]+ root$' "$MOCK_CALL_LOG" || true)"
+if [ "$root_calls" -eq 1 ]; then
+  pass "the whole run makes exactly one adb-root escalation attempt"
+else
+  fail_test "the whole run makes exactly one adb-root escalation attempt (got $root_calls)"
+fi
+reset_db_txn_state
+
+# An unknown capability is never mutated on: the operator's escape flag lets the REFUSED capture
+# continue, but the same cached unknown verdict then stops the helper phase fail-closed — a
+# transport that died in the adbd restart could recover into root a moment after a helperless
+# install stranded the panel.
+rm -f "$TMP/adb-root-escalated"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+assert_failure "the escape flag does not let a run mutate a panel whose root capability is unknown"
+assert_contains 'No setting, configuration, helper or APK was changed' "the MAIN-FLOW mutation gate is what stopped the run (not a later phase)"
+assert_contains 'continuing WITHOUT a database restore point' "the escape flag was honoured at the capture gate before the stop"
+assert_marker_absent "an unknown-capability run never claims a captured snapshot"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "an unknown-capability run never reaches the APK install"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The whole escalation runs under ONE aggregate deadline with remaining-time budgets per step: a
+# panel whose adb wedges after `adb root` refuses as unknown in bounded time instead of spending
+# the full per-step adb deadline on every reconnect attempt.
+rm -f "$TMP/adb-root-escalated"
+ROOT_RESOLVE_TIMEOUT_SECONDS=2 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates MOCK_ADB_DEVICES=hang_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a wedged escalation stops the upgrade within its aggregate deadline"
+assert_contains 'never answered in time' "the aggregate-deadline refusal reads as an undecided resolution"
+assert_marker_absent "a wedged escalation never claims a captured snapshot"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# A concluded unknown is consumed, never re-derived: with the escape flag the refused capture may
+# continue, but the helper phase reads the SAME verdict and stops before any mutation — without
+# re-asking the panel, whose hung probe might answer differently a second time.
+rm -f "$TMP/adb-root-escalated"
+: > "$MOCK_CALL_LOG"
+PRIVILEGE_INSPECTION_TIMEOUT_SECONDS=1 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_hang \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+assert_failure "the escape flag does not let the helper phase re-open a hung root resolution"
+assert_contains 'continuing WITHOUT a database restore point' "the escape flag was honoured at the refused capture first"
+assert_contains 'No setting, configuration, helper or APK was changed' "the main-flow mutation gate stops the hung resolution before any later phase"
+id_probes="$(grep -Ec '^adb -s [^ ]+ shell id$' "$MOCK_CALL_LOG" || true)"
+if [ "$id_probes" -eq 2 ]; then
+  pass "the resolution's hung probe is never re-asked by a later phase"
+else
+  fail_test "the resolution's hung probe is never re-asked by a later phase (got $id_probes id probes)"
+fi
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "an undecided route never reaches the APK install"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# Releases that predate helper assets return from the helper phase before any other root decision
+# point, so they must consume the run's verdict at the phase's head: an undecided route stops the
+# run before the historical direct-su path can reach the APK install.
+rm -f "$TMP/adb-root-escalated"
+PRE_ASSETS_APK="$TMP/ha-paneld-v0.9.2-manual-setup-required.apk"
+cp "$APK" "$PRE_ASSETS_APK"
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame --allow-missing-db-snapshot
+assert_failure "a pre-helper-assets release does not mutate a panel whose root capability is unknown"
+assert_contains 'No setting, configuration, helper or APK was changed' "the pre-assets flavour is stopped by the main-flow gate, before its own defense-in-depth arm"
+assert_not_contains 'predates automatic root-helper assets' "$LAST_OUTPUT" "the undecided route stops before the historical direct-su notice"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the pre-assets flavour never reaches the APK install on an undecided route"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The escape flag admits a refused CAPTURE, never a mutation on an undecided panel: with a
+# confirmed reset requested, the run stops at the mutation gate and pm clear is never issued.
+rm -f "$TMP/adb-root-escalated"
+: > "$MOCK_CALL_LOG"
+HAPANELD_RESET_CONFIRM=RESET MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config --allow-missing-db-snapshot
+assert_failure "a confirmed reset on an undecided root route stops the run"
+assert_contains 'continuing WITHOUT a database restore point' "the escape flag was honoured at the refused capture"
+assert_contains 'No setting, configuration, helper or APK was changed' "the mutation gate names what was left untouched"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a confirmed reset never reaches pm clear on an undecided route"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "no APK install on an undecided route"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The legacy pre-assets flavour performs no helper transaction before its APK replace, so it
+# confirms the proven route is still live before its direct-su era return: a live route proceeds,
+# a route that answered the resolution and has since died fails closed without reclassification.
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_success "a rooted panel upgrades through the pre-assets flavour"
+assert_contains 'predates automatic root-helper assets' "the legacy flavour is announced"
+assert_log_contains 'shell su 0 .id.$' "the proven route is confirmed live as uid=0 before the legacy return"
+assert_log_contains '^adb .* install' "the legacy flavour still installs the APK on a live route"
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT_LIVE=dead run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_failure "a proven route that stopped answering fails the legacy flavour closed"
+assert_contains 'proven root route stopped answering' "the legacy stop names the dead route"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "no APK install after the proven route died"
+reset_db_txn_state
+
+# The adbd-root form runs privileged commands as BARE shell commands, so a live check that merely
+# echoed a marker would answer from any adbd, rooted or not — proving nothing. These pin that the
+# check tests the privileged property itself on exactly that form.
+: > "$MOCK_CALL_LOG"
+MOCK_ADB_ROOT=1 run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_success "an adb-root panel upgrades through the pre-assets flavour"
+assert_log_contains '^adb .* install' "the adb-root panel still installs when its route is live"
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+MOCK_ADB_ROOT=1 MOCK_ROOT_LIVE=dead run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_failure "an adb-root panel that lost root since resolution fails the legacy flavour closed"
+assert_contains 'proven root route stopped answering' "the bare-shell live check names the dead route"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "no APK install after an adb-root route lost root"
+reset_db_txn_state
+
+# The resolver's aggregate deadline is enforced in the code, not only by wall-clock tests: driven
+# directly with a manipulated clock, an exhausted budget concludes unknown without granting the
+# liveness recheck a fresh allowance, and a positive allowance never exceeds min(remaining, 15).
+RESOLVER_UNIT_SOURCE="$(sed -n '/^min_deadline() {$/,/^}$/p; /^resolve_root_route() {$/,/^}$/p' "$PROVISION")"
+resolver_unit_case() {
+  {
+    printf 'set -u\nSECONDS=0\nTARGET=panel.test:5555\nADB_COMMAND=adb\nSU_FORM=""\nSU_PROBE_TIMED_OUT=0\nROOT_ROUTE_VERDICT=""\nPRIVILEGE_INSPECTION_TIMEOUT_SECONDS=45\nROOT_RESOLVE_TIMEOUT_SECONDS=50\n'
+    printf 'ADVANCE=%s\nRWD_COST=%s\n' "$1" "${2:-0}"
+    printf 'TRACE=%s\n' "$TMP/resolver-unit-trace"
+    printf ': > "$TRACE"\n'
+    # Stubs trace to a FILE, not stdout: the resolver captures some calls in command substitutions,
+    # which would otherwise swallow the very deadline values these contracts are about.
+    printf 'probe_su() { echo "PROBE_CAP=$PRIVILEGE_INSPECTION_TIMEOUT_SECONDS" >> "$TRACE"; SU_PROBE_TIMED_OUT=0; return 1; }\n'
+    printf 'probe_transport_alive() { echo "ALIVE_DEADLINE=$1" >> "$TRACE"; return 0; }\n'
+    printf 'run_with_deadline() { echo "RWD_DEADLINE=$1 CMD=$3" >> "$TRACE"; shift; SECONDS=$((SECONDS + RWD_COST)); "$@" || true; }\n'
+    printf 'adb() { :; }\n'
+    printf 'sleep() { SECONDS=$((SECONDS + ADVANCE)); }\n'
+    printf '%s\n' "$RESOLVER_UNIT_SOURCE"
+    printf 'resolve_root_route\ncat "$TRACE"\nprintf "VERDICT=%%s ELAPSED=%%s\\n" "$ROOT_ROUTE_VERDICT" "$SECONDS"\n'
+  } > "$TMP/resolver-unit-case.sh"
+  bash "$TMP/resolver-unit-case.sh"
+}
+resolver_unit_out="$(resolver_unit_case 5)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unrooted ELAPSED=45' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 2 ] && \
+   printf '%s\n' "$resolver_unit_out" | tail -2 | head -1 | grep -qx 'ALIVE_DEADLINE=5'; then
+  pass "the liveness allowance is capped to the remaining budget, not a fresh 15s"
+else
+  fail_test "the liveness allowance is capped to the remaining budget, not a fresh 15s ($resolver_unit_out)"
+fi
+resolver_unit_out="$(resolver_unit_case 40)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unknown-timeout ELAPSED=80' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 1 ]; then
+  pass "an exhausted aggregate budget concludes unknown without a post-deadline liveness probe, overrunning by at most one wait quantum"
+else
+  fail_test "an exhausted aggregate budget concludes unknown without a post-deadline liveness probe, overrunning by at most one wait quantum ($resolver_unit_out)"
+fi
+# Every deadline the resolver hands out is budget-derived, not a constant: the first liveness
+# allowance takes its own 15s ceiling while budget remains, the reprobe is capped to what is left,
+# and each adb step is given the remaining budget rather than a fixed value. These pin the
+# arithmetic that the elapsed-time assertions alone cannot see. Case 1 exercises all three.
+resolver_unit_out="$(resolver_unit_case 5)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'ALIVE_DEADLINE=15'; then
+  pass "the first liveness allowance takes the 15s ceiling while budget remains"
+else
+  fail_test "the first liveness allowance takes the 15s ceiling while budget remains ($resolver_unit_out)"
+fi
+resolver_unit_caps="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^PROBE_CAP=//p' | tr '\n' ',')"
+if [ "$resolver_unit_caps" = "45,5," ]; then
+  pass "the reprobe's inspection timeout is capped to the remaining budget"
+else
+  fail_test "the reprobe's inspection timeout is capped to the remaining budget (got ${resolver_unit_caps:-none})"
+fi
+# Budget-derived means the allowance SHRINKS as the reconnect window burns time; a hard-coded
+# per-step deadline would repeat one value.
+resolver_devices_first="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^RWD_DEADLINE=\([0-9]*\) CMD=devices$/\1/p' | head -1)"
+resolver_devices_last="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^RWD_DEADLINE=\([0-9]*\) CMD=devices$/\1/p' | tail -1)"
+if [ "$resolver_devices_first" = 45 ] && [ "$resolver_devices_last" = 10 ]; then
+  pass "each adb step in the escalation is bounded by the shrinking remaining budget, not a constant"
+else
+  fail_test "each adb step in the escalation is bounded by the shrinking remaining budget, not a constant (first=${resolver_devices_first:-none} last=${resolver_devices_last:-none})"
+fi
+
+# A wait must never START past the deadline: when the adb step itself consumes the whole budget,
+# the follow-up wait is skipped and elapsed time equals the budget exactly.
+resolver_unit_out="$(resolver_unit_case 25 50)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unknown-timeout ELAPSED=50' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 1 ]; then
+  pass "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget"
+else
+  fail_test "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget ($resolver_unit_out)"
+fi
 
 # Every refusal is FAIL-CLOSED with the named stage, leaves nothing behind on either side, and the
 # explicit escape admits the run without manufacturing a captured verdict.

@@ -5,6 +5,16 @@ printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
 [ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
 
+# adb-root is a TRANSITION, not a constant: MOCK_ADB_ROOT=1 models a panel already running adbd as
+# root; the escalates* modes model a userdebug panel that answers uid=2000 until the `root` verb is
+# called and only then changes state — the sequence the capture gate's escalation contracts need.
+# escalates: `id` answers uid=0 after the verb. escalates_then_hang: the probe never answers after
+# the verb. escalates_then_drop: the transport dies after the verb.
+adb_root_active() {
+  [ "${MOCK_ADB_ROOT:-0}" = 1 ] && return 0
+  [ "${MOCK_ADB_ROOT:-0}" = escalates ] && [ -f "$STATE_DIR/adb-root-escalated" ]
+}
+
 mark_hapaneld_stopped() {
   local apk_path="$1"
   if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [[ "$apk_path" != */shizuku.apk ]]; then
@@ -200,6 +210,12 @@ if [ "${1:-}" = "connect" ]; then
 fi
 
 if [ "${1:-}" = "devices" ]; then
+  # hang_after_escalation models adb wedging in the reconnect window the `root` verb opened, so a
+  # test can prove the escalation's aggregate deadline instead of the per-step adb deadline.
+  if [ "${MOCK_ADB_DEVICES:-ok}" = hang_after_escalation ] && [ -f "$STATE_DIR/adb-root-escalated" ]; then
+    trap 'exit 143' TERM INT
+    while :; do /bin/sleep 1; done
+  fi
   state="${MOCK_ADB_STATE:-device}"
   printf 'List of devices attached\n'
   if [ "$state" != "missing" ]; then
@@ -223,7 +239,12 @@ fi
 
 case "${1:-}" in
   root)
-    [ "${MOCK_ROOT:-1}" = 1 ]
+    case "${MOCK_ADB_ROOT:-0}" in
+      escalates|escalates_then_hang|escalates_then_drop)
+        : > "$STATE_DIR/adb-root-escalated" ;;
+      *)
+        [ "${MOCK_ROOT:-1}" = 1 ] ;;
+    esac
     ;;
   push)
     # A pushed staged input becomes a real modelled file, so its later reclamation is observable.
@@ -445,11 +466,40 @@ case "${1:-}" in
         printf 'Current WebView package (name, version): (com.android.webview, %s)\n' "${MOCK_WEBVIEW_VERSION:-150.0.0.0}"
         ;;
       "id")
-        if [ "${MOCK_ADB_ROOT:-0}" = 1 ]; then
-          printf 'uid=0(root) gid=0(root)\n'
-        else
-          printf 'uid=2000(shell) gid=2000(shell)\n'
-        fi
+        case "${MOCK_ADB_ROOT:-0}" in
+          escalates_then_hang)
+            if [ -f "$STATE_DIR/adb-root-escalated" ]; then
+              trap 'exit 143' TERM INT
+              while :; do /bin/sleep 1; done
+            fi
+            printf 'uid=2000(shell) gid=2000(shell)\n'
+            ;;
+          escalates_then_drop)
+            [ -f "$STATE_DIR/adb-root-escalated" ] && exit 1
+            printf 'uid=2000(shell) gid=2000(shell)\n'
+            ;;
+          *)
+            if adb_root_active; then
+              # MOCK_ROOT_LIVE=dead models an adbd-root route that answered the resolution probe and
+              # has since lost root (an unobserved reboot drops `adb root`): the FIRST bare id — the
+              # resolution — answers uid=0, any later one answers as plain shell. This is the form
+              # where a live check that only echoed a marker would pass from an unrooted adbd.
+              if [ "${MOCK_ROOT_LIVE:-ok}" = dead ]; then
+                bare_id_count=$(( $(cat "$STATE_DIR/bare-id-count" 2>/dev/null || echo 0) + 1 ))
+                printf '%s' "$bare_id_count" > "$STATE_DIR/bare-id-count"
+                if [ "$bare_id_count" -gt 1 ]; then
+                  printf 'uid=2000(shell) gid=2000(shell)\n'
+                else
+                  printf 'uid=0(root) gid=0(root)\n'
+                fi
+              else
+                printf 'uid=0(root) gid=0(root)\n'
+              fi
+            else
+              printf 'uid=2000(shell) gid=2000(shell)\n'
+            fi
+            ;;
+        esac
         ;;
       'su 0 "'*'"')
         inner_command="${command_text#su 0 \"}"
@@ -464,6 +514,11 @@ case "${1:-}" in
         fi
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = join ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        elif [ "$command_text" = 'su 0 "id"' ]; then
+          # The legacy flavour's live confirmation of a proven route (a single privileged id, unlike
+          # the probe's joined "id; id"); MOCK_ROOT_LIVE=dead models a route that answered the
+          # resolution probe and has since stopped answering as root.
+          [ "${MOCK_ROOT_LIVE:-ok}" = ok ] && [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
         elif printf '%s' "$command_text" | grep -Fq 'echo LEASE_OK' &&
              printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
           [ "${MOCK_MANUAL_LEASE_RENEW:-ok}" = ok ] && printf 'LEASE_OK\n'
@@ -630,22 +685,27 @@ case "${1:-}" in
         if printf '%s' "$command_text" | grep -Fq 'echo HAPANELD_TRANSPORT_ALIVE'; then
           # The snapshot's transport-liveness recheck. A live panel echoes the marker back exactly
           # as a real `adb shell echo` would; MOCK_SNAPSHOT_TRANSPORT=dead models the transport
-          # dying mid-probe, which must read as "unknown", never as "no root".
-          [ "${MOCK_SNAPSHOT_TRANSPORT:-alive}" = alive ] && printf 'HAPANELD_TRANSPORT_ALIVE\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
+          # dying mid-probe, which must read as "unknown", never as "no root";
+          # dead_after_escalation keeps it alive until the `root` verb has restarted adbd.
+          case "${MOCK_SNAPSHOT_TRANSPORT:-alive}" in
+            alive) printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
+            dead_after_escalation)
+              [ -f "$STATE_DIR/adb-root-escalated" ] || printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
+          esac
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
           [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ] && printf 'VENDOR_INIT_RW\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ] && printf 'TRANSACTION_BUSY\n' || printf 'INSTALL_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] &&
             [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ] && printf 'COMMIT_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         fi
         ;;
