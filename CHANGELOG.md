@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **The pre-upgrade database copy is now a verified restore point, not a hopeful file copy.** The installer takes a real SQLite backup on the panel in a single transaction, integrity-checks it, verifies the transfer by digest, and records a receipt naming the app build it came from. A rooted panel that cannot produce a verified copy now stops the upgrade instead of continuing without a safety net; `--allow-missing-db-snapshot` explicitly accepts that risk when you need to proceed anyway.
+
 - **Provisioning now handles slow first starts without proceeding against an unavailable panel.** Upgrades allow additional time for database migration and startup, while configuration writes, restores and Home Assistant token creation remain blocked until the panel responds successfully.
 
 - **Interrupted rooted upgrades no longer accumulate temporary helper files.** Provisioning removes its staging files on success, failure or interruption, and later runs safely reclaim leftovers from earlier attempts.

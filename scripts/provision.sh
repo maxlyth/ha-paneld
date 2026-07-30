@@ -59,6 +59,7 @@ Common operations:
   --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --allow-unsigned-helper  Developer-only: allow a privileged helper from an unsigned local APK
   --require-release-signer Reject a local APK unless it uses the official ha-paneld release certificate
+  --allow-missing-db-snapshot  Upgrade even if the panel's database cannot be captured first
   --mqtt-pass-file FILE    Read the MQTT password from a private text file
   --ha-token-file FILE     Read the Home Assistant token from a private text file
   --ha-pass-file FILE      Read the Home Assistant login password from a private text file
@@ -73,6 +74,9 @@ cleanup_provision_resources() {
   if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard; fi
   # Issue #76: reclaim this run's disposable staging on EVERY exit path, not only after a commit.
   if type cleanup_root_helper_staging >/dev/null 2>&1; then cleanup_root_helper_staging; fi
+  # An interrupted database capture holds a credential-bearing copy of the whole store on the panel
+  # and a partial one on the host; both are reclaimed on every exit path, never only on success.
+  if type discard_db_snapshot_txn >/dev/null 2>&1; then discard_db_snapshot_txn; fi
   [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR"
   SHIZUKU_DIR=""
   [ -z "${SECRET_DIR:-}" ] || rm -rf "$SECRET_DIR"
@@ -114,6 +118,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
+ALLOW_MISSING_DB_SNAPSHOT=0
+# The schema versions the app has actually shipped. Bump the MAX alongside every new database
+# migration; a snapshot admitting a version outside this set cannot be paired with any build this
+# installer could restore it onto.
+DB_SUPPORTED_USER_VERSION_MIN=1
+DB_SUPPORTED_USER_VERSION_MAX=14
+SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 # Whether the panel agent ever answered /health. Every mutation after the launch step is gated on
@@ -180,6 +191,7 @@ while [ "${1:-}" ]; do
     --no-tame) shift ;;   # deprecated compatibility no-op; profile recommendations are report-only
     --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
+    --allow-missing-db-snapshot) ALLOW_MISSING_DB_SNAPSHOT=1; shift ;; # explicit operator acceptance of upgrading without a database restore point
     --require-release-signer) REQUIRE_RELEASE_SIGNER=1; shift ;; # pin the official ha-paneld app signer
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
@@ -1086,6 +1098,9 @@ run_root() {
     surootjoin) adb -s "$TARGET" shell "su root \"$quoted\"" ;;
     surootshc)  adb -s "$TARGET" shell "su root sh -c \"$quoted\"" ;;
     suc)        adb -s "$TARGET" shell "su -c \"$quoted\"" ;;
+    # A form this dispatch does not know is a failure, never a silent success with empty output —
+    # callers treat run_root's exit status as "the panel was asked".
+    *)          return 1 ;;
   esac
 }
 
@@ -3342,18 +3357,115 @@ check_data_capacity() {
 # Nothing restores it automatically and nothing should: this is a manual, same-panel, same-version
 # last resort. The `.break-glass.` infix exists so that whoever finds these files months from now
 # reads that from the filename rather than assuming they are an ordinary restorable backup.
+# Reclaim both halves of an interrupted capture. The panel-side staging is created, verified and
+# normally removed entirely inside the one transaction script, so this only matters when the HOST
+# dies between the script succeeding and the post-pull cleanup: the script cannot clean up state it
+# already handed over. Removal rides the production adb() deadline wrapper, so a dead panel cannot
+# hold the exit open.
+discard_db_snapshot_txn() {
+  local stale
+  # The database and its receipt are registered in their own variables (never one word-split
+  # string) and removed together: a signal in the publication window can never leave a receipt
+  # describing a file that is gone, or a file no receipt admits to. A host survivor is named in
+  # the warning — it is a local file, and its removal needs nothing more than rm.
+  for stale in "${SNAPSHOT_TXN_HOST_DB:-}" "${SNAPSHOT_TXN_HOST_RECEIPT:-}"; do
+    [ -n "$stale" ] || continue
+    rm -f "$stale" 2>/dev/null || true
+    if [ -e "$stale" ] || [ -L "$stale" ]; then
+      warn "a file from the interrupted database backup was left at $stale — remove it by hand"
+    fi
+  done
+  SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
+  if [ -n "${SNAPSHOT_TXN_REMOTE:-}" ]; then
+    stale="$SNAPSHOT_TXN_REMOTE"; SNAPSHOT_TXN_REMOTE=""
+    # Best-effort by design (maintainer scope ruling 2026-07-30): the staging is owner-only,
+    # uniquely named so no later run can collide with it, and confined to panel-local tmp.
+    # Verifying its absence over the very transport whose failure usually brought us here is the
+    # custody layer this lane deliberately descoped; the || true is that decision, not an accident.
+    run_root "rm -rf $stale ${stale}-script" >/dev/null 2>&1 || true
+  fi
+}
+
+# A refused capture is fail-closed: the panel would be mutated with no database restore point. The
+# explicit --allow-missing-db-snapshot escape admits the run WITHOUT manufacturing a captured result.
+snapshot_txn_refuse() {
+  local reason="$1" advice="$2"
+  discard_db_snapshot_txn
+  if [ "$ALLOW_MISSING_DB_SNAPSHOT" = 1 ]; then
+    warn "data-store snapshot: $reason — continuing WITHOUT a database restore point (--allow-missing-db-snapshot)"
+    return 0
+  fi
+  fail "the panel's database could not be captured before mutation: $reason" \
+    "No helper or APK files were changed and no settings were written." \
+    "$advice Or re-run with --allow-missing-db-snapshot to explicitly accept upgrading without a database restore point."
+}
+
+# Capture the canonical store as ONE on-panel transaction, then verify what arrived.
+#
+# A multi-step capture — stage, admit, verify, hash, pull, receipt, clean as separate host↔panel
+# exchanges — has a custody edge at every seam, and each edge needs its own interruption and
+# failure handling to stay safe. This shape removes the seams: a single generated script, pushed and
+# hash-verified like the root-helper transaction script, performs backup, integrity check, schema
+# and content admission, provenance capture and digest emission ATOMICALLY on the panel, cleans
+# itself up on every internal failure, and speaks one machine-readable manifest. The host then does
+# exactly one pull, one manifest-vs-bytes check, one receipt written strictly AFTER verification,
+# and one verified cleanup. There is no window in which a receipt can claim what verification has
+# not proven, no staging the host knows about before the script owns it, and no discovery state
+# consulted outside the transaction that acts on it.
 snapshot_panel_database() {
-  local db_dir stage base safe_target stamp staged expected=0 pulled=0 failed=0 name destination
-  [ "${HAPANELD_SKIP_DB_SNAPSHOT:-0}" = 1 ] && return 0
-  if ! adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r' | grep -q '^package:'; then
+  local db_source stage base safe_target stamp script_file script_sha panel_sha out line
+  local mf_bytes="" mf_sha="" mf_integrity="" mf_rows="" mf_uv="" mf_vcode="" mf_vname="" mf_sqlite="" txn_ok=0 fail_reason=""
+  local pulled_bytes host_sha receipt_tmp receipt
+  # Discovery is tri-state and fail-closed: "not installed" must be the panel's positive answer,
+  # never the silence of a transport that could not be asked — a dead adb here would otherwise skip
+  # the capture and let the mutation proceed with no restore point.
+  local pm_path_out
+  if ! pm_path_out="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r')"; then
+    snapshot_txn_refuse "the panel could not be asked whether ha-paneld is installed" \
+      "Check adb connectivity to $TARGET, then re-run."
+    return 0
+  fi
+  if ! printf '%s\n' "$pm_path_out" | grep -q '^package:'; then
     return 0
   fi
   if ! probe_su; then
+    # POSITIVE tri-state: "no root route" must be the panel's answer, not the probe's absence. A
+    # probe that timed out has established nothing, and a probe whose transport died mid-question
+    # looks identical to a genuine "no" — so a negative is only accepted after the transport proves
+    # it is still alive to answer. Skipping on an unproven negative would silently drop the restore
+    # point on exactly the panel that is misbehaving.
+    if [ "${SU_PROBE_TIMED_OUT:-0}" = 1 ]; then
+      snapshot_txn_refuse "the panel's root route could not be determined (the probe timed out)" \
+        "Check adb responsiveness on $TARGET, then re-run."
+      return 0
+    fi
+    local probe_alive
+    probe_alive="$(run_with_deadline 15 "$ADB_COMMAND" -s "$TARGET" shell echo HAPANELD_TRANSPORT_ALIVE 2>/dev/null | tr -d '\r')" || probe_alive=""
+    case "$probe_alive" in
+      *HAPANELD_TRANSPORT_ALIVE*) : ;;
+      *)
+        snapshot_txn_refuse "the panel's root route could not be determined (the transport failed during the probe)" \
+          "Check adb connectivity to $TARGET, then re-run."
+        return 0
+        ;;
+    esac
+    # No root route means /data/data is unreachable by design; the settings export above remains the
+    # only capture. This is a capability boundary, not a failure to reach a reachable database.
     echo "   ${D}data-store snapshot: skipped — this panel has no root route, so only settings could be saved${X}"
     return 0
   fi
-  db_dir="/data/data/$PKG/databases"
-  stage="/data/local/tmp/.hapaneld-db-snapshot.$$"
+  db_source="/data/data/$PKG/databases/ha-paneld.db"
+  # A globally unique staging identity: two hosts can share a pid, and a collision must be
+  # impossible rather than unlikely, because the loser of a staging collision must never remove the
+  # winner's in-flight capture. With 128 bits of /dev/urandom in the name, the registered path
+  # cannot denote another run's staging, which is why registration may precede creation below.
+  # Concurrency custody beyond the script's own stage_exists refusal — ordering games between
+  # simultaneous installer runs against one panel — is deliberately out of scope (maintainer
+  # ruling 2026-07-30): the project supports one installer run per panel at a time, the same
+  # ruling already applied to the root-helper transaction lock.
+  local txn_capture_id
+  txn_capture_id="$(host_transaction_id)" || { snapshot_txn_refuse "could not create a unique capture identity" "Check host access to /dev/urandom, then retry."; return 0; }
+  stage="/data/local/tmp/.hapaneld-db-txn.$txn_capture_id"
   if [ -n "$AUTO_EXPORT_FILE" ]; then
     base="${AUTO_EXPORT_FILE%.json}"
   else
@@ -3362,39 +3474,230 @@ snapshot_panel_database() {
     stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
     base="$CONFIG_BACKUP_DIR/${safe_target}-${stamp}"
   fi
-  # Share the export's stamp so the pair is obviously one moment in time, and carry the label in the
-  # name itself. The .db suffix stays last so the file is still recognisable to ordinary tools.
   base="$base.break-glass"
-  # Stage owner-only and shell-owned: the store carries credentials, and /data/local/tmp is readable
-  # by anything running as shell. `adb pull` runs as shell, so 0600 is still pullable.
-  if ! staged="$(run_root "rm -rf $stage && mkdir -p $stage && cp -f $db_dir/ha-paneld.db $stage/ 2>/dev/null && { [ ! -e $db_dir/ha-paneld.db-wal ] || cp -f $db_dir/ha-paneld.db-wal $stage/ 2>/dev/null; } && { [ ! -e $db_dir/ha-paneld.db-shm ] || cp -f $db_dir/ha-paneld.db-shm $stage/ 2>/dev/null; } && chown -R shell:shell $stage 2>/dev/null && chmod 700 $stage && chmod 600 $stage/* 2>/dev/null && ls $stage" 2>/dev/null)"; then
-    echo "   ${D}data-store snapshot: skipped — the panel's database could not be staged for copying${X}"
-    run_root "rm -rf $stage" >/dev/null 2>&1 || true
+  # Ownership is registered BEFORE anything exists on either side, so an interruption at any later
+  # instant already has a cleanup owner.
+  SNAPSHOT_TXN_REMOTE="$stage"
+  script_file="$(mktemp)" || { snapshot_txn_refuse "could not create a working file on this host" "Check TMPDIR is writable."; return 0; }
+  # A recognisable name: the generated script is hashed and pushed under it, and digest tooling on
+  # some hosts special-cases by suffix.
+  mv "$script_file" "$script_file.db-txn-script" && script_file="$script_file.db-txn-script"
+  cat > "$script_file" <<'EOF'
+#!/system/bin/sh
+# One-transaction database capture. Every failure prints SNAPTXN_FAIL=<stage> as its LAST line and
+# removes the staging it created; success prints an unconditional manifest then SNAPTXN_OK. Nothing
+# outside @STAGE@ is ever written, and no state survives a failure.
+set -u
+read_vcode() { dumpsys package @PKG@ 2>/dev/null | sed -n 's/.*versionCode=\([0-9]\{1,\}\).*/\1/p' | head -1; }
+stage_created=0
+refuse() {
+  # Only the stage THIS transaction created is its to remove: a refusal before creation — or
+  # because the path already exists — must leave another owner's staging untouched.
+  [ "$stage_created" = 1 ] && rm -rf @STAGE@ 2>/dev/null
+  echo "SNAPTXN_FAIL=$1"
+  exit 1
+}
+sqlite3_bin=""
+if [ -x /system/bin/sqlite3 ]; then sqlite3_bin=/system/bin/sqlite3
+else sqlite3_bin=$(command -v sqlite3 2>/dev/null) || sqlite3_bin=""; fi
+case "$sqlite3_bin" in /*) ;; *) refuse sqlite_missing ;; esac
+[ -f @DB_SOURCE@ ] || refuse source_missing
+[ ! -L @DB_SOURCE@ ] || refuse source_not_regular
+umask 077
+mkdir -m 700 @STAGE@ 2>/dev/null || refuse stage_exists
+stage_created=1
+vcode_before=$(read_vcode)
+case "$vcode_before" in ''|*[!0-9]*) refuse provenance_unreadable ;; esac
+"$sqlite3_bin" @DB_SOURCE@ ".backup '@STAGE@/ha-paneld.db'" 2>/dev/null || refuse backup_failed
+[ -s @STAGE@/ha-paneld.db ] || refuse backup_empty
+integrity=$("$sqlite3_bin" @STAGE@/ha-paneld.db 'PRAGMA integrity_check;' 2>/dev/null) || refuse integrity_unreadable
+[ "$integrity" = ok ] || refuse integrity_failed
+rows=$("$sqlite3_bin" @STAGE@/ha-paneld.db 'SELECT count(*) FROM app_state;' 2>/dev/null) || refuse rows_unreadable
+case "$rows" in ''|*[!0-9]*) refuse rows_unreadable ;; esac
+[ "$rows" -gt 0 ] || refuse rows_empty
+uv=$("$sqlite3_bin" @STAGE@/ha-paneld.db 'PRAGMA user_version;' 2>/dev/null) || refuse schema_unreadable
+case "$uv" in ''|*[!0-9]*) refuse schema_unreadable ;; esac
+[ "$uv" -ge @VMIN@ ] || refuse schema_alien
+[ "$uv" -le @VMAX@ ] || refuse schema_alien
+# Provenance is captured INSIDE the transaction that admits the snapshot: a break-glass copy is only
+# restorable onto the exact build that wrote it, and reading the build in a separate step reopens the
+# window in which an install changes it between capture and record.
+vcode=$(read_vcode)
+case "$vcode" in ''|*[!0-9]*) refuse provenance_unreadable ;; esac
+# The build read before the backup and the build read after every admission check must agree, or an
+# install raced the capture and this snapshot belongs to no attributable build.
+[ "$vcode" = "$vcode_before" ] || refuse provenance_changed
+vname=$(dumpsys package @PKG@ 2>/dev/null | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -1)
+[ -n "$vname" ] || vname=unknown
+bytes=$(wc -c < @STAGE@/ha-paneld.db) || refuse size_unreadable
+case "$bytes" in ''|*[!0-9]*) refuse size_unreadable ;; esac
+sha=$(sha256sum @STAGE@/ha-paneld.db 2>/dev/null || toybox sha256sum @STAGE@/ha-paneld.db 2>/dev/null || busybox sha256sum @STAGE@/ha-paneld.db 2>/dev/null) || sha=""
+sha=${sha%% *}
+case "$sha" in [0-9a-f]*) [ "${#sha}" -eq 64 ] || sha=none ;; *) sha=none ;; esac
+chown shell:shell @STAGE@ @STAGE@/ha-paneld.db 2>/dev/null
+chmod 700 @STAGE@ && chmod 600 @STAGE@/ha-paneld.db || refuse permissions_failed
+echo "MF_BYTES=$bytes"
+echo "MF_SHA256=$sha"
+echo "MF_INTEGRITY=$integrity"
+echo "MF_ROWS=$rows"
+echo "MF_USER_VERSION=$uv"
+echo "MF_VCODE=$vcode"
+echo "MF_VNAME=$vname"
+echo "MF_SQLITE=$sqlite3_bin"
+echo "SNAPTXN_OK"
+EOF
+  sed -e "s|@STAGE@|$stage|g" -e "s|@DB_SOURCE@|$db_source|g" -e "s|@PKG@|$PKG|g" \
+      -e "s|@VMIN@|$DB_SUPPORTED_USER_VERSION_MIN|g" -e "s|@VMAX@|$DB_SUPPORTED_USER_VERSION_MAX|g" \
+      "$script_file" > "$script_file.ready" && mv "$script_file.ready" "$script_file"
+  script_sha="$(host_sha256 "$script_file")" || { rm -f "$script_file"; snapshot_txn_refuse "could not hash the capture script" "Check host sha256 tooling."; return 0; }
+  if ! adb -s "$TARGET" push "$script_file" "${stage}-script" >/dev/null 2>&1; then
+    rm -f "$script_file"
+    snapshot_txn_refuse "the capture script could not be pushed to the panel" "Check adb connectivity to $TARGET."
     return 0
   fi
-  staged="$(printf '%s' "$staged" | tr -d '\r')"
-  for name in ha-paneld.db ha-paneld.db-wal ha-paneld.db-shm; do
-    printf '%s\n' "$staged" | grep -Fxq "$name" || continue
-    expected=$((expected + 1))
-    destination="$base.${name#ha-paneld.}"
-    if run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/$name" "$destination" >/dev/null 2>&1 && [ -s "$destination" ]; then
-      chmod 600 "$destination" 2>/dev/null || true
-      pulled=$((pulled + 1))
-    else
-      failed=1
-    fi
-  done
-  run_root "rm -rf $stage" >/dev/null 2>&1 || true
-  # Sidecars are optional only when absent from staging. Losing a staged WAL during pull can silently
-  # discard committed transactions, so reject the entire set unless every staged member arrived.
-  if [ "$expected" -gt 0 ] && [ "$failed" -eq 0 ] && [ "$pulled" -eq "$expected" ] && [ -s "$base.db" ]; then
-    echo "   ${GRN}✓${X} data-store snapshot: ${B}$base.db${X} ${D}(with $((pulled - 1)) sidecar file(s))${X}"
-    echo "   ${D}        Break-glass copy — same panel, same version, restored by hand only. The panel's own${X}"
-    echo "   ${D}        Install → Backup .hpb is the supported restore path.${X}"
-  else
-    rm -f "$base.db" "$base.db-wal" "$base.db-shm" 2>/dev/null || true
-    echo "   ${D}data-store snapshot: skipped — the panel's database could not be copied; only settings were saved${X}"
+  rm -f "$script_file"
+  # The pushed bytes are proven before they run as root — the same rule the root-helper transaction
+  # script follows. The panel's own hash decides; a transport that cannot hash cannot execute.
+  panel_sha="$(run_root "sha256sum ${stage}-script 2>/dev/null || toybox sha256sum ${stage}-script 2>/dev/null || busybox sha256sum ${stage}-script 2>/dev/null" 2>/dev/null | tr -d '\r')"
+  panel_sha="${panel_sha%% *}"
+  if [ "$panel_sha" != "$script_sha" ]; then
+    snapshot_txn_refuse "the capture script did not arrive intact on the panel" "Check adb connectivity to $TARGET, then re-run."
+    return 0
   fi
+  out="$(run_root "sh ${stage}-script" 2>&1 | tr -d '\r')" || true
+  while IFS= read -r line; do
+    case "$line" in
+      MF_BYTES=*)        mf_bytes="${line#MF_BYTES=}" ;;
+      MF_SHA256=*)       mf_sha="${line#MF_SHA256=}" ;;
+      MF_INTEGRITY=*)    mf_integrity="${line#MF_INTEGRITY=}" ;;
+      MF_ROWS=*)         mf_rows="${line#MF_ROWS=}" ;;
+      MF_USER_VERSION=*) mf_uv="${line#MF_USER_VERSION=}" ;;
+      MF_VCODE=*)        mf_vcode="${line#MF_VCODE=}" ;;
+      MF_VNAME=*)        mf_vname="${line#MF_VNAME=}" ;;
+      MF_SQLITE=*)       mf_sqlite="${line#MF_SQLITE=}" ;;
+      SNAPTXN_OK)        txn_ok=1 ;;
+      SNAPTXN_FAIL=*)    fail_reason="${line#SNAPTXN_FAIL=}" ;;
+    esac
+  done <<EOF2
+$out
+EOF2
+  if [ "$txn_ok" != 1 ]; then
+    if [ "$fail_reason" = stage_exists ]; then
+      # The path is occupied by a DIFFERENT owner's staging — with a urandom identity that is a
+      # deliberate-interference signal, not a plausible accident. Either way it is not this run's to
+      # remove: disown it so the refusal cleanup cannot delete the winner's in-flight capture.
+      SNAPSHOT_TXN_REMOTE=""
+    fi
+    snapshot_txn_refuse "the on-panel capture transaction refused (${fail_reason:-no transaction verdict})" \
+      "The panel left nothing behind. Fix the named stage on the panel, then re-run."
+    return 0
+  fi
+  # Every manifest field is required — a script that succeeded without fully describing its output
+  # did not run the shipped transaction.
+  case "$mf_bytes" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (bytes)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_rows" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (rows)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_uv" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (schema)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_vcode" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (provenance)" "Re-run against the same panel."; return 0 ;; esac
+  [ -n "$mf_integrity" ] && [ -n "$mf_sha" ] && [ -n "$mf_sqlite" ] || { snapshot_txn_refuse "the capture manifest is incomplete" "Re-run against the same panel."; return 0; }
+  # The pull lands in an owner-only working file, never at the final name: the final name must only
+  # ever hold a fully verified snapshot, and a pre-existing file or symlink there is refused, not
+  # followed and not replaced.
+  # The working file is created in the destination's own directory — never a TMPDIR fallback, which
+  # can sit on another filesystem where the no-replace ln publication below cannot work at all.
+  local pull_tmp
+  pull_tmp="$(mktemp "$(dirname "$base.db")/.pull.XXXXXX" 2>/dev/null)" || pull_tmp=""
+  if [ -z "$pull_tmp" ]; then
+    snapshot_txn_refuse "could not create a working file beside $base.db" "Check that the backup directory is writable."
+    return 0
+  fi
+  mv "$pull_tmp" "$pull_tmp.break-glass.db" && pull_tmp="$pull_tmp.break-glass.db"
+  SNAPSHOT_TXN_HOST_DB="$pull_tmp"
+  if ! run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/ha-paneld.db" "$pull_tmp" >/dev/null 2>&1 || [ ! -s "$pull_tmp" ]; then
+    snapshot_txn_refuse "the verified snapshot could not be pulled from the panel" "Check adb connectivity to $TARGET, then re-run."
+    return 0
+  fi
+  chmod 600 "$pull_tmp" 2>/dev/null || true
+  pulled_bytes="$(wc -c < "$pull_tmp" | tr -d ' ')"
+  if [ "$pulled_bytes" != "$mf_bytes" ]; then
+    snapshot_txn_refuse "the pulled snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Check adb connectivity to $TARGET, then re-run."
+    return 0
+  fi
+  if [ -e "$base.db" ] || [ -L "$base.db" ]; then
+    snapshot_txn_refuse "the snapshot destination $base.db already exists" "Move it aside by hand, then re-run."
+    return 0
+  fi
+  # ln is the no-replace publication: it fails atomically if anything appeared at the destination
+  # since the check above, and never follows a symlink into overwriting something else.
+  if ! ln "$pull_tmp" "$base.db" 2>/dev/null; then
+    snapshot_txn_refuse "the snapshot could not be published exclusively at $base.db" "Check the backup directory, then re-run."
+    return 0
+  fi
+  rm -f "$pull_tmp" 2>/dev/null || true
+  SNAPSHOT_TXN_HOST_DB="$base.db"
+  # Everything the receipt will claim is re-read from the PUBLISHED file, so the receipt binds the
+  # bytes a later reader will actually find, not the working copy they came from.
+  pulled_bytes="$(wc -c < "$base.db" | tr -d ' ')"
+  if [ "$pulled_bytes" != "$mf_bytes" ]; then
+    snapshot_txn_refuse "the published snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Re-run against the same panel."
+    return 0
+  fi
+  # Digest where both sides can compute one; the byte count above is the floor, and a receipt that
+  # says which side lacked a digest tool is honest about what was checked rather than refusing a
+  # sound snapshot over the checker's own tooling.
+  host_sha="$(host_sha256 "$base.db" 2>/dev/null || true)"
+  if [ "$mf_sha" != none ] && [ -n "$host_sha" ] && [ "$host_sha" != "$mf_sha" ]; then
+    snapshot_txn_refuse "the published snapshot's digest does not match what the panel captured" "Check adb connectivity to $TARGET, then re-run."
+    return 0
+  fi
+  if [ "$mf_sha" = none ] || [ -z "$host_sha" ]; then
+    echo "   ${YEL}note${X} transfer verified by byte count only — $([ "$mf_sha" = none ] && echo 'the panel' || echo 'this host') has no usable digest tool; the receipt's database_sha256_panel/database_sha256_host record exactly which side could not compute one"
+  fi
+  # The receipt is written ONCE, after every verification above, so no receipt claiming this file
+  # can exist before the claim is proven. Built exclusively, published atomically, non-regular
+  # destinations refused.
+  receipt="$base.backup-receipt.txt"
+  SNAPSHOT_TXN_HOST_RECEIPT="$receipt"
+  if [ -e "$receipt" ] || [ -L "$receipt" ]; then
+    snapshot_txn_refuse "the receipt destination $receipt already exists" "Move it aside by hand, then re-run."
+    return 0
+  fi
+  # The working file is created in the destination's own directory — never a TMPDIR fallback, which
+  # can sit on another filesystem where the no-replace ln publication below cannot work at all.
+  receipt_tmp="$(mktemp "$(dirname "$receipt")/.receipt.XXXXXX" 2>/dev/null)" || receipt_tmp=""
+  if [ -z "$receipt_tmp" ]; then
+    snapshot_txn_refuse "could not create the receipt working file beside $receipt" "Check that the backup directory is writable."
+    return 0
+  fi
+  {
+    printf 'receipt_version=2\n'
+    printf 'database=%s\n' "$base.db"
+    printf 'database_bytes=%s\n' "$pulled_bytes"
+    printf 'database_sha256_panel=%s\n' "$mf_sha"
+    printf 'database_sha256_host=%s\n' "${host_sha:-none}"
+    printf 'database_integrity=%s\n' "$mf_integrity"
+    printf 'database_app_state_rows=%s\n' "$mf_rows"
+    printf 'database_user_version=%s\n' "$mf_uv"
+    printf 'app_version_code=%s\n' "$mf_vcode"
+    printf 'app_version_name=%s\n' "$mf_vname"
+    printf 'capture_binary=%s\n' "$mf_sqlite"
+    printf 'capture_script_sha256=%s\n' "$script_sha"
+    printf 'settings_export=%s\n' "${AUTO_EXPORT_FILE:-${EXPORT_FILE:-none}}"
+  } > "$receipt_tmp" && chmod 600 "$receipt_tmp" && ln "$receipt_tmp" "$receipt" 2>/dev/null && rm -f "$receipt_tmp" || {
+    rm -f "$receipt_tmp" 2>/dev/null
+    snapshot_txn_refuse "the receipt could not be published" "Check that $CONFIG_BACKUP_DIR is writable."
+    return 0
+  }
+  # Cleanup is best-effort by design (maintainer scope ruling 2026-07-30): the capture is already
+  # proven and keeps its verdict — the file on this host IS the restore point. The staging is
+  # owner-only and uniquely named, so a survivor is inert; the || true records that decision.
+  run_root "rm -f ${stage}-script && rm -rf $stage" >/dev/null 2>&1 || true
+  SNAPSHOT_TXN_REMOTE=""
+  SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
+  echo "   ${GRN}✓${X} data-store snapshot: ${B}$base.db${X} ${D}(verified SQLite backup, integrity ok, $mf_rows app_state rows)${X}"
+  echo "   ${D}        Receipt: $receipt${X}"
+  echo "   ${D}        Break-glass copy — same panel, same version, restored by hand only. The panel's own${X}"
+  echo "   ${D}        Install → Backup .hpb is the supported restore path.${X}"
+  echo "HAPANELD_SNAPSHOT_RESULT=captured"
   return 0
 }
 
@@ -3498,8 +3801,10 @@ version_guard
 # helper or APK can mutate the panel. Existing panels fail closed if the export cannot be made.
 auto_export_before_upgrade
 
-# Then the canonical store itself, where a root route allows it. Best-effort by design — see the
-# function comment for why this cannot be fail-closed like the export above.
+# Then the canonical store itself, where a root route allows it. Fail-closed like the export above:
+# a rooted panel that cannot produce a verified database restore point stops the run, and only the
+# explicit --allow-missing-db-snapshot escape admits it. Rootless panels are a capability boundary,
+# not a failure, and are skipped with a notice.
 snapshot_panel_database
 
 reset_panel_config

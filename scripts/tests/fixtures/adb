@@ -37,19 +37,109 @@ emit_system_layout_probe() {
   esac
 }
 
-emit_db_snapshot_stage() {
-  local snapshot_command="$1"
-  [ "${MOCK_DB_SNAPSHOT:-ok}" = stage_fail ] && return 1
-  # Model Android cp accurately: the old one-shot multi-source command failed when a cleanly
-  # checkpointed database had no WAL/SHM files. Independently guarded copies remain valid.
-  if [ "${MOCK_DB_SIDECARS:-present}" = absent ] &&
-     printf '%s\n' "$snapshot_command" | grep -Eq 'cp -f [^;&|]*ha-paneld\.db[[:space:]]+[^;&|]*ha-paneld\.db-wal'; then
-    return 1
+# The database capture is ONE pushed transaction script. The fixture does not emulate it — it saves
+# the pushed bytes and EXECUTES them for real in a path-rewritten sandbox with stub sqlite3/dumpsys
+# on PATH, so every contract observes the shipped script's own semantics. A model can agree with a
+# test and disagree with production; an executed script cannot.
+DB_TXN_SANDBOX="$STATE_DIR/db-txn-sandbox"
+prepare_db_txn_sandbox() {
+  [ -d "$DB_TXN_SANDBOX/bin" ] && return 0
+  mkdir -p "$DB_TXN_SANDBOX/data/local/tmp" "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases" "$DB_TXN_SANDBOX/bin"
+  printf 'mock canonical panel database\n' > "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+  # A cleanly present zero-byte WAL is a NORMAL source state and must never affect a .backup capture.
+  : > "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db-wal"
+  cat > "$DB_TXN_SANDBOX/bin/sqlite3" <<'STUB'
+#!/bin/bash
+db="$1"; shift; op="$*"
+case "$op" in
+  *.backup*)
+    [ "${MOCK_DB_TXN:-ok}" = backup_fail ] && exit 1
+    dest="${op#*.backup \'}"; dest="${dest%\'*}"
+    cp "$db" "$dest" || exit 1
+    if [ "${MOCK_DB_TXN:-ok}" = backup_empty ]; then : > "$dest"; fi
+    ;;
+  *integrity_check*)
+    if [ "${MOCK_DB_TXN:-ok}" = integrity_bad ]; then echo '*** in database main ***'; else echo ok; fi ;;
+  *'count(*) FROM app_state'*) echo "${MOCK_DB_DEVICE_ROWS:-7}" ;;
+  *user_version*) echo "${MOCK_DB_DEVICE_USER_VERSION:-9}" ;;
+  *) exit 1 ;;
+esac
+exit 0
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/dumpsys" <<'STUB'
+#!/bin/bash
+[ "${MOCK_DB_DEVICE_VCODE:-513}" = absent ] && exit 0
+if [ "${MOCK_DB_TXN:-ok}" = provenance_race ]; then
+  # Every dumpsys call answers a different build: the capture's before/after reads can never agree.
+  count_file="${MOCK_STATE_DIR:?}/db-txn-vcode-count"
+  count=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$count" > "$count_file"
+  printf '    versionCode=%s minSdk=26 targetSdk=35\n' $((500 + count))
+else
+  printf '    versionCode=%s minSdk=26 targetSdk=35\n' "${MOCK_DB_DEVICE_VCODE:-513}"
+fi
+printf '    versionName=0.9.6-test\n'
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/sha256sum" <<'STUB'
+#!/bin/bash
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+exec /usr/bin/sha256sum "$@"
+STUB
+  chmod 755 "$DB_TXN_SANDBOX/bin/sha256sum"
+  chmod 755 "$DB_TXN_SANDBOX/bin/sqlite3" "$DB_TXN_SANDBOX/bin/dumpsys"
+}
+
+run_db_txn_script() {
+  prepare_db_txn_sandbox
+  [ -s "$STATE_DIR/db-txn-script.$ADB_TARGET" ] || { echo 'SNAPTXN_FAIL=script_missing'; return 1; }
+  if [ "${MOCK_DB_TXN:-ok}" = stage_collision ]; then
+    # Another owner already holds the exact staging path this transaction wants: pre-create it with
+    # a marker file, so the survival of that marker proves the loser removed nothing.
+    collision_stage="$(grep -oE '/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+' "$STATE_DIR/db-txn-script.$ADB_TARGET" | head -1)"
+    mkdir -p "$DB_TXN_SANDBOX${collision_stage}"
+    : > "$DB_TXN_SANDBOX${collision_stage}/winner-in-flight"
   fi
-  printf 'ha-paneld.db\n'
-  if [ "${MOCK_DB_SIDECARS:-present}" = present ]; then
-    printf 'ha-paneld.db-wal\nha-paneld.db-shm\n'
-  fi
+  sed -e "s|/data/|$DB_TXN_SANDBOX/data/|g" -e "s|/system/bin/sqlite3|$DB_TXN_SANDBOX/bin/sqlite3|g" \
+    "$STATE_DIR/db-txn-script.$ADB_TARGET" > "$STATE_DIR/db-txn-script.runnable.$ADB_TARGET"
+  PATH="$DB_TXN_SANDBOX/bin:$PATH" bash "$STATE_DIR/db-txn-script.runnable.$ADB_TARGET"
+}
+
+handle_db_txn_command() {
+  local text="$1"
+  case "$text" in
+    *sha256sum*.hapaneld-db-txn.*-script*)
+      prepare_db_txn_sandbox
+      if [ "${MOCK_DB_TXN:-ok}" = script_tamper ]; then
+        printf '%064d  tampered\n' 1
+      else
+        /usr/bin/sha256sum "$STATE_DIR/db-txn-script.$ADB_TARGET" 2>/dev/null | awk '{print $1"  script"}'
+      fi
+      return 0 ;;
+    *'sh /data/local/tmp/.hapaneld-db-txn.'*-script*)
+      run_db_txn_script
+      return 0 ;;
+    *.hapaneld-db-txn.*HAPANELD_STALE_PRESENT*)
+      case "${MOCK_DB_CLEANUP:-ok}" in
+        unverifiable) return 1 ;;
+        retained) printf 'HAPANELD_STALE_PRESENT\n' ;;
+        *)
+          # Answer from sandbox truth for the EXACT path the probe names — absence is asserted by
+          # what the executed cleanup really left, and one run's leftovers never answer for another.
+          probed="$(printf '%s' "$text" | grep -oE '/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+' | head -1)"
+          if [ -n "$probed" ] && [ -e "$DB_TXN_SANDBOX/data/local/tmp/${probed#/data/local/tmp/}" ]; then
+            printf 'HAPANELD_STALE_PRESENT\n'
+          else
+            printf 'HAPANELD_STALE_ABSENT\n'
+          fi ;;
+      esac
+      return 0 ;;
+    *'rm -'*.hapaneld-db-txn.*)
+      if [ "${MOCK_DB_CLEANUP:-ok}" = ok ]; then
+        rm -rf "$DB_TXN_SANDBOX/data/local/tmp"/.hapaneld-db-txn.* 2>/dev/null
+      fi
+      return 0 ;;
+  esac
+  return 1
 }
 
 # Model the panel's id-named staging as real files. The journal was modelled as boolean flag files
@@ -133,25 +223,32 @@ case "${1:-}" in
           mkdir -p "$DEVICE_ADB_DIR" && : > "$DEVICE_ADB_DIR/${pushed##*/}" ;;
       esac
     done
+    # The capture transaction script's exact pushed bytes are saved so the fixture can hash and
+    # EXECUTE what production actually sent, not a paraphrase of it.
+    case "${3:-}" in
+      /data/local/tmp/.hapaneld-db-txn.*-script)
+        [ "${MOCK_DB_TXN:-ok}" = push_fail ] && exit 1
+        cp "${2:?push source missing}" "$STATE_DIR/db-txn-script.$ADB_TARGET" ;;
+    esac
     ;;
   pull)
-    [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+    # MOCK_APK_QUERY=fail models a package manager that became unanswerable at the install-outcome
+    # moment; queries before any install attempt still succeed, so pre-mutation stages (the database
+    # capture included) observe the panel as it was.
+    if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
     case "${2:-}" in
-      *hapaneld-db-snapshot*)
-        [ "${MOCK_DB_SNAPSHOT:-ok}" = pull_fail ] && exit 1
-        [ "${MOCK_DB_SNAPSHOT:-ok}" = wal_pull_fail ] && [ "${2##*/}" = ha-paneld.db-wal ] && exit 1
-        # A cleanly checkpointed database has no sidecars; model that so the "main file only" path
-        # is exercised rather than always producing a complete three-file set.
-        case "${2##*/}" in
-          ha-paneld.db) printf 'mock sqlite panel database\n' > "${3:?pull destination missing}" ;;
-          *) [ "${MOCK_DB_SIDECARS:-present}" = present ] || exit 1
-             printf 'mock sqlite sidecar\n' > "${3:?pull destination missing}" ;;
-        esac
+      *.hapaneld-db-txn.*/ha-paneld.db)
+        [ "${MOCK_DB_TXN:-ok}" = pull_fail ] && exit 1
+        # The pulled bytes come from the sandbox the executed script actually wrote, so a transfer
+        # contract observes the real captured file, not a manufactured stand-in.
+        cp "$DB_TXN_SANDBOX/data/local/tmp/${2#/data/local/tmp/}" "${3:?pull destination missing}" 2>/dev/null || exit 1
+        if [ "${MOCK_DB_TXN:-ok}" = pull_truncate ]; then printf 'short' > "$3"; fi
         ;;
       *) cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}" ;;
     esac
     ;;
   install)
+    : > "$STATE_DIR/apk-install-attempted"
     if [[ "${!#}" == */shizuku.apk ]] && [ "${MOCK_SHIZUKU_INSTALL:-ok}" = block ]; then
       [ -z "${MOCK_SHIZUKU_INSTALL_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_INSTALL_PID_FILE"
       trap 'exit 143' TERM INT
@@ -195,6 +292,13 @@ case "${1:-}" in
       exit 1
     fi
     model_device_adb_dir "$command_text"
+    # Database-capture traffic is dialect-independent: intercept it whether it arrives bare
+    # (SU_FORM=shell on adb-root panels) or su-wrapped, before any other dispatch.
+    case "$command_text" in
+      *'.hapaneld-db-txn.'*)
+        handle_db_txn_command "$command_text"
+        exit $? ;;
+    esac
     case "$command_text" in
       "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
         case "${MOCK_LAUNCHER_START:-ok}" in
@@ -249,7 +353,8 @@ case "${1:-}" in
         printf 'Success\n'
         ;;
       "pm path io.github.maxlyth.hapaneld")
-        [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+        if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
+        [ "${MOCK_PM_PATH:-ok}" = ok ] || exit 1
         [ -f "$STATE_DIR/installed-apk" ] && printf 'package:/data/app/io.github.maxlyth.hapaneld/base.apk\n'
         ;;
       "test -x /data/app/moe.shizuku.privileged.api/lib/arm64/libshizuku.so")
@@ -361,8 +466,6 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
-        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
-          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -443,14 +546,27 @@ case "${1:-}" in
           esac
         fi
         ;;
+      'su root "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = rootjoin ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
+      'su root sh -c "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = rootshc ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
+      'su -c "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = suc ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
       'su 0 sh -c "'*'"')
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = shc ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
-        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
-          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -501,7 +617,12 @@ case "${1:-}" in
         fi
         ;;
       *)
-        if [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
+        if printf '%s' "$command_text" | grep -Fq 'echo HAPANELD_TRANSPORT_ALIVE'; then
+          # The snapshot's transport-liveness recheck. A live panel echoes the marker back exactly
+          # as a real `adb shell echo` would; MOCK_SNAPSHOT_TRANSPORT=dead models the transport
+          # dying mid-probe, which must read as "unknown", never as "no root".
+          [ "${MOCK_SNAPSHOT_TRANSPORT:-alive}" = alive ] && printf 'HAPANELD_TRANSPORT_ALIVE\n'
+        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
           [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ] && printf 'VENDOR_INIT_RW\n'

@@ -16,6 +16,11 @@ case "${1:-}" in
   */installed.apk|*/ha-paneld*.apk)
     /usr/bin/sha256sum "$1"
     ;;
+  # The database-capture flow authenticates its own artifacts by digest; those hashes must be real
+  # or every transfer verification is comparing against a manufactured constant.
+  *.db-txn-script|*.break-glass.db|*/db-txn-sandbox/*)
+    /usr/bin/sha256sum "$1"
+    ;;
   *)
     # Installed-manager fixtures are intentionally not byte-identical to the curated APK. Returning
     # a deterministic non-match drives provisioning through its signing-certificate check without

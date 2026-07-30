@@ -100,7 +100,7 @@ while [ "$#" -gt 0 ]; do case "$1" in
           PROVISION_ARGS+=("$1" "$2")
           shift 2
           ;;
-        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin|--reset-config)
+        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin|--reset-config|--allow-missing-db-snapshot)
           PROVISION_ARGS+=("$1")
           shift
           ;;
