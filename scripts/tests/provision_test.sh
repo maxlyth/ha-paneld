@@ -2140,6 +2140,65 @@ if [ -f "$TMP/db-txn-sandbox/data/data/io.github.maxlyth.hapaneld/databases/ha-p
   pass "the capture succeeded over a source with a real zero-byte WAL present"
 else fail_test "the capture succeeded over a source with a real zero-byte WAL present"; fi
 
+# A published, verified snapshot survives the operator's Ctrl-C: once the receipt is published the
+# pair's custody has ended, so an interrupt during the best-effort panel staging cleanup — the
+# likeliest moment for one, because a wedged transport is exactly what makes an operator interrupt
+# — must find nothing to repossess. The fixture blocks that cleanup so the signal lands inside it.
+reset_db_txn_state
+rm -f "$TMP/db-cleanup-blocked-once"
+publication_int_pid_file="$TMP/db-cleanup-block.pid"
+publication_int_output="$TMP/db-cleanup-block-output.txt"
+rm -f "$publication_int_pid_file"
+set -m
+MOCK_DB_CLEANUP=block MOCK_DB_CLEANUP_PID_FILE="$publication_int_pid_file" MOCK_STATE_DIR="$TMP" \
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_CONFIG_BACKUP_DIR="$TMP/auto-backups" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$APK" --no-tame > "$publication_int_output" 2>&1 &
+publication_int_pid=$!
+set +m
+publication_int_ready=0
+publication_int_attempt=0
+while [ "$publication_int_attempt" -lt 200 ]; do
+  if [ -s "$publication_int_pid_file" ]; then publication_int_ready=1; break; fi
+  /bin/sleep 0.05
+  publication_int_attempt=$((publication_int_attempt + 1))
+done
+if [ "$publication_int_ready" -eq 1 ]; then
+  pass "the interrupt scenario reaches the blocked post-publication cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the interrupt scenario reaches the blocked post-publication cleanup"
+fi
+published_db="$(ls "$TMP"/auto-backups/*.break-glass.db 2>/dev/null | head -1)"
+published_receipt="$(ls "$TMP"/auto-backups/*.break-glass.backup-receipt.txt 2>/dev/null | head -1)"
+if [ -n "$published_db" ] && [ -n "$published_receipt" ]; then
+  pass "the snapshot and receipt are published before the interrupt arrives (guards the survival claims below)"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the snapshot and receipt are published before the interrupt arrives (guards the survival claims below)"
+fi
+kill -INT "$publication_int_pid" 2>/dev/null || true
+if wait "$publication_int_pid"; then publication_int_status=0; else publication_int_status=$?; fi
+if [ "$publication_int_status" -eq 130 ]; then
+  pass "the interrupted run exits with the signal status"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the interrupted run exits with the signal status (got $publication_int_status)"
+fi
+if [ -f "$published_db" ] && [ -s "$published_db" ]; then
+  pass "the published snapshot survives an interrupt during the panel staging cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the published snapshot survives an interrupt during the panel staging cleanup"
+fi
+if [ -f "$published_receipt" ] && [ -s "$published_receipt" ]; then
+  pass "the published receipt survives an interrupt during the panel staging cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the published receipt survives an interrupt during the panel staging cleanup"
+fi
+rm -f "$TMP/db-cleanup-blocked-once" "$publication_int_pid_file"
+reset_db_txn_state
+
 # Discovery is tri-state: a transport that cannot be asked is a refusal, never a silent skip.
 reset_db_txn_state
 MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame

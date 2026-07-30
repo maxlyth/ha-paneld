@@ -3743,11 +3743,15 @@ EOF2
   SNAPSHOT_TXN_HOST_RECEIPT="$receipt"
   rm -f "$receipt_tmp" 2>/dev/null || true
   SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
+  # Custody of the host artifacts ends HERE: both files are published and verified as a coherent
+  # pair, so a signal from this point on must find nothing to repossess. Deregistering BEFORE the
+  # best-effort remote cleanup below keeps an operator interrupt during a wedged transport from
+  # deleting the proven restore point this run just published.
+  SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
   # Cleanup is best-effort after a proven capture: the host file remains the restore point even if
   # the uniquely named, owner-only panel staging cannot be removed over a failing transport.
   run_root "rm -f ${stage}-script && rm -rf $stage" >/dev/null 2>&1 || true
   SNAPSHOT_TXN_REMOTE=""
-  SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
   echo "   ${GRN}✓${X} data-store snapshot: ${B}$base.db${X} ${D}(verified SQLite backup, integrity ok, $mf_rows app_state rows)${X}"
   echo "   ${D}        Receipt: $receipt${X}"
   echo "   ${D}        Break-glass copy — same panel, same version, restored by hand only. The panel's own${X}"

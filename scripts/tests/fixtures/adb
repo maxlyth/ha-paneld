@@ -134,6 +134,16 @@ handle_db_txn_command() {
       esac
       return 0 ;;
     *'rm -'*.hapaneld-db-txn.*)
+      # block models the post-publication cleanup wedging on a failing transport, so a test can
+      # deliver the operator's Ctrl-C exactly inside that window and observe what survives it. It
+      # blocks only the FIRST cleanup: the signal path retries the same removal from its handler,
+      # and blocking that retry too would wedge the handler the test is trying to observe.
+      if [ "${MOCK_DB_CLEANUP:-ok}" = block ] && [ ! -f "$STATE_DIR/db-cleanup-blocked-once" ]; then
+        : > "$STATE_DIR/db-cleanup-blocked-once"
+        [ -z "${MOCK_DB_CLEANUP_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_DB_CLEANUP_PID_FILE"
+        trap 'exit 143' TERM INT
+        while :; do /bin/sleep 1; done
+      fi
       if [ "${MOCK_DB_CLEANUP:-ok}" = ok ]; then
         rm -rf "$DB_TXN_SANDBOX/data/local/tmp"/.hapaneld-db-txn.* 2>/dev/null
       fi
