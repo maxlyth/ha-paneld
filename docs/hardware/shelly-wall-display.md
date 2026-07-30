@@ -128,7 +128,7 @@ GET https://updates.shelly.cloud/update/WallDisplay
 
 Covers SAWD-0A1XX10EU1 (Stargate) and SAWD-2A1XX10EU1 (Pegasus). The OTA updater-script asserts `ro.product.device` is `k400_mt6580_32_n` (Stargate) or `e500_7731e_32u_o` (Pegasus) before applying.
 
-Response (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below).
+Example response, captured at 2.7.1 (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below). For what is current, read the index rather than this example.
 
 #### Track 2 — WallDisplayV2 (arm64-v8a, Android 11 models)
 
@@ -138,12 +138,12 @@ GET https://updates.shelly.cloud/update/WallDisplayV2
 
 Covers Blake, Jenna, Cally, Maverick, Dayna. The OTA updater-script reads `ro.build.product` for logging only — no per-product assertion — so one ZIP installs on all modern models.
 
-Response: same version (`2.7.1`) and build_id as Track 1; compiled for arm64-v8a.
+Response: same version and build_id as Track 1 (`2.7.1` in the example above); compiled for arm64-v8a.
 
 Both tracks share version numbers and build IDs — they are compiled together from the same codebase for different ABIs.
 
 > [!NOTE]
-> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions, and there are no Wayback Machine archives of the CDN blobs — so once a URL rotates, that firmware is unrecoverable unless it was captured from the manifest endpoint at release time.
+> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions: once a newer release ships, the previous URL returns 404. Each release is therefore archived to the Wayback Machine as it is discovered, and the capture timestamps are recorded alongside the CDN URL in [`tools/firmware-index/fw-shelly-walldisplay.dat`](../../tools/firmware-index/fw-shelly-walldisplay.dat), which is what the archive links in the download table resolve to. A release that was never captured at the time it was current is unrecoverable.
 
 #### Static legacy CDN (SAWD-0A1XX10EU1 only)
 
@@ -193,6 +193,8 @@ Firmware 2.6.0 disclosed that RPC-over-BLE was open to any BLE connection withou
 
 | Version | Date | Notes |
 |---|---|---|
+| 2.7.3 | 2026-07-29 | Idle Cloud connection: after ~1 minute of screensaver the device asks the Cloud to report statuses for selected devices only (thermostat sensor/actuator and the sensor chosen for the dashboard and screensaver), reducing network throughput. Connected Blu H&T readings and the device's own status reports are still sent |
+| 2.7.2 | 2026-07-16 | Third-party apps uninstalled on factory reset; custom dashboard icon enumeration fixed (icons may be replaced once on update); thermostat actuator selection fixed for modern devices with more than one relay; Blake radar `Motion` RPC namespace fixed when the radar was already configured at startup |
 | 2.7.1 | 2026-06-10 | Automatic BT stack management (BLE on only when needed); aggressive BLE scan match; external sensor + BLE Gateway coupling |
 | 2.7.0 | 2026-06-03 | Multi-dashboard (XL: 5, X2i/Pegasus: 3, others: 1); HA WebView un-deprecated + cache clear; `Ui.OpenCameraFullscreen` RPC; OTA hardware sanity check; GATT non-connectable when RPC-over-BLE off |
 | 2.6.2 | 2026-05-20 | Shelly Camera tiles (live video stream); screensaver/brightness/thermostat fixes; auto-brightness fix X2i |
