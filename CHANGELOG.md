@@ -1,18 +1,42 @@
 # Changelog
 
-## Unreleased
+## v0.9.6-rc4 - 2026-07-30
+
+### Important changes — please read before upgrading
+
+**RC4 is primarily about making upgrades and backups deserve the trust we place in them.** Testing RC3 exposed paths where a slow panel could be declared dead too early, or where a backup could report success without preserving everything it promised. This candidate makes those paths fail safely and fixes discovery on panels whose network arrives late during boot. I would particularly like testers to retry rooted upgrades and, on Android 8.1 panels, create a fresh `.hpb` backup.
 
 ### Fixed
 
-- **The pre-upgrade database copy is now a verified restore point, not a hopeful file copy.** The installer takes a real SQLite backup on the panel in a single transaction, integrity-checks it, verifies its size and, when both endpoints have a digest tool, verifies the transfer by digest. The receipt records both digest results, including the explicit byte-count-only fallback when a tool is unavailable, and names the app build the backup came from. A rooted panel that cannot produce a verified copy now stops the upgrade instead of continuing without a safety net; `--allow-missing-db-snapshot` explicitly accepts that risk when you need to proceed anyway.
+- **Rooted upgrades now create and verify one coherent break-glass database snapshot before changing the panel.** This is a manual, same-panel recovery copy rather than the normal `.hpb` restore path, but the installer now verifies its integrity and transfer instead of relying on a live file copy. A rooted panel that cannot produce a verified snapshot stops before the upgrade; `--allow-missing-db-snapshot` explicitly accepts proceeding without one.
 
-- **Provisioning now handles slow first starts without proceeding against an unavailable panel.** Upgrades allow additional time for database migration and startup, while configuration writes, restores and Home Assistant token creation remain blocked until the panel responds successfully.
+- **Slow panels are no longer mistaken for failed upgrades.** Provisioning gives a first start up to three minutes by default to migrate its database and become healthy without repeatedly restarting it. If the panel still does not answer, configuration writes, restores and Home Assistant token creation remain blocked instead of being sent to an unavailable app.
 
-- **Interrupted rooted upgrades no longer accumulate temporary helper files.** Provisioning removes its staging files on success, failure or interruption, and later runs safely reclaim leftovers from earlier attempts.
+- **Failed rooted upgrades no longer leave temporary helper files to accumulate.** Provisioning cleans up its own staging after successful and handled failed runs. If a broken connection prevents that cleanup, the next helper transaction safely reclaims the leftovers.
 
-- **LAN discovery now starts reliably when a panel boots before DHCP finishes.** Network-address updates received while the service is still starting are retained and applied as soon as the runtime is ready, instead of mDNS remaining stopped until the app is restarted.
+- **Panels that receive their network address late during boot no longer remain absent from Home Assistant discovery until restart.** The address is retained while ha-paneld is starting and applied as soon as discovery is ready.
 
-- **Backups taken on Android 8.1 panels now include the panel's stored application state again.** A runtime incompatibility on older Android meant the backup bundle silently omitted its `app_state` entry on those devices — the backup completed and reported success, and your settings still restored from the bundle's own configuration section, but the panel's stored application state did not come back with it. Backups now capture that state on every supported Android version. If you rely on `.hpb` backups from an Android 8.1 panel, take a fresh backup after upgrading.
+- **Backups from Android 8.1 panels can now include device-local application state.** An `.hpb` created by RC1, RC2 or RC3 on Android 8.1 could report success while silently omitting stored state such as auto-sleep learning and profile calibration. Its normal configuration and profile data were still present. Existing backups are not repaired, so take a fresh backup after upgrading.
+
+- **`--export FILE --reset-config` now performs the requested reset after the verified export.** It previously returned success after writing the export while silently leaving the panel's configuration untouched.
+
+### Docs
+
+- **The README has been substantially reorganised around how people evaluate and adopt ha-paneld.** Installation, renderer choices, panel capabilities, root boundaries, supported hardware, community support and developer entry points now have clearer places, making the project's scope and the route into it easier to understand.
+
+- **The NSPanel Pro firmware index now includes the 4.6.2 and 4.7.0 update paths.** The guide distinguishes app-only updates from full firmware changes, keeps the hardware-verified flashing boundary at 4.4.0 and links the available community reports for newer releases so you can make a more informed decision before updating a panel.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
+
+- On a rooted panel, the installer now stops before changing anything if it cannot capture and verify the pre-upgrade database. This can expose missing panel-side SQLite tools, an unreadable or unsupported database, a transfer failure, or an unwritable backup directory on the computer running the installer. Userdebug panels that expose root only after `adb root` are covered by the same gate.
+
+- Use `--allow-missing-db-snapshot` only when you have deliberately accepted that there will be no database restore point. It does not bypass an unknown root state or a panel whose ADB connection has stopped answering.
+
+- A slow first start can now spend up to three minutes completing migration before provisioning continues. Progress is reported while it waits.
+
+- If you use `.hpb` backups from an Android 8.1 panel, take a fresh backup after upgrading; older backups may not contain the panel's stored application state.
 
 ## v0.9.6-rc3 - 2026-07-28
 
