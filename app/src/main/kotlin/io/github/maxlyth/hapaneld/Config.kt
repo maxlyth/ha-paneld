@@ -1640,7 +1640,7 @@ class Config private constructor(
     }
 
     // Silence the firmware startup chime by zeroing the ring/notification volume via Settings.System.
-    // Default off — existing panels already have their own volume state; only opt in deliberately.
+    // Default on: fresh panels should reboot silently; an explicit saved choice remains authoritative.
     val silenceBootChime: Boolean get() = boolPref("silence_boot_chime")
     fun setSilenceBootChime(on: Boolean) { edit { putBoolean("silence_boot_chime", on) } }
 
