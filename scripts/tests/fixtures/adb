@@ -95,7 +95,21 @@ STUB
 [ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
 exec /usr/bin/sha256sum "$@"
 STUB
-  chmod 755 "$DB_TXN_SANDBOX/bin/sha256sum"
+  cat > "$DB_TXN_SANDBOX/bin/toybox" <<'STUB'
+#!/bin/bash
+[ "$1" = sha256sum ] || exit 1
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+shift
+exec /usr/bin/sha256sum "$@"
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/busybox" <<'STUB'
+#!/bin/bash
+[ "$1" = sha256sum ] || exit 1
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+shift
+exec /usr/bin/sha256sum "$@"
+STUB
+  chmod 755 "$DB_TXN_SANDBOX/bin/sha256sum" "$DB_TXN_SANDBOX/bin/toybox" "$DB_TXN_SANDBOX/bin/busybox"
   chmod 755 "$DB_TXN_SANDBOX/bin/sqlite3" "$DB_TXN_SANDBOX/bin/dumpsys"
 }
 
