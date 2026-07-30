@@ -7,7 +7,9 @@ import android.provider.Settings
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.persistence.AppState
+import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.util.HelperClient
 
 /**
  * Silences the firmware startup chime while preserving the exact prior ring/notification state.
@@ -27,13 +29,14 @@ class BootChimeController internal constructor(
         context: Context,
         config: Config,
         root: RootShell = Su,
+        daemon: Daemon = HelperClient,
     ) : this(
         configured = { config.silenceBootChime },
         setConfigured = config::setSilenceBootChime,
         stateStore = AndroidBootChimeStateStore(
             AppState.preferences(context, "controller-state", STATE_PREFS),
         ),
-        hardware = AndroidBootChimeHardware(context.applicationContext, root),
+        hardware = AndroidBootChimeHardware(context.applicationContext, root, daemon),
     )
 
     fun isEnabled(): Boolean = configured()
@@ -186,10 +189,63 @@ private class AndroidBootChimeStateStore(
     }
 }
 
-private class AndroidBootChimeHardware(
-    context: Context,
+internal class AndroidBootChimeHardware(
+    private val direct: BootChimeDirectAccess,
     private val root: RootShell,
+    private val daemon: Daemon,
 ) : BootChimeHardware {
+    constructor(
+        context: Context,
+        root: RootShell,
+        daemon: Daemon = HelperClient,
+    ) : this(AndroidBootChimeDirectAccess(context), root, daemon)
+
+    override fun capture(): BootChimeState? = direct.capture()
+
+    override fun silence(): Boolean = applyTransition(
+        state = SILENCED_STATE,
+        helperCommand = "BOOTCHIME SILENCE",
+        rootCommand = silenceShellCommand(0),
+    )
+
+    override fun restore(state: BootChimeState): Boolean = applyTransition(
+        state = state,
+        helperCommand = restoreHelperCommand(state),
+        rootCommand = restoreShellCommand(state),
+    )
+
+    private fun applyTransition(
+        state: BootChimeState,
+        helperCommand: String,
+        rootCommand: String,
+    ): Boolean {
+        val directSucceeded = runCatching { direct.apply(state) }
+            .onFailure { Log.w(TAG, "app boot-chime transition failed; trying helper: ${it.message}") }
+            .getOrDefault(false)
+        if (directSucceeded) return true
+
+        val helperSucceeded = runCatching { daemon.send(helperCommand) == "OK" }
+            .onFailure { Log.w(TAG, "helper boot-chime transition failed; trying root: ${it.message}") }
+            .getOrDefault(false)
+        if (helperSucceeded) return true
+
+        return runCatching { root.run(rootCommand) }
+            .onFailure { Log.w(TAG, "root boot-chime transition failed: ${it.message}") }
+            .getOrDefault(false)
+    }
+
+    companion object {
+        private const val TAG = "ha-paneld/bootchime"
+        private val SILENCED_STATE = BootChimeState(0, 0, 0, 0, 0)
+    }
+}
+
+internal interface BootChimeDirectAccess {
+    fun capture(): BootChimeState?
+    fun apply(state: BootChimeState): Boolean
+}
+
+private class AndroidBootChimeDirectAccess(context: Context) : BootChimeDirectAccess {
     private val cr = context.contentResolver
     private val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -203,35 +259,15 @@ private class AndroidBootChimeHardware(
         )
     }.onFailure { Log.w(TAG, "boot-chime state capture failed: ${it.message}") }.getOrNull()
 
-    override fun silence(): Boolean = writeLevel(0)
-
-    override fun restore(state: BootChimeState): Boolean {
-        val direct = runCatching {
-            var ok = true
-            ok = writeSetting(RING_SPEAKER_KEY, state.ringSpeakerSetting) && ok
-            ok = writeSetting(RING_STANDARD_KEY, state.ringSetting) && ok
-            ok = writeSetting(NOTIFICATION_KEY, state.notificationSetting) && ok
-            am.setStreamVolume(AudioManager.STREAM_RING, state.ringStream, 0)
-            am.setStreamVolume(AudioManager.STREAM_NOTIFICATION, state.notificationStream, 0)
-            ok
-        }.onFailure { Log.w(TAG, "app exact restore failed; trying root: ${it.message}") }
-            .getOrDefault(false)
-        if (direct) return true
-        return root.run(restoreShellCommand(state))
-    }
-
-    private fun writeLevel(level: Int): Boolean {
-        val direct = runCatching {
-            var ok = true
-            ok = Settings.System.putInt(cr, RING_SPEAKER_KEY, level) && ok
-            ok = Settings.System.putInt(cr, RING_STANDARD_KEY, level) && ok
-            ok = Settings.System.putInt(cr, NOTIFICATION_KEY, level) && ok
-            ok
-        }.onFailure { Log.w(TAG, "app settings write failed; trying root: ${it.message}") }
-            .getOrDefault(false)
-        if (direct) return true
-        return root.run(silenceShellCommand(level))
-    }
+    override fun apply(state: BootChimeState): Boolean = applyBootChimeDirect(
+        state = state,
+        writeSetting = ::writeSetting,
+        writeStream = { stream, level ->
+            am.setStreamVolume(stream, level, 0)
+            true
+        },
+        onFailure = { Log.w(TAG, "app boot-chime write failed: ${it.message}") },
+    )
 
     private fun writeSetting(key: String, value: Int?): Boolean =
         if (value == null) cr.delete(Settings.System.CONTENT_URI, "name=?", arrayOf(key)) >= 0
@@ -241,6 +277,39 @@ private class AndroidBootChimeHardware(
         private const val TAG = "ha-paneld/bootchime"
     }
 }
+
+/** Every direct mutation is attempted; a partial transition is never reported as successful. */
+internal fun applyBootChimeDirect(
+    state: BootChimeState,
+    writeSetting: (String, Int?) -> Boolean,
+    writeStream: (Int, Int) -> Boolean,
+    onFailure: (Throwable) -> Unit = {},
+): Boolean {
+    var complete = true
+    fun attempt(operation: () -> Boolean) {
+        val succeeded = runCatching(operation).onFailure(onFailure).getOrDefault(false)
+        if (!succeeded) complete = false
+    }
+
+    attempt { writeSetting(RING_SPEAKER_KEY, state.ringSpeakerSetting) }
+    attempt { writeSetting(RING_STANDARD_KEY, state.ringSetting) }
+    attempt { writeSetting(NOTIFICATION_KEY, state.notificationSetting) }
+    attempt { writeStream(RING_STREAM, state.ringStream) }
+    attempt { writeStream(NOTIFICATION_STREAM, state.notificationStream) }
+    return complete
+}
+
+internal fun restoreHelperCommand(state: BootChimeState): String = listOf(
+    "BOOTCHIME",
+    "RESTORE",
+    state.ringSpeakerSetting.helperValue(),
+    state.ringSetting.helperValue(),
+    state.notificationSetting.helperValue(),
+    state.ringStream.toString(),
+    state.notificationStream.toString(),
+).joinToString(" ")
+
+private fun Int?.helperValue(): String = this?.toString() ?: "-"
 
 internal fun restoreShellCommand(state: BootChimeState): String =
     bootChimeTransitionCommand(

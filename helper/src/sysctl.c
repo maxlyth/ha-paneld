@@ -83,6 +83,65 @@ static int set_fontscale(const char *arg) {
     return command_ok(sysexec_run_argv("/system/bin/settings", argv, 1)) ? 0 : -1;
 }
 
+#define BOOTCHIME_MAX_VALUE 100U
+
+static int valid_bootchime_value(const char *value) {
+    if (!value || value[0] == '\0') return 0;
+    unsigned parsed = 0;
+    for (const unsigned char *cursor = (const unsigned char *)value; *cursor; cursor++) {
+        if (*cursor < '0' || *cursor > '9') return 0;
+        unsigned digit = (unsigned)(*cursor - '0');
+        if (parsed > (BOOTCHIME_MAX_VALUE - digit) / 10U) return 0;
+        parsed = parsed * 10U + digit;
+    }
+    return 1;
+}
+
+static int valid_bootchime_setting(const char *value) {
+    return strcmp(value, "-") == 0 || valid_bootchime_value(value);
+}
+
+static int write_bootchime_setting(const char *key, const char *value) {
+    if (strcmp(value, "-") == 0) {
+        const char *const argv[] = { "settings", "delete", "system", key, NULL };
+        return command_ok(sysexec_run_argv("/system/bin/settings", argv, 1)) ? 0 : -1;
+    }
+    const char *const argv[] = { "settings", "put", "system", key, value, NULL };
+    return command_ok(sysexec_run_argv("/system/bin/settings", argv, 1)) ? 0 : -1;
+}
+
+static int write_bootchime_stream(const char *stream, const char *value) {
+    const char *const argv[] = {
+        "cmd", "media_session", "volume", "--stream", stream, "--set", value, NULL
+    };
+    return command_ok(sysexec_run_argv("/system/bin/cmd", argv, 1)) ? 0 : -1;
+}
+
+static int apply_bootchime(
+    const char *ring_speaker,
+    const char *ring,
+    const char *notification,
+    const char *ring_stream,
+    const char *notification_stream
+) {
+    int applied = 0;
+    if (write_bootchime_setting("volume_ring_speaker", ring_speaker) != 0) return -1;
+    applied++;
+    if (write_bootchime_setting("volume_ring", ring) != 0) return applied;
+    applied++;
+    if (write_bootchime_setting("volume_notification", notification) != 0) return applied;
+    applied++;
+    if (write_bootchime_stream("2", ring_stream) != 0) return applied;
+    applied++;
+    if (write_bootchime_stream("5", notification_stream) != 0) return applied;
+    return 0;
+}
+
+static const char *bootchime_reply(int result) {
+    if (result == 0) return "OK\n";
+    return result > 0 ? "PARTIAL\n" : "ERR\n";
+}
+
 // Read the current font scale as "SCALE=<v>" parsed from `settings get system font_scale`
 // (v="null" when unset → the app reads that as the 1.0 default).
 static int get_fontscale(char *out, size_t outsz) {
@@ -302,6 +361,39 @@ void cmd_fontscale(conn_ctx *ctx, const char *args) {
         char out[48];
         reply(ctx->fd, get_fontscale(out, sizeof out) == 0 ? out : "ERR\n");  // get -> "SCALE=.."
     } else reply(ctx->fd, set_fontscale(arg) == 0 ? "OK\n" : "ERR\n");      // set <scale>|reset
+}
+
+void cmd_bootchime(conn_ctx *ctx, const char *args) {
+    char action[16] = "", ring_speaker[16] = "", ring[16] = "", notification[16] = "";
+    char ring_stream[16] = "", notification_stream[16] = "", extra[2] = "";
+    int fields = sscanf(
+        args,
+        "%15s %15s %15s %15s %15s %15s %1s",
+        action,
+        ring_speaker,
+        ring,
+        notification,
+        ring_stream,
+        notification_stream,
+        extra
+    );
+
+    if (fields == 1 && strcmp(action, "SILENCE") == 0) {
+        reply(ctx->fd, bootchime_reply(apply_bootchime("0", "0", "0", "0", "0")));
+        return;
+    }
+    if (fields != 6 || strcmp(action, "RESTORE") != 0 ||
+        !valid_bootchime_setting(ring_speaker) ||
+        !valid_bootchime_setting(ring) ||
+        !valid_bootchime_setting(notification) ||
+        !valid_bootchime_value(ring_stream) ||
+        !valid_bootchime_value(notification_stream)) {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    reply(ctx->fd, bootchime_reply(
+        apply_bootchime(ring_speaker, ring, notification, ring_stream, notification_stream)
+    ));
 }
 
 void cmd_gov(conn_ctx *ctx, const char *args) {

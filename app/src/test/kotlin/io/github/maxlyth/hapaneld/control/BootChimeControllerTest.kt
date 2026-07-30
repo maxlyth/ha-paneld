@@ -109,6 +109,107 @@ class BootChimeControllerTest {
         )
     }
 
+    @Test fun directTransitionAttemptsEveryDurableSettingAndLiveStream() {
+        val attempted = mutableListOf<String>()
+
+        assertFalse(applyBootChimeDirect(
+            state = prior,
+            writeSetting = { key, value ->
+                attempted += "setting:$key=${value ?: "-"}"
+                false
+            },
+            writeStream = { stream, value ->
+                attempted += "stream:$stream=$value"
+                if (stream == 2) error("ring stream denied")
+                true
+            },
+        ))
+
+        assertEquals(
+            listOf(
+                "setting:volume_ring_speaker=2",
+                "setting:volume_ring=-",
+                "setting:volume_notification=7",
+                "stream:2=3",
+                "stream:5=6",
+            ),
+            attempted,
+        )
+    }
+
+    @Test fun helperSilenceSucceedsOnSandboxedPanelWithoutSu() {
+        val direct = FakeBootChimeDirect(prior, applySucceeds = false)
+        val daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "OK"))
+        val root = FakeRootShell(available = false, runResult = false)
+        val hardware = AndroidBootChimeHardware(direct, root, daemon)
+
+        assertTrue(hardware.silence())
+
+        assertEquals(listOf(BootChimeState(0, 0, 0, 0, 0)), direct.applied)
+        assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
+        assertTrue(root.ran.isEmpty())
+    }
+
+    @Test fun helperFailureFallsThroughToExistingSuCommand() {
+        val direct = FakeBootChimeDirect(prior, applySucceeds = false)
+        val daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "PARTIAL"))
+        val root = FakeRootShell(runResult = true)
+        val hardware = AndroidBootChimeHardware(direct, root, daemon)
+
+        assertTrue(hardware.silence())
+
+        assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
+        assertEquals(listOf(silenceShellCommand(0)), root.ran)
+    }
+
+    @Test fun helperRestoreEncodesExactSnapshotIncludingUnsetValues() {
+        val command = "BOOTCHIME RESTORE 2 - 7 3 6"
+        val direct = FakeBootChimeDirect(prior, applySucceeds = false)
+        val daemon = FakeDaemon(mapOf(command to "OK"))
+        val root = FakeRootShell(runResult = false)
+        val hardware = AndroidBootChimeHardware(direct, root, daemon)
+
+        assertTrue(hardware.restore(prior))
+
+        assertEquals(command, restoreHelperCommand(prior))
+        assertEquals(listOf(command), daemon.sent)
+        assertTrue(root.ran.isEmpty())
+    }
+
+    @Test fun directSuccessAvoidsHelperAndSu() {
+        val direct = FakeBootChimeDirect(prior, applySucceeds = true)
+        val daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "OK"))
+        val root = FakeRootShell(runResult = true)
+        val hardware = AndroidBootChimeHardware(direct, root, daemon)
+
+        assertTrue(hardware.silence())
+
+        assertTrue(daemon.sent.isEmpty())
+        assertTrue(root.ran.isEmpty())
+    }
+
+    @Test fun allRouteFailureRemainsFalseAndPendingAtControllerLevel() {
+        var configured = false
+        val events = mutableListOf<String>()
+        val store = FakeBootStore(events)
+        val direct = FakeBootChimeDirect(prior, applySucceeds = false)
+        val daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "ERR"))
+        val root = FakeRootShell(available = false, runResult = false)
+        val controller = BootChimeController(
+            configured = { configured },
+            setConfigured = { configured = it },
+            stateStore = store,
+            hardware = AndroidBootChimeHardware(direct, root, daemon),
+        )
+
+        assertFalse(controller.set(true))
+
+        assertTrue(configured)
+        assertEquals(prior, store.state)
+        assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
+        assertEquals(listOf(silenceShellCommand(0)), root.ran)
+    }
+
     @Test fun failedExactRestoreRetainsConfigurationAndSnapshotForRetry() {
         var configured = true
         val events = mutableListOf<String>()
@@ -166,6 +267,18 @@ class BootChimeControllerTest {
             events += "restore:$state"
             restored = state
             return restoreSucceeds
+        }
+    }
+
+    private class FakeBootChimeDirect(
+        private val captured: BootChimeState,
+        private val applySucceeds: Boolean,
+    ) : BootChimeDirectAccess {
+        val applied = mutableListOf<BootChimeState>()
+        override fun capture(): BootChimeState = captured
+        override fun apply(state: BootChimeState): Boolean {
+            applied += state
+            return applySucceeds
         }
     }
 }
