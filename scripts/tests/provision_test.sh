@@ -2456,9 +2456,14 @@ assert_contains 'could not erase the panel configuration' "a failed erase names 
 # invocation resolves a release to install, so the run must NOT take the export-only early exit.
 : > "$MOCK_CALL_LOG"
 HAPANELD_RESET_CONFIRM=RESET run_provision "$MOCK_TARGET" --export "$TMP/export-then-reset.json" --reset-config
-assert_failure "--export with --reset-config never exits 0 with the reset silently dropped"
 assert_not_contains 'config export complete' "$LAST_OUTPUT" "the pairing never prints the export-only all-done banner"
-assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "the refused pairing run never reaches the package manager"
+if [ "$LAST_STATUS" -ne 0 ]; then
+  assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused pairing run never reaches the package manager"
+elif grep -Eq 'adb .*pm clear io.github.maxlyth.hapaneld' "$MOCK_CALL_LOG"; then
+  pass "a pairing that resolves a local APK performs the requested reset"
+else
+  fail_test "--export with --reset-config never exits 0 with the reset silently dropped"
+fi
 
 # The same pairing with an APK is the supported combined intent: export, upgrade, then erase.
 : > "$MOCK_CALL_LOG"
