@@ -2450,6 +2450,25 @@ HAPANELD_RESET_CONFIRM=RESET MOCK_PM_CLEAR=fail run_provision "$MOCK_TARGET" --a
 assert_failure "a failed erase returns nonzero"
 assert_contains 'could not erase the panel configuration' "a failed erase names what went wrong"
 
+# --export pairs with --reset-config: the export is the reset's preferred backup source, and the
+# pairing must never exit 0 with the erase silently dropped — an unattended handoff would believe
+# the panel was cleared while it still holds the full configuration. Without --apk a mutating
+# invocation resolves a release to install, so the run must NOT take the export-only early exit.
+: > "$MOCK_CALL_LOG"
+HAPANELD_RESET_CONFIRM=RESET run_provision "$MOCK_TARGET" --export "$TMP/export-then-reset.json" --reset-config
+assert_failure "--export with --reset-config never exits 0 with the reset silently dropped"
+assert_not_contains 'config export complete' "$LAST_OUTPUT" "the pairing never prints the export-only all-done banner"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "the refused pairing run never reaches the package manager"
+
+# The same pairing with an APK is the supported combined intent: export, upgrade, then erase.
+: > "$MOCK_CALL_LOG"
+rm -f "$TMP/export-then-reset.json"
+HAPANELD_RESET_CONFIRM=RESET MOCK_SETUP=identity run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --export "$TMP/export-then-reset.json" --reset-config
+assert_success "a confirmed export+upgrade+reset invocation completes"
+assert_log_contains 'adb .*pm clear io.github.maxlyth.hapaneld' "the paired reset really erases the app's stored state"
+if [ -s "$TMP/export-then-reset.json" ]; then pass "the paired export produced a non-empty backup file"
+else fail_test "the paired export produced a non-empty backup file"; fi
+
 # Bulk erase is not offered: fleet workers run with stdin closed, so a single exported confirmation
 # would otherwise wipe every panel at once.
 : > "$MOCK_CALL_LOG"

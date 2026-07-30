@@ -3820,7 +3820,7 @@ reset_panel_config() {
 export_is_only_operation() {
   [ -n "$EXPORT_FILE" ] && [ -z "$APK$PANEL_ID$MQTT$MQTT_USER$MQTT_PASS$LOG_HOST$LOG_PORT$LOG_PROTO$LOG_ENABLE" ] &&
     [ -z "$HA_URL$HA_TOKEN$HA_USER$HA_PASS$RESTORE_FILE" ] && [ "$LATEST" = 0 ] && [ "$PERSIST_ADB" = 0 ] &&
-    [ "$STRIP_VENDOR" = 0 ] && [ "$BUILTIN" = 0 ] && [ "$SHIZUKU" = 0 ]
+    [ "$STRIP_VENDOR" = 0 ] && [ "$BUILTIN" = 0 ] && [ "$SHIZUKU" = 0 ] && [ "$RESET_CONFIG" = 0 ]
 }
 
 echo "${MAG}${B}🛠  ha-paneld provisioning${X} ${D}→ $TARGET${X}"
