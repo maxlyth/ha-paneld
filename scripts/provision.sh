@@ -3341,13 +3341,11 @@ check_data_capacity() {
 # in the failure path the recovery guidance itself sends people to — an uninstall, which destroys the
 # store with no off-panel copy in existence.
 #
-# BEST-EFFORT on purpose. It needs a root route, so a sandboxed panel cannot do it at all, and an
-# upgrade must not begin failing on panels where it was never possible. The settings export remains
-# the fail-closed guarantee; this is strictly additional cover.
+# Root-capable panels capture the database fail-closed before upgrade. Sandboxed panels cannot reach
+# app-private storage, so they retain the settings export as their only pre-upgrade capture.
 #
-# The whole file-set moves in ONE root command: pulling ha-paneld.db without its -wal sidecar loses
-# every committed transaction still in the write-ahead log, which surfaces as silent data loss at
-# restore time rather than as a failed backup.
+# The panel creates one coherent SQLite backup inside a transaction. Pulling ha-paneld.db without an
+# uncheckpointed -wal sidecar would lose committed data, so raw file-set copying is never used here.
 #
 # BREAK-GLASS, and named so on disk. The panel's own .hpb backup deliberately does NOT contain this
 # file, because restoring a raw database across versions is the downgrade config-reset hazard and
@@ -3428,8 +3426,9 @@ snapshot_txn_refuse() {
 # and content admission, provenance capture and digest emission ATOMICALLY on the panel, cleans
 # itself up on every internal failure, and speaks one machine-readable manifest. The host then does
 # exactly one pull, one manifest-vs-bytes check, one receipt written strictly AFTER verification,
-# and one verified cleanup. There is no window in which a receipt can claim what verification has
-# not proven, no staging the host knows about before the script owns it, and no discovery state
+# and one best-effort cleanup of uniquely owned staging. There is no window in which a receipt can
+# claim what verification has not proven, no staging the host knows about before the script owns it,
+# and no discovery state
 # consulted outside the transaction that acts on it.
 snapshot_panel_database() {
   local db_source stage base safe_target stamp script_file script_sha panel_sha out line
