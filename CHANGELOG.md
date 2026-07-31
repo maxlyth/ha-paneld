@@ -6,6 +6,8 @@
 
 - **An in-app update is no longer refused because of a private housekeeping copy or a fixed storage margin.** ha-paneld still records a configuration revision immediately before replacing itself, but that revision is an internal convenience copy rather than your `.hpb` backup, so an upgrade that cannot write one now warns and continues instead of leaving the panel on the old build. Free space is likewise judged against what the update actually needs, rather than demanding an extra 64 MB beyond it — which had been refusing updates that would have installed. Download size limits, signer and package verification, and honest reporting of real download, storage and installation failures are unchanged.
 
+- **Installing an APK you upload is no longer refused over space the panel does not need.** Free space is judged against what the upload will actually stage, rather than demanding an extra 64 MB beyond it, which had been turning away installs that would have succeeded on a panel with little storage left. The maximum upload size, the package and signer shown for you to check before you confirm, and honest reporting of real storage, write and installation failures are unchanged.
+
 - **Encrypted backups no longer report success while their plaintext archive remains.** If that archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
 
 ## v0.9.6-rc4 - 2026-07-30

@@ -339,7 +339,8 @@ class ControlPlaneRoutesTest {
         assertUpload("12345", HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"upload-too-large"}""")
         assertEquals(beforeOversized, stagedFiles.size)
 
-        usableSpace = 64L * 1024L * 1024L + 2L
+        // A body that genuinely does not fit the free space is still refused before anything is written.
+        usableSpace = 2L
         assertUpload("apk", HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
         assertFalse(stagedFiles.last().exists())
 
@@ -363,6 +364,9 @@ class ControlPlaneRoutesTest {
 
         pending.open()
         closeDuringInspection = false
+        // An upload that fits its actual staging requirement is admitted with no surplus demanded: four
+        // usable bytes for a four-byte body. The retired fixed 64 MiB reserve refused exactly this.
+        usableSpace = 4L
         assertUpload(
             "good",
             HttpStatusCode.OK,
@@ -435,12 +439,11 @@ class ControlPlaneRoutesTest {
         assertEquals("timeout", response.bodyAsText())
     }
 
-    @Test fun uploadCapacityKeepsSafetyMarginAndBudgetsUnknownBodiesAtTheMaximum() {
-        val margin = 64L * 1024L * 1024L
-        assertEquals(0L, uploadStagingLimit(margin, maxPayloadBytes = 4L))
-        assertEquals(3L, uploadStagingLimit(margin + 3L, maxPayloadBytes = 4L))
-        assertEquals(4L, uploadStagingLimit(margin + 5L, maxPayloadBytes = 4L))
-        assertEquals(0L, uploadStagingLimit(Long.MAX_VALUE, maxPayloadBytes = -1L))
+    @Test fun uploadCapacityAdmitsTheActualRequirementAndBudgetsUnknownBodiesAtTheMaximum() {
+        assertEquals(0L, uploadStagingLimit(usableBytes = 0L, maxPayloadBytes = 4L))
+        assertEquals(3L, uploadStagingLimit(usableBytes = 3L, maxPayloadBytes = 4L))
+        assertEquals(4L, uploadStagingLimit(usableBytes = Long.MAX_VALUE, maxPayloadBytes = 4L))
+        assertEquals(0L, uploadStagingLimit(usableBytes = Long.MAX_VALUE, maxPayloadBytes = -1L))
     }
 
     @Test fun apkCommitApprovalNamesTheInspectedPackageVersionAndSigner() = testApplication {

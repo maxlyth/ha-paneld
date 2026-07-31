@@ -194,13 +194,17 @@ internal suspend fun receiveBoundedBody(
     }
 }
 
-internal fun uploadStagingLimit(
-    usableBytes: Long,
-    maxPayloadBytes: Long,
-    safetyMarginBytes: Long = UPLOAD_STORAGE_SAFETY_MARGIN_BYTES,
-): Long {
-    if (usableBytes <= safetyMarginBytes || maxPayloadBytes <= 0L) return 0L
-    return minOf(maxPayloadBytes, usableBytes - safetyMarginBytes)
+/**
+ * Bytes a staged upload may occupy, or 0 to refuse. Admission is the upload's **actual** staging
+ * requirement: the body is bounded by whichever of [maxPayloadBytes] and [usableBytes] is smaller, and
+ * nothing beyond it is reserved, because a fixed surplus only ever refused uploads that would have
+ * installed. The caller refuses a declared length exceeding this ceiling before writing; a body that
+ * outgrows it mid-stream is refused by the stream bound; and space exhausted during the write is
+ * reported by the write itself rather than pre-judged here.
+ */
+internal fun uploadStagingLimit(usableBytes: Long, maxPayloadBytes: Long): Long {
+    if (usableBytes <= 0L || maxPayloadBytes <= 0L) return 0L
+    return minOf(maxPayloadBytes, usableBytes)
 }
 
 /** Registers the control routes whose request parsing and admission decisions are independent of Android. */
@@ -620,7 +624,6 @@ private val COMPONENT_ACTIONS = setOf("update", "reinstall")
 internal const val RESTORE_BODY_RECEIPT_DEADLINE_MS = 120_000L
 internal const val STANDARD_BODY_RECEIPT_DEADLINE_MS = 30_000L
 private const val APK_UPLOAD_RECEIPT_DEADLINE_MS = 600_000L
-private const val UPLOAD_STORAGE_SAFETY_MARGIN_BYTES = 64L * 1024L * 1024L
 private const val APK_APPROVAL_PACKAGE_CHARS = 64
 private const val APK_APPROVAL_SIGNER_CHARS = 64
 private const val APK_APPROVAL_VERSION_CHARS = 20
