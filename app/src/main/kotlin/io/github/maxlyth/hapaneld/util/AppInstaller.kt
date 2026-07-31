@@ -63,25 +63,20 @@ object AppInstaller {
 
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
-        // the su install streams straight from it (no second /data/local/tmp copy). +64 MB margin.
+        // the su install streams straight from it (no second /data/local/tmp copy).
         val size = contentLength(url)
         if (size > MAX_APK_DOWNLOAD_BYTES) {
             Log.w(TAG, "refusing oversized APK download: $size bytes")
             return@withContext InstallOutcome.Retryable("download too large (${size / 1048576} MB)")
         }
-        val margin = 64L * 1024L * 1024L
         val free = context.cacheDir.usableSpace
-        val spaceLimit = (free - margin).coerceAtLeast(0L)
-        if (size > 0L && size > spaceLimit) {
-            val need = size + margin
-            Log.w(TAG, "insufficient storage: need ${need / 1048576} MB, have ${free / 1048576} MB free")
-            return@withContext InstallOutcome.Retryable(
-                "insufficient storage (need ${need / 1048576} MB, ${free / 1048576} MB free)",
-            )
-        }
-        val downloadLimit = minOf(MAX_APK_DOWNLOAD_BYTES, spaceLimit)
-        if (downloadLimit == 0L) {
-            return@withContext InstallOutcome.Retryable("insufficient storage (64 MB safety margin unavailable)")
+        val downloadLimit = downloadCeiling(size, free)
+        if (downloadLimit <= 0L) {
+            val why = if (size > 0L)
+                "insufficient storage (need ${size / 1048576} MB, ${free / 1048576} MB free)"
+            else "insufficient storage (no free space)"
+            Log.w(TAG, why)
+            return@withContext InstallOutcome.Retryable(why)
         }
         val apk = runCatching { File.createTempFile("hapaneld-dl-", ".apk", context.cacheDir) }
             .getOrElse { return@withContext InstallOutcome.Retryable("download staging failed") }
@@ -139,14 +134,12 @@ object AppInstaller {
             return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
         }
         val replacingSelf = inspect(context, apk.absolutePath)?.pkg == context.packageName
-        if (replacingSelf && !ConfigUpgradeBackup.snapshot(context)) {
-            apk.delete()
-            return@withContext InstallOutcome.Retryable(
-                "install deferred: configuration backup could not be written",
-            )
-        }
         val stateQuiescence = if (replacingSelf) {
-            AppState.quiesceForSelfReplace(context, SELF_REPLACE_STATE_FLUSH_MS)
+            prepareSelfReplace(
+                snapshot = { ConfigUpgradeBackup.snapshot(context) },
+                quiesce = { AppState.quiesceForSelfReplace(context, SELF_REPLACE_STATE_FLUSH_MS) },
+                warn = { Log.w(TAG, it) },
+            )
         } else null
         if (replacingSelf && stateQuiescence == null) {
             apk.delete()
@@ -214,6 +207,39 @@ object AppInstaller {
         return if (output.startsWith("Failure [")) InstallOutcome.Rejected(message)
         else InstallOutcome.Retryable(message)
     }
+
+    /**
+     * Bytes the staged download may occupy, or 0 to refuse. Admission is the download's **actual**
+     * requirement: a declared [size] must fit in [free] and nothing beyond it is reserved, because a
+     * fixed surplus only ever refused upgrades that would have installed. A server that declares no
+     * length ([size] < 0) is still bounded — by whichever of [free] and [MAX_APK_DOWNLOAD_BYTES] is
+     * smaller — and only a completely full filesystem is refused outright. Space exhausted while
+     * writing is reported by the write itself rather than pre-judged here.
+     */
+    internal fun downloadCeiling(size: Long, free: Long): Long {
+        val usable = free.coerceAtLeast(0L)
+        if (size > usable) return 0L
+        return minOf(MAX_APK_DOWNLOAD_BYTES, usable)
+    }
+
+    /**
+     * Prepare to replace the running package: take the private configuration revision, then quiesce
+     * state writes. The revision is defense in depth, not a precondition — an unwritable one warns
+     * through [warn] and the upgrade continues, because stranding the panel on the old build is the
+     * worse outcome and nothing in the restore path requires this optional copy. [quiesce] is still
+     * the gate; a null return means state is not yet safe to replace under.
+     */
+    internal fun prepareSelfReplace(
+        snapshot: () -> Boolean,
+        quiesce: () -> io.github.maxlyth.hapaneld.persistence.StateQuiescence?,
+        warn: (String) -> Unit,
+    ): io.github.maxlyth.hapaneld.persistence.StateQuiescence? {
+        if (!snapshot()) warn(SNAPSHOT_UNWRITABLE_WARNING)
+        return quiesce()
+    }
+
+    internal const val SNAPSHOT_UNWRITABLE_WARNING =
+        "pre-upgrade configuration revision could not be written; continuing with the upgrade"
 
     internal fun finishSelfReplaceQuiescence(
         quiescence: io.github.maxlyth.hapaneld.persistence.StateQuiescence?,

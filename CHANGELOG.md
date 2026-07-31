@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **An in-app update is no longer refused because of a private housekeeping copy or a fixed storage margin.** ha-paneld still records a configuration revision immediately before replacing itself, but that revision is an internal convenience copy rather than your `.hpb` backup, so an upgrade that cannot write one now warns and continues instead of leaving the panel on the old build. Free space is likewise judged against what the update actually needs, rather than demanding an extra 64 MB beyond it — which had been refusing updates that would have installed. Download size limits, signer and package verification, and honest reporting of real download, storage and installation failures are unchanged.
+
 ## v0.9.6-rc5 - 2026-07-31
 
 ### Fixed
