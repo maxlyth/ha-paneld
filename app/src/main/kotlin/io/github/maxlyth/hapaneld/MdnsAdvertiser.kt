@@ -220,7 +220,8 @@ class MdnsAdvertiser(
                 // JmDNS may rename a colliding instance during registration; monitor the actual name.
                 advertisedInstanceName = info.name ?: runtimePanelId
                 // Start the persistent peer browse (powers the header switcher) — begins querying immediately
-                // and keeps the roster fresh in the background, so a UI read is instant + complete.
+                // and feeds a cached roster, so UI reads are instant. Completeness is eventual and can take
+                // longer after a whole-fleet restart.
                 browsing = true
                 runCatching { dns.addServiceListener(Config.MDNS_SERVICE_TYPE, peerListener) }
                 // Periodic re-browse: dns.list resolves each service fully (incl. TXT), so this refreshes names

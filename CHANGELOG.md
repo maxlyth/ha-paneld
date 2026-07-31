@@ -14,7 +14,7 @@
 
 - **Failed rooted upgrades no longer leave temporary helper files to accumulate.** Provisioning cleans up its own staging after successful and handled failed runs. If a broken connection prevents that cleanup, the next helper transaction safely reclaims the leftovers.
 
-- **Panels that receive their network address late during boot no longer remain absent from Home Assistant discovery until restart.** The address is retained while ha-paneld is starting and applied as soon as discovery is ready.
+- **Panels that receive their network address late during boot no longer remain absent from Home Assistant discovery until restart ([#78](https://github.com/maxlyth/ha-paneld/issues/78)).** The address is retained while ha-paneld is starting and applied as soon as discovery is ready. In a later 48-boot rc4 fleet test, all 19 starts that initially deferred discovery recovered without invoking the running-responder supervisor.
 
 - **Backups from Android 8.1 panels can now include device-local application state.** An `.hpb` created by RC1, RC2 or RC3 on Android 8.1 could report success while silently omitting stored state such as auto-sleep learning and profile calibration. Its normal configuration and profile data were still present. Existing backups are not repaired, so take a fresh backup after upgrading.
 
@@ -48,7 +48,7 @@
 
 - **Interrupted rooted upgrades no longer leave a panel permanently unprovisionable.** An upgrade that rolled back successfully could leave its recovery journal behind, causing every later provisioning attempt to fail in exactly the same way. RC3 recognises the restored state, completes the rollback and allows the next attempt to proceed normally.
 
-- **LAN panel discovery recovers when its mDNS responder silently stalls.** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted.
+- **LAN panel discovery recovers when its mDNS responder silently stalls ([#75](https://github.com/maxlyth/ha-paneld/issues/75)).** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted. A later 16-panel rc3 soak observed 14 natural responder stalls; all 14 were detected and rebuilt in the same app process.
 
 - **The Dashboard no longer shifts or reopens in the wrong place on small panels.** Restored placement no longer drifts onto the wrong cards, and the narrow-screen header no longer causes the page to jump shortly after loading. The Dashboard opens where you left it and stops moving under your finger.
 
