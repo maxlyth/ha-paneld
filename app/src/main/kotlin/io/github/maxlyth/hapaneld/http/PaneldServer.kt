@@ -679,6 +679,72 @@ internal fun backupStagingRequirement(includeCompanion: Boolean, encrypted: Bool
     return PaneldServer.BACKUP_STORAGE_MARGIN_BYTES + maxOf(archivePeak, rawCapturePeak)
 }
 
+internal class BackupStagingRetainedException : Exception("sensitive backup staging file retained")
+
+/** Attempt one bounded cleanup without allowing it to replace an earlier backup failure. */
+internal inline fun attemptBackupCleanup(primary: Exception?, cleanup: () -> Unit): Exception? = try {
+    cleanup()
+    primary
+} catch (failure: Exception) {
+    if (primary == null) failure else primary.apply {
+        if (failure !== this) addSuppressed(failure)
+    }
+}
+
+internal inline fun <R> withBackupArtifactCleanup(
+    plain: File,
+    sealed: () -> File?,
+    ownedFiles: () -> List<File>,
+    block: () -> R,
+): R {
+    var primary: Exception? = null
+    var failed = false
+    try {
+        return block()
+    } catch (error: Exception) {
+        failed = true
+        primary = error
+        primary = attemptBackupCleanup(primary) { plain.delete() }
+        primary = attemptBackupCleanup(primary) { sealed()?.delete() }
+        throw error
+    } finally {
+        ownedFiles().forEach { file ->
+            primary = attemptBackupCleanup(primary) { file.delete() }
+        }
+        if (!failed) primary?.let { throw it }
+    }
+}
+
+internal inline fun <T : java.io.Closeable, R> withBackupCaptureAndPlaintext(
+    capture: T?,
+    createPlaintext: () -> File,
+    block: (T?, File) -> R,
+): R {
+    var primary: Exception? = null
+    try {
+        return block(capture, createPlaintext())
+    } catch (error: Exception) {
+        primary = error
+        throw error
+    } finally {
+        val failure = attemptBackupCleanup(primary) { capture?.close() }
+        if (primary == null && failure != null) throw failure
+    }
+}
+
+internal fun encryptedBackupArtifact(plain: File, sealed: File): PanelBackup.Artifact {
+    val retained = runCatching {
+        plain.delete()
+        plain.exists()
+    }.getOrDefault(true)
+    if (retained) {
+        // The encrypted temp is never returned, even if its best-effort cleanup also fails.
+        runCatching { sealed.delete() }
+        throw BackupStagingRetainedException()
+    }
+    return PanelBackup.Artifact(sealed)
+}
+
 /** Render one trusted Dashboard control without accepting pre-quoted HTML attribute fragments. */
 internal fun dashboardControlButtonHtml(
     action: String,
@@ -6634,7 +6700,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val packageName: String,
         val files: List<CapturedCompanionFile>,
         val owner: java.io.Closeable,
-    )
+    ) : java.io.Closeable {
+        override fun close() = owner.close()
+    }
     private data class BackupArchiveParts(
         val manifest: String,
         val sources: List<PanelBackup.ArchiveSource>,
@@ -6647,37 +6715,37 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             throw CompanionBackupUnavailable("Insufficient storage to stage a backup safely")
         }
         val capture = if (includeCompanion) captureCompanion() else null
-        val plain = File.createTempFile("panel-backup-", ".zip", cacheDir)
-        var sealed: File? = null
-        var parts: BackupArchiveParts? = null
-        try {
-            parts = backupArchiveParts(capture)
-            plain.outputStream().use { output ->
-                PanelBackup.writeArchive(
-                    output,
-                    parts.manifest,
-                    parts.sources,
-                    MAX_BACKUP_MANIFEST_BYTES,
-                )
+        return withBackupCaptureAndPlaintext(
+            capture,
+            createPlaintext = { File.createTempFile("panel-backup-", ".zip", cacheDir) },
+        ) { ownedCapture, plain ->
+            var sealed: File? = null
+            var parts: BackupArchiveParts? = null
+            withBackupArtifactCleanup(
+                plain = plain,
+                sealed = { sealed },
+                ownedFiles = { parts?.ownedFiles.orEmpty() },
+            ) {
+                parts = backupArchiveParts(ownedCapture)
+                plain.outputStream().use { output ->
+                    PanelBackup.writeArchive(
+                        output,
+                        parts.manifest,
+                        parts.sources,
+                        MAX_BACKUP_MANIFEST_BYTES,
+                    )
+                }
+                val plaintextLimit = if (passphrase.isEmpty()) MAX_RESTORE_BYTES
+                    else PanelBackup.maxSealablePlaintextBytes(MAX_RESTORE_BYTES)
+                if (plain.length() !in 1..plaintextLimit) throw ByteLimitExceeded(plaintextLimit)
+                if (passphrase.isEmpty()) return@withBackupCaptureAndPlaintext PanelBackup.Artifact(plain, "zip")
+                sealed = File.createTempFile("panel-backup-", ".hpb", cacheDir)
+                plain.inputStream().use { input ->
+                    sealed.outputStream().use { output -> PanelBackup.seal(input, output, passphrase) }
+                }
+                if (sealed.length() !in 1..MAX_RESTORE_BYTES) throw ByteLimitExceeded(MAX_RESTORE_BYTES)
+                encryptedBackupArtifact(plain, sealed)
             }
-            val plaintextLimit = if (passphrase.isEmpty()) MAX_RESTORE_BYTES
-                else PanelBackup.maxSealablePlaintextBytes(MAX_RESTORE_BYTES)
-            if (plain.length() !in 1..plaintextLimit) throw ByteLimitExceeded(plaintextLimit)
-            if (passphrase.isEmpty()) return PanelBackup.Artifact(plain, "zip")
-            sealed = File.createTempFile("panel-backup-", ".hpb", cacheDir)
-            plain.inputStream().use { input ->
-                sealed.outputStream().use { output -> PanelBackup.seal(input, output, passphrase) }
-            }
-            if (sealed.length() !in 1..MAX_RESTORE_BYTES) throw ByteLimitExceeded(MAX_RESTORE_BYTES)
-            plain.delete()
-            return PanelBackup.Artifact(sealed)
-        } catch (error: Exception) {
-            plain.delete()
-            sealed?.delete()
-            throw error
-        } finally {
-            parts?.ownedFiles?.forEach(File::delete)
-            capture?.owner?.close()
         }
     }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.6-rc5 - 2026-07-31
+
+### Fixed
+
+- **Encrypted backups no longer report success while their plaintext archive remains.** If that archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
+
 ## v0.9.6-rc4 - 2026-07-30
 
 ### Important changes — please read before upgrading

@@ -598,6 +598,14 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
             HttpStatusCode.UnprocessableEntity,
         )
         return
+    } catch (_: BackupStagingRetainedException) {
+        progressResult = "Sensitive backup staging file retained"
+        call.respondText(
+            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+            ContentType.Application.Json,
+            HttpStatusCode.InsufficientStorage,
+        )
+        return
     } finally {
         if (!deliveryHandedOff) {
             cleanDelivery()

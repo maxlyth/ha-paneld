@@ -186,6 +186,57 @@ class ControlPlaneRoutesTest {
         )
         assertOperationLaneReleased()
 
+        val retainedSource = temporary.newFile("retained-route.zip").apply { writeText("secret") }
+        val retainedPlaintext = object : java.io.File(retainedSource.path) {
+            override fun delete(): Boolean = false
+        }
+        val withdrawnSource = temporary.newFile("withdrawn-route.hpb").apply { writeText("sealed") }
+        var artifactDeleteAttempts = 0
+        val withdrawnArtifact = object : java.io.File(withdrawnSource.path) {
+            override fun delete(): Boolean {
+                artifactDeleteAttempts++
+                throw java.io.IOException("sealed cleanup failed")
+            }
+        }
+        val ownedSource = temporary.newFile("owned-route.payload").apply { writeText("temporary") }
+        var ownedDeleteAttempts = 0
+        val ownedFile = object : java.io.File(ownedSource.path) {
+            override fun delete(): Boolean {
+                ownedDeleteAttempts++
+                throw java.io.IOException("owned cleanup failed")
+            }
+        }
+        var captureCloseAttempts = 0
+        build = { _, _ ->
+            withBackupCaptureAndPlaintext(
+                capture = java.io.Closeable {
+                    captureCloseAttempts++
+                    throw java.io.IOException("capture close failed")
+                },
+                createPlaintext = { retainedPlaintext },
+            ) { _, plain ->
+                withBackupArtifactCleanup(
+                    plain = plain,
+                    sealed = { withdrawnArtifact },
+                    ownedFiles = { listOf(ownedFile) },
+                ) { encryptedBackupArtifact(plain, withdrawnArtifact) }
+            }
+        }
+        assertJsonPost(
+            "include_companion=true&passphrase=protected",
+            HttpStatusCode.InsufficientStorage,
+            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+            path = "/api/v1/backup",
+        )
+        assertTrue(retainedSource.exists())
+        assertTrue(withdrawnSource.exists())
+        assertTrue(ownedSource.exists())
+        assertEquals(2, artifactDeleteAttempts)
+        assertEquals(1, ownedDeleteAttempts)
+        assertEquals(1, captureCloseAttempts)
+        assertFalse(BackupDeliveryGate.occupied())
+        assertOperationLaneReleased()
+
         var laneHeldWhenArtifactDeleted = false
         var deliveryHeldWhenArtifactDeleted = false
         build = { includeCompanion, passphrase ->
