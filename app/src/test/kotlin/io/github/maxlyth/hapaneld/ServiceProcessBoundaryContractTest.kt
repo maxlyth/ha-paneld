@@ -545,7 +545,10 @@ class ServiceProcessBoundaryContractTest {
         assertTrue(admissions.contains("beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)"))
         assertTrue(destroy.contains("closeServiceAdmissions()"))
         assertTrue(requested.contains("closeServiceAdmissions()"))
-        assertTrue(requested.indexOf("closeServiceAdmissions()") < requested.indexOf("Thread {"))
+        assertTrue(requested.contains("restartAfterInternalBoundary.set(true)"))
+        assertTrue(requested.indexOf("closeServiceAdmissions()") < requested.indexOf("mainHandler.post { stopSelf() }"))
+        assertFalse(requested.contains("Thread {"))
+        assertFalse(requested.contains("server.stop()"))
     }
 
     @Test fun everyPaneldProcessBoundaryUsesTheExternalStateGate() {
@@ -554,6 +557,16 @@ class ServiceProcessBoundaryContractTest {
         assertTrue(source.contains("requestSafeProcessBoundary(\"activating staged profile\")"))
         assertTrue(source.contains("requestSafeProcessBoundary(\"bounded runtime recovery\")"))
         assertTrue(source.contains("requestSafeProcessBoundary(\"binding the \$verb WebView provider\")"))
+        val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("private fun finishTeardownAsync("))
+        val requested = source.substring(source.indexOf("private fun requestSafeProcessBoundary("), source.indexOf("private fun finishTeardownAfterExternalStateIsSafe("))
+        val finalizer = source.substring(source.indexOf("private fun finishTeardownAsync("), source.indexOf("private fun runFinalizerStep("))
+        assertTrue(requested.contains("mainHandler.post { stopSelf() }"))
+        assertTrue(requested.contains("restartAfterInternalBoundary.set(true)"))
+        assertTrue(destroy.contains("if (restartAfterInternalBoundary.get())"))
+        assertTrue(destroy.indexOf("finishTeardownAsync(") < destroy.indexOf("if (restartAfterInternalBoundary.get())"))
+        assertTrue(destroy.indexOf("if (restartAfterInternalBoundary.get())") < destroy.indexOf("super.onDestroy()"))
+        assertTrue(finalizer.contains("AppState.freezeForServiceShutdown(this)"))
+        assertTrue(finalizer.contains("AppState.proveCleanServiceShutdown(this, proofMs)"))
 
         val activation = source.substring(source.indexOf("private suspend fun activateWebView"), source.indexOf("private suspend fun autoUpdateWebView"))
         val builtin = activation.substring(activation.indexOf("if (config.dashboardPackage"), activation.indexOf("system.reloadDashboard"))

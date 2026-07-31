@@ -87,6 +87,96 @@ if (( failed )); then
   exit 1
 fi
 
+# Pin consumer prose to behavior-affecting implementation seams rather than inert policy constants.
+# The focused provisioner suite mutation-proves these branches; this contract prevents editorial
+# changes from silently describing the former staged/capacity-gated behavior again.
+backup_doc_section="$(awk '
+  /^## Starting a panel over$/ { in_section = 1; next }
+  in_section && /^## / { exit }
+  in_section { print }
+' docs/provisioning.md)"
+
+backup_doc_claims=(
+  'quiesces database writers'
+  'copies the closed database directly'
+  "falls back once to SQLite's live \`.backup\`"
+  'There is no fixed free-space threshold for making this backup'
+  'mandatory host-side SHA-256'
+  'Database-backup availability is best-effort for an ordinary in-place upgrade'
+  'may continue with the original app data untouched'
+  '**Reset is irreversible and makes no backup.**'
+  'separate **Install → Backup** operation'
+  'Use `--export FILE` as a separate command first'
+)
+for claim in "${backup_doc_claims[@]}"; do
+  if ! grep -Fq -- "$claim" <<< "$backup_doc_section"; then
+    printf 'docs/provisioning.md: backup contract is missing %s\n' "$claim" >&2
+    failed=1
+  fi
+done
+if ! grep -Fq -- 'Reset is irreversible and makes no backup' scripts/install.sh ||
+   grep -Fq -- 'backs the configuration up first' scripts/install.sh; then
+  printf 'scripts/install.sh: checkout-free reset help contradicts the no-backup contract\n' >&2
+  failed=1
+fi
+
+reject_backup_prose() {
+  local description="$1"
+  local pattern="$2"
+  local matches
+
+  matches="$(grep -Ein -- "$pattern" <<< "$backup_prose_for_contradictions" || true)"
+  if [ -n "$matches" ]; then
+    printf 'docs/provisioning.md: backup contract contradicts %s:\n%s\n' \
+      "$description" "$matches" >&2
+    failed=1
+  fi
+}
+
+# These are semantic contradictions, not forbidden vocabulary. For example, the required
+# "no fixed free-space threshold" sentence remains valid while a minimum, gate or refusal tied
+# to MiB, free space or /data is rejected.
+backup_prose_for_contradictions="${backup_doc_section//There is no fixed free-space threshold for making this backup/}"
+reject_backup_prose \
+  'best-effort capture without a fixed storage admission gate' \
+  '((requires?|minimum|at least|fixed|floor|threshold|gate|admission|admit|refus(e|es|ed)|block(s|ed)?|fail(s|ed)?|skip(s|ped)?)[^.!?]*(free[ -]?space|data[ -]?volume|/data|[0-9]+([.][0-9]+)?[[:space:]]*(mib|mb|gib|gb))|(free[ -]?space|data[ -]?volume|/data|[0-9]+([.][0-9]+)?[[:space:]]*(mib|mb|gib|gb))[^.!?]*(minimum|at least|fixed|floor|threshold|gate|admission|admit|refus(e|es|ed)|block(s|ed)?|fail(s|ed)?|skip(s|ped)?))'
+reject_backup_prose \
+  'mandatory host verification' \
+  '(((host(-side)?[[:space:]]+)?(sha-?256|digest|hash|verification))[^.!?]*(optional|best[ -]?effort|degrad(e|ed|ation)|skip(ped)?|unavailable|not required)|(optional|best[ -]?effort|degrad(e|ed|ation)|skip(ped)?|unavailable|not required)[^.!?]*((host(-side)?[[:space:]]+)?(sha-?256|digest|hash|verification)))'
+reject_backup_prose \
+  'ordinary upgrades continuing when only the database backup is unavailable' \
+  '((ordinary|normal|in-place)[^.!?]*(upgrade|install)[^.!?]*(fail(s|ed)?|abort(s|ed)?|refus(e|es|ed)|block(s|ed)?|stop(s|ped)?|cannot continue|will not continue)[^.!?]*(backup|snapshot)|(backup|snapshot)[^.!?]*(unavailable|missing|fail(s|ed)?|cannot be captured)[^.!?]*(fail(s|ed)?|abort(s|ed)?|refus(e|es|ed)|block(s|ed)?|stop(s|ped)?|prevent(s|ed)?)[^.!?]*(ordinary|normal|in-place|upgrade|install|package replacement)|(ordinary|normal|in-place)[^.!?]*(upgrade|install)[^.!?]*(requires?|mandatory|must have)[^.!?]*(backup|snapshot))'
+reset_prose_for_contradictions="${backup_prose_for_contradictions//and neither creates nor requires a backup/and bypasses automatic backup}"
+if grep -Eiq -- '((--reset-config|reset)[^.!?]*(requires?|must have|will not erase|refus(e|es|ed))[^.!?]*(backup|snapshot)|(backup|snapshot)[^.!?]*(required|mandatory)[^.!?]*(--reset-config|reset))' <<< "$reset_prose_for_contradictions"; then
+  printf 'docs/provisioning.md: reset contract contradicts its no-backup behavior\n' >&2
+  failed=1
+fi
+
+implementation_seams=(
+  'io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE'
+  'HAPANELD_UPGRADE_READY_V1:'
+  'exec-out'
+  '".backup '\''@STAGE@/ha-paneld.db'\''"'
+  'host_sha="$(host_sha256 "$host_db"'
+  'continuing the ordinary in-place upgrade WITHOUT a database restore point'
+  '[ "$RESET_CONFIG" = 1 ] || auto_export_before_upgrade'
+  '[ "$RESET_CONFIG" = 1 ] || snapshot_panel_database'
+)
+for seam in "${implementation_seams[@]}"; do
+  if ! grep -Fq -- "$seam" scripts/provision.sh; then
+    printf 'scripts/provision.sh: shipped backup seam is missing %s\n' "$seam" >&2
+    failed=1
+  fi
+done
+if grep -Fq -- 'df -P -k /data' scripts/provision.sh; then
+  printf 'scripts/provision.sh: fixed /data capacity gate returned\n' >&2
+  failed=1
+fi
+
+if (( failed )); then
+  exit 1
+fi
+
 # Keep the maintained HTTP/MQTT overview aligned with source-level distinctions that are easy to
 # flatten into misleading user promises during release editing.
 api_contract_requirements=(

@@ -29,6 +29,10 @@ import io.github.maxlyth.hapaneld.device.probe.AndroidPassiveProfileProbe
 import io.github.maxlyth.hapaneld.device.profile.ProfileDraftFactory
 import io.github.maxlyth.hapaneld.device.profile.RuntimeProfileRegistry
 import io.github.maxlyth.hapaneld.persistence.AppState
+import io.github.maxlyth.hapaneld.persistence.CleanDatabaseProof
+import io.github.maxlyth.hapaneld.persistence.StateQuiescence
+import io.github.maxlyth.hapaneld.upgrade.UpgradeShutdownCoordinator
+import io.github.maxlyth.hapaneld.upgrade.UpgradeShutdownClaim
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.AutoSleepController
@@ -172,9 +176,11 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -183,6 +189,30 @@ internal fun shouldDisableAutoBrightnessForMissingSource(
     haEntity: String,
     hasLocalSensor: Boolean,
 ): Boolean = enabled && haEntity.isBlank() && !hasLocalSensor
+
+/** Hard outer owner for synchronous SQLite/file proof. Its daemon worker cannot retain process exit. */
+internal fun <T> runBoundedShutdownProof(timeoutMs: Long, proof: () -> T): T? {
+    if (timeoutMs <= 0L) return null
+    val executor = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "ha-paneld-shutdown-db-proof").apply { isDaemon = true }
+    }
+    val future = executor.submit(Callable(proof))
+    return try {
+        future.get(timeoutMs, TimeUnit.MILLISECONDS)
+    } catch (_: TimeoutException) {
+        null
+    } catch (_: ExecutionException) {
+        null
+    } catch (_: java.util.concurrent.CancellationException) {
+        null
+    } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+        null
+    } finally {
+        future.cancel(true)
+        executor.shutdownNow()
+    }
+}
 
 internal fun defaultNetworkIpv4(addresses: Iterable<InetAddress>): String? =
     addresses.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }?.hostAddress
@@ -773,6 +803,8 @@ class PaneldService : Service() {
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
     private val teardownBoundary = ServiceTeardownBoundary()
+    private val restartAfterInternalBoundary = AtomicBoolean(false)
+    private var upgradeShutdownClaim: UpgradeShutdownClaim? = null
     private val screenExitRecoveryOwner = AtomicReference<CompletableFuture<Boolean>?>(null)
     private val startupRecoveryPrefs by lazy {
         AppState.preferences(this, "startup-recovery", "ha-paneld-startup-recovery")
@@ -3158,6 +3190,9 @@ class PaneldService : Service() {
         // External display/system-policy recovery remains mandatory even after this deadline expires.
         val asyncTeardownDeadline = MonotonicDeadline(ASYNC_TEARDOWN_BUDGET_MS)
         teardownBoundary.markStopping()
+        // Bind any armed request to this exact lifecycle generation. A finalizer that was already in
+        // flight before PREPARE cannot later satisfy or cancel the new request.
+        upgradeShutdownClaim = UpgradeShutdownCoordinator.claimShutdown()
         storageHealthSubscription?.close()
         storageHealthSubscription = null
         storageHealthCancellation.getAndSet(null)?.cancel()
@@ -3322,6 +3357,13 @@ class PaneldService : Service() {
             mqttFinalization,
             sensorPersistenceClosed,
         )
+        // stopSelf() removes START_STICKY. Re-arm only an app-internal profile/WebView/recovery
+        // boundary while the old predecessor barrier remains closed. A provisioner stop never sets
+        // this flag. Any successor onCreate work completes before the finalizer's state fence/proof.
+        if (restartAfterInternalBoundary.get()) {
+            runCatching { PaneldService.start(this) }
+                .onFailure { Log.e(TAG, "could not retain service start across process boundary", it) }
+        }
         super.onDestroy()
     }
 
@@ -3341,6 +3383,7 @@ class PaneldService : Service() {
         sensorPersistenceClosed: AtomicReference<Future<Unit>?>,
     ) {
         Thread {
+            var shutdownFreeze: StateQuiescence? = null
             try {
                 var rendererDrained = rendererAlreadyDrained
                 while (!rendererDrained) {
@@ -3348,6 +3391,7 @@ class PaneldService : Service() {
                     if (waitMs <= 0L) return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "renderer transaction remained active",
+                        shutdownFreeze = shutdownFreeze,
                     )
                     rendererDrained = rendererPreparation.close(waitMs)
                 }
@@ -3356,18 +3400,21 @@ class PaneldService : Service() {
                     if (waitMs <= 0L) return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "runtime cleanup did not finish",
+                        shutdownFreeze = shutdownFreeze,
                     )
                     val shutdownSucceeded = runtime.shutdown(waitMs) {}
                     if (!shutdownSucceeded && !ownerCleanup.isComplete()) {
                         return@Thread finishTeardownAfterExternalStateIsSafe(
                             completed = false,
                             reason = "network mutation owners remained active",
+                            shutdownFreeze = shutdownFreeze,
                         )
                     }
                     if (!shutdownSucceeded && runtime.hasFailedShutdown()) {
                         return@Thread finishTeardownAfterExternalStateIsSafe(
                             completed = false,
                             reason = "runtime cleanup failed",
+                            shutdownFreeze = shutdownFreeze,
                         )
                     }
                 }
@@ -3375,34 +3422,40 @@ class PaneldService : Service() {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "one or more runtime owners did not clean up",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
                 if (!audioDrained.get()) {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "audio cleanup did not drain",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
                 val mqttClose = mqttFinalization.get()
                     ?: return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "MQTT cleanup did not start",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 if (!awaitFinalizerFuture(finalizerDeadline, mqttClose)) {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "final MQTT publication did not finish",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
                 val sensorClose = sensorPersistenceClosed.get()
                     ?: return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "sensor cleanup did not start",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 if (!awaitFinalizerFuture(finalizerDeadline, sensorClose)) {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "proximity persistence did not drain",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
                 if (root != null && !root.isCompleted) {
@@ -3413,12 +3466,14 @@ class PaneldService : Service() {
                     if (!scopeDrained) return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "service scope did not drain",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
                 if (!httpOwnersStopped.get()) {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "HTTP owners did not stop cleanly",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
 
@@ -3426,6 +3481,17 @@ class PaneldService : Service() {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "entity-learning store did not close",
+                        shutdownFreeze = shutdownFreeze,
+                    )
+                }
+                // Runtime/scope/sensor/learner teardown above serializes their last writes. Fence any
+                // unrelated same-process caller only now, so final producer persistence is not rejected.
+                shutdownFreeze = AppState.freezeForServiceShutdown(this)
+                if (shutdownFreeze == null) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "application-state shutdown admission was not frozen",
+                        shutdownFreeze = null,
                     )
                 }
                 val stateFlushMs = finalizerDeadline.remainingMs()
@@ -3433,14 +3499,33 @@ class PaneldService : Service() {
                     return@Thread finishTeardownAfterExternalStateIsSafe(
                         completed = false,
                         reason = "final application-state writes did not drain",
+                        shutdownFreeze = shutdownFreeze,
                     )
                 }
-                finishTeardownAfterExternalStateIsSafe(completed = true, reason = "service teardown completed")
+                val proofMs = finalizerDeadline.remainingMs()
+                val cleanDatabaseProof = if (proofMs > 0L) {
+                    runBoundedShutdownProof(proofMs) {
+                        AppState.proveCleanServiceShutdown(this, proofMs)
+                    }
+                } else null
+                if (cleanDatabaseProof == null) {
+                    return@Thread finishTeardownAfterExternalStateIsSafe(
+                        completed = false,
+                        reason = "final application-state flush or WAL checkpoint did not prove stable",
+                        shutdownFreeze = shutdownFreeze,
+                    )
+                }
+                finishTeardownAfterExternalStateIsSafe(completed = true,
+                    reason = "service teardown completed with a stable database",
+                    shutdownFreeze = shutdownFreeze,
+                    cleanDatabaseProof = cleanDatabaseProof,
+                )
             } catch (error: Throwable) {
                 Log.e(TAG, "asynchronous service teardown failed", error)
                 finishTeardownAfterExternalStateIsSafe(
                     completed = false,
                     reason = "unexpected finalizer failure",
+                    shutdownFreeze = shutdownFreeze,
                 )
             }
         }.apply {
@@ -3510,28 +3595,16 @@ class PaneldService : Service() {
     }
 
     /**
-     * Route profile/WebView/recovery restarts through the same external-state proof as lifecycle teardown.
-     * The caller may be the main looper, so admission closes synchronously while all blocking cleanup runs
-     * on one daemon owner. App-local workers need no separate drain because the proven process boundary
-     * terminates them; HTTP is stopped first so it cannot reassert the root CDP relay during verification.
+     * Route profile/WebView/recovery restarts through the complete Android lifecycle teardown. Closing
+     * synchronous admission now prevents new hardware work before the main-loop stop reaches onDestroy;
+     * onDestroy remains the only owner of producer drains, final state flush, checkpoint and exit proof.
      */
     private fun requestSafeProcessBoundary(reason: String) {
         if (!teardownBoundary.requestExplicitBoundary()) return
+        restartAfterInternalBoundary.set(true)
         Log.i(TAG, "safe process restart requested: $reason")
         closeServiceAdmissions()
-        Thread {
-            if (::server.isInitialized) {
-                runCatching { server.stop() }
-                    .onFailure { Log.w(TAG, "HTTP cleanup before requested process restart failed", it) }
-                    .onSuccess { complete ->
-                        if (!complete) Log.w(TAG, "HTTP cleanup before requested process restart was incomplete")
-                    }
-            }
-            finishAfterExternalStateIsSafe(completed = false, reason = reason)
-        }.apply {
-            isDaemon = true
-            name = "ha-paneld-safe-process-boundary"
-        }.start()
+        mainHandler.post { stopSelf() }
     }
 
     /**
@@ -3540,14 +3613,21 @@ class PaneldService : Service() {
      * crop have been restored. Cleanup admission is closed first so an explicit external service stop
      * also leaves a usable panel even if Android has no remaining START_STICKY request to recreate us.
      */
-    private fun finishTeardownAfterExternalStateIsSafe(completed: Boolean, reason: String) {
+    private fun finishTeardownAfterExternalStateIsSafe(
+        completed: Boolean,
+        reason: String,
+        shutdownFreeze: StateQuiescence?,
+        cleanDatabaseProof: CleanDatabaseProof? = null,
+    ) {
         if (!completed) Log.e(TAG, "service teardown was incomplete: $reason")
-        finishAfterExternalStateIsSafe(completed, reason)
+        finishAfterExternalStateIsSafe(completed, reason, shutdownFreeze, cleanDatabaseProof)
     }
 
     private fun finishAfterExternalStateIsSafe(
         completed: Boolean,
         reason: String,
+        shutdownFreeze: StateQuiescence? = null,
+        cleanDatabaseProof: CleanDatabaseProof? = null,
     ) {
         runServiceBoundary(
             boundary = teardownBoundary,
@@ -3608,11 +3688,30 @@ class PaneldService : Service() {
             },
             finish = { disposition ->
                 if (disposition == ServiceTeardownDisposition.EXIT) {
+                    UpgradeShutdownCoordinator.failShutdown(
+                        this,
+                        upgradeShutdownClaim,
+                        shutdownFreeze,
+                        restartLease::completeTeardown,
+                        "shutdown_not_clean",
+                    )
                     Log.i(TAG, "$reason; entering a clean process boundary")
                     kotlin.system.exitProcess(0)
                 } else {
-                    Log.i(TAG, "$reason; releasing the same-process service successor")
-                    restartLease.completeTeardown()
+                    val heldForUpgrade = shutdownFreeze != null && cleanDatabaseProof != null &&
+                        UpgradeShutdownCoordinator.holdAfterCleanShutdown(
+                            upgradeShutdownClaim,
+                            shutdownFreeze,
+                            cleanDatabaseProof,
+                            restartLease::completeTeardown,
+                        )
+                    if (!heldForUpgrade) {
+                        shutdownFreeze?.close()
+                        Log.i(TAG, "$reason; releasing the same-process service successor")
+                        restartLease.completeTeardown()
+                    } else {
+                        Log.i(TAG, "$reason; holding the service successor for verified host transfer")
+                    }
                 }
             },
         )

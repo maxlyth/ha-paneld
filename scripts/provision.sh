@@ -59,7 +59,7 @@ Common operations:
   --shizuku                Install/start pinned Shizuku for locally approved non-root access
   --allow-unsigned-helper  Developer-only: allow a privileged helper from an unsigned local APK
   --require-release-signer Reject a local APK unless it uses the official ha-paneld release certificate
-  --allow-missing-db-snapshot  Upgrade even if the panel's database cannot be captured first
+  --allow-missing-db-snapshot  Deprecated parser-only compatibility no-op
   --mqtt-pass-file FILE    Read the MQTT password from a private text file
   --ha-token-file FILE     Read the Home Assistant token from a private text file
   --ha-pass-file FILE      Read the Home Assistant login password from a private text file
@@ -70,17 +70,20 @@ EOF
 }
 
 cleanup_provision_resources() {
-  if type stop_root_helper_apk_install >/dev/null 2>&1; then stop_root_helper_apk_install; fi
-  if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard; fi
+  if type stop_root_helper_apk_install >/dev/null 2>&1; then stop_root_helper_apk_install || true; fi
+  if type cleanup_root_helper_lease_guard >/dev/null 2>&1; then cleanup_root_helper_lease_guard || true; fi
   # Issue #76: reclaim this run's disposable staging on EVERY exit path, not only after a commit.
-  if type cleanup_root_helper_staging >/dev/null 2>&1; then cleanup_root_helper_staging; fi
+  if type cleanup_root_helper_staging >/dev/null 2>&1; then cleanup_root_helper_staging || true; fi
   # An interrupted database capture holds a credential-bearing copy of the whole store on the panel
   # and a partial one on the host; both are reclaimed on every exit path, never only on success.
-  if type discard_db_snapshot_txn >/dev/null 2>&1; then discard_db_snapshot_txn; fi
-  [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR"
+  if type discard_db_snapshot_txn >/dev/null 2>&1; then discard_db_snapshot_txn || true; fi
+  [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR" || true
   SHIZUKU_DIR=""
-  [ -z "${SECRET_DIR:-}" ] || rm -rf "$SECRET_DIR"
+  [ -z "${SECRET_DIR:-}" ] || rm -rf "$SECRET_DIR" || true
   SECRET_DIR=""
+  # Keep a possibly armed app quiesced until every abort cleanup above has stopped mutation and
+  # removed this run's owned staging. Release it last; the app watchdog covers blocked cleanup.
+  if type release_upgrade_quiescence >/dev/null 2>&1; then release_upgrade_quiescence || true; fi
 }
 
 handle_provision_signal() {
@@ -118,7 +121,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
-ALLOW_MISSING_DB_SNAPSHOT=0
+STORAGE_RECOVERY_ADMITTED=0
 # The schema versions the app has actually shipped. Bump the MAX alongside every new database
 # migration; a snapshot admitting a version outside this set cannot be paired with any build this
 # installer could restore it onto.
@@ -128,6 +131,9 @@ SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
 SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
 SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
 SNAPSHOT_TXN_DEFERRED_SIGNAL=""
+UPGRADE_QUIESCE_NONCE=""
+UPGRADE_RECEIPT_PID=""; UPGRADE_RECEIPT_VERSION_CODE=""; UPGRADE_RECEIPT_DATABASE_BYTES=""
+UPGRADE_RECEIPT_DATABASE_SHA256=""; UPGRADE_RECEIPT_USER_VERSION=""; UPGRADE_RECEIPT_APP_STATE_ROWS=""
 SETUP_JOURNEY_AVAILABLE=0; SETUP_COMPLETE=0; SETUP_REPAIR=0; SETUP_NEXT=""; SETUP_NEXT_STATUS=""; SETUP_NEXT_DETAIL=""
 LEGACY_MQTT_SET=0; LEGACY_HA_URL_SET=0; LEGACY_HA_AUTH_CONFIGURED=0
 # Whether the panel agent ever answered /health. Every mutation after the launch step is gated on
@@ -194,7 +200,7 @@ while [ "${1:-}" ]; do
     --no-tame) shift ;;   # deprecated compatibility no-op; profile recommendations are report-only
     --shizuku) SHIZUKU=1; shift ;;   # install/start pinned Shizuku on a non-root panel; permission stays local
     --allow-unsigned-helper) ALLOW_UNSIGNED_HELPER=1; shift ;; # developer acknowledgement for local privileged bytes
-    --allow-missing-db-snapshot) ALLOW_MISSING_DB_SNAPSHOT=1; shift ;; # explicit operator acceptance of upgrading without a database restore point
+    --allow-missing-db-snapshot) shift ;; # deprecated parser-only compatibility no-op
     --require-release-signer) REQUIRE_RELEASE_SIGNER=1; shift ;; # pin the official ha-paneld app signer
     --log-host) LOG_HOST="$2"; LOG_ENABLE=true; shift 2 ;;  # ship logcat to this aggregator (host enables shipping)
     --log-port) LOG_PORT="$2"; shift 2 ;;     # log sink port (default 514 for syslog)
@@ -321,6 +327,11 @@ if { [ -n "$HA_USER" ] || [ -n "$HA_TOKEN" ]; } && [ -z "$HA_URL" ]; then
 fi
 if [ "$RESET_CONFIG" = 1 ] && [ "$VERIFY_ONLY" = 1 ]; then
   echo "${RED}✗ --reset-config cannot be combined with --verify.${X} --verify never changes the panel." >&2
+  exit 2
+fi
+if [ "$RESET_CONFIG" = 1 ] && [ -n "$EXPORT_FILE" ]; then
+  echo "${RED}✗ --reset-config cannot be combined with --export.${X}" >&2
+  echo "   Reset is irreversible and makes no backup. Run --export FILE separately first if you want a settings export." >&2
   exit 2
 fi
 if [ "$RESET_CONFIG" = 1 ] && [ -n "$RESTORE_FILE" ]; then
@@ -695,9 +706,11 @@ read_power_safety() {
   POWER_SAFETY_RESULT="valid"
 }
 
-# Known destructive-risk states block every requested mutation before release resolution, backup,
-# helper changes, APK install, settings writes, or config import. Successful absence remains compatible
-# with an older app; transport failure is allowed only when Android proves this is a fresh install.
+# Unknown or malformed health blocks every requested mutation before release resolution, backup,
+# helper changes, APK install, settings writes, or config import. A package replacement or confirmed
+# requested reset is also a recovery attempt, so known pressure or database failure is admitted with a warning.
+# Successful absence remains compatible with an older app; transport failure is allowed only when
+# Android proves this is a fresh install.
 preflight_storage_health() {
   local package_path package_status
   read_storage_health
@@ -719,14 +732,20 @@ preflight_storage_health() {
       fi
       ;;
     valid:critical)
-      fail "storage health: critical — storage or database-file pressure is critical" \
-        "Recover panel headroom or address WAL growth before writes fail, then re-run verification. Details: $URL" \
-        "Nothing was installed or changed."
+      STORAGE_RECOVERY_ADMITTED=1
+      if [ "$RESET_CONFIG" = 1 ]; then
+        warn "storage health: critical — the requested reset will intentionally erase ha-paneld state if confirmed; Android's package manager will decide whether it can proceed"
+      else
+        warn "storage health: critical — fixed pressure thresholds are advisory for this in-place recovery attempt; the actual database capture and Android package manager will decide whether the upgrade can proceed"
+      fi
       ;;
     valid:database_failure)
-      fail "storage health: database failure — SQLite writes or health checks failed" \
-        "Preserve ha-paneld.db, free panel storage if low, inspect $URL/api/v1/diag, then re-run verification." \
-        "Nothing was installed or changed."
+      STORAGE_RECOVERY_ADMITTED=1
+      if [ "$RESET_CONFIG" = 1 ]; then
+        warn "storage health: database failure — the requested reset will intentionally discard the unhealthy database if confirmed instead of treating it as an admission gate"
+      else
+        warn "storage health: database failure — admitting this in-place replacement as a recovery attempt; a rejected or missing database snapshot will be reported, but will not preempt the APK install"
+      fi
       ;;
     malformed:)
       fail "the installed app returned malformed storage-health status" \
@@ -793,14 +812,24 @@ verify() {
       echo "     ${D}Review panel free space and WAL/database growth, then check $URL again.${X}"
       ;;
     valid:critical)
-      echo "   ${RED}✗ storage health: critical — storage or database-file pressure is critical.${X}"
-      echo "     ${D}Recover panel headroom or address WAL growth before writes fail, then re-run verification. Details: $URL${X}"
-      rc=1
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ] && [ "$STORAGE_RECOVERY_ADMITTED" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: critical — the admitted in-place mutation completed, but storage or database-file pressure remains critical.${X}"
+        echo "     ${D}Recover panel headroom or address WAL growth before writes fail. Details: $URL${X}"
+      else
+        echo "   ${RED}✗ storage health: critical — storage or database-file pressure is critical.${X}"
+        echo "     ${D}Recover panel headroom or address WAL growth before writes fail, then re-run verification. Details: $URL${X}"
+        rc=1
+      fi
       ;;
     valid:database_failure)
-      echo "   ${RED}✗ storage health: database failure — SQLite writes or health checks failed.${X}"
-      echo "     ${D}Preserve ha-paneld.db, free panel storage if low, inspect $URL/api/v1/diag, then re-run verification.${X}"
-      rc=1
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ] && [ "$STORAGE_RECOVERY_ADMITTED" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: database failure — the admitted in-place recovery attempt completed, but SQLite writes or health checks are still failing.${X}"
+        echo "     ${D}Preserve ha-paneld.db and inspect $URL/api/v1/diag. A missing or rejected pre-install database snapshot remains reported separately.${X}"
+      else
+        echo "   ${RED}✗ storage health: database failure — SQLite writes or health checks failed.${X}"
+        echo "     ${D}Preserve ha-paneld.db, free panel storage if low, inspect $URL/api/v1/diag, then re-run verification.${X}"
+        rc=1
+      fi
       ;;
     transport:)
       echo "   ${RED}✗ storage health: the status endpoint could not be reached.${X}"
@@ -3359,7 +3388,10 @@ export_config() {
   chmod 600 "$temporary" 2>/dev/null || true
   [ ! -L "$destination" ] || { rm -f "$temporary"; fail "config export destination became a symlink during export" \
     "Choose a regular file path in a directory only you can write, then retry."; }
-  mv "$temporary" "$destination"
+  mv "$temporary" "$destination" || fail "could not publish config export" \
+    "The temporary export could not be moved to $destination. Check that the destination is writable, then retry."
+  [ -s "$destination" ] || fail "published config export is empty" \
+    "Remove $destination, then retry the export before changing the panel."
   echo "   ${GRN}✓${X} $(wc -c < "$destination") bytes saved with owner-only permissions"
 }
 
@@ -3404,44 +3436,6 @@ auto_export_before_upgrade() {
   export_config "$AUTO_EXPORT_FILE"
 }
 
-# The panel's data partition must have room for the store AND a second copy of it.
-#
-# ha-paneld.db is the canonical store — configuration, the entity catalog, proximity and ambient
-# history and the revision ring all live in it. The pre-upgrade snapshot below stages a full copy
-# before pulling it, so the installer requires more than 128 MiB of headroom before proceeding.
-DATA_CAPACITY_MIN_KB=131072
-
-check_data_capacity() {
-  local out row extra available
-  out="$(adb -s "$TARGET" shell df -P -k /data 2>/dev/null | tr -d '\r')" || out=""
-  row="$(printf '%s\n' "$out" | sed -n '2p')"
-  extra="$(printf '%s\n' "$out" | sed -n '3,$p')"
-  available=""
-  # Same strictness as the /system probe: a wrapped or unexpected df layout is UNKNOWN, never a
-  # guessed number. A device name long enough to wrap would otherwise shift the column that is read.
-  if [ -n "$row" ] && [ -z "$extra" ]; then
-    set -f
-    # shellcheck disable=SC2086
-    set -- $row
-    set +f
-    if [ "$#" -eq 6 ]; then
-      case "$4" in ''|*[!0-9]*) ;; *) available="$4" ;; esac
-    fi
-  fi
-  if [ -z "$available" ]; then
-    fail "panel storage capacity could not be determined safely" \
-      "The /data free-space response was missing or malformed, so the safe upgrade headroom could not be verified." \
-      "Nothing was installed or changed. Restore adb/df visibility, then re-run the same command."
-  fi
-  if [ "$available" -le "$DATA_CAPACITY_MIN_KB" ]; then
-    fail "the panel has too little free storage for a safe upgrade" \
-      "/data has ${available}KB free; more than ${DATA_CAPACITY_MIN_KB}KB (128 MiB) is required." \
-      "ha-paneld's database holds the configuration, entity catalog and history, and the pre-upgrade backup stages a full copy of it before pulling it — so an upgrade needs room for two copies." \
-      "Nothing was installed or changed. Free space on the panel (Settings → Storage, or clear app caches with: adb -s $TARGET shell pm trim-caches 999G), then re-run."
-  fi
-  echo "   ${GRN}✓${X} panel storage: ${available}KB free on /data"
-}
-
 # Copy the panel's canonical data store to the host, alongside the settings export.
 #
 # The settings export is NOT a recovery point. Configuration, the entity catalog, proximity models,
@@ -3450,11 +3444,14 @@ check_data_capacity() {
 # in the failure path the recovery guidance itself sends people to — an uninstall, which destroys the
 # store with no off-panel copy in existence.
 #
-# Root-capable panels capture the database fail-closed before upgrade. Sandboxed panels cannot reach
-# app-private storage, so they retain the settings export as their only pre-upgrade capture.
+# Root-capable panels attempt the database capture before an ordinary upgrade. Any unavailable or
+# rejected database candidate warns and package replacement may continue. A reset deliberately makes
+# no backup and does not enter this path. Sandboxed panels cannot reach app-private storage, so they
+# retain the settings export as their only ordinary pre-upgrade capture.
 #
-# The panel creates one coherent SQLite backup inside a transaction. Pulling ha-paneld.db without an
-# uncheckpointed -wal sidecar would lose committed data, so raw file-set copying is never used here.
+# A receipt-capable app first quiesces writers, checkpoints and closes SQLite, then authenticates the
+# exact closed database bytes for a direct copy. Older apps fall back once to a coherent live SQLite
+# backup; copying an open ha-paneld.db without its WAL would lose committed data.
 #
 # BREAK-GLASS, and named so on disk. The panel's own .hpb backup deliberately does NOT contain this
 # file, because restoring a raw database across versions is the downgrade config-reset hazard and
@@ -3527,18 +3524,197 @@ discard_db_snapshot_txn() {
   fi
 }
 
-# A refused capture is fail-closed: the panel would be mutated with no database restore point. The
-# explicit --allow-missing-db-snapshot escape admits the run WITHOUT manufacturing a captured result.
+# Backup availability is best-effort for an ordinary in-place upgrade: Android's package replace
+# preserves app data, and a fixed free-space guess must not turn a useful precaution into an upgrade
+# blocker. A reset never enters this backup path. No incomplete backup is accepted or published.
 snapshot_txn_refuse() {
   local reason="$1" advice="$2"
   discard_db_snapshot_txn
-  if [ "$ALLOW_MISSING_DB_SNAPSHOT" = 1 ]; then
-    warn "data-store snapshot: $reason — continuing WITHOUT a database restore point (--allow-missing-db-snapshot)"
+  warn "data-store snapshot: $reason — continuing the ordinary in-place upgrade WITHOUT a database restore point. $advice"
+  return 0
+}
+
+# A rejected backup is discarded and treated as unavailable. Android package replacement preserves
+# the original database, so the ordinary upgrade remains eligible to continue.
+snapshot_txn_reject_unsafe() {
+  local reason="$1" advice="$2"
+  snapshot_txn_refuse "$reason" "$advice"
+}
+
+prepare_upgrade_quiescence() {
+  local nonce output receipt ready_count tag receipt_nonce receipt_pid receipt_vcode
+  local receipt_bytes receipt_sha receipt_uv receipt_rows receipt_extra timeout
+  UPGRADE_QUIESCE_NONCE=""
+  UPGRADE_RECEIPT_PID=""; UPGRADE_RECEIPT_VERSION_CODE=""; UPGRADE_RECEIPT_DATABASE_BYTES=""
+  UPGRADE_RECEIPT_DATABASE_SHA256=""; UPGRADE_RECEIPT_USER_VERSION=""; UPGRADE_RECEIPT_APP_STATE_ROWS=""
+  nonce="$(host_transaction_id)" || return 1
+  # Retain custody before transmission: a timeout or malformed result cannot prove the app failed
+  # to arm. A harmless RELEASE to an old build is safer than abandoning a quiesced current build.
+  UPGRADE_QUIESCE_NONCE="$nonce"
+  timeout="${UPGRADE_PREPARE_TIMEOUT_SECONDS:-45}"
+  case "$timeout" in ''|*[!0-9]*|0) timeout=45 ;; esac
+  output="$(run_with_deadline "$timeout" "$ADB_COMMAND" -s "$TARGET" shell am broadcast --user 0 \
+    -a io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE \
+    -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "$nonce" 2>/dev/null | tr -d '\r')" || output=""
+  receipt="$(printf '%s\n' "$output" | sed -n 's/^Broadcast completed: result=-1, data="\([^"]*\)"$/\1/p')"
+  ready_count="$(printf '%s\n' "$receipt" | grep -c '^HAPANELD_UPGRADE_READY_V1:' || true)"
+  [ "$ready_count" = 1 ] || return 1
+  IFS=: read -r tag receipt_nonce receipt_pid receipt_vcode receipt_bytes receipt_sha receipt_uv receipt_rows receipt_extra <<EOF
+$receipt
+EOF
+  [ "$tag" = HAPANELD_UPGRADE_READY_V1 ] && [ "$receipt_nonce" = "$nonce" ] && [ -z "$receipt_extra" ] || return 1
+  printf '%s\n' "$receipt_nonce" | grep -Eq '^[0-9a-f]{32}$' || return 1
+  case "$receipt_pid:$receipt_vcode:$receipt_bytes:$receipt_uv:$receipt_rows" in
+    *[!0-9:]*|:*|*::*|*:) return 1 ;;
+  esac
+  [ "${#receipt_pid}" -le 10 ] && [ "${#receipt_vcode}" -le 10 ] && \
+    [ "${#receipt_bytes}" -le 20 ] && [ "${#receipt_uv}" -le 10 ] && \
+    [ "${#receipt_rows}" -le 20 ] || return 1
+  [ "$receipt_pid" -gt 0 ] && [ "$receipt_vcode" -gt 0 ] && [ "$receipt_bytes" -gt 0 ] || return 1
+  [ "$receipt_uv" -ge "$DB_SUPPORTED_USER_VERSION_MIN" ] && \
+    [ "$receipt_uv" -le "$DB_SUPPORTED_USER_VERSION_MAX" ] && [ "$receipt_rows" -gt 0 ] || return 1
+  printf '%s\n' "$receipt_sha" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  UPGRADE_RECEIPT_PID="$receipt_pid"
+  UPGRADE_RECEIPT_VERSION_CODE="$receipt_vcode"
+  UPGRADE_RECEIPT_DATABASE_BYTES="$receipt_bytes"
+  UPGRADE_RECEIPT_DATABASE_SHA256="$receipt_sha"
+  UPGRADE_RECEIPT_USER_VERSION="$receipt_uv"
+  UPGRADE_RECEIPT_APP_STATE_ROWS="$receipt_rows"
+  return 0
+}
+
+release_upgrade_quiescence() {
+  local nonce output timeout attempt released_count root_start_failed=0
+  nonce="${UPGRADE_QUIESCE_NONCE:-}"
+  [ -n "$nonce" ] || return 0
+  timeout="${UPGRADE_RELEASE_TIMEOUT_SECONDS:-10}"
+  case "$timeout" in ''|*[!0-9]*|0) timeout=10 ;; esac
+  attempt=1
+  while [ "$attempt" -le 2 ]; do
+    output="$(run_with_deadline "$timeout" "$ADB_COMMAND" -s "$TARGET" shell am broadcast --user 0 \
+      -a io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE \
+      -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "$nonce" 2>/dev/null | tr -d '\r')" || output=""
+    released_count="$(printf '%s\n' "$output" | grep -Fxc \
+      "Broadcast completed: result=-1, data=\"HAPANELD_UPGRADE_RELEASED_V1:$nonce\"" || true)"
+    # The receiver may have opened its barrier but be unable to restart its own foreground service
+    # on API 31. Ask through the already-established root authority after every RELEASE attempt;
+    # exact receipt validation below remains the only authority that can disown the nonce.
+    if ! run_root "am start-foreground-service --user 0 -n $PKG/.PaneldService" >/dev/null 2>&1; then
+      root_start_failed=1
+    fi
+    if [ "$released_count" = 1 ]; then
+      # Disown only after the exact ordered-broadcast acknowledgement.
+      UPGRADE_QUIESCE_NONCE=""
+      if [ "$root_start_failed" = 1 ]; then
+        warn "upgrade release was acknowledged, but the root-authoritative PaneldService restart could not be confirmed; launch ha-paneld once on the panel"
+      fi
+      return 0
+    fi
+    attempt=$((attempt + 1))
+  done
+  # Keep the nonce owned. A later cleanup call may retry it; otherwise the app's bounded watchdog
+  # resumes service. Never turn an unverified RELEASE into a disowned lease.
+  if [ "$root_start_failed" = 1 ]; then
+    warn "upgrade quiescence RELEASE was not acknowledged after two attempts, and the root-authoritative PaneldService restart could not be confirmed; the app watchdog will resume service automatically"
+  else
+    warn "upgrade quiescence RELEASE was not acknowledged after two attempts; an idempotent root service start was requested and the app watchdog remains the fallback"
+  fi
+  return 0
+}
+
+copy_root_file_binary() {
+  local source="$1" destination="$2" command quoted
+  command="cat $source"
+  quoted="$(quote_root_command "$command")"
+  case "$SU_FORM" in
+    shell)      run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out cat "$source" > "$destination" ;;
+    su0join)    run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su 0 "$quoted" > "$destination" ;;
+    su0shc)     run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su 0 sh -c "$quoted" > "$destination" ;;
+    surootjoin) run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su root "$quoted" > "$destination" ;;
+    surootshc)  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su root sh -c "$quoted" > "$destination" ;;
+    suc)        run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su -c "$quoted" > "$destination" ;;
+    *) return 1 ;;
+  esac
+}
+
+snapshot_prepared_database() {
+  local base="$1" host_db receipt host_sha host_bytes sqlite_bin integrity user_version app_state_rows
+  host_db="${base%.break-glass}-$UPGRADE_QUIESCE_NONCE.break-glass.db"
+  snapshot_txn_defer_host_signals
+  if [ -e "$host_db" ] || [ -L "$host_db" ] || ! (umask 077; set -o noclobber; : > "$host_db") 2>/dev/null; then
+    snapshot_txn_restore_host_signals
+    snapshot_txn_refuse "could not create the unique owner-only host database file" "Check that the backup directory is writable."
     return 0
   fi
-  fail "the panel's database could not be captured before mutation: $reason" \
-    "No helper or APK files were changed and no settings were written." \
-    "$advice Or re-run with --allow-missing-db-snapshot to explicitly accept upgrading without a database restore point."
+  SNAPSHOT_TXN_HOST_DB="$host_db"
+  snapshot_txn_restore_host_signals
+  chmod 600 "$host_db" 2>/dev/null || true
+  if ! copy_root_file_binary "/data/data/$PKG/databases/ha-paneld.db" "$host_db" || [ ! -s "$host_db" ]; then
+    snapshot_txn_refuse "the quiesced database could not be copied from the panel" "Check adb/root responsiveness to $TARGET, then re-run."
+    return 0
+  fi
+  if ! host_bytes="$(wc -c < "$host_db" 2>/dev/null | tr -d ' ')"; then
+    snapshot_txn_refuse "the direct copy size could not be read on this host" "Check the backup filesystem, then re-run."
+    return 0
+  fi
+  if ! host_sha="$(host_sha256 "$host_db" 2>/dev/null)"; then
+    snapshot_txn_refuse "the direct copy could not be hashed on this host" "Install sha256sum (or shasum), then re-run."
+    return 0
+  fi
+  if [ "$host_bytes" != "$UPGRADE_RECEIPT_DATABASE_BYTES" ] || [ "$host_sha" != "$UPGRADE_RECEIPT_DATABASE_SHA256" ]; then
+    snapshot_txn_reject_unsafe "the direct copy did not match the app's clean-shutdown receipt" "The rejected copy was removed; re-run against the same panel."
+    return 0
+  fi
+  sqlite_bin="${HAPANELD_HOST_SQLITE3:-}"
+  [ -n "$sqlite_bin" ] || sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+  [ -n "$sqlite_bin" ] && [ -x "$sqlite_bin" ] || {
+    snapshot_txn_refuse "the host has no sqlite3 executable for local validation" "Install sqlite3, then retry if you need an automatic restore point."
+    return 0
+  }
+  integrity="$("$sqlite_bin" "$host_db" 'PRAGMA integrity_check;' 2>/dev/null || true)"
+  user_version="$("$sqlite_bin" "$host_db" 'PRAGMA user_version;' 2>/dev/null || true)"
+  app_state_rows="$("$sqlite_bin" "$host_db" 'SELECT count(*) FROM app_state;' 2>/dev/null || true)"
+  if [ "$integrity" != ok ] || [ "$user_version" != "$UPGRADE_RECEIPT_USER_VERSION" ] || \
+     [ "$app_state_rows" != "$UPGRADE_RECEIPT_APP_STATE_ROWS" ]; then
+    snapshot_txn_reject_unsafe "the direct copy failed local SQLite receipt validation" "The rejected copy was removed; re-run against the same panel."
+    return 0
+  fi
+  receipt="$host_db.backup-receipt.txt"
+  snapshot_txn_defer_host_signals
+  if [ -e "$receipt" ] || [ -L "$receipt" ] || ! (umask 077; set -o noclobber; : > "$receipt") 2>/dev/null; then
+    snapshot_txn_restore_host_signals
+    snapshot_txn_refuse "could not create the unique owner-only direct-copy receipt" "Check that the backup directory is writable."
+    return 0
+  fi
+  SNAPSHOT_TXN_HOST_RECEIPT="$receipt"
+  snapshot_txn_restore_host_signals
+  if ! {
+    printf 'receipt_version=3\n'
+    printf 'capture_mode=quiesced-direct\n'
+    printf 'database=%s\n' "$host_db"
+    printf 'database_bytes=%s\n' "$host_bytes"
+    printf 'database_sha256_host=%s\n' "$host_sha"
+    printf 'database_integrity=ok\n'
+    printf 'database_app_state_rows=%s\n' "$app_state_rows"
+    printf 'database_user_version=%s\n' "$user_version"
+    printf 'app_version_code=%s\n' "$UPGRADE_RECEIPT_VERSION_CODE"
+    printf 'app_pid=%s\n' "$UPGRADE_RECEIPT_PID"
+    printf 'quiescence_nonce=%s\n' "$UPGRADE_QUIESCE_NONCE"
+    printf 'settings_export=%s\n' "${AUTO_EXPORT_FILE:-${EXPORT_FILE:-none}}"
+  } > "$receipt" || ! chmod 600 "$receipt"; then
+    snapshot_txn_refuse "the direct-copy receipt could not be written" "Check that the backup directory is writable."
+    return 0
+  fi
+  # Handoff is one signal-atomic ownership transition: before it, abort cleanup removes both
+  # registered artifacts; after it, captured state owns and preserves both.
+  snapshot_txn_defer_host_signals
+  SNAPSHOT_TXN_HOST_DB=""
+  SNAPSHOT_TXN_HOST_RECEIPT=""
+  snapshot_txn_restore_host_signals
+  echo "   ${GRN}✓${X} data-store snapshot: ${B}$host_db${X} ${D}(quiesced direct copy, receipt and local SQLite validation matched)${X}"
+  echo "   ${D}        Receipt: $receipt${X}"
+  echo "HAPANELD_SNAPSHOT_RESULT=captured"
+  return 0
 }
 
 # Capture the canonical store as ONE on-panel transaction, then verify what arrived.
@@ -3558,9 +3734,9 @@ snapshot_panel_database() {
   local db_source stage base safe_target stamp script_file script_sha panel_sha out line
   local mf_bytes="" mf_sha="" mf_integrity="" mf_rows="" mf_uv="" mf_vcode="" mf_vname="" mf_sqlite="" txn_ok=0 fail_reason=""
   local pulled_bytes host_sha receipt_tmp receipt
-  # Discovery is tri-state and fail-closed: "not installed" must be the panel's positive answer,
-  # never the silence of a transport that could not be asked — a dead adb here would otherwise skip
-  # the capture and let the mutation proceed with no restore point.
+  # Discovery is tri-state: "not installed" must be the panel's positive answer, never the silence
+  # of a transport that could not be asked. Unknown is reported through the explicit refusal policy,
+  # not silently treated as a fresh install.
   local pm_path_out
   if ! pm_path_out="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r')"; then
     snapshot_txn_refuse "the panel could not be asked whether ha-paneld is installed" \
@@ -3621,21 +3797,43 @@ snapshot_panel_database() {
   stage="/data/local/tmp/.hapaneld-db-txn.$txn_capture_id"
   if [ -n "$AUTO_EXPORT_FILE" ]; then
     base="${AUTO_EXPORT_FILE%.json}"
+  elif [ -n "$EXPORT_FILE" ]; then
+    base="${EXPORT_FILE%.json}"
   else
-    ensure_config_backup_dir || return 0
-    safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
-    stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    if ! (ensure_config_backup_dir) >/dev/null 2>&1; then
+      snapshot_txn_refuse "the owner-only host backup directory could not be prepared" \
+        "Check that $CONFIG_BACKUP_DIR is writable and mode 700, then retry."
+      return 0
+    fi
+    if ! safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"; then
+      snapshot_txn_refuse "the panel address could not be converted into a safe backup name" "Check host text tooling, then re-run."
+      return 0
+    fi
+    if ! stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"; then
+      snapshot_txn_refuse "the host could not create a backup timestamp" "Check the host date command, then re-run."
+      return 0
+    fi
     base="$CONFIG_BACKUP_DIR/${safe_target}-${stamp}"
   fi
   base="$base.break-glass"
+  if prepare_upgrade_quiescence; then
+    snapshot_prepared_database "$base"
+    return 0
+  fi
+  warn "data-store snapshot: no valid upgrade-ready receipt was received (unsupported, non-ready, malformed, or timed out); using one legacy live SQLite backup attempt"
   # Ownership is registered BEFORE anything exists on either side, so an interruption at any later
   # instant already has a cleanup owner.
   SNAPSHOT_TXN_REMOTE="$stage"
   script_file="$(mktemp)" || { snapshot_txn_refuse "could not create a working file on this host" "Check TMPDIR is writable."; return 0; }
   # A recognisable name: the generated script is hashed and pushed under it, and digest tooling on
   # some hosts special-cases by suffix.
-  mv "$script_file" "$script_file.db-txn-script" && script_file="$script_file.db-txn-script"
-  cat > "$script_file" <<'EOF'
+  if ! mv "$script_file" "$script_file.db-txn-script"; then
+    rm -f "$script_file" 2>/dev/null || true
+    snapshot_txn_refuse "the capture working file could not be named safely" "Check TMPDIR, then re-run."
+    return 0
+  fi
+  script_file="$script_file.db-txn-script"
+  if ! cat > "$script_file" <<'EOF'
 #!/system/bin/sh
 # One-transaction database capture. Every failure prints SNAPTXN_FAIL=<stage> as its LAST line and
 # removes the staging it created; success prints an unconditional manifest then SNAPTXN_OK. Nothing
@@ -3654,8 +3852,9 @@ sqlite3_bin=""
 if [ -x /system/bin/sqlite3 ]; then sqlite3_bin=/system/bin/sqlite3
 else sqlite3_bin=$(command -v sqlite3 2>/dev/null) || sqlite3_bin=""; fi
 case "$sqlite3_bin" in /*) ;; *) refuse sqlite_missing ;; esac
-[ -f @DB_SOURCE@ ] || refuse source_missing
 [ ! -L @DB_SOURCE@ ] || refuse source_not_regular
+[ -e @DB_SOURCE@ ] || refuse source_missing
+[ -f @DB_SOURCE@ ] || refuse source_not_regular
 umask 077
 mkdir -m 700 @STAGE@ 2>/dev/null || refuse stage_exists
 stage_created=1
@@ -3699,26 +3898,41 @@ echo "MF_VNAME=$vname"
 echo "MF_SQLITE=$sqlite3_bin"
 echo "SNAPTXN_OK"
 EOF
-  sed -e "s|@STAGE@|$stage|g" -e "s|@DB_SOURCE@|$db_source|g" -e "s|@PKG@|$PKG|g" \
+  then
+    rm -f "$script_file" 2>/dev/null || true
+    snapshot_txn_refuse "the capture script could not be written on this host" "Check TMPDIR, then re-run."
+    return 0
+  fi
+  if ! sed -e "s|@STAGE@|$stage|g" -e "s|@DB_SOURCE@|$db_source|g" -e "s|@PKG@|$PKG|g" \
       -e "s|@VMIN@|$DB_SUPPORTED_USER_VERSION_MIN|g" -e "s|@VMAX@|$DB_SUPPORTED_USER_VERSION_MAX|g" \
-      "$script_file" > "$script_file.ready" && mv "$script_file.ready" "$script_file"
-  script_sha="$(host_sha256 "$script_file")" || { rm -f "$script_file"; snapshot_txn_refuse "could not hash the capture script" "Check host sha256 tooling."; return 0; }
+      "$script_file" > "$script_file.ready" || ! mv "$script_file.ready" "$script_file"; then
+    rm -f "$script_file" "$script_file.ready" 2>/dev/null || true
+    snapshot_txn_refuse "the capture script could not be finalized on this host" "Check TMPDIR and sed, then re-run."
+    return 0
+  fi
+  script_sha="$(host_sha256 "$script_file")" || { rm -f "$script_file" 2>/dev/null || true; snapshot_txn_refuse "could not hash the capture script" "Check host sha256 tooling."; return 0; }
   if ! adb -s "$TARGET" push "$script_file" "${stage}-script" >/dev/null 2>&1; then
-    rm -f "$script_file"
+    rm -f "$script_file" 2>/dev/null || true
     snapshot_txn_refuse "the capture script could not be pushed to the panel" "Check adb connectivity to $TARGET."
     return 0
   fi
-  rm -f "$script_file"
+  if ! rm -f "$script_file" 2>/dev/null; then
+    snapshot_txn_refuse "the capture working file could not be removed" "Remove $script_file by hand, then re-run if a backup is required."
+    return 0
+  fi
   # The pushed bytes are proven before they run as root — the same rule the root-helper transaction
   # script follows. The panel's own hash decides; a transport that cannot hash cannot execute.
-  panel_sha="$(run_root "sha256sum ${stage}-script 2>/dev/null || toybox sha256sum ${stage}-script 2>/dev/null || busybox sha256sum ${stage}-script 2>/dev/null" 2>/dev/null | tr -d '\r')"
+  if ! panel_sha="$(run_root "sha256sum ${stage}-script 2>/dev/null || toybox sha256sum ${stage}-script 2>/dev/null || busybox sha256sum ${stage}-script 2>/dev/null" 2>/dev/null | tr -d '\r')"; then
+    snapshot_txn_refuse "the capture script could not be hashed through the panel's root route" "Check adb/root responsiveness, then re-run."
+    return 0
+  fi
   panel_sha="${panel_sha%% *}"
   if [ "$panel_sha" != "$script_sha" ]; then
-    snapshot_txn_refuse "the capture script did not arrive intact on the panel" "Check adb connectivity to $TARGET, then re-run."
+    snapshot_txn_reject_unsafe "the capture script did not arrive intact on the panel" "Check adb connectivity to $TARGET, then re-run."
     return 0
   fi
   out="$(run_root "sh ${stage}-script" 2>&1 | tr -d '\r')" || true
-  while IFS= read -r line; do
+  if ! while IFS= read -r line; do
     case "$line" in
       MF_BYTES=*)        mf_bytes="${line#MF_BYTES=}" ;;
       MF_SHA256=*)       mf_sha="${line#MF_SHA256=}" ;;
@@ -3734,6 +3948,10 @@ EOF
   done <<EOF2
 $out
 EOF2
+  then
+    snapshot_txn_refuse "the capture manifest could not be parsed on this host" "Check host shell resources, then re-run."
+    return 0
+  fi
   if [ "$txn_ok" != 1 ]; then
     if [ "$fail_reason" = stage_exists ]; then
       # The path is occupied by a DIFFERENT owner's staging — with a urandom identity that is a
@@ -3741,17 +3959,29 @@ EOF2
       # remove: disown it so the refusal cleanup cannot delete the winner's in-flight capture.
       SNAPSHOT_TXN_REMOTE=""
     fi
-    snapshot_txn_refuse "the on-panel capture transaction refused (${fail_reason:-no transaction verdict})" \
-      "The panel left nothing behind. Fix the named stage on the panel, then re-run."
+    case "$fail_reason" in
+      integrity_failed|rows_empty|schema_alien|provenance_unreadable|provenance_changed|source_not_regular|stage_exists)
+        snapshot_txn_reject_unsafe "the on-panel capture transaction refused ($fail_reason)" \
+          "The panel left nothing behind. Fix the named stage on the panel, then re-run."
+        ;;
+      *)
+        snapshot_txn_refuse "the on-panel capture transaction refused (${fail_reason:-no transaction verdict})" \
+          "The panel left nothing behind. Fix the named stage on the panel, then re-run."
+        ;;
+    esac
     return 0
   fi
   # Every manifest field is required — a script that succeeded without fully describing its output
   # did not run the shipped transaction.
-  case "$mf_bytes" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (bytes)" "Re-run against the same panel."; return 0 ;; esac
-  case "$mf_rows" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (rows)" "Re-run against the same panel."; return 0 ;; esac
-  case "$mf_uv" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (schema)" "Re-run against the same panel."; return 0 ;; esac
-  case "$mf_vcode" in ''|*[!0-9]*) snapshot_txn_refuse "the capture manifest is incomplete (provenance)" "Re-run against the same panel."; return 0 ;; esac
-  [ -n "$mf_integrity" ] && [ -n "$mf_sha" ] && [ -n "$mf_sqlite" ] || { snapshot_txn_refuse "the capture manifest is incomplete" "Re-run against the same panel."; return 0; }
+  case "$mf_bytes" in ''|*[!0-9]*) snapshot_txn_reject_unsafe "the capture manifest is incomplete (bytes)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_rows" in ''|*[!0-9]*) snapshot_txn_reject_unsafe "the capture manifest is incomplete (rows)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_uv" in ''|*[!0-9]*) snapshot_txn_reject_unsafe "the capture manifest is incomplete (schema)" "Re-run against the same panel."; return 0 ;; esac
+  case "$mf_vcode" in ''|*[!0-9]*) snapshot_txn_reject_unsafe "the capture manifest is incomplete (provenance)" "Re-run against the same panel."; return 0 ;; esac
+  [ -n "$mf_integrity" ] && [ -n "$mf_sha" ] && [ -n "$mf_sqlite" ] || { snapshot_txn_reject_unsafe "the capture manifest is incomplete" "Re-run against the same panel."; return 0; }
+  if [ "$mf_sha" != none ] && ! printf '%s\n' "$mf_sha" | grep -Eq '^[0-9a-f]{64}$'; then
+    snapshot_txn_reject_unsafe "the capture manifest contains an invalid panel digest" "Re-run against the same panel."
+    return 0
+  fi
   # The pull lands in an owner-only working file, never at the final name: the final name must only
   # ever hold a fully verified snapshot, and a pre-existing file or symlink there is refused, not
   # followed and not replaced.
@@ -3781,9 +4011,12 @@ EOF2
     return 0
   fi
   chmod 600 "$pull_tmp" 2>/dev/null || true
-  pulled_bytes="$(wc -c < "$pull_tmp" | tr -d ' ')"
+  if ! pulled_bytes="$(wc -c < "$pull_tmp" 2>/dev/null | tr -d ' ')"; then
+    snapshot_txn_refuse "the pulled snapshot size could not be read on this host" "Check the backup filesystem, then re-run."
+    return 0
+  fi
   if [ "$pulled_bytes" != "$mf_bytes" ]; then
-    snapshot_txn_refuse "the pulled snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Check adb connectivity to $TARGET, then re-run."
+    snapshot_txn_reject_unsafe "the pulled snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Check adb connectivity to $TARGET, then re-run."
     return 0
   fi
   if [ -e "$base.db" ] || [ -L "$base.db" ]; then
@@ -3802,21 +4035,37 @@ EOF2
   SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
   # Everything the receipt will claim is re-read from the PUBLISHED file, so the receipt binds the
   # bytes a later reader will actually find, not the working copy they came from.
-  pulled_bytes="$(wc -c < "$base.db" | tr -d ' ')"
+  if ! pulled_bytes="$(wc -c < "$base.db" 2>/dev/null | tr -d ' ')"; then
+    snapshot_txn_refuse "the published snapshot size could not be read on this host" "Check the backup filesystem, then re-run."
+    return 0
+  fi
   if [ "$pulled_bytes" != "$mf_bytes" ]; then
-    snapshot_txn_refuse "the published snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Re-run against the same panel."
+    snapshot_txn_reject_unsafe "the published snapshot is $pulled_bytes bytes but the panel captured $mf_bytes" "Re-run against the same panel."
     return 0
   fi
-  # Digest where both sides can compute one; the byte count above is the floor, and a receipt that
-  # says which side lacked a digest tool is honest about what was checked rather than refusing a
-  # sound snapshot over the checker's own tooling.
-  host_sha="$(host_sha256 "$base.db" 2>/dev/null || true)"
-  if [ "$mf_sha" != none ] && [ -n "$host_sha" ] && [ "$host_sha" != "$mf_sha" ]; then
-    snapshot_txn_refuse "the published snapshot's digest does not match what the panel captured" "Check adb connectivity to $TARGET, then re-run."
+  # The host digest is mandatory because the host copy is the artifact an operator may later use.
+  # A panel without digest tooling may report `none`; byte count still binds that transfer, while a
+  # panel digest, when present, must match the mandatory host digest.
+  if ! host_sha="$(host_sha256 "$base.db" 2>/dev/null)"; then
+    snapshot_txn_refuse "the published snapshot could not be hashed on this host" "Install sha256sum (or shasum), then re-run."
     return 0
   fi
-  if [ "$mf_sha" = none ] || [ -z "$host_sha" ]; then
-    echo "   ${YEL}note${X} transfer verified by byte count only — $([ "$mf_sha" = none ] && echo 'the panel' || echo 'this host') has no usable digest tool; the receipt's database_sha256_panel/database_sha256_host record exactly which side could not compute one"
+  case "$host_sha" in
+    *[!0-9a-f]*|'')
+      snapshot_txn_refuse "the published snapshot could not be hashed on this host" "Install sha256sum (or shasum), then re-run."
+      return 0
+      ;;
+  esac
+  if [ "${#host_sha}" -ne 64 ]; then
+    snapshot_txn_refuse "the published snapshot could not be hashed on this host" "Install sha256sum (or shasum), then re-run."
+    return 0
+  fi
+  if [ "$mf_sha" != none ] && [ "$host_sha" != "$mf_sha" ]; then
+    snapshot_txn_reject_unsafe "the published snapshot's digest does not match what the panel captured" "Check adb connectivity to $TARGET, then re-run."
+    return 0
+  fi
+  if [ "$mf_sha" = none ]; then
+    echo "   ${YEL}note${X} the panel has no usable digest tool; transfer size and the mandatory host digest were verified, and database_sha256_panel=none records the panel-side limitation"
   fi
   # The receipt is written ONCE, after every verification above, so no receipt claiming this file
   # can exist before the claim is proven. Built exclusively, published atomically, non-regular
@@ -3844,7 +4093,7 @@ EOF2
     printf 'database=%s\n' "$base.db"
     printf 'database_bytes=%s\n' "$pulled_bytes"
     printf 'database_sha256_panel=%s\n' "$mf_sha"
-    printf 'database_sha256_host=%s\n' "${host_sha:-none}"
+    printf 'database_sha256_host=%s\n' "$host_sha"
     printf 'database_integrity=%s\n' "$mf_integrity"
     printf 'database_app_state_rows=%s\n' "$mf_rows"
     printf 'database_user_version=%s\n' "$mf_uv"
@@ -3868,7 +4117,9 @@ EOF2
   # pair, so a signal from this point on must find nothing to repossess. Deregistering BEFORE the
   # best-effort remote cleanup below keeps an operator interrupt during a wedged transport from
   # deleting the proven restore point this run just published.
+  snapshot_txn_defer_host_signals
   SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
+  snapshot_txn_restore_host_signals
   # Cleanup is best-effort after a proven capture: the host file remains the restore point even if
   # the uniquely named, owner-only panel staging cannot be removed over a failing transport.
   run_root "rm -f ${stage}-script && rm -rf $stage" >/dev/null 2>&1 || true
@@ -3893,32 +4144,28 @@ EOF2
 # The cost is real, so it is stated before the prompt rather than discovered afterwards. --force does
 # not stand in for the confirmation: it exists to skip a version comparison, not to authorise a wipe.
 reset_panel_config() {
-  local backup answer out
+  local answer out package_path package_status
   [ "$RESET_CONFIG" = 1 ] || return 0
-  if ! adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r' | grep -q '^package:'; then
+  # Android's raw diagnostic is suppressed so this function owns the actionable message; the exit
+  # status and positive `package:` evidence are both consumed and any uncertainty fails closed.
+  if package_path="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
+    package_status=0
+  else
+    package_status=$?
+  fi
+  [ "$package_status" -eq 0 ] || fail "could not re-check the installed app before reset" \
+    "Nothing was erased and no app or setting was changed." \
+    "Restore adb/package-manager responsiveness, then retry the reset."
+  if ! printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:'; then
     echo "   ${D}--reset-config: ha-paneld is not installed here, so there is no configuration to erase.${X}"
     RESET_CONFIG=0
     return 0
   fi
-  backup="${EXPORT_FILE:-$AUTO_EXPORT_FILE}"
-  if [ -z "$backup" ] || [ ! -s "$backup" ]; then
-    # The ordinary pre-upgrade snapshot is skippable by a test harness and is bypassed when the caller
-    # supplied its own --export path. An erase must never proceed on that basis, so take one here and
-    # let its own fail-closed handling stop the run if the panel or the backup directory will not
-    # cooperate. The check below is on the resulting file, not on the attempt.
-    HAPANELD_SKIP_AUTO_EXPORT=0 auto_export_before_upgrade
-    backup="${EXPORT_FILE:-$AUTO_EXPORT_FILE}"
-  fi
-  { [ -n "$backup" ] && [ -s "$backup" ]; } || fail "--reset-config has no verified configuration backup to fall back on" \
-    "Nothing was erased and no app or setting was changed." \
-    "Re-run with --export FILE to take one explicitly, or make $CONFIG_BACKUP_DIR writable so the automatic backup can be made."
   echo "${RED}${B}⚠ --reset-config will erase this panel's ha-paneld configuration.${X}"
   echo "   ${D}Erased: MQTT and Home Assistant settings, learned entity, proximity and ambient data, and the on-panel revision history.${X}"
   echo "   ${D}Kept:   the app itself, the root helper, and every other app on the panel.${X}"
-  # Name the backup's limits next to the backup itself. It is a settings export, not an image of the
-  # panel's data store, so it restores configuration and nothing else that this erase removes.
-  echo "   ${D}Backup: $backup${X}"
-  echo "   ${D}        Settings only — restoring it brings back configuration, not the learned data above.${X}"
+  echo "   ${D}Backup: none — reset is irreversible and does not create a settings or database backup.${X}"
+  echo "   ${D}        Cancel now and run --export FILE separately first if you want a settings export.${X}"
   if [ -t 0 ]; then
     printf "   Type ${B}RESET${X} to continue: "
     read -r answer
@@ -3928,14 +4175,33 @@ reset_panel_config() {
   [ "$answer" = "RESET" ] || fail "--reset-config was not confirmed" \
     "Nothing was erased and no app or setting was changed." \
     "Re-run and type RESET at the prompt, or set HAPANELD_RESET_CONFIRM=RESET for an unattended reset."
+  # Confirmation may be held open indefinitely. Re-establish exact package presence immediately
+  # before erasure; no backup identity or version-custody machinery belongs in a deliberate reset.
+  if package_path="$(run_with_deadline 10 "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
+    package_status=0
+  else
+    package_status=$?
+  fi
+  [ "$package_status" -eq 0 ] || fail "could not re-check the installed app before reset" \
+    "Nothing was erased and no app or setting was changed." \
+    "Restore adb/package-manager responsiveness, then retry the reset."
+  printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:' || \
+    fail "ha-paneld is no longer installed at the confirmed reset target" \
+      "Nothing was erased and no app or setting was changed." \
+      "Re-run reset and confirm the current package target."
   step "🧨 resetting" "${D}erasing this panel's configuration${X}"
-  out="$(adb -s "$TARGET" shell pm clear "$PKG" 2>&1 | tr -d '\r')"
-  case "$out" in
-    *Success*) echo "   ${GRN}✓${X} configuration erased — this panel will start guided setup fresh" ;;
-    *) fail "could not erase the panel configuration" \
-         "The package manager reported: ${out:-no output}" \
-         "The configuration backup at $backup is unchanged. Fix the cause above, then re-run." ;;
-  esac
+  if out="$(adb -s "$TARGET" shell pm clear "$PKG" 2>&1 | tr -d '\r')"; then
+    package_status=0
+  else
+    package_status=$?
+  fi
+  if [ "$package_status" -eq 0 ] && [ "$out" = "Success" ]; then
+    echo "   ${GRN}✓${X} configuration erased — this panel will start guided setup fresh"
+  else
+    fail "could not erase the panel configuration" \
+      "The package manager reported: ${out:-no output}" \
+      "No successful reset was reported. Fix the cause above, then re-run."
+  fi
 }
 
 export_is_only_operation() {
@@ -3963,12 +4229,9 @@ if export_is_only_operation; then
   exit 0
 fi
 
-# Refuse a panel that cannot hold its data store plus the copy the backup below stages, before a
-# release is downloaded or anything on the panel is touched.
-check_data_capacity
-
-# Block known storage/database danger before release resolution or any panel mutation. Older builds
-# without the contract remain eligible for upgrade; the post-install verification below is strict.
+# Classify storage health before release resolution or any panel mutation. Unknown/malformed state
+# fails closed; ordinary replacement and requested reset admit known pressure or database failure as
+# recovery attempts. Older builds without the contract remain eligible for upgrade.
 preflight_storage_health
 
 resolve_apk
@@ -3977,9 +4240,9 @@ verify_release_apk
 
 version_guard
 
-# Emergency upgrade safety window: persist a unique, owner-only config export before the paired
-# helper or APK can mutate the panel. Existing panels fail closed if the export cannot be made.
-auto_export_before_upgrade
+# Emergency upgrade safety window: persist a unique, owner-only config export before an ordinary
+# helper/APK mutation. Reset is intentionally irreversible and creates no automatic backup.
+[ "$RESET_CONFIG" = 1 ] || auto_export_before_upgrade
 
 # Decide the panel's root capability ONCE, before anything consumes it: the capture gate below and
 # the helper/APK mutation later act on this same verdict, so a "no" that lets the capture skip is
@@ -3987,17 +4250,15 @@ auto_export_before_upgrade
 # panels this performs the run's only `adb root` escalation.
 resolve_root_route
 
-# Then the canonical store itself, where a root route allows it. Fail-closed like the export above:
-# a rooted panel that cannot produce a verified database restore point stops the run, and only the
-# explicit --allow-missing-db-snapshot escape admits it. Rootless panels are a capability boundary,
-# not a failure, and are skipped with a notice.
-snapshot_panel_database
+# Then the canonical store itself, where a root route allows it. Ordinary in-place upgrades warn and
+# continue if no valid snapshot can be produced. Reset deliberately bypasses database capture.
+[ "$RESET_CONFIG" = 1 ] || snapshot_panel_database
 
 # THE mutation gate for an undecided route. The capture above may refuse on an unknown verdict and
-# --allow-missing-db-snapshot may admit that refusal, but the escape accepts a missing SNAPSHOT —
-# it never authorises mutating a panel whose capability is undecided. Every panel-changing step of
-# the run — pm clear, helper transactions, the APK replace, permission grants, accessibility,
-# persist-adb, vendor taming — sits after this line, so this single stop governs them all.
+# an ordinary backup failure may be advisory, but neither condition authorises mutating a panel whose
+# capability is undecided. Every panel-changing step of the run — pm clear, helper transactions, the
+# APK replace, permission grants, accessibility, persist-adb, vendor taming — sits after this line,
+# so this single stop governs them all.
 case "$ROOT_ROUTE_VERDICT" in
   rooted|unrooted) ;;
   *)
@@ -4250,6 +4511,9 @@ if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
 fi
 step "📦 installing" "${D}$APK${X}"
 install_apk
+# Successful package replacement terminates the old quiesced process. A later failure belongs to
+# the newly installed process and must not send it the old process's release nonce.
+UPGRADE_QUIESCE_NONCE=""
 if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
   if ! commit_root_helper_upgrade "$ROOT_HELPER_TRANSACTION_KIND" && \
      ! commit_root_helper_upgrade "$ROOT_HELPER_TRANSACTION_KIND"; then

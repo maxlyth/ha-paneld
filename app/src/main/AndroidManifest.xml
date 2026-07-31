@@ -130,6 +130,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- The shell user holds DUMP; ordinary apps cannot arm or release the upgrade barrier. -->
+        <receiver
+            android:name=".UpgradeControlReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE" />
+                <action android:name="io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE" />
+            </intent-filter>
+        </receiver>
+
         <!-- Optional hardware-button capture. Enabled at provisioning:
              settings put secure enabled_accessibility_services <pkg>/.input.PanelAccessibilityService -->
         <service

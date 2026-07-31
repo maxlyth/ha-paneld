@@ -1,0 +1,241 @@
+package io.github.maxlyth.hapaneld.upgrade
+
+import android.content.Context
+import android.util.Log
+import io.github.maxlyth.hapaneld.PaneldService
+import io.github.maxlyth.hapaneld.persistence.CleanDatabaseProof
+import io.github.maxlyth.hapaneld.persistence.StateQuiescence
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
+internal const val PREPARE_UPGRADE_ACTION = "io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE"
+internal const val RELEASE_UPGRADE_ACTION = "io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE"
+internal const val UPGRADE_NONCE_EXTRA = "nonce"
+
+private const val UPGRADE_HOLD_TIMEOUT_MS = 180_000L
+private val UPGRADE_NONCE = Regex("[0-9a-f]{32}")
+
+internal fun canonicalUpgradeNonce(value: String?): String? =
+    value?.takeIf { UPGRADE_NONCE.matches(it) }
+
+internal fun formatUpgradeReady(
+    nonce: String,
+    pid: Int,
+    versionCode: Int,
+    proof: CleanDatabaseProof,
+): String = "HAPANELD_UPGRADE_READY_V1:$nonce:$pid:$versionCode:${proof.databaseBytes}:" +
+    "${proof.sha256}:${proof.userVersion}:${proof.appStateRows}"
+
+internal fun formatUpgradeReleased(nonce: String): String =
+    "HAPANELD_UPGRADE_RELEASED_V1:$nonce"
+
+internal interface UpgradeRequestCompletion {
+    fun ready(nonce: String, proof: CleanDatabaseProof)
+    fun failed(reason: String)
+}
+
+internal data class UpgradeCancellation(
+    val matched: Boolean,
+    val freeze: StateQuiescence? = null,
+    val releaseSuccessor: (() -> Unit)? = null,
+)
+
+internal class UpgradeShutdownClaim internal constructor(internal val token: Any)
+
+internal fun releaseUpgradeHold(
+    freeze: StateQuiescence?,
+    additionalFreeze: StateQuiescence? = null,
+    releaseSuccessor: (() -> Unit)?,
+    restartService: (() -> Unit)?,
+): List<Throwable> {
+    val failures = mutableListOf<Throwable>()
+    listOfNotNull(freeze, additionalFreeze).distinct().forEach { lease ->
+        runCatching { lease.close() }.exceptionOrNull()?.let(failures::add)
+    }
+    releaseSuccessor?.let { release ->
+        runCatching(release).exceptionOrNull()?.let(failures::add)
+    }
+    restartService?.let { restart ->
+        runCatching(restart).exceptionOrNull()?.let(failures::add)
+    }
+    return failures
+}
+
+internal data class UpgradeReleaseOutcome(
+    val accepted: Boolean,
+    val failures: List<Throwable> = emptyList(),
+) {
+    val succeeded: Boolean get() = accepted && failures.isEmpty()
+}
+
+/** One process-local upgrade request. Service shutdown remains the sole quiescence implementation. */
+internal class UpgradeRequestGate {
+    private data class Active(
+        val nonce: String,
+        val completion: UpgradeRequestCompletion,
+        var freeze: StateQuiescence? = null,
+        var releaseSuccessor: (() -> Unit)? = null,
+        var ready: Boolean = false,
+        var claimToken: Any? = null,
+    )
+
+    private var active: Active? = null
+
+    @Synchronized
+    fun arm(nonce: String, completion: UpgradeRequestCompletion): Boolean {
+        if (active != null) return false
+        active = Active(nonce, completion)
+        return true
+    }
+
+    @Synchronized
+    fun claimShutdown(): UpgradeShutdownClaim? {
+        val request = active ?: return null
+        if (request.claimToken != null) return null
+        val token = Any()
+        request.claimToken = token
+        return UpgradeShutdownClaim(token)
+    }
+
+    /** Transfer the normal shutdown freeze to the request only after the normal stable-DB proof. */
+    @Synchronized
+    fun holdReady(
+        claim: UpgradeShutdownClaim,
+        freeze: StateQuiescence,
+        proof: CleanDatabaseProof,
+        releaseSuccessor: () -> Unit,
+    ): Boolean {
+        val request = active ?: return false
+        if (request.ready || request.claimToken !== claim.token) return false
+        request.freeze = freeze
+        request.releaseSuccessor = releaseSuccessor
+        request.ready = true
+        request.completion.ready(request.nonce, proof)
+        return true
+    }
+
+    @Synchronized
+    fun cancel(nonce: String?, reason: String): UpgradeCancellation {
+        val request = active ?: return UpgradeCancellation(matched = false)
+        if (nonce != null && request.nonce != nonce) return UpgradeCancellation(matched = false)
+        active = null
+        request.completion.failed(reason)
+        return UpgradeCancellation(
+            matched = true,
+            freeze = request.freeze,
+            releaseSuccessor = request.releaseSuccessor,
+        )
+    }
+
+    @Synchronized
+    fun cancelClaim(claim: UpgradeShutdownClaim, reason: String): UpgradeCancellation {
+        val request = active ?: return UpgradeCancellation(matched = false)
+        if (request.claimToken !== claim.token) return UpgradeCancellation(matched = false)
+        active = null
+        request.completion.failed(reason)
+        return UpgradeCancellation(
+            matched = true,
+            freeze = request.freeze,
+            releaseSuccessor = request.releaseSuccessor,
+        )
+    }
+
+    @Synchronized
+    fun release(nonce: String): UpgradeCancellation {
+        // RELEASE is deliberately stateless when no request survives (for example, package manager
+        // killed the READY process). A different live nonce remains a conflict and cannot be released.
+        val request = active ?: return UpgradeCancellation(matched = true)
+        if (request.nonce != nonce) return UpgradeCancellation(matched = false)
+        active = null
+        if (!request.ready) request.completion.failed("released_before_ready")
+        return UpgradeCancellation(
+            matched = true,
+            freeze = request.freeze,
+            releaseSuccessor = request.releaseSuccessor,
+        )
+    }
+}
+
+internal fun executeUpgradeRelease(
+    gate: UpgradeRequestGate,
+    nonce: String,
+    restartService: () -> Unit,
+): UpgradeReleaseOutcome {
+    val released = gate.release(nonce)
+    if (!released.matched) return UpgradeReleaseOutcome(accepted = false)
+    return UpgradeReleaseOutcome(
+        accepted = true,
+        failures = releaseUpgradeHold(
+            freeze = released.freeze,
+            releaseSuccessor = released.releaseSuccessor,
+            restartService = restartService,
+        ),
+    )
+}
+
+internal object UpgradeShutdownCoordinator {
+    private val gate = UpgradeRequestGate()
+    private val watchdog = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "ha-paneld-upgrade-hold-watchdog").apply { isDaemon = true }
+    }
+
+    fun arm(context: Context, nonce: String, completion: UpgradeRequestCompletion): Boolean {
+        if (!gate.arm(nonce, completion)) return false
+        val appContext = context.applicationContext
+        watchdog.schedule(
+            { cancelAndResume(appContext, nonce, "watchdog_expired") },
+            UPGRADE_HOLD_TIMEOUT_MS,
+            TimeUnit.MILLISECONDS,
+        )
+        return true
+    }
+
+    fun holdAfterCleanShutdown(
+        claim: UpgradeShutdownClaim?,
+        freeze: StateQuiescence,
+        proof: CleanDatabaseProof,
+        releaseSuccessor: () -> Unit,
+    ): Boolean = claim != null && gate.holdReady(claim, freeze, proof, releaseSuccessor)
+
+    fun claimShutdown(): UpgradeShutdownClaim? = gate.claimShutdown()
+
+    fun failShutdown(
+        context: Context,
+        claim: UpgradeShutdownClaim?,
+        freeze: StateQuiescence?,
+        releaseSuccessor: () -> Unit,
+        reason: String,
+    ) {
+        val cancelled = if (claim == null) UpgradeCancellation(matched = false)
+            else gate.cancelClaim(claim, reason)
+        logReleaseFailures(releaseUpgradeHold(
+            freeze = cancelled.freeze,
+            additionalFreeze = freeze?.takeUnless { it === cancelled.freeze },
+            releaseSuccessor = if (cancelled.matched) cancelled.releaseSuccessor ?: releaseSuccessor else null,
+            restartService = if (cancelled.matched) {
+                { PaneldService.start(context.applicationContext) }
+            } else null,
+        ))
+    }
+
+    fun cancelAndResume(context: Context, nonce: String, reason: String): Boolean {
+        val cancelled = gate.cancel(nonce, reason)
+        if (!cancelled.matched) return false
+        logReleaseFailures(releaseUpgradeHold(cancelled.freeze, releaseSuccessor = cancelled.releaseSuccessor, restartService = {
+            PaneldService.start(context.applicationContext)
+        }))
+        return true
+    }
+
+    fun releaseAndResume(context: Context, nonce: String): Boolean {
+        val outcome = executeUpgradeRelease(gate, nonce) {
+            PaneldService.start(context.applicationContext)
+        }
+        logReleaseFailures(outcome.failures)
+        return outcome.succeeded
+    }
+
+    private fun logReleaseFailures(failures: List<Throwable>) {
+        failures.forEach { Log.e("UpgradeControl", "upgrade release step failed", it) }
+    }
+}

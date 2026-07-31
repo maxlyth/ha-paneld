@@ -1,0 +1,54 @@
+package io.github.maxlyth.hapaneld
+
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ShutdownProofOwnerTest {
+    @Test fun successfulProofReturnsItsValueFromADaemonOwner() {
+        val daemon = AtomicBoolean()
+
+        val result = runBoundedShutdownProof(1_000) {
+            daemon.set(Thread.currentThread().isDaemon)
+            "proved"
+        }
+
+        assertEquals("proved", result)
+        assertTrue(daemon.get())
+    }
+
+    @Test fun blockingNativeLikeProofCannotHoldTheFinalizerPastItsDeadline() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val exited = CountDownLatch(1)
+        val daemon = AtomicBoolean()
+        val startedAt = System.nanoTime()
+        try {
+            val result = runBoundedShutdownProof(50) {
+                daemon.set(Thread.currentThread().isDaemon)
+                entered.countDown()
+                while (release.count > 0L) {
+                    try {
+                        release.await()
+                    } catch (_: InterruptedException) {
+                        // Model a native call that ignores cancellation until its own operation returns.
+                    }
+                }
+                exited.countDown()
+                "too late"
+            }
+
+            assertNull(result)
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertTrue(daemon.get())
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt) < 1_000L)
+        } finally {
+            release.countDown()
+            assertTrue(exited.await(1, TimeUnit.SECONDS))
+        }
+    }
+}

@@ -55,7 +55,17 @@ DB_TXN_SANDBOX="$STATE_DIR/db-txn-sandbox"
 prepare_db_txn_sandbox() {
   [ -d "$DB_TXN_SANDBOX/bin" ] && return 0
   mkdir -p "$DB_TXN_SANDBOX/data/local/tmp" "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases" "$DB_TXN_SANDBOX/bin"
-  printf 'mock canonical panel database\n' > "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+  canonical_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+  rm -f "$canonical_db"
+  "${HAPANELD_HOST_SQLITE3:-sqlite3}" "$canonical_db" >/dev/null <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA user_version=9;
+CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO app_state VALUES
+ ('fixture-1','1'),('fixture-2','2'),('fixture-3','3'),('fixture-4','4'),
+ ('fixture-5','5'),('fixture-6','6'),('fixture-7','7');
+SQL
+  "${HAPANELD_HOST_SQLITE3:-sqlite3}" "$canonical_db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null
   # A cleanly present zero-byte WAL is a NORMAL source state and must never affect a .backup capture.
   : > "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db-wal"
   cat > "$DB_TXN_SANDBOX/bin/sqlite3" <<'STUB'
@@ -63,6 +73,7 @@ prepare_db_txn_sandbox() {
 db="$1"; shift; op="$*"
 case "$op" in
   *.backup*)
+    [ -z "${MOCK_CALL_LOG:-}" ] || printf 'sqlite3 .backup\n' >> "$MOCK_CALL_LOG"
     [ "${MOCK_DB_TXN:-ok}" = backup_fail ] && exit 1
     dest="${op#*.backup \'}"; dest="${dest%\'*}"
     cp "$db" "$dest" || exit 1
@@ -132,6 +143,7 @@ handle_db_txn_command() {
   local text="$1"
   case "$text" in
     *sha256sum*.hapaneld-db-txn.*-script*)
+      [ "${MOCK_DB_TXN:-ok}" != panel_hash_transport ] || return 1
       prepare_db_txn_sandbox
       if [ "${MOCK_DB_TXN:-ok}" = script_tamper ]; then
         printf '%064d  tampered\n' 1
@@ -165,8 +177,7 @@ handle_db_txn_command() {
       if [ "${MOCK_DB_CLEANUP:-ok}" = block ] && [ ! -f "$STATE_DIR/db-cleanup-blocked-once" ]; then
         : > "$STATE_DIR/db-cleanup-blocked-once"
         [ -z "${MOCK_DB_CLEANUP_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_DB_CLEANUP_PID_FILE"
-        trap 'exit 143' TERM INT
-        while :; do /bin/sleep 1; done
+        exec /bin/sleep "${MOCK_DB_CLEANUP_BLOCK_SECONDS:-30}"
       fi
       if [ "${MOCK_DB_CLEANUP:-ok}" = ok ]; then
         rm -rf "$DB_TXN_SANDBOX/data/local/tmp"/.hapaneld-db-txn.* 2>/dev/null
@@ -292,6 +303,22 @@ case "${1:-}" in
       *) cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}" ;;
     esac
     ;;
+  exec-out)
+    shift
+    command_text="$*"
+    case "$command_text" in
+      *'cat /data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db'*)
+        if [ "${MOCK_DIRECT_COPY:-ok}" = block ]; then
+          [ -z "${MOCK_DIRECT_COPY_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_DIRECT_COPY_PID_FILE"
+          exec /bin/sleep "${MOCK_DIRECT_COPY_BLOCK_SECONDS:-30}"
+        fi
+        [ "${MOCK_DIRECT_COPY:-ok}" = ok ] || exit 1
+        prepare_db_txn_sandbox
+        cat "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
   install)
     : > "$STATE_DIR/apk-install-attempted"
     if [[ "${!#}" == */shizuku.apk ]] && [ "${MOCK_SHIZUKU_INSTALL:-ok}" = block ]; then
@@ -344,7 +371,67 @@ case "${1:-}" in
         handle_db_txn_command "$command_text"
         exit $? ;;
     esac
-    case "$command_text" in
+  case "$command_text" in
+      "am broadcast --user 0 -a io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "*)
+        nonce="${command_text##*--es nonce }"
+        case "${MOCK_UPGRADE_PREPARE:-unsupported}" in
+          ready|size_mismatch|digest_mismatch|invalid_sqlite|schema_mismatch|rows_mismatch)
+            prepare_db_txn_sandbox
+            direct_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+            if [ "${MOCK_UPGRADE_PREPARE:-}" = invalid_sqlite ]; then
+              printf 'not a sqlite database\n' > "$direct_db"
+            fi
+            bytes="$(wc -c < "$direct_db" | tr -d ' ')"
+            sha="$(/usr/bin/sha256sum "$direct_db" | awk '{print $1}')"
+            [ "${MOCK_UPGRADE_PREPARE:-}" != size_mismatch ] || bytes=$((bytes + 1))
+            [ "${MOCK_UPGRADE_PREPARE:-}" != digest_mismatch ] || sha="$(printf '%064d' 0)"
+            receipt_uv=9; receipt_rows=7
+            [ "${MOCK_UPGRADE_PREPARE:-}" != schema_mismatch ] || receipt_uv=10
+            [ "${MOCK_UPGRADE_PREPARE:-}" != rows_mismatch ] || receipt_rows=8
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:%s:4242:513:%s:%s:%s:%s"\n' \
+              "$nonce" "$bytes" "$sha" "$receipt_uv" "$receipt_rows"
+            ;;
+          malformed)
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:%s:bad"\n' "$nonce" ;;
+          wrong_nonce)
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:00000000000000000000000000000000:4242:513:1:%064d:9:7"\n' 0 ;;
+          wrong_result)
+            prepare_db_txn_sandbox
+            direct_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+            bytes="$(wc -c < "$direct_db" | tr -d ' ')"
+            sha="$(/usr/bin/sha256sum "$direct_db" | awk '{print $1}')"
+            printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_READY_V1:%s:4242:513:%s:%s:9:7"\n' "$nonce" "$bytes" "$sha"
+            ;;
+          nonready) printf 'Broadcast completed: result=0, data="NOT_READY"\n' ;;
+          unsupported) printf 'Broadcast completed: result=0\n' ;;
+          timeout)
+            [ -z "${MOCK_UPGRADE_PREPARE_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_UPGRADE_PREPARE_PID_FILE"
+            exec /bin/sleep "${MOCK_UPGRADE_PREPARE_BLOCK_SECONDS:-30}"
+            ;;
+          *) exit 1 ;;
+        esac
+        ;;
+      "am broadcast --user 0 -a io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "*)
+        nonce="${command_text##*--es nonce }"
+        release_attempt_file="$STATE_DIR/upgrade-release-attempts"
+        release_attempts=0
+        [ ! -f "$release_attempt_file" ] || release_attempts="$(cat "$release_attempt_file")"
+        release_attempts=$((release_attempts + 1))
+        printf '%s\n' "$release_attempts" > "$release_attempt_file"
+        case "${MOCK_UPGRADE_RELEASE:-ok}" in
+          ok) printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:%s"\n' "$nonce" ;;
+          fail_once)
+            if [ "$release_attempts" -eq 1 ]; then
+              printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:temporary"\n'
+            else
+              printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:%s"\n' "$nonce"
+            fi ;;
+          malformed) printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:wrong"\n' ;;
+          release_failed) printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:release_failed"\n' ;;
+          fail) printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:not_released"\n' ;;
+          *) exit 1 ;;
+        esac
+        ;;
       "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
         case "${MOCK_LAUNCHER_START:-ok}" in
           ok) rm -f "$STATE_DIR/package-stopped" ;;
