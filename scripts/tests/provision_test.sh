@@ -3310,15 +3310,89 @@ assert_contains 'could not erase the panel configuration' "a failed erase names 
 assert_log_contains '^adb -s panel\.test:5555 shell pm clear io.github.maxlyth.hapaneld$' "a failed erase still targets exactly ha-paneld"
 assert_not_contains 'configuration erased' "$LAST_OUTPUT" "a failed erase never prints the success claim"
 
-# Bulk erase is not offered: fleet workers run with stdin closed, so a single exported confirmation
-# would otherwise wipe every panel at once.
+# ── Fleet argument scope ────────────────────────────────────────────────────────────────────────
+# Every pass-through arg is forwarded verbatim to every worker, so an option that describes ONE panel is
+# wrong when multiplied: it collides on a single shared resource or applies one panel's data to all of
+# them, and because each worker still exits 0 the fleet reports all-OK while the damage is silent. Each
+# such option must be refused before any worker starts. The table pairs the option with the wording that
+# must point the operator at the per-panel alternative, and with the panel-side operation the refusal
+# must prevent. Two panels are used because multiplication is the whole defect.
+# Columns: option | value (empty when the option takes none) | required guidance | forbidden panel call
+fleet_scoped_options=(
+  # Bulk erase is not offered: workers run with stdin closed, so a single exported confirmation would
+  # otherwise wipe every panel at once.
+  "--reset-config||erase one panel at a time with scripts/provision.sh|pm clear"
+  # One destination for the whole fleet is last-writer-wins, and naming it also cancels each panel's
+  # own automatic pre-upgrade export — so the overwritten panels would have no backup anywhere.
+  "--export|$TMP/fleet-shared-export.json|cancels each panel's own automatic pre-upgrade settings export|config/export"
+  "--id|one-id-for-every-panel|a panel id names one panel|panel_id="
+  # Device-scoped keys belong to the panel they came from; --restore-fleet is the portable form.
+  "--restore|$RESTORE|use --restore-fleet to apply only the portable settings|config/import"
+)
+for fleet_scoped_case in "${fleet_scoped_options[@]}"; do
+  IFS='|' read -r fleet_option fleet_value fleet_guidance fleet_forbidden <<< "$fleet_scoped_case"
+  fleet_argv=("$fleet_option")
+  [ -z "$fleet_value" ] || fleet_argv+=("$fleet_value")
+  : > "$MOCK_CALL_LOG"
+  LAST_OUTPUT="$TMP/fleet-scoped-${fleet_option#--}-output.txt"
+  # HAPANELD_RESET_CONFIRM arms the precise hazard the --reset-config refusal exists to prevent: one
+  # exported confirmation satisfying every worker at once. Without it an unconfirmed erase stops short
+  # of the package manager on its own, so the forbidden-call assertion below would pass even with the
+  # refusal deleted — proven by mutation. It is inert for the other options.
+  MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' HAPANELD_RESET_CONFIRM=RESET \
+    bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame "${fleet_argv[@]}" \
+      -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+  LAST_STATUS=$?
+  assert_status 2 "fleet updates refuse the panel-scoped $fleet_option"
+  assert_contains "$fleet_option is not available for fleet updates" "the $fleet_option refusal names the option it rejected"
+  assert_contains "$fleet_guidance" "the $fleet_option refusal names its per-panel alternative"
+  assert_not_contains '^adb ' "$MOCK_CALL_LOG" "a refused $fleet_option starts no panel worker"
+  assert_not_contains "$fleet_forbidden" "$MOCK_CALL_LOG" "a refused $fleet_option never reaches its panel-side operation"
+done
+
+# --restore-fleet is deliberately absent from that table: it carries only portable, non-secret keys, so
+# applying it to every panel is exactly what it is for. Proven POSITIVELY — the mode-tagged import must
+# reach BOTH panels — because "the wrapper did not refuse it" is also true of a silently dropped flag.
 : > "$MOCK_CALL_LOG"
-LAST_OUTPUT="$TMP/fleet-reset-output.txt"
-bash "$UPDATE_FLEET" --reset-config -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_OUTPUT="$TMP/fleet-restore-fleet-output.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame --restore-fleet "$RESTORE" \
+    -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
-assert_failure "fleet updates refuse a bulk configuration erase"
-assert_contains 'not available for fleet updates' "the fleet refusal names the safe alternative"
-assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused fleet erase never reaches any panel"
+assert_success "the portable --restore-fleet survives the panel-scoped guard"
+assert_contains '2/2 panels OK' "the portable fleet restore completes on every panel"
+fleet_portable_imports="$(grep -Ec 'config/import\?mode=fleet' "$MOCK_CALL_LOG" || true)"
+if [ "$fleet_portable_imports" -eq 2 ]; then
+  pass "the portable fleet restore reaches both panels in fleet mode"
+else
+  fail_test "the portable fleet restore reaches both panels in fleet mode (got $fleet_portable_imports)"
+fi
+
+# The implicit per-panel export is the backup --export would have cancelled, so the guard is only worth
+# anything if that export still happens. An ordinary fleet run must leave one distinct file per panel.
+FLEET_AUTO_BACKUP_DIR="$TMP/fleet-auto-backups"
+rm -rf "$FLEET_AUTO_BACKUP_DIR"
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-auto-export-output.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' HAPANELD_CONFIG_BACKUP_DIR="$FLEET_AUTO_BACKUP_DIR" \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame \
+    -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "an ordinary fleet run completes with no fleet-wide export destination"
+fleet_auto_export_a=0; fleet_auto_export_b=0; fleet_auto_export_other=0
+for fleet_auto_export in "$FLEET_AUTO_BACKUP_DIR"/*.json; do
+  [ -f "$fleet_auto_export" ] || continue
+  case "${fleet_auto_export##*/}" in
+    panel-a.test_5555-*) fleet_auto_export_a=$((fleet_auto_export_a + 1)) ;;
+    panel-b.test_5555-*) fleet_auto_export_b=$((fleet_auto_export_b + 1)) ;;
+    *) fleet_auto_export_other=$((fleet_auto_export_other + 1)) ;;
+  esac
+done
+if [ "$fleet_auto_export_a" -eq 1 ] && [ "$fleet_auto_export_b" -eq 1 ] && [ "$fleet_auto_export_other" -eq 0 ]; then
+  pass "each panel keeps its own implicit pre-upgrade settings export"
+else
+  fail_test "each panel keeps its own implicit pre-upgrade settings export (panel-a $fleet_auto_export_a, panel-b $fleet_auto_export_b, other $fleet_auto_export_other)"
+fi
 
 # Official-signer policy is enforced once before workers start. The default still accepts one consistent
 # developer signer; --require-release-signer pins the official ha-paneld release certificate.

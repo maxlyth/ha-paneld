@@ -14,8 +14,10 @@
 #   printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 #
 # Panels are listed after `--` and/or on stdin (one per line). Except for this wrapper's `--jobs N`,
-# args before `--` pass through to every provision.sh call (e.g. --apk PATH, --mqtt ...). At most four
-# panels run concurrently by default; HAPANELD_FLEET_JOBS or --jobs can select 1..32 workers.
+# args before `--` pass through to every provision.sh call (e.g. --apk PATH, --mqtt ...). Options that
+# describe a single panel — --reset-config, --export, --id, --restore — are refused up front rather than
+# multiplied; --restore-fleet is the fleet-safe restore. At most four panels run concurrently by
+# default; HAPANELD_FLEET_JOBS or --jobs can select 1..32 workers.
 set -euo pipefail
 umask 077
 
@@ -71,12 +73,29 @@ done
 case "$JOBS" in
   ''|*[!0-9]*|0) echo "${RED}--jobs must be a whole number from 1 to 32${X}" >&2; exit 2 ;;
 esac
-# Erasing configuration is deliberately not a fleet operation. Workers run with stdin closed, so the
-# per-panel confirmation could only be satisfied by an environment variable — which one export would
-# then apply to every panel at once. Reset panels one at a time, on purpose.
+# Some provision.sh options describe ONE panel, and every pass-through arg is forwarded verbatim to
+# every worker below. Multiplied, they either collide on a single shared resource or apply one panel's
+# data to all of them — and because each worker still exits 0, the fleet reports all-OK while the damage
+# is silent. Refuse them here, before any worker starts, naming the per-panel alternative. Note what is
+# NOT listed: --restore-fleet exists precisely because it carries only portable, non-secret keys, so
+# multiplying it across panels is its intended use.
 for a in "${PARGS[@]}"; do
-  if [ "$a" = "--reset-config" ]; then
-    echo "${RED}--reset-config is not available for fleet updates${X} — erase one panel at a time with scripts/provision.sh" >&2
+  guidance=""
+  case "$a" in
+    # Workers run with stdin closed, so the per-panel confirmation could only be satisfied by an
+    # environment variable — which one export would then apply to every panel at once.
+    --reset-config) guidance="erase one panel at a time with scripts/provision.sh" ;;
+    # Every worker would publish its export onto the one destination, so only the last panel to finish
+    # would still be represented there. Worse, naming the file suppresses each panel's own automatic
+    # pre-upgrade settings export, so the panels overwritten here would have no backup anywhere.
+    --export) guidance="every panel would overwrite the same file, and naming it also cancels each panel's own automatic pre-upgrade settings export — omit it to keep those per-panel backups, or export one panel at a time with scripts/provision.sh" ;;
+    # A panel id is that panel's identity; one value cannot name a fleet.
+    --id) guidance="a panel id names one panel — provision each panel separately with its own --id" ;;
+    # --restore applies device-scoped keys, which belong to the panel they were exported from.
+    --restore) guidance="it imports device-scoped keys belonging to one panel — use --restore-fleet to apply only the portable settings across a fleet, or restore one panel at a time with scripts/provision.sh" ;;
+  esac
+  if [ -n "$guidance" ]; then
+    echo "${RED}$a is not available for fleet updates${X} — $guidance" >&2
     exit 2
   fi
 done
