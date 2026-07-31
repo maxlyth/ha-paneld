@@ -2907,13 +2907,24 @@ reset_db_txn_state
 RESOLVER_UNIT_SOURCE="$(sed -n '/^min_deadline() {$/,/^}$/p; /^resolve_root_route() {$/,/^}$/p' "$PROVISION")"
 resolver_unit_case() {
   {
-    printf 'set -u\nSECONDS=0\nTARGET=panel.test:5555\nADB_COMMAND=adb\nSU_FORM=""\nSU_PROBE_TIMED_OUT=0\nROOT_ROUTE_VERDICT=""\nPRIVILEGE_INSPECTION_TIMEOUT_SECONDS=45\nROOT_RESOLVE_TIMEOUT_SECONDS=50\n'
-    printf 'ADVANCE=%s\nRWD_COST=%s\n' "$1" "${2:-0}"
+    # The extracted resolver reads $SECONDS, which is bash's REAL elapsed-time variable: assigning
+    # to it only re-bases it, so wall-clock seconds kept accruing between statements and a loaded
+    # machine could slip an extra second into the budget and flip the verdict (observed 2026-07-31
+    # under a saturating mutation battery). `unset` strips the special attribute permanently, so
+    # the reassignment below leaves an ORDINARY integer this harness owns: it starts at 0 and moves
+    # only when a stub advances it. The extracted production source is unchanged and still reads
+    # $SECONDS — only the meaning of the variable inside this fixture is test-owned.
+    printf 'set -u\nunset SECONDS\nSECONDS=0\nTARGET=panel.test:5555\nADB_COMMAND=adb\nSU_FORM=""\nSU_PROBE_TIMED_OUT=0\nROOT_ROUTE_VERDICT=""\nPRIVILEGE_INSPECTION_TIMEOUT_SECONDS=45\nROOT_RESOLVE_TIMEOUT_SECONDS=50\n'
+    printf 'ADVANCE=%s\nRWD_COST=%s\nREAL_DELAY=%s\n' "$1" "${2:-0}" "${3:-0}"
     printf 'TRACE=%s\n' "$TMP/resolver-unit-trace"
     printf ': > "$TRACE"\n'
     # Stubs trace to a FILE, not stdout: the resolver captures some calls in command substitutions,
     # which would otherwise swallow the very deadline values these contracts are about.
-    printf 'probe_su() { echo "PROBE_CAP=$PRIVILEGE_INSPECTION_TIMEOUT_SECONDS" >> "$TRACE"; SU_PROBE_TIMED_OUT=0; return 1; }\n'
+    # REAL_DELAY burns genuine wall-clock time inside a stub; it must never change an outcome.
+    # It names /bin/sleep by absolute path deliberately: $FIXTURES leads PATH and ships a no-op
+    # `sleep`, so a bare `sleep` (or even `command sleep`) here would burn no time at all and the
+    # contract below would pass without ever exercising what it claims to.
+    printf 'probe_su() { echo "PROBE_CAP=$PRIVILEGE_INSPECTION_TIMEOUT_SECONDS" >> "$TRACE"; [ "$REAL_DELAY" = 0 ] || /bin/sleep "$REAL_DELAY"; SU_PROBE_TIMED_OUT=0; return 1; }\n'
     printf 'probe_transport_alive() { echo "ALIVE_DEADLINE=$1" >> "$TRACE"; return 0; }\n'
     printf 'run_with_deadline() { echo "RWD_DEADLINE=$1 CMD=$3" >> "$TRACE"; shift; SECONDS=$((SECONDS + RWD_COST)); "$@" || true; }\n'
     printf 'adb() { :; }\n'
@@ -2972,6 +2983,22 @@ if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unknown-timeout ELAPSE
   pass "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget"
 else
   fail_test "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget ($resolver_unit_out)"
+fi
+
+# The fixture's clock belongs to the fixture: a stub that burns more than a real second must not
+# move the budget. Under the previous form — bash's real-elapsed SECONDS merely re-based to 0 —
+# this same case drifted to ELAPSED=81 and lost a branch, so an unrelated mutation battery
+# saturating the CPU could turn this suite red and make a green run untrustworthy.
+# The delay is measured against THIS script's own SECONDS — still bash's real clock out here — so
+# the case cannot pass vacuously if the injected wait ever stops elapsing.
+resolver_unit_baseline="$(resolver_unit_case 40)"
+resolver_clock_mark="$SECONDS"
+resolver_unit_delayed="$(resolver_unit_case 40 0 1.1)"
+resolver_clock_spent=$((SECONDS - resolver_clock_mark))
+if [ "$resolver_clock_spent" -ge 1 ] && [ "$resolver_unit_delayed" = "$resolver_unit_baseline" ]; then
+  pass "the resolver deadline contracts are driven by a test-owned clock, unmoved by real elapsed time"
+else
+  fail_test "the resolver deadline contracts are driven by a test-owned clock, unmoved by real elapsed time (real seconds spent: $resolver_clock_spent; undelayed: $resolver_unit_baseline / delayed: $resolver_unit_delayed)"
 fi
 
 # Every refusal is validity-strict but availability-best-effort for an ordinary upgrade: it names
