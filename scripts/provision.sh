@@ -121,7 +121,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
 APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
-STORAGE_RECOVERY_ADMITTED=0
 # The schema versions the app has actually shipped. Bump the MAX alongside every new database
 # migration; a snapshot admitting a version outside this set cannot be paired with any build this
 # installer could restore it onto.
@@ -706,18 +705,26 @@ read_power_safety() {
   POWER_SAFETY_RESULT="valid"
 }
 
-# Unknown or malformed health blocks every requested mutation before release resolution, backup,
-# helper changes, APK install, settings writes, or config import. A package replacement or confirmed
-# requested reset is also a recovery attempt, so known pressure or database failure is admitted with a warning.
-# Successful absence remains compatible with an older app; transport failure is allowed only when
-# Android proves this is a fresh install.
+# Storage health classifies the panel; it does not admit or refuse the replacement.
+#
+# Every run that reaches this point goes on to replace the package, and an in-place replacement is a
+# recovery attempt: the most likely reason a panel reports critical pressure, a failing database, an
+# unreadable status endpoint or a state this provisioner does not recognise is precisely that it is
+# running a build the user is trying to move off. Refusing to install on that evidence strands the
+# panel on the broken build and offers no route back. So every health result here warns and
+# continues, and the operations that genuinely cannot proceed on bad input still fail on their own
+# evidence: the adb/package query below, the database capture, APK verification and Android's own
+# package manager.
+#
+# Successful absence of the field remains compatible with an older app.
 preflight_storage_health() {
   local package_path package_status
   read_storage_health
   case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
     transport:)
-      # A missing app has no status server yet and is eligible for first installation. If the package
-      # exists, however, inability to read its storage authority is UNKNOWN risk and must fail closed.
+      # A missing app has no status server yet and is eligible for first installation. Distinguishing
+      # the two still requires adb to answer — an actual adb/package-manager failure is not a health
+      # result and remains strict, because nothing after this line can run without it either.
       if package_path="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
         package_status=0
       else
@@ -727,12 +734,10 @@ preflight_storage_health() {
         "The storage-health endpoint and Android package query were both unavailable, so mutation safety could not be established." \
         "Nothing was installed or changed. Restore adb/package-manager responsiveness, then retry."
       if printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:'; then
-        fail "the installed app's storage-health status could not be reached" \
-          "Nothing was installed or changed. Restore $URL/api/v1/status, verify storage and SQLite health, then retry."
+        warn "storage health: the installed app's status endpoint could not be reached — advisory for this in-place recovery attempt; an unreachable app is a reason to replace it, not to refuse"
       fi
       ;;
     valid:critical)
-      STORAGE_RECOVERY_ADMITTED=1
       if [ "$RESET_CONFIG" = 1 ]; then
         warn "storage health: critical — the requested reset will intentionally erase ha-paneld state if confirmed; Android's package manager will decide whether it can proceed"
       else
@@ -740,7 +745,6 @@ preflight_storage_health() {
       fi
       ;;
     valid:database_failure)
-      STORAGE_RECOVERY_ADMITTED=1
       if [ "$RESET_CONFIG" = 1 ]; then
         warn "storage health: database failure — the requested reset will intentionally discard the unhealthy database if confirmed instead of treating it as an admission gate"
       else
@@ -748,12 +752,10 @@ preflight_storage_health() {
       fi
       ;;
     malformed:)
-      fail "the installed app returned malformed storage-health status" \
-        "Nothing was installed or changed. Inspect $URL/api/v1/status, then repair or update the installed app before retrying."
+      warn "storage health: the installed app returned malformed status — advisory for this in-place recovery attempt; inspect $URL/api/v1/status afterwards if it persists on the new build"
       ;;
     unknown:*)
-      fail "the installed app returned an unrecognised storage-health state: $STORAGE_HEALTH_STATE" \
-        "Nothing was installed or changed. Update this provisioner or inspect $URL/api/v1/status before retrying."
+      warn "storage health: unrecognised state '$STORAGE_HEALTH_STATE' — advisory for this in-place recovery attempt; update this provisioner if it persists on the new build"
       ;;
   esac
 }
@@ -800,9 +802,8 @@ verify() {
       ;;
     valid:unchecked)
       if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
-        echo "   ${RED}✗ storage health: not checked after bounded post-install retries.${X}"
-        echo "     ${D}Wait for the scheduled check to complete, inspect $URL/api/v1/status, then re-run verification.${X}"
-        rc=1
+        echo "   ${YEL}⚠ storage health: still not checked after bounded post-install retries.${X}"
+        echo "     ${D}The replacement completed. Wait for the scheduled check, then inspect $URL/api/v1/status.${X}"
       else
         echo "   ${YEL}ℹ${X} storage health: not checked yet ${D}(the scheduled check has not completed)${X}"
       fi
@@ -812,8 +813,8 @@ verify() {
       echo "     ${D}Review panel free space and WAL/database growth, then check $URL again.${X}"
       ;;
     valid:critical)
-      if [ "$VERIFY_DIRECT_GRANTS" = 1 ] && [ "$STORAGE_RECOVERY_ADMITTED" = 1 ]; then
-        echo "   ${YEL}⚠ storage health: critical — the admitted in-place mutation completed, but storage or database-file pressure remains critical.${X}"
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: critical — the in-place replacement completed, but storage or database-file pressure remains critical.${X}"
         echo "     ${D}Recover panel headroom or address WAL growth before writes fail. Details: $URL${X}"
       else
         echo "   ${RED}✗ storage health: critical — storage or database-file pressure is critical.${X}"
@@ -822,8 +823,8 @@ verify() {
       fi
       ;;
     valid:database_failure)
-      if [ "$VERIFY_DIRECT_GRANTS" = 1 ] && [ "$STORAGE_RECOVERY_ADMITTED" = 1 ]; then
-        echo "   ${YEL}⚠ storage health: database failure — the admitted in-place recovery attempt completed, but SQLite writes or health checks are still failing.${X}"
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: database failure — the in-place recovery attempt completed, but SQLite writes or health checks are still failing.${X}"
         echo "     ${D}Preserve ha-paneld.db and inspect $URL/api/v1/diag. A missing or rejected pre-install database snapshot remains reported separately.${X}"
       else
         echo "   ${RED}✗ storage health: database failure — SQLite writes or health checks failed.${X}"
@@ -832,26 +833,40 @@ verify() {
       fi
       ;;
     transport:)
-      echo "   ${RED}✗ storage health: the status endpoint could not be reached.${X}"
-      echo "     ${D}Restore $URL/api/v1/status and re-run verification; transport failure is not a legacy result.${X}"
-      rc=1
-      ;;
-    absent:)
       if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
-        echo "   ${RED}✗ storage health: the installed app did not return the required status contract.${X}"
-        echo "     ${D}Inspect $URL/api/v1/status and re-run verification; a current build must report storage health.${X}"
+        echo "   ${YEL}⚠ storage health: the status endpoint could not be reached after the replacement.${X}"
+        echo "     ${D}Check $URL/api/v1/status once the app has settled; the package replacement itself is reported above.${X}"
+      else
+        echo "   ${RED}✗ storage health: the status endpoint could not be reached.${X}"
+        echo "     ${D}Restore $URL/api/v1/status and re-run verification; transport failure is not a legacy result.${X}"
         rc=1
       fi
       ;;
+    absent:)
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: the installed app did not return the status contract.${X}"
+        echo "     ${D}The replacement completed. Inspect $URL/api/v1/status; a current build should report storage health.${X}"
+      fi
+      ;;
     malformed:)
-      echo "   ${RED}✗ storage health: malformed status response.${X}"
-      echo "     ${D}Inspect $URL/api/v1/status, then repair or update the app before relying on storage verification.${X}"
-      rc=1
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: malformed status response after the replacement.${X}"
+        echo "     ${D}Inspect $URL/api/v1/status; the package replacement itself is reported above.${X}"
+      else
+        echo "   ${RED}✗ storage health: malformed status response.${X}"
+        echo "     ${D}Inspect $URL/api/v1/status, then repair or update the app before relying on storage verification.${X}"
+        rc=1
+      fi
       ;;
     unknown:*)
-      echo "   ${RED}✗ storage health: unrecognised state '${STORAGE_HEALTH_STATE}'.${X}"
-      echo "     ${D}Update this provisioner or inspect $URL/api/v1/status before relying on storage verification.${X}"
-      rc=1
+      if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
+        echo "   ${YEL}⚠ storage health: unrecognised state '${STORAGE_HEALTH_STATE}' after the replacement.${X}"
+        echo "     ${D}Update this provisioner or inspect $URL/api/v1/status; the package replacement itself is reported above.${X}"
+      else
+        echo "   ${RED}✗ storage health: unrecognised state '${STORAGE_HEALTH_STATE}'.${X}"
+        echo "     ${D}Update this provisioner or inspect $URL/api/v1/status before relying on storage verification.${X}"
+        rc=1
+      fi
       ;;
   esac
   case "$POWER_SAFETY_RESULT:$POWER_SAFETY_STATE" in
@@ -3353,45 +3368,97 @@ version_guard() {
   return 0
 }
 
+# One export implementation, two obligations.
+#
+# An explicitly requested `--export FILE` is the deliverable of that command: the user asked for a
+# trustworthy file, so anything short of one stops the run before installation.
+#
+# The implicit pre-upgrade export is not a deliverable. It is a convenience taken on the way to an
+# ordinary in-place replacement, which is itself a recovery attempt, so its failure warns, withdraws
+# whatever partial artifact exists and returns non-zero for the caller to continue past. Withdrawal
+# matters as much as the warning: a half-written or rejected file left on disk would later be read as
+# a recovery point that was never produced.
+export_problem() {
+  local mode="$1" reason="$2" headline="$3"
+  shift 3
+  [ "$mode" = advisory ] || fail "$headline" "$@"
+  warn "pre-upgrade settings export: $reason"
+}
+
 export_config() {
-  local destination="$1" directory basename temporary http_status
+  local destination="$1" mode="${2:-strict}" directory basename temporary http_status
   directory="$(dirname "$destination")"
   basename="$(basename "$destination")"
-  [ -d "$directory" ] || fail "config export destination directory does not exist" \
-    "Create $directory first, then run the same --export command again."
-  [ ! -L "$destination" ] || fail "refusing to replace a symlink as a secret config export destination" \
-    "Choose a regular file path owned by you, then run the same --export command again."
-  temporary="$(mktemp "$directory/.${basename}.partial.XXXXXX")" || fail "could not create a secure config export file" \
-    "Check that $directory is writable, then run the same --export command again."
+  if [ ! -d "$directory" ]; then
+    export_problem "$mode" "the destination directory does not exist" \
+      "config export destination directory does not exist" \
+      "Create $directory first, then run the same --export command again."
+    return 1
+  fi
+  if [ -L "$destination" ]; then
+    export_problem "$mode" "the destination path is a symlink" \
+      "refusing to replace a symlink as a secret config export destination" \
+      "Choose a regular file path owned by you, then run the same --export command again."
+    return 1
+  fi
+  if ! temporary="$(mktemp "$directory/.${basename}.partial.XXXXXX")"; then
+    export_problem "$mode" "a secure working file could not be created in $directory" \
+      "could not create a secure config export file" \
+      "Check that $directory is writable, then run the same --export command again."
+    return 1
+  fi
   step "📦 exporting config" "${D}→ $destination (includes secrets — protect it)${X}"
   if ! http_status="$(curl -fsS --max-time 30 "$URL/api/v1/config/export?include_secrets=1" \
       -o "$temporary" -w '%{http_code}')"; then
     rm -f "$temporary"
-    fail "config export failed; the panel was not changed" \
+    export_problem "$mode" "the panel did not answer the export request" \
+      "config export failed; the panel was not changed" \
       "Confirm $URL opens from this computer, then run the same --export command again."
+    return 1
   fi
   if [ "$http_status" = 202 ] && approval_required_response "$temporary"; then
     rm -f "$temporary"
-    fail "config export requires approval on the panel; the panel was not changed" \
+    export_problem "$mode" "the panel requires on-panel approval before it will release the bundle" \
+      "config export requires approval on the panel; the panel was not changed" \
       "On the panel, open Configure → toolbar overflow → Security mode → Review approvals, approve the config export, then retry the identical --export command from this computer within ten minutes."
+    return 1
   fi
   if [ "$http_status" != 200 ]; then
     rm -f "$temporary"
-    fail "config export returned unexpected HTTP $http_status; no config file was saved" \
+    export_problem "$mode" "the panel returned unexpected HTTP $http_status" \
+      "config export returned unexpected HTTP $http_status; no config file was saved" \
       "Confirm the panel is running the expected ha-paneld build, then retry the same --export command."
+    return 1
   fi
   if [ ! -s "$temporary" ]; then
     rm -f "$temporary"
-    fail "config export was empty; the panel was not changed" \
+    export_problem "$mode" "the panel returned an empty bundle" \
+      "config export was empty; the panel was not changed" \
       "Retry the export. For uninstall recovery, separately create and verify a complete .hpb from the panel's Install page."
+    return 1
   fi
   chmod 600 "$temporary" 2>/dev/null || true
-  [ ! -L "$destination" ] || { rm -f "$temporary"; fail "config export destination became a symlink during export" \
-    "Choose a regular file path in a directory only you can write, then retry."; }
-  mv "$temporary" "$destination" || fail "could not publish config export" \
-    "The temporary export could not be moved to $destination. Check that the destination is writable, then retry."
-  [ -s "$destination" ] || fail "published config export is empty" \
-    "Remove $destination, then retry the export before changing the panel."
+  if [ -L "$destination" ]; then
+    rm -f "$temporary"
+    export_problem "$mode" "the destination path became a symlink during the export" \
+      "config export destination became a symlink during export" \
+      "Choose a regular file path in a directory only you can write, then retry."
+    return 1
+  fi
+  if ! mv "$temporary" "$destination"; then
+    rm -f "$temporary"
+    export_problem "$mode" "the completed export could not be published to $destination" \
+      "could not publish config export" \
+      "The temporary export could not be moved to $destination. Check that the destination is writable, then retry."
+    return 1
+  fi
+  if [ ! -s "$destination" ]; then
+    rm -f "$destination"
+    export_problem "$mode" "the published export was empty" \
+      "published config export is empty" \
+      "Remove $destination, then retry the export before changing the panel."
+    return 1
+  fi
   echo "   ${GRN}✓${X} $(wc -c < "$destination") bytes saved with owner-only permissions"
 }
 
@@ -3413,10 +3480,14 @@ ensure_config_backup_dir() {
     "Protect $CONFIG_BACKUP_DIR with mode 700, then retry before changing the panel."
 }
 
+announce_export_withdrawn() {
+  echo "   ${D}continuing with the in-place replacement without a pre-upgrade settings export; the panel keeps its existing data, and the database snapshot is attempted separately below${X}"
+}
+
 auto_export_before_upgrade() {
   local path_output safe_target stamp
-  # Test harnesses may disable the emergency guard when exercising later transaction branches; the
-  # production default is fail-closed (unset/0).
+  # Test harnesses may skip the export entirely when exercising later transaction branches. The
+  # production default (unset/0) attempts it; failure is advisory, handled below.
   [ "${HAPANELD_SKIP_AUTO_EXPORT:-0}" = 1 ] && return 0
   [ -n "$EXPORT_FILE" ] && return 0
   if ! path_output="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
@@ -3429,11 +3500,26 @@ auto_export_before_upgrade() {
     echo "   ${D}fresh install — no existing config requires an upgrade backup${X}"
     return 0
   fi
-  ensure_config_backup_dir
+  # From here every failure is advisory. The panel keeps its existing data across an `adb install -r`,
+  # so refusing to replace the package because this convenience copy could not be taken would strand
+  # the user on the build they are trying to move off — the opposite of a recovery. `fail`'s own
+  # recovery text is suppressed because it describes stopping, which is not what happens here.
+  if ! (ensure_config_backup_dir) >/dev/null 2>&1; then
+    warn "pre-upgrade settings export: the owner-only host backup directory $CONFIG_BACKUP_DIR could not be prepared"
+    announce_export_withdrawn
+    return 0
+  fi
   safe_target="$(printf '%s' "$TARGET" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   AUTO_EXPORT_FILE="$CONFIG_BACKUP_DIR/${safe_target}-${stamp}.json"
-  export_config "$AUTO_EXPORT_FILE"
+  if ! export_config "$AUTO_EXPORT_FILE" advisory; then
+    # export_config removes whatever it created on the way out; each of its exits knows what exists.
+    # What is withdrawn here is the CLAIM: downstream receipts read AUTO_EXPORT_FILE, and a receipt
+    # naming a settings export that was never produced is worse than one reporting none.
+    AUTO_EXPORT_FILE=""
+    announce_export_withdrawn
+    return 0
+  fi
 }
 
 # Copy the panel's canonical data store to the host, alongside the settings export.
@@ -4229,9 +4315,10 @@ if export_is_only_operation; then
   exit 0
 fi
 
-# Classify storage health before release resolution or any panel mutation. Unknown/malformed state
-# fails closed; ordinary replacement and requested reset admit known pressure or database failure as
-# recovery attempts. Older builds without the contract remain eligible for upgrade.
+# Classify storage health before release resolution or any panel mutation, and report it. Every
+# result is advisory here: an in-place replacement is a recovery attempt, so unreachable, malformed,
+# unrecognised, critical and database-failure states are all reasons to replace the build rather than
+# grounds to refuse. Older builds without the contract remain eligible for upgrade.
 preflight_storage_health
 
 resolve_apk
@@ -4240,8 +4327,9 @@ verify_release_apk
 
 version_guard
 
-# Emergency upgrade safety window: persist a unique, owner-only config export before an ordinary
-# helper/APK mutation. Reset is intentionally irreversible and creates no automatic backup.
+# Emergency upgrade safety window: try to persist a unique, owner-only config export before an
+# ordinary helper/APK mutation. Best effort — a failure warns, withdraws the partial artifact and
+# lets the replacement continue. Reset is intentionally irreversible and creates no automatic backup.
 [ "$RESET_CONFIG" = 1 ] || auto_export_before_upgrade
 
 # Decide the panel's root capability ONCE, before anything consumes it: the capture gate below and

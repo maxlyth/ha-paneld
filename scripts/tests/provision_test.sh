@@ -536,9 +536,52 @@ else
   fail_test "automatic config backup precedes APK mutation"
 fi
 
+# The implicit export is a convenience taken on the way to an in-place replacement, not a gate on it.
+# Its failure must still reach the package replacement, and must not leave a file behind that would
+# later read as a recovery point which was never produced.
+rm -rf "$TMP/auto-backups"
 MOCK_EXPORT=fail HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --apk "$APK"
-assert_failure "automatic backup failure blocks an upgrade"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "automatic backup failure stops before APK mutation"
+assert_success "implicit backup failure does not block an ordinary replacement"
+assert_log_contains '^adb .* install' "implicit backup failure still reaches the APK install"
+failed_auto_count="$(find "$TMP/auto-backups" -maxdepth 1 -type f \( -name '*.json' -o -name '*.partial.*' \) | wc -l | tr -d ' ')"
+if [ "$failed_auto_count" = 0 ]; then
+  pass "a rejected implicit backup is withdrawn rather than published"
+else
+  fail_test "a rejected implicit backup is withdrawn rather than published ($failed_auto_count left)"
+fi
+# Withdrawing the file is only half of it: the database receipt must not cite an export that was
+# never produced, or a later recovery reads a path that does not exist.
+failed_auto_receipt="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.backup-receipt.txt' | head -1)"
+if [ -n "$failed_auto_receipt" ] && grep -qx 'settings_export=none' "$failed_auto_receipt"; then
+  pass "the database receipt reports no settings export after the implicit export is withdrawn"
+else
+  fail_test "the database receipt reports no settings export after the implicit export is withdrawn"
+fi
+
+# The host-side directory is the other way the implicit export can fail, and it fails before any
+# request is made. It must reach the replacement too, or a host-side permissions problem would strand
+# every panel on its current build.
+UNUSABLE_BACKUP_DIR="$TMP/unusable-backup-dir"
+rm -rf "$UNUSABLE_BACKUP_DIR"
+ln -s "$TMP/nowhere-at-all" "$UNUSABLE_BACKUP_DIR"
+HAPANELD_CONFIG_BACKUP_DIR="$UNUSABLE_BACKUP_DIR" HAPANELD_SKIP_AUTO_EXPORT=0 \
+  run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "an unusable host backup directory does not block an ordinary replacement"
+assert_contains 'owner-only host backup directory.*could not be prepared' "the unusable backup directory is named"
+assert_log_contains '^adb .* install' "an unusable host backup directory still reaches the APK install"
+rm -f "$UNUSABLE_BACKUP_DIR"
+
+# The same failure on an explicitly requested --export is the failure of the requested deliverable.
+rm -rf "$TMP/auto-backups"
+EXPLICIT_STRICT_EXPORT="$TMP/explicit-strict-backup.json"
+MOCK_EXPORT=fail HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --export "$EXPLICIT_STRICT_EXPORT" --apk "$APK"
+assert_failure "explicit export failure blocks an upgrade"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "explicit export failure stops before APK mutation"
+if [ ! -e "$EXPLICIT_STRICT_EXPORT" ]; then
+  pass "a failed explicit export publishes no file"
+else
+  fail_test "a failed explicit export publishes no file"
+fi
 
 SYMLINK_TARGET="$TMP/symlink-target.json"
 SYMLINK_EXPORT="$TMP/symlink-backup.json"
@@ -650,14 +693,15 @@ assert_success "database failure admits an ordinary replacement as a recovery at
 assert_contains 'database failure.*admitting this in-place replacement as a recovery attempt' "database failure clearly records its recovery admission"
 assert_log_contains '^adb .* install' "database failure does not preempt the APK install"
 
-# Admission is a preflight recovery decision, not a blanket suppression of newly appearing damage.
+# Damage that appears only after the replacement is reported, not converted into a failed run: the
+# replacement already happened, so a non-zero exit would describe an outcome that did not occur.
 MOCK_STORAGE_HEALTH=healthy-then-critical run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "new critical pressure after a healthy preflight still fails post-install verification"
-assert_contains 'storage health: critical.*pressure is critical' "new post-install pressure remains visible as a verification failure"
+assert_success "new critical pressure after a healthy preflight does not fail a completed replacement"
+assert_contains 'storage health: critical.*replacement completed' "new post-install pressure stays visible as a warning"
 
 MOCK_STORAGE_HEALTH=healthy-then-database_failure run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "new database failure after a healthy preflight still fails post-install verification"
-assert_contains 'storage health: database failure.*SQLite writes or health checks failed' "new post-install database failure remains visible as a verification failure"
+assert_success "new database failure after a healthy preflight does not fail a completed replacement"
+assert_contains 'storage health: database failure.*recovery attempt completed' "new post-install database failure stays visible as a warning"
 
 HAPANELD_RESET_CONFIRM=RESET MOCK_STORAGE_HEALTH=critical \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
@@ -671,13 +715,15 @@ assert_success "database failure does not impose a backup gate on a confirmed re
 assert_contains 'requested reset will intentionally discard the unhealthy database if confirmed' "database failure explains why reset may proceed"
 assert_log_contains '^adb .* pm clear io.github.maxlyth.hapaneld$' "database failure still reaches the confirmed exact-package reset"
 
+# A panel whose health cannot be read or understood is a candidate for replacement, not a panel to
+# refuse. Standalone verification above still reports both states as failures.
 MOCK_STORAGE_HEALTH=missing-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "a malformed installed-app storage contract blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "malformed storage status blocks the APK install"
+assert_success "a malformed installed-app storage contract admits an ordinary replacement"
+assert_log_contains '^adb .* install' "malformed storage status does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=future-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an unknown installed-app storage state blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unknown storage state blocks the APK install"
+assert_success "an unknown installed-app storage state admits an ordinary replacement"
+assert_log_contains '^adb .* install' "unknown storage state does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=unchecked-then-healthy run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "post-install verification polls until storage health becomes healthy"
@@ -689,17 +735,17 @@ else
 fi
 
 MOCK_STORAGE_HEALTH=always-unchecked run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "post-install verification fails when storage health never completes"
-assert_contains 'not checked after bounded post-install retries' "bounded unchecked failure names the incomplete health check"
+assert_success "an indeterminate health check does not fail a completed replacement"
+assert_contains 'still not checked after bounded post-install retries' "the incomplete health check stays visible as a warning"
 
 MOCK_STORAGE_HEALTH=transport-fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an installed package with unavailable storage status blocks provisioning"
-assert_contains "installed app's storage-health status could not be reached" "installed-package transport failure names the unavailable authority"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "installed-package transport failure stops before APK install"
+assert_success "an installed package with unavailable storage status admits an ordinary replacement"
+assert_contains "status endpoint could not be reached" "unreachable storage status is reported"
+assert_log_contains '^adb .* install' "unreachable storage status does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "post-install verification rejects a current build with missing storage status"
-assert_contains 'installed app did not return the required status contract' "current-build missing status names the required contract"
+assert_success "a missing post-install storage contract does not fail a completed replacement"
+assert_contains 'installed app did not return the status contract' "current-build missing status stays visible as a warning"
 
 # Pre-plan releases remain verifiable. A 404 is an explicit compatibility result, not a reason to
 # discard the established health, permissions and diagnostics checks.
@@ -3434,7 +3480,7 @@ MOCK_STORAGE_HEALTH=critical MOCK_GITHUB_API=pretty \
 LAST_STATUS=$?
 assert_success "fleet update admits a critically storage-constrained panel as a recovery attempt"
 assert_contains 'fixed pressure thresholds are advisory.*recovery attempt' "fleet output retains the explicit storage-recovery admission"
-assert_contains 'storage health: critical.*admitted in-place mutation completed' "fleet output keeps the remaining critical pressure visible"
+assert_contains 'storage health: critical.*replacement completed' "fleet output keeps the remaining critical pressure visible"
 assert_contains 'fleet update complete.*1/1 panels OK' "fleet summary counts the admitted recovery replacement as successful"
 
 # The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
