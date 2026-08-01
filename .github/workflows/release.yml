@@ -2,8 +2,8 @@ name: Release
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release dry run · {0}', inputs.release_tag) || format('Release {0}', github.ref_name) }}
 
 # Before tagging, run the pre-tag checklist in docs/RELEASING.md. Editorial release docs are manual:
-# write the CHANGELOG.md section, refresh the README "Latest release" line, and move shipped items out
-# of "Planned" in docs/roadmap.md. The dynamic README release badge follows GitHub releases.
+# write the CHANGELOG.md section, reconcile README claims, and move shipped items out of "Planned"
+# in docs/roadmap.md. The dynamic README release badge follows GitHub releases.
 
 on:
   push:

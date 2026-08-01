@@ -166,6 +166,8 @@ scripts/update-fleet.sh --jobs 2 --latest -- 192.168.1.10 192.168.1.11:5555
 
 Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically. `HAPANELD_FLEET_JOBS` sets the default concurrency when `--jobs` is omitted; the command-line option takes precedence.
 
+Options that describe one panel are refused before any fleet worker starts: use `--reset-config`, `--export FILE`, `--id` and device-specific `--restore FILE` with `scripts/provision.sh` one panel at a time. `--restore-fleet FILE` remains the supported way to apply portable, non-secret settings across several panels.
+
 Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The fleet wrapper authenticates one APK package, signer and SHA-256 digest before starting any panel worker. An APK downloaded through `--latest` or `--prerelease` must carry the official release certificate; a supplied self-built APK may use its builder's consistent signer unless `--require-release-signer` is requested.
 
 ## Bootstrapping adb (Tuya TPA10 / Smatek panels)

@@ -1,14 +1,32 @@
 # Changelog
 
-## v0.9.6-rc5 - 2026-07-31
+## v0.9.6-rc5 - 2026-08-02
+
+### Important changes — please read before upgrading
+
+**RC5 corrects an upgrade-safety decision I got wrong in RC1-RC4.** ha-paneld moved all data/config storage to SQLite in 0.9.6-rc1, but older Android versions do not support clean SQLite backup features and by default Android apps do not always shut down cleanly. I spent the last three pre-releases chasing all the potentially broken database states before finally giving up. In RC5 I have changed direction to a "defense in depth" strategy where ha-paneld is responsible for maximising DB coherency on orderly shutdown rather than startup.
+
+RC1–RC4 do not support RC5’s new installer-requested shutdown handshake, so the installer attempts one legacy live backup. If neither automatic copy can be verified, it simply reports and continues with package replacement rather than blocking the update. This cannot eliminate every upgrade problem, and I am sorry that the strategy changed this late, but the previous approach carried a technical debt that was unsustainable.
 
 ### Fixed
 
-- **An in-app update is no longer refused because of a private housekeeping copy or a fixed storage margin.** ha-paneld still records a configuration revision immediately before replacing itself, but that revision is an internal convenience copy rather than your `.hpb` backup, so an upgrade that cannot write one now warns and continues instead of leaving the panel on the old build. Free space is likewise judged against what the update actually needs, rather than demanding an extra 64 MB beyond it — which had been refusing updates that would have installed. Download size limits, signer and package verification, and honest reporting of real download, storage and installation failures are unchanged.
+- **APK updates no longer fail over storage they do not actually need.** In-app updates and APKs uploaded through the Install page now check the space needed for the bytes they will really stage instead of demanding an additional 64 MB. An in-app update also warns and continues if it cannot make its optional private configuration revision.
 
-- **Installing an APK you upload is no longer refused over space the panel does not need.** Free space is judged against what the upload will actually stage, rather than demanding an extra 64 MB beyond it, which had been turning away installs that would have succeeded on a panel with little storage left. The maximum upload size, the package and signer shown for you to check before you confirm, and honest reporting of real storage, write and installation failures are unchanged.
+- **Encrypted backups no longer report success while their plaintext archive remains.** If the temporary archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
 
-- **Encrypted backups no longer report success while their plaintext archive remains.** If that archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
+- **Silence boot chime now works through the privileged helper when Android refuses the direct audio change.** Existing saved choices remain authoritative, and the exact previous ring and notification state is still restored when the setting is disabled.
+
+- **Fleet updates now refuse options that only make sense for one panel.** `--export`, `--id` and `--restore` can no longer be multiplied silently across a fleet, where they could overwrite exports or apply one panel's identity or settings to every panel. The fleet-safe `--restore-fleet` path is unchanged.
+
+### Docs
+
+- **The Shelly Wall Display firmware guide now includes 2.7.2 and 2.7.3.** It also distinguishes what the legacy and modern firmware actually prove about root access and records archival status from the firmware index rather than assuming every discovered image was captured.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected, but given the change in DB coherency handling it is possible that users upgrading from RC1–RC4 may encounter a problem. Please report any upgrade problems you encounter.
+
+- `--reset-config` is irreversible and now creates no backup. Create and verify a complete `.hpb` backup, or run a separate `--export FILE` if settings alone are sufficient, before starting the reset.
 
 ## v0.9.6-rc4 - 2026-07-30
 
