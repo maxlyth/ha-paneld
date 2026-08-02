@@ -1,174 +1,46 @@
 # Changelog
 
-## v0.9.6-rc5 - 2026-08-02
+## v0.9.6 - 2026-08-02
 
-### Important changes — please read before upgrading
-
-**RC5 corrects an upgrade-safety decision I got wrong in RC1-RC4.** ha-paneld moved all data/config storage to SQLite in 0.9.6-rc1, but older Android versions do not support clean SQLite backup features and by default Android apps do not always shut down cleanly. I spent the last three pre-releases chasing all the potentially broken database states before finally giving up. In RC5 I have changed direction to a "defense in depth" strategy where ha-paneld is responsible for maximising DB coherency on orderly shutdown rather than startup.
-
-RC1–RC4 do not support RC5’s new installer-requested shutdown handshake, so the installer attempts one legacy live backup. If neither automatic copy can be verified, it simply reports and continues with package replacement rather than blocking the update. This cannot eliminate every upgrade problem, and I am sorry that the strategy changed this late, but the previous approach carried a technical debt that was unsustainable.
-
-### Fixed
-
-- **APK updates no longer fail over storage they do not actually need.** In-app updates and APKs uploaded through the Install page now check the space needed for the bytes they will really stage instead of demanding an additional 64 MB. An in-app update also warns and continues if it cannot make its optional private configuration revision.
-
-- **Encrypted backups no longer report success while their plaintext archive remains.** If the temporary archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
-
-- **Silence boot chime now works through the privileged helper when Android refuses the direct audio change.** Existing saved choices remain authoritative, and the exact previous ring and notification state is still restored when the setting is disabled.
-
-- **Fleet updates now refuse options that only make sense for one panel.** `--export`, `--id` and `--restore` can no longer be multiplied silently across a fleet, where they could overwrite exports or apply one panel's identity or settings to every panel. The fleet-safe `--restore-fleet` path is unchanged.
-
-### Docs
-
-- **The Shelly Wall Display firmware guide now includes 2.7.2 and 2.7.3.** It also distinguishes what the legacy and modern firmware actually prove about root access and records archival status from the firmware index rather than assuming every discovered image was captured.
-
-### Upgrade notes
-
-- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected, but given the change in DB coherency handling it is possible that users upgrading from RC1–RC4 may encounter a problem. Please report any upgrade problems you encounter.
-
-- `--reset-config` is irreversible and now creates no backup. Create and verify a complete `.hpb` backup, or run a separate `--export FILE` if settings alone are sufficient, before starting the reset.
-
-## v0.9.6-rc4 - 2026-07-30
-
-### Important changes — please read before upgrading
-
-**RC4 is primarily about making upgrades and backups deserve the trust we place in them.** Testing RC3 exposed paths where a slow panel could be declared dead too early, or where a backup could report success without preserving everything it promised. This candidate makes those paths fail safely and fixes discovery on panels whose network arrives late during boot. I would particularly like testers to retry rooted upgrades and, on Android 8.1 panels, create a fresh `.hpb` backup.
-
-### Fixed
-
-- **Rooted upgrades now create and verify one coherent break-glass database snapshot before changing the panel.** This is a manual, same-panel recovery copy rather than the normal `.hpb` restore path, but the installer now verifies its integrity and transfer instead of relying on a live file copy. A rooted panel that cannot produce a verified snapshot stops before the upgrade; `--allow-missing-db-snapshot` explicitly accepts proceeding without one.
-
-- **Slow panels are no longer mistaken for failed upgrades.** Provisioning gives a first start up to three minutes by default to migrate its database and become healthy without repeatedly restarting it. If the panel still does not answer, configuration writes, restores and Home Assistant token creation remain blocked instead of being sent to an unavailable app.
-
-- **Failed rooted upgrades no longer leave temporary helper files to accumulate.** Provisioning cleans up its own staging after successful and handled failed runs. If a broken connection prevents that cleanup, the next helper transaction safely reclaims the leftovers.
-
-- **Panels that receive their network address late during boot no longer remain absent from Home Assistant discovery until restart ([#78](https://github.com/maxlyth/ha-paneld/issues/78)).** The address is retained while ha-paneld is starting and applied as soon as discovery is ready. In a later 48-boot rc4 fleet test, all 19 starts that initially deferred discovery recovered without invoking the running-responder supervisor.
-
-- **Backups from Android 8.1 panels can now include device-local application state.** An `.hpb` created by RC1, RC2 or RC3 on Android 8.1 could report success while silently omitting stored state such as auto-sleep learning and profile calibration. Its normal configuration and profile data were still present. Existing backups are not repaired, so take a fresh backup after upgrading.
-
-- **`--export FILE --reset-config` now performs the requested reset after the verified export.** It previously returned success after writing the export while silently leaving the panel's configuration untouched.
-
-### Docs
-
-- **The README has been substantially reorganised around how people evaluate and adopt ha-paneld.** Installation, renderer choices, panel capabilities, root boundaries, supported hardware, community support and developer entry points now have clearer places, making the project's scope and the route into it easier to understand.
-
-- **The NSPanel Pro firmware index now includes the 4.6.2 and 4.7.0 update paths.** The guide distinguishes app-only updates from full firmware changes, keeps the hardware-verified flashing boundary at 4.4.0 and links the available community reports for newer releases so you can make a more informed decision before updating a panel.
-
-### Upgrade notes
-
-- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
-
-- On a rooted panel, the installer now stops before changing anything if it cannot capture and verify the pre-upgrade database. This can expose missing panel-side SQLite tools, an unreadable or unsupported database, a transfer failure, or an unwritable backup directory on the computer running the installer. Userdebug panels that expose root only after `adb root` are covered by the same gate.
-
-- Use `--allow-missing-db-snapshot` only when you have deliberately accepted that there will be no database restore point. It does not bypass an unknown root state or a panel whose ADB connection has stopped answering.
-
-- A slow first start can now spend up to three minutes completing migration before provisioning continues. Progress is reported while it waits.
-
-- If you use `.hpb` backups from an Android 8.1 panel, take a fresh backup after upgrading; older backups may not contain the panel's stored application state.
-
-## v0.9.6-rc3 - 2026-07-28
-
-### Important changes — please read before upgrading
-
-**RC3 makes panels recover from failures that previously required a restart or could block every later upgrade.** After the breadth of RC1 and RC2, I have deliberately kept this release candidate focused on problems found while panels were running and being upgraded. The Dashboard now stays where you left it, local discovery can repair itself when it silently stalls, and an interrupted rooted upgrade can recover without leaving the panel permanently unprovisionable. I would particularly like testers to leave panels running long enough to exercise discovery and to report any upgrade that still cannot recover cleanly.
-
-### Fixed
-
-- **Interrupted rooted upgrades no longer leave a panel permanently unprovisionable.** An upgrade that rolled back successfully could leave its recovery journal behind, causing every later provisioning attempt to fail in exactly the same way. RC3 recognises the restored state, completes the rollback and allows the next attempt to proceed normally.
-
-- **LAN panel discovery recovers when its mDNS responder silently stalls ([#75](https://github.com/maxlyth/ha-paneld/issues/75)).** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted. A later 16-panel rc3 soak observed 14 natural responder stalls; all 14 were detected and rebuilt in the same app process.
-
-- **The Dashboard no longer shifts or reopens in the wrong place on small panels.** Restored placement no longer drifts onto the wrong cards, and the narrow-screen header no longer causes the page to jump shortly after loading. The Dashboard opens where you left it and stops moving under your finger.
-
-### Upgrade notes
-
-- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
-
-- If an earlier interrupted upgrade repeatedly reports that a prior helper and APK upgrade cannot be reconciled, use the RC3 provisioning script and APK, then rerun the same installation command. Do not manually remove the recovery journal.
-
-- Local `--apk` and all fleet installation paths now require Android Build-Tools (`apksigner` and `aapt` or `aapt2`) so the APK package and signer can be authenticated before the upgrade begins. Public self-build users may keep their own consistent signer; fleet runs that download an official release additionally require the official release certificate.
-
-## v0.9.6-rc2 - 2026-07-27
-
-### Important changes — please read before upgrading
-
-**This release candidate is primarily about keeping panels reachable and making failures visible while they can still be recovered.** It warns about storage, database and Android power conditions that could make a panel unreliable, stops failed configuration changes from masquerading as success, and improves dashboard, installer and hardware-sensor recovery. Testers should focus on upgrades, sleep and wake behaviour, log delivery and sensor continuity.
+0.9.6 is a substantial update centred on guided onboarding, Home Assistant-native dashboard integration, presence-aware sleep, safer upgrades and backups, and better diagnosis and recovery for always-on panels. Existing v0.9.5 installations can update in place without resetting configuration or cleaning up Home Assistant entities.
 
 ### Added
 
-- **Panels now warn when storage or database problems could make them unreliable.** The Dashboard, diagnostics and Home Assistant report available space, database growth and database health. Serious problems produce a persistent warning and cause fleet verification to fail with recovery guidance. This release only detects and reports problems; it never deletes data or performs automatic database maintenance.
+- **Guided first-run setup is available on the panel or at `/setup` from another device.** It covers renderer readiness, Home Assistant browser sign-in, dashboard selection and entity filtering before the first dashboard load, and blocks incompatible browser engines with recovery guidance instead of showing a broken dashboard.
 
-- **Panels can identify Android power settings that may make them unreachable after the screen switches off.** A warning explains the risk and offers **Repair power safety** where ha-paneld can safely apply and verify the supported safeguards without rebooting. Where Android requires a manual change, the panel provides specific guidance and lets you hide that exact unchanged caution after acting on it; diagnostics and installer verification continue to report the underlying state.
+- **Auto sleep can combine touch and proximity activity with selected Home Assistant presence devices.** It learns suitable delays and shows the reason for its current decision. You might get a better outcome with an automation written in Home Assistant, but this low-configuration panel-side solution might work for many users. The panel and Home Assistant sensors should share the same Home Assistant area.
 
-- **Remote Controls can now return a panel to its configured Dashboard.** Dashboard navigation remains separate from Reload, so routine navigation does not unnecessarily rebuild the page. A remote Reload in Hardened security mode requires approval on the panel.
+- **Remote panel control.** You can now simulate panel taps from the web UI, but only in Relaxed security mode, for obvious reasons. Click the screenshot in the Dashboard tab to access remote control. This is useful for navigating dashboard tabs remotely while trying to exercise full coverage of the entity filter. It is not designed to be a real-time, interactive, multi-touch terminal.
 
-### Changed
+- **Use Home Assistant's native dashboard interface.** I discovered during the 0.9.6 work that Home Assistant has a new external-bus interface that covers authentication and dashboard lifecycle capabilities we had previously built ourselves. For future compatibility, I chose to use Home Assistant's native interface where possible. This means the built-in renderer now requires Home Assistant 2026.4.2 or newer.
 
-- **Log shipping now works reliably with standard collectors and is easier to troubleshoot.** You can choose syslog over TCP or UDP, or HTTP, test the destination from the panel before saving, and see a useful explanation when the collector cannot be reached. Hostnames with both IPv4 and IPv6 addresses are handled correctly, existing installations retain their transport behaviour, and UDP status is described honestly because delivery cannot be confirmed. Fresh installations default to TCP because a rejected connection can be reported instead of silently losing records. A dependency-free [test receiver](tools/logship-receiver/README.md) is included for end-to-end checks.
-
-### Fixed
-
-- **Failed settings changes no longer look successful or replace working configuration.** A change becomes visible only after it has been written durably. If saving fails, the previous settings and their active behaviour remain in place, the request reports the failure, and a retry starts from the last known-good state.
-
-- **Automatic Home dashboard selection is predictable and only chooses a dashboard the signed-in user can access.** A blank selection follows the user's default, then the Home Assistant system default, then the first available dashboard. Temporary Home Assistant failures are retried instead of opening an invented or inaccessible route.
-
-- **TPA10 temperature, humidity and proximity sensors recover correctly again.** Climate readings remain active long enough to refresh, a trustworthy learned proximity model survives restart validation, and brief noise no longer makes the Home Assistant entity appear unavailable. A genuinely stalled or contradictory sensor still fails safely and enters bounded recovery.
-
-- **The installer can recover an app that Android has placed into its stopped state.** It verifies that the normal launcher route actually restored panel health and uses a bounded fallback when it did not, rather than reporting success while the panel remains unavailable.
-
-- **Automatic-sleep activity updates no longer make the Configure page flash, collapse or jump.** Presence-source and history refreshes update the affected content while preserving settled controls, chart position, focus and scroll state. Temporary Home Assistant registry or history failures retry without replacing useful information with a misleading broken state.
-
-### Upgrade notes
-
-- Use the normal installer for an in-place update. No configuration reset or manual Home Assistant entity cleanup is expected.
-
-- Existing installations retain their effective log-shipping transport: an explicit legacy `syslog` selection remains TCP, while an upgraded configuration that never stored a protocol continues using UDP. Fresh installations default to TCP. A scheme or port entered in **Sink host**, such as `udp://collector` or `collector:1514`, is now interpreted directly.
-
-- A critical storage or database warning now makes installer and fleet verification stop. Preserve `ha-paneld.db`, restore storage headroom or correct the reported database or I/O problem, then rerun verification; RC2 does not delete or compact data automatically.
-
-- A panel may show a new **Power safety** warning if Android cannot prove that it will remain reachable with the screen off. Review the guidance and use **Repair power safety** where offered; the repair does not reboot the panel. In Hardened security mode, remote repair, Reload and acknowledgement of a manual-only caution require physical approval on the panel.
-
-## v0.9.6-rc1 - 2026-07-27
-
-The 0.9.6 release of ha-paneld is on track to be the largest to date, and I have been working night and day to get it out the door. Previously, I was careful to list the major changes so that testers could evaluate new features, but this time there are hundreds, and trying to annotate every one has long since stopped being viable.
-
-Previous releases had largely ignored the new-user experience, and features had piled on with little thought about how a new user would navigate setting up a new panel. Over the pre-release cycle, we have evolved from a helper process for the Home Assistant Companion App into a fully fledged dashboard app with many capabilities that I cannot expect a new user to set up without context.
-
-Therefore, the biggest new feature might not be visible to existing users upgrading from an earlier release. I have spent a lot of time resetting panels and iteratively building a first-run configuration workflow that can run directly on a panel or, preferably, from a user's laptop or phone. Choosing to support two very different runtimes did not make this easy, and I am certain there will be holes. I have tried to imagine and test corner cases, but I am sure there are many I have missed. Please report them so that someone else does not have to suffer the same error.
-
-The change list below is therefore acknowledged to be full of omissions. If I have broken something that you relied upon and not listed it, please raise an issue. Here are some of the highlights.
-
-### Added
-
-- **New panels get a guided setup journey** — the panel and browser both expose `/setup`, which leads through connection, dashboard and renderer requirements, Home Assistant sign-in, and the entity-filter choice. A panel that cannot safely render the dashboard because its browser engine is too old receives a clear block and recovery direction instead of a blank or misleading dashboard.
-
-- **Panel screen remote control** — you can now simulate panel taps from the web UI in Relaxed security mode only, for obvious reasons. Click the screenshot in the Dashboard tab to access it. This is useful for navigating dashboard tabs remotely while trying to get full coverage of the entity filter. It is not designed to be a real-time, interactive, multi-touch terminal.
-
-- **Upgrades and backups preserve more recoverable state** — I completely refactored the database schema in 0.9.6 into a more abstract form. Configuration is vaulted before structural database changes, downgrade recovery is surfaced clearly, and panel backups now include portable durable state as well as settings and profiles. Configuration data older than 0.9.5 cannot be upgraded directly, so upgrade to 0.9.5 first if you need to migrate an older installation. On rooted panels, the installer also makes a best-effort protected same-panel database snapshot for manual break-glass recovery before an upgrade; sandboxed panels retain the fail-closed settings export only.
-
-- **Auto sleep using Home Assistant presence devices as well as local activity** — the panel combines touch and proximity activity with selected Home Assistant presence sources, learns suitable delays, and shows the reason for its current decision. You might get a better outcome with an automation written in Home Assistant, but this low-configuration panel-side solution might work for many users once an area and presence sources have been selected. The panel and Home Assistant sensors must share the same Home Assistant area.
-
-- **Use Home Assistant's native dashboard interface** — I discovered during the 0.9.6 work that Home Assistant has a new external-bus interface that covers authentication and dashboard lifecycle capabilities we had previously built ourselves. For future compatibility, I chose to use Home Assistant's native interface where possible. This means the built-in renderer now requires Home Assistant 2026.4.2 or newer.
-
-- **The installer can deliberately start over safely** — `install.sh --reset-config` creates and checks a settings export, asks for typed confirmation, clears the app only after the replacement APK has been authenticated, and then returns the panel to first-run setup. Learned entity, proximity, ambient and revision state is intentionally erased and is not restored by that export. The option is refused for fleet updates.
+- **Storage, SQLite and Android power-safety monitoring now identify conditions that could leave a panel unreliable.** The Dashboard, diagnostics, Home Assistant and installer surface actionable warnings. Android power settings can be repaired with verification where the platform permits it, with specific manual guidance otherwise.
 
 ### Changed
 
-- **Automatic dashboard selection is more useful** — Auto now resolves to ha-paneld's built-in renderer, and the Home dashboard can initially follow the Home Assistant user's configured default. Explicit external-renderer choices remain available for existing setups.
+- **The built-in renderer is now the default.** Automatic renderer selection now prefers the built-in renderer because the performance gains over the Home Assistant Companion app are so transformative for most users that the remaining feature gap (multi-server support, Assist, notifications) is mostly irrelevant.
 
-- **Broader entity-filter support** — filtering now understands more dynamic dashboard and card patterns and explains when cards cannot be safely filtered, including compatibility limits for Bubble and Kiosk-style dashboards.
+- **Dashboard entity filtering now understands more of what modern Home Assistant dashboards load.** It follows dynamic and custom-card dependencies more accurately, warns when a dependency cannot be resolved safely, and avoids claiming a filter is complete when it may hide something the dashboard needs.
 
-- **More sensible default values** — I have gone over nearly all configuration items and set explicit defaults for new users. Existing installations keep settings that were explicitly saved, but a changed default can affect an installation that was relying on the previous implicit value. Please review your configuration and point out anything missing.
+- **Log shipping now supports syslog over TCP or UDP and HTTP, with destination testing and clearer failure reporting.** Fresh configurations and an explicit legacy `syslog` selection use TCP, while upgraded configurations that never stored a transport retain their previous UDP behaviour. If you relied on implicit defaults, review Configure after upgrading.
+
+- **Configuration and recoverable application state now use a more durable SQLite-backed model.** Upgrade directly from v0.9.5; installations older than v0.9.5 must first upgrade to v0.9.5 if their configuration must be preserved. New complete backups can include settings, profiles, eligible Companion login data and eligible same-panel durable application state, but entity catalogs and learned proximity or ambient histories are rebuilt after restore, so create a fresh `.hpb` after upgrading. An encrypted backup download is withheld if its sensitive temporary plaintext archive cannot be removed.
+
+- **Ordinary upgrades now use defense-in-depth recovery.** The installer always attempts an automatic settings export; with a usable root route it also requests an orderly shutdown and verifies one coherent database copy, with one legacy SQLite fallback for older builds. On unrooted panels, only the settings export can be copied off-panel automatically. An unavailable or invalid automatic copy is removed and reported prominently while package replacement continues with existing app data preserved; these automatic copies are not substitutes for a user-verified backup.
+
+- **Local `--apk` provisioning and fleet installs now require Android Build-Tools with `apksigner` and `aapt` or `aapt2`.** Fleet mode rejects `--reset-config`, `--export`, `--id` and device-scoped `--restore` before starting workers; `--restore-fleet` remains supported for portable fleet configuration.
+
+- **`--reset-config` is deliberately irreversible and creates no backup.** It requires the user to type `RESET` as confirmation, erases settings together with learned entity, proximity, ambient and revision state, and leaves the app, helper and unrelated applications installed. Fleet updates refuse this option. Create and verify a complete `.hpb`, or run a separate `--export FILE` when settings alone are sufficient, before resetting.
 
 ### Fixed
 
-- **The on-panel controls are clearer and more reliable** — vendor packages that firmware disabled can be re-enabled before ha-paneld removes its own tame selection; screen-brightness status distinguishes reduced helper-backed control from genuinely unavailable control; protected Configure labels no longer separate from their approval shields; and screenshot controls are easier to read and operate.
+- **Failed settings writes no longer appear successful or replace working configuration.** A setting becomes visible only after durable storage succeeds, while a failed save leaves the previous value and active behaviour intact.
 
-- **Configured panels stay configured after an upgrade or reconnect** — setup banners no longer promise a dashboard step that does not exist, and panels already using entity filtering are not stranded on its setup question.
+- **LAN discovery now recovers from silently stalled mDNS responders and network addresses that arrive late during boot.** Recovery uses bounded retries and reports when automatic repair is exhausted instead of requiring an unexplained app or network restart.
 
-### Upgrade notes
+- **Dashboard and Configure pages remain stable on small panels.** Restored Dashboard placement no longer drifts to the wrong cards, narrow-screen headers no longer jump shortly after loading, and automatic-sleep refreshes preserve controls, focus, chart position and scroll state.
 
-- Use the normal installer for an in-place update. If you choose `--reset-config`, keep the verified settings export and expect to complete first-run setup again; it restores configuration, not learned state. Existing installations should continue without manual Home Assistant entity or discovery changes; a complete panel backup remains recommended before any major update.
+- **Provisioning recovers more reliably from slow first starts, Android-stopped applications and interrupted rooted upgrades.** It waits within documented bounds, avoids configuration writes or Home Assistant token creation before the app answers, recovers cleanly when a rooted upgrade is interrupted and no longer rejects viable APK updates because of fixed storage margins or optional housekeeping copies.
 
 ## v0.9.5 - 2026-07-20
 
