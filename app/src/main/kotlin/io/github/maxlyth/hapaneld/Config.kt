@@ -220,8 +220,8 @@ class Config private constructor(
      * Without this, introducing the question strands the entire installed base. The flag defaults false, the
      * built-in renderer holds its first load until it is answered, and `setupEverCompleted` is itself new — so
      * an upgraded panel would stop showing its dashboard, and could not even earn the completion stamp that
-     * would release it, because earning it requires the render that is being held. A canary deployed to two
-     * configured panels reproduced exactly that.
+     * would release it, because earning it requires the render that is being held. This failure mode was
+     * reproduced on configured hardware.
      *
      * It runs on every start until it actually finds evidence, and only then records itself as done. The
      * earlier version ran exactly once and marked itself complete even when the configuration read back
@@ -240,8 +240,8 @@ class Config private constructor(
             // journey in progress, not by a pre-existing install. Without this gate the retry below read the
             // wizard's own broker save as upgrade evidence on the first mid-journey service restart and
             // durably stamped every question answered: the panel rendered unfiltered, the journey reported
-            // complete, and the sign-in return dumped the user to Configure with two questions never asked
-            // (second hardware walk, 2026-07-26). Migration is DONE for such a panel: the wizard records the
+            // complete, and the sign-in return dumped the user to Configure with two questions never asked.
+            // Migration is DONE for such a panel: the wizard records the
             // real answers itself.
             if (setupIdentityConfirmed) {
                 prefs.edit().putBoolean(SETUP_QUESTION_MIGRATION_PREF, true).commit()

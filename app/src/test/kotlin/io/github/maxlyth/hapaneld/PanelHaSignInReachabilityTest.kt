@@ -116,8 +116,8 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun anAlreadyWorkingPanelIsNeverHeldByTheEntityFilterQuestion() {
-        // The regression this pins was found by a canary on two configured panels: the answer flag is new, so
-        // it defaults false on every upgrade, and the renderer held their dashboards to ask a question they had
+        // The answer flag is new, so it defaults false on every upgrade, and without the completed-setup guard
+        // the renderer would hold an existing dashboard to ask a question the user had
         // never been asked. Worse, it could not resolve itself — the completion stamp that releases the hold is
         // earned by rendering, which was the thing being held.
         assertFalse(
@@ -195,9 +195,8 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun aPanelWithFilteringAlreadyOnIsNeverHeldToAnswerWhetherToTurnItOn() {
-        // Three fleet panels were found stranded on the hold screen while running a filtered dashboard: the
-        // one-shot migration had recorded "not a pre-existing install" after the configuration read back blank
-        // at startup, and nothing else exempted them. The filter being ON is durable proof the question is
+        // A one-shot migration can record "not a pre-existing install" when the configuration reads back blank
+        // at startup. The filter being ON is durable proof the question is
         // moot — it defaults off — and it is evaluated at the moment of the check rather than trusted from a
         // flag written once, which is the property that makes it a safety net rather than another guess.
         assertFalse(
@@ -216,7 +215,7 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun theUpgradeMigrationRetriesUntilItSeesEvidenceAndCountsAnEnabledFilter() {
-        // Marking itself done after a blank read is what stranded the fleet, so it must not record completion
+        // Marking itself done after a blank read can strand an upgraded panel, so it must not record completion
         // without evidence, and an already-enabled filter must count as evidence.
         val config = File("src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt").readText()
         val m = config.substring(config.indexOf("fun migrateSetupQuestionsForExistingInstall()"))
@@ -233,8 +232,8 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun theMigrationNeverStampsAPanelWhoseGuidedSetupHasBegun() {
-        // Second hardware walk, 2026-07-26: the retrying migration read the WIZARD'S OWN broker save as
-        // upgrade evidence on the first mid-journey service restart and durably stamped every question
+        // The retrying migration must not read the WIZARD'S OWN broker save as upgrade evidence on a
+        // mid-journey service restart and durably stamp every question
         // answered — the panel rendered unfiltered, the journey reported complete, and the sign-in return
         // dumped the user to Configure with the dashboard and filter questions never asked. Identity
         // confirmation is written only by the wizard, so its presence proves the config evidence is

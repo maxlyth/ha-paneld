@@ -3,7 +3,7 @@
 // "expose to HA" pip on each HA-capable row, and saves via partial-merge POST. Vanilla, no build.
 (function () {
   "use strict";
-  // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
+  // Advanced is the default view; Basic intentionally exposes a reduced set of common settings.
   var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, apps = [], radio = null;
   var savedValues = {}, savedExpose = {};
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
@@ -399,11 +399,10 @@
       return sel;
     }
     // Home dashboard picker: Home Assistant provides this signed-in user's dashboards in its own order.
-    // Deliberately a NATIVE select. A custom popup was tried (to carry the dashboards' icons like HA's
-    // own picker) and was a bust on hardware review: it escaped the card, ran off the viewport and stole
-    // wheel scrolling — the browser's own popup gets all of that right on every platform, and the
-    // maintainer chose clean-over-icons. The wizard's dedicated page keeps the icon list; this form
-    // keeps HA's GROUPING via native optgroups, which is the part that carries real information.
+    // Deliberately a NATIVE select. A custom popup carrying dashboard icons escaped the card, ran off the
+    // viewport and stole wheel scrolling in hardware testing. The browser's own popup handles those cases
+    // correctly on every platform. The wizard's dedicated page keeps the icon list; this form keeps HA's
+    // GROUPING via native optgroups, which is the part that carries real information.
     // Auto intentionally remains first; a legacy/custom configured path is preserved rather than silently lost.
     if (f.picker === "ha_dashboard") {
       var currentDashboard = v == null ? "" : v;
@@ -469,7 +468,7 @@
     if (f.picker === "ha_area") {
       // Populated EAGERLY, when the field renders. It used to load on focus/pointerdown, which appended
       // options into a native dropdown the user had just opened — the picker re-laid-out on every insert
-      // and visibly flickered before settling (hardware report). Nothing may mutate an open picker.
+      // and visibly flickered in hardware testing. Nothing may mutate an open picker.
       var areaCurrent = v == null ? "" : v;
       var areaWrap = el("div", { class: "ha-area-picker" });
       var areaSelect = el("select", { class: "pkgsel", "aria-label": f.label });
@@ -486,14 +485,13 @@
       var areaAdmin = null;
       // The note describes the VALUE, not permissions. Shown for every non-admin session it told a panel
       // whose value MATCHED Home Assistant that it had been overridden locally — untrue, and alarming on a
-      // panel that had just converged correctly (reported on a fleet panel, 2026-07-26). It may appear only
+      // panel that had just converged correctly. It may appear only
       // while the local request genuinely differs from what Home Assistant holds, and it must stay honest
       // after an edit, so it is recomputed rather than decided once.
       function syncAreaNote() {
         var localArea = values[f.key] == null ? "" : String(values[f.key]);
         if (areaQueried && haAreaUserOverride && localArea !== areaHa) {
-          // Name what Home Assistant actually holds, so the divergence is legible at a glance —
-          // "Office while HA has Hall" is the whole story (maintainer, rc2 request 2026-07-27).
+          // Name what Home Assistant actually holds so the divergence is legible at a glance.
           areaNote.textContent = areaHa
             ? "Local override only — Home Assistant has \u201C" + areaHa + "\u201D"
             : "Local override only";
@@ -515,8 +513,8 @@
           areaFrag.appendChild(el("option", { value: area.name, text: area.name }));
         });
         // Home Assistant is canonical: where it holds an area for this device, that is what this control
-        // reads, even if the local request has never been set. A panel whose HA device sits in Office must
-        // never present itself as having no area — reported on a fleet panel whose local value was blank.
+        // reads, even if the local request has never been set. A panel whose HA device has an area must
+        // never present itself as having no area merely because its local value is blank.
         var haArea = a && a.device && a.device.found ? a.device.area_name : "";
         if (haArea && !have[haArea]) {
           have[haArea] = true;
@@ -2042,9 +2040,8 @@
   }
 
   // Per-card maturity badges: [text, css-modifier]. Applied to the card heading by render().
-  // Logging lost its experimental badge on 2026-07-27, when log shipping was finally proven on
-  // hardware: all three transports delivered marked probe records AND real shipped log lines into a
-  // live collector, addressed by hostname. Display keeps its badge — that work is still unvalidated.
+  // Logging is validated on hardware: all three transports delivered marked probe records and real log
+  // lines to a live collector addressed by hostname. Display keeps its badge because it remains unvalidated.
   var CARD_BADGES = { "Display": ["experimental", "exp"] };
   var CARD_NOTES = {
     "Sensors": "Home Assistant reporting",

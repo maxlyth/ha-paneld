@@ -827,8 +827,8 @@ internal class MqttBridge(
      * Whether THIS bridge generation was built from the given credentials. The bridge swap after a
      * config save is asynchronous, so between the commit and the swap any state this instance reports
      * was earned by the OLD credentials — on a fresh panel that state is the anonymous discovery
-     * connect's auth rejection, which the setup wizard then misattributed to the credentials the user
-     * had just typed correctly (first hardware walks, 2-for-2). Callers use this to report a stale
+     * connect's auth rejection, which the setup wizard could then misattribute to the credentials the user
+     * had just typed correctly. Callers use this to report a stale
      * generation as "connecting" instead of parroting a verdict the new credentials never earned.
      */
     internal fun servesCredentials(broker: String, user: String, password: String): Boolean =

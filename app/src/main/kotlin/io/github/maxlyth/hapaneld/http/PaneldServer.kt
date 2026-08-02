@@ -4084,9 +4084,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         else ""
         // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
         // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
-        // panel this banner kept reappearing to narrate a step that was done months ago. Reported twice from
-        // the fleet. The Configure tab keeps it unconditionally: there it is feedback for a save the user just
-        // made, which is the reason it was added.
+        // panel this banner would keep reappearing to narrate a step that was already complete. The Configure
+        // tab keeps it unconditionally: there it is immediate feedback for a save the user just made.
         val mqttProgress = if (!setupNeedsUser()) "" else {
             SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let {
                 """<div class="setup">⟳ ${esc(it)}</div>"""
@@ -4278,7 +4277,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val caps = liveCapabilities(s.caps)
         keys.mapNotNull { key ->
             // A deliberately overridden area must say so wherever the value is shown — at rest it is
-            // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
+            // otherwise indistinguishable from an adopted value.
             val areaFormatter: ((String) -> String)? =
                 if (key == "ha_area" && config.haAreaUserOverride) { raw -> "$raw (local override)" } else null
             settingRowHtml(key, s.live, caps, hints, areaFormatter)
@@ -5874,10 +5873,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         }
         // The pre-existing-install inference is only valid BEFORE guided setup has begun. The wizard
         // itself writes a broker at step 2, so inferring "upgraded install" from durable config alone
-        // force-satisfied the later question stages MID-JOURNEY: on the first hardware walk the journey
-        // reported complete the instant the HA token committed, the sign-in callback sent the browser to
-        // Configure, the dashboard and filter pages never showed, and the panel deadlocked on its hold
-        // screen (whose predicate has no such escape) while this authority claimed nothing was needed.
+        // force-satisfied the later question stages MID-JOURNEY: the journey could report complete as soon
+        // as the HA token committed, sending the sign-in callback to Configure before the dashboard and
+        // filter pages appeared while the panel remained on its hold screen.
         // Identity confirmation is the begin-marker: a fresh panel records it at step 1, which switches
         // the inference off for the rest of that journey; a genuinely pre-existing install never confirms
         // identity through the wizard, so it keeps the escape until the startup migration stamps its
@@ -5964,8 +5962,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      *
      * The confirmation flag defaults false, so without this every existing install would be told its next
      * step is to confirm a panel name the user chose long ago — wrong on its face, and on a working panel
-     * it would drag a finished journey back to step one. Found immediately on the first canary deploy: an
-     * established panel reported `next: identity` while its real gap was a missing Home Assistant login.
+     * it would drag a finished journey back to step one. An established panel can otherwise report
+     * `next: identity` when its real gap is a missing Home Assistant login.
      *
      * Durable configuration is the evidence. A broker, a Home Assistant URL or an explicit renderer can
      * only be present because somebody configured this panel, and a genuinely fresh install has none of
@@ -6071,9 +6069,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     /**
      * A briefly-held copy of the area registry, this device's row and the account's admin flag.
      *
-     * All three change about once in a panel's life — "in real life this is a value that changes once and
-     * almost never again" (maintainer, 2026-07-26) — yet the picker asked Home Assistant for them on EVERY
-     * Configure paint: one authenticated WebSocket session per page load, and one per reload through an
+     * All three normally change very rarely, yet the picker previously asked Home Assistant for them on
+     * EVERY Configure paint: one authenticated WebSocket session per page load, and one per reload through an
      * upgrade round, which is what made the control look like it was constantly refreshing. Only successful
      * reads are held, so a failed query never becomes authoritative; the unprompted convergence pass
      * deliberately bypasses this, because noticing an admin's change in Home Assistant is its whole job.
@@ -6198,9 +6195,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      *
      * "Home Assistant is canonical" was implemented only at read time, and every reader was a UI control —
      * the Configure area picker and the wizard's dashboard step. A panel nobody had opened that dropdown on
-     * therefore never adopted anything: five of six fleet panels held a blank `ha_area` while their HA
-     * devices sat in real areas, so every surface honestly reported "No area" and discovery published no
-     * `suggested_area` (reported 2026-07-26 on a panel whose device is plainly in Office). One unprompted
+     * therefore never adopted anything: a blank local `ha_area` persisted even when Home Assistant assigned
+     * the device to an area, so every surface reported "No area" and discovery published no `suggested_area`.
+     * One unprompted
      * pass after start, then a slow repeat, is enough: the area of a wall panel changes about never, and the
      * read is one authenticated WebSocket round trip.
      */

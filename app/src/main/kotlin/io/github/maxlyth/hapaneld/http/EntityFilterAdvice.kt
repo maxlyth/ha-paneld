@@ -45,7 +45,7 @@ object EntityFilterAdvice {
         /** The device profile's declared `soc` block: the strongest, and exact for a supported panel. */
         DECLARED_SOC,
 
-        /** Android API level and core count. Agrees with the declared tier on every fleet panel checked. */
+        /** Android API level and core count. Agrees with the declared tier on the profiled devices tested. */
         PLATFORM_INFERRED,
 
         NONE,
@@ -73,8 +73,8 @@ object EntityFilterAdvice {
     data class Bands(val recommendAbove: Int, val struggleAbove: Int?)
 
     /**
-     * Bands per tier. MODEST's ceiling and CAPABLE's recommendation are the maintainer's calls; MIDDLING is
-     * interpolated between them; MODEST's ceiling is also the one the attended measurement supports, where a
+     * Bands per tier. The MODEST ceiling and CAPABLE recommendation are conservative heuristics; MIDDLING is
+     * interpolated between them. The MODEST ceiling is also supported by a hardware measurement where a
      * 4× A35 panel at 3,769 entities ran the renderer at 94% p95 and answered touches ~60% slower.
      */
     private val BANDS = mapOf(
@@ -126,10 +126,10 @@ object EntityFilterAdvice {
 
     /**
      * Tier a panel with no declared SoC. Android API level tracks how old the silicon is and core count
-     * separates the small parts from the large ones; on every fleet panel read live these two agree with the
+     * separates the small parts from the large ones; on the profiled devices tested these two agree with the
      * declared tier — API 27 / 4 cores modest, API 30 / 4 cores middling, API 34 / 8 cores capable.
      *
-     * RAM is deliberately almost unused. The slowest panel in the fleet has 1.9 GB, which is not a
+     * RAM is deliberately almost unused. The measured low-end device had 1.9 GB, which is not a
      * memory-starved device, and when it drowned its memory rose 8.7% while renderer CPU went up fourteen
      * fold. So this bottleneck is CPU, and RAM may only ever *drop* a tier — a genuinely tiny device — never
      * raise one, because plentiful RAM in front of slow cores predicts nothing.
@@ -145,7 +145,7 @@ object EntityFilterAdvice {
         return if (starved) demote(base) else base
     }
 
-    private const val RAM_STARVED_BYTES = 1_100L * 1024 * 1024   // ~1 GB, below any fleet panel
+    private const val RAM_STARVED_BYTES = 1_100L * 1024 * 1024   // ~1 GB, below the tested devices
 
     private fun demote(tier: Tier): Tier = when (tier) {
         Tier.CAPABLE -> Tier.MIDDLING
@@ -199,7 +199,7 @@ object EntityFilterAdvice {
     }
 
     /**
-     * The two counts an attended test actually measured, both on a 4× Cortex-A35 panel: comfortable with a
+     * The two counts measured in a controlled hardware test, both on a 4× Cortex-A35 panel: comfortable with a
      * ~340-entity filtered subscription, and saturated at 3,769 unfiltered.
      */
     private const val MEASURED_COMFORTABLE_UP_TO = 500
@@ -209,7 +209,7 @@ object EntityFilterAdvice {
      * Whether an attended measurement actually backs this verdict — which means *near the counts that were
      * measured*, not merely on the tier that was.
      *
-     * The tier's band edges are a maintainer judgement, so a modest panel just past its 1,000 ceiling is a
+     * The tier's band edges are heuristic, so a modest panel just past its 1,000 ceiling is a
      * red we believe but have not seen: the nearest real measurement is at 3,769. Calling that "measured"
      * would be the exact dishonesty the confidence tag exists to prevent, and it would devalue the label
      * everywhere it is earned. So the claim is bounded to the neighbourhood of the evidence.

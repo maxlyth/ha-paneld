@@ -181,9 +181,8 @@ class SetupWizardAssetTest {
         assertTrue(configure.contains("if (!areaTouched && !haAreaUserOverride && haArea"))
         assertTrue(configure.contains("areaTouched = true;"))
         assertTrue(configure.contains("Local override only"))
-        // The resting note names what Home Assistant actually holds — "Office while HA has Hall" is the
-        // whole story, and without it an override is indistinguishable from an adopted value at a glance
-        // (maintainer, rc2 request 2026-07-27).
+        // The resting note names what Home Assistant actually holds; without it an override is
+        // indistinguishable from an adopted value at a glance.
         assertTrue(configure.contains("Local override only — Home Assistant has"))
         // The override note may only appear when a non-admin local request genuinely differs from Home
         // Assistant. A matching value is not an override, while an admin change can be written back to HA.

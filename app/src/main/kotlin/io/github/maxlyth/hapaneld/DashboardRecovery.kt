@@ -232,16 +232,15 @@ internal fun entityFilterQuestionPending(
 ): Boolean = builtinRenderer &&
     // The filter being ON is self-evident proof the question is moot: it cannot be true on a fresh panel
     // (the setting defaults off) and it is true on every panel that has ever been through this. Derived at
-    // the moment of the check rather than trusted from a flag written once at startup — which is what failed.
-    // Three fleet panels were found stranded on the hold screen with the filter already enabled, because the
-    // one-shot migration below had run at a moment when the configuration read back blank and so recorded
+    // the moment of the check rather than trusted from a flag written once at startup. A one-shot migration
+    // can run while the configuration reads back blank and record
     // "not a pre-existing install". A durable fact about the panel beats a flag captured at one instant.
     !entityFilterEnabled &&
     // A panel that has ALREADY finished setup is never held, whatever the answer flag says. The flag is new,
     // so it defaults false on every panel that upgrades — and without this an upgrade stops a working panel
-    // from showing its dashboard to ask a question it was never asked before. Found exactly that way, on two
-    // configured panels, by the synthetic canary. Holding a first render is protecting a first impression;
-    // holding a panel that already had one is a regression, and an optimisation question never justifies it.
+    // from showing its dashboard to ask a question it was never asked before. Holding a first render protects
+    // a first impression; holding a panel that already had one is a regression, and an optimisation question
+    // never justifies it.
     !setupEverCompleted &&
     !entityFilterAnswered &&
     haUrl.isNotBlank() &&

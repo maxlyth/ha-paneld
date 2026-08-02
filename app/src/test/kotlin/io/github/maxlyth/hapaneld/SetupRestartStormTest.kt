@@ -17,20 +17,19 @@ import org.junit.Test
 /**
  * The setup journey, stormed with restarts.
  *
- * Both severe first-run defects of the vc468-477 hardware era were one shape: a service restart landed
+ * Both severe first-run defects had one shape: a service restart landed
  * mid-journey, and something inferred from the durable configuration the wizard had *just written* that
  * this panel was an upgraded install which had already answered the questions. The panel then rendered
  * unfiltered, the journey reported complete, and the sign-in return dumped the user on the Configure tab
  * with two questions never asked. It happened twice from different organs — once from the read-time
- * inference in the journey inputs, once from the retrying startup migration — and eleven hardware walks
- * were the only reason either was found, because a restart mid-walk is invisible to a unit test that
- * evaluates one state.
+ * inference in the journey inputs and once from the retrying startup migration. A restart mid-journey is
+ * invisible to a unit test that evaluates only one state.
  *
  * This suite tests durable-state sequences rather than one isolated state. It drives the real [Config]
  * over surviving fake preferences, replays the durable writes each wizard step commits, and reconstructs
  * Config after every prefix of the walk. It deliberately does not claim to simulate service startup,
  * HTTP form handling, or Android process-static state; those require integration or hardware coverage. The
- * invariant is the one the maintainer states as the product rule: first run must work or fail cleanly —
+ * invariant is the product rule: first run must work or fail cleanly —
  * no restart may answer a question on the user's behalf, and no state may report unfinished with nothing
  * to do.
  *
