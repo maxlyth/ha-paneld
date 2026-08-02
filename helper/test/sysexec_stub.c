@@ -128,6 +128,13 @@ int sysexec_stub_count_argv(const char *path, const char *const argv[], int quie
     return count;
 }
 
+int sysexec_stub_count_argv_calls(void) {
+    pthread_mutex_lock(&run_block_lock);
+    int count = argv_history_count;
+    pthread_mutex_unlock(&run_block_lock);
+    return count;
+}
+
 void sysexec_stub_add_popen(const char *needle, const char *output, int close_status) {
     if (popen_rule_count >= MAX_POPEN_RULES) return;
     popen_rule *rule = &popen_rules[popen_rule_count++];

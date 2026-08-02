@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import io
+import pathlib
+import re
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -121,20 +123,104 @@ class SparklineTest(unittest.TestCase):
         )
 
 
-class RenderEvidenceBoundaryTest(unittest.TestCase):
-    def test_render_does_not_overstate_460_release_or_flash_evidence(self):
+DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs" / "hardware"
+
+# Nothing past this has been flashed on real hardware by this project.
+FLASH_VERIFIED_CEILING = (4, 4, 0)
+
+
+class PublishedDataContractTest(unittest.TestCase):
+    """Contracts the published surfaces must keep with the indexed data.
+
+    Only claims checkable against the data or a recorded hardware fact live here.
+    Editorial wording is not tested; a wording regression is fixed by editing the
+    sentence, the same as in any docs repo.
+    """
+
+    def test_every_document_states_the_flash_verification_boundary(self):
+        """4.4.0 is the hardware-verified boundary; no surface may widen or drop it.
+
+        Stating the boundary is necessary but not sufficient — a document could say it and
+        then claim verification of something later in the next sentence, so every
+        verification claim is checked against the ceiling too, in both directions and
+        without pinning the connecting verb ("4.7.0 has since been flash-verified" is as
+        wrong as "flash-verified through 4.7.0").
+        """
+        claim = re.compile(
+            r"(?:hardware|flash|live-flash)[- ]verified[^.\n]{0,80}?(\d+\.\d+\.\d+)"
+            r"|(\d+\.\d+\.\d+)[^.\n]{0,60}?(?:hardware|flash|live-flash)[- ]verified",
+            flags=re.I,
+        )
+        for name, text in self._documents().items():
+            with self.subTest(document=name):
+                self.assertRegex(text, r"(?:hardware-verified|flash-verified)[^.\n]{0,60}4\.4\.0")
+                for match in claim.finditer(text):
+                    raw = match.group(1) or match.group(2)
+                    version = tuple(int(part) for part in raw.split("."))
+                    self.assertLessEqual(
+                        version,
+                        FLASH_VERIFIED_CEILING,
+                        f"{name} claims verification of {raw}, past the "
+                        f"{'.'.join(map(str, FLASH_VERIFIED_CEILING))} ceiling: "
+                        f"{match.group(0)!r}",
+                    )
+
+    def test_upgrade_guidance_matches_the_indexed_data(self):
+        """The index records releases with several inbound diffs, and APK-only releases
+        with no ROM at all, so guidance must not describe a single-diff-only model."""
+        widest = self._widest_inbound_diff_count()
+        self.assertGreater(widest, 1, "index has no multi-source release to guard against")
+        for name, text in self._documents().items():
+            with self.subTest(document=name):
+                self.assertNotIn("a diff against one specific earlier version", text)
+                self.assertIn("APK-only", text)
+
+    @staticmethod
+    def _widest_inbound_diff_count():
+        widest = 0
+        for name in ("fw-120p.dat", "fw-86p.dat"):
+            for line in (pathlib.Path(__file__).parent / name).read_text().splitlines():
+                if line.startswith("diff|"):
+                    widest = max(widest, len(line.split("|")) - 3)
+        return widest
+
+    def test_curated_release_rows_are_in_ascending_version_order(self):
+        """A release appended to the curated table must not land out of sequence."""
+        versions = self._curated_versions()
+        self.assertGreater(len(versions), 5, "curated table not found")
+        self.assertEqual(
+            versions,
+            sorted(versions),
+            f"curated release rows out of order: {['.'.join(map(str, v)) for v in versions]}",
+        )
+
+    @classmethod
+    def _curated_versions(cls):
+        body = cls._body()
+        section = body.split("## Which version should an HA panel run?")[1].split("\n## ")[0]
+        found = []
+        for line in section.split("\n"):
+            match = re.match(r"\|\s*\[?\*\*(\d+)\.(\d+)\.(\d+)\*\*", line)
+            if match:
+                found.append(tuple(int(g) for g in match.groups()))
+        return found
+
+    @classmethod
+    def _documents(cls):
+        return {
+            "generated discussion body": cls._body(),
+            "docs/hardware/nspanel-pro.md": (DOCS / "nspanel-pro.md").read_text(encoding="utf-8"),
+            "docs/hardware/nspanel-pro-firmware.md": (
+                DOCS / "nspanel-pro-firmware.md"
+            ).read_text(encoding="utf-8"),
+        }
+
+    @staticmethod
+    def _body():
         output = io.StringIO()
         with mock.patch("sys.stdout", output):
             firmware_index.cmd_render(SimpleNamespace(history=None, out=None))
-
-        body = output.getvalue()
-        self.assertIn("hardware-verified the procedure only through 4.4.0", body)
-        self.assertIn("Sonoff does not label it “Stable”", body)
-        self.assertIn("newest listed release", body)
-        self.assertNotIn("official *Stable*", body)
-        self.assertNotIn("official **Stable**", body)
-        self.assertNotIn("current Stable", body)
-        self.assertNotIn("latest verified ROM (4.6.0)", body)
+        return output.getvalue()
 
 
 if __name__ == "__main__":

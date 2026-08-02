@@ -62,7 +62,8 @@ show_usage() {
   echo "flags remain compatible but expose their value in the original shell command and process list."
   echo
   echo "--reset-config erases the panel's existing ha-paneld configuration and starts guided setup"
-  echo "from scratch. It backs the configuration up first and asks for confirmation before erasing."
+  echo "from scratch. Reset is irreversible and makes no backup; use a separate backup or export"
+  echo "operation first if you need one. It asks for confirmation before erasing."
 }
 while [ "$#" -gt 0 ]; do case "$1" in
   --prerelease|--pre)
@@ -100,7 +101,7 @@ while [ "$#" -gt 0 ]; do case "$1" in
           PROVISION_ARGS+=("$1" "$2")
           shift 2
           ;;
-        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin|--reset-config)
+        --force|--persist-adb|--strip-vendor|--no-tame|--shizuku|--log-off|--builtin|--reset-config|--allow-missing-db-snapshot)
           PROVISION_ARGS+=("$1")
           shift
           ;;

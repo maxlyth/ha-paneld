@@ -247,21 +247,21 @@ Direct, clickable, **live-verified** download links for Sonoff NSPanel Pro OTA f
 Flashing how-to (fully remote, no recovery-mode ADB): see [the repo's firmware guide](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware.md). `/data` (apps + settings) is preserved across an OTA.
 
 > [!TIP]
-> **Latest indexed ROM (4.6.0):** the CDN contains diffs from **4.0.12**, **4.4.0** and **4.5.1**. The project has hardware-verified the procedure only through 4.4.0; applying a 4.6.0 diff is experimental and should first be tried on one recoverable panel. `4.0.12` is the full-ROM checkpoint; everything past `3.x` is incremental. **4.5.3 was a ROM diff on 120P but an APK-only update on 86P**, and **no full ROM newer than 4.0.12** exists.
+> **How to read this index:** the per-model tables below are generated from the index data and are the authority on what exists — this page deliberately does not name a “latest” version in prose, because prose goes stale the moment a release lands. `4.0.12` is the full-ROM checkpoint, and it is itself a full ROM. A release indexed after it arrives either as one or more diffs — each patching from a specific earlier version, and a release commonly has several inbound diffs to choose from — or as an APK-only update carrying no ROM at all, and a release can be a ROM on one model and APK-only on the other — so an upgrade is not always a single hop, and the per-model tables show which form each release takes. The project has hardware-verified the flashing procedure only through **4.4.0**; anything newer is CDN-verified only, so try it on one recoverable panel first.
 
 > [!NOTE]
-> **Frontier / help wanted:** the newest release in Sonoff's public changelog is **4.6.0** (June 2026); Sonoff does not label it “Stable”. **4.5.0 / 4.5.2** ship APK-only on both models; **4.5.3** has ROM diffs on 120P but is APK-only on 86P. No full ROM newer than `4.0.12` is published — distribution is diff-based off that checkpoint. Spot a newer build or a missing link? Reply with the URL plus a range probe (`curl -s -r 0-0 -D - -o /dev/null "<url>"`) showing `206` and the total size, and it gets added. This thread is the living list.
+> **Help wanted:** this index lists what has been *found*, not everything that exists. The bucket cannot be listed and the per-build index cannot be derived from a version number, so a failed probe rules out one filename at one index and never a build — absence here is not proof of non-existence. Spot a build or a link that is missing? Reply with the URL plus a range probe (`curl -s -r 0-0 -D - -o /dev/null "<url>"`) showing `206` and the total size, and it gets added. This thread is the living list.
 """
 
 CHANGES = """## Which version should an HA panel run? (newer isn't always better)
 
-Vendor release notes are written for eWeLink / Zigbee-hub users, not for people running the panel purely as a Home Assistant dashboard. Below is the same history re-read through an HA-panel lens, combining the official notes, community reports from the release threads (**[c]**), and our own fleet testing (**[f]**, ha-paneld, June 2026). Several releases trade dashboard convenience for hub features an HA-only panel doesn't need.
+Vendor release notes are written for eWeLink / Zigbee-hub users, not for people running the panel purely as a Home Assistant dashboard. Below is the same history re-read through an HA-panel lens, combining the official notes where they exist, community reports from the release and user feedback threads (**[c]**), and our own fleet testing (**[f]**, ha-paneld, June 2026). Several releases trade dashboard convenience for hub features an HA-only panel doesn't need.
 
 > [!TIP]
 > **Picking a build for an HA-only panel:**
 > - **Lean kiosk:** a late **3.x** build is lighter, keeps the **Web Shortcut** web-app (point straight at a dashboard URL, no sideload), and ships **no Termux**.
 > - **Modern app model:** if you want F-Droid / the HA Companion app or 4.x MQTT features, stop at **4.0.12** — the conservative full-ROM checkpoint — then turn on **Settings → About → Block Firmware Updates** to pin it.
-> - **Latest / bleeding edge:** **4.6.0** (June 2026) is the newest listed release after **4.5.1 / 4.5.2**, whose community reports cited reboot loops every ~10–60 min on both 120P and 86P. 4.6.0 is not yet live-flash verified here, so try it on one recoverable panel first; **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability.
+> - **Latest / bleeding edge:** take the newest rows of the table below and of the per-model download tables. Nothing past **4.4.0** is live-flash verified by this project, and recent releases carry unverified community reports — restart loops on 4.5.1 / 4.5.2, sub-device connectivity trouble on 4.7.0. Try any of them on one recoverable panel first; **4.0.12** remains the conservative full-ROM checkpoint to pin for maximum stability.
 > - **Always:** sideload a current **System WebView** — the stock one is too old to render the HA dashboard (see the repo's [docs/hardware](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) notes).
 
 | Version | What it changes for HA-panel use | Watch out for |
@@ -275,7 +275,9 @@ Vendor release notes are written for eWeLink / Zigbee-hub users, not for people 
 | [**4.4.0**](https://forum.ewelink.cc/t/nspanel-pro-v4-4-0-officially-released-new-features-enhancements/207640) | Native **wake-on-proximity**, **mic recording** and **speaker playback** over MQTT (play a file or URL from HA); Zigbee NCP 8.x. | **[c]** Widespread **persistent ticking/tapping sound** from the proximity feature (disable Touch Sounds or the feature); heating not shutting off at setpoint. |
 | [**4.5.1 / 4.5.2**](https://forum.ewelink.cc/t/nspanel-pro-firmware-4-5-2-has-been-released/208527) | Zigbee water-valve + PIR motion support; general fixes. 4.5.2 is an APK-only update over the 4.5.1 ROM. | **[c]** **Frequent restarts (~10–60 min) on both 120P and 86P**; app crashes viewing logs; Matter Bridge missing on some units. |
 | [**4.5.3**](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) | Matter auto-discovery and screen-management optimizations; ROM diffs on 120P but APK-only on 86P. | No 4.5.3-specific restart-loop evidence found; followed by 4.6.0. |
-| [**4.6.0**](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) | **Local Web Portal** — the panel is now reachable on the LAN at `http://nspanelpro.local` (or its IP) for setup + management: add Zigbee / eWeLink sub-devices, arm/disarm Smart Security, configure the **MQTT broker to sync Zigbee into Home Assistant**, authorize HA + Matter Bridge pairing, upload custom ringtones/screensavers. It is the newest release in Sonoff's public changelog. | Released **2026-06-30** — not yet live-flash verified here. The CDN contains **diff-only** packages off 4.0.12 / 4.4.0 / 4.5.1 (no new full ROM). |
+| [**4.6.0**](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) | **Local Web Portal** — the panel is now reachable on the LAN at `http://nspanelpro.local` (or its IP) for setup + management: add Zigbee / eWeLink sub-devices, arm/disarm Smart Security, configure the **MQTT broker to sync Zigbee into Home Assistant**, authorize HA + Matter Bridge pairing, upload custom ringtones/screensavers. | Released **2026-06-30** — not yet live-flash verified here. Distributed as diffs off 4.0.12 / 4.4.0 / 4.5.1, with no new full ROM. |
+| **4.6.2** | No release notes found; indexed as an APK-only update with no ROM diff on either channel. | Located by probing the CDN — treat the absence of notes as unknown-content, not as a minor release. |
+| **4.7.0** | Covers Gen1 and the Gen2 panels; users report added Basic gen-5 relay (BASIC-1GS) support. **No official release notes were found** — this is drawn from the [eWeLink user feedback thread](https://forum.ewelink.cc/t/nspanel-pro-v4-7-0-feeback/208789), which is a discussion thread rather than a release announcement or a vendor changelog. | Released ~**2026-07-16**; not live-flash verified here. **[c]** The thread carries reports of sub-device connectivity trouble after updating, some resolved by a reboot and others described as continuing. This project has not reproduced or quantified them; treat them as unverified user reports rather than a known regression. |
 
 **Cross-cutting gotchas (firmware-independent) [f]:**
 
@@ -284,7 +286,7 @@ Vendor release notes are written for eWeLink / Zigbee-hub users, not for people 
 - **4.x bundles Termux** (`/system/app`, plus Termux:Boot) — the runtime some community Zigbee2MQTT-on-panel bridges use. An HA panel where the HA server already owns Zigbee doesn't need it; it's disableable without root.
 - **The vendor's own MQTT exposure (4.1.0+) is unfiltered** — it can flood HA with raw Zigbee DP entities. If you just want the panel as a dashboard, leave the eWeLink↔HA MQTT bridge off and drive the panel from HA directly.
 
-*Legend: unmarked = official release notes · **[c]** community-reported in the release thread · **[f]** ha-paneld fleet testing, June 2026.*
+*Legend: unmarked = official release notes · **[c]** community-reported in the release or user feedback thread · **[f]** ha-paneld fleet testing, June 2026.*
 """
 
 RELEASE_NOTES = """## Release notes
@@ -299,7 +301,9 @@ Notes are published per "NSPanel Pro" — not split by 86P vs 120P.
 | 4.1.0 / 4.2.0 / 4.3.0 | eWeLink per-version threads ([4.1.0](https://forum.ewelink.cc/t/nspanel-pro-v4-1-0-release-new-features-enhancements/206443) · [4.2.0](https://forum.ewelink.cc/t/nspanel-pro-v4-2-0-officially-released-new-features-enhancements/206900) · [4.3.0](https://forum.ewelink.cc/t/nspanel-pro-v4-3-0-officially-released-new-features-enhancements/207281)) |
 | 4.4.0 | [eWeLink — V4.4.0 officially released](https://forum.ewelink.cc/t/nspanel-pro-v4-4-0-officially-released-new-features-enhancements/207640) (native wake-on-proximity, mic record + speaker playback over MQTT) |
 | 4.5.1–4.5.3 | [eWeLink — firmware 4.5.2 released](https://forum.ewelink.cc/t/nspanel-pro-firmware-4-5-2-has-been-released/208527) · [eWeLink rolling release notes](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) |
-| 4.6.0 | [SONOFF "NSPanel Pro Version Update Information and FAQ"](https://sonoff.tech/en-us/blogs/news/sonoff-nspanel-pro-version-update-information-and-faq) (Local Web Portal; newest listed release) |
+| 4.6.0 | [SONOFF "NSPanel Pro Version Update Information and FAQ"](https://sonoff.tech/en-us/blogs/news/sonoff-nspanel-pro-version-update-information-and-faq) (Local Web Portal) |
+| 4.6.2 | **No release notes found** — this project found neither a vendor changelog entry nor a community thread for it. It was located by probing the CDN, so this index records the files only. |
+| 4.7.0 | **No vendor changelog entry found.** Community discussion only: [eWeLink 4.7.0 user feedback thread](https://forum.ewelink.cc/t/nspanel-pro-v4-7-0-feeback/208789) — a discussion thread of user reports, not a release announcement and not official release notes. |
 | 3.9.4 / 4.0.10 / 4.0.12 | No official notes published (bug threads only) |
 | All 4.x (rolling) | [eWeLink "[Rolling] NSPanel Pro Firmware Updates"](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) |
 """
@@ -323,7 +327,7 @@ Channels and conventions differ by model:
 `<idx>` is a per-build serial (the `rom-diff` index is per **target** version). Probing: a missing file returns `403`; a real file answers a range request with `206` + a `Content-Range` total. Check one with `curl -s -r 0-0 -D - -o /dev/null "<url>"`.
 
 > [!CAUTION]
-> `4.0.12` is the **only full ROM** on either channel. The ROM path past it is diff-based: `4.0.12 → 4.4.0` and `4.0.12 → 4.5.1` (or `4.4.0 → 4.5.1`). **`4.5.0` and `4.5.2` are APK-only** on both models; `4.5.3` has ROM diffs on 120P but is APK-only on 86P. Plan the path accordingly.
+> The per-model tables above are the authority on which full ROMs, diffs and APKs are indexed. Past the `4.0.12` full-ROM checkpoint a release arrives either as one or more diffs — each patching from a specific earlier version, so there is usually more than one way in — or as an APK-only update carrying no ROM diff at all, and a release can be a ROM on one model and APK-only on the other. Read the route off the tables rather than assuming a direct hop.
 """
 
 FOOTER = """---

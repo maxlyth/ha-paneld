@@ -13,10 +13,26 @@ import org.junit.Test
  */
 class DiscoveryParityTest {
     @Test fun silenceBootChimeDefaultHasOneAuthority() {
+        assertTrue(SettingsRegistry.DEFAULT_SILENCE_BOOT_CHIME)
         assertEquals(
             SettingsRegistry.DEFAULT_SILENCE_BOOT_CHIME.toString(),
             SettingsRegistry.spec("silence_boot_chime")?.default,
         )
+        val configSource = sequenceOf(
+            java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt"),
+            java.io.File("app/src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt"),
+        ).first { it.isFile }.readText()
+        assertTrue(configSource.contains(
+            "Default on: fresh panels should reboot silently; an explicit saved choice remains authoritative.",
+        ))
+
+        val openApi = sequenceOf(
+            java.io.File("src/main/assets/openapi.json"),
+            java.io.File("app/src/main/assets/openapi.json"),
+        ).first { it.isFile }.readText()
+        assertTrue(openApi.contains(
+            "\"silence_boot_chime\": { \"type\": \"boolean\", \"default\": true",
+        ))
     }
 
     @Test fun cpuGovernorIsExplicitlyLiveOnly() {

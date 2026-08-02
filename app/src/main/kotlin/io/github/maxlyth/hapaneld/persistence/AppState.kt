@@ -7,6 +7,8 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import org.json.JSONArray
+import java.io.File
+import java.io.FileInputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
@@ -34,20 +36,23 @@ object AppState {
     fun preferences(context: Context, namespace: String, legacyName: String): SharedPreferences {
         val appContext = context.applicationContext
         val process = process(appContext)
-        return process.stores.getOrCreate(namespace) {
-            val legacy = appContext.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
-            SqliteStatePreferences(
-                DowngradeCompatibleStatePersistence(
-                    SqliteNamespacePersistence(process.helper, namespace, legacyName, legacy),
-                    SharedPreferencesLegacyStateMirror(legacy),
-                    SharedPreferencesBridgeMetadata(
-                        appContext.getSharedPreferences(BRIDGE_PREFS, Context.MODE_PRIVATE),
-                        namespace,
+        process.stores[namespace]?.let { return it }
+        return process.admission.initializeWhenOpen {
+            process.stores.getOrCreate(namespace) {
+                val legacy = appContext.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
+                SqliteStatePreferences(
+                    DowngradeCompatibleStatePersistence(
+                        SqliteNamespacePersistence(process.helper, namespace, legacyName, legacy),
+                        SharedPreferencesLegacyStateMirror(legacy),
+                        SharedPreferencesBridgeMetadata(
+                            appContext.getSharedPreferences(BRIDGE_PREFS, Context.MODE_PRIVATE),
+                            namespace,
+                        ),
                     ),
-                ),
-                process.executor,
-                process.admission,
-            )
+                    process.executor,
+                    process.admission,
+                )
+            }
         }
     }
 
@@ -111,6 +116,21 @@ object AppState {
     fun quiesceForSelfReplace(context: Context, timeoutMs: Long): StateQuiescence? =
         process(context.applicationContext).quiesce(timeoutMs)
 
+    /**
+     * Reject new state mutations for the final proof phase of every clean, orderly service stop.
+     * Unlike the self-replace lease, cached writers arriving after this boundary fail promptly; new
+     * namespace initialization waits for release. The lease remains held through checkpoint proof.
+     */
+    fun freezeForServiceShutdown(context: Context): StateQuiescence? =
+        process(context.applicationContext).freezeForShutdown()
+
+    /** Final flush, WAL fold and stable-file evidence shared by ordinary and upgrade-triggered stops. */
+    fun proveCleanServiceShutdown(context: Context, timeoutMs: Long): CleanDatabaseProof? =
+        processes[context.applicationContext.packageName]?.proveCleanShutdown(
+            context.applicationContext,
+            timeoutMs,
+        )
+
     private fun process(appContext: Context): ProcessState =
         processes.getOrCreate(appContext.packageName) {
             ProcessState(
@@ -129,6 +149,8 @@ object AppState {
         fun quiesce(timeoutMs: Long): StateQuiescence? =
             quiesceStateWrites(admission) { flush(timeoutMs) }
 
+        fun freezeForShutdown(): StateQuiescence? = admission.freezeRejecting()
+
         fun flush(timeoutMs: Long): Boolean {
             if (timeoutMs < 0) return false
             val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
@@ -144,6 +166,23 @@ object AppState {
                 }
             }
             return succeeded
+        }
+
+        fun proveCleanShutdown(appContext: Context, timeoutMs: Long): CleanDatabaseProof? {
+            val budget = ShutdownProofBudget(timeoutMs)
+            val flushMs = budget.remainingMs()
+            if (flushMs <= 0L || !flush(flushMs) || !budget.hasTime()) return null
+            val database = helper.writableDatabase
+            if (!budget.hasTime()) {
+                runCatching { helper.close() }
+                return null
+            }
+            return proveStableDatabase(
+                database = database,
+                databaseFile = appContext.getDatabasePath(EntityCatalogStore.DATABASE_NAME),
+                closeDatabase = helper::close,
+                budget = budget,
+            )
         }
     }
 
@@ -298,7 +337,7 @@ internal class SqliteStatePreferences(
             if (!clear && changes.isEmpty()) return true
             return admission.admit {
                 publishAdmitted(waitForDisk, deferPublication = publishOnlyWhenDurable)
-            }
+            } ?: false
         }
 
         private fun publishAdmitted(
@@ -366,23 +405,48 @@ class StateQuiescence internal constructor(
 internal class StateMutationAdmission {
     private val lock = ReentrantLock()
     private val unfrozen = lock.newCondition()
-    private var frozen = false
+    private var deferred = false
+    private var rejecting = false
 
-    fun <T> admit(block: () -> T): T = lock.withLock {
-        while (frozen) unfrozen.awaitUninterruptibly()
+    fun <T> admit(block: () -> T): T? = lock.withLock {
+        while (deferred && !rejecting) unfrozen.awaitUninterruptibly()
+        if (rejecting) null else block()
+    }
+
+    /** Cache-miss initialization may open/import SQLite, so it waits out every freeze under this lock. */
+    fun <T> initializeWhenOpen(block: () -> T): T = lock.withLock {
+        while (deferred || rejecting) unfrozen.awaitUninterruptibly()
         block()
     }
 
     fun freeze(): Boolean = lock.withLock {
-        if (frozen) false else {
-            frozen = true
+        if (deferred || rejecting) false else {
+            deferred = true
             true
         }
     }
 
     fun unfreeze() = lock.withLock {
-        frozen = false
+        deferred = false
+        if (!rejecting) unfrozen.signalAll()
+    }
+
+    /**
+     * Enter the non-blocking shutdown mode. A concurrent self-replace lease retains independent
+     * ownership, so either lease can close without accidentally releasing the other's admission fence.
+     */
+    fun freezeRejecting(): StateQuiescence? = lock.withLock {
+        if (rejecting) return null
+        rejecting = true
         unfrozen.signalAll()
+        StateQuiescence {
+            lock.withLock {
+                if (rejecting) {
+                    rejecting = false
+                    if (!deferred) unfrozen.signalAll()
+                }
+            }
+        }
     }
 }
 
@@ -397,6 +461,123 @@ internal fun quiesceStateWrites(
         return null
     }
     return StateQuiescence(admission::unfreeze)
+}
+
+data class CleanDatabaseProof(
+    val databaseBytes: Long,
+    val sha256: String,
+    val userVersion: Int,
+    val appStateRows: Long,
+)
+
+internal fun cleanCheckpointAccepted(
+    busy: Int,
+    walBytesAfterCheckpoint: Long,
+    databaseBytesBeforeDigest: Long,
+    databaseBytesAfterDigest: Long,
+    walBytesAfterDigest: Long,
+): Boolean = busy == 0 && walBytesAfterCheckpoint == 0L &&
+    databaseBytesBeforeDigest > 0L && databaseBytesBeforeDigest == databaseBytesAfterDigest &&
+    walBytesAfterDigest == 0L
+
+internal class ShutdownProofBudget(
+    timeoutMs: Long,
+    private val nanoTime: () -> Long = System::nanoTime,
+) {
+    private val deadlineNanos = nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0L))
+
+    fun hasTime(): Boolean = deadlineNanos - nanoTime() > 0L
+
+    fun remainingMs(): Long {
+        val remainingNanos = deadlineNanos - nanoTime()
+        if (remainingNanos <= 0L) return 0L
+        return ((remainingNanos - 1L) / 1_000_000L) + 1L
+    }
+}
+
+private fun proveStableDatabase(
+    database: SQLiteDatabase,
+    databaseFile: File,
+    closeDatabase: () -> Unit,
+    budget: ShutdownProofBudget,
+): CleanDatabaseProof? {
+    var closed = false
+    return try {
+        check(budget.hasTime()) { "shutdown proof budget exhausted before WAL checkpoint" }
+        val checkpoint = database.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null)
+        val busy = try {
+            check(checkpoint.moveToFirst()) { "checkpoint returned no result" }
+            checkpoint.getInt(0)
+        } finally {
+            checkpoint.close()
+        }
+        check(budget.hasTime()) { "shutdown proof budget exhausted during WAL checkpoint" }
+        check(busy == 0) { "WAL checkpoint remained busy" }
+        val userVersion = scalarLong(database, "PRAGMA user_version", budget).toInt()
+        val appStateRows = scalarLong(database, "SELECT count(*) FROM app_state", budget)
+        // Explicit close is API-27-safe; SQLiteOpenHelper does not implement AutoCloseable until API 29.
+        closeDatabase()
+        closed = true
+        check(budget.hasTime()) { "shutdown proof budget exhausted while closing database" }
+        val wal = File(databaseFile.path + "-wal")
+        val walBytesAfterCheckpoint = if (wal.exists()) wal.length() else 0L
+        val databaseBytesBeforeDigest = databaseFile.length()
+        val sha256 = sha256WithinBudget(databaseFile, budget)
+            ?: error("shutdown proof budget exhausted while hashing database")
+        val databaseBytesAfterDigest = databaseFile.length()
+        val walBytesAfterDigest = if (wal.exists()) wal.length() else 0L
+        check(budget.hasTime()) { "shutdown proof budget exhausted after hashing database" }
+        check(
+            cleanCheckpointAccepted(
+                busy = busy,
+                walBytesAfterCheckpoint = walBytesAfterCheckpoint,
+                databaseBytesBeforeDigest = databaseBytesBeforeDigest,
+                databaseBytesAfterDigest = databaseBytesAfterDigest,
+                walBytesAfterDigest = walBytesAfterDigest,
+            ),
+        ) { "database did not remain stable after WAL checkpoint" }
+        CleanDatabaseProof(
+            databaseBytes = databaseBytesAfterDigest,
+            sha256 = sha256,
+            userVersion = userVersion,
+            appStateRows = appStateRows,
+        )
+    } catch (failure: Throwable) {
+        Log.e("AppState", "clean database shutdown proof failed", failure)
+        null
+    } finally {
+        if (!closed) runCatching(closeDatabase)
+            .onFailure { Log.e("AppState", "database close after failed shutdown proof failed", it) }
+    }
+}
+
+internal fun sha256WithinBudget(databaseFile: File, budget: ShutdownProofBudget): String? {
+    if (!budget.hasTime()) return null
+    val digest = MessageDigest.getInstance("SHA-256")
+    FileInputStream(databaseFile).use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            if (!budget.hasTime()) return null
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    if (!budget.hasTime()) return null
+    return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+}
+
+private fun scalarLong(database: SQLiteDatabase, sql: String, budget: ShutdownProofBudget): Long {
+    check(budget.hasTime()) { "shutdown proof budget exhausted before query" }
+    val cursor = database.rawQuery(sql, null)
+    return try {
+        check(cursor.moveToFirst()) { "$sql returned no result" }
+        cursor.getLong(0).also {
+            check(budget.hasTime()) { "shutdown proof budget exhausted during query" }
+        }
+    } finally {
+        cursor.close()
+    }
 }
 
 internal data class StateMutation(

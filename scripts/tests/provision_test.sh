@@ -5,8 +5,8 @@ set -u
 
 PROVISION_TEST_SCOPE="${PROVISION_TEST_SCOPE:-all}"
 case "$PROVISION_TEST_SCOPE" in
-  core|all) ;;
-  *) echo "PROVISION_TEST_SCOPE must be core or all" >&2; exit 2 ;;
+  backup|publication|core|all) ;;
+  *) echo "PROVISION_TEST_SCOPE must be backup, publication, core or all" >&2; exit 2 ;;
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,14 +14,83 @@ PROVISION="$ROOT/scripts/provision.sh"
 UPDATE_FLEET="$ROOT/scripts/update-fleet.sh"
 FIXTURES="$ROOT/scripts/tests/fixtures"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+ACTIVE_PUBLICATION_PGID=""
+cleanup_provision_test() {
+  local status=$? pgid="${ACTIVE_PUBLICATION_PGID:-}" attempt=0
+  trap - EXIT
+  if [ -n "$pgid" ]; then
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+    while kill -0 -- "-$pgid" 2>/dev/null && [ "$attempt" -lt 40 ]; do
+      /bin/sleep 0.05
+      attempt=$((attempt + 1))
+    done
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+    wait "$pgid" 2>/dev/null || true
+    ACTIVE_PUBLICATION_PGID=""
+  fi
+  rm -rf "$TMP"
+  exit "$status"
+}
+trap cleanup_provision_test EXIT
 
-export PATH="$FIXTURES:/usr/bin:/bin"
 export MOCK_TARGET="panel.test:5555"
 export MOCK_CALL_LOG="$TMP/calls.log"
 export HAPANELD_HELPER_PROBE="$FIXTURES/helper-probe"
 export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
 export PROVISION_TEST_CURL="$FIXTURES/curl"
+export PROVISION_TEST_ADB_FIXTURE="$FIXTURES/adb"
+export PROVISION_TEST_STATE_DIR="$TMP"
+export HAPANELD_HOST_SQLITE3="$(command -v sqlite3)"
+
+# Extend the shared adb fixture with targeted database-backup mutations. This must be an executable
+# (not an exported function) because production deadlines launch adb via setsid(1).
+ADB_WRAPPER_DIR="$TMP/adb-wrapper"
+mkdir -p "$ADB_WRAPPER_DIR"
+cat > "$ADB_WRAPPER_DIR/adb" <<'ADB_WRAPPER'
+#!/usr/bin/env bash
+set -u
+case "${MOCK_DB_TXN:-ok}" in
+  source_not_regular|source_directory)
+  case "$*" in
+    *'sh /data/local/tmp/.hapaneld-db-txn.'*-script*)
+      source_db="$PROVISION_TEST_STATE_DIR/db-txn-sandbox/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+      if [ -f "$source_db" ] && [ ! -L "$source_db" ]; then
+        rm -f "$source_db"
+        if [ "${MOCK_DB_TXN:-ok}" = source_directory ]; then
+          mkdir "$source_db"
+        else
+          ln -s "$source_db.missing" "$source_db"
+        fi
+      fi
+      ;;
+  esac
+  ;;
+esac
+case "${MOCK_DB_TXN:-ok}" in
+  manifest_missing_bytes|manifest_missing_rows|manifest_missing_schema|manifest_missing_provenance|manifest_missing_integrity|manifest_missing_sqlite|panel_digest_invalid|panel_digest_mismatch)
+    case "$*" in
+      *'sh /data/local/tmp/.hapaneld-db-txn.'*-script*)
+        output="$("$PROVISION_TEST_ADB_FIXTURE" "$@")"; status=$?
+        case "${MOCK_DB_TXN:-ok}" in
+          manifest_missing_bytes) output="$(printf '%s\n' "$output" | sed '/^MF_BYTES=/d')" ;;
+          manifest_missing_rows) output="$(printf '%s\n' "$output" | sed '/^MF_ROWS=/d')" ;;
+          manifest_missing_schema) output="$(printf '%s\n' "$output" | sed '/^MF_USER_VERSION=/d')" ;;
+          manifest_missing_provenance) output="$(printf '%s\n' "$output" | sed '/^MF_VCODE=/d')" ;;
+          manifest_missing_integrity) output="$(printf '%s\n' "$output" | sed '/^MF_INTEGRITY=/d')" ;;
+          manifest_missing_sqlite) output="$(printf '%s\n' "$output" | sed '/^MF_SQLITE=/d')" ;;
+          panel_digest_invalid) output="$(printf '%s\n' "$output" | sed 's/^MF_SHA256=.*/MF_SHA256=not-a-digest/')" ;;
+          panel_digest_mismatch) output="$(printf '%s\n' "$output" | sed "s/^MF_SHA256=.*/MF_SHA256=$(printf '%064d' 0)/")" ;;
+        esac
+        [ -z "$output" ] || printf '%s\n' "$output"
+        exit "$status"
+        ;;
+    esac
+    ;;
+esac
+exec "$PROVISION_TEST_ADB_FIXTURE" "$@"
+ADB_WRAPPER
+chmod 755 "$ADB_WRAPPER_DIR/adb"
+export PATH="$FIXTURES:/usr/bin:/bin"
 
 # The checked-in curl fixture predates Hardened mode. Keep its ordinary behavior intact while
 # modelling the successful HTTP 202 transport response returned for protected operations awaiting
@@ -103,12 +172,20 @@ LAST_STATUS=0
 
 run_provision() {
   local unsigned_ack=()
+  local provision_path="$PATH"
+  case "${MOCK_DB_TXN:-ok}" in
+    source_not_regular|source_directory|manifest_missing_*|panel_digest_invalid|panel_digest_mismatch)
+      provision_path="$ADB_WRAPPER_DIR:$provision_path" ;;
+  esac
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
-  rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts"
+  # The slow-health probe counter is per-run state; leaving it behind made one test's outcome
+  # depend on how many health probes an earlier test happened to make.
+  rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
+  rm -f "$TMP/upgrade-release-attempts"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
-  rm -f "$TMP/package-stopped"
+  rm -f "$TMP/package-stopped" "$TMP/apk-install-attempted"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
   if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
     cp "$MOCK_INSTALLED_APK_SOURCE" "$TMP/installed-apk"
@@ -117,6 +194,12 @@ run_provision() {
   fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
+  MOCK_HEALTH_READY_AFTER="${MOCK_HEALTH_READY_AFTER:-3}" \
+  MOCK_HEALTH_HANG_SECONDS="${MOCK_HEALTH_HANG_SECONDS:-3}" \
+  MOCK_HEALTH_HANG_PID_FILE="${MOCK_HEALTH_HANG_PID_FILE:-}" \
+  MOCK_HEALTH_HANG_DONE_FILE="${MOCK_HEALTH_HANG_DONE_FILE:-}" \
+  APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-1}" \
+  APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-3}" \
   MOCK_STOPPED_STATE="${MOCK_STOPPED_STATE:-0}" \
   MOCK_LAUNCHER_START="${MOCK_LAUNCHER_START:-ok}" \
   MOCK_LAUNCHER_PID_FILE="${MOCK_LAUNCHER_PID_FILE:-}" \
@@ -133,10 +216,22 @@ run_provision() {
   MOCK_PLAN="${MOCK_PLAN:-ok}" \
   MOCK_SETUP="${MOCK_SETUP:-complete}" \
   MOCK_PM_CLEAR="${MOCK_PM_CLEAR:-ok}" \
+  MOCK_INSTALLED_VCODE="${MOCK_INSTALLED_VCODE:-513}" \
   MOCK_DATA_CAPACITY="${MOCK_DATA_CAPACITY:-valid}" \
   MOCK_DATA_AVAIL_KB="${MOCK_DATA_AVAIL_KB:-1048576}" \
-  MOCK_DB_SNAPSHOT="${MOCK_DB_SNAPSHOT:-ok}" \
-  MOCK_DB_SIDECARS="${MOCK_DB_SIDECARS:-present}" \
+  MOCK_DB_TXN="${MOCK_DB_TXN:-ok}" \
+  MOCK_UPGRADE_PREPARE="${MOCK_UPGRADE_PREPARE:-unsupported}" \
+  MOCK_UPGRADE_PREPARE_PID_FILE="${MOCK_UPGRADE_PREPARE_PID_FILE:-}" \
+  MOCK_UPGRADE_PREPARE_BLOCK_SECONDS="${MOCK_UPGRADE_PREPARE_BLOCK_SECONDS:-30}" \
+  MOCK_UPGRADE_RELEASE="${MOCK_UPGRADE_RELEASE:-ok}" \
+  MOCK_DIRECT_COPY="${MOCK_DIRECT_COPY:-ok}" \
+  MOCK_DIRECT_COPY_PID_FILE="${MOCK_DIRECT_COPY_PID_FILE:-}" \
+  MOCK_DIRECT_COPY_BLOCK_SECONDS="${MOCK_DIRECT_COPY_BLOCK_SECONDS:-30}" \
+  MOCK_PM_PATH="${MOCK_PM_PATH:-ok}" \
+  MOCK_DB_CLEANUP="${MOCK_DB_CLEANUP:-ok}" \
+  MOCK_DB_DEVICE_ROWS="${MOCK_DB_DEVICE_ROWS:-7}" \
+  MOCK_DB_DEVICE_USER_VERSION="${MOCK_DB_DEVICE_USER_VERSION:-9}" \
+  MOCK_DB_DEVICE_VCODE="${MOCK_DB_DEVICE_VCODE:-513}" \
   MOCK_WEBVIEW_VERSION="${MOCK_WEBVIEW_VERSION:-150.0.0.0}" \
   MOCK_GH_FAIL="${MOCK_GH_FAIL:-0}" \
   MOCK_GITHUB_API="${MOCK_GITHUB_API:-fail}" \
@@ -208,9 +303,11 @@ run_provision() {
   PANEL_POST_TIMEOUT_SECONDS="${PANEL_POST_TIMEOUT_SECONDS:-1}" \
   PANEL_RESTORE_TIMEOUT_SECONDS="${PANEL_RESTORE_TIMEOUT_SECONDS:-1}" \
   APK_INSTALL_TIMEOUT_SECONDS="${APK_INSTALL_TIMEOUT_SECONDS:-30}" \
+  UPGRADE_PREPARE_TIMEOUT_SECONDS="${UPGRADE_PREPARE_TIMEOUT_SECONDS:-45}" \
   STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-3}" \
   STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-0}" \
   MOCK_APK_INSTALL_PID_FILE="${MOCK_APK_INSTALL_PID_FILE:-}" \
+  PATH="$provision_path" \
     bash "$PROVISION" "$@" "${unsigned_ack[@]}" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
 }
@@ -268,6 +365,17 @@ assert_log_contains() {
   if grep -Eqi -- "$pattern" "$MOCK_CALL_LOG"; then pass "$description"
   else fail_test "$description (missing call pattern: $pattern)"; fi
 }
+
+assert_marker_captured() {
+  if grep -qx 'HAPANELD_SNAPSHOT_RESULT=captured' "$LAST_OUTPUT"; then pass "$1"
+  else fail_test "$1 (no whole-line captured marker)"; fi
+}
+assert_marker_absent() {
+  if grep -qx 'HAPANELD_SNAPSHOT_RESULT=captured' "$LAST_OUTPUT"; then fail_test "$1 (unexpected captured marker)"
+  else pass "$1"; fi
+}
+reset_db_txn_state() { rm -rf "$TMP/db-txn-sandbox" "$TMP"/db-txn-script*; rm -f "$TMP"/auto-backups/*.break-glass* "$TMP/adb-root-escalated" "$TMP/bare-id-count" 2>/dev/null; }
+
 
 CAPACITY_PROBE_SOURCE="$(sed -n '
   /# HAPANELD_CAPACITY_PROBE_BEGIN/,/# HAPANELD_CAPACITY_PROBE_END/ {
@@ -354,6 +462,7 @@ done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
+if [ "$PROVISION_TEST_SCOPE" = core ] || [ "$PROVISION_TEST_SCOPE" = all ]; then
 # A host-only logging request has one durable meaning on fresh and upgraded panels: explicit TCP.
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --log-host collector.test
 assert_success "log host without protocol provisions successfully"
@@ -427,9 +536,52 @@ else
   fail_test "automatic config backup precedes APK mutation"
 fi
 
+# The implicit export is a convenience taken on the way to an in-place replacement, not a gate on it.
+# Its failure must still reach the package replacement, and must not leave a file behind that would
+# later read as a recovery point which was never produced.
+rm -rf "$TMP/auto-backups"
 MOCK_EXPORT=fail HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --apk "$APK"
-assert_failure "automatic backup failure blocks an upgrade"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "automatic backup failure stops before APK mutation"
+assert_success "implicit backup failure does not block an ordinary replacement"
+assert_log_contains '^adb .* install' "implicit backup failure still reaches the APK install"
+failed_auto_count="$(find "$TMP/auto-backups" -maxdepth 1 -type f \( -name '*.json' -o -name '*.partial.*' \) | wc -l | tr -d ' ')"
+if [ "$failed_auto_count" = 0 ]; then
+  pass "a rejected implicit backup is withdrawn rather than published"
+else
+  fail_test "a rejected implicit backup is withdrawn rather than published ($failed_auto_count left)"
+fi
+# Withdrawing the file is only half of it: the database receipt must not cite an export that was
+# never produced, or a later recovery reads a path that does not exist.
+failed_auto_receipt="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.backup-receipt.txt' | head -1)"
+if [ -n "$failed_auto_receipt" ] && grep -qx 'settings_export=none' "$failed_auto_receipt"; then
+  pass "the database receipt reports no settings export after the implicit export is withdrawn"
+else
+  fail_test "the database receipt reports no settings export after the implicit export is withdrawn"
+fi
+
+# The host-side directory is the other way the implicit export can fail, and it fails before any
+# request is made. It must reach the replacement too, or a host-side permissions problem would strand
+# every panel on its current build.
+UNUSABLE_BACKUP_DIR="$TMP/unusable-backup-dir"
+rm -rf "$UNUSABLE_BACKUP_DIR"
+ln -s "$TMP/nowhere-at-all" "$UNUSABLE_BACKUP_DIR"
+HAPANELD_CONFIG_BACKUP_DIR="$UNUSABLE_BACKUP_DIR" HAPANELD_SKIP_AUTO_EXPORT=0 \
+  run_provision "$MOCK_TARGET" --apk "$APK"
+assert_success "an unusable host backup directory does not block an ordinary replacement"
+assert_contains 'owner-only host backup directory.*could not be prepared' "the unusable backup directory is named"
+assert_log_contains '^adb .* install' "an unusable host backup directory still reaches the APK install"
+rm -f "$UNUSABLE_BACKUP_DIR"
+
+# The same failure on an explicitly requested --export is the failure of the requested deliverable.
+rm -rf "$TMP/auto-backups"
+EXPLICIT_STRICT_EXPORT="$TMP/explicit-strict-backup.json"
+MOCK_EXPORT=fail HAPANELD_SKIP_AUTO_EXPORT=0 run_provision "$MOCK_TARGET" --export "$EXPLICIT_STRICT_EXPORT" --apk "$APK"
+assert_failure "explicit export failure blocks an upgrade"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "explicit export failure stops before APK mutation"
+if [ ! -e "$EXPLICIT_STRICT_EXPORT" ]; then
+  pass "a failed explicit export publishes no file"
+else
+  fail_test "a failed explicit export publishes no file"
+fi
 
 SYMLINK_TARGET="$TMP/symlink-target.json"
 SYMLINK_EXPORT="$TMP/symlink-backup.json"
@@ -527,23 +679,51 @@ assert_failure "database failure makes verification fail"
 assert_contains 'storage health: database failure.*SQLite writes or health checks failed' "database failure identifies the failing condition"
 assert_contains 'Preserve ha-paneld\.db.*inspect.*/api/v1/diag.*re-run verification' "database failure protects the database and provides a recovery action"
 
-# Mutating runs gate known danger before install, then require a complete current-build contract
-# after install. The latter is bounded because package replacement and app startup are asynchronous.
+# An ordinary package replacement is also a recovery attempt: known pressure and database failure
+# warn but do not preempt the backup attempt or APK install. Standalone verification above remains
+# strict, and unknown/malformed health below still fails closed.
 MOCK_STORAGE_HEALTH=critical run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "critical storage blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "critical storage blocks the APK install"
+assert_success "critical storage admits an ordinary replacement as a recovery attempt"
+assert_contains 'fixed pressure thresholds are advisory.*recovery attempt' "critical storage clearly records its recovery admission"
+assert_marker_captured "critical storage still lets the actual snapshot decide whether the backup fits"
+assert_log_contains '^adb .* install' "critical storage does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=database_failure run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "database failure blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "database failure blocks the APK install"
+assert_success "database failure admits an ordinary replacement as a recovery attempt"
+assert_contains 'database failure.*admitting this in-place replacement as a recovery attempt' "database failure clearly records its recovery admission"
+assert_log_contains '^adb .* install' "database failure does not preempt the APK install"
 
+# Damage that appears only after the replacement is reported, not converted into a failed run: the
+# replacement already happened, so a non-zero exit would describe an outcome that did not occur.
+MOCK_STORAGE_HEALTH=healthy-then-critical run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "new critical pressure after a healthy preflight does not fail a completed replacement"
+assert_contains 'storage health: critical.*replacement completed' "new post-install pressure stays visible as a warning"
+
+MOCK_STORAGE_HEALTH=healthy-then-database_failure run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "new database failure after a healthy preflight does not fail a completed replacement"
+assert_contains 'storage health: database failure.*recovery attempt completed' "new post-install database failure stays visible as a warning"
+
+HAPANELD_RESET_CONFIRM=RESET MOCK_STORAGE_HEALTH=critical \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_success "critical storage does not impose a backup gate on a confirmed reset"
+assert_contains 'requested reset will intentionally erase ha-paneld state if confirmed' "critical storage explains why reset may proceed"
+assert_log_contains '^adb .* pm clear io.github.maxlyth.hapaneld$' "critical storage still reaches the confirmed exact-package reset"
+
+HAPANELD_RESET_CONFIRM=RESET MOCK_STORAGE_HEALTH=database_failure \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_success "database failure does not impose a backup gate on a confirmed reset"
+assert_contains 'requested reset will intentionally discard the unhealthy database if confirmed' "database failure explains why reset may proceed"
+assert_log_contains '^adb .* pm clear io.github.maxlyth.hapaneld$' "database failure still reaches the confirmed exact-package reset"
+
+# A panel whose health cannot be read or understood is a candidate for replacement, not a panel to
+# refuse. Standalone verification above still reports both states as failures.
 MOCK_STORAGE_HEALTH=missing-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "a malformed installed-app storage contract blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "malformed storage status blocks the APK install"
+assert_success "a malformed installed-app storage contract admits an ordinary replacement"
+assert_log_contains '^adb .* install' "malformed storage status does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=future-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an unknown installed-app storage state blocks provisioning before mutation"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unknown storage state blocks the APK install"
+assert_success "an unknown installed-app storage state admits an ordinary replacement"
+assert_log_contains '^adb .* install' "unknown storage state does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=unchecked-then-healthy run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "post-install verification polls until storage health becomes healthy"
@@ -555,17 +735,17 @@ else
 fi
 
 MOCK_STORAGE_HEALTH=always-unchecked run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "post-install verification fails when storage health never completes"
-assert_contains 'not checked after bounded post-install retries' "bounded unchecked failure names the incomplete health check"
+assert_success "an indeterminate health check does not fail a completed replacement"
+assert_contains 'still not checked after bounded post-install retries' "the incomplete health check stays visible as a warning"
 
 MOCK_STORAGE_HEALTH=transport-fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an installed package with unavailable storage status blocks provisioning"
-assert_contains "installed app's storage-health status could not be reached" "installed-package transport failure names the unavailable authority"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "installed-package transport failure stops before APK install"
+assert_success "an installed package with unavailable storage status admits an ordinary replacement"
+assert_contains "status endpoint could not be reached" "unreachable storage status is reported"
+assert_log_contains '^adb .* install' "unreachable storage status does not preempt the APK install"
 
 MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "post-install verification rejects a current build with missing storage status"
-assert_contains 'installed app did not return the required status contract' "current-build missing status names the required contract"
+assert_success "a missing post-install storage contract does not fail a completed replacement"
+assert_contains 'installed app did not return the status contract' "current-build missing status stays visible as a warning"
 
 # Pre-plan releases remain verifiable. A 404 is an explicit compatibility result, not a reason to
 # discard the established health, permissions and diagnostics checks.
@@ -2052,80 +2232,1068 @@ assert_contains 'provisioned and verified' "a finished panel is reported as prov
 assert_not_contains 'Next: ' "$LAST_OUTPUT" "a finished panel is given no next step"
 
 # ── Panel storage headroom ──────────────────────────────────────────────────────────────────────
-# ha-paneld.db is the canonical store and the pre-upgrade snapshot stages a full copy of it, so an
-# upgrade needs room for two copies. Failing that up front beats failing part-way through a write to
-# the store itself.
+# Snapshot capacity is determined by the actual capture, not a guessed free-space floor. Even a
+# malformed df response must not preempt a package replacement that can capture and install.
 MOCK_DATA_AVAIL_KB=1024 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an upgrade onto a full data partition returns nonzero"
-assert_contains 'too little free storage' "insufficient panel storage is named before anything is installed"
-assert_contains 'room for two copies' "the storage requirement explains why twice the database is needed"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "insufficient storage stops before any APK install"
+assert_success "a low reported free-space number does not impose an arbitrary upgrade floor"
+assert_marker_captured "the real snapshot attempt, not df arithmetic, proves that this backup fits"
+assert_log_contains '^adb .* install' "a successful capture on a constrained panel reaches APK install"
+assert_not_contains 'shell df -P -k /data' "$MOCK_CALL_LOG" "ordinary provisioning does not query a fixed /data admission floor"
 
-MOCK_DATA_AVAIL_KB=131072 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "exactly 128 MiB free is below the safe capacity floor"
-assert_contains 'more than 131072KB \(128 MiB\) is required' "the capacity boundary is explicit"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the exact capacity floor stops before APK install"
+# Pin the whole shipped backup implementation, not one spelling: no executable data-volume df,
+# stat or du probe may silently recreate a guessed capacity gate. /system helper-capacity probes
+# live outside this backup range and remain intentionally allowed.
+backup_source="$(sed -n '/^snapshot_prepared_database()/,/^reset_panel_config()/p' "$PROVISION" | sed '/^[[:space:]]*#/d')"
+if printf '%s\n' "$backup_source" | grep -Eq '(^|[;&|[:space:]])(df|du|stat)([[:space:]]|$).*(/data|databases|ha-paneld\.db)'; then
+  fail_test "the complete backup path has no data-volume df, stat or du capacity gate"
+else pass "the complete backup path has no data-volume df, stat or du capacity gate"; fi
 
-# Unknown capacity cannot prove that the database plus its staged copy fit, so it fails closed.
 MOCK_DATA_CAPACITY=wrapped run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_failure "an unreadable df blocks an upgrade safely"
-assert_contains 'storage capacity could not be determined safely' "an unreadable df fails without guessing a number"
-assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "unreadable capacity stops before APK install"
+assert_success "an unreadable df response does not block an otherwise successful upgrade"
+assert_marker_captured "a malformed df response cannot replace the actual capture result"
+assert_not_contains 'shell df -P -k /data' "$MOCK_CALL_LOG" "malformed capacity data is irrelevant because the fixed gate is absent"
 
-MOCK_DATA_AVAIL_KB=131073 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "capacity immediately above 128 MiB permits an upgrade"
+fi
 
-run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "an upgrade with adequate storage succeeds"
-assert_contains 'panel storage: .*free on /data' "adequate storage is reported"
+# ── Data-store snapshot: acknowledged quiescence with one legacy fallback ──────────────────────
+if [ "$PROVISION_TEST_SCOPE" != publication ]; then
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a receipt-capable build upgrades through the quiesced direct-copy path"
+assert_marker_captured "the receipt-bound direct copy earns the captured marker"
+assert_log_contains 'PREPARE_UPGRADE.*--es nonce [0-9a-f]{32}' "PREPARE carries one exact lowercase nonce"
+assert_log_contains 'exec-out su 0 cat /data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db' "the join-style root route copies the closed database with binary-safe exec-out"
+assert_not_contains '\.hapaneld-db-txn\.' "$MOCK_CALL_LOG" "the READY path creates no on-panel staging"
+assert_not_contains 'shell df -P -k /data' "$MOCK_CALL_LOG" "the READY path has no fixed capacity floor"
+prepare_line="$(grep -n 'PREPARE_UPGRADE' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+copy_line="$(grep -n 'exec-out .*ha-paneld.db' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+install_line="$(grep -n '^adb .* install' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$prepare_line" ] && [ -n "$copy_line" ] && [ -n "$install_line" ] && \
+   [ "$prepare_line" -lt "$copy_line" ] && [ "$copy_line" -lt "$install_line" ]; then
+  pass "PREPARE then direct copy then APK install occur in order"
+else fail_test "PREPARE then direct copy then APK install occur in order"; fi
+direct_receipt="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db.backup-receipt.txt' | head -1)"
+if [ -n "$direct_receipt" ] && grep -Eq '^database_sha256_host=[0-9a-f]{64}$' "$direct_receipt"; then
+  pass "the direct-copy receipt records the mandatory host digest"
+else fail_test "the direct-copy receipt records the mandatory host digest"; fi
+direct_database="$(sed -n 's/^database=//p' "$direct_receipt" 2>/dev/null)"
+direct_receipt_sha="$(sed -n 's/^database_sha256_host=//p' "$direct_receipt" 2>/dev/null)"
+direct_actual_sha="$(/usr/bin/sha256sum "$direct_database" 2>/dev/null | awk '{print $1}')"
+if [ -n "$direct_database" ] && [ "$direct_receipt_sha" = "$direct_actual_sha" ]; then
+  pass "the direct-copy receipt digest equals the actual published database bytes"
+else fail_test "the direct-copy receipt digest equals the actual published database bytes"; fi
+prepare_nonce="$(sed -n 's/.*PREPARE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG" | head -1)"
+if grep -Fq "quiescence_nonce=$prepare_nonce" "$direct_receipt" 2>/dev/null; then
+  pass "the published receipt binds the exact acknowledged nonce"
+else fail_test "the published receipt binds the exact acknowledged nonce"; fi
+assert_not_contains 'RELEASE_UPGRADE' "$MOCK_CALL_LOG" "successful package replacement does not release the terminated old process"
+if grep -q 'timeout="${UPGRADE_PREPARE_TIMEOUT_SECONDS:-45}"' "$PROVISION" &&
+   grep -q 'case "$timeout" in .*timeout=45' "$PROVISION"; then
+  pass "the host PREPARE budget covers the app's orderly teardown and digest window"
+else fail_test "the host PREPARE budget covers the app's orderly teardown and digest window"; fi
+nonce_owner_line="$(grep -n 'UPGRADE_QUIESCE_NONCE="\$nonce"' "$PROVISION" | head -1 | cut -d: -f1)"
+prepare_send_line="$(grep -n -- '-a io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE' "$PROVISION" | head -1 | cut -d: -f1)"
+if [ -n "$nonce_owner_line" ] && [ -n "$prepare_send_line" ] && [ "$nonce_owner_line" -lt "$prepare_send_line" ]; then
+  pass "the host retains nonce custody before PREPARE can arm the app"
+else fail_test "the host retains nonce custody before PREPARE can arm the app"; fi
+cleanup_discard_line="$(grep -n 'if type discard_db_snapshot_txn' "$PROVISION" | head -1 | cut -d: -f1)"
+cleanup_release_line="$(grep -n 'if type release_upgrade_quiescence' "$PROVISION" | head -1 | cut -d: -f1)"
+if [ -n "$cleanup_discard_line" ] && [ -n "$cleanup_release_line" ] && [ "$cleanup_discard_line" -lt "$cleanup_release_line" ]; then
+  pass "abort cleanup releases quiescence only after owned snapshot cleanup"
+else fail_test "abort cleanup releases quiescence only after owned snapshot cleanup"; fi
 
-# ── Data-store snapshot ─────────────────────────────────────────────────────────────────────────
+# Direct host artifacts use the same deferred-signal ownership primitive as the legacy publisher.
+# Creation and registration are indivisible, and the successful handoff changes owners before
+# signals are replayed.
+direct_db_defer_line="$(grep -n '^  snapshot_txn_defer_host_signals$' "$PROVISION" | sed -n '1s/:.*//p')"
+direct_receipt_defer_line="$(grep -n '^  snapshot_txn_defer_host_signals$' "$PROVISION" | sed -n '2s/:.*//p')"
+direct_handoff_defer_line="$(grep -n '^  snapshot_txn_defer_host_signals$' "$PROVISION" | sed -n '3s/:.*//p')"
+direct_db_restore_line="$(grep -n '^  snapshot_txn_restore_host_signals$' "$PROVISION" | sed -n '1s/:.*//p')"
+direct_receipt_restore_line="$(grep -n '^  snapshot_txn_restore_host_signals$' "$PROVISION" | sed -n '2s/:.*//p')"
+direct_handoff_restore_line="$(grep -n '^  snapshot_txn_restore_host_signals$' "$PROVISION" | sed -n '3s/:.*//p')"
+direct_db_create_line="$(grep -n 'if \[ -e "\$host_db" \].*: > "\$host_db"' "$PROVISION" | cut -d: -f1)"
+direct_db_owner_line="$(grep -n '^  SNAPSHOT_TXN_HOST_DB="\$host_db"$' "$PROVISION" | cut -d: -f1)"
+direct_receipt_create_line="$(grep -n 'if \[ -e "\$receipt" \].*: > "\$receipt"' "$PROVISION" | head -1 | cut -d: -f1)"
+direct_receipt_owner_line="$(grep -n '^  SNAPSHOT_TXN_HOST_RECEIPT="\$receipt"$' "$PROVISION" | head -1 | cut -d: -f1)"
+direct_db_disown_line="$(grep -n '^  SNAPSHOT_TXN_HOST_DB=""$' "$PROVISION" | cut -d: -f1)"
+direct_receipt_disown_line="$(grep -n '^  SNAPSHOT_TXN_HOST_RECEIPT=""$' "$PROVISION" | cut -d: -f1)"
+if [ -n "$direct_db_defer_line" ] && [ "$direct_db_defer_line" -lt "$direct_db_create_line" ] &&
+   [ "$direct_db_create_line" -lt "$direct_db_owner_line" ] && [ "$direct_db_owner_line" -lt "$direct_db_restore_line" ]; then
+  pass "direct database creation and cleanup registration are signal-atomic"
+else fail_test "direct database creation and cleanup registration are signal-atomic"; fi
+if [ -n "$direct_receipt_defer_line" ] && [ "$direct_receipt_defer_line" -lt "$direct_receipt_create_line" ] &&
+   [ "$direct_receipt_create_line" -lt "$direct_receipt_owner_line" ] && [ "$direct_receipt_owner_line" -lt "$direct_receipt_restore_line" ]; then
+  pass "direct receipt creation and cleanup registration are signal-atomic"
+else fail_test "direct receipt creation and cleanup registration are signal-atomic"; fi
+if grep -q 'set -o noclobber; : > "\$host_db"' "$PROVISION" &&
+   grep -q 'set -o noclobber; : > "\$receipt"' "$PROVISION"; then
+  pass "direct database and receipt creation both enforce shell noclobber"
+else fail_test "direct database and receipt creation both enforce shell noclobber"; fi
+if [ -n "$direct_handoff_defer_line" ] && [ "$direct_handoff_defer_line" -lt "$direct_db_disown_line" ] &&
+   [ "$direct_db_disown_line" -lt "$direct_receipt_disown_line" ] &&
+   [ "$direct_receipt_disown_line" -lt "$direct_handoff_restore_line" ]; then
+  pass "direct database and receipt handoff is signal-atomic before signals replay"
+else fail_test "direct database and receipt handoff is signal-atomic before signals replay"; fi
+
+# Runtime custody on each side of that handoff. Before acceptance, an interrupt removes the owned
+# partial and RELEASEs the app. After acceptance, an interrupt during package installation preserves
+# both published artifacts while still reaping the blocked child and RELEASEing the app.
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+direct_copy_pid_file="$TMP/direct-copy-block.pid"
+direct_copy_output="$TMP/direct-copy-block-output.txt"
+rm -f "$direct_copy_pid_file"
+set -m
+MOCK_UPGRADE_PREPARE=ready MOCK_DIRECT_COPY=block MOCK_DIRECT_COPY_PID_FILE="$direct_copy_pid_file" \
+ADB_COMMAND_TIMEOUT_SECONDS=5 HAPANELD_SKIP_AUTO_EXPORT=1 \
+HAPANELD_CONFIG_BACKUP_DIR="$TMP/auto-backups" MOCK_STATE_DIR="$TMP" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$APK" --no-tame --allow-unsigned-helper > "$direct_copy_output" 2>&1 &
+direct_copy_owner_pid=$!
+ACTIVE_PUBLICATION_PGID="$direct_copy_owner_pid"
+set +m
+direct_copy_ready=0
+for _ in {1..100}; do
+  if [ -s "$direct_copy_pid_file" ]; then direct_copy_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$direct_copy_ready" -eq 1 ]; then
+  pass "direct-copy interruption reaches the blocked binary transfer"
+else
+  LAST_OUTPUT="$direct_copy_output"
+  fail_test "direct-copy interruption reaches the blocked binary transfer"
+fi
+direct_partial_db="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db' | head -1)"
+if [ -n "$direct_partial_db" ]; then
+  pass "the direct database is registered before its transfer can block"
+else
+  LAST_OUTPUT="$direct_copy_output"
+  fail_test "the direct database is registered before its transfer can block"
+fi
+direct_interrupt_started="$(date +%s)"
+kill -INT -- "-$direct_copy_owner_pid" 2>/dev/null || true
+if wait "$direct_copy_owner_pid"; then direct_copy_status=0; else direct_copy_status=$?; fi
+direct_interrupt_elapsed=$(( $(date +%s) - direct_interrupt_started ))
+ACTIVE_PUBLICATION_PGID=""
+if [ "$direct_copy_status" -eq 130 ]; then
+  pass "interrupting a direct copy preserves signal status"
+else
+  LAST_OUTPUT="$direct_copy_output"
+  fail_test "interrupting a direct copy preserves signal status (got $direct_copy_status)"
+fi
+if find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db*' | grep -q .; then
+  LAST_OUTPUT="$direct_copy_output"
+  fail_test "an interrupted unaccepted direct pair is removed"
+else pass "an interrupted unaccepted direct pair is removed"; fi
+direct_copy_blocked_pid="$(cat "$direct_copy_pid_file" 2>/dev/null || true)"
+if [ -n "$direct_copy_blocked_pid" ] && ! kill -0 -- "-$direct_copy_blocked_pid" 2>/dev/null; then
+  pass "direct-copy interruption reaps the entire nested adb process group"
+else fail_test "direct-copy interruption reaps the entire nested adb process group"; fi
+if [ "$direct_interrupt_elapsed" -lt 4 ]; then
+  pass "direct-copy interruption beats the nested five-second deadline"
+else fail_test "direct-copy interruption beats the nested five-second deadline (elapsed ${direct_interrupt_elapsed}s)"; fi
+if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
+  pass "direct-copy interruption RELEASEs quiescence exactly once"
+else fail_test "direct-copy interruption RELEASEs quiescence exactly once"; fi
+
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+direct_install_pid_file="$TMP/direct-handoff-install.pid"
+direct_handoff_output="$TMP/direct-handoff-output.txt"
+rm -f "$direct_install_pid_file" "$TMP/active-helper-transaction"
+set -m
+MOCK_UPGRADE_PREPARE=ready MOCK_DIRECT_COPY=ok MOCK_APK_INSTALL=block \
+MOCK_APK_INSTALL_PID_FILE="$direct_install_pid_file" ADB_COMMAND_TIMEOUT_SECONDS=5 \
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_CONFIG_BACKUP_DIR="$TMP/auto-backups" MOCK_STATE_DIR="$TMP" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$APK" --no-tame --allow-unsigned-helper > "$direct_handoff_output" 2>&1 &
+direct_handoff_owner_pid=$!
+ACTIVE_PUBLICATION_PGID="$direct_handoff_owner_pid"
+set +m
+direct_handoff_ready=0
+for _ in {1..100}; do
+  if [ -s "$direct_install_pid_file" ]; then direct_handoff_ready=1; break; fi
+  /bin/sleep 0.05
+done
+if [ "$direct_handoff_ready" -eq 1 ]; then
+  pass "post-handoff interruption reaches the blocked package install"
+else
+  LAST_OUTPUT="$direct_handoff_output"
+  fail_test "post-handoff interruption reaches the blocked package install"
+fi
+accepted_direct_db="$(find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db' | head -1)"
+accepted_direct_receipt="${accepted_direct_db}.backup-receipt.txt"
+if [ -n "$accepted_direct_db" ] && [ -s "$accepted_direct_db" ] && [ -s "$accepted_direct_receipt" ]; then
+  pass "the accepted direct pair exists before the post-handoff interrupt"
+else
+  LAST_OUTPUT="$direct_handoff_output"
+  fail_test "the accepted direct pair exists before the post-handoff interrupt"
+fi
+kill -INT -- "-$direct_handoff_owner_pid" 2>/dev/null || true
+if wait "$direct_handoff_owner_pid"; then direct_handoff_status=0; else direct_handoff_status=$?; fi
+ACTIVE_PUBLICATION_PGID=""
+if [ "$direct_handoff_status" -eq 130 ]; then
+  pass "interrupting after direct handoff preserves signal status"
+else
+  LAST_OUTPUT="$direct_handoff_output"
+  fail_test "interrupting after direct handoff preserves signal status (got $direct_handoff_status)"
+fi
+if [ -s "$accepted_direct_db" ] && [ -s "$accepted_direct_receipt" ]; then
+  pass "post-handoff interruption preserves the accepted direct pair"
+else
+  LAST_OUTPUT="$direct_handoff_output"
+  fail_test "post-handoff interruption preserves the accepted direct pair"
+fi
+direct_install_blocked_pid="$(cat "$direct_install_pid_file" 2>/dev/null || true)"
+if [ -n "$direct_install_blocked_pid" ] && ! kill -0 "$direct_install_blocked_pid" 2>/dev/null; then
+  pass "post-handoff interruption reaps the blocked package install"
+else fail_test "post-handoff interruption reaps the blocked package install"; fi
+if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
+  pass "post-handoff interruption RELEASEs quiescence exactly once"
+else fail_test "post-handoff interruption RELEASEs quiescence exactly once"; fi
+reset_db_txn_state
+
+# Every non-ready or malformed outcome gets one PREPARE and exactly one legacy .backup attempt.
+for prepare_mode in unsupported malformed wrong_nonce wrong_result nonready; do
+  reset_db_txn_state
+  MOCK_UPGRADE_PREPARE="$prepare_mode" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $prepare_mode PREPARE outcome uses the legacy backup and still upgrades"
+  if [ "$(grep -c 'PREPARE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
+    pass "a $prepare_mode outcome is not retried"
+  else fail_test "a $prepare_mode outcome is not retried"; fi
+  assert_log_contains 'sh /data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "a $prepare_mode outcome uses the one legacy SQLite backup"
+  if [ "$(grep -c 'sh /data/local/tmp/\.hapaneld-db-txn\..*-script' "$MOCK_CALL_LOG")" = 1 ] &&
+     [ "$(grep -c '^sqlite3 \.backup$' "$MOCK_CALL_LOG")" = 1 ]; then
+    pass "a $prepare_mode outcome executes exactly one legacy transaction and one SQLite .backup"
+  else fail_test "a $prepare_mode outcome executes exactly one legacy transaction and one SQLite .backup"; fi
+  assert_not_contains 'exec-out .*ha-paneld.db' "$MOCK_CALL_LOG" "a $prepare_mode receipt is never accepted for direct copy"
+  assert_not_contains 'RELEASE_UPGRADE' "$MOCK_CALL_LOG" "successful replacement retires a $prepare_mode custody nonce without RELEASE"
+done
+
+reset_db_txn_state
+prepare_timeout_pid_file="$TMP/upgrade-prepare-timeout.pid"
+rm -f "$prepare_timeout_pid_file"
+UPGRADE_PREPARE_TIMEOUT_SECONDS=1 MOCK_UPGRADE_PREPARE=timeout \
+MOCK_UPGRADE_PREPARE_PID_FILE="$prepare_timeout_pid_file" \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a timed-out PREPARE falls back once and still upgrades"
+assert_log_contains 'sh /data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "a timed-out PREPARE uses the one legacy SQLite backup"
+if [ "$(grep -c 'sh /data/local/tmp/\.hapaneld-db-txn\..*-script' "$MOCK_CALL_LOG")" = 1 ] &&
+   [ "$(grep -c '^sqlite3 \.backup$' "$MOCK_CALL_LOG")" = 1 ]; then
+  pass "a timed-out PREPARE executes exactly one legacy transaction and one SQLite .backup"
+else fail_test "a timed-out PREPARE executes exactly one legacy transaction and one SQLite .backup"; fi
+assert_not_contains 'RELEASE_UPGRADE' "$MOCK_CALL_LOG" "successful replacement retires timed-out PREPARE custody without RELEASE"
+prepare_timeout_pid="$(cat "$prepare_timeout_pid_file" 2>/dev/null || true)"
+if [ -n "$prepare_timeout_pid" ] && ! kill -0 "$prepare_timeout_pid" 2>/dev/null; then
+  pass "a timed-out PREPARE reaps its adb fixture process"
+else fail_test "a timed-out PREPARE reaps its adb fixture process"; fi
+
+# A malformed or timed-out result cannot prove the app failed to arm. If a later pre-install step
+# aborts, cleanup therefore RELEASEs the retained request nonce after staging cleanup.
+for uncertain_prepare in malformed timeout; do
+  reset_db_txn_state
+  uncertain_timeout=45
+  [ "$uncertain_prepare" != timeout ] || uncertain_timeout=1
+  UPGRADE_PREPARE_TIMEOUT_SECONDS="$uncertain_timeout" MOCK_UPGRADE_PREPARE="$uncertain_prepare" \
+  MOCK_HELPER_INSTALL=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_failure "a post-$uncertain_prepare abort fails before package replacement"
+  if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
+    pass "a post-$uncertain_prepare abort releases its retained nonce exactly once"
+  else fail_test "a post-$uncertain_prepare abort releases its retained nonce exactly once"; fi
+  prepare_nonce="$(sed -n 's/.*PREPARE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG" | head -1)"
+  release_nonce="$(sed -n 's/.*RELEASE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG" | head -1)"
+  if [ -n "$prepare_nonce" ] && [ "$release_nonce" = "$prepare_nonce" ]; then
+    pass "a post-$uncertain_prepare abort RELEASEs the exact request nonce"
+  else fail_test "a post-$uncertain_prepare abort RELEASEs the exact request nonce"; fi
+done
+
+# Size, digest, schema, row-count and local SQLite failures reject only the optional ordinary-upgrade backup. They do
+# not silently switch to a second capture mechanism after an authenticated READY receipt.
+for direct_failure in size_mismatch digest_mismatch schema_mismatch rows_mismatch invalid_sqlite; do
+  reset_db_txn_state
+  MOCK_UPGRADE_PREPARE="$direct_failure" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $direct_failure direct copy is discarded while the ordinary upgrade continues"
+  assert_marker_absent "a $direct_failure direct copy never earns the captured marker"
+  assert_log_contains '^adb .* install' "a $direct_failure optional backup does not preempt install"
+  assert_not_contains '\.hapaneld-db-txn\.' "$MOCK_CALL_LOG" "a $direct_failure result does not retry through the legacy path"
+  if find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db*' | grep -q .; then
+    fail_test "a $direct_failure rejection removes its host artifacts"
+  else pass "a $direct_failure rejection removes its host artifacts"; fi
+done
+
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready MOCK_SU_DIALECT=shc run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "the quiesced direct copy supports the sh -c root route"
+assert_log_contains 'exec-out su 0 sh -c cat /data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db' "the direct copy uses the probed sh -c form"
+for direct_dialect in rootjoin:'exec-out su root cat ' rootshc:'exec-out su root sh -c cat ' suc:'exec-out su -c cat '; do
+  dialect_name="${direct_dialect%%:*}"; wrapper_pattern="${direct_dialect#*:}"
+  reset_db_txn_state
+  MOCK_UPGRADE_PREPARE=ready MOCK_SU_DIALECT="$dialect_name" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_marker_captured "the READY direct copy supports the $dialect_name root form"
+  assert_log_contains "$wrapper_pattern/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db" "the direct copy dispatches through the exact $dialect_name form"
+done
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready MOCK_ADB_ROOT=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_marker_captured "the READY direct copy supports root adbd without su"
+assert_log_contains 'exec-out cat /data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db' "root adbd uses the bare binary-safe copy form"
+
+# A failure after READY but before package replacement releases the exact lease once. A destructive
+# reset with rejected bytes remains fail-closed and likewise releases rather than erasing anything.
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready MOCK_HELPER_INSTALL=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a pre-install helper failure aborts after READY"
+if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
+  pass "a pre-install abort sends exactly one RELEASE"
+else fail_test "a pre-install abort sends exactly one RELEASE"; fi
+prepare_nonce="$(sed -n 's/.*PREPARE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG" | head -1)"
+release_nonce="$(sed -n 's/.*RELEASE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG" | head -1)"
+if [ -n "$prepare_nonce" ] && [ "$release_nonce" = "$prepare_nonce" ]; then
+  pass "RELEASE carries the exact READY nonce"
+else fail_test "RELEASE carries the exact READY nonce"; fi
+assert_log_contains 'am start-foreground-service --user 0 -n io.github.maxlyth.hapaneld/.PaneldService' "an acknowledged RELEASE gets the API31 root-authoritative service start"
+
+# A non-exact response never disowns the lease. The same nonce is retried once, and every RELEASE
+# attempt receives the idempotent API31 root start backstop even when the receiver says release_failed.
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready MOCK_UPGRADE_RELEASE=fail_once MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a transient RELEASE response preserves the original provisioning failure"
+release_nonces="$(sed -n 's/.*RELEASE_UPGRADE.*--es nonce \([0-9a-f]\{32\}\).*/\1/p' "$MOCK_CALL_LOG")"
+if [ "$(printf '%s\n' "$release_nonces" | grep -c .)" = 2 ] &&
+   [ "$(printf '%s\n' "$release_nonces" | sort -u | grep -c .)" = 1 ]; then
+  pass "a non-exact RELEASE is retried once with the same retained nonce"
+else fail_test "a non-exact RELEASE is retried once with the same retained nonce"; fi
+if [ "$(grep -c 'am start-foreground-service --user 0 -n io.github.maxlyth.hapaneld/.PaneldService' "$MOCK_CALL_LOG")" = 2 ]; then
+  pass "each RELEASE attempt receives the idempotent API31 service-start backstop"
+else fail_test "each RELEASE attempt receives the idempotent API31 service-start backstop"; fi
+
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready MOCK_UPGRADE_RELEASE=release_failed MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a receiver release_failed response preserves the original provisioning failure"
+if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 2 ]; then
+  pass "release_failed is retried exactly once"
+else fail_test "release_failed is retried exactly once"; fi
+assert_log_contains 'am start-foreground-service --user 0 -n io.github.maxlyth.hapaneld/.PaneldService' "release_failed still receives the root-authoritative service-start backstop"
+assert_contains 'RELEASE was not acknowledged after two attempts' "release_failed warns that lease acknowledgement is still absent"
+release_clear_line="$(grep -n '^      UPGRADE_QUIESCE_NONCE=""$' "$PROVISION" | head -1 | cut -d: -f1)"
+exact_release_branch_line="$(grep -n '^    if \[ "\$released_count" = 1 \]; then$' "$PROVISION" | head -1 | cut -d: -f1)"
+if [ -n "$exact_release_branch_line" ] && [ -n "$release_clear_line" ] &&
+   [ "$exact_release_branch_line" -lt "$release_clear_line" ]; then
+  pass "source disowns RELEASE custody only inside the exact-response branch"
+else fail_test "source disowns RELEASE custody only inside the exact-response branch"; fi
+
+if grep -Eq 'am force-stop[^\n]*io\.github\.maxlyth\.hapaneld|p?kill(all)?[^\n]*io\.github\.maxlyth\.hapaneld' "$PROVISION"; then
+  fail_test "the upgrade path never force-stops or kills ha-paneld"
+else pass "the upgrade path never force-stops or kills ha-paneld"; fi
+
+if [ "$PROVISION_TEST_SCOPE" = backup ]; then
+  printf '1..%d\n' "$((passes + failures))"
+  [ "$failures" -eq 0 ] || { printf '%d assertion(s) failed\n' "$failures" >&2; exit 1; }
+  exit 0
+fi
+fi
+
+# ── Data-store snapshot: one on-panel transaction (legacy fallback) ─────────────────────────────
 # The settings export is not a recovery point: configuration, the entity catalog, proximity and
-# ambient history and the revision ring all live in ha-paneld.db. Until this existed, nothing in the
-# toolchain held a copy of that file, so the uninstall-based recovery the script itself recommends
-# destroyed it irrecoverably.
+# ambient history and the revision ring all live in ha-paneld.db. The capture is ONE generated
+# script, pushed and hash-verified before it runs as root, performing backup + integrity + admission
+# + provenance + digest atomically on the panel. The fixture EXECUTES the pushed bytes in a sandbox,
+# so every contract below observes the shipped script's own behaviour. The captured marker is always
+# matched whole-line (-x), exactly as the fleet consumer greps it.
+reset_db_txn_state
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "an upgrade with a root route succeeds"
-assert_log_contains 'adb .*pull .*hapaneld-db-snapshot.*ha-paneld\.db ' "the upgrade snapshot copies the canonical data store"
-assert_log_contains 'adb .*pull .*ha-paneld\.db-wal ' "the snapshot also copies the write-ahead log"
-assert_log_contains 'adb .*pull .*ha-paneld\.db-shm ' "the snapshot also copies the shared-memory sidecar"
-assert_contains 'data-store snapshot' "the snapshot reports where it wrote the database"
-assert_log_contains 'rm -rf /data/local/tmp/\.hapaneld-db-snapshot' "the on-panel staging copy is removed again"
-# The label is the whole safety story for this artefact: the panel's own backup deliberately omits a
-# raw database because restoring one across versions or onto another panel is the known hazard. These
-# files are same-panel, same-version, manual-restore-only, and must say so where someone finds them.
-assert_log_contains 'adb .*pull .*break-glass\.db$' "the snapshot is named break-glass on disk, not as an ordinary backup"
+assert_marker_captured "a verified capture emits the exact whole-line captured marker"
+assert_log_contains 'push .*/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "the capture script is pushed to the panel"
+assert_log_contains 'sha256sum /data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "the pushed script is hash-verified before it runs as root"
+assert_log_contains 'sh /data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "the capture runs as one on-panel transaction"
+assert_log_contains 'pull .*\.hapaneld-db-txn\.[0-9a-f]+/ha-paneld\.db .*break-glass\.db' "the verified snapshot is pulled to the break-glass name"
+assert_contains 'verified SQLite backup, integrity ok' "the report states what was verified, not just where it wrote"
 assert_contains 'restored by hand only' "the snapshot states that nothing restores it automatically"
 assert_contains 'Install → Backup .hpb is the supported restore path' "the snapshot points at the supported restore route instead"
+receipt_file="$(ls "$TMP"/auto-backups/*.break-glass.backup-receipt.txt 2>/dev/null | head -1)"
+if [ -n "$receipt_file" ]; then pass "a receipt is published beside the snapshot"; else fail_test "a receipt is published beside the snapshot"; fi
+for receipt_field in receipt_version=2 database_bytes= database_sha256_panel= database_sha256_host= database_integrity=ok database_app_state_rows=7 database_user_version=9 app_version_code=513 app_version_name= capture_binary= capture_script_sha256= settings_export=; do
+  if grep -q "^$receipt_field" "$receipt_file" 2>/dev/null; then pass "the receipt records $receipt_field unconditionally"
+  else fail_test "the receipt records $receipt_field unconditionally"; fi
+done
+snapshot_db="$(ls "$TMP"/auto-backups/*.break-glass.db 2>/dev/null | head -1)"
+if [ -n "$snapshot_db" ] && [ -s "$snapshot_db" ] && [ "$(stat -c '%a' "$snapshot_db" 2>/dev/null)" = 600 ]; then
+  pass "the pulled snapshot exists owner-only"
+else fail_test "the pulled snapshot exists owner-only"; fi
+if ls -d "$TMP/db-txn-sandbox/data/local/tmp"/.hapaneld-db-txn.* >/dev/null 2>&1; then
+  fail_test "the on-panel staging is really removed after capture (sandbox truth)"
+else pass "the on-panel staging is really removed after capture (sandbox truth)"; fi
 
-# A cleanly checkpointed database has no sidecars. That is a complete backup, not a failed one.
-MOCK_DB_SIDECARS=absent run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "an upgrade succeeds when the database has no sidecar files"
-assert_contains 'data-store snapshot' "a sidecar-free database still produces a snapshot"
-assert_contains 'with 0 sidecar file\(s\)' "a sidecar-free database reports a complete main-file-only snapshot"
+# A cleanly checkpointed source with an empty -wal beside it is a normal state the sandbox seeds by
+# default, and the capture above succeeded over it.
+if [ -f "$TMP/db-txn-sandbox/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db-wal" ] && \
+   [ ! -s "$TMP/db-txn-sandbox/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db-wal" ]; then
+  pass "the capture succeeded over a source with a real zero-byte WAL present"
+else fail_test "the capture succeeded over a source with a real zero-byte WAL present"; fi
 
-# Best-effort by design: a panel with no root route cannot do this, and must not fail because of it.
+# A published, verified snapshot survives the operator's Ctrl-C: once the receipt is published the
+# pair's custody has ended, so an interrupt during the best-effort panel staging cleanup — the
+# likeliest moment for one, because a wedged transport is exactly what makes an operator interrupt
+# — must find nothing to repossess. The fixture blocks that cleanup so the signal lands inside it.
+reset_db_txn_state
+rm -f "$TMP/db-cleanup-blocked-once"
+publication_int_pid_file="$TMP/db-cleanup-block.pid"
+publication_int_output="$TMP/db-cleanup-block-output.txt"
+rm -f "$publication_int_pid_file"
+set -m
+MOCK_DB_CLEANUP=block MOCK_DB_CLEANUP_PID_FILE="$publication_int_pid_file" MOCK_STATE_DIR="$TMP" \
+ADB_COMMAND_TIMEOUT_SECONDS=5 \
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_CONFIG_BACKUP_DIR="$TMP/auto-backups" \
+  bash "$PROVISION" "$MOCK_TARGET" --apk "$APK" --no-tame > "$publication_int_output" 2>&1 &
+publication_int_pid=$!
+ACTIVE_PUBLICATION_PGID="$publication_int_pid"
+set +m
+publication_int_ready=0
+publication_int_attempt=0
+while [ "$publication_int_attempt" -lt 200 ]; do
+  if [ -s "$publication_int_pid_file" ]; then publication_int_ready=1; break; fi
+  /bin/sleep 0.05
+  publication_int_attempt=$((publication_int_attempt + 1))
+done
+if [ "$publication_int_ready" -eq 1 ]; then
+  pass "the interrupt scenario reaches the blocked post-publication cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the interrupt scenario reaches the blocked post-publication cleanup"
+fi
+published_db="$(ls "$TMP"/auto-backups/*.break-glass.db 2>/dev/null | head -1)"
+published_receipt="$(ls "$TMP"/auto-backups/*.break-glass.backup-receipt.txt 2>/dev/null | head -1)"
+if [ -n "$published_db" ] && [ -n "$published_receipt" ]; then
+  pass "the snapshot and receipt are published before the interrupt arrives (guards the survival claims below)"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the snapshot and receipt are published before the interrupt arrives (guards the survival claims below)"
+fi
+publication_blocked_pid="$(cat "$publication_int_pid_file" 2>/dev/null || true)"
+publication_interrupt_started=$SECONDS
+kill -INT -- "-$publication_int_pid" 2>/dev/null || true
+if wait "$publication_int_pid"; then publication_int_status=0; else publication_int_status=$?; fi
+publication_interrupt_elapsed=$((SECONDS - publication_interrupt_started))
+ACTIVE_PUBLICATION_PGID=""
+if [ "$publication_int_status" -eq 130 ]; then
+  pass "the interrupted run exits with the signal status"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the interrupted run exits with the signal status (got $publication_int_status)"
+fi
+if [ "$publication_interrupt_elapsed" -lt 4 ]; then
+  pass "process-group interruption completes before the nested 5s adb deadline"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "process-group interruption completes before the nested 5s adb deadline (took ${publication_interrupt_elapsed}s)"
+fi
+if [ -f "$published_db" ] && [ -s "$published_db" ]; then
+  pass "the published snapshot survives an interrupt during the panel staging cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the published snapshot survives an interrupt during the panel staging cleanup"
+fi
+if [ -f "$published_receipt" ] && [ -s "$published_receipt" ]; then
+  pass "the published receipt survives an interrupt during the panel staging cleanup"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the published receipt survives an interrupt during the panel staging cleanup"
+fi
+if [ -n "$publication_blocked_pid" ] && ! kill -0 "$publication_blocked_pid" 2>/dev/null; then
+  pass "the interrupt reaps the blocked cleanup fixture"
+else
+  LAST_OUTPUT="$publication_int_output"
+  fail_test "the interrupt reaps the blocked cleanup fixture"
+fi
+rm -f "$TMP/db-cleanup-blocked-once" "$publication_int_pid_file"
+reset_db_txn_state
+
+if [ "$PROVISION_TEST_SCOPE" = publication ]; then
+  printf '1..%d\n' "$((passes + failures))"
+  [ "$failures" -eq 0 ] || { printf '%d assertion(s) failed\n' "$failures" >&2; exit 1; }
+  exit 0
+fi
+
+# Discovery failure is never mistaken for a captured backup, but it is advisory for an ordinary
+# in-place upgrade because Android preserves the existing app data.
+reset_db_txn_state
+MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an unanswerable snapshot discovery does not stop an ordinary upgrade"
+assert_contains 'could not be asked whether ha-paneld is installed' "the unanswerable discovery is named"
+assert_marker_absent "an unanswerable discovery never claims a captured snapshot"
+assert_log_contains '^adb .* install' "the discovery warning still reaches APK install"
+reset_db_txn_state
+MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+assert_success "the deprecated snapshot flag remains a compatibility no-op"
+assert_marker_absent "the compatibility flag does not manufacture a captured verdict"
+reset_db_txn_state
+
+# A capability boundary, not a failure: no root route means /data/data is unreachable by design.
 MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "an upgrade on a panel with no root route still succeeds"
 assert_contains 'no root route, so only settings could be saved' "a sandboxed panel is told what was and was not saved"
-assert_not_contains 'adb .*pull .*hapaneld-db-snapshot' "$MOCK_CALL_LOG" "a panel with no root route is never asked to stage its database"
+assert_marker_absent "a rootless skip never claims a captured snapshot"
+assert_not_contains 'PREPARE_UPGRADE|exec-out .*ha-paneld.db' "$MOCK_CALL_LOG" "a rootless panel is neither quiesced nor asked for an inaccessible database"
 
-MOCK_DB_SNAPSHOT=stage_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "a failed database staging does not fail the upgrade"
-assert_contains 'could not be staged' "a failed staging says so without claiming a backup"
+# The rootless skip above is only accepted from a transport that proves it is still alive: a probe
+# whose transport died mid-question looks identical to a genuine "no root", and skipping on it would
+# drop the restore point on exactly the panel that is misbehaving. A dead transport refuses.
+reset_db_txn_state
+MOCK_ROOT=0 MOCK_SNAPSHOT_TRANSPORT=dead run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a transport that dies during root discovery stops the upgrade"
+assert_contains 'transport failed during root discovery' "the dead-transport refusal is named"
+assert_marker_absent "a dead-transport probe never claims a captured snapshot"
+reset_db_txn_state
 
-MOCK_DB_SNAPSHOT=pull_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "a failed database copy does not fail the upgrade"
-assert_contains 'could not be copied' "a failed copy never reports a snapshot that does not exist"
+# The rootless "no" above is also not the mutation path's answer: install_root_helper escalates via
+# `adb root` (ensure_root_path) before touching the panel, so a userdebug panel that answers
+# uid=2000 until `adb root` would have been mutated as root moments after a "no root route" skip.
+# The capture gate performs the same escalation first: the panel that CAN be captured IS captured.
+rm -f "$TMP/adb-root-escalated"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an upgrade on a userdebug panel whose root appears only after adb root succeeds"
+assert_marker_captured "the post-escalation capture emits the exact whole-line captured marker"
+assert_not_contains 'no root route' "$LAST_OUTPUT" "escalated root is never reported as a rootless skip"
+root_line="$(grep -En '^adb -s [^ ]+ root$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+push_line="$(grep -En 'push .*/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+if [ -n "$root_line" ] && [ -n "$push_line" ] && [ "$root_line" -lt "$push_line" ]; then
+  pass "the capture gate itself performed the adb-root escalation before pushing the capture script"
+else
+  fail_test "the capture gate itself performed the adb-root escalation before pushing the capture script (root=${root_line:-none} push=${push_line:-none})"
+fi
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
 
-MOCK_DB_SNAPSHOT=wal_pull_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "a partial sidecar copy does not fail the upgrade"
-assert_contains 'could not be copied' "a missing staged WAL rejects the whole snapshot instead of claiming success"
-assert_not_contains 'with [0-9]+ sidecar file' "$LAST_OUTPUT" "a partial SQLite file set is never reported as recoverable"
+# Escalation that ends in an unanswerable probe is an unproven root route, not a "no": refuse,
+# naming the post-escalation probe, instead of mutating a panel whose capability is unknown.
+PRIVILEGE_INSPECTION_TIMEOUT_SECONDS=1 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_hang \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a probe that hangs after adb root stops the upgrade"
+assert_contains 'never answered in time' "the post-escalation timeout refusal is named"
+assert_marker_absent "a hung post-escalation probe never claims a captured snapshot"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# A transport that dies in the adbd restart answers exactly like a genuine "no root": the
+# post-escalation negative is only accepted from a transport that proves it is still alive.
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a transport that dies after adb root stops the upgrade"
+assert_contains 'transport failed during root discovery' "the post-escalation dead-transport refusal is named"
+assert_marker_absent "a post-escalation dead transport never claims a captured snapshot"
+assert_log_contains '^adb -s [^ ]+ root$' "the drop is observed AFTER a real escalation, not on the pre-escalation path"
+alive_probes="$(grep -Ec 'shell echo HAPANELD_TRANSPORT_ALIVE' "$MOCK_CALL_LOG" || true)"
+if [ "$alive_probes" -eq 2 ]; then
+  pass "the post-escalation liveness recheck is what observed the dead transport"
+else
+  fail_test "the post-escalation liveness recheck is what observed the dead transport (got $alive_probes liveness probes)"
+fi
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The escalation is ONE decision per run: a proven "no" at the capture gate is the same "no" the
+# helper install acts on, so a rootless run issues exactly one adb-root attempt — a second attempt
+# minutes later could answer differently and recreate the skip-then-mutate hazard the gate closes.
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a rootless upgrade still succeeds under the single-decision escalation"
+root_calls="$(grep -Ec '^adb -s [^ ]+ root$' "$MOCK_CALL_LOG" || true)"
+if [ "$root_calls" -eq 1 ]; then
+  pass "the whole run makes exactly one adb-root escalation attempt"
+else
+  fail_test "the whole run makes exactly one adb-root escalation attempt (got $root_calls)"
+fi
+reset_db_txn_state
+
+# An unknown capability is never mutated on: the operator's escape flag lets the REFUSED capture
+# continue, but the same cached unknown verdict then stops the helper phase fail-closed — a
+# transport that died in the adbd restart could recover into root a moment after a helperless
+# install stranded the panel.
+rm -f "$TMP/adb-root-escalated"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+assert_failure "the escape flag does not let a run mutate a panel whose root capability is unknown"
+assert_contains 'No setting, configuration, helper or APK was changed' "the MAIN-FLOW mutation gate is what stopped the run (not a later phase)"
+assert_contains 'continuing .*WITHOUT a database restore point' "the backup refusal was reported before the capability gate stopped mutation"
+assert_marker_absent "an unknown-capability run never claims a captured snapshot"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "an unknown-capability run never reaches the APK install"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The whole escalation runs under ONE aggregate deadline with remaining-time budgets per step: a
+# panel whose adb wedges after `adb root` refuses as unknown in bounded time instead of spending
+# the full per-step adb deadline on every reconnect attempt.
+rm -f "$TMP/adb-root-escalated"
+ROOT_RESOLVE_TIMEOUT_SECONDS=2 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates MOCK_ADB_DEVICES=hang_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a wedged escalation stops the upgrade within its aggregate deadline"
+assert_contains 'never answered in time' "the aggregate-deadline refusal reads as an undecided resolution"
+assert_marker_absent "a wedged escalation never claims a captured snapshot"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# A concluded unknown is consumed, never re-derived: with the escape flag the refused capture may
+# continue, but the helper phase reads the SAME verdict and stops before any mutation — without
+# re-asking the panel, whose hung probe might answer differently a second time.
+rm -f "$TMP/adb-root-escalated"
+: > "$MOCK_CALL_LOG"
+PRIVILEGE_INSPECTION_TIMEOUT_SECONDS=1 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_hang \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+assert_failure "the escape flag does not let the helper phase re-open a hung root resolution"
+assert_contains 'continuing .*WITHOUT a database restore point' "the backup refusal was reported before the capability gate stopped mutation"
+assert_contains 'No setting, configuration, helper or APK was changed' "the main-flow mutation gate stops the hung resolution before any later phase"
+id_probes="$(grep -Ec '^adb -s [^ ]+ shell id$' "$MOCK_CALL_LOG" || true)"
+if [ "$id_probes" -eq 2 ]; then
+  pass "the resolution's hung probe is never re-asked by a later phase"
+else
+  fail_test "the resolution's hung probe is never re-asked by a later phase (got $id_probes id probes)"
+fi
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "an undecided route never reaches the APK install"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# Releases that predate helper assets return from the helper phase before any other root decision
+# point, so they must consume the run's verdict at the phase's head: an undecided route stops the
+# run before the historical direct-su path can reach the APK install.
+rm -f "$TMP/adb-root-escalated"
+PRE_ASSETS_APK="$TMP/ha-paneld-v0.9.2-manual-setup-required.apk"
+cp "$APK" "$PRE_ASSETS_APK"
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
+  run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame --allow-missing-db-snapshot
+assert_failure "a pre-helper-assets release does not mutate a panel whose root capability is unknown"
+assert_contains 'No setting, configuration, helper or APK was changed' "the pre-assets flavour is stopped by the main-flow gate, before its own defense-in-depth arm"
+assert_not_contains 'predates automatic root-helper assets' "$LAST_OUTPUT" "the undecided route stops before the historical direct-su notice"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the pre-assets flavour never reaches the APK install on an undecided route"
+rm -f "$TMP/adb-root-escalated"
+reset_db_txn_state
+
+# The legacy pre-assets flavour performs no helper transaction before its APK replace, so it
+# confirms the proven route is still live before its direct-su era return: a live route proceeds,
+# a route that answered the resolution and has since died fails closed without reclassification.
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_success "a rooted panel upgrades through the pre-assets flavour"
+assert_contains 'predates automatic root-helper assets' "the legacy flavour is announced"
+assert_log_contains 'shell su 0 .id.$' "the proven route is confirmed live as uid=0 before the legacy return"
+assert_log_contains '^adb .* install' "the legacy flavour still installs the APK on a live route"
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+MOCK_ROOT_LIVE=dead run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_failure "a proven route that stopped answering fails the legacy flavour closed"
+assert_contains 'proven root route stopped answering' "the legacy stop names the dead route"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "no APK install after the proven route died"
+reset_db_txn_state
+
+# The adbd-root form runs privileged commands as BARE shell commands, so a live check that merely
+# echoed a marker would answer from any adbd, rooted or not — proving nothing. These pin that the
+# check tests the privileged property itself on exactly that form.
+: > "$MOCK_CALL_LOG"
+MOCK_ADB_ROOT=1 run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_success "an adb-root panel upgrades through the pre-assets flavour"
+assert_log_contains '^adb .* install' "the adb-root panel still installs when its route is live"
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+MOCK_ADB_ROOT=1 MOCK_ROOT_LIVE=dead run_provision "$MOCK_TARGET" --apk "$PRE_ASSETS_APK" --release-tag v0.9.2 --no-tame
+assert_failure "an adb-root panel that lost root since resolution fails the legacy flavour closed"
+assert_contains 'proven root route stopped answering' "the bare-shell live check names the dead route"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "no APK install after an adb-root route lost root"
+reset_db_txn_state
+
+# The resolver's aggregate deadline is enforced in the code, not only by wall-clock tests: driven
+# directly with a manipulated clock, an exhausted budget concludes unknown without granting the
+# liveness recheck a fresh allowance, and a positive allowance never exceeds min(remaining, 15).
+RESOLVER_UNIT_SOURCE="$(sed -n '/^min_deadline() {$/,/^}$/p; /^resolve_root_route() {$/,/^}$/p' "$PROVISION")"
+resolver_unit_case() {
+  {
+    # The extracted resolver reads $SECONDS, which is bash's REAL elapsed-time variable: assigning
+    # to it only re-bases it, so wall-clock seconds kept accruing between statements and a loaded
+    # machine could slip an extra second into the budget and flip the verdict (observed 2026-07-31
+    # under a saturating mutation battery). `unset` strips the special attribute permanently, so
+    # the reassignment below leaves an ORDINARY integer this harness owns: it starts at 0 and moves
+    # only when a stub advances it. The extracted production source is unchanged and still reads
+    # $SECONDS — only the meaning of the variable inside this fixture is test-owned.
+    printf 'set -u\nunset SECONDS\nSECONDS=0\nTARGET=panel.test:5555\nADB_COMMAND=adb\nSU_FORM=""\nSU_PROBE_TIMED_OUT=0\nROOT_ROUTE_VERDICT=""\nPRIVILEGE_INSPECTION_TIMEOUT_SECONDS=45\nROOT_RESOLVE_TIMEOUT_SECONDS=50\n'
+    printf 'ADVANCE=%s\nRWD_COST=%s\nREAL_DELAY=%s\n' "$1" "${2:-0}" "${3:-0}"
+    printf 'TRACE=%s\n' "$TMP/resolver-unit-trace"
+    printf ': > "$TRACE"\n'
+    # Stubs trace to a FILE, not stdout: the resolver captures some calls in command substitutions,
+    # which would otherwise swallow the very deadline values these contracts are about.
+    # REAL_DELAY burns genuine wall-clock time inside a stub; it must never change an outcome.
+    # It names /bin/sleep by absolute path deliberately: $FIXTURES leads PATH and ships a no-op
+    # `sleep`, so a bare `sleep` (or even `command sleep`) here would burn no time at all and the
+    # contract below would pass without ever exercising what it claims to.
+    printf 'probe_su() { echo "PROBE_CAP=$PRIVILEGE_INSPECTION_TIMEOUT_SECONDS" >> "$TRACE"; [ "$REAL_DELAY" = 0 ] || /bin/sleep "$REAL_DELAY"; SU_PROBE_TIMED_OUT=0; return 1; }\n'
+    printf 'probe_transport_alive() { echo "ALIVE_DEADLINE=$1" >> "$TRACE"; return 0; }\n'
+    printf 'run_with_deadline() { echo "RWD_DEADLINE=$1 CMD=$3" >> "$TRACE"; shift; SECONDS=$((SECONDS + RWD_COST)); "$@" || true; }\n'
+    printf 'adb() { :; }\n'
+    printf 'sleep() { SECONDS=$((SECONDS + ADVANCE)); }\n'
+    printf '%s\n' "$RESOLVER_UNIT_SOURCE"
+    printf 'resolve_root_route\ncat "$TRACE"\nprintf "VERDICT=%%s ELAPSED=%%s\\n" "$ROOT_ROUTE_VERDICT" "$SECONDS"\n'
+  } > "$TMP/resolver-unit-case.sh"
+  bash "$TMP/resolver-unit-case.sh"
+}
+resolver_unit_out="$(resolver_unit_case 5)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unrooted ELAPSED=45' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 2 ] && \
+   printf '%s\n' "$resolver_unit_out" | tail -2 | head -1 | grep -qx 'ALIVE_DEADLINE=5'; then
+  pass "the liveness allowance is capped to the remaining budget, not a fresh 15s"
+else
+  fail_test "the liveness allowance is capped to the remaining budget, not a fresh 15s ($resolver_unit_out)"
+fi
+resolver_unit_out="$(resolver_unit_case 40)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unknown-timeout ELAPSED=80' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 1 ]; then
+  pass "an exhausted aggregate budget concludes unknown without a post-deadline liveness probe, overrunning by at most one wait quantum"
+else
+  fail_test "an exhausted aggregate budget concludes unknown without a post-deadline liveness probe, overrunning by at most one wait quantum ($resolver_unit_out)"
+fi
+# Every deadline the resolver hands out is budget-derived, not a constant: the first liveness
+# allowance takes its own 15s ceiling while budget remains, the reprobe is capped to what is left,
+# and each adb step is given the remaining budget rather than a fixed value. These pin the
+# arithmetic that the elapsed-time assertions alone cannot see. Case 1 exercises all three.
+resolver_unit_out="$(resolver_unit_case 5)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'ALIVE_DEADLINE=15'; then
+  pass "the first liveness allowance takes the 15s ceiling while budget remains"
+else
+  fail_test "the first liveness allowance takes the 15s ceiling while budget remains ($resolver_unit_out)"
+fi
+resolver_unit_caps="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^PROBE_CAP=//p' | tr '\n' ',')"
+if [ "$resolver_unit_caps" = "45,5," ]; then
+  pass "the reprobe's inspection timeout is capped to the remaining budget"
+else
+  fail_test "the reprobe's inspection timeout is capped to the remaining budget (got ${resolver_unit_caps:-none})"
+fi
+# Budget-derived means the allowance SHRINKS as the reconnect window burns time; a hard-coded
+# per-step deadline would repeat one value.
+resolver_devices_first="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^RWD_DEADLINE=\([0-9]*\) CMD=devices$/\1/p' | head -1)"
+resolver_devices_last="$(printf '%s\n' "$resolver_unit_out" | sed -n 's/^RWD_DEADLINE=\([0-9]*\) CMD=devices$/\1/p' | tail -1)"
+if [ "$resolver_devices_first" = 45 ] && [ "$resolver_devices_last" = 10 ]; then
+  pass "each adb step in the escalation is bounded by the shrinking remaining budget, not a constant"
+else
+  fail_test "each adb step in the escalation is bounded by the shrinking remaining budget, not a constant (first=${resolver_devices_first:-none} last=${resolver_devices_last:-none})"
+fi
+
+# A wait must never START past the deadline: when the adb step itself consumes the whole budget,
+# the follow-up wait is skipped and elapsed time equals the budget exactly.
+resolver_unit_out="$(resolver_unit_case 25 50)"
+if printf '%s\n' "$resolver_unit_out" | grep -qx 'VERDICT=unknown-timeout ELAPSED=50' && \
+   [ "$(printf '%s\n' "$resolver_unit_out" | grep -c '^ALIVE_DEADLINE=')" -eq 1 ]; then
+  pass "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget"
+else
+  fail_test "no wait starts past the deadline: an adb step consuming the budget ends the resolution at the budget ($resolver_unit_out)"
+fi
+
+# The fixture's clock belongs to the fixture: a stub that burns more than a real second must not
+# move the budget. Under the previous form — bash's real-elapsed SECONDS merely re-based to 0 —
+# this same case drifted to ELAPSED=81 and lost a branch, so an unrelated mutation battery
+# saturating the CPU could turn this suite red and make a green run untrustworthy.
+# The delay is measured against THIS script's own SECONDS — still bash's real clock out here — so
+# the case cannot pass vacuously if the injected wait ever stops elapsing.
+resolver_unit_baseline="$(resolver_unit_case 40)"
+resolver_clock_mark="$SECONDS"
+resolver_unit_delayed="$(resolver_unit_case 40 0 1.1)"
+resolver_clock_spent=$((SECONDS - resolver_clock_mark))
+if [ "$resolver_clock_spent" -ge 1 ] && [ "$resolver_unit_delayed" = "$resolver_unit_baseline" ]; then
+  pass "the resolver deadline contracts are driven by a test-owned clock, unmoved by real elapsed time"
+else
+  fail_test "the resolver deadline contracts are driven by a test-owned clock, unmoved by real elapsed time (real seconds spent: $resolver_clock_spent; undelayed: $resolver_unit_baseline / delayed: $resolver_unit_delayed)"
+fi
+
+# Every refusal is validity-strict but availability-best-effort for an ordinary upgrade: it names
+# the failed stage, leaves no accepted/partial artifact, emits no captured marker, and still installs.
+for refusal in backup_fail:backup_failed backup_empty:backup_empty; do
+  txn_mode="${refusal%%:*}"; named="${refusal##*:}"
+  reset_db_txn_state
+  MOCK_DB_TXN="$txn_mode" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $txn_mode capture refusal remains advisory for an ordinary upgrade"
+  assert_contains "$named" "the $txn_mode refusal names its stage"
+  assert_marker_absent "a $txn_mode refusal never claims a captured snapshot"
+  assert_log_contains '^adb .* install' "a $txn_mode refusal does not preempt APK install"
+  if ls "$TMP"/auto-backups/*.break-glass.db >/dev/null 2>&1; then
+    fail_test "a $txn_mode refusal leaves no host partial behind"
+  else pass "a $txn_mode refusal leaves no host partial behind"; fi
+done
+# Root-route and adb transport failures are backup-only failures too. Under `set -e` they must flow
+# through the explicit snapshot refusal policy so an ordinary recovery replacement still installs.
+for transport_refusal in panel_hash_transport:'could not be hashed through the panel.s root route' push_fail:'could not be pushed to the panel'; do
+  txn_mode="${transport_refusal%%:*}"; named="${transport_refusal#*:}"
+  reset_db_txn_state
+  MOCK_DB_TXN="$txn_mode" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $txn_mode backup transport failure remains advisory for an ordinary upgrade"
+  assert_contains "$named" "the $txn_mode failure is routed through the explicit snapshot refusal"
+  assert_marker_absent "a $txn_mode failure never claims a captured snapshot"
+  assert_log_contains '^adb .* install' "a $txn_mode backup transport failure still reaches APK install"
+done
+# Invalid legacy evidence is discarded, but it does not turn an optional automatic backup into an
+# ordinary-upgrade gate. Destructive reset coverage below retains the strict mutation boundary.
+for refusal in integrity_bad:integrity_failed script_tamper:intact source_not_regular:source_not_regular source_directory:source_not_regular; do
+  txn_mode="${refusal%%:*}"; named="${refusal##*:}"
+  reset_db_txn_state
+  MOCK_DB_TXN="$txn_mode" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $txn_mode unsafe snapshot is discarded while the ordinary upgrade continues"
+  assert_contains "$named" "the $txn_mode unsafe evidence names its stage"
+  assert_marker_absent "a $txn_mode unsafe snapshot never earns a captured marker"
+  assert_log_contains '^adb .* install' "a $txn_mode unsafe snapshot does not preempt APK install"
+done
+# A tampered script must be refused BEFORE it executes as root: the sandbox proves no transaction ran.
+reset_db_txn_state
+MOCK_DB_TXN=script_tamper run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a tampered capture script is refused without blocking the ordinary upgrade"
+if [ -d "$TMP/db-txn-sandbox" ] && ls -d "$TMP/db-txn-sandbox/data/local/tmp"/.hapaneld-db-txn.* >/dev/null 2>&1; then
+  fail_test "a tampered script is never executed as root (sandbox shows no staging)"
+else pass "a tampered script is never executed as root (sandbox shows no staging)"; fi
+
+# Admission refusals produced by the EXECUTED script: empty content, never-migrated and alien
+# schemas — including the in-range-looking value one past the newest shipped migration — and a
+# provenance the transaction itself cannot establish.
+for admission in MOCK_DB_DEVICE_ROWS=0:rows_empty MOCK_DB_DEVICE_USER_VERSION=0:schema_alien MOCK_DB_DEVICE_USER_VERSION=15:schema_alien MOCK_DB_DEVICE_VCODE=absent:provenance_unreadable; do
+  admission_env="${admission%%:*}"; named="${admission##*:}"
+  env_name="${admission_env%%=*}"; env_value="${admission_env#*=}"
+  reset_db_txn_state
+  eval "$env_name=\"$env_value\" run_provision \"\$MOCK_TARGET\" --apk \"\$APK\" --no-tame"
+  assert_success "a $admission_env unsafe source is discarded while the ordinary upgrade continues"
+  assert_contains "$named" "the $admission_env refusal names its stage"
+  assert_marker_absent "a $admission_env refusal never claims a captured snapshot"
+  assert_log_contains '^adb .* install' "a $admission_env unsafe source does not preempt APK install"
+done
+
+# The host accepts only a complete manifest from the legacy transaction, while an invalid optional
+# manifest is discarded without blocking an ordinary Android package replacement.
+for manifest_case in manifest_missing_bytes:bytes manifest_missing_rows:rows manifest_missing_schema:schema manifest_missing_provenance:provenance manifest_missing_integrity:'capture manifest is incomplete' manifest_missing_sqlite:'capture manifest is incomplete'; do
+  txn_mode="${manifest_case%%:*}"; named="${manifest_case#*:}"
+  reset_db_txn_state
+  MOCK_DB_TXN="$txn_mode" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a $txn_mode unsafe manifest is discarded while the ordinary upgrade continues"
+  assert_contains "$named" "the $txn_mode refusal names the incomplete evidence"
+  assert_marker_absent "a $txn_mode manifest never earns a captured marker"
+  assert_log_contains '^adb .* install' "a $txn_mode manifest does not preempt APK install"
+done
+
+reset_db_txn_state
+MOCK_DB_TXN=panel_digest_invalid run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a malformed panel digest discards the backup without stopping the ordinary upgrade"
+assert_contains 'invalid panel digest' "the malformed panel digest is named"
+assert_marker_absent "a malformed panel digest never earns a captured marker"
+assert_log_contains '^adb .* install' "a malformed panel digest does not preempt APK install"
+
+reset_db_txn_state
+MOCK_DB_TXN=panel_digest_mismatch run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a valid-shaped panel digest mismatch discards the backup without stopping the ordinary upgrade"
+assert_contains "digest does not match what the panel captured" "the panel and host digest mismatch is named"
+assert_marker_absent "a panel digest mismatch never earns a captured marker"
+assert_log_contains '^adb .* install' "a panel digest mismatch does not preempt APK install"
+
+# Transfer verification: a pull that truncates or fails never becomes a restore point.
+reset_db_txn_state
+MOCK_DB_TXN=pull_fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a failed snapshot pull does not stop the ordinary upgrade"
+assert_contains 'could not be pulled' "a failed pull is named"
+assert_marker_absent "a failed pull never claims a captured snapshot"
+assert_log_contains '^adb .* install' "a failed snapshot pull still reaches APK install"
+reset_db_txn_state
+MOCK_DB_TXN=pull_truncate run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a truncated snapshot pull is discarded without stopping the ordinary upgrade"
+assert_contains 'bytes but the panel captured' "a truncated pull is refused by the byte comparison"
+assert_marker_absent "a truncated pull never claims a captured snapshot"
+assert_log_contains '^adb .* install' "a truncated snapshot does not preempt APK install"
+
+# Staging cleanup is best-effort: a proven capture keeps its verdict if the transport cannot remove
+# the uniquely named panel-side staging afterwards, because the host file is the restore point.
+reset_db_txn_state
+MOCK_DB_CLEANUP=retained run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a retained staging directory does not revoke a proven capture"
+assert_marker_captured "the capture verdict stands despite a cleanup failure"
+reset_db_txn_state
+MOCK_DB_CLEANUP=unverifiable run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an unverifiable removal does not revoke a proven capture"
+reset_db_txn_state
+
+# The whole capture, driven through the sh -c su dialect as well as the default join style, with the
+# same whole-line captured evidence required.
+MOCK_SU_DIALECT=shc run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "the capture succeeds through the sh -c su dialect"
+assert_marker_captured "the sh -c dialect produces the same whole-line captured evidence"
+reset_db_txn_state
+
+# The remaining root forms. The capture transaction is proven under each with its exact wrapper
+# visible in the call log; the run's LATER phases (helper transactions) are not modelled for these
+# wrappers by this fixture, so only capture evidence is asserted.
+for capture_dialect in rootjoin:'su root \"sh /data/local/tmp/\.hapaneld-db-txn' rootshc:'su root sh -c \"sh /data/local/tmp/\.hapaneld-db-txn' suc:'su -c \"sh /data/local/tmp/\.hapaneld-db-txn'; do
+  dialect_name="${capture_dialect%%:*}"; wrapper_pattern="${capture_dialect#*:}"
+  reset_db_txn_state
+  MOCK_SU_DIALECT="$dialect_name" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_marker_captured "the $dialect_name dialect produces whole-line captured evidence"
+  assert_log_contains "$wrapper_pattern" "the $dialect_name capture ran under its exact wrapper"
+done
+# The sixth form: adb-root panels run bare shell commands with no su wrapper at all.
+reset_db_txn_state
+MOCK_ADB_ROOT=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_marker_captured "the plain-shell (adb root) form produces whole-line captured evidence"
+reset_db_txn_state
+
+# A staging collision: the loser must refuse by name and remove NOTHING — the winner's in-flight
+# marker survives and no privileged removal for the staging path is even attempted.
+MOCK_DB_TXN=stage_collision run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a staging collision refuses the backup without blocking the ordinary upgrade"
+assert_contains 'stage_exists' "the collision refusal names its stage"
+collision_marker="$(find "$TMP/db-txn-sandbox/data/local/tmp" -name winner-in-flight 2>/dev/null | head -1)"
+if [ -n "$collision_marker" ] && [ -f "$collision_marker" ]; then
+  pass "the loser of a staging collision leaves the winner's in-flight capture untouched"
+else fail_test "the loser of a staging collision leaves the winner's in-flight capture untouched"; fi
+assert_not_contains 'rm -rf? [^|]*hapaneld-db-txn' "$MOCK_CALL_LOG" "the loser never even attempts a privileged removal of the contested staging"
+reset_db_txn_state
+
+# Panel-only digest degradation is stated, never silent: a panel with no digest tool still captures,
+# while the host digest remains mandatory and is recorded in full.
+MOCK_DB_TXN=no_device_digest run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel without a digest tool still produces a verified capture"
+assert_marker_captured "the digest-degraded capture still earns its marker"
+assert_contains 'panel has no usable digest tool' "the panel-only degradation is stated on the console"
+degraded_receipt="$(ls "$TMP"/auto-backups/*.break-glass.backup-receipt.txt 2>/dev/null | head -1)"
+if grep -q '^database_sha256_panel=none$' "$degraded_receipt" 2>/dev/null; then
+  pass "the receipt records the missing panel digest as none"
+else fail_test "the receipt records the missing panel digest as none"; fi
+if grep -Eq '^database_sha256_host=[0-9a-f]{64}$' "$degraded_receipt" 2>/dev/null; then
+  pass "panel degradation retains a valid mandatory host digest"
+else fail_test "panel degradation retains a valid mandatory host digest"; fi
+reset_db_txn_state
+
+# A nonempty but malformed host hash is not accepted as a digest. Export a one-run command shim so
+# this stays black-box coverage without changing the shared adb/sha fixture owned by another lane.
+export PROVISION_TEST_SHA256_FIXTURE="$FIXTURES/sha256sum"
+sha256sum() {
+  case "${1:-}" in
+    *.break-glass.db) printf '%064d  %s\ntrailing-garbage  %s\n' 0 "$1" "$1" ;;
+    *) command "$PROVISION_TEST_SHA256_FIXTURE" "$@" ;;
+  esac
+}
+export -f sha256sum
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a multiline host digest rejects only the optional backup during an ordinary upgrade"
+assert_contains 'could not be hashed on this host' "the multiline host digest is named"
+assert_marker_absent "a multiline host digest never earns a captured marker"
+assert_log_contains '^adb .* install' "host backup hashing failure does not preempt the ordinary APK replace"
+if ls "$TMP"/auto-backups/*.break-glass* >/dev/null 2>&1; then
+  fail_test "host digest refusal removes the database and receipt pair"
+else pass "host digest refusal removes the database and receipt pair"; fi
+unset -f sha256sum
+unset PROVISION_TEST_SHA256_FIXTURE
+reset_db_txn_state
+
+# A digest executable can terminate instead of returning text. Guard the assignment itself: an
+# inner `|| true` cannot contain `exit` from a shell function running inside command substitution.
+export PROVISION_TEST_SHA256_FIXTURE="$FIXTURES/sha256sum"
+sha256sum() {
+  case "${1:-}" in
+    *.break-glass.db) exit 17 ;;
+    *) command "$PROVISION_TEST_SHA256_FIXTURE" "$@" ;;
+  esac
+}
+export -f sha256sum
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a terminating legacy host digest remains an advisory backup refusal"
+assert_contains 'published snapshot could not be hashed on this host' "legacy digest process failure is routed through snapshot refusal"
+assert_log_contains '^adb .* install' "legacy digest process failure still reaches APK install"
+reset_db_txn_state
+MOCK_UPGRADE_PREPARE=ready run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a terminating direct-copy host digest remains an advisory backup refusal"
+assert_contains 'direct copy could not be hashed on this host' "direct digest process failure is routed through snapshot refusal"
+assert_log_contains '^adb .* install' "direct digest process failure still reaches APK install"
+unset -f sha256sum
+unset PROVISION_TEST_SHA256_FIXTURE
+reset_db_txn_state
+
+# An install racing the capture changes the provenance answer between the transaction's two reads,
+# and the snapshot is refused as unattributable.
+MOCK_DB_TXN=provenance_race run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a build change during capture discards the backup without blocking the ordinary upgrade"
+assert_contains 'provenance_changed' "the provenance race is named"
+assert_marker_absent "a provenance race never claims a captured snapshot"
+reset_db_txn_state
+
+# Structural pins on the publication custody that no black-box run can distinguish, each proven
+# breakable by a named mutation: the snapshot reaches its final name only through no-replace ln
+# after an existence refusal, and the database and receipt are registered as ONE cleanup unit so a
+# signal in the publication window removes the pair or neither.
+if [ "$(grep -c 'ln "\$pull_tmp" "\$base.db"' "$PROVISION")" -eq 1 ] &&    grep -q 'if \[ -e "\$base.db" \] || \[ -L "\$base.db" \]; then' "$PROVISION"; then
+  pass "publication is no-replace: existence refusal plus hardlink finalization"
+else fail_test "publication is no-replace: existence refusal plus hardlink finalization"; fi
+if [ "$(grep -c 'SNAPSHOT_TXN_HOST_DB="\$base.db"' "$PROVISION")" -eq 1 ] &&
+   grep -q 'SNAPSHOT_TXN_HOST_RECEIPT="\$receipt"' "$PROVISION" &&
+   grep -q 'for stale in "\${SNAPSHOT_TXN_HOST_DB:-}" "\${SNAPSHOT_TXN_HOST_RECEIPT:-}"' "$PROVISION"; then
+  pass "the database and its receipt are registered as one cleanup unit, in separate unsplittable variables"
+else fail_test "the database and its receipt are registered as one cleanup unit, in separate unsplittable variables"; fi
+receipt_guard_line="$(grep -n 'if \[ -e "\$receipt" \] || \[ -L "\$receipt" \]; then' "$PROVISION" | cut -d: -f1)"
+receipt_owner_line="$(grep -n 'SNAPSHOT_TXN_HOST_RECEIPT="\$receipt"' "$PROVISION" | tail -1 | cut -d: -f1)"
+if [ -n "$receipt_guard_line" ] && [ -n "$receipt_owner_line" ] && [ "$receipt_guard_line" -lt "$receipt_owner_line" ]; then
+  pass "a pre-existing receipt is refused before this run claims ownership"
+else fail_test "a pre-existing receipt is refused before this run claims ownership"; fi
+if grep -q '\[ "\$SNAPSHOT_TXN_HOST_DB_WORK" -ef "\$SNAPSHOT_TXN_HOST_DB_TARGET" \]' "$PROVISION" &&
+   grep -q '\[ "\$SNAPSHOT_TXN_HOST_RECEIPT_WORK" -ef "\$SNAPSHOT_TXN_HOST_RECEIPT_TARGET" \]' "$PROVISION"; then
+  pass "publication-window cleanup removes final paths only when their working hardlink proves ownership"
+else fail_test "publication-window cleanup removes final paths only when their working hardlink proves ownership"; fi
+if [ "$(grep -c 'snapshot_txn_defer_host_signals' "$PROVISION")" -eq 7 ] &&
+   [ "$(grep -c 'snapshot_txn_restore_host_signals' "$PROVISION")" -eq 9 ] &&
+   grep -q 'SNAPSHOT_TXN_HOST_DB_WORK="\$pull_tmp"' "$PROVISION" &&
+   grep -q 'SNAPSHOT_TXN_HOST_RECEIPT_WORK="\$receipt_tmp"' "$PROVISION"; then
+  pass "temporary creation defers signals until database and receipt ownership are registered"
+else fail_test "temporary creation defers signals until database and receipt ownership are registered"; fi
+legacy_handoff_defer_line="$(grep -n '^  snapshot_txn_defer_host_signals$' "$PROVISION" | tail -1 | cut -d: -f1)"
+legacy_db_disown_line="$(grep -n '^  SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""$' "$PROVISION" | tail -1 | cut -d: -f1)"
+legacy_handoff_restore_line="$(grep -n '^  snapshot_txn_restore_host_signals$' "$PROVISION" | tail -1 | cut -d: -f1)"
+legacy_remote_cleanup_line="$(grep -n 'run_root "rm -f \${stage}-script && rm -rf \$stage"' "$PROVISION" | tail -1 | cut -d: -f1)"
+if [ -n "$legacy_handoff_defer_line" ] && [ "$legacy_handoff_defer_line" -lt "$legacy_db_disown_line" ] &&
+   [ "$legacy_db_disown_line" -lt "$legacy_handoff_restore_line" ] &&
+   [ "$legacy_handoff_restore_line" -lt "$legacy_remote_cleanup_line" ]; then
+  pass "legacy accepted database and receipt handoff is signal-atomic before remote cleanup"
+else fail_test "legacy accepted database and receipt handoff is signal-atomic before remote cleanup"; fi
+restore_handler_line="$(grep -n "trap 'handle_provision_signal 130' INT" "$PROVISION" | tail -1 | cut -d: -f1)"
+read_deferred_line="$(grep -n 'deferred="\$SNAPSHOT_TXN_DEFERRED_SIGNAL"' "$PROVISION" | cut -d: -f1)"
+if [ -n "$restore_handler_line" ] && [ -n "$read_deferred_line" ] && [ "$restore_handler_line" -lt "$read_deferred_line" ]; then
+  pass "real signal handlers are restored before the deferred signal is read or cleared"
+else fail_test "real signal handlers are restored before the deferred signal is read or cleared"; fi
+
+# The one-line installer forwards its argv to the downloaded provisioner unfiltered, so the escape
+# reaches it; pinned on the exact invocation.
+if grep -q 'bash "\$SCRIPT" "\${ARGS\[@\]}"' "$ROOT/scripts/install.sh"; then
+  pass "the public installer hands its argument vector to the provisioner"
+else fail_test "the public installer hands its argument vector to the provisioner"; fi
+
+# Fleet workers share the best-effort ordinary-upgrade policy; the deprecated flag remains accepted
+# as a compatibility no-op by the wrapper and each worker.
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-snapshot-escape.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' MOCK_DB_TXN=backup_fail \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "a fleet whose snapshots are unavailable still completes ordinary upgrades"
+assert_contains '2/2 panels OK' "snapshot availability alone does not fail a fleet wave"
+reset_db_txn_state
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-snapshot-escape2.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' MOCK_DB_TXN=backup_fail \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --allow-missing-db-snapshot --no-tame -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "the fleet wrapper continues accepting the deprecated snapshot flag"
+assert_contains '2/2 panels OK' "the compatibility flag preserves the same best-effort behavior"
+reset_db_txn_state
+
+# The public checkout-free installer must continue accepting the compatibility option. Acceptance is
+# proven POSITIVELY, with no network: the flag is followed by a deliberate unknown sentinel, so an
+# accepting parser consumes the flag and rejects the SENTINEL by name, while a rejecting parser
+# names the escape itself. The assertion pair distinguishes the two exactly.
+bash "$ROOT/scripts/install.sh" --provision panel-a.test --allow-missing-db-snapshot --hapaneld-test-sentinel > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "the installer parser run ends at the deliberate sentinel"
+assert_contains 'unknown provisioning option: --hapaneld-test-sentinel' "the public installer consumes the snapshot escape and rejects only the sentinel"
+assert_not_contains 'unknown provisioning option: --allow-missing-db-snapshot' "$LAST_OUTPUT" "the public installer accepts --allow-missing-db-snapshot"
 
 # ── --reset-config ──────────────────────────────────────────────────────────────────────────────
 # A clean install must reach a genuine FIRST RUN, not a repair. Everything here exists to make the
-# erase deliberate, recoverable, and impossible to trigger by accident or in bulk.
+# irreversible erase deliberate and impossible to trigger by accident or in bulk.
 run_provision "$MOCK_TARGET" --verify --reset-config
 assert_failure "--reset-config with --verify returns nonzero"
 assert_contains '(read-only|never changes)' "a read-only run refuses to combine with an erase"
@@ -2135,41 +3303,123 @@ run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config --restore "$R
 assert_failure "--reset-config with --restore returns nonzero"
 assert_contains 'opposite intents' "erase-then-import names the contradiction"
 
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --export "$TMP/export-then-reset.json" --reset-config
+assert_failure "--reset-config with --export returns nonzero"
+assert_contains 'Run --export FILE separately first' "reset directs backup-seeking users to a separate operation"
+assert_not_contains 'pm clear|config/export|PREPARE_UPGRADE' "$MOCK_CALL_LOG" "a rejected export/reset pairing does not contact backup or erase paths"
+
 HAPANELD_RESET_CONFIRM=no run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
 assert_failure "an unconfirmed reset returns nonzero"
 assert_contains 'was not confirmed' "an unconfirmed reset says so"
 assert_contains 'Nothing was erased' "an unconfirmed reset states that the panel is untouched"
 assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "an unconfirmed reset never reaches the package manager"
+assert_not_contains 'config/export|PREPARE_UPGRADE|sqlite3 \.backup|exec-out .*ha-paneld.db|^adb .* install' "$MOCK_CALL_LOG" "an unconfirmed reset performs no backup or install work"
 
 # --force skips a version comparison; it must not stand in for authorising a wipe.
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config --force
 assert_failure "--force does not authorise an unconfirmed reset"
 assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "--force never reaches the package manager on its own"
 
-HAPANELD_RESET_CONFIRM=RESET MOCK_SETUP=identity run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+HAPANELD_RESET_CONFIRM=RESET MOCK_SETUP=identity MOCK_ROOT=0 MOCK_EXPORT=fail MOCK_DB_TXN=backup_fail MOCK_UPGRADE_PREPARE=digest_mismatch \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
 assert_success "a confirmed reset completes"
-assert_log_contains 'adb .*pm clear io.github.maxlyth.hapaneld' "a confirmed reset erases the app's stored state"
+assert_log_contains '^adb -s panel\.test:5555 shell pm clear io.github.maxlyth.hapaneld$' "a confirmed reset targets exactly ha-paneld"
+if [ "$(grep -Ec '^adb -s panel\.test:5555 shell pm clear io\.github\.maxlyth\.hapaneld$' "$MOCK_CALL_LOG")" = 1 ]; then
+  pass "a confirmed reset issues exactly one package clear"
+else fail_test "a confirmed reset issues exactly one package clear"; fi
+assert_not_contains 'config/export|PREPARE_UPGRADE|sqlite3 \.backup|exec-out .*ha-paneld.db' "$MOCK_CALL_LOG" "reset bypasses settings export and database capture"
 assert_contains 'configuration erased' "a confirmed reset reports what it did"
 assert_contains 'Next: confirm this panel.s name' "a reset panel lands in guided setup, not in repair"
-
-# The backup is the whole safety story: it must exist and be non-empty BEFORE anything is erased.
-MOCK_EXPORT=fail HAPANELD_RESET_CONFIRM=RESET run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
-assert_failure "a reset without a usable backup returns nonzero"
-assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a reset without a usable backup never reaches the package manager"
 
 HAPANELD_RESET_CONFIRM=RESET MOCK_PM_CLEAR=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
 assert_failure "a failed erase returns nonzero"
 assert_contains 'could not erase the panel configuration' "a failed erase names what went wrong"
+assert_log_contains '^adb -s panel\.test:5555 shell pm clear io.github.maxlyth.hapaneld$' "a failed erase still targets exactly ha-paneld"
+assert_not_contains 'configuration erased' "$LAST_OUTPUT" "a failed erase never prints the success claim"
 
-# Bulk erase is not offered: fleet workers run with stdin closed, so a single exported confirmation
-# would otherwise wipe every panel at once.
+# ── Fleet argument scope ────────────────────────────────────────────────────────────────────────
+# Every pass-through arg is forwarded verbatim to every worker, so an option that describes ONE panel is
+# wrong when multiplied: it collides on a single shared resource or applies one panel's data to all of
+# them, and because each worker still exits 0 the fleet reports all-OK while the damage is silent. Each
+# such option must be refused before any worker starts. The table pairs the option with the wording that
+# must point the operator at the per-panel alternative, and with the panel-side operation the refusal
+# must prevent. Two panels are used because multiplication is the whole defect.
+# Columns: option | value (empty when the option takes none) | required guidance | forbidden panel call
+fleet_scoped_options=(
+  # Bulk erase is not offered: workers run with stdin closed, so a single exported confirmation would
+  # otherwise wipe every panel at once.
+  "--reset-config||erase one panel at a time with scripts/provision.sh|pm clear"
+  # One destination for the whole fleet is last-writer-wins, and naming it also cancels each panel's
+  # own automatic pre-upgrade export — so the overwritten panels would have no backup anywhere.
+  "--export|$TMP/fleet-shared-export.json|cancels each panel's own automatic pre-upgrade settings export|config/export"
+  "--id|one-id-for-every-panel|a panel id names one panel|panel_id="
+  # Device-scoped keys belong to the panel they came from; --restore-fleet is the portable form.
+  "--restore|$RESTORE|use --restore-fleet to apply only the portable settings|config/import"
+)
+for fleet_scoped_case in "${fleet_scoped_options[@]}"; do
+  IFS='|' read -r fleet_option fleet_value fleet_guidance fleet_forbidden <<< "$fleet_scoped_case"
+  fleet_argv=("$fleet_option")
+  [ -z "$fleet_value" ] || fleet_argv+=("$fleet_value")
+  : > "$MOCK_CALL_LOG"
+  LAST_OUTPUT="$TMP/fleet-scoped-${fleet_option#--}-output.txt"
+  # HAPANELD_RESET_CONFIRM arms the precise hazard the --reset-config refusal exists to prevent: one
+  # exported confirmation satisfying every worker at once. Without it an unconfirmed erase stops short
+  # of the package manager on its own, so the forbidden-call assertion below would pass even with the
+  # refusal deleted — proven by mutation. It is inert for the other options.
+  MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' HAPANELD_RESET_CONFIRM=RESET \
+    bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame "${fleet_argv[@]}" \
+      -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+  LAST_STATUS=$?
+  assert_status 2 "fleet updates refuse the panel-scoped $fleet_option"
+  assert_contains "$fleet_option is not available for fleet updates" "the $fleet_option refusal names the option it rejected"
+  assert_contains "$fleet_guidance" "the $fleet_option refusal names its per-panel alternative"
+  assert_not_contains '^adb ' "$MOCK_CALL_LOG" "a refused $fleet_option starts no panel worker"
+  assert_not_contains "$fleet_forbidden" "$MOCK_CALL_LOG" "a refused $fleet_option never reaches its panel-side operation"
+done
+
+# --restore-fleet is deliberately absent from that table: it carries only portable, non-secret keys, so
+# applying it to every panel is exactly what it is for. Proven POSITIVELY — the mode-tagged import must
+# reach BOTH panels — because "the wrapper did not refuse it" is also true of a silently dropped flag.
 : > "$MOCK_CALL_LOG"
-LAST_OUTPUT="$TMP/fleet-reset-output.txt"
-bash "$UPDATE_FLEET" --reset-config -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_OUTPUT="$TMP/fleet-restore-fleet-output.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame --restore-fleet "$RESTORE" \
+    -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
-assert_failure "fleet updates refuse a bulk configuration erase"
-assert_contains 'not available for fleet updates' "the fleet refusal names the safe alternative"
-assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "a refused fleet erase never reaches any panel"
+assert_success "the portable --restore-fleet survives the panel-scoped guard"
+assert_contains '2/2 panels OK' "the portable fleet restore completes on every panel"
+fleet_portable_imports="$(grep -Ec 'config/import\?mode=fleet' "$MOCK_CALL_LOG" || true)"
+if [ "$fleet_portable_imports" -eq 2 ]; then
+  pass "the portable fleet restore reaches both panels in fleet mode"
+else
+  fail_test "the portable fleet restore reaches both panels in fleet mode (got $fleet_portable_imports)"
+fi
+
+# The implicit per-panel export is the backup --export would have cancelled, so the guard is only worth
+# anything if that export still happens. An ordinary fleet run must leave one distinct file per panel.
+FLEET_AUTO_BACKUP_DIR="$TMP/fleet-auto-backups"
+rm -rf "$FLEET_AUTO_BACKUP_DIR"
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-auto-export-output.txt"
+MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' HAPANELD_CONFIG_BACKUP_DIR="$FLEET_AUTO_BACKUP_DIR" \
+  bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame \
+    -- panel-a.test panel-b.test > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "an ordinary fleet run completes with no fleet-wide export destination"
+fleet_auto_export_a=0; fleet_auto_export_b=0; fleet_auto_export_other=0
+for fleet_auto_export in "$FLEET_AUTO_BACKUP_DIR"/*.json; do
+  [ -f "$fleet_auto_export" ] || continue
+  case "${fleet_auto_export##*/}" in
+    panel-a.test_5555-*) fleet_auto_export_a=$((fleet_auto_export_a + 1)) ;;
+    panel-b.test_5555-*) fleet_auto_export_b=$((fleet_auto_export_b + 1)) ;;
+    *) fleet_auto_export_other=$((fleet_auto_export_other + 1)) ;;
+  esac
+done
+if [ "$fleet_auto_export_a" -eq 1 ] && [ "$fleet_auto_export_b" -eq 1 ] && [ "$fleet_auto_export_other" -eq 0 ]; then
+  pass "each panel keeps its own implicit pre-upgrade settings export"
+else
+  fail_test "each panel keeps its own implicit pre-upgrade settings export (panel-a $fleet_auto_export_a, panel-b $fleet_auto_export_b, other $fleet_auto_export_other)"
+fi
 
 # Official-signer policy is enforced once before workers start. The default still accepts one consistent
 # developer signer; --require-release-signer pins the official ha-paneld release certificate.
@@ -2322,17 +3572,17 @@ assert_log_contains 'curl .*--proto =https --proto-redir =https .*ha-paneld-v0\.
 assert_not_contains '^gh ' "$MOCK_CALL_LOG" "fleet release resolution has no unbounded GitHub CLI branch"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet workers retain and verify the authenticated release tag"
 
-# Fleet workers inherit provision.sh's final storage gate. A successfully installed panel whose
-# shared health authority is critical must still fail the wave with the same recovery guidance.
+# Fleet workers inherit the same recovery-attempt policy: a panel already reporting critical
+# pressure is upgraded and remains explicitly warned, rather than being stranded by a guessed floor.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-storage-critical-output.txt"
 MOCK_STORAGE_HEALTH=critical MOCK_GITHUB_API=pretty \
   bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
-assert_failure "fleet update rejects a critically storage-constrained panel"
-assert_contains 'storage health: critical.*pressure is critical' "fleet output retains the storage-pressure cause"
-assert_contains 'Recover panel headroom or address WAL growth before writes fail.*re-run verification' "fleet failure retains the actionable storage recovery"
-assert_contains 'fleet update: 0 OK, 1 failed' "fleet summary counts critical storage as a failed panel"
+assert_success "fleet update admits a critically storage-constrained panel as a recovery attempt"
+assert_contains 'fixed pressure thresholds are advisory.*recovery attempt' "fleet output retains the explicit storage-recovery admission"
+assert_contains 'storage health: critical.*replacement completed' "fleet output keeps the remaining critical pressure visible"
+assert_contains 'fleet update complete.*1/1 panels OK' "fleet summary counts the admitted recovery replacement as successful"
 
 # The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
 # newer stable release and bind the candidate tag to that candidate's APK.
@@ -3077,6 +4327,533 @@ if grep -Fq 'release_key_digest=$(openssl pkey -pubin -in "$public_key" -outform
 else
   fail_test "release signing fails before publication when installer trust keys drift from the keystore"
 fi
+
+# A failed direct-start COMMAND must not skip the health wait: the launcher route may already have
+# the agent coming up, and aborting there is how a starting panel gets called a failure.
+MOCK_DIRECT_START=fail MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a failed direct start still waits out the health budget"
+
+# Exactly one direct start. A second launch restarts the first-run migration being waited on.
+# MOCK_STOPPED_STATE + an ineffective launcher forces the escalation. Without that the launcher
+# answers during the probe and this passes with zero direct launches, proving nothing.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an ineffective launcher escalates to the direct route and still provisions"
+direct_starts="$(grep -c 'shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity' "$MOCK_CALL_LOG" || true)"
+if [ "$direct_starts" -eq 1 ]; then
+  pass "the direct route is issued exactly once while the agent is starting"
+else
+  fail_test "the direct route is issued exactly once while the agent is starting (saw $direct_starts)"
+fi
+
+# A hanging launcher command must not consume the health budget with it.
+MOCK_LAUNCHER_START=block APP_LAUNCH_COMMAND_TIMEOUT_SECONDS=2 APP_HEALTH_TIMEOUT_SECONDS=3 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a hanging launcher command is bounded and the run still completes"
+
+# ── #74: a slow first start is not a failed start ───────────────────────────────────────────────
+# A panel can need about two minutes to answer after an upgrade while it is still migrating. The
+# launch route and the health budget must stay separate, and the shipped default must be long.
+default_health_budget="$(sed -n 's/^APP_HEALTH_TIMEOUT_SECONDS="\${APP_HEALTH_TIMEOUT_SECONDS:-\([0-9]*\)}"/\1/p' "$PROVISION")"
+if [ "${default_health_budget:-0}" -ge 120 ]; then
+  pass "the shipped health budget tolerates a multi-minute first start (${default_health_budget}s)"
+else
+  fail_test "the shipped health budget tolerates a multi-minute first start (got '${default_health_budget}')"
+fi
+
+MOCK_HEALTH=slow MOCK_HEALTH_READY_AFTER=4 APP_HEALTH_TIMEOUT_SECONDS=20 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel that answers only after a delay still provisions"
+assert_not_contains 'provisioning is incomplete' "$LAST_OUTPUT" "a late-starting panel is not reported as incomplete"
+
+MOCK_HEALTH=fail APP_HEALTH_TIMEOUT_SECONDS=2 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "a genuinely dead agent still fails after the budget expires"
+assert_contains 'still not answering .* after [0-9]+s' "the failure names how long it waited"
+
+# A health probe that never answers must consume only curl's remaining-budget clamp. This exercises
+# the blocking shape rather than treating an immediate fixture failure as deadline coverage.
+HEALTH_HANG_PID_FILE="$TMP/health-hang.pids"
+HEALTH_HANG_DONE_FILE="$TMP/health-hang.done"
+HEALTH_HANG_STATUS_FILE="$TMP/health-hang.status"
+rm -f "$HEALTH_HANG_PID_FILE" "$HEALTH_HANG_DONE_FILE" "$HEALTH_HANG_STATUS_FILE"
+(
+  MOCK_HEALTH=hang \
+  MOCK_HEALTH_HANG_SECONDS=30 \
+  MOCK_HEALTH_HANG_PID_FILE="$HEALTH_HANG_PID_FILE" \
+  MOCK_HEALTH_HANG_DONE_FILE="$HEALTH_HANG_DONE_FILE" \
+  APP_LAUNCH_PROBE_SECONDS=2 \
+  APP_HEALTH_TIMEOUT_SECONDS=1 \
+    run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  printf '%s\n' "$LAST_STATUS" > "$HEALTH_HANG_STATUS_FILE"
+) &
+health_run_pid=$!
+health_hang_ready=0
+health_hang_attempt=0
+while [ "$health_hang_attempt" -lt 500 ]; do
+  if [ -s "$HEALTH_HANG_PID_FILE" ]; then health_hang_ready=1; break; fi
+  kill -0 "$health_run_pid" 2>/dev/null || break
+  /bin/sleep 0.01
+  health_hang_attempt=$((health_hang_attempt + 1))
+done
+first_fixture_pid="$(awk 'NR == 1 {print $1}' "$HEALTH_HANG_PID_FILE" 2>/dev/null)"
+first_sleep_pid="$(awk 'NR == 1 {print $2}' "$HEALTH_HANG_PID_FILE" 2>/dev/null)"
+if [ "$health_hang_ready" = 1 ] && kill -0 "$first_fixture_pid" 2>/dev/null && \
+   kill -0 "$first_sleep_pid" 2>/dev/null && [ ! -s "$HEALTH_HANG_DONE_FILE" ]; then
+  pass "MOCK_HEALTH=hang observably blocks inside its bounded probe"
+else
+  fail_test "MOCK_HEALTH=hang observably blocks inside its bounded probe"
+fi
+wait "$health_run_pid"
+LAST_OUTPUT="$TMP/output.txt"
+LAST_STATUS="$(cat "$HEALTH_HANG_STATUS_FILE")"
+assert_failure "a hanging health probe fails through the normal bounded health path"
+assert_contains 'still not answering .* after 1s' "a hanging health probe reports the configured final budget"
+direct_start_line="$(grep -n 'shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+post_direct_health_calls="$(awk -v start="$direct_start_line" 'NR > start && /^curl .*\/health$/ {count++} END {print count+0}' "$MOCK_CALL_LOG")"
+if [ "$post_direct_health_calls" -eq 2 ]; then
+  pass "the direct route is followed by exactly two total health checks"
+else
+  fail_test "the direct route is followed by exactly two total health checks (saw $post_direct_health_calls)"
+fi
+post_direct_health_line="$(awk -v start="$direct_start_line" 'NR > start && /^curl .*\/health$/ {print}' "$MOCK_CALL_LOG")"
+post_direct_launch_probes="$(printf '%s\n' "$post_direct_health_line" | grep -Ec '^curl .*--max-time 1 .*\/health$' || true)"
+post_direct_status_checks="$(printf '%s\n' "$post_direct_health_line" | grep -Ec '^curl .*--max-time 5 .*\/health$' || true)"
+if [ "$post_direct_launch_probes" -eq 1 ] && [ "$post_direct_status_checks" -eq 1 ]; then
+  pass "post-direct health calls are exactly one launch probe and one bounded status check"
+else
+  fail_test "post-direct health calls are exactly one launch probe and one bounded status check (saw $post_direct_launch_probes/1s, $post_direct_status_checks/5s)"
+fi
+if [ -s "$HEALTH_HANG_PID_FILE" ] && cmp -s "$HEALTH_HANG_PID_FILE" "$HEALTH_HANG_DONE_FILE"; then
+  pass "every hanging health probe completed its bounded wait"
+else
+  fail_test "every hanging health probe completed its bounded wait"
+fi
+health_process_leaked=0
+while read -r fixture_pid sleep_pid _; do
+  kill -0 "$fixture_pid" 2>/dev/null && health_process_leaked=1
+  kill -0 "$sleep_pid" 2>/dev/null && health_process_leaked=1
+done < "$HEALTH_HANG_PID_FILE"
+if [ "$health_process_leaked" = 0 ]; then
+  pass "hanging health probes leave no fixture or sleep process behind"
+else
+  fail_test "hanging health probes leave no fixture or sleep process behind"
+fi
+
+# ── #74: nothing may mutate a panel whose agent never answered ──────────────────────────────────
+# A health timeout used to fall through to the configuration POST and the restore import, so the run
+# wrote settings — or imported a whole bundle — into an agent that had not come up.
+# A package that stays stopped fails health at the LAUNCH step specifically, leaving the earlier
+# steps intact. MOCK_HEALTH=fail cannot be used here: it breaks health for the whole run, so the
+# provisioner dies before the launch step and the gate under test is never reached.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --id post-timeout-panel --mqtt tcp://broker.test:1883
+assert_failure "a panel whose agent never answered fails the run"
+assert_contains 'refusing to write configuration' "the run says why it refused to write"
+assert_not_contains 'X POST .*api/v1/config$' "$MOCK_CALL_LOG" "no configuration is written after a health timeout"
+
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --restore "$RESTORE"
+assert_failure "a restore into an unanswering panel fails the run"
+assert_contains 'refusing to import a configuration bundle' "the run says why it refused to import"
+assert_not_contains 'api/v1/config/import' "$MOCK_CALL_LOG" "no bundle is imported after a health timeout"
+
+# Minting is a side effect on Home Assistant, not on the panel: a token minted for a panel that never
+# came up cannot be delivered and is left behind as a dangling credential to find and revoke.
+MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=ineffective MOCK_DIRECT_START=fail \
+  APP_HEALTH_TIMEOUT_SECONDS=2 APP_LAUNCH_PROBE_SECONDS=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --ha-url https://ha.test --ha-user u --ha-pass p
+assert_failure "a panel that never answered does not get a token minted for it"
+assert_contains 'refusing to mint a Home Assistant token' "the run says which side effect it refused"
+assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Home Assistant after a health timeout"
+
+# ── #76: root-helper staging must not accumulate across failing runs ────────────────────────────
+# The fixture models the panel's id-named staging as real files that survive run_provision's reset,
+# because a real panel's /data/local/tmp and /data/adb/hapaneld do. Counts are exact, never bounds —
+# a bound like -le 1 is also satisfied by a run that never staged anything.
+DEVICE_ADB_STATE_DIR="$TMP/device-data-adb-hapaneld"
+count_device_artifacts() { find "$DEVICE_ADB_STATE_DIR" -maxdepth 1 -name "$1" 2>/dev/null | wc -l | tr -d ' '; }
+assert_count() {
+  actual="$1"; expected="$2"; description="$3"
+  if [ "$actual" -eq "$expected" ] 2>/dev/null; then pass "$description"
+  else fail_test "$description (expected $expected, got ${actual:-nothing})"; fi
+}
+
+# A successful run leaves no staging behind.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "baseline transactional run for staging accounting succeeds"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "the successful run really staged a bundle (guards the counts below against vacuity)"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "a successful run leaves no staged bundle files"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "a successful run leaves no protected transaction record"
+
+# Issue #76 itself: repeated failing runs accrued one protected transaction record plus one staged
+# bundle per attempt. Reclamation now runs from the EXIT trap, and these counts also pin the
+# probe_su cached-branch fix: inside a trap a bare `return` reports the shell's pending (failing)
+# exit status, which silently no-opped every root command the handler issued — reverting that fix
+# makes these counts nonzero.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+for _ in 1 2 3; do
+  MOCK_HELPER_INSTALL=fail \
+    run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+done
+assert_failure "a helper install failure still fails the run"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "each failing run really staged a bundle (guards the counts below against vacuity)"
+# These runs send no signals, so any reclamation observed is by construction the ORDINARY EXIT trap
+# issuing a fresh privileged rm through the unmodified production run_root → adb() →
+# run_with_deadline chain after the run's failing step — not a signal handler and not an extracted
+# copy of the cleanup.
+assert_log_contains 'rm -f .*hapaneld-helper-[0-9a-f]{32}' "the EXIT-trap reclamation rm went through the production adb wrapper in a signal-free failing run"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "three failing runs accrue no staged bundle files"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "three failing runs accrue no protected transaction records"
+
+# Executable substantiation of the probe_su comment, in both directions: the cached branch's old
+# bare-return form leaks the shell's pending exit status when the function runs inside an EXIT trap,
+# and the explicit-status form is immune. Either assertion fails if bash's trap-return semantics
+# were ever different from what the comment claims.
+bare_return_form="$(bash -c 'f() { if [ -n "$V" ]; then [ "$V" != none ]; return; fi; }; h() { if f; then echo CACHE-HONOURED; else echo PENDING-STATUS-LEAKED; fi; }; trap h EXIT; V=su0join; exit 1')"
+if [ "$bare_return_form" = PENDING-STATUS-LEAKED ]; then
+  pass "a bare return inside an EXIT trap reports the pending exit status, not the preceding test (the defect probe_su guards against)"
+else
+  fail_test "a bare return inside an EXIT trap reports the pending exit status, not the preceding test (got: $bare_return_form)"
+fi
+explicit_return_form="$(bash -c 'f() { local c; if [ -n "$V" ]; then [ "$V" != none ]; c=$?; return "$c"; fi; }; h() { if f; then echo CACHE-HONOURED; else echo PENDING-STATUS-LEAKED; fi; }; trap h EXIT; V=su0join; exit 1')"
+if [ "$explicit_return_form" = CACHE-HONOURED ]; then
+  pass "the explicit-status form probe_su now uses is immune to trap-context status leakage"
+else
+  fail_test "the explicit-status form probe_su now uses is immune to trap-context status leakage (got: $explicit_return_form)"
+fi
+
+# The reclamation rm rides run_root, whose quoting differs per su dialect; prove the contract under
+# the sh -c dialect as well as the default join style the runs above used.
+rm -rf "$DEVICE_ADB_STATE_DIR"
+MOCK_SU_DIALECT=shc MOCK_HELPER_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a helper install failure still fails the run under the sh -c su dialect"
+assert_log_contains 'push .*hapaneld-helper-[0-9a-f]{32}' "the sh -c dialect run really staged a bundle (guards the count below against vacuity)"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "a failing run reclaims its staging under the sh -c su dialect"
+
+# Reclamation must also run from the SIGNAL path, not only plain exit: a provisioner killed while
+# blocked in adb install has pushed its bundle and promoted its transaction record, and the signal
+# handler — which never reaches the post-commit cleanup — must reclaim both. The journal marker is
+# deliberately not part of this claim; it is the durable record reconcile needs.
+for reclaim_signal in TERM INT; do
+  case "$reclaim_signal" in TERM) expected_signal_status=143 ;; INT) expected_signal_status=130 ;; esac
+  rm -rf "$DEVICE_ADB_STATE_DIR"
+  : > "$MOCK_CALL_LOG"
+  signal_install_pid_file="$TMP/reclaim-$reclaim_signal-install.pid"
+  signal_output="$TMP/reclaim-$reclaim_signal-output.txt"
+  # Job control is required for the INT case: a plain async job in a non-interactive shell starts
+  # with SIGINT ignored, and a trap on a signal ignored at entry never arms — the provisioner would
+  # ignore the kill instead of running its handler. Under set -m the child gets its own process
+  # group with default dispositions, which is also how production's own deadline wrapper runs it.
+  set -m
+  MOCK_APK_INSTALL=block \
+  MOCK_APK_INSTALL_PID_FILE="$signal_install_pid_file" \
+  MOCK_STATE_DIR="$TMP" \
+    bash "$PROVISION" "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame \
+      > "$signal_output" 2>&1 &
+  signal_provision_pid=$!
+  set +m
+  signal_ready=0
+  signal_attempt=0
+  while [ "$signal_attempt" -lt 200 ]; do
+    if [ -s "$signal_install_pid_file" ]; then signal_ready=1; break; fi
+    /bin/sleep 0.05
+    signal_attempt=$((signal_attempt + 1))
+  done
+  if [ "$signal_ready" -eq 1 ]; then
+    pass "$reclaim_signal reclamation scenario reaches the blocked install with staging in place"
+  else
+    LAST_OUTPUT="$signal_output"
+    fail_test "$reclaim_signal reclamation scenario reaches the blocked install with staging in place"
+  fi
+  assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 5 "the staged bundle exists before $reclaim_signal arrives (guards the counts below against vacuity)"
+  kill "-$reclaim_signal" "$signal_provision_pid" 2>/dev/null || true
+  if wait "$signal_provision_pid"; then signal_status=0; else signal_status=$?; fi
+  if [ "$signal_status" -eq "$expected_signal_status" ]; then
+    pass "$reclaim_signal exits the provisioner with its signal status"
+  else
+    LAST_OUTPUT="$signal_output"
+    fail_test "$reclaim_signal exits the provisioner with its signal status (got $signal_status)"
+  fi
+  assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 0 "$reclaim_signal-interrupted run reclaims its staged bundle from the signal handler"
+  assert_count "$(count_device_artifacts '.helper-transaction-*')" 0 "$reclaim_signal-interrupted run reclaims its protected transaction record from the signal handler"
+done
+
+# Reclamation is scoped to the run's OWN identity: a concurrent provisioner's staging must survive.
+# The panel-side sweep that would remove a genuinely orphaned identity runs inside the device
+# transaction script, which the fixture deliberately does not emulate — it is executed for real in
+# the sandbox below instead, because a fixture model can agree with a test and disagree with
+# production.
+FOREIGN_STAGING_ID="0123456789abcdef0123456789abcdef"
+mkdir -p "$DEVICE_ADB_STATE_DIR"
+: > "$DEVICE_ADB_STATE_DIR/hapaneld-helper-$FOREIGN_STAGING_ID"
+: > "$DEVICE_ADB_STATE_DIR/.helper-transaction-$FOREIGN_STAGING_ID-$(printf '%064d' 7)"
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "a run with a concurrent provisioner's staging present succeeds"
+assert_count "$(count_device_artifacts "hapaneld-helper-$FOREIGN_STAGING_ID")" 1 "host reclamation never touches another run's staged bundle"
+assert_count "$(count_device_artifacts ".helper-transaction-$FOREIGN_STAGING_ID-*")" 1 "host reclamation never touches another run's transaction record"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 1 "the run's own staging is still reclaimed alongside the survivor"
+rm -rf "$DEVICE_ADB_STATE_DIR"
+
+# A reclamation the transport refuses must not change the run's outcome, must say so, and must name
+# the mechanism that recovers the leftovers (the next transaction's panel-side sweep).
+MOCK_STAGING_CLEANUP=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "a successful provision stays successful when staging reclamation fails"
+assert_contains "could not reclaim this run's root-helper staging" "a failed reclamation is reported, not silent"
+assert_contains 'next provisioning transaction .* removes it automatically' "the report names the recovery mechanism"
+assert_count "$(count_device_artifacts 'hapaneld-helper-*')" 5 "the unreclaimed bundle really was left behind (the report is about something real)"
+assert_count "$(count_device_artifacts '.helper-transaction-*')" 1 "the unreclaimed transaction record really was left behind"
+rm -rf "$DEVICE_ADB_STATE_DIR"
+
+# A run that refuses before executing any transaction still reclaims what it staged.
+MOCK_VENDOR_RC_STATE=unexpected \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "an unexpected vendor rc still refuses the run"
+assert_log_contains 'rm -f .*hapaneld-helper-[0-9a-f]{32}' "exit-path reclamation still runs in the pre-promotion window (guards the check below against vacuity)"
+
+# The .new guard defends a state no end-to-end scenario reaches — any run that survives long enough
+# to stage files has already derived the record path too — so the shipped cleanup is executed
+# directly in that state: identity valid, record path still empty. Unguarded, the appended
+# "$path.new" becomes a RELATIVE `.new` inside a privileged rm. The promoted state is asserted
+# positively as well, so deleting the append outright cannot pass either.
+CLEANUP_PROBE_ID="eeee5555eeee5555eeee5555eeee5555"
+CLEANUP_PROBE_SHA="$(printf '%064d' 2)"
+CLEANUP_SRC="$(sed -n '/^cleanup_root_helper_staging()/,/^}/p' "$PROVISION")"
+if printf '%s\n' "$CLEANUP_SRC" | grep -q 'cleanup_root_helper_staging()'; then
+  pass "the shipped cleanup function was extracted (an empty probe must not pass by doing nothing)"
+else
+  fail_test "the shipped cleanup function was extracted (an empty probe must not pass by doing nothing)"
+fi
+run_cleanup_probe() {
+  local record_path="$1" capture="$TMP/cleanup-probe-capture"
+  : > "$capture"
+  /bin/bash -uc "
+    YEL=''; X=''
+    run_root() { printf '%s\n' \"\$1\" >> '$capture'; }
+    $CLEANUP_SRC
+    ROOT_HELPER_TRANSACTION_ID='$CLEANUP_PROBE_ID'
+    ROOT_HELPER_STAGED_HELPER='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID'
+    ROOT_HELPER_STAGED_RC='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.rc'
+    ROOT_HELPER_STAGED_HYBRID_RC='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.hrc'
+    ROOT_HELPER_STAGED_SERVICE='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.svc'
+    ROOT_HELPER_STAGED_TRANSACTION='/data/local/tmp/hapaneld-helper-$CLEANUP_PROBE_ID.txn'
+    ROOT_HELPER_TRANSACTION_PATH='$record_path'
+    cleanup_root_helper_staging"
+  CLEANUP_PROBE_COMMAND="$(cat "$capture")"
+}
+run_cleanup_probe ""
+case "$CLEANUP_PROBE_COMMAND" in
+  *"hapaneld-helper-$CLEANUP_PROBE_ID"*) pass "pre-promotion cleanup still names the staged bundle (guards the check below against vacuity)" ;;
+  *) fail_test "pre-promotion cleanup still names the staged bundle (guards the check below against vacuity)" ;;
+esac
+if printf '%s\n' "$CLEANUP_PROBE_COMMAND" | grep -Eq '(^| )\.new( |$)'; then
+  fail_test "an exit before promotion never passes a relative .new to the privileged rm"
+else
+  pass "an exit before promotion never passes a relative .new to the privileged rm"
+fi
+run_cleanup_probe "/data/adb/hapaneld/.helper-transaction-$CLEANUP_PROBE_ID-$CLEANUP_PROBE_SHA"
+case "$CLEANUP_PROBE_COMMAND" in
+  *".helper-transaction-$CLEANUP_PROBE_ID-$CLEANUP_PROBE_SHA.new"*) pass "a promoted record's .new leftover is reclaimed once the path is owned" ;;
+  *) fail_test "a promoted record's .new leftover is reclaimed once the path is owned" ;;
+esac
+
+# ── #76: the panel-side sweep, executed from the shipped script ─────────────────────────────────
+# The sweep is lifted from the transaction-script heredoc exactly as generation ships it, its
+# @TRANSACTION_ID@ placeholder substituted the same way production's sed does, its absolute path
+# roots mechanically redirected into a sandbox, and the real function body run under /bin/sh. No
+# emulation is involved; the glob, the keep-set and the fail-closed journal parse are the shipped
+# ones.
+SWEEP_OWN_ID="aaaa1111aaaa1111aaaa1111aaaa1111"
+SWEEP_SRC="$(awk '/^  cat > "\$transaction_file" <<'\''EOF'\''$/{f=1;next} f&&/^EOF$/{exit} f' "$PROVISION" \
+  | sed -n '/^sweep_disposable_staging()/,/^}/p' \
+  | sed -e "s/@TRANSACTION_ID@/$SWEEP_OWN_ID/g" \
+        -e 's|/data/|${SWEEP_ROOT}/data/|g' -e 's|/system/|${SWEEP_ROOT}/system/|g')"
+if printf '%s\n' "$SWEEP_SRC" | grep -q 'sweep_disposable_staging()' &&
+   printf '%s\n' "$SWEEP_SRC" | grep -Fq "$SWEEP_OWN_ID"; then
+  pass "the shipped sweep function was extracted and substituted (an empty harness must not pass by doing nothing)"
+else
+  fail_test "the shipped sweep function was extracted and substituted (an empty harness must not pass by doing nothing)"
+fi
+
+run_sweep() {
+  SWEEP_ROOT="$1" transaction_id="$2" /bin/sh -uc "$SWEEP_SRC
+sweep_disposable_staging"
+}
+mk_sweep_tree() {
+  SWEEP_TREE="$TMP/sweep-tree"
+  rm -rf "$SWEEP_TREE"
+  mkdir -p "$SWEEP_TREE/data/local/tmp" "$SWEEP_TREE/data/adb/hapaneld" "$SWEEP_TREE/system/bin"
+}
+assert_swept() {
+  if [ -e "$SWEEP_TREE/$1" ] || [ -L "$SWEEP_TREE/$1" ]; then fail_test "$2 (still present: $1)"
+  else pass "$2"; fi
+}
+assert_kept() {
+  if [ -e "$SWEEP_TREE/$1" ] || [ -L "$SWEEP_TREE/$1" ]; then pass "$2"
+  else fail_test "$2 (missing: $1)"; fi
+}
+
+SWEEP_STALE_ID="bbbb2222bbbb2222bbbb2222bbbb2222"
+SWEEP_ARG_ID="cccc3333cccc3333cccc3333cccc3333"
+SWEEP_JOURNAL_ID="dddd4444dddd4444dddd4444dddd4444"
+SWEEP_SHA="$(printf '%064d' 1)"
+
+# Disposable, protected and namespaced artifacts side by side in one tree.
+mk_sweep_tree
+for suffix in '' .rc .txn; do : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID$suffix"; done
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-probe-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA"
+: > "$SWEEP_TREE/data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA.new"
+ln -s /nonexistent "$SWEEP_TREE/data/adb/hapaneld/.helper-probe-$SWEEP_JOURNAL_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID.txn"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper.probe-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-deadbeef"
+if run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID"; then pass "the shipped sweep runs cleanly"; else fail_test "the shipped sweep runs cleanly"; fi
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a stale staged bundle is swept"
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID.rc" "a stale bundle sidecar is swept"
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID.txn" "a stale staged transaction script is swept"
+assert_swept "data/adb/hapaneld/.helper-probe-$SWEEP_STALE_ID" "a stale probe is swept"
+assert_swept "data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA" "a stale protected transaction record is swept"
+assert_swept "data/adb/hapaneld/.helper-transaction-$SWEEP_STALE_ID-$SWEEP_SHA.new" "an interrupted promotion's .new leftover is swept"
+assert_swept "data/adb/hapaneld/.helper-probe-$SWEEP_JOURNAL_ID" "a broken symlink still occupying a staging path is swept"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID.txn" "the sweeping transaction's own staging is kept"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID" "the identity named by the verb argument is kept"
+assert_kept "data/local/tmp/hapaneld-helper.probe-$SWEEP_STALE_ID" "the standalone daemon installer's dot-separated staging is out of reach"
+assert_kept "data/local/tmp/hapaneld-helper-deadbeef" "a name without a full 32-hex identity is left alone"
+
+# A recovery journal protects the staging it references — on every journal marker path, including
+# the /system one.
+for journal_path in "data/adb/hapaneld/.helper-upgrade.marker" \
+                    "data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+                    "system/bin/.hapaneld-helper-upgrade"; do
+  mk_sweep_tree
+  printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=%s\n' "$SWEEP_JOURNAL_ID" > "$SWEEP_TREE/$journal_path"
+  : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_JOURNAL_ID"
+  : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+  run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+  assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_JOURNAL_ID" "staging referenced by the ${journal_path##*/} journal is kept"
+  assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "unreferenced staging is still swept while that journal exists"
+done
+
+# A journal whose identity cannot be read is a journal whose references are unknown: the sweep must
+# refuse to act at all rather than guess.
+mk_sweep_tree
+printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=not-a-valid-identity\n' > "$SWEEP_TREE/data/adb/hapaneld/.helper-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a malformed journal identity aborts the whole sweep"
+
+# A marker path that exists but is not a plain regular file aborts the sweep too — even a symlink
+# pointing at a perfectly valid marker, because a journal is written as a root-owned regular file
+# and anything else at that path is not a state the sweep may interpret.
+mk_sweep_tree
+printf 'JOURNAL_VERSION=1\nTRANSACTION_ID=%s\n' "$SWEEP_JOURNAL_ID" > "$SWEEP_TREE/data/adb/hapaneld/real-marker-target"
+ln -s "$SWEEP_TREE/data/adb/hapaneld/real-marker-target" "$SWEEP_TREE/data/adb/hapaneld/.helper-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a symlink journal marker aborts the whole sweep even when its target is valid"
+mk_sweep_tree
+mkdir "$SWEEP_TREE/data/adb/hapaneld/.helper-hybrid-upgrade.marker"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+run_sweep "$SWEEP_TREE" "$SWEEP_ARG_ID" || true
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a directory at a journal marker path aborts the whole sweep"
+
+# ── #76: staged inputs are consumed before the first destructive step ───────────────────────────
+# Both reclamation paths rest on this ordering: a verb that loses its staged inputs can only fail
+# early and cleanly, never mid-mutation. Pinned against the shipped heredoc per mutating verb: the
+# last @STAGED_*@ read must precede the first destructive operation — helper retirement (stop/pkill),
+# any move onto a live path or journal marker (mv -f), any restore of recorded state
+# (restore_or_remove), and any rm -f of a live path. Two rm -f forms are deliberately NOT
+# destructive: removing `*.hapaneld-recovery` copies (they belong to an already-concluded
+# transaction, and only after helper_journal_state proved no journal references them) and removing
+# the verb's own `$probe` staging before re-creating it. Both line numbers must exist: a verb where
+# either side is unmatched fails rather than passing vacuously.
+DEVICE_HEREDOC="$TMP/device-heredoc.sh"
+awk '/^  cat > "\$transaction_file" <<'\''EOF'\''$/{f=1;next} f&&/^EOF$/{exit} f' "$PROVISION" > "$DEVICE_HEREDOC"
+
+# Execute the complete emitted script through its production lock -> sweep -> verb dispatch path.
+# Direct function extraction above proves sweep semantics; this binds those semantics to the actual
+# entry point so deleting or moving the production call cannot leave the suite green.
+DISPATCH_SCRIPT="$TMP/device-dispatch.sh"
+sed -e "s/@TRANSACTION_ID@/$SWEEP_OWN_ID/g" \
+    -e 's|/data/|${SWEEP_ROOT}/data/|g' \
+    -e 's|/system/|${SWEEP_ROOT}/system/|g' \
+    -e 's|/vendor/|${SWEEP_ROOT}/vendor/|g' \
+    -e 's|/dev/.hapaneld-helper-transaction.lock|${SWEEP_ROOT}/dev/.hapaneld-helper-transaction.lock|g' \
+    "$DEVICE_HEREDOC" > "$DISPATCH_SCRIPT"
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID"
+dispatch_output="$TMP/device-dispatch-output"
+if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$dispatch_output" 2>&1; then
+  pass "the complete emitted transaction script dispatches a production verb"
+else
+  LAST_OUTPUT="$dispatch_output"
+  fail_test "the complete emitted transaction script dispatches a production verb"
+fi
+if [ "$(tail -n 1 "$dispatch_output")" = "LIVE_STATE=PRE_SWAP" ]; then
+  pass "production dispatch executes the selected discover-system verb"
+else
+  LAST_OUTPUT="$dispatch_output"
+  fail_test "production dispatch executes the selected discover-system verb"
+fi
+assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "production transaction dispatch reaches the staging sweep"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID" "production dispatch keeps the emitted transaction identity"
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID" "production dispatch keeps the argv transaction identity"
+assert_swept "dev/.hapaneld-helper-transaction.lock" "production dispatch releases its transaction lock"
+
+# A live owner must reject before the sweep. This proves the top-level order, not merely that the
+# successful path eventually leaves no lock directory behind.
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock" "$SWEEP_TREE/vendor"
+printf '%s\n' "$$" > "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock/pid"
+: > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
+busy_output="$TMP/device-dispatch-busy-output"
+if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$busy_output" 2>&1; then
+  busy_status=0
+else
+  busy_status=$?
+fi
+if [ "$busy_status" -eq 75 ] && [ "$(tail -n 1 "$busy_output")" = "TRANSACTION_BUSY" ]; then
+  pass "a live-owned transaction lock returns TRANSACTION_BUSY with status 75"
+else
+  LAST_OUTPUT="$busy_output"
+  fail_test "a live-owned transaction lock returns TRANSACTION_BUSY with status 75 (got $busy_status)"
+fi
+assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "a live-owned transaction lock rejects before staging sweep"
+assert_kept "dev/.hapaneld-helper-transaction.lock" "failed lock admission preserves the live owner's lock"
+if [ "$(cat "$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock/pid")" = "$$" ]; then
+  pass "failed lock admission preserves the live owner's identity"
+else
+  fail_test "failed lock admission preserves the live owner's identity"
+fi
+
+for verb in install_system install_systemless install_hybrid rollback_system rollback_systemless rollback_hybrid; do
+  ordering="$(awk -v verb="$verb" '
+    $0 == verb"() {" {inside=1}
+    inside && /@STAGED_[A-Z_]*@/ {last_read=NR}
+    inside && !first_destruct && (/^  stop hapaneld_helper/ || /^  pkill -x hapaneld-helper/ || /^  mv -f / || /^  restore_or_remove / || (/^  rm -f / && !/hapaneld-recovery/ && !/\$probe/)) {first_destruct=NR}
+    inside && /^\}/ {print last_read+0, first_destruct+0; exit}
+  ' "$DEVICE_HEREDOC")"
+  last_read="${ordering%% *}"; first_destruct="${ordering##* }"
+  if [ "${last_read:-0}" -gt 0 ] && [ "${first_destruct:-0}" -gt 0 ] && [ "$last_read" -lt "$first_destruct" ]; then
+    pass "$verb consumes its staged inputs before its first destructive step (read $last_read < destroy $first_destruct)"
+  else
+    fail_test "$verb consumes its staged inputs before its first destructive step (read ${last_read:-none}, destroy ${first_destruct:-none})"
+  fi
+done
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then

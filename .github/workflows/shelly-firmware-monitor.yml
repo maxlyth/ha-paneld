@@ -84,6 +84,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -97,10 +98,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          branch="automation/shelly-firmware-index"
           repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git ls-remote --exit-code --heads "$repo_url" automation/shelly-firmware-index >/dev/null 2>&1; then
-            git fetch -q "$repo_url" automation/shelly-firmware-index
-            git show FETCH_HEAD:"$DAT" > "$DAT"
+          git fetch -q "$repo_url" +refs/heads/main:refs/remotes/shelly/main
+          git checkout -q -B main refs/remotes/shelly/main
+          pr_number="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main --state open --json number --jq '.[0].number')"
+          if [ -n "$pr_number" ]; then
+            git fetch -q "$repo_url" "$branch"
+            pending_dat="$RUNNER_TEMP/shelly-pending.dat"
+            git show FETCH_HEAD:"$DAT" > "$pending_dat"
+            python tools/firmware-index/shelly_firmware.py merge --dat "$DAT" --pending "$pending_dat"
           fi
 
       # Check both manifest endpoints for new versions. Sets has_new, has_pending,
@@ -175,18 +182,8 @@ jobs:
             msg="data: Shelly Wall Display $NEW_VERSIONS discovered"
           fi
 
-          dat_content="$(cat "$DAT")"
-          if git ls-remote --exit-code --heads "$repo_url" "$branch" >/dev/null 2>&1; then
-            git fetch -q "$repo_url" "$branch"
-            git checkout -q -B "$branch" FETCH_HEAD
-          else
-            git checkout -q -b "$branch"
-          fi
-          printf '%s\n' "$dat_content" > "$DAT"
-
-          git add "$DAT"
-          git commit -q -m "${msg} [skip ci]" || echo "nothing new to commit onto $branch"
-          git push -q "$repo_url" "HEAD:$branch"
+          DAT="$DAT" BRANCH="$branch" REPO_URL="$repo_url" COMMIT_MESSAGE="${msg} [skip ci]" \
+            bash tools/firmware-index/reconcile_shelly_branch.sh
 
           if [ -z "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main --state open --json number --jq '.[0].number')" ]; then
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \

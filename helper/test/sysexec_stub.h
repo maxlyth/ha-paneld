@@ -7,6 +7,7 @@ void sysexec_stub_reset(void);
 void sysexec_stub_fail_run(const char *needle, int status);
 int  sysexec_stub_count_run(const char *needle);
 int  sysexec_stub_count_argv(const char *path, const char *const argv[], int quiet);
+int  sysexec_stub_count_argv_calls(void);
 void sysexec_stub_block_run(const char *needle);
 void sysexec_stub_wait_blocked(void);
 void sysexec_stub_release_run(void);

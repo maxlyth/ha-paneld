@@ -1,5 +1,71 @@
 # Changelog
 
+## v0.9.6-rc5 - 2026-08-02
+
+### Important changes — please read before upgrading
+
+**RC5 corrects an upgrade-safety decision I got wrong in RC1-RC4.** ha-paneld moved all data/config storage to SQLite in 0.9.6-rc1, but older Android versions do not support clean SQLite backup features and by default Android apps do not always shut down cleanly. I spent the last three pre-releases chasing all the potentially broken database states before finally giving up. In RC5 I have changed direction to a "defense in depth" strategy where ha-paneld is responsible for maximising DB coherency on orderly shutdown rather than startup.
+
+RC1–RC4 do not support RC5’s new installer-requested shutdown handshake, so the installer attempts one legacy live backup. If neither automatic copy can be verified, it simply reports and continues with package replacement rather than blocking the update. This cannot eliminate every upgrade problem, and I am sorry that the strategy changed this late, but the previous approach carried a technical debt that was unsustainable.
+
+### Fixed
+
+- **APK updates no longer fail over storage they do not actually need.** In-app updates and APKs uploaded through the Install page now check the space needed for the bytes they will really stage instead of demanding an additional 64 MB. An in-app update also warns and continues if it cannot make its optional private configuration revision.
+
+- **Encrypted backups no longer report success while their plaintext archive remains.** If the temporary archive cannot be removed after encryption, the encrypted download is withheld with an actionable error; an acquired Companion capture is also released if the following staging allocation fails.
+
+- **Silence boot chime now works through the privileged helper when Android refuses the direct audio change.** Existing saved choices remain authoritative, and the exact previous ring and notification state is still restored when the setting is disabled.
+
+- **Fleet updates now refuse options that only make sense for one panel.** `--export`, `--id` and `--restore` can no longer be multiplied silently across a fleet, where they could overwrite exports or apply one panel's identity or settings to every panel. The fleet-safe `--restore-fleet` path is unchanged.
+
+### Docs
+
+- **The Shelly Wall Display firmware guide now includes 2.7.2 and 2.7.3.** It also distinguishes what the legacy and modern firmware actually prove about root access and records archival status from the firmware index rather than assuming every discovered image was captured.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected, but given the change in DB coherency handling it is possible that users upgrading from RC1–RC4 may encounter a problem. Please report any upgrade problems you encounter.
+
+- `--reset-config` is irreversible and now creates no backup. Create and verify a complete `.hpb` backup, or run a separate `--export FILE` if settings alone are sufficient, before starting the reset.
+
+## v0.9.6-rc4 - 2026-07-30
+
+### Important changes — please read before upgrading
+
+**RC4 is primarily about making upgrades and backups deserve the trust we place in them.** Testing RC3 exposed paths where a slow panel could be declared dead too early, or where a backup could report success without preserving everything it promised. This candidate makes those paths fail safely and fixes discovery on panels whose network arrives late during boot. I would particularly like testers to retry rooted upgrades and, on Android 8.1 panels, create a fresh `.hpb` backup.
+
+### Fixed
+
+- **Rooted upgrades now create and verify one coherent break-glass database snapshot before changing the panel.** This is a manual, same-panel recovery copy rather than the normal `.hpb` restore path, but the installer now verifies its integrity and transfer instead of relying on a live file copy. A rooted panel that cannot produce a verified snapshot stops before the upgrade; `--allow-missing-db-snapshot` explicitly accepts proceeding without one.
+
+- **Slow panels are no longer mistaken for failed upgrades.** Provisioning gives a first start up to three minutes by default to migrate its database and become healthy without repeatedly restarting it. If the panel still does not answer, configuration writes, restores and Home Assistant token creation remain blocked instead of being sent to an unavailable app.
+
+- **Failed rooted upgrades no longer leave temporary helper files to accumulate.** Provisioning cleans up its own staging after successful and handled failed runs. If a broken connection prevents that cleanup, the next helper transaction safely reclaims the leftovers.
+
+- **Panels that receive their network address late during boot no longer remain absent from Home Assistant discovery until restart ([#78](https://github.com/maxlyth/ha-paneld/issues/78)).** The address is retained while ha-paneld is starting and applied as soon as discovery is ready. In a later 48-boot rc4 fleet test, all 19 starts that initially deferred discovery recovered without invoking the running-responder supervisor.
+
+- **Backups from Android 8.1 panels can now include device-local application state.** An `.hpb` created by RC1, RC2 or RC3 on Android 8.1 could report success while silently omitting stored state such as auto-sleep learning and profile calibration. Its normal configuration and profile data were still present. Existing backups are not repaired, so take a fresh backup after upgrading.
+
+- **`--export FILE --reset-config` now performs the requested reset after the verified export.** It previously returned success after writing the export while silently leaving the panel's configuration untouched.
+
+### Docs
+
+- **The README has been substantially reorganised around how people evaluate and adopt ha-paneld.** Installation, renderer choices, panel capabilities, root boundaries, supported hardware, community support and developer entry points now have clearer places, making the project's scope and the route into it easier to understand.
+
+- **The NSPanel Pro firmware index now includes the 4.6.2 and 4.7.0 update paths.** The guide distinguishes app-only updates from full firmware changes, keeps the hardware-verified flashing boundary at 4.4.0 and links the available community reports for newer releases so you can make a more informed decision before updating a panel.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
+
+- On a rooted panel, the installer now stops before changing anything if it cannot capture and verify the pre-upgrade database. This can expose missing panel-side SQLite tools, an unreadable or unsupported database, a transfer failure, or an unwritable backup directory on the computer running the installer. Userdebug panels that expose root only after `adb root` are covered by the same gate.
+
+- Use `--allow-missing-db-snapshot` only when you have deliberately accepted that there will be no database restore point. It does not bypass an unknown root state or a panel whose ADB connection has stopped answering.
+
+- A slow first start can now spend up to three minutes completing migration before provisioning continues. Progress is reported while it waits.
+
+- If you use `.hpb` backups from an Android 8.1 panel, take a fresh backup after upgrading; older backups may not contain the panel's stored application state.
+
 ## v0.9.6-rc3 - 2026-07-28
 
 ### Important changes — please read before upgrading
@@ -10,7 +76,7 @@
 
 - **Interrupted rooted upgrades no longer leave a panel permanently unprovisionable.** An upgrade that rolled back successfully could leave its recovery journal behind, causing every later provisioning attempt to fail in exactly the same way. RC3 recognises the restored state, completes the rollback and allows the next attempt to proceed normally.
 
-- **LAN panel discovery recovers when its mDNS responder silently stalls.** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted.
+- **LAN panel discovery recovers when its mDNS responder silently stalls ([#75](https://github.com/maxlyth/ha-paneld/issues/75)).** A panel that disappears from Home Assistant discovery or other panels' switchers can rebuild its responder automatically with bounded retries rather than remaining absent until the app or network is restarted. Diagnostics report the recovery state and warn if automatic recovery is exhausted. A later 16-panel rc3 soak observed 14 natural responder stalls; all 14 were detected and rebuilt in the same app process.
 
 - **The Dashboard no longer shifts or reopens in the wrong place on small panels.** Restored placement no longer drifts onto the wrong cards, and the narrow-screen header no longer causes the page to jump shortly after loading. The Dashboard opens where you left it and stops moving under your finger.
 

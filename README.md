@@ -9,7 +9,7 @@
 
 **The universal Home Assistant dashboard app for Android wall panels.**
 
-ha-paneld makes Home Assistant dashboards practical on panels that otherwise feel too slow or awkward to use. Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. ha-paneld's built-in renderer can learn what the dashboard uses and ask Home Assistant to send only those states, reducing the work on the panel without replacing the hardware.
+ha-paneld makes Home Assistant dashboards practical on panels that otherwise feel too slow or awkward to use. Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. **ha-paneld's built-in renderer can learn which entities the dashboard uses and ask Home Assistant to send only those states**. In the real world, this can reduce entity load by 10–100×, making that dashboard finally usable.
 
 It also replaces fragmented vendor software with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds a built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
 
@@ -63,10 +63,10 @@ The same one-line installer also supports non-interactive single-panel provision
 > **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
 
 > [!IMPORTANT]
-> **First-run gotcha — check Home Assistant and the panel's system WebView.** Starting with ha-paneld 0.9.6, the built-in renderer requires Home Assistant 2026.4.2+ and a WebView with its secure native-host message interface. Even modern panels can ship with a WebView/Chromium far too old to render a current dashboard. See [Built-in renderer requirements and controls](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel. Another renderer may help when Home Assistant itself cannot be upgraded, but Companion uses the same system WebView and cannot bypass an obsolete WebView on the panel.
+> **First-run gotcha — check Home Assistant and the panel's system WebView.** Starting with ha-paneld 0.9.6, the built-in renderer requires Home Assistant 2026.4.2 or newer and a modern WebView. Even new panels can ship with a WebView/Chromium far too old to render a current dashboard. See [Built-in renderer requirements and controls](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel.
 
 > [!NOTE]
-> The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need Assist or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
+> The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need multiple Home Assistant servers, Assist voice control or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
 
 > [!NOTE]
 > ha-paneld can only be sideloaded on a panel — it isn't on the Play Store, so even Play-capable panels (eg 2026 Android 14 models) should sideload it.
@@ -76,31 +76,7 @@ The same one-line installer also supports non-interactive single-panel provision
 - **F-Droid (on-device, no PC).** Add ha-paneld's F-Droid repository and install + auto-update straight from the panel — see [Installing via F-Droid](docs/fdroid.md). Easiest where the panel can run F-Droid (Sonoff NSPanel Pro firmware ≥ 4.0.0 bundles it). Delivers the app only — the root-gated features still need [provisioning](docs/provisioning.md).
 - **USB bootstrap, no-adb sideload, and scripted / whole-fleet installs** — if your panel doesn't expose adb over the network, or you want to roll many panels at once, see [Provisioning & fleet updates](docs/provisioning.md).
 
-## Why not just the Home Assistant Companion app?
-
-The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen, LED and button control; hardware-button events back to Home Assistant; a built-in launcher and on-screen navigation for key-less hardware; fleet provisioning; and automatic pairing. ha-paneld supplies those panel-specific capabilities.
-
-For the dashboard itself there are **two supported paths**. The built-in renderer is designed for a dedicated dashboard panel: it provides entity filtering, remote sign-in without typing on the panel, and recovery from screen-off freezes, connection failures, excessive memory use and renderer crashes. It remains experimental and deliberately omits **Home Assistant's Voice Assistant (Assist)** and native notifications. Use the Companion app when either of those is required. Both paths remain supported.
-
-## Why not Fully Kiosk?
-
-[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a closed-source, commercial general-purpose kiosk browser. Running it alongside ha-paneld creates overlapping ownership of kiosk lifecycle, screen control and remote administration, with two separate configuration surfaces. Consider that operational conflict when choosing a renderer.
-
-<details>
-<summary>The three friction points in full</summary>
-
-- **Not free, not open source.** Fully Kiosk is closed-source commercial software. The free tier is limited and nags; the parts people actually want for a panel — the remote-admin REST/MQTT API, motion/screensaver controls, no watermark — need the paid **Plus** licence, **per device**. That cuts against HA's and ha-paneld's free, open, local-first ethos.
-- **Entity filtering is integrated with the renderer.** ha-paneld can learn which entities its dashboard uses and reduce the state stream before it reaches the panel. A separate browser cannot participate in that renderer pipeline.
-- **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each unit is a bespoke setup. ha-paneld is config-as-code: MQTT auto-discovery, uniform entities across every panel, and one `update-fleet.sh` to roll them together.
-
-For the simplest ownership model, choose one panel stack: ha-paneld's built-in renderer for its integrated panel features, Home Assistant Companion when Assist or native notifications are required, or a separately managed renderer when its tradeoffs fit your deployment.
-</details>
-
-## Why not FreeKiosk?
-
-[FreeKiosk](https://github.com/RushB-fr/freekiosk) is an unrelated project, despite the similar name. It re-implements Fully Kiosk's feature set on a completely different, fully open-source codebase. One technical difference worth knowing: FreeKiosk is built on React Native, and the second JavaScript runtime it requires can severely impact performance on typical low-RAM panels (1–2 GB).
-
-## Capabilities
+## Hardware Control Capabilities
 
 | Cap | Surface |
 |-----|---------|
@@ -150,14 +126,6 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 | Shelly Wall Display X2 | SC7731E | 8.1 | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path |
 | Shelly Wall Display X1i / X2i / XL | RK3326-S / RK3566 (model-dependent) | 11 (API 30) | arm64-v8a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
 
-## Status & roadmap
-
-**Latest stable release — 0.9.5:** panels can now be signed in to Home Assistant from a remote browser, auto-brightness learns each panel’s normal environment from local and Home Assistant light history, and Hardened security mode protects sensitive remote maintenance with physical approval on the panel. Full notes are in [CHANGELOG.md](CHANGELOG.md).
-
-**Current release candidate — 0.9.6-rc3 (under test):** panels now recover from interrupted rooted upgrades and silently stalled LAN discovery, while the Dashboard keeps its restored position and no longer jumps after loading on narrow screens. RC3 builds on the storage, database, Android power, automatic-sleep, sensor and settings reliability work in the earlier 0.9.6 candidates. It remains a prerelease while testing continues.
-
-**Where it's heading** — the near-term direction remains reliable provisioning and operation across more than one panel. Two larger stretch candidates are being evaluated for the initial v1.0 release: fleet management and Voice Assistant support; neither is committed. Other planned work includes MQTT TLS for self-signed brokers, an on-device scheduler, deeper per-card performance attribution, and continued iteration on the HTTP UI. The full curated list is in **[docs/roadmap.md](docs/roadmap.md)**.
-
 ## Documentation
 
 - **[docs/api.md](docs/api.md)** — the control API: uniform MQTT entities, the HTTP contract (`:8888`), and pairing. Browse and try every endpoint live at `http://<panel>:8888/api`; the machine-readable spec is at `/api/v1/openapi.json`.
@@ -182,16 +150,35 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 |---|---|
 | <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen — icon, config URL and a QR code to open the config page" width="480"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/api-explorer-light.png"><img src="docs/img/api-explorer-dark.png" alt="REST API explorer" width="480"></picture> |
 
-## Stack
+## Why not just the Home Assistant Companion app?
 
-- **Application runtime** — [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) and [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
-- **HTTP and Home Assistant WebSocket** — [Ktor](https://github.com/ktorio/ktor) CIO server, client and WebSocket modules provide coroutine I/O without a thread per connection.
-- **MQTT** — [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client) supplies the MQTT 5 client and pure-Java NIO transport, keeping the APK ABI-agnostic.
-- **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` for Home Assistant discovery and the multi-panel switcher. ha-paneld checks its own advertisement and rebuilds a silently stalled responder with bounded retries, then warns if automatic recovery is exhausted.
-- **Runtime profiles** — [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) parses YAML 1.2 profile documents, while [CodeMirror](https://codemirror.net/) and its [YAML language package](https://github.com/codemirror/lang-yaml) provide the in-browser profile editor.
-- **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
+The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen, LED and button control; hardware-button events back to Home Assistant; a built-in launcher and on-screen navigation for key-less hardware; fleet provisioning; and automatic pairing. ha-paneld supplies those panel-specific capabilities.
 
-Dependency selection and updates follow the project's [dependency and supply-chain policy](SECURITY.md#dependency-and-supply-chain-policy).
+For the dashboard itself, there are **two supported paths**. The built-in renderer is designed for a dedicated dashboard panel: it provides entity filtering, remote sign-in without typing on the panel, and recovery from screen-off freezes, connection failures, excessive memory use and renderer crashes. It remains experimental and deliberately omits support for multiple Home Assistant servers, **Home Assistant Assist** and native notifications. Use the Companion app when any of those is required. Both paths remain supported.
+
+## Why not Fully Kiosk?
+
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a closed-source, commercial general-purpose kiosk browser. Running it alongside ha-paneld creates overlapping ownership of kiosk lifecycle, screen control and remote administration, with two separate configuration surfaces. Consider that operational conflict when choosing a renderer.
+
+<details>
+<summary>The three friction points in full</summary>
+
+- **Not free, not open source.** Fully Kiosk is closed-source commercial software. The free tier is limited and nags; the parts people actually want for a panel — the remote-admin REST/MQTT API, motion/screensaver controls, no watermark — need the paid **Plus** licence, **per device**. That cuts against HA's and ha-paneld's free, open, local-first ethos.
+- **Entity filtering is integrated with the renderer.** ha-paneld can learn which entities its dashboard uses and reduce the state stream before it reaches the panel. A separate browser cannot participate in that renderer pipeline.
+- **Per-device config doesn't scale on a non-homogeneous fleet.** Fully Kiosk is configured per device (its settings UI / per-device cloud), so a mixed fleet of different panels drifts and each unit is a bespoke setup. ha-paneld is config-as-code: MQTT auto-discovery, uniform entities across every panel, and one `update-fleet.sh` to roll them together.
+
+For the simplest ownership model, choose one panel stack: ha-paneld's built-in renderer for its integrated panel features, Home Assistant Companion when Assist or native notifications are required, or a separately managed renderer when its tradeoffs fit your deployment.
+</details>
+
+## Why not FreeKiosk?
+
+[FreeKiosk](https://github.com/RushB-fr/freekiosk) is an unrelated project, despite the similar name. It re-implements Fully Kiosk's feature set on a completely different, fully open-source codebase. One technical difference worth knowing: FreeKiosk is built on React Native, and the second JavaScript runtime it requires can severely impact performance on typical low-RAM panels (1–2 GB).
+
+## Community chat
+
+I did not want to set up a Discord server or Slack workspace for a one-man project, so I am experimenting with Matrix and Element. Join [#ha-paneld:matrix.org](https://matrix.to/#/#ha-paneld:matrix.org) in your usual Matrix client, or view it without an account in [Element Web](https://app.element.io/#/room/#ha-paneld:matrix.org).
+
+Do not post configurations or file links in GitHub issues or discussions unless you are comfortable with them remaining public forever. The Matrix space is a better place to start informal support conversations, but it is public and world-readable too. Redact credentials, private URLs and personal details before posting configurations, logs or file links anywhere, and arrange a private exchange before sharing anything sensitive.
 
 ## Want your panel supported?
 
@@ -204,6 +191,23 @@ So if you'd like to help:
 - **Or send me the panel.** I'm **UK-based** and happy to do the reverse-engineering directly — the fastest route to a fully-supported new model. You'll get it back (I have way too many already); open an issue first so we can sort the details.
 
 The result is always open: your panel becomes a profile everyone can use — a bit less per-vendor fragmentation for the next person. That's the donation.
+
+## Development
+
+If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and devcontainer builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [device-profile development](docs/profiles/README.md), the [UI layout test harness](test/README.md), and the [release process](docs/RELEASING.md).
+
+I have deliberately provided enough information to use the supplied development container and build a local test version. Do not submit computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first.
+
+## Stack
+
+- **Application runtime** — [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) and [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
+- **HTTP and Home Assistant WebSocket** — [Ktor](https://github.com/ktorio/ktor) CIO server, client and WebSocket modules provide coroutine I/O without a thread per connection.
+- **MQTT** — [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client) supplies the MQTT 5 client and pure-Java NIO transport, keeping the APK ABI-agnostic.
+- **mDNS** — [JmDNS](https://github.com/jmdns/jmdns) advertises `_ha-paneld._tcp` for Home Assistant discovery and the multi-panel switcher. ha-paneld checks its own advertisement and rebuilds a silently stalled responder with bounded retries, then warns if automatic recovery is exhausted.
+- **Runtime profiles** — [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) parses YAML 1.2 profile documents, while [CodeMirror](https://codemirror.net/) and its [YAML language package](https://github.com/codemirror/lang-yaml) provide the in-browser profile editor.
+- **QR and logging** — [ZXing](https://github.com/zxing/zxing) generates on-panel setup QR codes, while [SLF4J](https://github.com/qos-ch/slf4j) routes Ktor and HiveMQ logs to Logcat.
+
+Dependency selection and updates follow the project's [dependency and supply-chain policy](SECURITY.md#dependency-and-supply-chain-policy).
 
 ## Acknowledgements
 

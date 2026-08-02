@@ -186,6 +186,57 @@ class ControlPlaneRoutesTest {
         )
         assertOperationLaneReleased()
 
+        val retainedSource = temporary.newFile("retained-route.zip").apply { writeText("secret") }
+        val retainedPlaintext = object : java.io.File(retainedSource.path) {
+            override fun delete(): Boolean = false
+        }
+        val withdrawnSource = temporary.newFile("withdrawn-route.hpb").apply { writeText("sealed") }
+        var artifactDeleteAttempts = 0
+        val withdrawnArtifact = object : java.io.File(withdrawnSource.path) {
+            override fun delete(): Boolean {
+                artifactDeleteAttempts++
+                throw java.io.IOException("sealed cleanup failed")
+            }
+        }
+        val ownedSource = temporary.newFile("owned-route.payload").apply { writeText("temporary") }
+        var ownedDeleteAttempts = 0
+        val ownedFile = object : java.io.File(ownedSource.path) {
+            override fun delete(): Boolean {
+                ownedDeleteAttempts++
+                throw java.io.IOException("owned cleanup failed")
+            }
+        }
+        var captureCloseAttempts = 0
+        build = { _, _ ->
+            withBackupCaptureAndPlaintext(
+                capture = java.io.Closeable {
+                    captureCloseAttempts++
+                    throw java.io.IOException("capture close failed")
+                },
+                createPlaintext = { retainedPlaintext },
+            ) { _, plain ->
+                withBackupArtifactCleanup(
+                    plain = plain,
+                    sealed = { withdrawnArtifact },
+                    ownedFiles = { listOf(ownedFile) },
+                ) { encryptedBackupArtifact(plain, withdrawnArtifact) }
+            }
+        }
+        assertJsonPost(
+            "include_companion=true&passphrase=protected",
+            HttpStatusCode.InsufficientStorage,
+            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+            path = "/api/v1/backup",
+        )
+        assertTrue(retainedSource.exists())
+        assertTrue(withdrawnSource.exists())
+        assertTrue(ownedSource.exists())
+        assertEquals(2, artifactDeleteAttempts)
+        assertEquals(1, ownedDeleteAttempts)
+        assertEquals(1, captureCloseAttempts)
+        assertFalse(BackupDeliveryGate.occupied())
+        assertOperationLaneReleased()
+
         var laneHeldWhenArtifactDeleted = false
         var deliveryHeldWhenArtifactDeleted = false
         build = { includeCompanion, passphrase ->
@@ -288,7 +339,8 @@ class ControlPlaneRoutesTest {
         assertUpload("12345", HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"upload-too-large"}""")
         assertEquals(beforeOversized, stagedFiles.size)
 
-        usableSpace = 64L * 1024L * 1024L + 2L
+        // A body that genuinely does not fit the free space is still refused before anything is written.
+        usableSpace = 2L
         assertUpload("apk", HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
         assertFalse(stagedFiles.last().exists())
 
@@ -312,6 +364,9 @@ class ControlPlaneRoutesTest {
 
         pending.open()
         closeDuringInspection = false
+        // An upload that fits its actual staging requirement is admitted with no surplus demanded: four
+        // usable bytes for a four-byte body. The retired fixed 64 MiB reserve refused exactly this.
+        usableSpace = 4L
         assertUpload(
             "good",
             HttpStatusCode.OK,
@@ -384,12 +439,11 @@ class ControlPlaneRoutesTest {
         assertEquals("timeout", response.bodyAsText())
     }
 
-    @Test fun uploadCapacityKeepsSafetyMarginAndBudgetsUnknownBodiesAtTheMaximum() {
-        val margin = 64L * 1024L * 1024L
-        assertEquals(0L, uploadStagingLimit(margin, maxPayloadBytes = 4L))
-        assertEquals(3L, uploadStagingLimit(margin + 3L, maxPayloadBytes = 4L))
-        assertEquals(4L, uploadStagingLimit(margin + 5L, maxPayloadBytes = 4L))
-        assertEquals(0L, uploadStagingLimit(Long.MAX_VALUE, maxPayloadBytes = -1L))
+    @Test fun uploadCapacityAdmitsTheActualRequirementAndBudgetsUnknownBodiesAtTheMaximum() {
+        assertEquals(0L, uploadStagingLimit(usableBytes = 0L, maxPayloadBytes = 4L))
+        assertEquals(3L, uploadStagingLimit(usableBytes = 3L, maxPayloadBytes = 4L))
+        assertEquals(4L, uploadStagingLimit(usableBytes = Long.MAX_VALUE, maxPayloadBytes = 4L))
+        assertEquals(0L, uploadStagingLimit(usableBytes = Long.MAX_VALUE, maxPayloadBytes = -1L))
     }
 
     @Test fun apkCommitApprovalNamesTheInspectedPackageVersionAndSigner() = testApplication {

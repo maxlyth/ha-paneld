@@ -1,6 +1,6 @@
 # Roadmap
 
-The curated public roadmap for ha-paneld. The [README](../README.md#status--roadmap) carries a short "where it's heading" summary; this is the full list. Shipped work lives in [CHANGELOG.md](../CHANGELOG.md). Nothing here is a dated commitment during the v0.x line — it's the direction, ordered roughly by priority within each tier.
+The curated public roadmap for ha-paneld. Shipped work lives in [CHANGELOG.md](../CHANGELOG.md). Nothing here is a dated commitment during the v0.x line — it is the direction, ordered roughly by priority within each tier.
 
 ## Planned
 

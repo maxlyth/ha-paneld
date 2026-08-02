@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.util
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -28,6 +29,49 @@ class AppInstallerTest {
         val failed = StateQuiescence { failureReopened.set(true) }
         AppInstaller.finishSelfReplaceQuiescence(failed, installSucceeded = false)
         assertTrue(failureReopened.get())
+    }
+
+    @Test fun anUnwritableConfigRevisionWarnsAndTheUpgradeContinues() {
+        // The private revision is defense in depth, not a precondition — losing it must not strand
+        // the panel on the old build, so quiescence still runs and its lease is still returned.
+        val warnings = mutableListOf<String>()
+        val lease = StateQuiescence { }
+
+        val prepared = AppInstaller.prepareSelfReplace(
+            snapshot = { false },
+            quiesce = { lease },
+            warn = warnings::add,
+        )
+
+        assertSame("the upgrade must continue into quiescence", lease, prepared)
+        assertEquals(listOf(AppInstaller.SNAPSHOT_UNWRITABLE_WARNING), warnings)
+    }
+
+    @Test fun aWrittenConfigRevisionIsTakenBeforeStateIsQuiesced() {
+        val order = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+
+        AppInstaller.prepareSelfReplace(
+            snapshot = { order.add("snapshot"); true },
+            quiesce = { order.add("quiesce"); StateQuiescence { } },
+            warn = warnings::add,
+        )
+
+        assertEquals(listOf("snapshot", "quiesce"), order)
+        assertTrue("a written revision must not warn", warnings.isEmpty())
+    }
+
+    @Test fun storageTooSmallForTheActualApkIsRefused() {
+        assertEquals("a 100 MB APK cannot be staged in 50 MB", 0L, AppInstaller.downloadCeiling(100 * MIB, 50 * MIB))
+        assertEquals("an undeclared length on a full filesystem is refused", 0L, AppInstaller.downloadCeiling(-1L, 0L))
+    }
+
+    @Test fun noFixedSurplusIsReservedAboveTheApkItself() {
+        // 110 MB free for a 100 MB APK is viable, and was refused only by the retired 64 MB reserve.
+        val ceiling = AppInstaller.downloadCeiling(100 * MIB, 110 * MIB)
+
+        assertTrue("an otherwise viable update must be admitted", ceiling > 0L)
+        assertTrue("the download must not be bounded below the APK itself", ceiling >= 100 * MIB)
     }
 
     private val github = URL("https://github.com/maxlyth/ha-paneld/releases/download/v1/app.apk")
@@ -119,5 +163,9 @@ class AppInstallerTest {
 
         assertTrue(failure is java.net.SocketTimeoutException)
         assertEquals(0, output.size())
+    }
+
+    private companion object {
+        const val MIB = 1024L * 1024L
     }
 }

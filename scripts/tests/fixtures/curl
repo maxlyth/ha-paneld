@@ -8,6 +8,8 @@ output_file=""
 want_output_file=0
 write_format=""
 want_write_format=0
+max_time=""
+want_max_time=0
 for arg in "$@"; do
   if [ "$want_output_file" = 1 ]; then
     output_file="$arg"
@@ -19,9 +21,15 @@ for arg in "$@"; do
     want_write_format=0
     continue
   fi
+  if [ "$want_max_time" = 1 ]; then
+    max_time="$arg"
+    want_max_time=0
+    continue
+  fi
   case "$arg" in
     -o|--output) want_output_file=1 ;;
     -w|--write-out) want_write_format=1 ;;
+    --max-time) want_max_time=1 ;;
     http://*|https://*) url="$arg" ;;
   esac
 done
@@ -189,7 +197,35 @@ JSON
     printf '{"message":"API running."}\n'
     ;;
   */health)
-    [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
+    # `slow` models the #74 shape: the agent is starting and answers only after N probes. It must be
+    # a success, not a failure — the panels in that report were serving ~2 minutes later untouched.
+    # BOUNDED hang: consumes the probe's --max-time and then returns, so the deadline overrun is
+    # measurable without the suite inheriting an unbounded wait. An earlier unbounded version made
+    # every health call in the run block and pushed the suite past ten minutes.
+    if [ "${MOCK_HEALTH:-ok}" = "hang" ]; then
+      case "$max_time" in ''|*[!0-9]*|0) exit 2 ;; esac
+      hang_seconds="${MOCK_HEALTH_HANG_SECONDS:-30}"
+      case "$hang_seconds" in ''|*[!0-9]*|0) exit 2 ;; esac
+      [ "$hang_seconds" -ge "$max_time" ] || exit 2
+      /bin/sleep "$max_time" &
+      sleep_pid=$!
+      if [ -n "${MOCK_HEALTH_HANG_PID_FILE:-}" ]; then
+        printf '%s %s %s\n' "$$" "$sleep_pid" "$max_time" >> "$MOCK_HEALTH_HANG_PID_FILE"
+      fi
+      wait "$sleep_pid"
+      if [ -n "${MOCK_HEALTH_HANG_DONE_FILE:-}" ]; then
+        printf '%s %s %s\n' "$$" "$sleep_pid" "$max_time" >> "$MOCK_HEALTH_HANG_DONE_FILE"
+      fi
+      exit 28
+    fi
+    if [ "${MOCK_HEALTH:-ok}" = "slow" ]; then
+      probe_file="${MOCK_STATE_DIR:?}/health-probes"
+      probes=0; [ ! -f "$probe_file" ] || probes="$(cat "$probe_file")"
+      probes=$((probes + 1)); printf '%s\n' "$probes" > "$probe_file"
+      [ "$probes" -ge "${MOCK_HEALTH_READY_AFTER:-3}" ] || exit 22
+    else
+      [ "${MOCK_HEALTH:-ok}" = "ok" ] || exit 22
+    fi
     if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [ -f "${MOCK_STATE_DIR:?}/package-stopped" ]; then
       exit 22
     fi
@@ -230,6 +266,20 @@ JSON
         else
           printf '{"storage_health":{"state":"healthy"}%s}\n' "$power_json"
         fi
+        ;;
+      healthy-then-critical|healthy-then-database_failure)
+        attempts_file="${MOCK_STATE_DIR:?}/storage-status-attempts"
+        attempts=0
+        [ ! -f "$attempts_file" ] || attempts="$(cat "$attempts_file")"
+        attempts=$((attempts + 1))
+        printf '%s\n' "$attempts" > "$attempts_file"
+        if [ "$attempts" -eq 1 ]; then
+          next_health=healthy
+        else
+          next_health="${storage_health#healthy-then-}"
+        fi
+        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}%s}\n' \
+          "$next_health" "$power_json"
         ;;
       always-unchecked) printf '{"storage_health":{"state":"unchecked"}%s}\n' "$power_json" ;;
       healthy|unchecked|warning|critical|database_failure)

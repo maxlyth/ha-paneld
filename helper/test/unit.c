@@ -679,6 +679,145 @@ static void test_sysctl_execution_results(void) {
     sysexec_stub_reset();
 }
 
+static void test_bootchime_protocol(void) {
+    char out[128];
+    const char *const silence_calls[][8] = {
+        { "settings", "put", "system", "volume_ring_speaker", "0", NULL },
+        { "settings", "put", "system", "volume_ring", "0", NULL },
+        { "settings", "put", "system", "volume_notification", "0", NULL },
+        { "cmd", "media_session", "volume", "--stream", "2", "--set", "0", NULL },
+        { "cmd", "media_session", "volume", "--stream", "5", "--set", "0", NULL },
+    };
+    const char *const silence_paths[] = {
+        "/system/bin/settings", "/system/bin/settings", "/system/bin/settings",
+        "/system/bin/cmd", "/system/bin/cmd",
+    };
+
+    sysexec_stub_reset();
+    dispatch_reply("  BOOTCHIME\t SILENCE  \t", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0,
+          "BOOTCHIME SILENCE accepts normalized whitespace (got '%s')\n", out);
+    for (size_t i = 0; i < sizeof silence_calls / sizeof silence_calls[0]; i++) {
+        CHECK(sysexec_stub_count_argv(silence_paths[i], silence_calls[i], 1) == 1,
+              "BOOTCHIME SILENCE emits exact argv call %zu\n", i + 1);
+    }
+    CHECK(sysexec_stub_count_run("") == 0,
+          "BOOTCHIME SILENCE never crosses the constant-shell seam\n");
+
+    const char *const restore_calls[][8] = {
+        { "settings", "put", "system", "volume_ring_speaker", "43", NULL },
+        { "settings", "delete", "system", "volume_ring", NULL },
+        { "settings", "put", "system", "volume_notification", "5", NULL },
+        { "cmd", "media_session", "volume", "--stream", "2", "--set", "7", NULL },
+        { "cmd", "media_session", "volume", "--stream", "5", "--set", "9", NULL },
+    };
+    const char *const restore_paths[] = {
+        "/system/bin/settings", "/system/bin/settings", "/system/bin/settings",
+        "/system/bin/cmd", "/system/bin/cmd",
+    };
+    sysexec_stub_reset();
+    dispatch_reply("BOOTCHIME  RESTORE\t43  -\t5  7\t9", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0,
+          "BOOTCHIME RESTORE accepts values and the exact null token (got '%s')\n", out);
+    for (size_t i = 0; i < sizeof restore_calls / sizeof restore_calls[0]; i++) {
+        CHECK(sysexec_stub_count_argv(restore_paths[i], restore_calls[i], 1) == 1,
+              "BOOTCHIME RESTORE emits exact argv call %zu\n", i + 1);
+    }
+    CHECK(sysexec_stub_count_run("") == 0,
+          "BOOTCHIME RESTORE never crosses the constant-shell seam\n");
+
+    const char *invalid[] = {
+        "BOOTCHIME",
+        "BOOTCHIME SILENCE extra",
+        "BOOTCHIME RESTORE",
+        "BOOTCHIME RESTORE 1 2 3 4",
+        "BOOTCHIME RESTORE 1 2 3 4 5 extra",
+        "BOOTCHIME RESTORE - - - - 5",
+        "BOOTCHIME RESTORE -1 2 3 4 5",
+        "BOOTCHIME RESTORE +1 2 3 4 5",
+        "BOOTCHIME RESTORE 1 2 3 4.0 5",
+        "BOOTCHIME RESTORE 101 2 3 4 5",
+        "BOOTCHIME RESTORE 1 2 3 4 101",
+        "BOOTCHIME RESTORE 999999999999999999999 2 3 4 5",
+        "BOOTCHIME RESTORE 1 2 3 4 5;reboot",
+        "BOOTCHIME RESTORE 1 2 $(reboot) 4 5",
+        "BOOTCHIME restore 1 2 3 4 5",
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        sysexec_stub_reset();
+        dispatch_reply(invalid[i], out, sizeof out);
+        CHECK(strcmp(out, "ERR\n") == 0, "%s is rejected (got '%s')\n", invalid[i], out);
+        CHECK(sysexec_stub_count_argv_calls() == 0,
+              "%s cannot execute any structural argv mutation\n", invalid[i]);
+        CHECK(sysexec_stub_count_run("") == 0,
+              "%s cannot reach the constant-shell seam\n", invalid[i]);
+    }
+
+    const char *const failure_calls[][8] = {
+        { "settings", "put", "system", "volume_ring_speaker", "7", NULL },
+        { "settings", "put", "system", "volume_ring", "8", NULL },
+        { "settings", "put", "system", "volume_notification", "9", NULL },
+        { "cmd", "media_session", "volume", "--stream", "2", "--set", "10", NULL },
+        { "cmd", "media_session", "volume", "--stream", "5", "--set", "11", NULL },
+    };
+    const char *const failure_paths[] = {
+        "/system/bin/settings", "/system/bin/settings", "/system/bin/settings",
+        "/system/bin/cmd", "/system/bin/cmd",
+    };
+    const char *const failure_needles[] = {
+        "settings put system volume_ring_speaker 7",
+        "settings put system volume_ring 8",
+        "settings put system volume_notification 9",
+        "cmd media_session volume --stream 2 --set 10",
+        "cmd media_session volume --stream 5 --set 11",
+    };
+    for (size_t failed = 0; failed < sizeof failure_calls / sizeof failure_calls[0]; failed++) {
+        sysexec_stub_reset();
+        sysexec_stub_fail_run(failure_needles[failed], 256);
+        dispatch_reply("BOOTCHIME RESTORE 7 8 9 10 11", out, sizeof out);
+        const char *expected_reply = failed == 0 ? "ERR\n" : "PARTIAL\n";
+        CHECK(strcmp(out, expected_reply) == 0,
+              "BOOTCHIME RESTORE reports truthful failure at step %zu (got '%s')\n", failed + 1, out);
+        for (size_t call = 0; call < sizeof failure_calls / sizeof failure_calls[0]; call++) {
+            int expected = call <= failed ? 1 : 0;
+            CHECK(sysexec_stub_count_argv(failure_paths[call], failure_calls[call], 1) == expected,
+                  "BOOTCHIME RESTORE failure at step %zu leaves step %zu count at %d\n",
+                  failed + 1, call + 1, expected);
+        }
+    }
+
+    for (size_t failed = 0; failed < sizeof failure_calls / sizeof failure_calls[0]; failed++) {
+        sysexec_stub_reset();
+        sysexec_stub_fail_run(silence_calls[failed][0] == NULL ? "" : (const char *[]){
+            "settings put system volume_ring_speaker 0",
+            "settings put system volume_ring 0",
+            "settings put system volume_notification 0",
+            "cmd media_session volume --stream 2 --set 0",
+            "cmd media_session volume --stream 5 --set 0",
+        }[failed], 256);
+        dispatch_reply("BOOTCHIME SILENCE", out, sizeof out);
+        CHECK(strcmp(out, failed == 0 ? "ERR\n" : "PARTIAL\n") == 0,
+              "BOOTCHIME SILENCE reports truthful failure at step %zu (got '%s')\n", failed + 1, out);
+        for (size_t call = 0; call < sizeof silence_calls / sizeof silence_calls[0]; call++) {
+            int expected = call <= failed ? 1 : 0;
+            CHECK(sysexec_stub_count_argv(silence_paths[call], silence_calls[call], 1) == expected,
+                  "BOOTCHIME SILENCE failure at step %zu leaves step %zu count at %d\n",
+                  failed + 1, call + 1, expected);
+        }
+    }
+
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("settings delete system volume_ring", 256);
+    dispatch_reply("BOOTCHIME RESTORE 7 - 9 10 11", out, sizeof out);
+    CHECK(strcmp(out, "PARTIAL\n") == 0,
+          "BOOTCHIME RESTORE reports a partial nullable-delete failure (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv(failure_paths[0], failure_calls[0], 1) == 1,
+          "nullable-delete failure preserves the successful prefix\n");
+    CHECK(sysexec_stub_count_argv_calls() == 2,
+          "nullable-delete failure stops before later structural writes\n");
+    sysexec_stub_reset();
+}
+
 static void test_screencap_stream_writes(void) {
     const char payload[] = "PNG-fixture-payload";
     const int test_fd = 4242;
@@ -1467,6 +1606,7 @@ int main(void) {
     test_stat_jiffies();
     test_dispatch_exact_match();
     test_sysctl_execution_results();
+    test_bootchime_protocol();
     test_screencap_stream_writes();
     test_line_accumulator();
     test_reply_stream_writes();

@@ -5,6 +5,16 @@ printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
 [ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
 
+# adb-root is a TRANSITION, not a constant: MOCK_ADB_ROOT=1 models a panel already running adbd as
+# root; the escalates* modes model a userdebug panel that answers uid=2000 until the `root` verb is
+# called and only then changes state — the sequence the capture gate's escalation contracts need.
+# escalates: `id` answers uid=0 after the verb. escalates_then_hang: the probe never answers after
+# the verb. escalates_then_drop: the transport dies after the verb.
+adb_root_active() {
+  [ "${MOCK_ADB_ROOT:-0}" = 1 ] && return 0
+  [ "${MOCK_ADB_ROOT:-0}" = escalates ] && [ -f "$STATE_DIR/adb-root-escalated" ]
+}
+
 mark_hapaneld_stopped() {
   local apk_path="$1"
   if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [[ "$apk_path" != */shizuku.apk ]]; then
@@ -37,19 +47,187 @@ emit_system_layout_probe() {
   esac
 }
 
-emit_db_snapshot_stage() {
-  local snapshot_command="$1"
-  [ "${MOCK_DB_SNAPSHOT:-ok}" = stage_fail ] && return 1
-  # Model Android cp accurately: the old one-shot multi-source command failed when a cleanly
-  # checkpointed database had no WAL/SHM files. Independently guarded copies remain valid.
-  if [ "${MOCK_DB_SIDECARS:-present}" = absent ] &&
-     printf '%s\n' "$snapshot_command" | grep -Eq 'cp -f [^;&|]*ha-paneld\.db[[:space:]]+[^;&|]*ha-paneld\.db-wal'; then
-    return 1
+# The database capture is ONE pushed transaction script. The fixture does not emulate it — it saves
+# the pushed bytes and EXECUTES them for real in a path-rewritten sandbox with stub sqlite3/dumpsys
+# on PATH, so every contract observes the shipped script's own semantics. A model can agree with a
+# test and disagree with production; an executed script cannot.
+DB_TXN_SANDBOX="$STATE_DIR/db-txn-sandbox"
+prepare_db_txn_sandbox() {
+  [ -d "$DB_TXN_SANDBOX/bin" ] && return 0
+  mkdir -p "$DB_TXN_SANDBOX/data/local/tmp" "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases" "$DB_TXN_SANDBOX/bin"
+  canonical_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+  rm -f "$canonical_db"
+  "${HAPANELD_HOST_SQLITE3:-sqlite3}" "$canonical_db" >/dev/null <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA user_version=9;
+CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO app_state VALUES
+ ('fixture-1','1'),('fixture-2','2'),('fixture-3','3'),('fixture-4','4'),
+ ('fixture-5','5'),('fixture-6','6'),('fixture-7','7');
+SQL
+  "${HAPANELD_HOST_SQLITE3:-sqlite3}" "$canonical_db" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null
+  # A cleanly present zero-byte WAL is a NORMAL source state and must never affect a .backup capture.
+  : > "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db-wal"
+  cat > "$DB_TXN_SANDBOX/bin/sqlite3" <<'STUB'
+#!/bin/bash
+db="$1"; shift; op="$*"
+case "$op" in
+  *.backup*)
+    [ -z "${MOCK_CALL_LOG:-}" ] || printf 'sqlite3 .backup\n' >> "$MOCK_CALL_LOG"
+    [ "${MOCK_DB_TXN:-ok}" = backup_fail ] && exit 1
+    dest="${op#*.backup \'}"; dest="${dest%\'*}"
+    cp "$db" "$dest" || exit 1
+    if [ "${MOCK_DB_TXN:-ok}" = backup_empty ]; then : > "$dest"; fi
+    ;;
+  *integrity_check*)
+    if [ "${MOCK_DB_TXN:-ok}" = integrity_bad ]; then echo '*** in database main ***'; else echo ok; fi ;;
+  *'count(*) FROM app_state'*) echo "${MOCK_DB_DEVICE_ROWS:-7}" ;;
+  *user_version*) echo "${MOCK_DB_DEVICE_USER_VERSION:-9}" ;;
+  *) exit 1 ;;
+esac
+exit 0
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/dumpsys" <<'STUB'
+#!/bin/bash
+[ "${MOCK_DB_DEVICE_VCODE:-513}" = absent ] && exit 0
+if [ "${MOCK_DB_TXN:-ok}" = provenance_race ]; then
+  # Every dumpsys call answers a different build: the capture's before/after reads can never agree.
+  count_file="${MOCK_STATE_DIR:?}/db-txn-vcode-count"
+  count=$(( $(cat "$count_file" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$count" > "$count_file"
+  printf '    versionCode=%s minSdk=26 targetSdk=35\n' $((500 + count))
+else
+  printf '    versionCode=%s minSdk=26 targetSdk=35\n' "${MOCK_DB_DEVICE_VCODE:-513}"
+fi
+printf '    versionName=0.9.6-test\n'
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/sha256sum" <<'STUB'
+#!/bin/bash
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+exec /usr/bin/sha256sum "$@"
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/toybox" <<'STUB'
+#!/bin/bash
+[ "$1" = sha256sum ] || exit 1
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+shift
+exec /usr/bin/sha256sum "$@"
+STUB
+  cat > "$DB_TXN_SANDBOX/bin/busybox" <<'STUB'
+#!/bin/bash
+[ "$1" = sha256sum ] || exit 1
+[ "${MOCK_DB_TXN:-ok}" = no_device_digest ] && exit 1
+shift
+exec /usr/bin/sha256sum "$@"
+STUB
+  chmod 755 "$DB_TXN_SANDBOX/bin/sha256sum" "$DB_TXN_SANDBOX/bin/toybox" "$DB_TXN_SANDBOX/bin/busybox"
+  chmod 755 "$DB_TXN_SANDBOX/bin/sqlite3" "$DB_TXN_SANDBOX/bin/dumpsys"
+}
+
+run_db_txn_script() {
+  prepare_db_txn_sandbox
+  [ -s "$STATE_DIR/db-txn-script.$ADB_TARGET" ] || { echo 'SNAPTXN_FAIL=script_missing'; return 1; }
+  if [ "${MOCK_DB_TXN:-ok}" = stage_collision ]; then
+    # Another owner already holds the exact staging path this transaction wants: pre-create it with
+    # a marker file, so the survival of that marker proves the loser removed nothing.
+    collision_stage="$(grep -oE '/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+' "$STATE_DIR/db-txn-script.$ADB_TARGET" | head -1)"
+    mkdir -p "$DB_TXN_SANDBOX${collision_stage}"
+    : > "$DB_TXN_SANDBOX${collision_stage}/winner-in-flight"
   fi
-  printf 'ha-paneld.db\n'
-  if [ "${MOCK_DB_SIDECARS:-present}" = present ]; then
-    printf 'ha-paneld.db-wal\nha-paneld.db-shm\n'
-  fi
+  sed -e "s|/data/|$DB_TXN_SANDBOX/data/|g" -e "s|/system/bin/sqlite3|$DB_TXN_SANDBOX/bin/sqlite3|g" \
+    "$STATE_DIR/db-txn-script.$ADB_TARGET" > "$STATE_DIR/db-txn-script.runnable.$ADB_TARGET"
+  PATH="$DB_TXN_SANDBOX/bin:$PATH" bash "$STATE_DIR/db-txn-script.runnable.$ADB_TARGET"
+}
+
+handle_db_txn_command() {
+  local text="$1"
+  case "$text" in
+    *sha256sum*.hapaneld-db-txn.*-script*)
+      [ "${MOCK_DB_TXN:-ok}" != panel_hash_transport ] || return 1
+      prepare_db_txn_sandbox
+      if [ "${MOCK_DB_TXN:-ok}" = script_tamper ]; then
+        printf '%064d  tampered\n' 1
+      else
+        /usr/bin/sha256sum "$STATE_DIR/db-txn-script.$ADB_TARGET" 2>/dev/null | awk '{print $1"  script"}'
+      fi
+      return 0 ;;
+    *'sh /data/local/tmp/.hapaneld-db-txn.'*-script*)
+      run_db_txn_script
+      return 0 ;;
+    *.hapaneld-db-txn.*HAPANELD_STALE_PRESENT*)
+      case "${MOCK_DB_CLEANUP:-ok}" in
+        unverifiable) return 1 ;;
+        retained) printf 'HAPANELD_STALE_PRESENT\n' ;;
+        *)
+          # Answer from sandbox truth for the EXACT path the probe names — absence is asserted by
+          # what the executed cleanup really left, and one run's leftovers never answer for another.
+          probed="$(printf '%s' "$text" | grep -oE '/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+' | head -1)"
+          if [ -n "$probed" ] && [ -e "$DB_TXN_SANDBOX/data/local/tmp/${probed#/data/local/tmp/}" ]; then
+            printf 'HAPANELD_STALE_PRESENT\n'
+          else
+            printf 'HAPANELD_STALE_ABSENT\n'
+          fi ;;
+      esac
+      return 0 ;;
+    *'rm -'*.hapaneld-db-txn.*)
+      # block models the post-publication cleanup wedging on a failing transport, so a test can
+      # deliver the operator's Ctrl-C exactly inside that window and observe what survives it. It
+      # blocks only the FIRST cleanup: the signal path retries the same removal from its handler,
+      # and blocking that retry too would wedge the handler the test is trying to observe.
+      if [ "${MOCK_DB_CLEANUP:-ok}" = block ] && [ ! -f "$STATE_DIR/db-cleanup-blocked-once" ]; then
+        : > "$STATE_DIR/db-cleanup-blocked-once"
+        [ -z "${MOCK_DB_CLEANUP_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_DB_CLEANUP_PID_FILE"
+        exec /bin/sleep "${MOCK_DB_CLEANUP_BLOCK_SECONDS:-30}"
+      fi
+      if [ "${MOCK_DB_CLEANUP:-ok}" = ok ]; then
+        rm -rf "$DB_TXN_SANDBOX/data/local/tmp"/.hapaneld-db-txn.* 2>/dev/null
+      fi
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Model the panel's id-named staging as real files. The journal was modelled as boolean flag files
+# that the harness reset before every run, so no test could observe staging carried between runs —
+# that blind spot is why Issue #76's accumulation was invisible to a green suite. Both halves of a
+# run's staging are modelled: the protected transaction record in /data/adb/hapaneld AND the pushed
+# bundle in /data/local/tmp, flattened by basename into one directory.
+DEVICE_ADB_DIR="$STATE_DIR/device-data-adb-hapaneld"
+
+device_adb_paths() {
+  printf '%s' "$1" \
+    | grep -oE '/data/(adb/hapaneld/\.helper-(transaction|probe)|local/tmp/hapaneld-helper)-[0-9a-f]+(-[0-9a-f]+)?(\.[a-z]+)?' \
+    || true
+}
+
+model_device_adb_dir() {
+  local text="$1" path
+  case "$text" in
+    *'echo TRANSACTION_READY'*|*'echo PROBE_READY'*)
+      [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] || return 0
+      mkdir -p "$DEVICE_ADB_DIR" || return 0
+      for path in $(device_adb_paths "$text"); do
+        : > "$DEVICE_ADB_DIR/${path##*/}"
+      done
+      # The promotion command names both <record>.new and <record>; its mv -f leaves only the
+      # final record, so a phantom .new must not survive in the model.
+      rm -f "$DEVICE_ADB_DIR"/.helper-transaction-*.new
+      return 0
+      ;;
+  esac
+  case "$text" in
+    *'rm -f '*)
+      for path in $(device_adb_paths "$text"); do
+        rm -f "$DEVICE_ADB_DIR/${path##*/}"
+      done
+      # A glob in a privileged rm expands on the panel; expand it in the model too, or a too-broad
+      # wildcard cleanup would sail past the identity-scoping survival contracts.
+      for pattern in $(printf '%s' "$text" | grep -oE '/data/(adb/hapaneld/\.helper-[a-z]+|local/tmp/hapaneld-helper)-[0-9a-f-]*\*' || true); do
+        base="${pattern##*/}"
+        rm -f "$DEVICE_ADB_DIR/${base%\*}"* 2>/dev/null || true
+      done
+      ;;
+  esac
 }
 
 if [ "${1:-}" = "connect" ]; then
@@ -57,6 +235,12 @@ if [ "${1:-}" = "connect" ]; then
 fi
 
 if [ "${1:-}" = "devices" ]; then
+  # hang_after_escalation models adb wedging in the reconnect window the `root` verb opened, so a
+  # test can prove the escalation's aggregate deadline instead of the per-step adb deadline.
+  if [ "${MOCK_ADB_DEVICES:-ok}" = hang_after_escalation ] && [ -f "$STATE_DIR/adb-root-escalated" ]; then
+    trap 'exit 143' TERM INT
+    while :; do /bin/sleep 1; done
+  fi
   state="${MOCK_ADB_STATE:-device}"
   printf 'List of devices attached\n'
   if [ "$state" != "missing" ]; then
@@ -80,28 +264,63 @@ fi
 
 case "${1:-}" in
   root)
-    [ "${MOCK_ROOT:-1}" = 1 ]
+    case "${MOCK_ADB_ROOT:-0}" in
+      escalates|escalates_then_hang|escalates_then_drop)
+        : > "$STATE_DIR/adb-root-escalated" ;;
+      *)
+        [ "${MOCK_ROOT:-1}" = 1 ] ;;
+    esac
     ;;
   push)
+    # A pushed staged input becomes a real modelled file, so its later reclamation is observable.
+    for pushed in "$@"; do
+      case "$pushed" in
+        /data/local/tmp/hapaneld-helper-*)
+          mkdir -p "$DEVICE_ADB_DIR" && : > "$DEVICE_ADB_DIR/${pushed##*/}" ;;
+      esac
+    done
+    # The capture transaction script's exact pushed bytes are saved so the fixture can hash and
+    # EXECUTE what production actually sent, not a paraphrase of it.
+    case "${3:-}" in
+      /data/local/tmp/.hapaneld-db-txn.*-script)
+        [ "${MOCK_DB_TXN:-ok}" = push_fail ] && exit 1
+        cp "${2:?push source missing}" "$STATE_DIR/db-txn-script.$ADB_TARGET" ;;
+    esac
     ;;
   pull)
-    [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+    # MOCK_APK_QUERY=fail models a package manager that became unanswerable at the install-outcome
+    # moment; queries before any install attempt still succeed, so pre-mutation stages (the database
+    # capture included) observe the panel as it was.
+    if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
     case "${2:-}" in
-      *hapaneld-db-snapshot*)
-        [ "${MOCK_DB_SNAPSHOT:-ok}" = pull_fail ] && exit 1
-        [ "${MOCK_DB_SNAPSHOT:-ok}" = wal_pull_fail ] && [ "${2##*/}" = ha-paneld.db-wal ] && exit 1
-        # A cleanly checkpointed database has no sidecars; model that so the "main file only" path
-        # is exercised rather than always producing a complete three-file set.
-        case "${2##*/}" in
-          ha-paneld.db) printf 'mock sqlite panel database\n' > "${3:?pull destination missing}" ;;
-          *) [ "${MOCK_DB_SIDECARS:-present}" = present ] || exit 1
-             printf 'mock sqlite sidecar\n' > "${3:?pull destination missing}" ;;
-        esac
+      *.hapaneld-db-txn.*/ha-paneld.db)
+        [ "${MOCK_DB_TXN:-ok}" = pull_fail ] && exit 1
+        # The pulled bytes come from the sandbox the executed script actually wrote, so a transfer
+        # contract observes the real captured file, not a manufactured stand-in.
+        cp "$DB_TXN_SANDBOX/data/local/tmp/${2#/data/local/tmp/}" "${3:?pull destination missing}" 2>/dev/null || exit 1
+        if [ "${MOCK_DB_TXN:-ok}" = pull_truncate ]; then printf 'short' > "$3"; fi
         ;;
       *) cp "$STATE_DIR/installed-apk" "${3:?pull destination missing}" ;;
     esac
     ;;
+  exec-out)
+    shift
+    command_text="$*"
+    case "$command_text" in
+      *'cat /data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db'*)
+        if [ "${MOCK_DIRECT_COPY:-ok}" = block ]; then
+          [ -z "${MOCK_DIRECT_COPY_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_DIRECT_COPY_PID_FILE"
+          exec /bin/sleep "${MOCK_DIRECT_COPY_BLOCK_SECONDS:-30}"
+        fi
+        [ "${MOCK_DIRECT_COPY:-ok}" = ok ] || exit 1
+        prepare_db_txn_sandbox
+        cat "$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
   install)
+    : > "$STATE_DIR/apk-install-attempted"
     if [[ "${!#}" == */shizuku.apk ]] && [ "${MOCK_SHIZUKU_INSTALL:-ok}" = block ]; then
       [ -z "${MOCK_SHIZUKU_INSTALL_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_SHIZUKU_INSTALL_PID_FILE"
       trap 'exit 143' TERM INT
@@ -137,7 +356,82 @@ case "${1:-}" in
   shell)
     shift
     command_text="$*"
+    # Reclamation transport failure: the run's own outcome must not change, and the notice must be
+    # honest about what happens next (the panel-side sweep removes the leftovers).
+    if [ "${MOCK_STAGING_CLEANUP:-ok}" = fail ] &&
+       printf '%s' "$command_text" | grep -Eq 'rm -f[^|]*(hapaneld-helper-[0-9a-f]{32}|\.helper-transaction-)'; then
+      printf 'rm: permission denied\n' >&2
+      exit 1
+    fi
+    model_device_adb_dir "$command_text"
+    # Database-capture traffic is dialect-independent: intercept it whether it arrives bare
+    # (SU_FORM=shell on adb-root panels) or su-wrapped, before any other dispatch.
     case "$command_text" in
+      *'.hapaneld-db-txn.'*)
+        handle_db_txn_command "$command_text"
+        exit $? ;;
+    esac
+  case "$command_text" in
+      "am broadcast --user 0 -a io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "*)
+        nonce="${command_text##*--es nonce }"
+        case "${MOCK_UPGRADE_PREPARE:-unsupported}" in
+          ready|size_mismatch|digest_mismatch|invalid_sqlite|schema_mismatch|rows_mismatch)
+            prepare_db_txn_sandbox
+            direct_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+            if [ "${MOCK_UPGRADE_PREPARE:-}" = invalid_sqlite ]; then
+              printf 'not a sqlite database\n' > "$direct_db"
+            fi
+            bytes="$(wc -c < "$direct_db" | tr -d ' ')"
+            sha="$(/usr/bin/sha256sum "$direct_db" | awk '{print $1}')"
+            [ "${MOCK_UPGRADE_PREPARE:-}" != size_mismatch ] || bytes=$((bytes + 1))
+            [ "${MOCK_UPGRADE_PREPARE:-}" != digest_mismatch ] || sha="$(printf '%064d' 0)"
+            receipt_uv=9; receipt_rows=7
+            [ "${MOCK_UPGRADE_PREPARE:-}" != schema_mismatch ] || receipt_uv=10
+            [ "${MOCK_UPGRADE_PREPARE:-}" != rows_mismatch ] || receipt_rows=8
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:%s:4242:513:%s:%s:%s:%s"\n' \
+              "$nonce" "$bytes" "$sha" "$receipt_uv" "$receipt_rows"
+            ;;
+          malformed)
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:%s:bad"\n' "$nonce" ;;
+          wrong_nonce)
+            printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_READY_V1:00000000000000000000000000000000:4242:513:1:%064d:9:7"\n' 0 ;;
+          wrong_result)
+            prepare_db_txn_sandbox
+            direct_db="$DB_TXN_SANDBOX/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db"
+            bytes="$(wc -c < "$direct_db" | tr -d ' ')"
+            sha="$(/usr/bin/sha256sum "$direct_db" | awk '{print $1}')"
+            printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_READY_V1:%s:4242:513:%s:%s:9:7"\n' "$nonce" "$bytes" "$sha"
+            ;;
+          nonready) printf 'Broadcast completed: result=0, data="NOT_READY"\n' ;;
+          unsupported) printf 'Broadcast completed: result=0\n' ;;
+          timeout)
+            [ -z "${MOCK_UPGRADE_PREPARE_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_UPGRADE_PREPARE_PID_FILE"
+            exec /bin/sleep "${MOCK_UPGRADE_PREPARE_BLOCK_SECONDS:-30}"
+            ;;
+          *) exit 1 ;;
+        esac
+        ;;
+      "am broadcast --user 0 -a io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "*)
+        nonce="${command_text##*--es nonce }"
+        release_attempt_file="$STATE_DIR/upgrade-release-attempts"
+        release_attempts=0
+        [ ! -f "$release_attempt_file" ] || release_attempts="$(cat "$release_attempt_file")"
+        release_attempts=$((release_attempts + 1))
+        printf '%s\n' "$release_attempts" > "$release_attempt_file"
+        case "${MOCK_UPGRADE_RELEASE:-ok}" in
+          ok) printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:%s"\n' "$nonce" ;;
+          fail_once)
+            if [ "$release_attempts" -eq 1 ]; then
+              printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:temporary"\n'
+            else
+              printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:%s"\n' "$nonce"
+            fi ;;
+          malformed) printf 'Broadcast completed: result=-1, data="HAPANELD_UPGRADE_RELEASED_V1:wrong"\n' ;;
+          release_failed) printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:release_failed"\n' ;;
+          fail) printf 'Broadcast completed: result=0, data="HAPANELD_UPGRADE_ERROR_V1:not_released"\n' ;;
+          *) exit 1 ;;
+        esac
+        ;;
       "monkey -p io.github.maxlyth.hapaneld -c android.intent.category.LAUNCHER 1")
         case "${MOCK_LAUNCHER_START:-ok}" in
           ok) rm -f "$STATE_DIR/package-stopped" ;;
@@ -191,7 +485,8 @@ case "${1:-}" in
         printf 'Success\n'
         ;;
       "pm path io.github.maxlyth.hapaneld")
-        [ "${MOCK_APK_QUERY:-ok}" = ok ] || exit 1
+        if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
+        [ "${MOCK_PM_PATH:-ok}" = ok ] || exit 1
         [ -f "$STATE_DIR/installed-apk" ] && printf 'package:/data/app/io.github.maxlyth.hapaneld/base.apk\n'
         ;;
       "test -x /data/app/moe.shizuku.privileged.api/lib/arm64/libshizuku.so")
@@ -272,11 +567,40 @@ case "${1:-}" in
         printf 'Current WebView package (name, version): (com.android.webview, %s)\n' "${MOCK_WEBVIEW_VERSION:-150.0.0.0}"
         ;;
       "id")
-        if [ "${MOCK_ADB_ROOT:-0}" = 1 ]; then
-          printf 'uid=0(root) gid=0(root)\n'
-        else
-          printf 'uid=2000(shell) gid=2000(shell)\n'
-        fi
+        case "${MOCK_ADB_ROOT:-0}" in
+          escalates_then_hang)
+            if [ -f "$STATE_DIR/adb-root-escalated" ]; then
+              trap 'exit 143' TERM INT
+              while :; do /bin/sleep 1; done
+            fi
+            printf 'uid=2000(shell) gid=2000(shell)\n'
+            ;;
+          escalates_then_drop)
+            [ -f "$STATE_DIR/adb-root-escalated" ] && exit 1
+            printf 'uid=2000(shell) gid=2000(shell)\n'
+            ;;
+          *)
+            if adb_root_active; then
+              # MOCK_ROOT_LIVE=dead models an adbd-root route that answered the resolution probe and
+              # has since lost root (an unobserved reboot drops `adb root`): the FIRST bare id — the
+              # resolution — answers uid=0, any later one answers as plain shell. This is the form
+              # where a live check that only echoed a marker would pass from an unrooted adbd.
+              if [ "${MOCK_ROOT_LIVE:-ok}" = dead ]; then
+                bare_id_count=$(( $(cat "$STATE_DIR/bare-id-count" 2>/dev/null || echo 0) + 1 ))
+                printf '%s' "$bare_id_count" > "$STATE_DIR/bare-id-count"
+                if [ "$bare_id_count" -gt 1 ]; then
+                  printf 'uid=2000(shell) gid=2000(shell)\n'
+                else
+                  printf 'uid=0(root) gid=0(root)\n'
+                fi
+              else
+                printf 'uid=0(root) gid=0(root)\n'
+              fi
+            else
+              printf 'uid=2000(shell) gid=2000(shell)\n'
+            fi
+            ;;
+        esac
         ;;
       'su 0 "'*'"')
         inner_command="${command_text#su 0 \"}"
@@ -291,6 +615,11 @@ case "${1:-}" in
         fi
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = join ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        elif [ "$command_text" = 'su 0 "id"' ]; then
+          # The legacy flavour's live confirmation of a proven route (a single privileged id, unlike
+          # the probe's joined "id; id"); MOCK_ROOT_LIVE=dead models a route that answered the
+          # resolution probe and has since stopped answering as root.
+          [ "${MOCK_ROOT_LIVE:-ok}" = ok ] && [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
         elif printf '%s' "$command_text" | grep -Fq 'echo LEASE_OK' &&
              printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
           [ "${MOCK_MANUAL_LEASE_RENEW:-ok}" = ok ] && printf 'LEASE_OK\n'
@@ -303,8 +632,6 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
-        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
-          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -385,14 +712,27 @@ case "${1:-}" in
           esac
         fi
         ;;
+      'su root "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = rootjoin ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
+      'su root sh -c "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = rootshc ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
+      'su -c "'*'"')
+        if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = suc ]; then
+          [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
+        fi
+        ;;
       'su 0 sh -c "'*'"')
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = shc ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
              printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
           [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
-        elif printf '%s' "$command_text" | grep -Fq 'hapaneld-db-snapshot'; then
-          emit_db_snapshot_stage "$command_text"
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -443,20 +783,30 @@ case "${1:-}" in
         fi
         ;;
       *)
-        if [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
+        if printf '%s' "$command_text" | grep -Fq 'echo HAPANELD_TRANSPORT_ALIVE'; then
+          # The snapshot's transport-liveness recheck. A live panel echoes the marker back exactly
+          # as a real `adb shell echo` would; MOCK_SNAPSHOT_TRANSPORT=dead models the transport
+          # dying mid-probe, which must read as "unknown", never as "no root";
+          # dead_after_escalation keeps it alive until the `root` verb has restarted adbd.
+          case "${MOCK_SNAPSHOT_TRANSPORT:-alive}" in
+            alive) printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
+            dead_after_escalation)
+              [ -f "$STATE_DIR/adb-root-escalated" ] || printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
+          esac
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
           [ "${MOCK_VENDOR_INIT_RW:-1}" = 1 ] && printf 'VENDOR_INIT_RW\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'echo TRANSACTION_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ] && printf 'TRANSACTION_BUSY\n' || printf 'INSTALL_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] &&
             [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ] && printf 'COMMIT_OK\n'
-        elif [ "${MOCK_ADB_ROOT:-0}" = 1 ] && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
+        elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         fi
         ;;

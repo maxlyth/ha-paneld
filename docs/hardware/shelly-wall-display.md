@@ -31,7 +31,7 @@ Shelly's current range spans several distinct Android platforms. Firmware codena
 
 The Wall Display is an **Android device**, not an ESP-based embedded product like Shelly Gen1/Gen2 switches. It runs a custom Android launcher app called "Stargate".
 
-The original Wall Display, X2, X1i/X2i and XL are not one interchangeable hardware class: they use MT6580, SC7731E, RK3326-S and RK3566 respectively. The shared OTA channels describe package compatibility, not a shared SoC. Available firmware images are `userdebug` builds, so `adb root` may be possible *if* an ADB connection can be established, but no user-facing route has been verified.
+The original Wall Display, X2, X1i/X2i and XL are not one interchangeable hardware class: they use MT6580, SC7731E, RK3326-S and RK3566 respectively. The shared OTA channels describe package compatibility, not a shared SoC. The legacy image targets a `userdebug` base build, so `adb root` may be possible there *if* an ADB connection can be established, but no user-facing route has been verified; the modern image carries no OTA metadata fingerprint and evidences no build type, so the same cannot be claimed for it. See *Access model* below.
 
 Shelly documents temperature and humidity sensing on the original and X2, and ambient-light sensing on the original, X2, X1i, X2i and XL. X2, X1i and X2i have documented proximity sensing; the XL has a motion sensor. Their exact components and app-independent Android access paths have not been established. Relay count is model- and base-dependent, and no app-accessible standard Android relay interface has been established.
 
@@ -71,7 +71,11 @@ The built-in browser WebView on the Wall Display XL had rendering/layout problem
 > [!WARNING]
 > **There is no user-facing adb or root access exposed on Shelly Wall Display devices.** Shelly does not surface Developer options, `adb`, or `su` to end users. This is the primary constraint on any ha-paneld integration.
 
-**A caveat worth probing:** both the legacy and modern firmware are **userdebug** builds (confirmed from the OTA build fingerprints). On a userdebug build, `adb root` *succeeds* — so **if** an `adb` connection can be established (e.g. Developer options can be reached, or a service-mode/USB path exists), full root and the daemon become available. This has not been tested on a unit; it's the most promising avenue for a deeper ha-paneld integration and is worth investigating before assuming the device is fully closed.
+**A caveat worth probing, but only on legacy hardware.** The legacy OTA declares its target build in `META-INF/com/android/metadata`, and at firmware 2.7.3 that is still `alps/full_k400_mt6580_32_n/k400_mt6580_32_n:7.0/NRD90M/vXD100008:userdebug/test-keys`. On a userdebug build `adb root` *succeeds*, so **if** an `adb` connection can be established, root and the daemon become available. Two limits on that evidence: the fingerprint describes the device's **base OS image**, whose timestamp is 2022-11-14 and which the app-only OTA does not change; and no `adb` route has been verified on a unit.
+
+**It does not extend to the modern track.** The WallDisplayV2 package declares no build type: it has no `META-INF/com/android/metadata` fingerprint, and none of the markers `userdebug`, `test-keys`, `release-keys` or `ro.build.fingerprint` appears in any entry outside the bundled APKs (checked at 2.7.3; the APK payloads themselves were not searched). Its updater-script reads `ro.build.product` only to log the device, and reads `ro.build.version.incremental` into `HW_VERSION`, which gates one conditional step — `Camera2.apk` is installed only when that value starts with `vBlake` and no camera package is already present. Neither value is asserted against, so one ZIP still installs on every modern model. So the **retail modern OTA** evidences no build type either way. Shelly's own [security-posture note](https://github.com/ShellyGroup/Wall-Display-Changelog/blob/main/SECURITY_POSTURE.md) — published in the same repository as the official changelog, and scoped there to current-generation hardware — states that *"production devices ship with the Android `user` build type, on which ADB and developer/debug facilities are disabled by default"*.
+
+One qualification, so the scope is exact: an archived **partition** image (not part of either retail OTA track) identifies itself as Android 11 `userdebug`. Its SKU-to-codename filing is unreliable and its display platform contradicts the current retail specification, so it is evidence about that image, not about what modern retail units run. Treat modern hardware as closed unless a live unit shows otherwise.
 
 **What the closed-by-default posture means for ha-paneld:**
 - Without an `adb` foothold, the daemon (`hapaneld-helper`) cannot be installed — no privileged path to `/system`.
@@ -128,7 +132,7 @@ GET https://updates.shelly.cloud/update/WallDisplay
 
 Covers SAWD-0A1XX10EU1 (Stargate) and SAWD-2A1XX10EU1 (Pegasus). The OTA updater-script asserts `ro.product.device` is `k400_mt6580_32_n` (Stargate) or `e500_7731e_32u_o` (Pegasus) before applying.
 
-Response (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below).
+Example response, captured at 2.7.1 (`stable.version`: `2.7.1`, `build_id`: `20260609-205046/2.7.1-857d7175`; CDN URL is a SHA-256-named blob — see note below). For what is current, read the index rather than this example.
 
 #### Track 2 — WallDisplayV2 (arm64-v8a, Android 11 models)
 
@@ -138,12 +142,12 @@ GET https://updates.shelly.cloud/update/WallDisplayV2
 
 Covers Blake, Jenna, Cally, Maverick, Dayna. The OTA updater-script reads `ro.build.product` for logging only — no per-product assertion — so one ZIP installs on all modern models.
 
-Response: same version (`2.7.1`) and build_id as Track 1; compiled for arm64-v8a.
+Response: same version and build_id as Track 1 (`2.7.1` in the example above); compiled for arm64-v8a.
 
 Both tracks share version numbers and build IDs — they are compiled together from the same codebase for different ABIs.
 
 > [!NOTE]
-> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions, and there are no Wayback Machine archives of the CDN blobs — so once a URL rotates, that firmware is unrecoverable unless it was captured from the manifest endpoint at release time.
+> **The CDN URL is content-addressed (SHA-256 filename, no version in path).** It rotates with every release and cannot be inferred for older versions: once a newer release ships, the previous URL returns 404. Archival to the Wayback Machine is therefore **attempted** for each release as it is discovered, and is only **confirmed** once a capture timestamp is written beside that release's CDN URL in [`tools/firmware-index/fw-shelly-walldisplay.dat`](../../tools/firmware-index/fw-shelly-walldisplay.dat). An empty timestamp means archival is still pending or has not succeeded — it is not a claim that the bytes are safe. Read which releases are confirmed off the index itself rather than from prose here, which would go stale the moment a capture lands. The archive links in the download table resolve only for confirmed rows. A release that is never captured while it is current is unrecoverable.
 
 #### Static legacy CDN (SAWD-0A1XX10EU1 only)
 
@@ -193,6 +197,8 @@ Firmware 2.6.0 disclosed that RPC-over-BLE was open to any BLE connection withou
 
 | Version | Date | Notes |
 |---|---|---|
+| 2.7.3 | 2026-07-29 | Idle Cloud connection: after ~1 minute of screensaver the device asks the Cloud to report statuses for selected devices only (thermostat sensor/actuator and the sensor chosen for the dashboard and screensaver), reducing network throughput. Connected Blu H&T readings and the device's own status reports are still sent |
+| 2.7.2 | 2026-07-16 | Third-party apps uninstalled on factory reset; custom dashboard icon enumeration fixed (icons may be replaced once on update); thermostat actuator selection fixed for modern devices with more than one relay; Blake radar `Motion` RPC namespace fixed when the radar was already configured at startup |
 | 2.7.1 | 2026-06-10 | Automatic BT stack management (BLE on only when needed); aggressive BLE scan match; external sensor + BLE Gateway coupling |
 | 2.7.0 | 2026-06-03 | Multi-dashboard (XL: 5, X2i/Pegasus: 3, others: 1); HA WebView un-deprecated + cache clear; `Ui.OpenCameraFullscreen` RPC; OTA hardware sanity check; GATT non-connectable when RPC-over-BLE off |
 | 2.6.2 | 2026-05-20 | Shelly Camera tiles (live video stream); screensaver/brightness/thermostat fixes; auto-brightness fix X2i |
@@ -232,7 +238,7 @@ Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-dis
 | Field | `shelly-wall-display` (legacy) | `shelly-wall-display-v2` (modern) | Source |
 |---|---|---|---|
 | `soc_class` | currently MT6580, but the X2 is SC7731E | currently PX30/rk3326, but X1i/X2i are RK3326-S and XL is RK3566 | official model pages; OTA fingerprints |
-| `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (but userdebug — see *Access model*) |
+| `platform.su_form` / `app_can_su` | `none` / `false` | `none` / `false` | no user-exposed root (legacy targets a userdebug base build; modern is unevidenced — see *Access model*) |
 | `hardware.led.mechanism` | `none` | `none` | current profile declaration; not verified across every model |
 | `hardware.screen_off` | `brightness-zero` | `brightness-zero` | no privileged screen-off path |
 | `hardware.relay_base` | absent | absent | relay operation is routed through the HA Shelly integration; no app-accessible standard path established |
@@ -247,7 +253,7 @@ Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-dis
 - Whether Android `SensorManager` exposes each documented ambient-light or motion/proximity sensor.
 - `platform.has_recents` per model (the Stargate home image may suppress overview).
 - Display density defaults and an appropriate `provisioning.display.density` per model.
-- Whether an `adb` foothold + `adb root` is reachable on the userdebug build (would unlock the daemon).
+- Whether an `adb` foothold + `adb root` is reachable on the legacy userdebug base build (would unlock the daemon). For modern hardware the prior question is what build type it actually runs, which the OTA does not reveal.
 - Whether ha-paneld's HTTP service (`:8888`) is reachable from the LAN (depends on the device's firewall).
 
 ---
@@ -255,6 +261,7 @@ Two bundled YAML profiles currently follow the two OTA tracks: [`shelly-wall-dis
 ## Sources
 
 - [ShellyGroup/Wall-Display-Changelog](https://github.com/ShellyGroup/Wall-Display-Changelog) — official firmware changelog
+- [SECURITY_POSTURE.md](https://github.com/ShellyGroup/Wall-Display-Changelog/blob/main/SECURITY_POSTURE.md) — Shelly's own statement on build type, ADB, sideloading and update signing for current-generation hardware
 - [Shelly Wall Display KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display) — original (4") KB
 - [Shelly Wall Display X2 KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x2)
 - [Shelly Wall Display X1i KB](https://kb.shelly.cloud/knowledge-base/shelly-wall-display-x1i)

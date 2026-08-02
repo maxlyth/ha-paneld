@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import ssl
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -52,6 +53,18 @@ class ShellyFirmwareValidationTest(unittest.TestCase):
                 "build_id": build_id,
                 "url": f"https://fwcdn.shelly.cloud/gen2-ntest/{track}/" + "a" * 64,
             }
+        }
+
+    @staticmethod
+    def entry(track="WallDisplay", version="2.8.0", wayback_ts=""):
+        return {
+            "track": track,
+            "version": version,
+            "build_id": f"20260716-120000/{version}-deadbeef",
+            "bytes": 123,
+            "discovered": "2026-07-30",
+            "cdn_url": f"https://fwcdn.shelly.cloud/gen2-ntest/{track}/" + "a" * 64,
+            "wayback_ts": wayback_ts,
         }
 
     def run_probe(self, manifests, head_result=123):
@@ -195,6 +208,53 @@ class ShellyFirmwareValidationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             shelly.gha_output("new_versions", "safe\nforged=true")
 
+    def test_merge_dat_preserves_main_rows_and_pending_archive_state(self):
+        base = [
+            self.entry(track="WallDisplay", version="2.7.3", wayback_ts=""),
+            self.entry(track="WallDisplayV2", version="2.8.0", wayback_ts=""),
+        ]
+        pending = [
+            self.entry(track="WallDisplay", version="2.7.3", wayback_ts="20260730114129"),
+            self.entry(track="WallDisplayV2", version="2.7.3", wayback_ts=""),
+        ]
+
+        merged = shelly.merge_dat(base, pending)
+
+        self.assertEqual(
+            [("WallDisplay", "2.7.3"), ("WallDisplayV2", "2.8.0"),
+             ("WallDisplayV2", "2.7.3")],
+            [(entry["track"], entry["version"]) for entry in merged])
+        self.assertEqual("20260730114129", merged[0]["wayback_ts"])
+
+    def test_merge_dat_rejects_conflicting_release_identity(self):
+        base = [self.entry(track="WallDisplay", version="2.7.3", wayback_ts="")]
+        pending_entry = self.entry(track="WallDisplay", version="2.7.3", wayback_ts="")
+        pending_entry["cdn_url"] = pending_entry["cdn_url"] + "a"
+
+        with self.assertRaisesRegex(ValueError, "conflicting data.*cdn_url"):
+            shelly.merge_dat(base, [pending_entry])
+
+    def test_merge_dat_rejects_conflicting_archive_timestamps(self):
+        base = [self.entry(
+            track="WallDisplay", version="2.7.3", wayback_ts="20260730114129")]
+        pending = [self.entry(
+            track="WallDisplay", version="2.7.3", wayback_ts="20260730114130")]
+
+        with self.assertRaisesRegex(ValueError, "conflicting Wayback timestamps"):
+            shelly.merge_dat(base, pending)
+
+    def test_merge_command_rejects_malformed_pending_rows_without_rewriting_base(self):
+        base = [self.entry(track="WallDisplay", version="2.7.3")]
+        shelly.save_dat(self.dat, base)
+        original = self.dat.read_bytes()
+        pending = pathlib.Path(self.tempdir.name) / "pending.dat"
+        pending.write_text("WallDisplay|truncated|row\n")
+
+        with self.assertRaisesRegex(ValueError, "expected 7 fields"):
+            shelly.cmd_merge(SimpleNamespace(dat=str(self.dat), pending=str(pending)))
+
+        self.assertEqual(original, self.dat.read_bytes())
+
     def test_shelly_network_calls_use_vendor_trust_context(self):
         manifest_response = mock.MagicMock()
         manifest_response.__enter__.return_value = io.StringIO(json.dumps(self.manifest()))
@@ -235,6 +295,153 @@ class ShellyFirmwareValidationTest(unittest.TestCase):
 
         monitor = text.split("  monitor:\n", 1)[1]
         self.assertIn("if: github.event_name == 'schedule' || inputs.mode == 'update'", monitor)
+
+    def test_workflow_reconciles_open_pr_branch_without_force_push(self):
+        workflow = pathlib.Path(__file__).parents[2] / ".github/workflows/shelly-firmware-monitor.yml"
+        text = workflow.read_text()
+        monitor = text.split("  monitor:\n", 1)[1]
+        update = monitor.split("- name: Open/update pull request with the firmware index", 1)[1]
+        reconcile = pathlib.Path(__file__).with_name("reconcile_shelly_branch.sh").read_text()
+
+        self.assertIn("fetch-depth: 0", monitor)
+        self.assertIn("gh pr list", monitor)
+        self.assertIn("shelly_firmware.py merge", monitor)
+        self.assertIn("+refs/heads/main:refs/remotes/shelly/main", monitor)
+        self.assertIn("reconcile_shelly_branch.sh", update)
+        self.assertLess(reconcile.index('git restore --source=HEAD -- "$DAT"'),
+                        reconcile.index('git checkout -q -B "$BRANCH"'))
+        self.assertIn("git merge --no-commit --no-ff refs/remotes/shelly/main", reconcile)
+        self.assertIn("chore: sync Shelly firmware update branch with main [skip ci]", reconcile)
+        self.assertIn("+refs/heads/main:refs/remotes/shelly/main", reconcile)
+        self.assertIn('git diff --name-only --diff-filter=U', reconcile)
+        self.assertIn("shelly_firmware.py\" merge", reconcile)
+        self.assertNotIn("--force", update)
+        self.assertNotIn("--force", reconcile)
+
+    def test_branch_reconciliation_survives_squash_merge_and_preserves_both_sides(self):
+        root = pathlib.Path(self.tempdir.name)
+        remote = root / "remote.git"
+        seed = root / "seed"
+        runner = root / "runner"
+        dat_rel = pathlib.Path("tools/firmware-index/fw-shelly-walldisplay.dat")
+
+        def git(repo, *args, check=True):
+            return subprocess.run(
+                ["git", "-C", str(repo), *args], check=check,
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        git(root, "init", "--bare", str(remote))
+        git(root, "init", "-b", "main", str(seed))
+        git(seed, "config", "user.name", "test")
+        git(seed, "config", "user.email", "test@example.invalid")
+        (seed / dat_rel).parent.mkdir(parents=True)
+        initial = [self.entry(track="WallDisplay", version="2.7.2", wayback_ts="20260721113036")]
+        shelly.save_dat(seed / dat_rel, initial)
+        git(seed, "add", str(dat_rel))
+        git(seed, "commit", "-m", "initial")
+        git(seed, "remote", "add", "origin", str(remote))
+        git(seed, "push", "-u", "origin", "main")
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+        git(seed, "checkout", "-b", "automation/shelly-firmware-index")
+        discovered = initial + [
+            self.entry(track="WallDisplay", version="2.7.3"),
+            self.entry(track="WallDisplayV2", version="2.7.3"),
+        ]
+        shelly.save_dat(seed / dat_rel, discovered)
+        git(seed, "add", str(dat_rel))
+        git(seed, "commit", "-m", "discovery")
+        git(seed, "push", "-u", "origin", "automation/shelly-firmware-index")
+
+        git(seed, "checkout", "main")
+        shelly.save_dat(seed / dat_rel, discovered)
+        git(seed, "add", str(dat_rel))
+        git(seed, "commit", "-m", "squash discovery")
+        main_only = discovered + [self.entry(track="WallDisplay", version="2.8.0")]
+        shelly.save_dat(seed / dat_rel, main_only)
+        git(seed, "add", str(dat_rel))
+        git(seed, "commit", "-m", "main-only discovery")
+        git(seed, "push", "origin", "main")
+
+        git(seed, "checkout", "automation/shelly-firmware-index")
+        pending = discovered.copy()
+        pending[-2] = pending[-2].copy()
+        pending[-2]["wayback_ts"] = "20260730114129"
+        shelly.save_dat(seed / dat_rel, pending)
+        git(seed, "add", str(dat_rel))
+        git(seed, "commit", "-m", "archive legacy")
+        git(seed, "push", "origin", "automation/shelly-firmware-index")
+
+        git(root, "clone", str(remote), str(runner))
+        git(runner, "config", "user.name", "test")
+        git(runner, "config", "user.email", "test@example.invalid")
+        pending_text = git(
+            runner, "show", "origin/automation/shelly-firmware-index:" + str(dat_rel)).stdout
+        pending_path = root / "pending.dat"
+        pending_path.write_text(pending_text)
+        prepared = shelly.merge_dat(shelly.load_dat(runner / dat_rel), shelly.load_dat(pending_path))
+        for entry in prepared:
+            if entry["track"] == "WallDisplayV2" and entry["version"] == "2.7.3":
+                entry["wayback_ts"] = "20260731115639"
+        shelly.save_dat(runner / dat_rel, prepared)
+
+        env = os.environ.copy()
+        env.update({
+            "DAT": str(dat_rel),
+            "BRANCH": "automation/shelly-firmware-index",
+            "REPO_URL": str(remote),
+            "COMMIT_MESSAGE": "data: simulated update [skip ci]",
+            "RUNNER_TEMP": str(root),
+        })
+        script = pathlib.Path(__file__).with_name("reconcile_shelly_branch.sh")
+        subprocess.run(["bash", str(script)], cwd=runner, env=env, check=True)
+
+        git(runner, "fetch", "origin")
+        self.assertEqual(
+            0, git(runner, "merge-base", "--is-ancestor", "origin/main",
+                   "origin/automation/shelly-firmware-index", check=False).returncode)
+        changed = git(
+            runner, "diff", "--name-only", "origin/main...origin/automation/shelly-firmware-index"
+        ).stdout.splitlines()
+        self.assertEqual([str(dat_rel)], changed)
+        final_text = git(
+            runner, "show", "origin/automation/shelly-firmware-index:" + str(dat_rel)).stdout
+        final_path = root / "final.dat"
+        final_path.write_text(final_text)
+        final = shelly.load_dat(final_path)
+        self.assertIn(("WallDisplay", "2.8.0"), {
+            (entry["track"], entry["version"]) for entry in final})
+        timestamps = {
+            (entry["track"], entry["version"]): entry["wayback_ts"] for entry in final}
+        self.assertEqual("20260730114129", timestamps[("WallDisplay", "2.7.3")])
+        self.assertEqual("20260731115639", timestamps[("WallDisplayV2", "2.7.3")])
+
+        git(seed, "fetch", "origin")
+        git(seed, "checkout", "main")
+        (seed / "collision.txt").write_text("main\n")
+        git(seed, "add", "collision.txt")
+        git(seed, "commit", "-m", "main collision")
+        git(seed, "push", "origin", "main")
+        git(seed, "checkout", "-B", "automation/shelly-firmware-index",
+            "origin/automation/shelly-firmware-index")
+        (seed / "collision.txt").write_text("automation\n")
+        git(seed, "add", "collision.txt")
+        git(seed, "commit", "-m", "automation collision")
+        git(seed, "push", "origin", "automation/shelly-firmware-index")
+        branch_before = git(
+            seed, "rev-parse", "automation/shelly-firmware-index").stdout.strip()
+
+        git(runner, "fetch", "origin")
+        git(runner, "checkout", "-B", "main", "origin/main")
+        failed = subprocess.run(
+            ["bash", str(script)], cwd=runner, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertNotEqual(0, failed.returncode)
+        self.assertIn("conflicts outside", failed.stderr)
+        git(runner, "fetch", "origin")
+        self.assertEqual(
+            branch_before,
+            git(runner, "rev-parse", "origin/automation/shelly-firmware-index").stdout.strip())
 
 
 if __name__ == "__main__":
