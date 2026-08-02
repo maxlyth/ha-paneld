@@ -11,9 +11,9 @@
 
 ha-paneld makes Home Assistant dashboards practical on panels that otherwise feel too slow or awkward to use. Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. **ha-paneld's built-in renderer can learn which entities the dashboard uses and ask Home Assistant to send only those states**. In the real world, this can reduce entity load by 10–100×, making that dashboard finally usable.
 
-It also replaces fragmented vendor software with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds a built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
+It also replaces fragmented vendor (often demo-only) hardware support with one free, open-source way to operate different makes of panel. The Android app exposes the screen, LEDs, buttons, sensors, relays and audio to Home Assistant over HTTP, MQTT auto-discovery and mDNS; adds an optional built-in launcher and on-screen navigation for key-less hardware; and supports consistent provisioning across a whole fleet. Once provisioned, a panel pairs itself with Home Assistant without per-device YAML.
 
-It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
+It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes hardware profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family. For other hardware, ha-paneld will probe the hardware and has a generic profile that will cover the basics. Hardware profiles are text files, so owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
@@ -21,25 +21,6 @@ It is built for panel-class Android, **not** personal phones. Device support is 
 </picture>
 
 **One control surface for every panel.** See live state, tune behaviour, manage software, keep the dashboard lean and diagnose problems without hunting through vendor apps or per-device configuration.
-
-<details>
-<summary><strong>More screenshots from the ha-paneld user interface</strong></summary>
-
-| Dashboard | Configure |
-|---|---|
-| <a href="docs/img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-dashboard-light.png"><img src="docs/img/ui-dashboard-dark.png" alt="Dashboard tab" width="420"></picture></a> | <a href="docs/img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-configure-light.png"><img src="docs/img/ui-configure-dark.png" alt="Configure tab" width="420"></picture></a> |
-
-| Entities | Install |
-|---|---|
-| <a href="docs/img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-entities-light.png"><img src="docs/img/ui-entities-dark.png" alt="Entities tab" width="420"></picture></a> | <a href="docs/img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-install-light.png"><img src="docs/img/ui-install-dark.png" alt="Install tab" width="420"></picture></a> |
-
-| Profile | Logs |
-|---|---|
-| <a href="docs/img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-profile-light.png"><img src="docs/img/ui-profile-dark.png" alt="Profile tab" width="420"></picture></a> | <a href="docs/img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-logs-light.png"><img src="docs/img/ui-logs-dark.png" alt="Logs tab" width="420"></picture></a> |
-
-</details>
-
-<br>
 
 **A slow dashboard does not necessarily mean the panel is too weak.** ha-paneld can reduce the stream of Home Assistant state updates before they reach its built-in renderer, while its performance tools show dashboard response time, unexpected reloads, CPU, GPU, clock speed, temperature and the busiest processes. See [docs/performance.md](docs/performance.md) and the [performance comparison](docs/hardware/README.md#performance-comparison--practical-deployment).
 
@@ -51,30 +32,25 @@ First enable network ADB on the panel (Developer options → "ADB debugging"). T
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
 ```
 
-No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing), explains each panel change before making it, prompts for the panel IP and a few optional choices, downloads the **latest signed stable release**, then installs, starts, and verifies ha-paneld. A failed required step exits clearly as incomplete instead of reporting success; correct the named problem and run the same command again. To follow the newest published release, including release candidates, append `--prerelease` (a newer stable release still wins):
+No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing), explains each panel change before making it, prompts for the panel IP and a few optional choices, downloads the **latest signed release**, then installs, starts, and verifies ha-paneld. A failed step attempts to tidy up and exits clearly as incomplete instead of reporting success; correct the named problem and run the same command again. To install the latest **pre-release** (release candidate) instead, append `--prerelease`.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
-```
+I have worked hard on the provisioning script, and it is the most challenging part of the project. The goal was to make it idempotent, so running it multiple times is safe by design and will not break the panel. I have learned from experience that breaking a panel is the worst possible outcome for a new user.
 
 The same one-line installer also supports non-interactive single-panel provisioning. Whole-fleet updates and local builds are covered separately in [Provisioning & fleet updates](docs/provisioning.md).
 
 > [!IMPORTANT]
-> **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. macOS and Linux run it as-is.
+> **On Windows, run the one-liner in Git Bash or WSL — not PowerShell.** It's a `bash` script, so PowerShell fails at the `bash` step. Git Bash ships with [Git for Windows](https://gitforwindows.org/); install `adb` first with `winget install Google.PlatformTools`, then reopen the shell and paste the command. Of course, on macOS and Linux you can just run it as-is.
 
 > [!IMPORTANT]
-> **First-run gotcha — check Home Assistant and the panel's system WebView.** Starting with ha-paneld 0.9.6, the built-in renderer requires Home Assistant 2026.4.2 or newer and a modern WebView. Even new panels can ship with a WebView/Chromium far too old to render a current dashboard. See [Built-in renderer requirements and controls](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel.
+> **First-run gotcha — check Home Assistant and the panel's system WebView.** Starting with ha-paneld 0.9.6, the built-in renderer requires Home Assistant 2026.4.2 or newer and a modern WebView. Even the latest panels can ship with a WebView/Chromium years out of date and incapable of rendering an HA dashboard well. See [Built-in renderer requirements and controls](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview) before judging the panel.
 
 > [!NOTE]
-> The built-in renderer is the integrated path for dashboard entity filtering. The [HA Companion app](https://github.com/home-assistant/android) remains supported for panels that need multiple Home Assistant servers, Assist voice control or native notifications; on panels without Google Play, use its [**minimal** release APK](https://github.com/home-assistant/android/releases/latest/download/app-minimal-release.apk).
-
-> [!NOTE]
-> ha-paneld can only be sideloaded on a panel — it isn't on the Play Store, so even Play-capable panels (eg 2026 Android 14 models) should sideload it.
+> ha-paneld can only be sideloaded on a panel — it isn't on the Play Store as I would have to compromise features. It must be sideloaded, and if your panel does not support sideloading, then you are already going to get a compromised feature set. If you are not sure if your panel supports sideloading, check the panel's documentation or ask the vendor. Play Store and sideloading are not mutually exclusive, and many of the new Android 14-class panels support both.
 
 ### Other ways to install
 
 - **F-Droid (on-device, no PC).** Add ha-paneld's F-Droid repository and install + auto-update straight from the panel — see [Installing via F-Droid](docs/fdroid.md). Easiest where the panel can run F-Droid (Sonoff NSPanel Pro firmware ≥ 4.0.0 bundles it). Delivers the app only — the root-gated features still need [provisioning](docs/provisioning.md).
-- **USB bootstrap, no-adb sideload, and scripted / whole-fleet installs** — if your panel doesn't expose adb over the network, or you want to roll many panels at once, see [Provisioning & fleet updates](docs/provisioning.md).
+- **USB bootstrap, no-adb sideload, and scripted / whole-fleet installs** — if your panel doesn't expose adb over the network, or you want to roll many panels at once, see other ways to install at [Provisioning & fleet updates](docs/provisioning.md).
 
 ## Hardware Control Capabilities
 
@@ -94,8 +70,6 @@ The same one-line installer also supports non-interactive single-panel provision
 
 Every panel uses the same MQTT naming and control contracts, while discovery publishes only entities supported by its active profile and live capabilities. Home Assistant still picks them up with no YAML. The full entity reference, the HTTP contract on `:8888`, and how pairing works are in **[docs/api.md](docs/api.md)** (or browse it live at `http://<panel>:8888/api`).
 
-The default **Relaxed mode** keeps that API simple on a trusted home network. Panels on a network shared with less-trusted clients can opt into [Hardened mode](docs/security-mode.md). Hardened mode requires physical access to the panel: high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. The dashboard screenshot remains viewable, but remote taps are disabled rather than becoming remotely approvable. Hardened mode is enabled locally per panel and is not copied by backup, restore or fleet provisioning.
-
 ## What needs root — and what doesn't
 
 A few of ha-paneld's features reach hardware that is only accessible to a privileged process, AKA **root**. Whether a panel permits root access is a property of the **panel's firmware**, not of ha-paneld. For most wall panels this is fine: purpose-built panels such as the Sonoff NSPanel Pro expose `su`, while some others let the installer place ha-paneld's small root helper during ADB setup. The helper has no general shell or filesystem interface. Its one private-app operation is an explicit, descriptor-confined and size-bounded Home Assistant Companion login backup/restore used by the full panel-backup workflow.
@@ -110,21 +84,11 @@ A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted pan
 
 **Still needs direct root (`su`) inside ha-paneld:** **Lock Android to dashboard**, full system logs, and the legacy Companion-session import compatibility path. Full backups can include and restore an existing Companion login through either direct root or the current authenticated root helper.
 
-## Supported hardware
+## Security
 
-ha-paneld needs no system-signed install. Standard-Android capabilities (brightness, sleep, navigate, TTS) work on any panel; LED/buttons depend on a per-panel hardware abstraction layer (HAL) or direct support in ha-paneld via a profile.
+I take security seriously, and that is the reason I use Home Assistant above any other home control system. The UI and API are deliberately simple, with no authentication or encryption by default. They are designed to be safe on a trusted home network, but I recognise that bad security is a deal-breaker for many users, no matter how well the rest of the app works. By default, security is always a consideration, but where there is a tradeoff between usability and security, I have split the app into two modes: **Relaxed** and **Hardened**.
 
-| Panel class | SoC | Android | ABI | Notes |
-|-------------|-----|---------|-----|-------|
-| Sonoff NSPanel Pro / Pro 120 | Rockchip PX30 / rk3326-S | 8.1 (API 27) | arm64-v8a | toolbox `su` |
-| Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
-| Electron WF1589T | Rockchip rk3576 | userdebug (`adb root`) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
-| ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no app-accessible root on reported stock firmware, so RGB LED control is unavailable there; the authenticated root helper supports it when that route is available — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
-| ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary OEM/generic-market wall panel** — app-direct RGB LED and light/proximity; climate is optional enhanced capability, while relay and root/unlock paths remain under characterisation ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
-| Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager); experimental profile assumes normal-app `su`, pending live confirmation |
-| Shelly Wall Display (original) | MT6580 | 7.0 | armeabi-v7a | Android version is below ha-paneld's minimum, so the app cannot run on the stock software |
-| Shelly Wall Display X2 | SC7731E | 8.1 | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path |
-| Shelly Wall Display X1i / X2i / XL | RK3326-S / RK3566 (model-dependent) | 11 (API 30) | arm64-v8a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
+The default **Relaxed mode** keeps that API simple on a trusted home network. Panels on a network shared with less-trusted clients can opt into [Hardened mode](docs/security-mode.md). Hardened mode requires physical access to the panel: high-impact remote actions cannot proceed until someone approves them on the panel's screen, and they cannot be approved remotely. The dashboard screenshot remains viewable, but remote taps are disabled rather than becoming remotely approvable. Hardened mode is enabled locally per panel and is not copied by backup, restore or fleet provisioning.
 
 ## Documentation
 
@@ -144,21 +108,15 @@ ha-paneld needs no system-signed install. Standard-Android capabilities (brightn
 - **[helper/README.md](helper/README.md)** — the root LED/control helper daemon for sysfs-LED panels (build + boot-persistent install).
 - **`GET /diag`** on a panel — a copy-paste hardware/firmware/capability dump for bug reports.
 
-## Screenshots
-
-| ha-paneld standing screen | REST API explorer |
-|---|---|
-| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen — icon, config URL and a QR code to open the config page" width="480"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/api-explorer-light.png"><img src="docs/img/api-explorer-dark.png" alt="REST API explorer" width="480"></picture> |
-
 ## Why not just the Home Assistant Companion app?
 
-The [HA Companion app](https://github.com/home-assistant/android) targets personal phones and tablets. Wall panels need different primitives: screen, LED and button control; hardware-button events back to Home Assistant; a built-in launcher and on-screen navigation for key-less hardware; fleet provisioning; and automatic pairing. ha-paneld supplies those panel-specific capabilities.
+This project started as a helper for the Home Assistant Companion app. That app is still supported, but it really targets mobile phones. Wall panels need different primitives: screen control, LED and button support; hardware-button events back to Home Assistant; a built-in launcher and on-screen navigation for key-less hardware; fleet provisioning; and automatic pairing. ha-paneld supplies those panel-specific capabilities.
 
 For the dashboard itself, there are **two supported paths**. The built-in renderer is designed for a dedicated dashboard panel: it provides entity filtering, remote sign-in without typing on the panel, and recovery from screen-off freezes, connection failures, excessive memory use and renderer crashes. It remains experimental and deliberately omits support for multiple Home Assistant servers, **Home Assistant Assist** and native notifications. Use the Companion app when any of those is required. Both paths remain supported.
 
 ## Why not Fully Kiosk?
 
-[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a closed-source, commercial general-purpose kiosk browser. Running it alongside ha-paneld creates overlapping ownership of kiosk lifecycle, screen control and remote administration, with two separate configuration surfaces. Consider that operational conflict when choosing a renderer.
+[Fully Kiosk Browser](https://www.fully-kiosk.com/) is a commercial general-purpose kiosk browser. Running it alongside ha-paneld creates overlapping ownership of kiosk lifecycle, screen control and remote administration, with two separate configuration surfaces. It is over-complicated where it does not need to be for HA dashboards and can't be recommended unless it solves a mission-critical need.
 
 <details>
 <summary>The three friction points in full</summary>
@@ -172,23 +130,55 @@ For the simplest ownership model, choose one panel stack: ha-paneld's built-in r
 
 ## Why not FreeKiosk?
 
-[FreeKiosk](https://github.com/RushB-fr/freekiosk) is an unrelated project, despite the similar name. It re-implements Fully Kiosk's feature set on a completely different, fully open-source codebase. One technical difference worth knowing: FreeKiosk is built on React Native, and the second JavaScript runtime it requires can severely impact performance on typical low-RAM panels (1–2 GB).
+[FreeKiosk](https://github.com/RushB-fr/freekiosk) is an unrelated project, despite the similar name. It re-implements Fully Kiosk's feature set on a completely different, fully open-source codebase. One technical difference worth knowing: FreeKiosk is built on React Native, and the second JavaScript runtime it requires can severely impact performance on typical low-RAM panels (1–2 GB). In my experience, FreeKiosk cannot be recommended for HA dashboards.
 
 ## Community chat
 
-I did not want to set up a Discord server or Slack workspace for a one-man project, so I am experimenting with Matrix and Element. Join [#ha-paneld:matrix.org](https://matrix.to/#/#ha-paneld:matrix.org) in your usual Matrix client, or view it without an account in [Element Web](https://app.element.io/#/room/#ha-paneld:matrix.org).
+I did not want to set up a Discord server or Slack workspace for a one-man project, so I am experimenting with Matrix/Element. Join [#ha-paneld:matrix.org](https://matrix.to/#/#ha-paneld:matrix.org) in your usual Matrix client, or view it without an account in [Element Web](https://app.element.io/#/room/#ha-paneld:matrix.org).
 
-Do not post configurations or file links in GitHub issues or discussions unless you are comfortable with them remaining public forever. The Matrix space is a better place to start informal support conversations, but it is public and world-readable too. Redact credentials, private URLs and personal details before posting configurations, logs or file links anywhere, and arrange a private exchange before sharing anything sensitive.
+## Supported hardware
+
+ha-paneld needs no system-signed install. Standard Android capabilities (brightness, sleep, navigate, TTS) work on almost any panel; LED/buttons depend on a per-panel hardware abstraction layer (HAL) or direct support in ha-paneld via a profile.
+
+| Panel class | SoC | Android | ABI | Notes |
+|-------------|-----|---------|-----|-------|
+| Sonoff NSPanel Pro / Pro 120 | Rockchip PX30 / rk3326-S | 8.1 (API 27) | arm64-v8a | toolbox `su` |
+| Tuya TPA10 | Rockchip rk3566 | 11 (API 30) | armeabi-v7a | 32-bit userspace |
+| Electron WF1589T | Rockchip rk3576 | 14 (API 34), userdebug (adb root) | arm64-v8a | RGB LED via clean-room NDK ioctl on `/dev/ledjni` (no vendor lib) |
+| ZHICAI SMT1019 | Rockchip rk3576 | 14 (API 34) | arm64-v8a | no app-accessible root on reported stock firmware, so RGB LED control is unavailable there; the authenticated root helper supports it when that route is available — community-reported ([#8](https://github.com/maxlyth/ha-paneld/issues/8)) |
+| ZX-SMT156 / RK3566_T | Rockchip rk3566 | 13 (API 33) | arm64-v8a | **preliminary OEM/generic-market wall panel** — app-direct RGB LED and light/proximity; climate is optional enhanced capability, while relay and root/unlock paths remain under characterisation ([#24](https://github.com/maxlyth/ha-paneld/issues/24)) |
+| Smatek S9E | Rockchip rk3566 | 11 (API 30) | arm64-v8a | onboard relays + button LEDs; proximity via root GPIO (not SensorManager); experimental profile assumes normal-app `su`, pending live confirmation |
+| Shelly Wall Display (original) | MT6580 | 7.0 | armeabi-v7a | Android version is below ha-paneld's minimum, so the app cannot run on the stock software |
+| Shelly Wall Display X2 | SC7731E | 8.1 | armeabi-v7a | **research-only profile** — no confirmed ha-paneld installation path |
+| Shelly Wall Display X1i / X2i / XL | RK3326-S / RK3566 (model-dependent) | 11 (API 30) | arm64-v8a | **research-only profile** — current profile metadata needs a model-specific split; no confirmed ha-paneld installation path |
+
+## Screenshots
+
+| Dashboard | Configure |
+|---|---|
+| <a href="docs/img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-dashboard-light.png"><img src="docs/img/ui-dashboard-dark.png" alt="Dashboard tab" width="480"></picture></a> | <a href="docs/img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-configure-light.png"><img src="docs/img/ui-configure-dark.png" alt="Configure tab" width="480"></picture></a> |
+
+| Entities | Install |
+|---|---|
+| <a href="docs/img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-entities-light.png"><img src="docs/img/ui-entities-dark.png" alt="Entities tab" width="480"></picture></a> | <a href="docs/img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-install-light.png"><img src="docs/img/ui-install-dark.png" alt="Install tab" width="480"></picture></a> |
+
+| Profile | Logs |
+|---|---|
+| <a href="docs/img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-profile-light.png"><img src="docs/img/ui-profile-dark.png" alt="Profile tab" width="480"></picture></a> | <a href="docs/img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-logs-light.png"><img src="docs/img/ui-logs-dark.png" alt="Logs tab" width="480"></picture></a> |
+
+| ha-paneld standing screen | REST API explorer |
+|---|---|
+| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen — icon, config URL and a QR code to open the config page" width="480"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/api-explorer-light.png"><img src="docs/img/api-explorer-dark.png" alt="REST API explorer" width="480"></picture> |
 
 ## Want your panel supported?
 
-ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more panels supported** — which takes hardware to study. Start with the [runtime profile authoring guide](docs/profiles/README.md): Generic can produce a passive draft that you can validate, test and share without building the app. Fully curated support still needs hands-on evidence from the device itself, especially for buttons, LEDs, relays and sensors.
+ha-paneld has no donate button. It's free, and the "payment" that actually moves it forward is **more panels supported** — this takes hardware to study. Start with the [runtime profile authoring guide](docs/profiles/README.md): The generic profile can produce a passive draft that you can validate, test and share without building the app. Fully curated support still needs hands-on evidence from the device itself, especially for buttons, LEDs, relays and sensors.
 
 So if you'd like to help:
 
 - **Create and share a profile.** Open `http://<panel-ip>:8888/profiles`, download the Generic device draft, and follow the staged [testing](docs/profiles/testing.md) and [sharing](docs/profiles/sharing.md) guides. A community profile can be useful before it is ready to ship as a bundled profile.
 - **Or open an issue with your panel's diagnostics.** Visit `http://<panel-ip>:8888/diag` (or the diag link on the panel's config page) and paste the redacted dump into a new issue. That's enough to start; from there we'll work out a short interactive workflow to map the buttons/LEDs/sensors that need a person at the panel.
-- **Or send me the panel.** I'm **UK-based** and happy to do the reverse-engineering directly — the fastest route to a fully-supported new model. You'll get it back (I have way too many already); open an issue first so we can sort the details.
+- **Or send me the panel.** I'm **UK-based** and happy to do the reverse-engineering directly — the fastest route to a fully supported new model. You'll get it back (I have way too many already); open an issue first so we can sort the details.
 
 The result is always open: your panel becomes a profile everyone can use — a bit less per-vendor fragmentation for the next person. That's the donation.
 
@@ -196,7 +186,7 @@ The result is always open: your panel becomes a profile everyone can use — a b
 
 If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and devcontainer builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [device-profile development](docs/profiles/README.md), the [UI layout test harness](test/README.md), and the [release process](docs/RELEASING.md).
 
-I have deliberately provided enough information to use the supplied development container and build a local test version. Do not submit computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first.
+I have deliberately provided enough information so you can use an AI to navigate the supplied development container. However, do not submit raw computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first. I am human and can be slow to reply, so be gentle.
 
 ## Stack
 
@@ -211,7 +201,7 @@ Dependency selection and updates follow the project's [dependency and supply-cha
 
 ## Acknowledgements
 
-Thanks to **Seaky** for [**NSPanel Pro Tools**](https://github.com/seaky/nspanel_pro_tools_apk) ([releases](https://github.com/seaky/nspanel_pro_tools_apk/releases)), which showed what good panel-side Home Assistant tooling can do — genuinely excellent work. It targets the Sonoff NSPanel-Pro class and is distributed as a closed-source APK; ha-paneld exists to be an **open, multi-vendor** alternative that any Android panel can adopt and extend.
+Thanks to **Seaky** for [**NSPanel Pro Tools**](https://github.com/seaky/nspanel_pro_tools_apk), which was the inspiration for this project and showed what good panel-side Home Assistant tooling can do — genuinely excellent work.
 
 ## Licence
 
