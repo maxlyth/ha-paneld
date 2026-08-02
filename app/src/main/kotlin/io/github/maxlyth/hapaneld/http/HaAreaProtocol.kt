@@ -22,8 +22,8 @@ internal fun haAreaCacheEntryUsable(
  * area is assigned, and `config/area_registry/create`) are admin-only — so everything here is honest
  * about what the signed-in account can actually do.
  *
- * The precedence rule (maintainer decision, 2026-07-26): **Home Assistant's value, when set, is
- * canonical.** The local `ha_area` setting records the panel's *requested* area — it seeds the MQTT
+ * The precedence rule: **Home Assistant's value, when set, is canonical.** The local `ha_area` setting
+ * records the panel's *requested* area — it seeds the MQTT
  * discovery `suggested_area` (which applies only at first device registration) and drives write-back
  * attempts — but a differing area reported by HA overwrites the local value, never the reverse. That
  * keeps the non-admin story coherent: a non-admin's choice stands only while HA has none, and an admin's
@@ -58,9 +58,9 @@ object HaAreaProtocol {
      *
      * HA is canonical over ADOPTED values — but a value a PERSON chose is a deliberate local override
      * that adoption must never undo. The first version had no such distinction, so saving a divergent
-     * area was impossible: the convergence pass reverted it seconds after the save (hardware report,
-     * 2026-07-26 — the maintainer's Hall panel sits in an HA area with no motion entities, and its area
-     * is deliberately set to a neighbouring room so auto-sleep has sources). Blank local = "follow HA".
+     * area was impossible: the convergence pass reverted it seconds after the save. A panel may need a
+     * neighbouring room's area when its own HA area has no motion entities for auto-sleep. Blank local =
+     * "follow HA".
      * A user override matching HA (any casing) is not overriding anything, so HA's spelling is adopted
      * and the caller should clear the override bit.
      */
@@ -82,11 +82,11 @@ object HaAreaProtocol {
      * Whether an unprompted reconciliation is worth attempting.
      *
      * The precedence rule above was true only of readers, and every reader was a UI control: the browser's
-     * area picker and the wizard's dashboard step. So a panel nobody had opened that dropdown on never
-     * adopted anything — five of six fleet panels sat with a blank `ha_area` while their Home Assistant
-     * devices had real areas, every surface faithfully reporting "No area" (reported 2026-07-26). The rule
-     * now needs an owner that runs without a person, which is what this gates: HA must be reachable and
-     * credentialled, since the registry read is an authenticated WebSocket call.
+     * area picker and the wizard's dashboard step. So a panel whose area dropdown had never been opened
+     * could retain a blank `ha_area` while its Home Assistant device had a real area, with every surface
+     * faithfully reporting "No area". The rule now needs an owner that runs without a person, which is
+     * what this gates: HA must be reachable and credentialled, since the registry read is an authenticated
+     * WebSocket call.
      */
     fun canQueryUnprompted(haUrl: String, credentialed: Boolean): Boolean =
         haUrl.isNotBlank() && credentialed

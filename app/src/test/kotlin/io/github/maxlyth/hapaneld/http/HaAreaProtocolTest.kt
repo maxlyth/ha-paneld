@@ -26,10 +26,9 @@ class HaAreaProtocolTest {
     )
 
     @Test fun aPersonsChoiceIsAnOverrideAdoptionMustNotUndo() {
-        // The first precedence rule reverted every deliberate divergence seconds after it was saved: the
-        // maintainer set the Hall panel's area to a neighbouring room (its own HA area has no motion
-        // entities, so auto-sleep needed sources from next door), hit save, and watched the value snap
-        // back. A user-chosen value beats adoption; only ADOPTED values follow Home Assistant.
+        // The first precedence rule reverted every deliberate divergence seconds after it was saved. A
+        // panel whose own HA area has no motion entities may use a neighbouring room's auto-sleep sources.
+        // A user-chosen value beats adoption; only ADOPTED values follow Home Assistant.
         assertEquals(
             ReconcileAction.KEEP,
             HaAreaProtocol.reconcile("Office", "Hall", admin = false, userOverride = true),
@@ -184,10 +183,10 @@ class HaAreaProtocolTest {
 
     @Test fun theCanonicalRuleHasAnOwnerThatDoesNotWaitForSomebodyToOpenAMenu() {
         // The rule "Home Assistant's area is canonical" was implemented only at read time, and every reader
-        // was a UI control. So a panel nobody had opened the area dropdown on never adopted anything: five
-        // of six fleet panels held a blank ha_area while their HA devices sat in real areas, and every
-        // surface honestly reported "No area" (2026-07-26). Reachable-and-credentialled is the only
-        // precondition — the registry read is an authenticated WebSocket call.
+        // was a UI control. So a panel whose area dropdown had never been opened could retain a blank
+        // ha_area while its HA device had a real area, and every surface honestly reported "No area".
+        // Reachable-and-credentialled is the only precondition — the registry read is an authenticated
+        // WebSocket call.
         assertTrue(HaAreaProtocol.canQueryUnprompted("http://ha.local:8123", credentialed = true))
         assertFalse("no endpoint means nothing to ask", HaAreaProtocol.canQueryUnprompted("", credentialed = true))
         assertFalse("no credential means the read cannot succeed", HaAreaProtocol.canQueryUnprompted("http://ha.local:8123", credentialed = false))

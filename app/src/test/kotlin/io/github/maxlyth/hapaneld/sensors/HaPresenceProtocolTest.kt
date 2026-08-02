@@ -20,9 +20,9 @@ class HaPresenceProtocolTest {
     }
 
     @Test fun `a locally configured area names the room presence sources come from`() {
-        // A person may deliberately point the panel at a different room than its HA device sits in — the
-        // maintainer's Hall panel lives in an HA area with no motion entities, so auto-sleep sources come
-        // from a neighbouring room. Resolution is by NAME, case-insensitively, against HA's own list.
+        // A person may deliberately point the panel at a different room than its HA device sits in when
+        // the device's own area has no motion entities and a neighbouring room supplies auto-sleep
+        // sources. Resolution is by NAME, case-insensitively, against HA's own list.
         val devices = response(JSONArray().put(device("panel-device", "hall", "ha-paneld-aid-abc")))
         val areas = response(JSONArray()
             .put(JSONObject().put("area_id", "hall").put("name", "Hall"))
