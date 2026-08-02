@@ -3539,6 +3539,28 @@ else
   fail_test "REST-downloaded release is signer-verified before install"
 fi
 
+: > "$MOCK_CALL_LOG"
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=stable_newest run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner inclusive channel accepts a newer stable release"
+assert_log_contains 'releases/download/v0\.9\.3/ha-paneld-v0\.9\.3-manual-setup-required\.apk' \
+  "provisioner inclusive channel selects the newer stable asset"
+assert_not_contains 'releases/download/v0\.9\.2-rc3/' "$MOCK_CALL_LOG" \
+  "provisioner keeps the newer stable tag paired with its own asset"
+
+: > "$MOCK_CALL_LOG"
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=stable_only run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner inclusive channel works after release candidates are deleted"
+assert_log_contains 'releases/download/v0\.9\.3/ha-paneld-v0\.9\.3-manual-setup-required\.apk' \
+  "provisioner inclusive channel falls through to the remaining stable release"
+
+: > "$MOCK_CALL_LOG"
+MOCK_GH_FAIL=1 MOCK_GITHUB_API=draft_newest run_provision "$MOCK_TARGET" --prerelease --no-tame
+assert_success "provisioner inclusive channel ignores an unpublished draft"
+assert_log_contains 'releases/download/v0\.9\.3/ha-paneld-v0\.9\.3-manual-setup-required\.apk' \
+  "provisioner inclusive channel selects the first published release"
+assert_not_contains 'releases/download/v0\.9\.4-rc1/' "$MOCK_CALL_LOG" \
+  "provisioner never downloads an asset from a draft release"
+
 PATH="$NO_GH_FIXTURES:/usr/bin:/bin" MOCK_GITHUB_API=pretty \
   run_provision "$MOCK_TARGET" --prerelease --no-tame
 assert_success "provisioner REST fallback works when gh is not installed"
@@ -3584,8 +3606,8 @@ assert_contains 'fixed pressure thresholds are advisory.*recovery attempt' "flee
 assert_contains 'storage health: critical.*replacement completed' "fleet output keeps the remaining critical pressure visible"
 assert_contains 'fleet update complete.*1/1 panels OK' "fleet summary counts the admitted recovery replacement as successful"
 
-# The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. It must skip a
-# newer stable release and bind the candidate tag to that candidate's APK.
+# The unauthenticated REST fallback receives GitHub's normal pretty multi-line JSON. When the
+# candidate is newest, it must bind that candidate tag to that candidate's APK.
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-rest-output.txt"
 MOCK_GH_FAIL=1 MOCK_GITHUB_API=pretty bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
@@ -3593,12 +3615,31 @@ LAST_STATUS=$?
 assert_success "fleet prerelease REST fallback accepts pretty GitHub JSON"
 if grep -Fq 'https://github.com/maxlyth/ha-paneld/releases/download/v0.9.2-rc3/ha-paneld-v0.9.2-rc3-manual-setup-required.apk' "$MOCK_CALL_LOG" && \
    ! grep -Fq 'https://github.com/maxlyth/ha-paneld/releases/download/v0.9.1/ha-paneld-v0.9.1-manual-setup-required.apk' "$MOCK_CALL_LOG"; then
-  pass "REST fallback selects the candidate APK rather than the newer stable channel"
+  pass "REST fallback selects the newest candidate and its paired APK"
 else
-  fail_test "REST fallback selects the candidate APK rather than the newer stable channel"
+  fail_test "REST fallback selects the newest candidate and its paired APK"
 fi
 assert_log_contains 'curl .*--proto =https --proto-redir =https .*https://github\.com/maxlyth/ha-paneld/releases/download/v0\.9\.2-rc3/ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk' "fleet REST APK redirects remain HTTPS"
 assert_contains 'verified.*v0\.9\.2-rc3' "fleet REST workers retain and verify the authenticated release tag"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-stable-newest-output.txt"
+MOCK_GITHUB_API=stable_newest bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "fleet inclusive channel accepts a newer stable release"
+assert_log_contains 'releases/download/v0\.9\.3/ha-paneld-v0\.9\.3-manual-setup-required\.apk' \
+  "fleet inclusive channel selects the newer stable asset"
+assert_not_contains 'releases/download/v0\.9\.2-rc3/' "$MOCK_CALL_LOG" \
+  "fleet keeps the newer stable tag paired with its own asset"
+assert_contains 'verified.*v0\.9\.3' "fleet workers retain the newer stable release tag"
+
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-stable-only-output.txt"
+MOCK_GITHUB_API=stable_only bash "$UPDATE_FLEET" --prerelease -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_success "fleet inclusive channel works after release candidates are deleted"
+assert_log_contains 'releases/download/v0\.9\.3/ha-paneld-v0\.9\.3-manual-setup-required\.apk' \
+  "fleet inclusive channel falls through to the remaining stable release"
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-oversized-output.txt"
@@ -3950,13 +3991,22 @@ case "$url" in
     printf '%s\n' '{"tag_name":"v0.9.3","assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.3/ha-paneld-v0.9.3-manual-setup-required.apk"}]}'
     ;;
   https://api.github.com/repos/maxlyth/ha-paneld/releases\?per_page=100)
-    if [ "${MOCK_ADVANCED_GITHUB_API:-small}" = oversized ]; then
-      printf '%s' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]},{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/203","tag_name":"v0.9.3","draft":false,"prerelease":false,"padding":"'
-      awk 'BEGIN { for (i = 0; i < 2097152; i++) printf "x" }'
-      printf '%s\n' '"}]'
-    else
-      printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
-    fi
+    case "${MOCK_ADVANCED_GITHUB_API:-small}" in
+      oversized)
+        printf '%s' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]},{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/203","tag_name":"v0.9.3","draft":false,"prerelease":false,"padding":"'
+        awk 'BEGIN { for (i = 0; i < 2097152; i++) printf "x" }'
+        printf '%s\n' '"}]'
+        ;;
+      stable_newest)
+        printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/205","tag_name":"v0.9.5","draft":false,"prerelease":false,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.5/ha-paneld-v0.9.5-manual-setup-required.apk"}]},{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
+        ;;
+      stable_only)
+        printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/205","tag_name":"v0.9.5","draft":false,"prerelease":false,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.5/ha-paneld-v0.9.5-manual-setup-required.apk"}]}]'
+        ;;
+      *)
+        printf '%s\n' '[{"url":"https://api.github.com/repos/maxlyth/ha-paneld/releases/204","tag_name":"v0.9.4-rc1","draft":false,"prerelease":true,"assets":[{"browser_download_url":"https://github.com/maxlyth/ha-paneld/releases/download/v0.9.4-rc1/ha-paneld-v0.9.4-rc1-manual-setup-required.apk"}]}]'
+        ;;
+    esac
     ;;
   */ha-paneld-provision-v*.sh.sha256.sig)
     printf 'mock signature\n' > "$output"
@@ -4109,6 +4159,16 @@ MOCK_ADVANCED_GITHUB_API=oversized run_moving_advanced_installer --prerelease --
 assert_success "moving installer consumes an oversized prerelease response without SIGPIPE"
 assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.4-rc1-manual-setup-required\.apk> <--release-tag> <v0\.9\.4-rc1> <--shizuku>$' \
   "oversized moving-installer response retains the first prerelease asset"
+
+MOCK_ADVANCED_GITHUB_API=stable_newest run_moving_advanced_installer --prerelease --provision panel.test --shizuku
+assert_success "moving installer inclusive channel accepts a newer stable release"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.5-manual-setup-required\.apk> <--release-tag> <v0\.9\.5> <--shizuku>$' \
+  "moving installer pairs the newer stable tag and asset"
+
+MOCK_ADVANCED_GITHUB_API=stable_only run_moving_advanced_installer --prerelease --provision panel.test --shizuku
+assert_success "moving installer inclusive channel works after candidates are deleted"
+assert_log_contains '^provision-argv <panel\.test:5555> <--apk> <.*/ha-paneld-v0\.9\.5-manual-setup-required\.apk> <--release-tag> <v0\.9\.5> <--shizuku>$' \
+  "moving installer selects the remaining stable release"
 fi
 
 run_moving_advanced_installer --provision panel.test --verify
