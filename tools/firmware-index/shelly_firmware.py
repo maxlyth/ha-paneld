@@ -138,7 +138,8 @@ def load_dat(path):
                     continue
                 parts = line.split("|")
                 if len(parts) != 7:
-                    continue
+                    raise ValueError(
+                        f"invalid data row {line_number}: expected 7 fields, got {len(parts)}")
                 track, version, build_id, bytes_str, discovered, cdn_url, wayback_ts = parts
                 entry = {
                     "track": track,
@@ -181,6 +182,36 @@ def save_dat(path, entries):
         ]))
     with open(path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
+
+
+def merge_dat(base_entries, pending_entries):
+    """Merge an open automation PR's append-only index into the current branch."""
+    merged = [entry.copy() for entry in base_entries]
+    by_key = {(entry["track"], entry["version"]): entry for entry in merged}
+    immutable_fields = ("build_id", "bytes", "discovered", "cdn_url")
+
+    for pending in pending_entries:
+        key = (pending["track"], pending["version"])
+        current = by_key.get(key)
+        if current is None:
+            added = pending.copy()
+            merged.append(added)
+            by_key[key] = added
+            continue
+
+        mismatches = [field for field in immutable_fields if current[field] != pending[field]]
+        if mismatches:
+            raise ValueError(
+                f"conflicting data for {pending['track']}/{pending['version']}: "
+                + ", ".join(mismatches))
+        if current["wayback_ts"] and pending["wayback_ts"] \
+                and current["wayback_ts"] != pending["wayback_ts"]:
+            raise ValueError(
+                f"conflicting Wayback timestamps for {pending['track']}/{pending['version']}")
+        if not current["wayback_ts"]:
+            current["wayback_ts"] = pending["wayback_ts"]
+
+    return merged
 
 
 def gha_output(name, value):
@@ -227,6 +258,12 @@ def cmd_verify(_args):
             continue
         print(f"verified: {track} {version} ({size / 1e6:.1f} MB)")
     return 1 if failed else 0
+
+
+def cmd_merge(args):
+    merged = merge_dat(load_dat(args.dat), load_dat(args.pending))
+    save_dat(args.dat, merged)
+    return 0
 
 
 def cmd_probe(args):
@@ -511,6 +548,11 @@ def main():
 
     v = sub.add_parser("verify", help="strictly validate current manifests and CDN objects")
     v.set_defaults(func=cmd_verify)
+
+    m = sub.add_parser("merge", help="merge an open automation PR index into current data")
+    m.add_argument("--dat", required=True)
+    m.add_argument("--pending", required=True)
+    m.set_defaults(func=cmd_merge)
 
     p = sub.add_parser("probe", help="check manifests for new versions, update .dat")
     p.add_argument("--dat", required=True)
