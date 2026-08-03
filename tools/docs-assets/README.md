@@ -31,6 +31,8 @@ python3 tools/docs-assets/assets.py verify
 
 **Published objects are permanent.** A URL that has appeared in a commit must keep resolving to the same bytes indefinitely, because git records the reference and not the image. Superseding an image means publishing a new object beside the old one, never replacing or deleting it. Removing an object that looks unused will silently break documentation at older tags, with no error and no failing test to notice it.
 
+Permanence also runs in the other direction, which is easy to miss: objects are served with a one-year immutable cache header, so Cloudflare's edge keeps serving a file for up to a year *after* it is deleted from the bucket. Deleting is not withdrawing. Check an image before uploading it, because the only prompt way to stop serving something is a cache purge from the Cloudflare dashboard.
+
 **Everything lives under the `docs/` prefix.** Object paths cannot be reorganised after publication for the same reason, so the namespace is partitioned up front and the bucket root is left free. The tooling rejects any key outside `docs/`.
 
 ## Metadata stripping

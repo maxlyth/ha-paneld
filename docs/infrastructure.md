@@ -36,6 +36,8 @@ This matters more than it looks, because the failure is silent. Tidying up image
 
 **The bucket is public.** Anything placed in it is world-readable from the moment it is uploaded. Never stage anything there that is not intended for publication.
 
+**Publishing is effectively irreversible, and more so than deleting the object suggests.** Objects are served with a one-year immutable cache header, so Cloudflare's edge continues serving a file for up to a year after it has been deleted from the bucket. This was measured, not assumed: a test object removed from R2 still answered with HTTP 200 from the cache immediately afterwards. Deleting from storage is therefore not a withdrawal, and there is no undo available from the publishing tooling — the only way to stop serving something promptly is a cache purge from the Cloudflare dashboard (Caching → Configuration → Purge by URL). Treat every upload as final and check the image before running it, rather than relying on being able to take it back.
+
 **Keys stay under the `docs/` prefix.** Paths cannot be reorganised after publication, for the same permanence reason, so the namespace is partitioned in advance and the bucket root is left unused.
 
 **The credential is a single narrow write token**, scoped to this one bucket. Reading requires nothing, so it does not grant read access. If a second use appears, issue a second token rather than widening this one — widening leaves no trace after the fact.

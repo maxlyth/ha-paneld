@@ -31,6 +31,7 @@
 import argparse
 import datetime
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -295,9 +296,18 @@ def cmd_upload(args):
     published = 0
     for r in rows:
         key, local = r["key"], os.path.join(STAGING, r["key"])
+        # Parse the JSON rather than comparing strings: rclone pretty-prints an empty result as
+        # "[\n]", so a naive check for "[]" reads every absent object as present and silently skips
+        # publishing it — the tool then reports success having uploaded nothing.
         probe = subprocess.run(["rclone", "lsjson", rclone_target(key)],
                                capture_output=True, text=True)
-        if probe.returncode == 0 and probe.stdout.strip() not in ("", "[]"):
+        present = False
+        if probe.returncode == 0:
+            try:
+                present = bool(json.loads(probe.stdout or "[]"))
+            except json.JSONDecodeError:
+                fail("could not parse rclone output while probing %s:\n%s" % (key, probe.stdout))
+        if present:
             print("exists   %s" % key)
             continue
         if args.dry_run:
@@ -322,8 +332,14 @@ def cmd_verify(args):
     problems = []
     for r in rows:
         url = "%s/%s" % (BASE_URL, r["key"])
+        # Cloudflare answers urllib's default "Python-urllib/x.y" User-Agent with 403, so a request
+        # without this header fails in a way that looks like a broken bucket rather than a rejected
+        # client. Identify the tool honestly instead of impersonating a browser.
+        request = urllib.request.Request(url, headers={
+            "User-Agent": "ha-paneld-docs-assets/1.0 (+https://github.com/maxlyth/ha-paneld)",
+        })
         try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
+            with urllib.request.urlopen(request, timeout=30) as resp:
                 body = resp.read()
                 headers = resp.headers
         except Exception as exc:
