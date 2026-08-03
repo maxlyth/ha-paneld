@@ -44,6 +44,36 @@ Credential files address exposure on the provisioning host, not transport confid
 - **CSRF** — OriginGuard refuses a state-changing request (`POST`/`PUT`/`PATCH`/`DELETE`) whose `Origin`/`Referer` is present and doesn't match the request `Host`, so a malicious LAN web page can't silently drive these endpoints. Same-origin UI `fetch`es and header-less API clients (curl / HA `rest_command`) are unaffected.
 - **DNS-rebinding** — the `Host` header must be an IP literal, `localhost`, `*.local` (mDNS), or an operator-configured name (`http_allowed_hosts`); any other hostname is refused (all methods), so an attacker who rebinds their own DNS name to the panel can't pose as same-origin to read secrets (`GET /config/export`) or drive the surface. Reaching a panel by IP — the norm — is always allowed and is inherently rebinding-immune.
 
+Every request passes the rebinding check first; what happens next depends on whether it changes state, starts privileged work, or is an ordinary read:
+
+```mermaid
+flowchart TD
+    R["Request on :8888"] --> H{"Host header present?"}
+    H -- "absent" --> HOK["no name to rebind — continue"]
+    H -- "present" --> HL{"IP literal, localhost, *.local,<br/>or in http_allowed_hosts?"}
+    HL -- "no" --> DENY1["REFUSE — DNS-rebinding guard"]
+    HL -- "yes" --> HOK
+    HOK --> M{"Method"}
+
+    M -- "POST PUT PATCH DELETE" --> O{"Origin or Referer present?"}
+    O -- "no" --> ALLOW1["ALLOW — header-less LAN API client"]
+    O -- "yes" --> P{"Parseable, and its authority<br/>equals the Host?"}
+    P -- "no" --> DENY2["REFUSE — cross-origin write"]
+    P -- "yes" --> ALLOW2["ALLOW — same-origin UI"]
+
+    M -- "active GET<br/>capture, subprocess, refresh" --> F{"Sec-Fetch-Site"}
+    F -- "cross-site or same-site" --> DENY3["REFUSE"]
+    F -- "same-origin, none, absent" --> AO{"Origin or Referer present?"}
+    AO -- "yes" --> P
+    AO -- "no" --> UA{"Metadata absent AND<br/>user agent looks like a browser?"}
+    UA -- "yes" --> DENY4["REFUSE — browser without<br/>positive metadata"]
+    UA -- "no" --> ALLOW3["ALLOW — automation"]
+
+    M -- "ordinary GET" --> ALLOW4["ALLOW — cross-origin reads are<br/>already CORS-blocked"]
+```
+
+Three behaviours there are easy to misread from the prose. A **missing `Host` passes** the rebinding check, because there is no name to rebind — but a **state-changing request with no `Host` is refused**, as is one whose `Origin` is present but unparseable. Ordinary `GET`s are deliberately not origin-guarded, since the browser's same-origin policy already blocks reading the response; it is the *side effect* of a write, or of an active read, that needs guarding. And active `GET`s — those that start capture, a subprocess, sampling or a network refresh — take a third path keyed on Fetch Metadata, failing closed for a browser-shaped request that supplies no positive same-origin evidence while leaving header-less automation working.
+
 Neither authenticates the *caller*. Hardened mode can require physical approval for a protected operation, but decision 3 remains the upgrade path for general caller authentication.
 
 Runtime profile files are treated as untrusted data, not plugins. The closed schema can select only drivers compiled into ha-paneld; it carries no shell commands, helper verbs, native code or general scripting. Privileged paths are restricted to core allowlists, and WebView recommendations select only core-owned artifact IDs whose HTTPS URL, version and signer hash are compiled into the app. Security-sensitive driver parameters are validated by the owning driver, and declarations never substitute for live root/helper/Shizuku or hardware probes. A Shizuku recommendation cannot install the Manager, record local consent or approve ha-paneld.

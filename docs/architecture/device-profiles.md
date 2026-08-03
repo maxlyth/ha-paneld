@@ -29,6 +29,35 @@ The activation transaction is:
 6. Mark the activation healthy only after startup reaches the required health point.
 7. If resolution or startup fails, select the last-known-good revision and restart conservatively.
 
+```mermaid
+stateDiagram-v2
+    direction TB
+    [*] --> Parsed: parse and validate untrusted YAML<br/>without touching runtime state
+    Parsed --> Previewed: show exact candidate hash, compatibility,<br/>match result, risks, diff vs active
+    Previewed --> Stored: save an immutable inactive revision
+    Stored --> Requested: explicit activation records the desired<br/>exact revision and generation
+    Requested --> Restarting: HTTP response returns first,<br/>then the service restarts
+    Restarting --> Constructing: resolve and construct every<br/>controller from that revision
+    Constructing --> Healthy: startup reaches the required health point
+    Healthy --> [*]: activation marked healthy
+
+    Constructing --> Recovering: resolution or startup fails
+    Restarting --> Recovering: fails to come up
+    Recovering --> Restarting: select last-known-good revision<br/>and restart conservatively
+
+    note right of Requested
+        Saving or importing never
+        changes selection by itself
+    end note
+    note right of Recovering
+        The local UI stays available
+        throughout, so a bad profile
+        is recoverable over HTTP
+    end note
+```
+
+Activation is restart-bound rather than hot-swapped because long-lived controllers, evdev listeners and Home Assistant entities would otherwise disagree about the panel. Note the ordering in the middle: the HTTP response is returned *before* the restart, so the caller learns the outcome rather than losing the connection to it.
+
 The local UI remains available after profile failure. When no installed panel-specific profile can run, ha-paneld normally resolves the bundled `generic.yaml` fallback. If that bundled fallback is itself missing or corrupt, a capability-empty emergency contract keeps the local recovery surface available without inventing hardware support.
 
 ## Sources and immutability
@@ -44,6 +73,29 @@ Profile selection is either automatic matching or an explicit pin to one immutab
 Automatic matching is pure and limited to immutable build facts: Android build model, build device and the vendor product-version property. It does not probe sysfs or run privileged commands.
 
 Exact bundled product identities are evaluated before bundled reference-platform fallbacks such as `px30`, `rk3326`, `rk3566` and `rk3576`, because unrelated vendors can ship the same SoC. The resolver compares the highest matched group priority, then the profile priority; an exact tie fails closed to the bundled Generic profile (or the capability-empty emergency contract if that asset is unavailable). This two-level order lets one profile carry both an exact identity and a lower-priority compatibility fallback without its broad branch defeating another product's exact rule. Local/community match rules are preview evidence only and never enter automatic selection. A local revision can override bundled detection only through explicit activation; once pinned, the panel keeps that exact revision rather than being reinterpreted by a later import.
+
+```mermaid
+flowchart TD
+    S["Service startup"] --> PIN{"An explicit revision<br/>is pinned?"}
+    PIN -- "yes" --> USE["Use that exact revision<br/>— never reinterpreted by a later import"]
+    PIN -- "no" --> FACTS["Read immutable build facts only:<br/>build model, build device,<br/>vendor product-version.<br/>No sysfs, no privileged commands."]
+    FACTS --> EXACT{"Matches an exact bundled<br/>product identity?"}
+    EXACT -- "yes" --> CAND["Candidate set"]
+    EXACT -- "no" --> PLAT{"Matches a bundled reference<br/>platform: px30, rk3326,<br/>rk3566, rk3576?"}
+    PLAT -- "yes" --> CAND
+    PLAT -- "no" --> GEN["Bundled generic.yaml"]
+    CAND --> RANK["Rank by highest matched group priority,<br/>then by profile priority"]
+    RANK --> TIE{"Exact tie?"}
+    TIE -- "yes" --> GEN
+    TIE -- "no" --> USE
+    GEN --> AVAIL{"Bundled fallback present<br/>and valid?"}
+    AVAIL -- "yes" --> USE
+    AVAIL -- "no" --> EMERG["Capability-empty emergency contract<br/>— keeps local recovery available,<br/>invents no hardware support"]
+
+    LOCAL["Local / community match rules"] -. "preview evidence only —<br/>never enter automatic selection" .-> FACTS
+```
+
+Exact identities are evaluated before reference-platform fallbacks because unrelated vendors ship the same SoC, and the two-level ranking lets a single profile carry both an exact identity and a lower-priority compatibility branch without that broad branch defeating another product's exact rule. Every uncertain outcome resolves downward — to Generic, then to the emergency contract — rather than guessing at hardware.
 
 Named core-owned strategies can derive a small set of bounded values from those same facts, for example a product variant that changes the local model label or recommended density. The schema has no general scripting, arbitrary expressions or conditional patch section. Proximity polarity, ranges and firmware classifiers are deliberately not profile data; the runtime learner normalizes live sensor behavior across panels.
 
