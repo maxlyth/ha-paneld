@@ -53,13 +53,17 @@ updates:
       # exclusions when a stable Kotlin release supports newer AGP and the migration gates pass.
       - dependency-name: "com.android.application"
         versions:
-          - "9.2.x"
-          - "9.3.x"
+          - "[9.2,9.4)"
+      # Temporary: CodeQL 2.26 supports Kotlin through 2.4.0. Remove when the hosted
+      # analyzer supports 2.4.10 and the full Kotlin/Android gates pass together.
+      - dependency-name: "org.jetbrains.kotlin:kotlin-gradle-plugin"
+        versions:
+          - "2.4.10"
       # Temporary: Engine 3 requires Java 11. Remove after its parser and emitter pass the
       # oldest-supported Android runtime gate; review any security advisory independently.
       - dependency-name: "org.snakeyaml:snakeyaml-engine"
         versions:
-          - "3.x"
+          - "[3.0,4.0)"
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
