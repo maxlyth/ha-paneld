@@ -16,6 +16,7 @@ A release is cut by pushing a `vX.Y.Z` tag; the [Release workflow](../.github/wo
    - In **`docs/roadmap.md`**, move every item that's now done **out of "Planned"** (it's shipped — it belongs in `CHANGELOG.md`, not the roadmap).
    - Confirm the README's release badge still reads GitHub dynamically and that no surrounding prose hard-codes an older release or candidate. The badge is the release-status summary; the README deliberately does not duplicate it in a manually maintained section.
    - Refresh screenshots in `docs/img/` from the final combined contender when the UI changed. Use the deterministic capture harness with Roboto loaded and verified, fixed documented viewports and normalized image metadata; the on-panel standing-screen shot is **480×480**.
+   - Hardware photographs are not committed here and are not tied to a release — they live on `assets.ha-paneld.com` and are published with [`tools/docs-assets/assets.py`](../tools/docs-assets/assets.py), which strips metadata as a hard gate because camera EXIF carries GPS and serial numbers. Nothing about a release requires republishing them; see [`docs/infrastructure.md`](infrastructure.md).
 
 2. **CHANGELOG.md** — the release workflow looks for a section whose header matches the **exact tag** (`## v0.8.4-rc3`, not `## v0.8.4`). For a missing RC section the workflow **errors** (not just warns) so the CI job fails before a release is published with wrong notes.
 

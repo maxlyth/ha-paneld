@@ -34,6 +34,9 @@ __pycache__/
 # gen-icon.py preview output (dev artifact, not shipped)
 docs/icon-preview.png
 
+# Documentation image store — originals and published bytes are kept out of this repository.
+/.docs-assets/
+
 # UI layout-test deps (playwright-core)
 test/node_modules/
 
