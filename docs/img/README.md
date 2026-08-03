@@ -1,5 +1,12 @@
 # Documentation images
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://assets.ha-paneld.com/docs/logo/wordmark-dark-c957b6e2.webp">
+  <img src="https://assets.ha-paneld.com/docs/logo/wordmark-light-e0f5bab8.webp" width="360" alt="ha-paneld">
+</picture>
+
+The wordmark above is served from `assets.ha-paneld.com` rather than from this repository, and is the working example of everything described below: content-addressed key, transparency preserved, metadata stripped, recorded in [`manifest.txt`](manifest.txt) with its SHA-256, and paired light and dark variants selected by `prefers-color-scheme`.
+
 This directory holds images that are committed to the repository, plus [`manifest.txt`](manifest.txt), which records the images that are not.
 
 **Committed here:** screenshots of ha-paneld's own interface. They are the project's own work, they carry no third-party rights, and they are tied to the release they depict — a screenshot of the Configure tab from one version is misleading against another, so having git version them alongside the code is correct. [`docs/RELEASING.md`](../RELEASING.md) covers refreshing them when the interface changes.

@@ -9,3 +9,5 @@
 # to rot; the served copy is the durable artefact and nothing depends on the source.
 #
 # key	sha256	bytes	dimensions	provenance	source	captured	licence
+docs/logo/wordmark-dark-c957b6e2.webp	c957b6e2e28f368fc59a19fed78c7e7e6d5b540d67285b29f491e12acdcd286a	20546	1067x216	own	-	2026-08-03	apache-2.0
+docs/logo/wordmark-light-e0f5bab8.webp	e0f5bab89967fbb0e0c10eb67e430fecb177a2fbc798dc9c4b4bdd05e7155fce	18114	1067x216	own	-	2026-08-03	apache-2.0

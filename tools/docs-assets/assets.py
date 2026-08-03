@@ -115,14 +115,29 @@ def write_manifest(rows):
 
 # --- ingest ------------------------------------------------------------------------------------
 
-def strip_and_encode(src, dest, max_width, quality):
-    """Re-encode to sRGB WebP with no EXIF, XMP or ICC. Returns (width, height)."""
+def has_alpha(im):
+    return im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
+
+
+def strip_and_encode(src, dest, max_width, quality, lossless=None):
+    """Re-encode to sRGB WebP with no EXIF, XMP or ICC. Returns (width, height, lossless)."""
     try:
         from PIL import Image
     except ImportError:
         fail("Pillow is required: pip install Pillow")
 
     with Image.open(src) as im:
+        # Transparency must survive. Flattening to RGB composites a logo or line drawing onto black,
+        # which destroys it silently — the file is still valid, just wrong.
+        alpha = has_alpha(im)
+        mode = "RGBA" if alpha else "RGB"
+
+        # Graphics with hard edges (wordmarks, diagrams, line art) ring badly under lossy WebP, so
+        # default to lossless when the source carries alpha and is therefore probably not a
+        # photograph. Explicit --lossless / --lossy override the guess.
+        if lossless is None:
+            lossless = alpha
+
         icc = im.info.get("icc_profile")
         # Convert a non-sRGB source into sRGB before discarding its profile, so dropping the profile
         # does not silently shift colour. If ImageCms is unavailable the profile is still dropped —
@@ -133,11 +148,11 @@ def strip_and_encode(src, dest, max_width, quality):
                 from PIL import ImageCms
                 src_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc))
                 im = ImageCms.profileToProfile(im, src_profile, ImageCms.createProfile("sRGB"),
-                                               outputMode="RGB")
+                                               outputMode=mode)
             except Exception:
                 pass
 
-        im = im.convert("RGB")
+        im = im.convert(mode)
         if im.width > max_width:
             height = round(im.height * max_width / im.width)
             im = im.resize((max_width, height), Image.LANCZOS)
@@ -147,8 +162,9 @@ def strip_and_encode(src, dest, max_width, quality):
         # dropping EXIF here even without it, but that is version-dependent behaviour and a silent
         # regression would leak GPS. assert_clean() below is what actually guarantees the strip, by
         # inspecting the encoded file rather than trusting the encoder.
-        im.save(dest, "WEBP", quality=quality, method=6, exif=b"", xmp=b"", icc_profile=b"")
-    return size
+        im.save(dest, "WEBP", quality=quality, method=6, lossless=lossless,
+                exif=b"", xmp=b"", icc_profile=b"")
+    return size + (lossless,)
 
 
 def assert_clean(path):
@@ -196,7 +212,8 @@ def cmd_ingest(args):
     tmp = os.path.join(STAGING, ".tmp-%s.webp" % args.name)
     os.makedirs(STAGING, exist_ok=True)
 
-    size = strip_and_encode(args.source, tmp, args.max_width, args.quality)
+    width, height, lossless = strip_and_encode(args.source, tmp, args.max_width, args.quality,
+                                               args.lossless)
     assert_clean(tmp)
 
     digest = sha256_file(tmp)
@@ -224,7 +241,7 @@ def cmd_ingest(args):
         "key": key,
         "sha256": digest,
         "bytes": str(os.path.getsize(dest)),
-        "dimensions": "%dx%d" % size,
+        "dimensions": "%dx%d" % (width, height),
         "provenance": args.provenance,
         "source": args.source_url or "-",
         "captured": args.captured or datetime.date.today().isoformat(),
@@ -235,7 +252,7 @@ def cmd_ingest(args):
     print("staged   %s" % dest)
     print("original %s" % original)
     print("url      %s/%s" % (BASE_URL, key))
-    print("sha256   %s" % digest)
+    print("sha256   %s  (%s)" % (digest, "lossless" if lossless else "lossy q%d" % args.quality))
 
 
 # --- check / upload / verify ---------------------------------------------------------------------
@@ -381,6 +398,11 @@ def main():
     p.add_argument("--licence")
     p.add_argument("--max-width", type=int, default=MAX_WIDTH)
     p.add_argument("--quality", type=int, default=QUALITY)
+    encoding = p.add_mutually_exclusive_group()
+    encoding.add_argument("--lossless", dest="lossless", action="store_true", default=None,
+                          help="force lossless (default for images carrying alpha)")
+    encoding.add_argument("--lossy", dest="lossless", action="store_false",
+                          help="force lossy even if the image carries alpha")
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser("check", help="verify manifest and staging agree, both directions")
