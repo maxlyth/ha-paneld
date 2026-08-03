@@ -264,6 +264,10 @@
    "ts": 1785050008,
    "wb": "20260715221429"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/27/CK_4.4.0_4.5.3V228-diff.zip": {
+   "ts": 1785763508,
+   "wb": "20260802071022"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/27/CK_4.5.1_4.5.3V228-diff.zip": {
    "ts": 1785050008,
    "wb": "20260715221415"
@@ -328,9 +332,17 @@
    "ts": 1785654617,
    "wb": "20260730213428"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/130/app4.7.0.apk": {
+   "ts": 1785763510,
+   "wb": "20260730213423"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/19/app1.5.0.apk": {
    "ts": 1785050009,
    "wb": "20260715221824"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/25/app1.5.6.apk": {
+   "ts": 1785763510,
+   "wb": "20260726071401"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/26/app1.6.0.apk": {
    "ts": 1785654617,
@@ -692,6 +704,10 @@
    "ts": 1785654617,
    "wb": "20260726071333"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.7.1_4.0.7-diff.zip": {
+   "ts": 1785763510,
+   "wb": "20260802071022"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/44/CK_3.8.0_4.0.7-diff.zip": {
    "ts": 1783421355,
    "wb": "20260705060200"
@@ -840,6 +856,6 @@
  "page": {
   "job": "spn2-8cd254f2322be3b3631531d76097c1dde396b6e6",
   "ok": true,
-  "ts": 1785654611
+  "ts": 1785763505
  }
 }
