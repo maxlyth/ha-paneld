@@ -228,6 +228,9 @@ run_provision() {
   MOCK_DIRECT_COPY_PID_FILE="${MOCK_DIRECT_COPY_PID_FILE:-}" \
   MOCK_DIRECT_COPY_BLOCK_SECONDS="${MOCK_DIRECT_COPY_BLOCK_SECONDS:-30}" \
   MOCK_PM_PATH="${MOCK_PM_PATH:-ok}" \
+  MOCK_PM_PATH_PID_FILE="${MOCK_PM_PATH_PID_FILE:-}" \
+  MOCK_PM_LIVENESS="${MOCK_PM_LIVENESS:-ok}" \
+  MOCK_PM_LIVENESS_PID_FILE="${MOCK_PM_LIVENESS_PID_FILE:-}" \
   MOCK_DB_CLEANUP="${MOCK_DB_CLEANUP:-ok}" \
   MOCK_DB_DEVICE_ROWS="${MOCK_DB_DEVICE_ROWS:-7}" \
   MOCK_DB_DEVICE_USER_VERSION="${MOCK_DB_DEVICE_USER_VERSION:-9}" \
@@ -306,6 +309,7 @@ run_provision() {
   UPGRADE_PREPARE_TIMEOUT_SECONDS="${UPGRADE_PREPARE_TIMEOUT_SECONDS:-45}" \
   STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-3}" \
   STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-0}" \
+  STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-2}" \
   MOCK_APK_INSTALL_PID_FILE="${MOCK_APK_INSTALL_PID_FILE:-}" \
   PATH="$provision_path" \
     bash "$PROVISION" "$@" "${unsigned_ack[@]}" > "$LAST_OUTPUT" 2>&1
@@ -742,6 +746,59 @@ MOCK_STORAGE_HEALTH=transport-fail run_provision "$MOCK_TARGET" --apk "$APK" --n
 assert_success "an installed package with unavailable storage status admits an ordinary replacement"
 assert_contains "status endpoint could not be reached" "unreachable storage status is reported"
 assert_log_contains '^adb .* install' "unreachable storage status does not preempt the APK install"
+assert_not_contains 'ha-paneld is not installed on this panel yet' "$LAST_OUTPUT" \
+  "an installed panel is not announced as a fresh install"
+assert_not_contains 'pm path android' "$MOCK_CALL_LOG" \
+  "a package that resolves to a path needs no liveness corroboration"
+
+# A clean panel has no status endpoint AND no package, which is exactly the shape v0.9.6 refused to
+# install onto: `pm path` reports a missing package as a failure, and that was read as a failed
+# package manager (#89). Both observed absence shapes must now reach installation.
+#   fail   = the package manager answers, non-zero, naming no path  (the reported NSPanel Pro 120)
+#   absent = the package manager answers zero, naming no path
+for absent_mode in fail absent; do
+  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PATH="$absent_mode" \
+    run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_success "a clean panel whose package query reports $absent_mode installs for the first time"
+  assert_contains 'ha-paneld is not installed on this panel yet' \
+    "the $absent_mode clean panel is named as a fresh install"
+  assert_not_contains 'could not determine whether ha-paneld is already installed' "$LAST_OUTPUT" \
+    "normal package absence ($absent_mode) is not reported as an unusable package manager"
+  # Only the pre-install advisory is forbidden here; post-install verification legitimately reports
+  # the same endpoint as unreachable, because the fixture panel never serves it.
+  assert_not_contains 'an unreachable app is a reason to replace it' "$LAST_OUTPUT" \
+    "a panel with no app installed is not described as an unreachable app ($absent_mode)"
+  assert_log_contains 'pm path android' \
+    "absence ($absent_mode) is corroborated by a package that exists on every Android build"
+  assert_log_contains '^adb .* install' "a clean panel ($absent_mode) reaches the APK install"
+done
+
+# The fail-closed mutation gate is unchanged: when the package manager itself cannot answer, nothing
+# is installed or changed. Each mode below breaks a different link in the classification.
+#   pm answers nothing at all      : both queries fail
+#   pm resolves nothing at all     : both queries answer zero but name no path, so nothing is proved
+#   the panel's query never returns: the deadline expires on the ha-paneld query
+#   the corroboration never returns: the deadline expires on the liveness query
+for unknown_case in fail:fail absent:absent hang:ok fail:hang; do
+  pm_mode="${unknown_case%%:*}"
+  live_mode="${unknown_case##*:}"
+  label="pm=$pm_mode liveness=$live_mode"
+  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PATH="$pm_mode" MOCK_PM_LIVENESS="$live_mode" \
+    run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_failure "an unusable package manager ($label) refuses before any mutation"
+  assert_contains 'could not determine whether ha-paneld is already installed' \
+    "the refusal ($label) names the undecided classification"
+  assert_contains 'Nothing was installed or changed' "the refusal ($label) states what did not happen"
+  assert_not_contains 'ha-paneld is not installed on this panel yet' "$LAST_OUTPUT" \
+    "an undecided classification ($label) never claims a fresh install"
+  # The mutation proof: no APK install, no helper push, no adb-root escalation, no grants, no
+  # accessibility write and no config POST may appear in the call log.
+  assert_not_contains '^adb .*( install | push |pm grant|pm clear|appops |settings put|am start)' \
+    "$MOCK_CALL_LOG" "no panel mutation is attempted ($label)"
+  assert_not_contains '^adb .* root$' "$MOCK_CALL_LOG" "no root escalation is attempted ($label)"
+  assert_not_contains '^curl .* -X POST' "$MOCK_CALL_LOG" "no configuration is written ($label)"
+done
+unset pm_mode live_mode label
 
 MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a missing post-install storage contract does not fail a completed replacement"
@@ -2715,17 +2772,28 @@ if [ "$PROVISION_TEST_SCOPE" = publication ]; then
 fi
 
 # Discovery failure is never mistaken for a captured backup, but it is advisory for an ordinary
-# in-place upgrade because Android preserves the existing app data.
+# in-place upgrade because Android preserves the existing app data. "Unanswerable" now means the
+# package manager itself did not answer: a query that fails *because the package is absent* is a
+# real answer, and must not be reported as an unreachable panel (#89).
 reset_db_txn_state
-MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+MOCK_PM_PATH=fail MOCK_PM_LIVENESS=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "an unanswerable snapshot discovery does not stop an ordinary upgrade"
 assert_contains 'could not be asked whether ha-paneld is installed' "the unanswerable discovery is named"
 assert_marker_absent "an unanswerable discovery never claims a captured snapshot"
 assert_log_contains '^adb .* install' "the discovery warning still reaches APK install"
 reset_db_txn_state
-MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
+MOCK_PM_PATH=fail MOCK_PM_LIVENESS=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
 assert_success "the deprecated snapshot flag remains a compatibility no-op"
 assert_marker_absent "the compatibility flag does not manufacture a captured verdict"
+reset_db_txn_state
+# The same failing exit status, with a package manager that is demonstrably answering, is ordinary
+# absence: there is no installed database to snapshot and nothing is wrong with the panel.
+MOCK_PM_PATH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a panel whose package query fails only because ha-paneld is absent still upgrades"
+assert_not_contains 'could not be asked whether ha-paneld is installed' "$LAST_OUTPUT" \
+  "normal package absence is never reported as an unreachable panel"
+assert_marker_absent "an absent package never claims a captured snapshot"
+assert_log_contains '^adb .* install' "an absent package still reaches APK install"
 reset_db_txn_state
 
 # A capability boundary, not a failure: no root route means /data/data is unreachable by design.

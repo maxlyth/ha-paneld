@@ -376,10 +376,19 @@ APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-20}"
 APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-180}"
 STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-6}"
 STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-2}"
+# Deadline for each package query taken while classifying an unreachable status endpoint. Kept short
+# and deliberately separate from the general adb deadline: this runs before anything is installed, so
+# a wedged package manager should refuse quickly rather than hold a first installation open.
+STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-5}"
+# Deadline for the package re-check taken immediately before an erasure, after a confirmation that
+# may have been held open indefinitely. Slightly longer than the pre-install probe because the panel
+# has been idle in the meantime, and short enough that a wedged panel cannot stall a confirmed reset.
+RESET_RECHECK_PACKAGE_QUERY_SECONDS="${RESET_RECHECK_PACKAGE_QUERY_SECONDS:-10}"
 for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
     PANEL_POST_CONNECT_TIMEOUT_SECONDS PANEL_POST_TIMEOUT_SECONDS PANEL_RESTORE_TIMEOUT_SECONDS \
     APK_INSTALL_TIMEOUT_SECONDS APP_LAUNCH_COMMAND_TIMEOUT_SECONDS APP_LAUNCH_PROBE_SECONDS \
-    APP_HEALTH_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS; do
+    APP_HEALTH_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS \
+    STORAGE_HEALTH_PACKAGE_QUERY_SECONDS RESET_RECHECK_PACKAGE_QUERY_SECONDS; do
   timeout_value="${!timeout_name}"
   case "$timeout_value" in
     ''|*[!0-9]*|0)
@@ -626,6 +635,9 @@ STORAGE_HEALTH_RESULT=""
 STORAGE_HEALTH_STATE=""
 POWER_SAFETY_RESULT=""
 POWER_SAFETY_STATE=""
+# Never read before classify_package_presence sets it; initialised so an unclassified read is the
+# fail-closed value rather than an unbound-variable abort.
+PACKAGE_PRESENCE="unknown"
 
 # Read the small status contract without adding jq as a fleet-host dependency. A successful response
 # without storage_health is distinguishable only as a legacy build until this run installs a current
@@ -705,6 +717,72 @@ read_power_safety() {
   POWER_SAFETY_RESULT="valid"
 }
 
+# Android answers "is this package installed?" and "can the package manager answer at all?" through
+# one command and one exit status, and the provisioner used to read them as the same signal: `pm
+# path` exits non-zero both when the package manager cannot be reached and when it answers, quite
+# correctly, that the package is not installed. A clean panel is the second case, so a first
+# installation was refused as though adb had died, and only a hand-sideloaded APK let the next run
+# past the gate (#89).
+#
+# The two helpers below keep those questions apart. Presence is proved only by a `package:` line,
+# never by an exit status: adb forwards the device's status only when both ends speak shell protocol
+# v2, and `pm` reports a missing package as a failure. Absence is concluded only once the package
+# manager has proved, on the same connection and within the same deadline, that it still resolves
+# path queries at all. Everything else stays unknown, and every caller keeps failing closed on it.
+
+# Packages that exist on every Android build and cannot be uninstalled: `android` is the framework
+# package, and `com.android.shell` is the identity `adb shell` itself runs as. Resolving either one
+# proves the package manager ran and answered, independently of whether ha-paneld is installed.
+PACKAGE_MANAGER_LIVENESS_PACKAGES=(android com.android.shell)
+
+# Ask Android for one package's installed APK paths within `seconds`. Returns:
+#   0  the package manager named at least one path — that package is installed
+#   1  no path was named — either the package is absent, or the query never reached a live package
+#      manager. This status alone cannot tell those two apart; only a liveness probe can.
+#   2  no answer was produced at all, because the deadline expired or the query was killed.
+query_package_path() {
+  local package="$1" seconds="$2" output="" status=0
+  # Android's raw diagnostic is suppressed so each calling site owns the actionable message. The
+  # payload below, not this discarded stream, is what presence is read from.
+  output="$(run_with_deadline "$seconds" \
+    "$ADB_COMMAND" -s "$TARGET" shell pm path "$package" 2>/dev/null)" || status=$?
+  if printf '%s\n' "$output" | tr -d '\r' | grep -q '^package:'; then
+    return 0
+  fi
+  # run_with_deadline reserves 124 for its own deadline; an outside SIGKILL surfaces as 137.
+  case "$status" in 124|137) return 2 ;; esac
+  return 1
+}
+
+# Classify whether ha-paneld is installed on this panel, allowing `seconds` per query. Sets
+# PACKAGE_PRESENCE to exactly one of:
+#   present  a `package:` line was returned for $PKG
+#   absent   $PKG resolved to no path, and the package manager separately resolved a package that
+#            exists on every Android build — so its silence about ha-paneld is a real answer
+#   unknown  no trustworthy answer was obtained; callers must not read this as either state
+classify_package_presence() {
+  local seconds="$1" status=0 probe
+  PACKAGE_PRESENCE="unknown"
+  query_package_path "$PKG" "$seconds" || status=$?
+  case "$status" in
+    0) PACKAGE_PRESENCE="present"; return 0 ;;
+    1) ;;
+    # A query that produced no answer cannot be corroborated into absence, so the liveness probe is
+    # deliberately not run: there is nothing for it to confirm.
+    *) return 0 ;;
+  esac
+  for probe in "${PACKAGE_MANAGER_LIVENESS_PACKAGES[@]}"; do
+    status=0
+    query_package_path "$probe" "$seconds" || status=$?
+    case "$status" in
+      0) PACKAGE_PRESENCE="absent"; return 0 ;;
+      # The package manager has stopped answering mid-classification; nothing further is trustworthy.
+      2) return 0 ;;
+    esac
+  done
+  return 0
+}
+
 # Storage health classifies the panel; it does not admit or refuse the replacement.
 #
 # Every run that reaches this point goes on to replace the package, and an in-place replacement is a
@@ -718,24 +796,27 @@ read_power_safety() {
 #
 # Successful absence of the field remains compatible with an older app.
 preflight_storage_health() {
-  local package_path package_status
   read_storage_health
   case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
     transport:)
-      # A missing app has no status server yet and is eligible for first installation. Distinguishing
-      # the two still requires adb to answer — an actual adb/package-manager failure is not a health
-      # result and remains strict, because nothing after this line can run without it either.
-      if package_path="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
-        package_status=0
-      else
-        package_status=$?
-      fi
-      [ "$package_status" -eq 0 ] || fail "could not determine whether ha-paneld is already installed" \
-        "The storage-health endpoint and Android package query were both unavailable, so mutation safety could not be established." \
-        "Nothing was installed or changed. Restore adb/package-manager responsiveness, then retry."
-      if printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:'; then
-        warn "storage health: the installed app's status endpoint could not be reached — advisory for this in-place recovery attempt; an unreachable app is a reason to replace it, not to refuse"
-      fi
+      # A missing app has no status server yet and is eligible for first installation. Telling that
+      # apart from an app that is installed but not answering needs Android's package manager — and
+      # an unanswered package query is not a health result, so it remains strict, because nothing
+      # after this line can run without adb either. Normal package absence is not such a failure.
+      classify_package_presence "$STORAGE_HEALTH_PACKAGE_QUERY_SECONDS"
+      case "$PACKAGE_PRESENCE" in
+        present)
+          warn "storage health: the installed app's status endpoint could not be reached — advisory for this in-place recovery attempt; an unreachable app is a reason to replace it, not to refuse"
+          ;;
+        absent)
+          echo "   ${D}fresh install — ha-paneld is not installed on this panel yet${X}"
+          ;;
+        *)
+          fail "could not determine whether ha-paneld is already installed" \
+            "The app's status endpoint did not answer, and Android's package manager did not return a usable reply either, so mutation safety could not be established." \
+            "Nothing was installed or changed. Restore adb/package-manager responsiveness, then retry."
+          ;;
+      esac
       ;;
     valid:critical)
       if [ "$RESET_CONFIG" = 1 ]; then
@@ -3485,21 +3566,25 @@ announce_export_withdrawn() {
 }
 
 auto_export_before_upgrade() {
-  local path_output safe_target stamp
+  local safe_target stamp
   # Test harnesses may skip the export entirely when exercising later transaction branches. The
   # production default (unset/0) attempts it; failure is advisory, handled below.
   [ "${HAPANELD_SKIP_AUTO_EXPORT:-0}" = 1 ] && return 0
   [ -n "$EXPORT_FILE" ] && return 0
-  if ! path_output="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
-    fail "could not verify the installed panel before upgrade" \
-      "The configuration backup could not be guaranteed, so no helper or APK was changed." \
-      "Restore adb/package-manager responsiveness, then re-run the same command."
-  fi
-  path_output="$(printf '%s\n' "$path_output" | tr -d '\r')"
-  if ! printf '%s\n' "$path_output" | grep -q '^package:'; then
-    echo "   ${D}fresh install — no existing config requires an upgrade backup${X}"
-    return 0
-  fi
+  # A first installation has no configuration to back up, so absence is an ordinary outcome here and
+  # only an unanswerable package query stops the run.
+  classify_package_presence "$ADB_COMMAND_TIMEOUT_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    absent)
+      echo "   ${D}fresh install — no existing config requires an upgrade backup${X}"
+      return 0
+      ;;
+    unknown)
+      fail "could not verify the installed panel before upgrade" \
+        "The configuration backup could not be guaranteed, so no helper or APK was changed." \
+        "Restore adb/package-manager responsiveness, then re-run the same command."
+      ;;
+  esac
   # From here every failure is advisory. The panel keeps its existing data across an `adb install -r`,
   # so refusing to replace the package because this convenience copy could not be taken would strand
   # the user on the build they are trying to move off — the opposite of a recovery. `fail`'s own
@@ -3823,15 +3908,15 @@ snapshot_panel_database() {
   # Discovery is tri-state: "not installed" must be the panel's positive answer, never the silence
   # of a transport that could not be asked. Unknown is reported through the explicit refusal policy,
   # not silently treated as a fresh install.
-  local pm_path_out
-  if ! pm_path_out="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null | tr -d '\r')"; then
-    snapshot_txn_refuse "the panel could not be asked whether ha-paneld is installed" \
-      "Check adb connectivity to $TARGET, then re-run."
-    return 0
-  fi
-  if ! printf '%s\n' "$pm_path_out" | grep -q '^package:'; then
-    return 0
-  fi
+  classify_package_presence "$ADB_COMMAND_TIMEOUT_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    absent) return 0 ;;
+    unknown)
+      snapshot_txn_refuse "the panel could not be asked whether ha-paneld is installed" \
+        "Check adb connectivity to $TARGET, then re-run."
+      return 0
+      ;;
+  esac
   # The run's one root-route verdict, resolved before this gate, decides the capture. Both unknown
   # verdicts refuse: a probe that never answered or a transport that died mid-question looks
   # exactly like a genuine "no root", and could recover minutes later, just in time for the
@@ -4230,23 +4315,23 @@ EOF2
 # The cost is real, so it is stated before the prompt rather than discovered afterwards. --force does
 # not stand in for the confirmation: it exists to skip a version comparison, not to authorise a wipe.
 reset_panel_config() {
-  local answer out package_path package_status
+  local answer out
   [ "$RESET_CONFIG" = 1 ] || return 0
-  # Android's raw diagnostic is suppressed so this function owns the actionable message; the exit
-  # status and positive `package:` evidence are both consumed and any uncertainty fails closed.
-  if package_path="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
-    package_status=0
-  else
-    package_status=$?
-  fi
-  [ "$package_status" -eq 0 ] || fail "could not re-check the installed app before reset" \
-    "Nothing was erased and no app or setting was changed." \
-    "Restore adb/package-manager responsiveness, then retry the reset."
-  if ! printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:'; then
-    echo "   ${D}--reset-config: ha-paneld is not installed here, so there is no configuration to erase.${X}"
-    RESET_CONFIG=0
-    return 0
-  fi
+  # Positive `package:` evidence decides presence and any uncertainty fails closed; a panel that
+  # answers "not installed" simply has nothing to erase, which is not an uncertainty.
+  classify_package_presence "$ADB_COMMAND_TIMEOUT_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    absent)
+      echo "   ${D}--reset-config: ha-paneld is not installed here, so there is no configuration to erase.${X}"
+      RESET_CONFIG=0
+      return 0
+      ;;
+    unknown)
+      fail "could not re-check the installed app before reset" \
+        "Nothing was erased and no app or setting was changed." \
+        "Restore adb/package-manager responsiveness, then retry the reset."
+      ;;
+  esac
   echo "${RED}${B}⚠ --reset-config will erase this panel's ha-paneld configuration.${X}"
   echo "   ${D}Erased: MQTT and Home Assistant settings, learned entity, proximity and ambient data, and the on-panel revision history.${X}"
   echo "   ${D}Kept:   the app itself, the root helper, and every other app on the panel.${X}"
@@ -4263,18 +4348,22 @@ reset_panel_config() {
     "Re-run and type RESET at the prompt, or set HAPANELD_RESET_CONFIRM=RESET for an unattended reset."
   # Confirmation may be held open indefinitely. Re-establish exact package presence immediately
   # before erasure; no backup identity or version-custody machinery belongs in a deliberate reset.
-  if package_path="$(run_with_deadline 10 "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null)"; then
-    package_status=0
-  else
-    package_status=$?
-  fi
-  [ "$package_status" -eq 0 ] || fail "could not re-check the installed app before reset" \
-    "Nothing was erased and no app or setting was changed." \
-    "Restore adb/package-manager responsiveness, then retry the reset."
-  printf '%s\n' "$package_path" | tr -d '\r' | grep -q '^package:' || \
-    fail "ha-paneld is no longer installed at the confirmed reset target" \
-      "Nothing was erased and no app or setting was changed." \
-      "Re-run reset and confirm the current package target."
+  # Both outcomes short of `present` stop the erasure, but they are reported apart: the user needs to
+  # know whether the target vanished or whether the panel simply stopped answering.
+  classify_package_presence "$RESET_RECHECK_PACKAGE_QUERY_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    present) ;;
+    absent)
+      fail "ha-paneld is no longer installed at the confirmed reset target" \
+        "Nothing was erased and no app or setting was changed." \
+        "Re-run reset and confirm the current package target."
+      ;;
+    *)
+      fail "could not re-check the installed app before reset" \
+        "Nothing was erased and no app or setting was changed." \
+        "Restore adb/package-manager responsiveness, then retry the reset."
+      ;;
+  esac
   step "🧨 resetting" "${D}erasing this panel's configuration${X}"
   if out="$(adb -s "$TARGET" shell pm clear "$PKG" 2>&1 | tr -d '\r')"; then
     package_status=0

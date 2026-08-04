@@ -15,6 +15,28 @@ adb_root_active() {
   [ "${MOCK_ADB_ROOT:-0}" = escalates ] && [ -f "$STATE_DIR/adb-root-escalated" ]
 }
 
+# Package presence and package-manager responsiveness are INDEPENDENT axes, because Android reports
+# them through one exit status and the provisioner has to tell them apart (#89). MOCK_PM_PATH models
+# the ha-paneld package; MOCK_PM_LIVENESS models the package manager itself, answering for framework
+# packages that exist on every build. A clean panel is MOCK_PM_PATH=fail with MOCK_PM_LIVENESS=ok:
+# the query "fails" precisely because the package is not installed.
+#   ok      resolves to a path            fail  answers nothing, exit 1
+#   absent  answers, names no path, exit 0  hang  never answers, so the caller's deadline expires
+pm_query_reply() {
+  local mode="$1" path="$2" pid_file="${3:-}"
+  case "$mode" in
+    ok) printf '%s\n' "$path"; exit 0 ;;
+    absent) exit 0 ;;
+    fail) exit 1 ;;
+    hang)
+      [ -z "$pid_file" ] || printf '%s\n' "$$" > "$pid_file"
+      trap 'exit 143' TERM INT
+      while :; do /bin/sleep 1; done
+      ;;
+    *) printf 'mock adb: unknown pm query mode %s\n' "$mode" >&2; exit 64 ;;
+  esac
+}
+
 mark_hapaneld_stopped() {
   local apk_path="$1"
   if [ "${MOCK_STOPPED_STATE:-0}" = 1 ] && [[ "$apk_path" != */shizuku.apk ]]; then
@@ -486,8 +508,21 @@ case "${1:-}" in
         ;;
       "pm path io.github.maxlyth.hapaneld")
         if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
-        [ "${MOCK_PM_PATH:-ok}" = ok ] || exit 1
-        [ -f "$STATE_DIR/installed-apk" ] && printf 'package:/data/app/io.github.maxlyth.hapaneld/base.apk\n'
+        if [ "${MOCK_PM_PATH:-ok}" = ok ] && [ ! -f "$STATE_DIR/installed-apk" ]; then
+          exit 1
+        fi
+        pm_query_reply "${MOCK_PM_PATH:-ok}" \
+          'package:/data/app/io.github.maxlyth.hapaneld/base.apk' "${MOCK_PM_PATH_PID_FILE:-}"
+        ;;
+      # Framework packages exist on every Android build, so resolving one proves the package manager
+      # is answering whatever the ha-paneld query returned.
+      "pm path android")
+        pm_query_reply "${MOCK_PM_LIVENESS:-ok}" \
+          'package:/system/framework/framework-res.apk' "${MOCK_PM_LIVENESS_PID_FILE:-}"
+        ;;
+      "pm path com.android.shell")
+        pm_query_reply "${MOCK_PM_LIVENESS:-ok}" \
+          'package:/system/priv-app/Shell/Shell.apk' "${MOCK_PM_LIVENESS_PID_FILE:-}"
         ;;
       "test -x /data/app/moe.shizuku.privileged.api/lib/arm64/libshizuku.so")
         [ "${MOCK_SHIZUKU_START_SCRIPT:-ok}" = "ok" ]
