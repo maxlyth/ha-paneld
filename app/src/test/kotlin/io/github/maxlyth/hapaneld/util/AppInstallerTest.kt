@@ -137,11 +137,26 @@ class AppInstallerTest {
     @Test fun downloadRefusesToStartWhenItsOwnerAlreadyCancelled() {
         val destination = File.createTempFile("download-cancelled-", ".apk").also { it.deleteOnExit() }
         val abort = DownloadAbort().apply { abort() }
+        var requested = false
+        var disconnected = false
+        val connection = object : java.net.HttpURLConnection(java.net.URL("https://cdn.example/app.apk")) {
+            override fun connect() = Unit
+            override fun usingProxy() = false
+            override fun disconnect() { disconnected = true }
+            override fun getResponseCode(): Int {
+                requested = true
+                return 200
+            }
+        }
 
         assertEquals(
             AppInstaller.DownloadResult.Aborted,
-            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort),
+            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort) { connection },
         )
+        // The outcome alone cannot prove this: a failed request would also be reported as aborted once
+        // the owner has cancelled. What must hold is that no request was ever issued.
+        assertFalse("a cancelled download must not issue a request at all", requested)
+        assertTrue("the connection opened before the abort was seen must be closed", disconnected)
         assertEquals(0L, destination.length())
     }
 

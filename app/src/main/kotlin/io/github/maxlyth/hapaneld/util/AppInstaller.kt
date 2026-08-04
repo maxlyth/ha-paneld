@@ -349,6 +349,7 @@ object AppInstaller {
         dest: File,
         maxBytes: Long,
         abort: DownloadAbort? = null,
+        openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
     ): DownloadResult {
         val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
         // Held as a non-null local: `current` is reassigned from inside the redirect loop, so a nullable
@@ -363,7 +364,7 @@ object AppInstaller {
             repeat(5) {
                 val remainingMs = deadline.remainingMs()
                 if (remainingMs <= 0L) return DownloadResult.TimedOut
-                val conn = current.openConnection() as HttpURLConnection
+                val conn = openConnection(current)
                 conn.instanceFollowRedirects = false
                 conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
                 conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
