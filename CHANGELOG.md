@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.7-rc1 - Unreleased
+
+### Fixed
+
+- **Panels recover promptly after a transient SQLite busy failure.** Storage-health verification now retries after bounded 5, 15 and 30 second delays, coalesces overlapping recovery requests, and clears the warning only after a later clean integrity check and durable write prove recovery.
+
 ## v0.9.6-rc5 - 2026-08-02
 
 ### Important changes — please read before upgrading
