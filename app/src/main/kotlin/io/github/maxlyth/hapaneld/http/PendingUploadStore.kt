@@ -12,7 +12,8 @@ internal class PendingUploadStore(
     private val newToken: () -> String = { UUID.randomUUID().toString() },
 ) {
     sealed interface BeginResult {
-        data class Granted(val lease: Lease) : BeginResult
+        /** [abort] is present only for panel-side work, and exists from the instant the slot is taken. */
+        data class Granted(val lease: Lease, val abort: DownloadAbort? = null) : BeginResult
         data object Busy : BeginResult
         data object Closed : BeginResult
     }
@@ -69,9 +70,14 @@ internal class PendingUploadStore(
      *
      * What is NOT superseded is a request body still arriving from a client: the panel cannot retract
      * someone else's upload stream, so that remains [BeginResult.Busy].
+     *
+     * A non-null [owner] declares panel-side work and registers its identity **and** its abort handle
+     * in the same synchronized step that takes the slot. Registering them afterwards left an interval
+     * in which a cancel found no owner, answered "nothing cancelled", and let the fetch go on to
+     * complete and publish a token.
      */
     @Synchronized
-    fun begin(panelWork: Boolean = false): BeginResult {
+    fun begin(owner: String? = null): BeginResult {
         expireActive()
         if (!open) return BeginResult.Closed
         if (receiving != null) {
@@ -84,21 +90,12 @@ internal class PendingUploadStore(
             active = null
             it.file.delete()
         }
-        receivingIsPanelWork = panelWork
+        receivingIsPanelWork = owner != null
         receivingCancelled = false
-        return BeginResult.Granted(Lease(epoch, ++nextLeaseId).also { receiving = it })
-    }
-
-    /** Bind panel-side work to the reservation that started it, so ending the reservation ends the work. */
-    @Synchronized
-    fun attachPanelWork(lease: Lease, owner: String, abort: DownloadAbort) {
-        if (!receiving.matches(lease)) {
-            // The reservation moved on while this request was being admitted; never start work for it.
-            abort.abort()
-            return
-        }
-        receivingAbort = abort
         receivingOwner = owner
+        receivingAbort = owner?.let { DownloadAbort() }
+        val lease = Lease(epoch, ++nextLeaseId).also { receiving = it }
+        return BeginResult.Granted(lease, receivingAbort)
     }
 
     /** Stop the in-flight fetch only when [owner] is the request that started it. */

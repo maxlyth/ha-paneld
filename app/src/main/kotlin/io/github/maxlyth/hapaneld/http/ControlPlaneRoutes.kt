@@ -423,13 +423,13 @@ private suspend fun stageInspectAndRespond(
 private suspend fun beginApkStaging(
     call: ApplicationCall,
     dependencies: ApkUploadRouteDependencies,
-    owner: String = "",
-    panelWork: Boolean = false,
-): PendingUploadStore.Lease? = when (val admission = dependencies.pending.begin(panelWork)) {
-    is PendingUploadStore.BeginResult.Granted -> admission.lease
+    echo: String = "",
+    owner: String? = null,
+): PendingUploadStore.BeginResult.Granted? = when (val admission = dependencies.pending.begin(owner)) {
+    is PendingUploadStore.BeginResult.Granted -> admission
     PendingUploadStore.BeginResult.Busy -> {
         call.respondText(
-            """{"ok":false,"error":"upload-busy"$owner}""",
+            """{"ok":false,"error":"upload-busy"$echo}""",
             ContentType.Application.Json,
             HttpStatusCode.Conflict,
         )
@@ -437,7 +437,7 @@ private suspend fun beginApkStaging(
     }
     PendingUploadStore.BeginResult.Closed -> {
         call.respondText(
-            """{"ok":false,"error":"stopping"$owner}""",
+            """{"ok":false,"error":"stopping"$echo}""",
             ContentType.Application.Json,
             HttpStatusCode.ServiceUnavailable,
         )
@@ -521,9 +521,9 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
     val echo = requestEcho(request)
     // Reserving supersedes any panel-side work the operator has just replaced, so the previous fetch
     // is stopped and its staged token retired rather than stranding this request behind them.
-    val lease = beginApkStaging(call, dependencies, echo, panelWork = true) ?: return
-    val abort = DownloadAbort()
-    dependencies.pending.attachPanelWork(lease, request, abort)
+    val admitted = beginApkStaging(call, dependencies, echo, owner = request) ?: return
+    val lease = admitted.lease
+    val abort = admitted.abort ?: DownloadAbort()
     stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
         when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort) }) {
             AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
@@ -596,7 +596,7 @@ private suspend fun handleApkUpload(call: ApplicationCall, dependencies: ApkUplo
         )
         return
     }
-    val lease = beginApkStaging(call, dependencies) ?: return
+    val lease = (beginApkStaging(call, dependencies) ?: return).lease
     stageInspectAndRespond(call, dependencies, lease, declaredBytes) { staged, stagingLimit ->
         try {
             val received = withContext(Dispatchers.IO) {

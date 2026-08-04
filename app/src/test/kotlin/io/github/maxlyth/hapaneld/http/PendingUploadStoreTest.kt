@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -52,10 +53,8 @@ class PendingUploadStoreTest {
     @Test fun everyWayAReservationEndsAlsoStopsThePanelWorkBoundToIt() {
         fun freshStoreWithWork(): Pair<PendingUploadStore, io.github.maxlyth.hapaneld.util.DownloadAbort> {
             val store = PendingUploadStore { "token" }.apply { open() }
-            val lease = granted(store.begin(panelWork = true))
-            val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
-            store.attachPanelWork(lease, "req", abort)
-            return store to abort
+            val admitted = store.begin("req") as PendingUploadStore.BeginResult.Granted
+            return store to admitted.abort!!
         }
 
         val (disabled, disabledWork) = freshStoreWithWork()
@@ -84,8 +83,7 @@ class PendingUploadStoreTest {
      *  any timing, once the operator has said stop. */
     @Test fun aCancelledReservationCannotStageEvenIfItsBytesAlreadyArrived() {
         val store = PendingUploadStore { "token" }.apply { open() }
-        val lease = granted(store.begin(panelWork = true))
-        store.attachPanelWork(lease, "mine", io.github.maxlyth.hapaneld.util.DownloadAbort())
+        val lease = granted(store.begin("mine"))
 
         assertTrue(store.cancelPanelWork("mine"))
         assertTrue("the refusal must be attributable to the cancel", store.isCancelled(lease))
@@ -98,9 +96,8 @@ class PendingUploadStoreTest {
     /** A cancel may only stop the request that started the work, never a replacement. */
     @Test fun panelWorkIsCancellableOnlyByTheRequestThatOwnsIt() {
         val store = PendingUploadStore { "token" }.apply { open() }
-        val lease = granted(store.begin(panelWork = true))
-        val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
-        store.attachPanelWork(lease, "mine", abort)
+        val admitted = store.begin("mine") as PendingUploadStore.BeginResult.Granted
+        val abort = admitted.abort!!
 
         assertFalse("a foreign request must not cancel", store.cancelPanelWork("someone-else"))
         assertFalse(abort.isAborted)
@@ -108,17 +105,21 @@ class PendingUploadStoreTest {
         assertTrue(abort.isAborted)
     }
 
-    /** Work admitted against a reservation that has already moved on must never start. */
-    @Test fun panelWorkAttachedToASupersededReservationIsStoppedImmediately() {
+    /** The race the third review found: the owner used to be recorded AFTER the slot was taken, so a
+     *  cancel arriving in between found nobody, reported that it had cancelled nothing, and the fetch
+     *  went on to complete and publish a token. There is deliberately no attachment step to race with
+     *  now — the very first thing a caller can do after reserving is cancel, and it must stick. */
+    @Test fun aCancelImmediatelyAfterReservationIsHonouredWithNoAttachmentStepToRace() {
         val store = PendingUploadStore { "token" }.apply { open() }
-        val stale = granted(store.begin(panelWork = true))
-        store.begin()
-        val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
+        val admitted = store.begin("mine") as PendingUploadStore.BeginResult.Granted
 
-        store.attachPanelWork(stale, "stale", abort)
+        assertNotNull("panel-side work must own an abort from the instant it is admitted", admitted.abort)
+        assertTrue("a cancel with no intervening step must be recognised", store.cancelPanelWork("mine"))
+        assertTrue("and must actually stop the transfer", admitted.abort!!.isAborted)
 
-        assertTrue("work for a superseded reservation must not run", abort.isAborted)
-        assertFalse("and it must not become cancellable under that owner", store.cancelPanelWork("stale"))
+        val completed = file("raced.apk")
+        assertNull("nothing may be staged for a reservation cancelled this early", store.stage(admitted.lease, completed))
+        assertFalse(completed.exists())
     }
 
     @Test fun beginRefusesAnArrivingBodyButSupersedesTheOperatorsPreviousStagedIntent() {
