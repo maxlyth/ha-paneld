@@ -51,6 +51,27 @@ adb -s $IP:5555 shell 'pm disable-user --user 0 com.elclcd.otaupdater'   # WF158
 
 Restoring *writes* to the panel, so unlike backup it needs a **USB cable to a computer** and the `rkdeveloptool` program. Bring a laptop to the panel; you may have to unmount the panel to reach the USB port. One-time setup is in [Setting up rkdeveloptool](#setting-up-rkdeveloptool). The supported action depends on whether Android still boots:
 
+```mermaid
+flowchart TD
+    START["Panel needs restoring"] --> MODEL{"Which panel?"}
+    MODEL -- "NSPanel Pro 86P / 120P" --> SEAKY["Use seaky's model-specific tooling.<br/>rkdeveloptool is NOT the route here."]
+    MODEL -- "TPA10 / WF1589T" --> BACKUP{"Do you have a verified backup?<br/>Sizes compared against<br/>blockdev --getsize64"}
+    BACKUP -- "no" --> STOPB["STOP — take a backup first.<br/>Backup is read-only and needs<br/>only the network."]
+    BACKUP -- "yes" --> BOOTS{"Does Android still boot?"}
+
+    BOOTS -- "yes" --> LOADER["Supported path<br/>adb reboot loader — software entry, no buttons"]
+    LOADER --> LD["rkdeveloptool ld — expect Loader"]
+    LD --> WLX["rkdeveloptool wlx PARTITION file.img<br/>restore by NAME, never raw sector"]
+    WLX --> RD["rkdeveloptool rd — reboot"]
+
+    BOOTS -- "no" --> MASK["Maskrom will still enumerate<br/>the device"]
+    MASK --> MINI{"Do you have a verified,<br/>model- and memory-specific<br/>MiniLoader?"}
+    MINI -- "no — the current state<br/>for every panel here" --> HALT["FULL STOP — observation only.<br/>Run ld to confirm the mode.<br/>Do NOT run db, wl, wlx, gpt, ul or ef."]
+    MINI -- "yes, and proved on a spare" --> UNDOC["Out of scope — this guide does not<br/>yet document a write path from Maskrom"]
+
+    IDB["idb_head.img from backup"] -. "is NOT a MiniLoader —<br/>never rename it loader.bin<br/>or pass it to db" .-> HALT
+```
+
 **The panel still boots** — switch it to flashing mode over the network, write the partition back:
 
 ```bash
@@ -151,6 +172,29 @@ The TPA10 and WF1589T covered by the generic procedure are [Rockchip](https://en
 - **Not fastboot.** Rockchip uses its own USB protocol, *rockusb*, with two [flashing modes](https://wiki.radxa.com/Rock5/install/rockchip-flash-tools):
     - **Loader** — entered in software with `adb reboot loader` (no buttons). Normal restores use this.
     - **Maskrom** — a rescue mode baked into the chip's ROM that runs even with a wiped bootloader. It starts with no RAM set up, so a valid model-specific MiniLoader is required before partition access. The raw eMMC head is not that loader, and this guide does not yet provide a write procedure from Maskrom.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    Android: Android running
+    Android: backup works here — network only, read-only, no mode change
+    Loader: Loader mode
+    Loader: rkdeveloptool reports Loader — wlx restore by partition name
+    Maskrom: Maskrom mode
+    Maskrom: in-ROM rescue, survives a wiped bootloader, no RAM set up yet
+    Unsupported: Not documented here
+    Unsupported: every write from Maskrom needs a verified<br/>model-specific MiniLoader, which has not been sourced
+
+    [*] --> Android
+    Android --> Loader: adb reboot loader<br/>software entry, over the network
+    Loader --> Loader: wlx — restore one named partition
+    Loader --> Android: rkdeveloptool rd
+    Android --> Maskrom: hardware entry<br/>TPA10 pin-hole is only a candidate<br/>and the WF1589T test-point is not located
+    Maskrom --> Maskrom: ld only — reports the mode, writes nothing
+    Maskrom --> Unsupported: db, wl, wlx, gpt, ul, ef
+```
+
+The practical consequence is that **Loader is the only mode this guide can restore from**, and it is reachable only while Android still boots — which is precisely when you least feel you need it. That asymmetry is the argument for taking a backup now: the software path out of a working panel exists, while the rescue path out of a dead one is still missing its loader file.
 
 ### Per-panel notes
 
