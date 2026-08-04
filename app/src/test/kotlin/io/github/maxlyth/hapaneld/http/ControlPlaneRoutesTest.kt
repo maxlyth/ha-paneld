@@ -406,8 +406,11 @@ class ControlPlaneRoutesTest {
         var usableSpace = Long.MAX_VALUE
         var installed: PendingUploadStore.Entry? = null
         var fileId = 0
+        var approved = true
+        val approvalAsked = mutableListOf<Pair<SensitiveOperation, String>>()
         val stagedFiles = mutableListOf<java.io.File>()
         val fetched = mutableListOf<Pair<String, Long>>()
+        val owner = ApkFetchOwner()
         val pending = PendingUploadStore { "fetch-token" }
         val upload = ApkUploadRouteDependencies(
             enabled = { enabled },
@@ -424,13 +427,33 @@ class ControlPlaneRoutesTest {
             },
             maxBytes = 4,
             usableSpace = { usableSpace },
-            fetch = { url, dest, maxBytes ->
+            fetch = { url, dest, maxBytes, abort ->
                 fetched += url to maxBytes
                 if (result == AppInstaller.DownloadResult.Succeeded) dest.writeBytes("good".toByteArray())
                 result
             },
+            fetchOwner = owner,
         )
-        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+        application {
+            routing {
+                controlPlaneRoutes(
+                    dependencies(
+                        apkUpload = upload,
+                        authorize = { call, operation, _, summary ->
+                            approvalAsked += operation to summary
+                            if (approved) true else {
+                                call.respondText(
+                                    """{"ok":false,"error":"approval-required"}""",
+                                    ContentType.Application.Json,
+                                    HttpStatusCode.Accepted,
+                                )
+                                false
+                            }
+                        },
+                    ),
+                )
+            }
+        }
         val url = "https://example.test/app.apk"
 
         assertFetch(url, HttpStatusCode.Forbidden, """{"ok":false,"error":"disabled"}""")
@@ -446,15 +469,29 @@ class ControlPlaneRoutesTest {
         assertFetch("example.test/app.apk", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-url"}""")
         assertFetch("", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-url"}""")
 
-        assertFetch(url, HttpStatusCode.ServiceUnavailable, """{"ok":false,"error":"stopping"}""")
+        // A malformed owner identifier is refused as input, never silently replaced with an unowned fetch.
+        assertFetch(url, HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-request"}""", request = "")
+        assertFetch(url, HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-request"}""", request = "bad id!")
+
+        // THE gate this whole revision exists for: authority is settled BEFORE the panel is aimed at
+        // anything. An unapproved caller must not be able to make the panel emit even one request.
+        approved = false
+        assertFetch(url, HttpStatusCode.Accepted, """{"ok":false,"error":"approval-required"}""")
+        assertEquals(0, fetched.size)
+        // The approver is told which host the panel would be aimed at, under its own operation.
+        assertEquals(SensitiveOperation.APK_FETCH, approvalAsked.last().first)
+        assertEquals("Download an APK from example.test", approvalAsked.last().second)
+        approved = true
+
+        assertFetch(url, HttpStatusCode.ServiceUnavailable, """{"ok":false,"error":"stopping"$OWNER}""")
 
         pending.open()
         stagingFails = true
-        assertFetch(url, HttpStatusCode.InternalServerError, """{"ok":false,"error":"upload-staging-failed"}""")
+        assertFetch(url, HttpStatusCode.InternalServerError, """{"ok":false,"error":"upload-staging-failed"$OWNER}""")
         stagingFails = false
 
         usableSpace = 0L
-        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
+        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
         // Nothing above this line may have reached the network: capability, URL shape, lifetime and
@@ -464,28 +501,28 @@ class ControlPlaneRoutesTest {
         // A ceiling imposed by the panel's own free space reports as storage, not as an oversized file.
         usableSpace = 2L
         result = AppInstaller.DownloadResult.TooLarge
-        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
+        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"$OWNER}""")
         assertEquals(1, fetched.size)
         assertEquals(url to 2L, fetched.last())
         assertFalse(stagedFiles.last().exists())
 
         usableSpace = Long.MAX_VALUE
-        assertFetch(url, HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"fetch-too-large"}""")
+        assertFetch(url, HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"fetch-too-large"$OWNER}""")
         assertEquals(url to 4L, fetched.last())
         assertFalse(stagedFiles.last().exists())
 
         result = AppInstaller.DownloadResult.TimedOut
-        assertFetch(url, HttpStatusCode.RequestTimeout, """{"ok":false,"error":"fetch-timeout"}""")
+        assertFetch(url, HttpStatusCode.RequestTimeout, """{"ok":false,"error":"fetch-timeout"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
         result = AppInstaller.DownloadResult.Failed
-        assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"}""")
+        assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
         // Bytes that arrive but are not an APK are refused after inspection, and still leave nothing.
         result = AppInstaller.DownloadResult.Succeeded
         identity = null
-        assertFetch(url, HttpStatusCode.BadRequest, """{"ok":false,"error":"not-an-apk"}""")
+        assertFetch(url, HttpStatusCode.BadRequest, """{"ok":false,"error":"not-an-apk"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
         // Every failure above released its lease: this fetch is admitted rather than answered busy.
@@ -493,12 +530,12 @@ class ControlPlaneRoutesTest {
         assertFetch(
             url,
             HttpStatusCode.OK,
-            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
         )
 
         // One staged APK at a time, whichever source produced it — a second fetch and an upload both
         // contend for the same slot, so a replacement cannot appear behind an already-issued token.
-        assertFetch(url, HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
+        assertFetch(url, HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"$OWNER}""")
         assertUpload("next", HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
         assertCommit("wrong-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
 
@@ -509,6 +546,118 @@ class ControlPlaneRoutesTest {
         assertArrayEquals("good".toByteArray(), installed!!.file.readBytes())
         installed!!.file.delete()
         assertFalse(InstallProgress.running)
+    }
+
+    /** Cancel must stop the operator's own download and nothing else. A cancel that stopped "whatever
+     *  is running" would abort the replacement of a fetch the operator had already given up on — which
+     *  is precisely the moment they are most likely to press it. */
+    @Test
+    fun apkFetchCancellationStopsOnlyTheRequestThatOwnsItAndFreesTheSlot() = testApplication {
+        var cancelDuring: String? = null
+        var cancelReported: Boolean? = null
+        var fileId = 0
+        val stagedFiles = mutableListOf<java.io.File>()
+        val owner = ApkFetchOwner()
+        val pending = PendingUploadStore { "fetch-token" }.apply { open() }
+        val upload = ApkUploadRouteDependencies(
+            enabled = { true },
+            rootAvailable = { true },
+            pending = pending,
+            createStagingFile = { temporary.newFile("cancel-${++fileId}.apk").also { stagedFiles += it } },
+            inspect = { UploadedApkIdentity("example.panel", "1.2.3", null) },
+            startInstall = { _, ticket -> InstallProgress.finish(ticket, "done") },
+            maxBytes = 16,
+            usableSpace = { Long.MAX_VALUE },
+            fetch = { _, dest, _, abort ->
+                // A cancel arriving mid-transfer, driven deterministically instead of with threads.
+                cancelDuring?.let { cancelReported = owner.cancel(it) }
+                if (abort.isAborted) {
+                    AppInstaller.DownloadResult.Aborted
+                } else {
+                    dest.writeBytes("good".toByteArray())
+                    AppInstaller.DownloadResult.Succeeded
+                }
+            },
+            fetchOwner = owner,
+        )
+        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+        val url = "https://example.test/app.apk"
+
+        // A cancel naming somebody else's request stops nothing, and the download completes normally.
+        cancelDuring = "someone-elses-request"
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
+        )
+        assertEquals(false, cancelReported)
+        assertCommit("fetch-token", HttpStatusCode.OK, """{"status":"started"}""")
+        assertFalse(InstallProgress.running)
+
+        // The owning request stops its own download, and says so rather than blaming the link.
+        cancelDuring = FETCH_REQUEST
+        assertFetch(url, HttpStatusCode(499, "Client Closed Request"), """{"ok":false,"error":"cancelled"$OWNER}""")
+        assertEquals(true, cancelReported)
+        assertFalse("a cancelled download must leave nothing staged", stagedFiles.last().exists())
+
+        // Cancelling released the slot immediately: the next fetch is admitted, not answered busy.
+        cancelDuring = null
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
+        )
+        pending.clear()
+    }
+
+    @Test fun apkFetchCancelRouteRefusesMalformedOwnersAndReportsWhenNothingWasStopped() = testApplication {
+        val upload = ApkUploadRouteDependencies(
+            enabled = { true },
+            rootAvailable = { true },
+            pending = PendingUploadStore().apply { open() },
+            createStagingFile = { error("unused") },
+            inspect = { error("unused") },
+            startInstall = { _, _ -> error("unused") },
+        )
+        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+
+        assertCancel("", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-request"}""")
+        assertCancel("has space", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-request"}""")
+        // Honest about doing nothing, rather than reporting a success it did not perform.
+        assertCancel("nothing-in-flight", HttpStatusCode.OK, """{"ok":true,"cancelled":false}""")
+    }
+
+    /** The abort must win a race it cannot see: an operator can press Cancel while the panel is still
+     *  connecting, before there is any connection to close. */
+    @Test fun downloadAbortRefusesAConnectionAttachedAfterTheOperatorCancelled() {
+        val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
+        assertFalse(abort.isAborted)
+        abort.abort()
+        assertTrue(abort.isAborted)
+
+        var disconnected = false
+        val connection = object : java.net.HttpURLConnection(java.net.URL("https://example.test/app.apk")) {
+            override fun connect() = Unit
+            override fun usingProxy() = false
+            override fun disconnect() { disconnected = true }
+        }
+        assertFalse("a download must not start once its owner has cancelled", abort.attach(connection))
+        assertTrue("the late connection must be closed, not left open", disconnected)
+    }
+
+    @Test fun apkFetchRequestIdAdmissionAcceptsOnlyBoundedOpaqueIdentifiers() {
+        assertEquals("req-1", validApkFetchRequestId("  req-1  "))
+        assertEquals("A_b-9", validApkFetchRequestId("A_b-9"))
+        assertNull(validApkFetchRequestId(""))
+        assertNull(validApkFetchRequestId("   "))
+        assertNull(validApkFetchRequestId("has space"))
+        assertNull(validApkFetchRequestId("quote\"injection"))
+        assertNull(validApkFetchRequestId("newline\nin-it"))
+        assertNull(validApkFetchRequestId("a".repeat(APK_FETCH_REQUEST_ID_MAX_CHARS + 1)))
+        assertEquals(
+            "a".repeat(APK_FETCH_REQUEST_ID_MAX_CHARS),
+            validApkFetchRequestId("a".repeat(APK_FETCH_REQUEST_ID_MAX_CHARS)),
+        )
     }
 
     @Test fun apkFetchUrlAdmissionAcceptsOnlyExplicitBoundedHttpsLinks() {
@@ -694,10 +843,27 @@ class ControlPlaneRoutesTest {
         url: String,
         status: HttpStatusCode,
         responseBody: String,
+        request: String = FETCH_REQUEST,
     ) {
         val response = client.post("/api/v1/install/apk/from-url") {
             contentType(ContentType.Application.FormUrlEncoded)
-            setBody("url=" + java.net.URLEncoder.encode(url, "UTF-8"))
+            setBody(
+                "url=" + java.net.URLEncoder.encode(url, "UTF-8") +
+                    "&request=" + java.net.URLEncoder.encode(request, "UTF-8"),
+            )
+        }
+        assertEquals(status, response.status)
+        assertEquals(responseBody, response.bodyAsText())
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.assertCancel(
+        request: String,
+        status: HttpStatusCode,
+        responseBody: String,
+    ) {
+        val response = client.post("/api/v1/install/apk/fetch/cancel") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("request=" + java.net.URLEncoder.encode(request, "UTF-8"))
         }
         assertEquals(status, response.status)
         assertEquals(responseBody, response.bodyAsText())
@@ -725,5 +891,12 @@ class ControlPlaneRoutesTest {
     private fun assertNotNullTicket(ticket: InstallProgress.Ticket?): InstallProgress.Ticket {
         assertNotNull(ticket)
         return ticket!!
+    }
+
+    private companion object {
+        const val FETCH_REQUEST = "req-1"
+
+        /** Every answer to a request-owned fetch echoes its owner, so a client can drop a stale reply. */
+        const val OWNER = ",\"request\":\"$FETCH_REQUEST\""
     }
 }

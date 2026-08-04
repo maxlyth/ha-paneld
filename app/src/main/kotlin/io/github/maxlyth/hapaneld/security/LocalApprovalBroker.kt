@@ -6,6 +6,7 @@ import java.security.SecureRandom
 
 internal enum class SensitiveOperation(val label: String) {
     APK_INSTALL("Install uploaded APK"),
+    APK_FETCH("Download an APK from a link"),
     BACKUP_EXPORT("Export panel backup"),
     CONFIG_SECRET_EXPORT("Export settings with secrets"),
     CONFIG_IMPORT("Import panel settings"),

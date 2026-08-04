@@ -201,6 +201,12 @@
     fetch('/api/v1/install/apk/allow', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'on=' + (cb.checked ? '1' : '0') }).catch(function () {});
   };
 
+  // One counter across BOTH APK sources. Whichever the operator acted on last owns the preview, so a
+  // slower earlier response can never paint itself over a newer action and offer a token that does not
+  // belong to what the operator is looking at.
+  var apkPreviewGeneration = 0;
+  var apkFetchRequest = null;
+
   // Server refusal codes in the operator's words. An administrator doing this from a phone, away from
   // the panel, cannot inspect logs — the difference between "too big", "stalled" and "unreachable" is
   // the difference between knowing what to do next and guessing.
@@ -217,6 +223,8 @@
     'upload-timeout': 'the upload took too long',
     'fetch-timeout': 'the download stalled or took too long',
     'fetch-failed': 'the panel could not download that link',
+    'cancelled': 'the download was cancelled',
+    'invalid-request': 'the panel rejected this request identifier',
     'not-an-apk': 'that file is not a readable APK'
   };
   function apkErrorText(code) { return APK_ERRORS[code] || code || 'error'; }
@@ -242,52 +250,79 @@
     var f = input.files && input.files[0]; if (!f) return;
     var prev = document.getElementById('apk-preview');
     apkMsg('');
+    var mine = ++apkPreviewGeneration;
+    apkFetchRequest = null;
     if (prev) { prev.innerHTML = '<p class="note">Uploading + inspecting ' + esc(f.name) + '…</p>'; scheduleInstallColumnAlignment(); }
     fetch('/api/v1/install/apk', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f })
       .then(function (r) { return r.json(); }).then(function (d) {
+        if (mine !== apkPreviewGeneration) return;
         renderApkPreview(prev, d, 'Upload failed');
       }).catch(function () {
+        if (mine !== apkPreviewGeneration) return;
         if (prev) prev.innerHTML = '<p class="note">Upload failed.</p>';
         scheduleInstallColumnAlignment();
       });
   };
 
   // Have the panel fetch the APK itself. Same review, same token, same commit route as an upload —
-  // this only changes where the bytes come from. Cancel abandons the wait here; the panel discards
-  // whatever it staged, bounded by its own download deadline.
-  var apkFetchAbort = null;
+  // this only changes where the bytes come from.
+  //
+  // Cancel tells the PANEL to stop, rather than only abandoning the browser's wait. That distinction
+  // matters: a browser-side abort would leave the panel downloading and its staging slot held, so the
+  // next attempt would be refused as busy while the page claimed the download had been cancelled.
+  function newRequestId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+    return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
+
   window.apkFetchUrl = function () {
     var input = document.getElementById('apk-url');
     var url = input ? String(input.value || '').trim() : '';
     var prev = document.getElementById('apk-preview');
     if (!url) { apkMsg('Paste an https:// link to an APK first.'); return; }
     apkMsg('');
+    var request = newRequestId();
+    var mine = ++apkPreviewGeneration;
+    apkFetchRequest = request;
     if (prev) {
       prev.innerHTML = '<p class="note">Downloading + inspecting…</p>' +
         '<button class="pbtn" style="margin-top:8px" onclick="apkCancelFetch()">Cancel</button>';
       scheduleInstallColumnAlignment();
     }
-    apkFetchAbort = new AbortController();
     fetch('/api/v1/install/apk/from-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'url=' + encodeURIComponent(url),
-      signal: apkFetchAbort.signal
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      apkFetchAbort = null;
+      body: 'url=' + encodeURIComponent(url) + '&request=' + encodeURIComponent(request)
+    }).then(approvalAwareJson).then(function (d) {
+      if (mine !== apkPreviewGeneration) return;
+      apkFetchRequest = null;
+      if (!d.ok && d.error === 'cancelled') {
+        if (prev) { prev.innerHTML = '<p class="note">Download cancelled — the panel stopped it.</p>'; scheduleInstallColumnAlignment(); }
+        return;
+      }
       renderApkPreview(prev, d, 'Download failed');
     }).catch(function (error) {
-      apkFetchAbort = null;
+      if (mine !== apkPreviewGeneration) return;
+      apkFetchRequest = null;
       if (prev) {
-        prev.innerHTML = (error && error.name === 'AbortError')
-          ? '<p class="note">Download cancelled.</p>'
-          : '<p class="note">Download failed.</p>';
+        prev.innerHTML = '<p class="note">' + esc(requestFailure(error, 'Download failed.')) + '</p>';
         scheduleInstallColumnAlignment();
       }
     });
   };
 
-  window.apkCancelFetch = function () { if (apkFetchAbort) apkFetchAbort.abort(); };
+  // Names the request being stopped, so this can never cancel a download the operator has since
+  // started in its place.
+  window.apkCancelFetch = function () {
+    var request = apkFetchRequest;
+    if (!request) return;
+    apkMsg('Cancelling…');
+    fetch('/api/v1/install/apk/fetch/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'request=' + encodeURIComponent(request)
+    }).then(function () { apkMsg(''); }).catch(function () { apkMsg(''); });
+  };
 
   window.apkInstall = function (btn) {
     btn.disabled = true; apkMsg('Installing…');

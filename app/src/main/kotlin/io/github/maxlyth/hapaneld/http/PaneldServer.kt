@@ -3519,7 +3519,11 @@ $compRow
 <div id="apk-preview" style="margin-top:10px"></div>
 </div>"""
         }
-        return """<div class="card" data-layout-key="apk-install"><h2>Install an APK</h2>
+        // Both actions in this card are approval-gated in Hardened mode — fetching, because it aims the
+        // panel at a destination someone chose remotely, and installing — so the card title carries the
+        // shield rather than each control repeating it.
+        val title = if (root) hardenedApprovalCardTitle("Install an APK") else "<h2>Install an APK</h2>"
+        return """<div class="card" data-layout-key="apk-install">$title
 <p class="note">Sideload an app (e.g. a dashboard renderer) from a file on your device or an <code>https://</code> link the panel downloads itself — either way you'll see its package, version and signer before it installs.</p>
 $body
 <p class="note" id="apk-msg"></p></div>"""

@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
+import io.github.maxlyth.hapaneld.util.DownloadAbort
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
@@ -57,18 +58,38 @@ internal data class ApkUploadRouteDependencies(
     val receiveBody: (InputStream, OutputStream, Long) -> Long = { input, output, maxBytes ->
         DeadlineBoundedBody.copy(input, output, maxBytes, APK_UPLOAD_RECEIPT_DEADLINE_MS)
     },
-    val fetch: (String, File, Long) -> AppInstaller.DownloadResult = AppInstaller::download,
+    val fetch: (String, File, Long, DownloadAbort) -> AppInstaller.DownloadResult = { url, dest, maxBytes, abort ->
+        AppInstaller.download(url, dest, maxBytes, abort)
+    },
+    val fetchOwner: ApkFetchOwner = ApkFetchOwner(),
 )
+
+/**
+ * Accepts the client-minted identifier that owns one fetch, or null to refuse it.
+ *
+ * Bounded and restricted to characters that cannot disturb a log line or a form round-trip. The value
+ * carries no authority of its own: it decides only which in-flight download a cancel may stop.
+ */
+internal fun validApkFetchRequestId(raw: String): String? {
+    val trimmed = raw.trim()
+    if (trimmed.length !in 1..APK_FETCH_REQUEST_ID_MAX_CHARS) return null
+    if (!trimmed.all { it.isLetterOrDigit() || it == '-' || it == '_' }) return null
+    return trimmed
+}
 
 /**
  * Accepts an operator-supplied APK URL, or null to refuse it before any lease or network work happens.
  *
  * HTTPS-only, inherited unchanged from [AppInstaller.download] rather than widened, so there is one
  * scheme rule for every APK the panel fetches. The bound on length keeps an absurd string out of the
- * staging and logging paths. Note deliberately absent: there is **no** outbound host or address
- * allowlist. This surface is the LAN-trust control plane, where the same caller can already upload
- * arbitrary bytes for a privileged install, so fetching bytes is strictly weaker than what the panel
- * already accepts — and an allowlist would break the LAN-hosted mirror this feature exists to serve.
+ * staging and logging paths.
+ *
+ * This shape check is **not** the security control, and must not be mistaken for one. A fetch is not
+ * a weaker cousin of an upload: an upload requires the caller to already hold the bytes, while a fetch
+ * points a privileged device inside the network at a destination the caller names, across redirects.
+ * There is deliberately no outbound host or address allowlist, because one would break the LAN-hosted
+ * mirror this feature exists to serve and would still not survive a rebinding host. The control is
+ * that [SensitiveOperation.APK_FETCH] must be approved for the exact URL before any socket opens.
  */
 internal fun validApkFetchUrl(raw: String, maxChars: Int = APK_FETCH_URL_MAX_CHARS): String? {
     val trimmed = raw.trim()
@@ -237,7 +258,8 @@ internal fun Route.controlPlaneRoutes(dependencies: ControlPlaneRouteDependencie
         post("/play") { handlePlay(call, dependencies) }
         post("/install/component") { handleComponentInstall(call, dependencies) }
         post("/install/apk") { handleApkUpload(call, dependencies.apkUpload) }
-        post("/install/apk/from-url") { handleApkFetchFromUrl(call, dependencies.apkUpload) }
+        post("/install/apk/from-url") { handleApkFetchFromUrl(call, dependencies) }
+        post("/install/apk/fetch/cancel") { handleApkFetchCancel(call, dependencies.apkUpload) }
         post("/install/apk/commit") { handleApkCommit(call, dependencies) }
         post("/backup") { handleBackup(call, dependencies) }
     }
@@ -316,14 +338,18 @@ private suspend fun stageInspectAndRespond(
     dependencies: ApkUploadRouteDependencies,
     lease: PendingUploadStore.Lease,
     declaredBytes: Long?,
+    request: String? = null,
     writeBytes: suspend (File, Long) -> StagedBytes,
 ) {
+    // Echoed on every answer for a request-owned source, so a client can discard a reply belonging to
+    // an action it has already replaced instead of rendering it over the newer one.
+    val owner = request?.let(::requestEcho).orEmpty()
     var responseTransferred = false
     var stagedFile: File? = null
     try {
         val staged = runCatching { dependencies.createStagingFile() }.getOrElse {
             call.respondText(
-                """{"ok":false,"error":"upload-staging-failed"}""",
+                """{"ok":false,"error":"upload-staging-failed"$owner}""",
                 ContentType.Application.Json,
                 HttpStatusCode.InternalServerError,
             )
@@ -333,7 +359,7 @@ private suspend fun stageInspectAndRespond(
         val stagingLimit = uploadStagingLimit(dependencies.usableSpace(staged), dependencies.maxBytes)
         if (stagingLimit == 0L || (declaredBytes != null && declaredBytes > stagingLimit)) {
             call.respondText(
-                """{"ok":false,"error":"insufficient-storage"}""",
+                """{"ok":false,"error":"insufficient-storage"$owner}""",
                 ContentType.Application.Json,
                 HttpStatusCode.InsufficientStorage,
             )
@@ -342,7 +368,7 @@ private suspend fun stageInspectAndRespond(
         when (val written = writeBytes(staged, stagingLimit)) {
             is StagedBytes.Refused -> {
                 call.respondText(
-                    """{"ok":false,"error":${Json.str(written.error)}}""",
+                    """{"ok":false,"error":${Json.str(written.error)}$owner}""",
                     ContentType.Application.Json,
                     written.status,
                 )
@@ -353,7 +379,7 @@ private suspend fun stageInspectAndRespond(
         val identity = dependencies.inspect(staged)
         if (identity == null) {
             call.respondText(
-                """{"ok":false,"error":"not-an-apk"}""",
+                """{"ok":false,"error":"not-an-apk"$owner}""",
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
@@ -362,14 +388,14 @@ private suspend fun stageInspectAndRespond(
         val entry = dependencies.pending.stage(lease, staged, identity)
         if (entry == null) {
             call.respondText(
-                """{"ok":false,"error":"stopping"}""",
+                """{"ok":false,"error":"stopping"$owner}""",
                 ContentType.Application.Json,
                 HttpStatusCode.ServiceUnavailable,
             )
             return
         }
         call.respondText(
-            """{"ok":true,"token":${Json.str(entry.token)},"package":${Json.str(identity.pkg)},"version":${Json.str(identity.version)},"signer":${Json.str(identity.signerSha256 ?: "unsigned")}}""",
+            """{"ok":true,"token":${Json.str(entry.token)},"package":${Json.str(identity.pkg)},"version":${Json.str(identity.version)},"signer":${Json.str(identity.signerSha256 ?: "unsigned")}$owner}""",
             ContentType.Application.Json,
         )
         responseTransferred = true
@@ -381,15 +407,17 @@ private suspend fun stageInspectAndRespond(
     }
 }
 
-/** Reserves the single staging slot, or answers the caller and returns null when it is unavailable. */
+/** Reserves the single staging slot, or answers the caller and returns null when it is unavailable.
+ *  [owner] is the pre-rendered request echo, so a request-owned source answers uniformly here too. */
 private suspend fun beginApkStaging(
     call: ApplicationCall,
     dependencies: ApkUploadRouteDependencies,
+    owner: String = "",
 ): PendingUploadStore.Lease? = when (val admission = dependencies.pending.begin()) {
     is PendingUploadStore.BeginResult.Granted -> admission.lease
     PendingUploadStore.BeginResult.Busy -> {
         call.respondText(
-            """{"ok":false,"error":"upload-busy"}""",
+            """{"ok":false,"error":"upload-busy"$owner}""",
             ContentType.Application.Json,
             HttpStatusCode.Conflict,
         )
@@ -397,7 +425,7 @@ private suspend fun beginApkStaging(
     }
     PendingUploadStore.BeginResult.Closed -> {
         call.respondText(
-            """{"ok":false,"error":"stopping"}""",
+            """{"ok":false,"error":"stopping"$owner}""",
             ContentType.Application.Json,
             HttpStatusCode.ServiceUnavailable,
         )
@@ -405,17 +433,35 @@ private suspend fun beginApkStaging(
     }
 }
 
+/** The request echo appended to every answer for a request-owned source. */
+private fun requestEcho(request: String): String = ""","request":${Json.str(request)}"""
+
+/** Names the destination for the physical approval. The URL is attacker-supplied, so it goes through
+ *  the same control/format stripping and bounding as every other field shown on the panel. */
+internal fun apkFetchApprovalSummary(url: String): String {
+    val host = runCatching { URI(url).host }.getOrNull().orEmpty()
+    return "Download an APK from ${approvalDisplayField(host, APK_FETCH_HOST_CHARS)}"
+}
+
 /**
  * Fetches an operator-named APK so it can be reviewed exactly like an uploaded one.
  *
  * This is a *source* for the existing review flow, never an installer: it ends at the same staged file
- * and the same one-shot token, and installation still requires the unchanged commit route with its
- * physical-approval gate. Downloading bytes here grants no authority that committing them does not.
- * Reaching the network is bounded by [AppInstaller.download] — HTTPS-only hops, a redirect cap, a
- * whole-operation deadline, and a byte ceiling enforced on bytes actually read rather than on any
- * length the peer declares.
+ * and the same one-shot token, and installation still requires the unchanged commit route.
+ *
+ * **Authority is settled before the network is touched.** Making the panel originate a request is not
+ * weaker than accepting an upload, and treating it as such was wrong: an upload requires the caller to
+ * already hold the bytes, whereas a fetch aims a privileged device inside the network at a destination
+ * the caller chooses, following redirects. In Hardened mode that must sit inside the approval boundary,
+ * not outside it, so no socket opens until [SensitiveOperation.APK_FETCH] is approved for this exact
+ * URL. Once past that gate the transfer is bounded by [AppInstaller.download] — HTTPS-only hops, a
+ * redirect cap, a whole-operation deadline, and a byte ceiling enforced on bytes actually read.
+ *
+ * The download is owned by the client-minted request identifier, so a cancel stops this fetch and only
+ * this fetch, and releases the staging slot immediately rather than leaving it held until a timeout.
  */
-private suspend fun handleApkFetchFromUrl(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
+private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: ControlPlaneRouteDependencies) {
+    val dependencies = routes.apkUpload
     if (!dependencies.enabled()) {
         call.respondText(
             """{"ok":false,"error":"disabled"}""",
@@ -442,23 +488,73 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, dependencies: A
         )
         return
     }
-    val lease = beginApkStaging(call, dependencies) ?: return
-    stageInspectAndRespond(call, dependencies, lease, declaredBytes = null) { staged, stagingLimit ->
-        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit) }) {
-            AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
-            // A ceiling the panel's own free space imposed is reported as storage, not as the operator
-            // having named something too large, because those need different corrective action.
-            AppInstaller.DownloadResult.TooLarge -> if (stagingLimit < dependencies.maxBytes) {
-                StagedBytes.Refused(HttpStatusCode.InsufficientStorage, "insufficient-storage")
-            } else {
-                StagedBytes.Refused(HttpStatusCode.PayloadTooLarge, "fetch-too-large")
-            }
-            AppInstaller.DownloadResult.TimedOut ->
-                StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
-            AppInstaller.DownloadResult.Failed ->
-                StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
-        }
+    val request = validApkFetchRequestId(parameters["request"].orEmpty())
+    if (request == null) {
+        call.respondText(
+            """{"ok":false,"error":"invalid-request"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest,
+        )
+        return
     }
+    // Bound to the URL alone, not the whole body: the destination is what is being approved, and the
+    // request identifier carries no authority, so a retry after approval need not reuse it.
+    if (!routes.authorize(
+            call,
+            SensitiveOperation.APK_FETCH,
+            exactHttpApprovalPayload(call, sha256Hex(url.toByteArray(Charsets.UTF_8))),
+            apkFetchApprovalSummary(url),
+        )
+    ) return
+    val echo = requestEcho(request)
+    val abort = dependencies.fetchOwner.begin(request)
+    if (abort == null) {
+        call.respondText(
+            """{"ok":false,"error":"upload-busy"$echo}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Conflict,
+        )
+        return
+    }
+    try {
+        val lease = beginApkStaging(call, dependencies, echo) ?: return
+        stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
+            when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort) }) {
+                AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
+                // A ceiling the panel's own free space imposed is reported as storage, not as the operator
+                // having named something too large, because those need different corrective action.
+                AppInstaller.DownloadResult.TooLarge -> if (stagingLimit < dependencies.maxBytes) {
+                    StagedBytes.Refused(HttpStatusCode.InsufficientStorage, "insufficient-storage")
+                } else {
+                    StagedBytes.Refused(HttpStatusCode.PayloadTooLarge, "fetch-too-large")
+                }
+                AppInstaller.DownloadResult.TimedOut ->
+                    StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
+                AppInstaller.DownloadResult.Aborted ->
+                    StagedBytes.Refused(CLIENT_CLOSED_REQUEST, "cancelled")
+                AppInstaller.DownloadResult.Failed ->
+                    StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
+            }
+        }
+    } finally {
+        dependencies.fetchOwner.end(request)
+    }
+}
+
+/** Stops one in-flight fetch, and only for the request that started it. */
+private suspend fun handleApkFetchCancel(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
+    val parameters = receiveBoundedFormParameters(call) ?: return
+    val request = validApkFetchRequestId(parameters["request"].orEmpty())
+    if (request == null) {
+        call.respondText(
+            """{"ok":false,"error":"invalid-request"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest,
+        )
+        return
+    }
+    val cancelled = dependencies.fetchOwner.cancel(request)
+    call.respondText("""{"ok":true,"cancelled":$cancelled}""", ContentType.Application.Json)
 }
 
 /** Stages an arbitrary user-supplied APK on the unauthenticated LAN-trust surface, so the production source, origin, host, explicit-enable and root-capability gates must remain in force around this route. */
@@ -727,6 +823,11 @@ internal const val RESTORE_BODY_RECEIPT_DEADLINE_MS = 120_000L
 internal const val STANDARD_BODY_RECEIPT_DEADLINE_MS = 30_000L
 private const val APK_UPLOAD_RECEIPT_DEADLINE_MS = 600_000L
 internal const val APK_FETCH_URL_MAX_CHARS = 2048
+internal const val APK_FETCH_REQUEST_ID_MAX_CHARS = 64
+private const val APK_FETCH_HOST_CHARS = 64
+
+/** No standard status says "the operator stopped this"; 499 is the established convention for it. */
+private val CLIENT_CLOSED_REQUEST = HttpStatusCode(499, "Client Closed Request")
 private const val APK_APPROVAL_PACKAGE_CHARS = 64
 private const val APK_APPROVAL_SIGNER_CHARS = 64
 private const val APK_APPROVAL_VERSION_CHARS = 20

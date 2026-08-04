@@ -327,7 +327,7 @@ object AppInstaller {
      * review flow reports them separately, because an administrator fetching an APK from somewhere else
      * on the network needs to know whether the panel was refused, timed out, or hit the size ceiling.
      */
-    internal enum class DownloadResult { Succeeded, TooLarge, TimedOut, Failed }
+    internal enum class DownloadResult { Succeeded, TooLarge, TimedOut, Aborted, Failed }
 
     /**
      * Download [url] to [dest], following redirects (GitHub release → CDN).
@@ -344,7 +344,12 @@ object AppInstaller {
      * [DOWNLOAD_TOTAL_TIMEOUT_MS] deadline that a slow drip cannot outlast, and [maxBytes] enforced by
      * [copyBeforeDeadline] on bytes actually read — a lying or absent `Content-Length` cannot widen it.
      */
-    internal fun download(url: String, dest: File, maxBytes: Long): DownloadResult {
+    internal fun download(
+        url: String,
+        dest: File,
+        maxBytes: Long,
+        abort: DownloadAbort? = null,
+    ): DownloadResult {
         val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
         // Held as a non-null local: `current` is reassigned from inside the redirect loop, so a nullable
         // captured var would never smart-cast.
@@ -356,12 +361,16 @@ object AppInstaller {
         var current: URL = origin
         return try {
             repeat(5) {
+                if (abort?.isAborted == true) return DownloadResult.Aborted
                 val remainingMs = deadline.remainingMs()
                 if (remainingMs <= 0L) return DownloadResult.TimedOut
                 val conn = current.openConnection() as HttpURLConnection
                 conn.instanceFollowRedirects = false
                 conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
                 conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
+                // Registering before the first read is what makes a cancel effective: the copy loop is
+                // synchronous, so only closing the connection can free a thread already blocked in read().
+                if (abort != null && !abort.attach(conn)) return DownloadResult.Aborted
                 try {
                     when (conn.responseCode) {
                         in 300..399 -> {
@@ -385,12 +394,15 @@ object AppInstaller {
                         else -> return DownloadResult.Failed
                     }
                 } finally {
+                    abort?.detach()
                     conn.disconnect()
                 }
             }
             DownloadResult.Failed
         } catch (error: Exception) {
-            downloadFailure(error)
+            // A closed connection surfaces as an ordinary IO failure; the owner's intent decides what it
+            // actually was, so a cancel is never reported to the operator as a broken link.
+            if (abort?.isAborted == true) DownloadResult.Aborted else downloadFailure(error)
         }
     }
 
