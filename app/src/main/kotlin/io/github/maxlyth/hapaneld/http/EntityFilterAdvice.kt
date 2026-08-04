@@ -45,7 +45,7 @@ object EntityFilterAdvice {
         /** The device profile's declared `soc` block: the strongest, and exact for a supported panel. */
         DECLARED_SOC,
 
-        /** Android API level and core count. Agrees with the declared tier on every fleet panel checked. */
+        /** Android API level and core count. Agrees with the declared tier on every tested panel. */
         PLATFORM_INFERRED,
 
         NONE,
@@ -73,7 +73,7 @@ object EntityFilterAdvice {
     data class Bands(val recommendAbove: Int, val struggleAbove: Int?)
 
     /**
-     * Bands per tier. MODEST's ceiling and CAPABLE's recommendation are the maintainer's calls; MIDDLING is
+     * Bands per tier. MODEST's ceiling and CAPABLE's recommendation are policy choices; MIDDLING is
      * interpolated between them; MODEST's ceiling is also the one the attended measurement supports, where a
      * 4× A35 panel at 3,769 entities ran the renderer at 94% p95 and answered touches ~60% slower.
      */
@@ -126,10 +126,10 @@ object EntityFilterAdvice {
 
     /**
      * Tier a panel with no declared SoC. Android API level tracks how old the silicon is and core count
-     * separates the small parts from the large ones; on every fleet panel read live these two agree with the
+     * separates the small parts from the large ones; on every tested panel these two agree with the
      * declared tier — API 27 / 4 cores modest, API 30 / 4 cores middling, API 34 / 8 cores capable.
      *
-     * RAM is deliberately almost unused. The slowest panel in the fleet has 1.9 GB, which is not a
+     * RAM is deliberately almost unused. The supported minimum remains well above this, so it is not a
      * memory-starved device, and when it drowned its memory rose 8.7% while renderer CPU went up fourteen
      * fold. So this bottleneck is CPU, and RAM may only ever *drop* a tier — a genuinely tiny device — never
      * raise one, because plentiful RAM in front of slow cores predicts nothing.
@@ -145,7 +145,7 @@ object EntityFilterAdvice {
         return if (starved) demote(base) else base
     }
 
-    private const val RAM_STARVED_BYTES = 1_100L * 1024 * 1024   // ~1 GB, below any fleet panel
+    private const val RAM_STARVED_BYTES = 1_100L * 1024 * 1024   // ~1 GB, below supported panels
 
     private fun demote(tier: Tier): Tier = when (tier) {
         Tier.CAPABLE -> Tier.MIDDLING

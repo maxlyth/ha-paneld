@@ -124,7 +124,7 @@ object CompanionDb {
     // ---- login borrow: reuse the Companion's sign-in for the built-in renderer ----
     // Same panel, same HA user; HA does not rotate refresh tokens on use, so both apps refresh
     // independently off the same token and the Companion keeps working as a fallback (mechanism in
-    // production on the maintainer fleet since 2026-07-09; the DB columns are plain text).
+    // deployed installations; the DB columns are plain text).
 
     /** The client_id the Companion's refresh token was issued to — a refresh only works with it. */
     const val COMPANION_CLIENT_ID = "https://home-assistant.io/android"

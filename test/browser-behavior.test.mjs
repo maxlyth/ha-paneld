@@ -133,7 +133,7 @@ function autoSleepHydrationSchema() {
 
 function autoSleepHydrationSettings(source) {
   return {
-    panel_id: 'panel-office', friendly_name: 'Office panel', manufacturer: 'Panel maker', model: 'Panel model',
+    panel_id: 'panel-example', friendly_name: 'Example panel', manufacturer: 'Panel maker', model: 'Panel model',
     ha_area: 'Office', mqtt_broker: 'mqtt.example', mqtt_user: 'panel', mqtt_password: '',
     ha_url: 'https://ha.example', ha_token: '', home_dashboard: '',
     dashboard_package: 'builtin', dashboard_zoom: '100', auto_sleep: 'true', touch_sound: 'false',

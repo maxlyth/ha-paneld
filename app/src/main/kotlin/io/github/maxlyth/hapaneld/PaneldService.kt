@@ -114,6 +114,8 @@ import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
 import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
 import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
+import io.github.maxlyth.hapaneld.storage.StorageHealthObservationQueue
+import io.github.maxlyth.hapaneld.storage.StorageHealthRecoveryLifecycle
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
@@ -298,6 +300,16 @@ internal fun storageHealthObservationQuality(
 
 internal fun storageHealthObservationNeedsRetry(observation: StorageHealthObservation): Boolean =
     storageHealthObservationQuality(observation) == StorageHealthObservationQuality.INCOMPLETE
+
+internal sealed interface StorageHealthObservationAttempt {
+    data object Complete : StorageHealthObservationAttempt
+    data object Retry : StorageHealthObservationAttempt
+    data object Stopped : StorageHealthObservationAttempt
+}
+
+/** A stopped or complete observation must not spend another prompt-recovery attempt. */
+internal fun storageHealthRecoveryAttemptComplete(attempt: StorageHealthObservationAttempt): Boolean =
+    attempt != StorageHealthObservationAttempt.Retry
 
 internal enum class ServiceStartupDisposition {
     RUNNING,
@@ -717,7 +729,12 @@ class PaneldService : Service() {
     private lateinit var rendererPreparation: RendererPreparationCoordinator
     private lateinit var entityLearning: EntityLearningManager
     private var storageHealthSubscription: AutoCloseable? = null
-    private val storageHealthCancellation = AtomicReference<CancellationSignal?>()
+    private val storageHealthLifecycleLock = Any()
+    private var storageHealthRecoveryLifecycle: StorageHealthRecoveryLifecycle? = null
+    private val storageHealthObservationQueue = StorageHealthObservationQueue(
+        create = ::CancellationSignal,
+        cancel = CancellationSignal::cancel,
+    )
     private lateinit var companionDataOperationState: CompanionDataOperationState
     private val mqtt: MqttBridge get() = runtime.current().mqtt
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
@@ -1748,7 +1765,7 @@ class PaneldService : Service() {
             }
             val completed = mutation.replace(
                 retire = { previous ->
-                    // FIRST-CONFIGURATION FAST PATH (maintainer decision, 2026-07-27): a panel whose
+                    // FIRST-CONFIGURATION FAST PATH (behavioral contract): a panel whose
                     // applied runtime never had a broker AND whose probe never connected has published
                     // nothing, owns nothing and owes nobody an offline — every fence below protects
                     // state that provably does not exist, and paying full ceremony here is why a fresh
@@ -2989,6 +3006,29 @@ class PaneldService : Service() {
     }
 
     private fun startStorageHealthChecks() {
+        val recoveryLifecycle = StorageHealthRecoveryLifecycle(
+            scope = scope,
+            delaysMs = STORAGE_HEALTH_RECOVERY_DELAYS_MS,
+            subscribeFailures = StorageHealthRuntime::subscribeDatabaseFailures,
+            verify = {
+                storageHealthRecoveryAttemptComplete(runQueuedStorageHealthObservation())
+            },
+            onError = { error ->
+                Log.w(TAG, "storage health recovery failed (${error.javaClass.simpleName})")
+            },
+        )
+        val admitted = synchronized(storageHealthLifecycleLock) {
+            if (teardownBoundary.isStopping) {
+                false
+            } else {
+                storageHealthRecoveryLifecycle = recoveryLifecycle
+                true
+            }
+        }
+        if (!admitted) {
+            recoveryLifecycle.close()
+            return
+        }
         scope.periodic(
             intervalMs = STORAGE_HEALTH_CHECK_MS,
             initialDelayMs = 0L,
@@ -3001,52 +3041,60 @@ class PaneldService : Service() {
             repeat(STORAGE_HEALTH_CHECK_ATTEMPTS) { index ->
                 if (teardownBoundary.isStopping) return@periodic
                 val attempt = index + 1
-                val cancellationSignal = CancellationSignal()
-                if (!storageHealthCancellation.compareAndSet(null, cancellationSignal)) {
-                    Log.w(TAG, "storage health check skipped because a prior check is still active")
+                when (runQueuedStorageHealthObservation()) {
+                    StorageHealthObservationAttempt.Complete,
+                    StorageHealthObservationAttempt.Stopped -> return@periodic
+                    StorageHealthObservationAttempt.Retry -> Unit
+                }
+                if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) {
+                    Log.w(TAG, "storage health check remained incomplete after $attempt attempts")
                     return@periodic
                 }
-                try {
-                    // Capture immediately before the read. A database failure recorded while this
-                    // observation is in flight must remain newer truth when the result returns.
-                    val observationToken = StorageHealthRuntime.beginObservation()
-                    val observation = entityLearning.storageHealthObservation(cancellationSignal)
-                    if (teardownBoundary.isStopping || storageHealthCancellation.get() !== cancellationSignal) {
-                        return@periodic
-                    }
-                    val quality = storageHealthObservationQuality(observation)
-                    // A completed integrity failure is authoritative corruption evidence, not an
-                    // incomplete sample. Publish it once; retry only partial observations/exceptions.
-                    if (!storageHealthObservationNeedsRetry(observation)) {
-                        StorageHealthRuntime.refresh(observation, observationToken)
-                        return@periodic
-                    }
-                    // Partial evidence is still truthful: publish its unknown fields immediately so
-                    // every surface sees the completed probe, then make the bounded recovery attempt.
-                    StorageHealthRuntime.refresh(observation, observationToken)
-                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) {
-                        Log.w(TAG, "storage health check remained ${quality.name.lowercase(Locale.ROOT)} " +
-                            "after $attempt attempts")
-                        return@periodic
-                    }
-                    Log.w(TAG, "storage health check ${quality.name.lowercase(Locale.ROOT)}; " +
-                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (cancelled: OperationCanceledException) {
-                    if (teardownBoundary.isStopping) return@periodic
-                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) throw cancelled
-                    Log.w(TAG, "storage health check interrupted; " +
-                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
-                } catch (failure: Exception) {
-                    if (attempt == STORAGE_HEALTH_CHECK_ATTEMPTS) throw failure
-                    Log.w(TAG, "storage health check failed (${failure.javaClass.simpleName}); " +
-                        "retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
-                } finally {
-                    storageHealthCancellation.compareAndSet(cancellationSignal, null)
-                }
+                Log.w(TAG, "storage health check retrying ($attempt/$STORAGE_HEALTH_CHECK_ATTEMPTS)")
                 kotlinx.coroutines.delay(STORAGE_HEALTH_RETRY_MS)
             }
+        }
+    }
+
+    /** One bounded observation attempt shared by prompt recovery and the independent daily loop. */
+    private suspend fun runQueuedStorageHealthObservation(): StorageHealthObservationAttempt =
+        storageHealthObservationQueue.run(::runStorageHealthObservation)
+            ?: StorageHealthObservationAttempt.Stopped
+
+    private suspend fun runStorageHealthObservation(
+        cancellationSignal: CancellationSignal,
+    ): StorageHealthObservationAttempt {
+        if (teardownBoundary.isStopping) return StorageHealthObservationAttempt.Stopped
+        return try {
+            // Capture immediately before the read. A database failure recorded while this observation
+            // is in flight must remain newer truth when the result returns.
+            val observationToken = StorageHealthRuntime.beginObservation()
+            val observation = entityLearning.storageHealthObservation(cancellationSignal)
+            if (teardownBoundary.isStopping) {
+                StorageHealthObservationAttempt.Stopped
+            } else {
+                val quality = storageHealthObservationQuality(observation)
+                // Refresh never clears the failure latch. A completed clean observation only arms the
+                // next ordinary durable write; a completed integrity failure remains authoritative.
+                StorageHealthRuntime.refresh(observation, observationToken)
+                if (storageHealthObservationNeedsRetry(observation)) {
+                    Log.w(TAG, "storage health observation ${quality.name.lowercase(Locale.ROOT)}")
+                    StorageHealthObservationAttempt.Retry
+                } else {
+                    StorageHealthObservationAttempt.Complete
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: OperationCanceledException) {
+            if (teardownBoundary.isStopping) StorageHealthObservationAttempt.Stopped
+            else StorageHealthObservationAttempt.Retry
+        } catch (failure: Exception) {
+            if (!teardownBoundary.isStopping) {
+                Log.w(TAG, "storage health observation failed (${failure.javaClass.simpleName})")
+            }
+            if (teardownBoundary.isStopping) StorageHealthObservationAttempt.Stopped
+            else StorageHealthObservationAttempt.Retry
         }
     }
 
@@ -3195,7 +3243,11 @@ class PaneldService : Service() {
         upgradeShutdownClaim = UpgradeShutdownCoordinator.claimShutdown()
         storageHealthSubscription?.close()
         storageHealthSubscription = null
-        storageHealthCancellation.getAndSet(null)?.cancel()
+        val recoveryLifecycle = synchronized(storageHealthLifecycleLock) {
+            storageHealthRecoveryLifecycle.also { storageHealthRecoveryLifecycle = null }
+        }
+        recoveryLifecycle?.close()
+        storageHealthObservationQueue.close()
         lightMqttPublisher.close()
         adaptiveSiteGeneration.incrementAndGet()
         brightnessObserver?.let { observer ->
@@ -3781,6 +3833,7 @@ class PaneldService : Service() {
         private const val STORAGE_HEALTH_CHECK_MS = 24L * 3_600L * 1_000L
         private const val STORAGE_HEALTH_CHECK_ATTEMPTS = 3
         private const val STORAGE_HEALTH_RETRY_MS = 5_000L
+        private val STORAGE_HEALTH_RECOVERY_DELAYS_MS = longArrayOf(5_000L, 15_000L, 30_000L)
         // MQTT reconnect-watchdog poll interval; a stuck bridge self-heals after ~2 of these.
         private const val MQTT_WATCHDOG_MS = 60_000L
         // Fresh-client broker-progress lease. A previously-live process crosses its controlled boundary

@@ -195,7 +195,7 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun aPanelWithFilteringAlreadyOnIsNeverHeldToAnswerWhetherToTurnItOn() {
-        // Three fleet panels were found stranded on the hold screen while running a filtered dashboard: the
+        // Panels could be stranded on the hold screen while running a filtered dashboard: the
         // one-shot migration had recorded "not a pre-existing install" after the configuration read back blank
         // at startup, and nothing else exempted them. The filter being ON is durable proof the question is
         // moot — it defaults off — and it is evaluated at the moment of the check rather than trusted from a
@@ -216,7 +216,7 @@ class PanelHaSignInReachabilityTest {
     }
 
     @Test fun theUpgradeMigrationRetriesUntilItSeesEvidenceAndCountsAnEnabledFilter() {
-        // Marking itself done after a blank read is what stranded the fleet, so it must not record completion
+        // Marking itself done after a blank read is what stranded deployed panels, so it must not record completion
         // without evidence, and an already-enabled filter must count as evidence.
         val config = File("src/main/kotlin/io/github/maxlyth/hapaneld/Config.kt").readText()
         val m = config.substring(config.indexOf("fun migrateSetupQuestionsForExistingInstall()"))

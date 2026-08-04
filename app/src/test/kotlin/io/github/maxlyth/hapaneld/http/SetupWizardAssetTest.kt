@@ -111,7 +111,7 @@ class SetupWizardAssetTest {
         // by the dashboard path. The control is a NATIVE select, deliberately: two custom pickers were
         // tried on hardware — an open icon list (swamped the page, buried the Area field) and a portal
         // popup (escaped the card and viewport, stole wheel scrolling) — and the browser's own control
-        // beat both. Grouping survives as optgroups; icons did not, by the maintainer's call.
+        // beat both. Grouping survives as optgroups; icons did not, by design.
         assertTrue(js.contains("function homeDashboardCard()"))
         assertTrue(js.contains("Select the HA dashboard for this panel"))
         assertTrue(js.contains("fetch(\"/api/v1/config/home-dashboards\""))
@@ -143,7 +143,7 @@ class SetupWizardAssetTest {
     }
 
     @Test fun completedStepsAreRevisitableAndTheJourneyStillOwnsWhatComesNext() {
-        // No way back was a hardware-review finding: completed dots are links (URL-addressable,
+        // No way back was a hardware usability defect: completed dots are links (URL-addressable,
         // /setup#broker — the browser back button and manual deep-links work), the current and future
         // dots are NOT links (no skipping ahead), a revisit never re-arms state by itself, and a re-save
         // that moves the real journey clears the revisit so the user sees the consequence.

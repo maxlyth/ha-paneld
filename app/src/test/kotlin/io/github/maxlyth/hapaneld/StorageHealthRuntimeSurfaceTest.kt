@@ -39,6 +39,12 @@ class StorageHealthRuntimeSurfaceTest {
         }
     }
 
+    @Test fun promptRecoveryOnlyCompletesForFinishedOrStoppedObservations() {
+        assertTrue(storageHealthRecoveryAttemptComplete(StorageHealthObservationAttempt.Complete))
+        assertTrue(storageHealthRecoveryAttemptComplete(StorageHealthObservationAttempt.Stopped))
+        assertFalse(storageHealthRecoveryAttemptComplete(StorageHealthObservationAttempt.Retry))
+    }
+
     @Test fun notificationPolicyKeepsUncheckedCancelsNonCriticalAndShowsActionableFaults() {
         assertEquals(
             StorageHealthNotificationDecision.KeepExisting,
@@ -164,27 +170,66 @@ class StorageHealthRuntimeSurfaceTest {
         assertTrue(mqtt.contains("stateConverger.reconcile(\"storage_health\", force = true)"))
         assertTrue(service.contains("storageHealth = StorageHealthRuntime::snapshot"))
         assertTrue(service.contains("StorageHealthRuntime.subscribe(::onStorageHealthSnapshot)"))
+        assertTrue(service.contains("StorageHealthRuntime::subscribeDatabaseFailures"))
+        assertTrue(service.contains("StorageHealthRecoveryLifecycle("))
+        assertTrue(service.contains("delaysMs = STORAGE_HEALTH_RECOVERY_DELAYS_MS"))
+        assertTrue(service.contains("longArrayOf(5_000L, 15_000L, 30_000L)"))
+        val serviceStart = service.substring(
+            service.indexOf("override fun onStartCommand"),
+            service.indexOf("private fun startStorageHealthChecks"),
+        )
+        assertTrue(serviceStart.contains("startStorageHealthChecks()"))
+        val recoverySetup = service.substring(
+            service.indexOf("private fun startStorageHealthChecks"),
+            service.indexOf("/** One bounded observation attempt"),
+        )
+        assertEquals(2, Regex("runQueuedStorageHealthObservation\\(\\)").findAll(recoverySetup).count())
+        assertTrue(
+            recoverySetup.contains(
+                "storageHealthRecoveryAttemptComplete(runQueuedStorageHealthObservation())",
+            ),
+        )
         assertTrue(service.contains("intervalMs = STORAGE_HEALTH_CHECK_MS"))
         assertTrue(service.contains("initialDelayMs = 0L"))
         assertTrue(service.contains("repeat(STORAGE_HEALTH_CHECK_ATTEMPTS)"))
         assertTrue(service.contains("private const val STORAGE_HEALTH_CHECK_ATTEMPTS = 3"))
         assertTrue(service.contains("private const val STORAGE_HEALTH_RETRY_MS = 5_000L"))
         assertTrue(service.contains("kotlinx.coroutines.delay(STORAGE_HEALTH_RETRY_MS)"))
-        assertTrue(
-            service.indexOf("val observationToken = StorageHealthRuntime.beginObservation()") <
-                service.indexOf("entityLearning.storageHealthObservation(cancellationSignal)"),
-        )
+        val observationTokenAt = service.indexOf("val observationToken = StorageHealthRuntime.beginObservation()")
+        val observationReadAt = service.indexOf("entityLearning.storageHealthObservation(cancellationSignal)")
+        assertTrue(observationTokenAt >= 0)
+        assertTrue(observationReadAt >= 0)
+        assertTrue(observationTokenAt < observationReadAt)
         assertTrue(service.contains("StorageHealthRuntime.refresh(observation, observationToken)"))
         assertTrue(service.contains("storage health check failed (\${error.javaClass.simpleName})"))
         assertFalse(service.contains("Log.w(TAG, \"storage health check failed\", error)"))
         assertFalse(service.contains("failure.message"))
         assertFalse(service.contains("Log.w(TAG, \"storage health check failed\", failure)"))
         assertFalse(service.contains("nightly", ignoreCase = true))
-        assertTrue(service.indexOf("storageHealthSubscription?.close()") < service.indexOf("scope.cancel()"))
-        assertTrue(
-            service.indexOf("storageHealthCancellation.getAndSet(null)?.cancel()") <
-                service.indexOf("scope.cancel()"),
+        val storageSubscriptionCloseAt = service.indexOf("storageHealthSubscription?.close()")
+        val scopeCancelAt = service.indexOf("scope.cancel()")
+        assertTrue(storageSubscriptionCloseAt >= 0)
+        assertTrue(scopeCancelAt >= 0)
+        assertTrue(storageSubscriptionCloseAt < scopeCancelAt)
+        assertTrue(service.indexOf("recoveryLifecycle?.close()") < scopeCancelAt)
+        assertTrue(service.contains("synchronized(storageHealthLifecycleLock)"))
+        val recoveryCloseAt = service.indexOf("recoveryLifecycle?.close()")
+        val activeCheckCancelAt = service.indexOf("storageHealthObservationQueue.close()")
+        assertTrue(recoveryCloseAt >= 0)
+        assertTrue(activeCheckCancelAt >= 0)
+        assertTrue(recoveryCloseAt < activeCheckCancelAt)
+        val storageRuntime = source("storage/StorageHealth.kt")
+        val runtimeStart = storageRuntime.indexOf("object StorageHealthRuntime")
+        val failureRecorderStart = storageRuntime.indexOf(
+            "fun recordDatabaseFailure(operation: String, throwable: Throwable)",
+            runtimeStart,
         )
+        val failureRecorder = storageRuntime.substring(
+            failureRecorderStart,
+            storageRuntime.indexOf("fun recordDatabaseWriteSuccess()", failureRecorderStart),
+        )
+        assertTrue(failureRecorder.contains("failureHub.recordDatabaseFailure"))
+        assertTrue(activeCheckCancelAt < scopeCancelAt)
         assertTrue(service.contains("NotificationManager.IMPORTANCE_HIGH"))
         assertTrue(service.contains(".setOnlyAlertOnce(true)"))
         assertTrue(service.contains(".setSilent(true)"))

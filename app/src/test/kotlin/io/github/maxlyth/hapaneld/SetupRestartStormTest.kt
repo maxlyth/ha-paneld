@@ -30,7 +30,7 @@ import org.junit.Test
  * over surviving fake preferences, replays the durable writes each wizard step commits, and reconstructs
  * Config after every prefix of the walk. It deliberately does not claim to simulate service startup,
  * HTTP form handling, or Android process-static state; those require integration or hardware coverage. The
- * invariant is the one the maintainer states as the product rule: first run must work or fail cleanly —
+ * invariant is the one the product defines as the product rule: first run must work or fail cleanly —
  * no restart may answer a question on the user's behalf, and no state may report unfinished with nothing
  * to do.
  *

@@ -355,6 +355,7 @@ object StorageHealthRuntime {
             Thread(runnable, "ha-paneld-storage-health-listener").apply { isDaemon = true }
         },
     )
+    private val failureHub = StorageHealthFailureHub(authority)
 
     fun snapshot(): StorageHealthSnapshot = authority.snapshot()
 
@@ -367,13 +368,17 @@ object StorageHealthRuntime {
         observationToken: Long,
     ): StorageHealthSnapshot = authority.refresh(observation, observationToken)
 
-    fun recordDatabaseFailure(operation: String, throwable: Throwable): StorageHealthSnapshot =
-        authority.recordDatabaseFailure(operation, throwable)
+    fun recordDatabaseFailure(operation: String, throwable: Throwable): StorageHealthSnapshot {
+        return failureHub.recordDatabaseFailure(operation, throwable)
+    }
 
     fun recordDatabaseWriteSuccess(): StorageHealthSnapshot = authority.recordDatabaseWriteSuccess()
 
     fun subscribe(listener: (StorageHealthSnapshot) -> Unit): AutoCloseable =
         listenerDispatch.subscribe(authority, listener)
+
+    internal fun subscribeDatabaseFailures(listener: () -> Unit): AutoCloseable =
+        failureHub.subscribe(listener)
 }
 
 internal fun classifyDatabaseFailure(throwable: Throwable): StorageDatabaseFailureKind {

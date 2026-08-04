@@ -706,7 +706,7 @@
    * Both choices are NATIVE selects, deliberately: two custom pickers were tried on hardware — an open
    * icon list (swamped the page and buried the Area field) and a portal popup (escaped the card and the
    * viewport) — and the browser's own control beat both. Grouping survives as optgroups; icons did not
-   * survive, by the maintainer's call: clean over decorated. */
+   * survive, by design: clean over decorated. */
 
   var hdCatalog = null;   // {items, default} from the read-only list endpoint; null = not loaded/failed
   var hdArea = null;      // {areas, device, admin, queried, requested} from the ha-area endpoint

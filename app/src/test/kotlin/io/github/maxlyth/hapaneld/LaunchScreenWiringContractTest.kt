@@ -97,7 +97,7 @@ class LaunchScreenWiringContractTest {
         assertTrue("MainActivity owns the normal app launch entry", manifest.contains("android:name=\".MainActivity\""))
         assertTrue("MainActivity must keep the readable configure URL", main.contains("LocalAdminEndpoint.externalUrl"))
         // The QR's destination is now setup-aware: guided setup until this panel has completed setup
-        // once, the Configure tab afterwards — never a generic admin drawer. The maintainer's direction
+        // once, the Configure tab afterwards — never a generic admin drawer. The intended flow
         // is that the QR exists to start commissioning, and the wizard is its primary destination.
         assertTrue(
             "MainActivity must route the QR to guided setup first, Configure after completion",

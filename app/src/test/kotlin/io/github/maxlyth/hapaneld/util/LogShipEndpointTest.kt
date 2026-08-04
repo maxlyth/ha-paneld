@@ -71,24 +71,24 @@ class LogShipEndpointTest {
      */
     @Test fun aTypedSchemeSelectsTheTransportInsteadOfBecomingTheHostname() {
         assertEquals(
-            LogShipEndpoint.Endpoint("vector.lan", 514, SYSLOG_UDP),
-            resolve("udp://vector.lan", protocol = SYSLOG_TCP),
+            LogShipEndpoint.Endpoint("collector.example", 514, SYSLOG_UDP),
+            resolve("udp://collector.example", protocol = SYSLOG_TCP),
         )
         assertEquals(
-            LogShipEndpoint.Endpoint("vector.lan", 514, SYSLOG_TCP),
-            resolve("tcp://vector.lan", protocol = SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("collector.example", 514, SYSLOG_TCP),
+            resolve("tcp://collector.example", protocol = SYSLOG_UDP),
         )
         assertEquals(
-            LogShipEndpoint.Endpoint("vector.lan", 514, HTTP),
-            resolve("http://vector.lan", protocol = SYSLOG_UDP),
+            LogShipEndpoint.Endpoint("collector.example", 514, HTTP),
+            resolve("http://collector.example", protocol = SYSLOG_UDP),
         )
     }
 
     @Test fun anUnrecognisedSchemeLeavesTheStoredProtocolAlone() {
         // Falling back to the default here would silently retarget the transport the user chose.
         assertEquals(
-            LogShipEndpoint.Endpoint("vector.lan", 514, SYSLOG_TCP),
-            resolve("gopher://vector.lan", protocol = SYSLOG_TCP),
+            LogShipEndpoint.Endpoint("collector.example", 514, SYSLOG_TCP),
+            resolve("gopher://collector.example", protocol = SYSLOG_TCP),
         )
     }
 

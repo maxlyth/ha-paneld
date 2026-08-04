@@ -233,7 +233,7 @@ internal fun entityFilterQuestionPending(
     // The filter being ON is self-evident proof the question is moot: it cannot be true on a fresh panel
     // (the setting defaults off) and it is true on every panel that has ever been through this. Derived at
     // the moment of the check rather than trusted from a flag written once at startup — which is what failed.
-    // Three fleet panels were found stranded on the hold screen with the filter already enabled, because the
+    // Panels could be stranded on the hold screen with the filter already enabled, because the
     // one-shot migration below had run at a moment when the configuration read back blank and so recorded
     // "not a pre-existing install". A durable fact about the panel beats a flag captured at one instant.
     !entityFilterEnabled &&

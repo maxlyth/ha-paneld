@@ -203,7 +203,7 @@ internal object HaPresenceProtocol {
      *
      * [preferredAreaName] is the panel's locally configured area (`ha_area`), resolved by NAME first: a
      * person may deliberately point the panel at a different room than its HA device sits in — the
-     * maintainer's Hall panel lives in an HA area with no motion entities, so its presence sources come
+     * a panel lives in an HA area with no motion entities, so its presence sources come
      * from a neighbouring room (2026-07-26). An unknown or blank name falls back to the device's own
      * registry area, so a renamed area degrades to today's behaviour instead of failing.
      */

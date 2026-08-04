@@ -4085,7 +4085,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
         // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
         // panel this banner kept reappearing to narrate a step that was done months ago. Reported twice from
-        // the fleet. The Configure tab keeps it unconditionally: there it is feedback for a save the user just
+        // deployed panels. The Configure tab keeps it unconditionally: there it is feedback for a save the user just
         // made, which is the reason it was added.
         val mqttProgress = if (!setupNeedsUser()) "" else {
             SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let {
@@ -6198,7 +6198,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      *
      * "Home Assistant is canonical" was implemented only at read time, and every reader was a UI control —
      * the Configure area picker and the wizard's dashboard step. A panel nobody had opened that dropdown on
-     * therefore never adopted anything: five of six fleet panels held a blank `ha_area` while their HA
+     * therefore never adopted anything: affected panels held a blank `ha_area` while their HA
      * devices sat in real areas, so every surface honestly reported "No area" and discovery published no
      * `suggested_area` (reported 2026-07-26 on a panel whose device is plainly in Office). One unprompted
      * pass after start, then a slow repeat, is enough: the area of a wall panel changes about never, and the

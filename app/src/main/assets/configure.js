@@ -486,7 +486,7 @@
       var areaAdmin = null;
       // The note describes the VALUE, not permissions. Shown for every non-admin session it told a panel
       // whose value MATCHED Home Assistant that it had been overridden locally — untrue, and alarming on a
-      // panel that had just converged correctly (reported on a fleet panel, 2026-07-26). It may appear only
+      // panel that had just converged correctly (reported on an upgraded panel, 2026-07-26). It may appear only
       // while the local request genuinely differs from what Home Assistant holds, and it must stay honest
       // after an edit, so it is recomputed rather than decided once.
       function syncAreaNote() {
@@ -516,7 +516,7 @@
         });
         // Home Assistant is canonical: where it holds an area for this device, that is what this control
         // reads, even if the local request has never been set. A panel whose HA device sits in Office must
-        // never present itself as having no area — reported on a fleet panel whose local value was blank.
+        // never present itself as having no area — reported on an upgraded panel whose local value was blank.
         var haArea = a && a.device && a.device.found ? a.device.area_name : "";
         if (haArea && !have[haArea]) {
           have[haArea] = true;
