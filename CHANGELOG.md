@@ -5,6 +5,7 @@
 ### Fixed
 
 - **Panels recover promptly after a transient SQLite busy failure.** Storage-health verification now retries after bounded 5, 15 and 30 second delays, coalesces overlapping recovery requests, and clears the warning only after a later clean integrity check and durable write prove recovery.
+- **Fresh installations now fail closed when Android's package manager is unresponsive.** The installer distinguishes a genuinely absent app from an incomplete package query before deciding whether backups or helper recovery are required.
 
 ## v0.9.6-rc5 - 2026-08-02
 
