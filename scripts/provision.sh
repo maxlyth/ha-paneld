@@ -724,62 +724,67 @@ read_power_safety() {
 # installation was refused as though adb had died, and only a hand-sideloaded APK let the next run
 # past the gate (#89).
 #
-# The two helpers below keep those questions apart. Presence is proved only by a `package:` line,
-# never by an exit status: adb forwards the device's status only when both ends speak shell protocol
-# v2, and `pm` reports a missing package as a failure. Absence is concluded only once the package
-# manager has proved, on the same connection and within the same deadline, that it still resolves
-# path queries at all. Everything else stays unknown, and every caller keeps failing closed on it.
+# Presence is therefore proved only by a non-empty `package:` path, never by an exit status: adb
+# forwards the device's status only when both ends speak shell protocol v2, and `pm` reports a
+# missing package as a failure. Absence is concluded only once the package manager has proved, in
+# the same completed observation, that it still resolves path queries at all. Everything else stays
+# unknown, and every caller fails closed on it.
 
-# Packages that exist on every Android build and cannot be uninstalled: `android` is the framework
-# package, and `com.android.shell` is the identity `adb shell` itself runs as. Resolving either one
-# proves the package manager ran and answered, independently of whether ha-paneld is installed.
-PACKAGE_MANAGER_LIVENESS_PACKAGES=(android com.android.shell)
+# The package manager that exists on every Android build. `android` is the framework package; it
+# cannot be uninstalled, so resolving it proves the package manager ran and answered, independently
+# of whether ha-paneld is installed.
+PACKAGE_MANAGER_LIVENESS_PKG="android"
 
-# Ask Android for one package's installed APK paths within `seconds`. Returns:
-#   0  the package manager named at least one path — that package is installed
-#   1  no path was named — either the package is absent, or the query never reached a live package
-#      manager. This status alone cannot tell those two apart; only a liveness probe can.
-#   2  no answer was produced at all, because the deadline expired or the query was killed.
-query_package_path() {
-  local package="$1" seconds="$2" output="" status=0
-  # Android's raw diagnostic is suppressed so each calling site owns the actionable message. The
-  # payload below, not this discarded stream, is what presence is read from.
-  output="$(run_with_deadline "$seconds" \
-    "$ADB_COMMAND" -s "$TARGET" shell pm path "$package" 2>/dev/null)" || status=$?
-  if printf '%s\n' "$output" | tr -d '\r' | grep -q '^package:'; then
-    return 0
-  fi
-  # run_with_deadline reserves 124 for its own deadline; an outside SIGKILL surfaces as 137.
-  case "$status" in 124|137) return 2 ;; esac
-  return 1
-}
-
-# Classify whether ha-paneld is installed on this panel, allowing `seconds` per query. Sets
-# PACKAGE_PRESENCE to exactly one of:
-#   present  a `package:` line was returned for $PKG
-#   absent   $PKG resolved to no path, and the package manager separately resolved a package that
-#            exists on every Android build — so its silence about ha-paneld is a real answer
-#   unknown  no trustworthy answer was obtained; callers must not read this as either state
+# Ask the panel BOTH questions in ONE bounded shell run, and prove the run completed.
+#
+# An earlier attempt asked them as two separate `pm path` calls and tried to stay safe by listing the
+# exit statuses that must not be trusted. That list is the wrong shape of defence: it named 124 and
+# 137 and missed 130/143, so an interrupted query returned "no path", the second call corroborated
+# it, and an INTERRUPTED observation classified as absence — fail-open on the gate this is supposed
+# to hold. Enumerating statuses can only ever be as complete as the last person to think about it.
+#
+# So the observation carries its own proof of completion instead. One shell run emits a nonce-marked
+# BEGIN, the ha-paneld paths, MID, the framework paths, and END. Every marker must appear exactly
+# once, in order, carrying this run's nonce. A truncated, killed, interrupted, replayed or partially
+# buffered answer cannot produce that sequence, so it is structurally incapable of yielding a verdict
+# rather than merely being on a list of statuses to reject. It also makes the two facts one
+# observation: the package manager is proved live BY THE SAME shell run that said nothing about
+# ha-paneld, instead of by a second round trip that could have raced it.
+#
+# This is the file's established shape — see the `PROBE_READY` and `TRANSACTION_READY` probes and the
+# nonce-bound upgrade handshake.
+#
+# Sets PACKAGE_PRESENCE to exactly one of:
+#   present  a non-empty `package:` path was returned for $PKG
+#   absent   $PKG named no path AND the framework package did, in the same completed run
+#   unknown  no trustworthy answer; callers must not read this as either state
 classify_package_presence() {
-  local seconds="$1" status=0 probe
+  local seconds="$1" nonce out verdict status=0
   PACKAGE_PRESENCE="unknown"
-  query_package_path "$PKG" "$seconds" || status=$?
-  case "$status" in
-    0) PACKAGE_PRESENCE="present"; return 0 ;;
-    1) ;;
-    # A query that produced no answer cannot be corroborated into absence, so the liveness probe is
-    # deliberately not run: there is nothing for it to confirm.
-    *) return 0 ;;
+  nonce="$(host_transaction_id)" || return 0
+  # Android's raw diagnostic is suppressed so each calling site owns the actionable message; the
+  # marked payload below, not this discarded stream, is the only thing a verdict is read from.
+  out="$(run_with_deadline "$seconds" "$ADB_COMMAND" -s "$TARGET" shell \
+    "echo HAPANELD_PKG_BEGIN:$nonce; pm path $PKG; echo HAPANELD_PKG_MID:$nonce; \
+     pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_PKG_END:$nonce" 2>/dev/null)" || status=$?
+  [ "$status" -eq 0 ] || return 0
+  # A path must be non-empty to count: a bare `package:` proves nothing, and accepting it would let a
+  # truncated line stand in for either presence or proof that the package manager is alive.
+  verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" '
+    $0 == "HAPANELD_PKG_BEGIN:" n { if (seg != 0) bad = 1; seg = 1; next }
+    $0 == "HAPANELD_PKG_MID:" n   { if (seg != 1) bad = 1; seg = 2; next }
+    $0 == "HAPANELD_PKG_END:" n   { if (seg != 2) bad = 1; seg = 3; next }
+    seg == 1 && /^package:[^[:space:]]/ { target = 1 }
+    seg == 2 && /^package:[^[:space:]]/ { liveness = 1 }
+    END {
+      if (bad || seg != 3) { print "unknown"; exit }
+      if (target) { print "present"; exit }
+      if (liveness) { print "absent"; exit }
+      print "unknown"
+    }')"
+  case "$verdict" in
+    present|absent) PACKAGE_PRESENCE="$verdict" ;;
   esac
-  for probe in "${PACKAGE_MANAGER_LIVENESS_PACKAGES[@]}"; do
-    status=0
-    query_package_path "$probe" "$seconds" || status=$?
-    case "$status" in
-      0) PACKAGE_PRESENCE="absent"; return 0 ;;
-      # The package manager has stopped answering mid-classification; nothing further is trustworthy.
-      2) return 0 ;;
-    esac
-  done
   return 0
 }
 
@@ -2007,8 +2012,22 @@ root_helper_transaction_record() {
 
 # Return 0 only when the exact APK bytes are installed, 1 for a definitive different/missing package,
 # and 2 when adb transport or pulling the installed base APK is inconclusive.
+#
+# The "missing package" verdict used to be unreachable on precisely the panels where the package is
+# missing: this read `pm path`'s exit status directly, so absence — which Android reports as a failed
+# query — became "inconclusive". That is the same conflation this file's classifier exists to remove,
+# and it matters most here. This function decides whether a FAILED APK install rolls the root-helper
+# transaction back. Called on a first installation it answered "inconclusive", so the run refused to
+# roll back and every later run refused to reconcile the retained journal, stranding the panel with a
+# live helper and no app. Absence must reach the definitive `1` for that rollback to happen.
 installed_apk_matches_hash() {
   local expected="$1" path_output path dir pulled actual
+  classify_package_presence "$ADB_COMMAND_TIMEOUT_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    absent) return 1 ;;
+    present) ;;
+    *) return 2 ;;
+  esac
   path_output="$(adb -s "$TARGET" shell pm path "$PKG" 2>/dev/null)" || return 2
   path="$(printf '%s\n' "$path_output" | tr -d '\r' | sed -n 's/^package://p' | head -1)"
   [ -n "$path" ] || return 1

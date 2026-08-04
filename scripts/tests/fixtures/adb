@@ -3,7 +3,11 @@ set -u
 
 printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
-[ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
+# A clean panel has no package at all. Without this the fixture would silently re-create one and a
+# genuine first installation could never be modelled.
+if [ "${MOCK_NO_INSTALLED_PACKAGE:-0}" != 1 ]; then
+  [ -f "$STATE_DIR/installed-apk" ] || printf 'previous installed apk\n' > "$STATE_DIR/installed-apk"
+fi
 
 # adb-root is a TRANSITION, not a constant: MOCK_ADB_ROOT=1 models a panel already running adbd as
 # root; the escalates* modes model a userdebug panel that answers uid=2000 until the `root` verb is
@@ -22,6 +26,72 @@ adb_root_active() {
 # the query "fails" precisely because the package is not installed.
 #   ok      resolves to a path            fail  answers nothing, exit 1
 #   absent  answers, names no path, exit 0  hang  never answers, so the caller's deadline expires
+# Answer the nonce-marked package probe. MOCK_PM_PROBE models how the OBSERVATION itself fails,
+# independently of what the package manager would have said:
+#   ok           the whole marked sequence is emitted
+#   truncated    the END marker is lost, as when the run is killed or the transport dies mid-stream
+#   stale_nonce  a complete sequence carrying somebody else's nonce (replayed / buffered output)
+#   out_of_order MID is emitted before BEGIN
+#   hang         nothing is ever emitted, so the caller's deadline expires
+#   complete_then_fail  the whole sequence arrives, but the command still reports failure
+pm_marked_probe_reply() {
+  local text="$1" nonce other
+  # The nonce is whatever the caller stamped into its BEGIN marker.
+  nonce="${text#*HAPANELD_PKG_BEGIN:}"
+  nonce="${nonce%%[!0-9a-f]*}"
+  other="${MOCK_PM_PROBE:-ok}"
+  # MOCK_APK_QUERY models a package manager that stops answering AFTER a mutation is attempted. It
+  # must reach this probe too, otherwise the fixture would claim a confident verdict from a package
+  # manager it is simultaneously modelling as unanswerable.
+  if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then
+    other=truncated
+  fi
+  # MOCK_PM_VANISH_AFTER models the package disappearing partway through a run: the first N marked
+  # probes resolve it, later ones do not. It is what a reset target being uninstalled mid-run looks
+  # like, which is the only way to reach the post-confirmation re-check's absent verdict.
+  if [ -n "${MOCK_PM_VANISH_AFTER:-}" ]; then
+    printf 'x' >> "$STATE_DIR/pm-probe-count"
+    if [ "$(wc -c < "$STATE_DIR/pm-probe-count")" -gt "$MOCK_PM_VANISH_AFTER" ]; then
+      MOCK_PM_PATH=absent
+    fi
+  fi
+  if [ "$other" = hang ]; then
+    [ -z "${MOCK_PM_PROBE_PID_FILE:-}" ] || printf '%s\n' "$$" > "$MOCK_PM_PROBE_PID_FILE"
+    trap 'exit 143' TERM INT
+    while :; do /bin/sleep 1; done
+  fi
+  [ "$other" != stale_nonce ] || nonce="0123456789abcdef0123456789abcdef"
+  if [ "$other" = out_of_order ]; then
+    printf 'HAPANELD_PKG_MID:%s\n' "$nonce"
+    printf 'HAPANELD_PKG_BEGIN:%s\n' "$nonce"
+    printf 'HAPANELD_PKG_END:%s\n' "$nonce"
+    exit 0
+  fi
+  printf 'HAPANELD_PKG_BEGIN:%s\n' "$nonce"
+  pm_marked_paths "${MOCK_PM_PATH:-ok}" 'package:/data/app/io.github.maxlyth.hapaneld/base.apk' \
+    "$([ -f "$STATE_DIR/installed-apk" ] && echo yes || echo no)"
+  printf 'HAPANELD_PKG_MID:%s\n' "$nonce"
+  pm_marked_paths "${MOCK_PM_LIVENESS:-ok}" 'package:/system/framework/framework-res.apk' yes
+  [ "$other" = truncated ] || printf 'HAPANELD_PKG_END:%s\n' "$nonce"
+  # Complete, nonce-bound output from a command that nonetheless failed. The markers alone cannot
+  # catch this, so it is what makes the caller's exit-status check load-bearing rather than redundant.
+  [ "$other" != complete_then_fail ] || exit 1
+  exit 0
+}
+
+# Emit the path lines one `pm path` would print inside the marked run. `empty_path` models a
+# truncated line — a bare `package:` with nothing after it, which must never count as an answer.
+pm_marked_paths() {
+  local mode="$1" path="$2" installed="$3"
+  case "$mode" in
+    ok) [ "$installed" = yes ] && printf '%s\n' "$path" ;;
+    empty_path) printf 'package:\n' ;;
+    absent|fail) ;;
+    *) ;;
+  esac
+  return 0
+}
+
 pm_query_reply() {
   local mode="$1" path="$2" pid_file="${3:-}"
   case "$mode" in
@@ -505,6 +575,13 @@ case "${1:-}" in
       "pm clear io.github.maxlyth.hapaneld")
         [ "${MOCK_PM_CLEAR:-ok}" = ok ] || { printf 'Failed\n'; exit 0; }
         printf 'Success\n'
+        ;;
+      # The nonce-marked package probe: ONE run answering both questions and proving it completed.
+      # Note that the inner `pm path` exit statuses are invisible here, exactly as on a real panel,
+      # because the trailing `echo` is what sets the run's status. That is the point of the design:
+      # `fail` and `absent` become indistinguishable to the classifier, so it cannot depend on them.
+      "echo HAPANELD_PKG_BEGIN:"*)
+        pm_marked_probe_reply "$command_text"
         ;;
       "pm path io.github.maxlyth.hapaneld")
         if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi

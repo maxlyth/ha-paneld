@@ -185,12 +185,18 @@ run_provision() {
   rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
   rm -f "$TMP/upgrade-release-attempts"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
-  rm -f "$TMP/package-stopped" "$TMP/apk-install-attempted"
+  rm -f "$TMP/package-stopped" "$TMP/apk-install-attempted" "$TMP/pm-probe-count"
   if [ "${MOCK_STALE_TRANSACTION:-0}" = 1 ]; then : > "$TMP/stale-helper-transaction"; fi
-  if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
-    cp "$MOCK_INSTALLED_APK_SOURCE" "$TMP/installed-apk"
-  else
-    printf 'previous installed apk\n' > "$TMP/installed-apk"
+  # Every run used to fabricate a previously-installed package, which made a genuine first
+  # installation inexpressible — the reason no test caught that a failed first install strands the
+  # panel. MOCK_NO_INSTALLED_PACKAGE=1 models a truly clean panel: nothing installed at all.
+  rm -f "$TMP/installed-apk"
+  if [ "${MOCK_NO_INSTALLED_PACKAGE:-0}" != 1 ]; then
+    if [ -n "${MOCK_INSTALLED_APK_SOURCE:-}" ]; then
+      cp "$MOCK_INSTALLED_APK_SOURCE" "$TMP/installed-apk"
+    else
+      printf 'previous installed apk\n' > "$TMP/installed-apk"
+    fi
   fi
   LAST_OUTPUT="$TMP/output.txt"
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
@@ -231,6 +237,10 @@ run_provision() {
   MOCK_PM_PATH_PID_FILE="${MOCK_PM_PATH_PID_FILE:-}" \
   MOCK_PM_LIVENESS="${MOCK_PM_LIVENESS:-ok}" \
   MOCK_PM_LIVENESS_PID_FILE="${MOCK_PM_LIVENESS_PID_FILE:-}" \
+  MOCK_PM_PROBE="${MOCK_PM_PROBE:-ok}" \
+  MOCK_PM_VANISH_AFTER="${MOCK_PM_VANISH_AFTER:-}" \
+  MOCK_PM_PROBE_PID_FILE="${MOCK_PM_PROBE_PID_FILE:-}" \
+  MOCK_NO_INSTALLED_PACKAGE="${MOCK_NO_INSTALLED_PACKAGE:-0}" \
   MOCK_DB_CLEANUP="${MOCK_DB_CLEANUP:-ok}" \
   MOCK_DB_DEVICE_ROWS="${MOCK_DB_DEVICE_ROWS:-7}" \
   MOCK_DB_DEVICE_USER_VERSION="${MOCK_DB_DEVICE_USER_VERSION:-9}" \
@@ -748,16 +758,18 @@ assert_contains "status endpoint could not be reached" "unreachable storage stat
 assert_log_contains '^adb .* install' "unreachable storage status does not preempt the APK install"
 assert_not_contains 'ha-paneld is not installed on this panel yet' "$LAST_OUTPUT" \
   "an installed panel is not announced as a fresh install"
-assert_not_contains 'pm path android' "$MOCK_CALL_LOG" \
-  "a package that resolves to a path needs no liveness corroboration"
+assert_log_contains 'HAPANELD_PKG_BEGIN:[0-9a-f]{32}' \
+  "classification uses one nonce-marked observation, not a sequence of separate queries"
 
 # A clean panel has no status endpoint AND no package, which is exactly the shape v0.9.6 refused to
 # install onto: `pm path` reports a missing package as a failure, and that was read as a failed
-# package manager (#89). Both observed absence shapes must now reach installation.
+# package manager (#89). Both observed absence shapes must reach installation — and because the
+# marked probe reads the payload rather than the exit status, they are now indistinguishable to it,
+# which is the point: the classifier CANNOT depend on which variant a panel happens to use.
 #   fail   = the package manager answers, non-zero, naming no path  (the reported NSPanel Pro 120)
 #   absent = the package manager answers zero, naming no path
 for absent_mode in fail absent; do
-  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PATH="$absent_mode" \
+  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PATH="$absent_mode" MOCK_NO_INSTALLED_PACKAGE=1 \
     run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
   assert_success "a clean panel whose package query reports $absent_mode installs for the first time"
   assert_contains 'ha-paneld is not installed on this panel yet' \
@@ -768,8 +780,8 @@ for absent_mode in fail absent; do
   # the same endpoint as unreachable, because the fixture panel never serves it.
   assert_not_contains 'an unreachable app is a reason to replace it' "$LAST_OUTPUT" \
     "a panel with no app installed is not described as an unreachable app ($absent_mode)"
-  assert_log_contains 'pm path android' \
-    "absence ($absent_mode) is corroborated by a package that exists on every Android build"
+  assert_log_contains 'HAPANELD_PKG_BEGIN:[0-9a-f]{32}' \
+    "absence ($absent_mode) is decided from one completed marked observation"
   assert_log_contains '^adb .* install' "a clean panel ($absent_mode) reaches the APK install"
   # Positive control for the refusal contracts below: the very pattern they require to be ABSENT is
   # shown here to match a run that really does mutate the panel, so their silence is evidence rather
@@ -778,19 +790,31 @@ for absent_mode in fail absent; do
     "the mutation pattern the refusal contracts rely on does match a run that mutates ($absent_mode)"
 done
 
-# The fail-closed mutation gate is unchanged: when the package manager itself cannot answer, nothing
-# is installed or changed. Each mode below breaks a different link in the classification.
-#   pm answers nothing at all      : both queries fail
-#   pm resolves nothing at all     : both queries answer zero but name no path, so nothing is proved
-#   the panel's query never returns: the deadline expires on the ha-paneld query
-#   the corroboration never returns: the deadline expires on the liveness query
-for unknown_case in fail:fail absent:absent hang:ok fail:hang; do
-  pm_mode="${unknown_case%%:*}"
-  live_mode="${unknown_case##*:}"
-  label="pm=$pm_mode liveness=$live_mode"
-  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PATH="$pm_mode" MOCK_PM_LIVENESS="$live_mode" \
+# The fail-closed gate is unchanged, and is now held by the COMPLETENESS of the observation rather
+# than by a list of exit statuses. The first four cases each break the proof that the run finished;
+# an earlier design that enumerated statuses instead classified an interrupted query as absence and
+# installed onto it. The last two break what the package manager actually resolved.
+#   hang         : the run never answers, so the deadline expires
+#   truncated    : the run is cut off before its END marker, as when it is killed mid-stream
+#   stale_nonce  : a complete sequence that belongs to some other run (replayed or buffered output)
+#   out_of_order : the markers do not arrive in the order the probe emits them
+#   dead_pm      : the run completes but resolves nothing at all, proving nothing
+#   empty_path   : the run completes but names a bare `package:` with no path, which is not an answer
+#   complete_then_fail : every marker arrives, but the command itself reported failure
+for unknown_case in "probe hang" "probe truncated" "probe stale_nonce" "probe out_of_order" \
+                    "probe complete_then_fail" "resolve dead_pm" "resolve empty_path"; do
+  set -- $unknown_case
+  kind="$1"; mode="$2"; label="$kind=$mode"
+  probe_mode=ok; pm_mode=ok; live_mode=ok
+  case "$kind:$mode" in
+    probe:*) probe_mode="$mode" ;;
+    resolve:dead_pm) pm_mode=fail; live_mode=fail ;;
+    resolve:empty_path) pm_mode=empty_path; live_mode=empty_path ;;
+  esac
+  MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PROBE="$probe_mode" MOCK_PM_PATH="$pm_mode" \
+    MOCK_PM_LIVENESS="$live_mode" MOCK_NO_INSTALLED_PACKAGE=1 \
     run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-  assert_failure "an unusable package manager ($label) refuses before any mutation"
+  assert_failure "an untrustworthy classification ($label) refuses before any mutation"
   assert_contains 'could not determine whether ha-paneld is already installed' \
     "the refusal ($label) names the undecided classification"
   assert_contains 'Nothing was installed or changed' "the refusal ($label) states what did not happen"
@@ -804,7 +828,68 @@ for unknown_case in fail:fail absent:absent hang:ok fail:hang; do
   assert_not_contains '^adb .*( install | push |pm grant|pm clear|appops |settings put|am start)' \
     "$MOCK_CALL_LOG" "no panel mutation is attempted ($label)"
 done
-unset pm_mode live_mode label
+unset kind mode label probe_mode pm_mode live_mode
+
+# Every site that asks "is ha-paneld installed?" was changed, so each is covered directly here rather
+# than only through the one that happened to be reported. Leaving storage health healthy means the
+# pre-install classification does not run, which isolates each later site in turn.
+
+# The pre-upgrade settings export. A first installation has nothing to export, and would have been
+# refused here even after the reported site was fixed.
+HAPANELD_SKIP_AUTO_EXPORT=0 MOCK_NO_INSTALLED_PACKAGE=1 MOCK_PM_PATH=fail \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a first installation needs no pre-upgrade settings export"
+assert_contains 'no existing config requires an upgrade backup' \
+  "the export step names an absent package as a fresh install"
+assert_log_contains '^adb .* install' "the skipped export still reaches the APK install"
+
+HAPANELD_SKIP_AUTO_EXPORT=0 MOCK_PM_PROBE=truncated run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unverifiable package state stops before the upgrade backup is skipped or taken"
+assert_contains 'could not verify the installed panel before upgrade' "the export step names its own refusal"
+assert_not_contains '^adb .*( install | push )' "$MOCK_CALL_LOG" \
+  "the export refusal precedes every helper and APK mutation"
+
+# The reset check taken before the confirmation prompt.
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_RESET_CONFIRM=RESET MOCK_NO_INSTALLED_PACKAGE=1 MOCK_PM_PATH=fail \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_success "--reset-config on a panel with nothing installed is not an error"
+assert_contains 'there is no configuration to erase' "the reset says plainly that there is nothing to erase"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "nothing is erased when no package is installed"
+
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_RESET_CONFIRM=RESET MOCK_PM_PROBE=truncated \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+assert_failure "an unverifiable package state refuses the reset"
+assert_contains 'could not re-check the installed app before reset' "the reset names its own refusal"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "nothing is erased while presence is undecided"
+
+# The re-check taken after the confirmation, which exists because the prompt can be held open
+# indefinitely. A target that has genuinely gone must be reported as gone, not as an unusable panel.
+HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_RESET_CONFIRM=RESET MOCK_PM_VANISH_AFTER=1 \
+  run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+# This case turns on WHICH observation the package vanishes between, so the coupling is asserted
+# rather than assumed: a confirmed reset classifies exactly twice, once before the prompt and once
+# immediately before erasing, and MOCK_PM_VANISH_AFTER=1 removes the package between the two. If that
+# sequence ever changes, this fails loudly instead of the case below quietly passing for a new reason.
+assert_count "$(grep -c 'HAPANELD_PKG_BEGIN' "$MOCK_CALL_LOG")" 2 \
+  "a confirmed reset classifies exactly twice: before the prompt, and again immediately before erasing"
+assert_failure "a reset target that disappears after confirmation is refused"
+assert_contains 'no longer installed at the confirmed reset target' \
+  "a vanished reset target is named exactly"
+assert_not_contains 'could not re-check the installed app before reset' "$LAST_OUTPUT" \
+  "a vanished target is not blamed on an unresponsive package manager"
+assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "nothing is erased once the target has gone"
+
+# A FAILED first installation must roll the root-helper transaction back. This is the site that made
+# absence look inconclusive: the run refused to roll back, and because the retained journal was then
+# re-examined by the same conflation, every later run refused to reconcile it too — leaving a live
+# helper, no app, and no route back. The panel-side journal already handled "nothing was there".
+MOCK_NO_INSTALLED_PACKAGE=1 MOCK_PM_PATH=fail MOCK_APK_INSTALL=fail \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a failed first installation is reported as a failure"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' \
+  "a failed FIRST install rolls the helper transaction back instead of stranding the panel"
+assert_not_contains 'adb install outcome is ambiguous' "$LAST_OUTPUT" \
+  "an absent package is a definite install outcome, never an ambiguous one"
 
 MOCK_STORAGE_HEALTH=legacy-json run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a missing post-install storage contract does not fail a completed replacement"
@@ -1441,9 +1526,13 @@ assert_failure "a mismatched transaction token cannot roll back another provisio
 assert_contains 'rollback could not be verified' "rollback token mismatch is reported without claiming restoration"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "rollback token mismatch leaves the APK untouched"
 
+# Scope note: this models a panel that DOES have ha-paneld installed and whose package manager stops
+# answering after the install attempt. That is genuinely ambiguous. The panel response is otherwise
+# identical to a clean panel's, where it is NOT ambiguous but definite absence — see the failed
+# first-install case above, which asserts a rollback rather than this retained-recovery path.
 MOCK_APK_INSTALL=fail MOCK_APK_QUERY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
-assert_failure "unqueryable package-manager outcome retains helper recovery without rollback"
+assert_failure "unqueryable package-manager outcome on an INSTALLED panel retains helper recovery without rollback"
 assert_contains 'adb install outcome is ambiguous; helper recovery was retained without rollback' "unqueryable install outcome gives the safe retry path"
 assert_not_contains 'hapaneld-helper\.txn (rollback|commit)-system' "$MOCK_CALL_LOG" "unqueryable install outcome neither rolls back nor commits the helper journal"
 
