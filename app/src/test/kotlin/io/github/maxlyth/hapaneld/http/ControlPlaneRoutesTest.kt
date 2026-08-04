@@ -422,8 +422,6 @@ class ControlPlaneRoutesTest {
         val approvalAsked = mutableListOf<Triple<SensitiveOperation, String, String>>()
         val stagedFiles = mutableListOf<java.io.File>()
         val fetched = mutableListOf<Pair<String, Long>>()
-        var redirectProbe: String? = null
-        var admittedHop: Boolean? = null
         val pending = PendingUploadStore { "fetch-token" }
         val upload = ApkUploadRouteDependencies(
             enabled = { enabled },
@@ -440,9 +438,8 @@ class ControlPlaneRoutesTest {
             },
             maxBytes = 4,
             usableSpace = { usableSpace },
-            fetch = { url, dest, maxBytes, _, followRedirect ->
+            fetch = { url, dest, maxBytes, _ ->
                 fetched += url to maxBytes
-                redirectProbe?.let { admittedHop = followRedirect(java.net.URL(it)) }
                 if (result == AppInstaller.DownloadResult.Succeeded) dest.writeBytes("good".toByteArray())
                 result
             },
@@ -549,19 +546,6 @@ class ControlPlaneRoutesTest {
         assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
-        // A server-chosen hop is never followed; the target comes back so the operator can send the
-        // panel there deliberately. That is what keeps every destination one they typed and approved.
-        result = AppInstaller.DownloadResult.RedirectRefused
-        redirectProbe = "https://cdn.example/real.apk"
-        assertFetch(
-            url,
-            HttpStatusCode.BadGateway,
-            """{"ok":false,"error":"redirect-refused","redirect":"https://cdn.example/real.apk"$OWNER}""",
-        )
-        assertEquals("the hop must be refused, never followed", false, admittedHop)
-        assertFalse(stagedFiles.last().exists())
-        redirectProbe = null
-
         // Bytes that arrive but are not an APK are refused after inspection, and still leave nothing.
         result = AppInstaller.DownloadResult.Succeeded
         identity = null
@@ -614,7 +598,7 @@ class ControlPlaneRoutesTest {
             startInstall = { _, ticket -> InstallProgress.finish(ticket, "done") },
             maxBytes = 16,
             usableSpace = { Long.MAX_VALUE },
-            fetch = { _, dest, _, abort, _ ->
+            fetch = { _, dest, _, abort ->
                 // A cancel arriving mid-transfer, driven deterministically instead of with threads.
                 cancelDuring?.let { cancelReported = pending.cancelPanelWork(it) }
                 if (cancelSucceedsAnyway) {

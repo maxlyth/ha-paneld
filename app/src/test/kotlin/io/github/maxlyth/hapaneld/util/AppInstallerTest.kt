@@ -151,44 +151,12 @@ class AppInstallerTest {
 
         assertEquals(
             AppInstaller.DownloadResult.Aborted,
-            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort, { connection }),
+AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort) { connection },
         )
         // The outcome alone cannot prove this: a failed request would also be reported as aborted once
         // the owner has cancelled. What must hold is that no request was ever issued.
         assertFalse("a cancelled download must not issue a request at all", requested)
         assertTrue("the connection opened before the abort was seen must be closed", disconnected)
-        assertEquals(0L, destination.length())
-    }
-
-    /** The redirect decision has to be consulted by the downloader, not merely exist. Driven offline
-     *  through the injected connection seam: a server sends one redirect, the caller declines it, and
-     *  the chain must stop there rather than the next hop being opened. */
-    @Test fun aRedirectThatIsNotFollowedStopsTheChainAndIsReportedAsSuch() {
-        val destination = File.createTempFile("download-redirect-", ".apk").also { it.deleteOnExit() }
-        val opened = mutableListOf<String>()
-        val offered = mutableListOf<String>()
-
-        fun connectionFor(target: URL) = object : java.net.HttpURLConnection(target) {
-            override fun connect() = Unit
-            override fun usingProxy() = false
-            override fun disconnect() = Unit
-            override fun getResponseCode(): Int = 302
-            override fun getHeaderField(name: String): String? =
-                if (name == "Location") "https://internal.example/app.apk" else null
-        }
-
-        val result = AppInstaller.download(
-            "https://cdn.example/app.apk",
-            destination,
-            1024L,
-            null,
-            { target -> opened += target.toString(); connectionFor(target) },
-            { target -> offered += target.toString(); false },
-        )
-
-        assertEquals(AppInstaller.DownloadResult.RedirectRefused, result)
-        assertEquals("the caller must be told which hop the server chose", listOf("https://internal.example/app.apk"), offered)
-        assertEquals("a hop that is not followed must never be opened", listOf("https://cdn.example/app.apk"), opened)
         assertEquals(0L, destination.length())
     }
 

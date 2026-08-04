@@ -58,11 +58,10 @@ internal data class ApkUploadRouteDependencies(
     val receiveBody: (InputStream, OutputStream, Long) -> Long = { input, output, maxBytes ->
         DeadlineBoundedBody.copy(input, output, maxBytes, APK_UPLOAD_RECEIPT_DEADLINE_MS)
     },
-    /** Fetch [url] into a staging file, deciding per hop whether a server-chosen redirect is followed. */
-    val fetch: (String, File, Long, DownloadAbort, (java.net.URL) -> Boolean) -> AppInstaller.DownloadResult =
-        { url, dest, maxBytes, abort, followRedirect ->
-            AppInstaller.download(url, dest, maxBytes, abort, followRedirect = followRedirect)
-        },
+    /** Fetch [url] into a staging file. */
+    val fetch: (String, File, Long, DownloadAbort) -> AppInstaller.DownloadResult = { url, dest, maxBytes, abort ->
+        AppInstaller.download(url, dest, maxBytes, abort)
+    },
 )
 
 /**
@@ -85,12 +84,20 @@ internal fun validApkFetchRequestId(raw: String): String? {
  * scheme rule for every APK the panel fetches. The bound on length keeps an absurd string out of the
  * staging and logging paths.
  *
- * This shape check is **not** the security control, and must not be mistaken for one. A fetch is not
- * a weaker cousin of an upload: an upload requires the caller to already hold the bytes, while a fetch
- * points a privileged device inside the network at a destination the caller names, across redirects.
- * There is deliberately no outbound host or address allowlist, because one would break the LAN-hosted
- * mirror this feature exists to serve and would still not survive a rebinding host. The control is
- * that [SensitiveOperation.APK_FETCH] must be approved for the exact URL before any socket opens.
+ * Redirects are followed normally, and there is deliberately **no** outbound host or address filter.
+ * That is a documented proportionality decision, recorded here so it reads as a choice rather
+ * than an oversight. Reaching this endpoint at all means being a trusted LAN actor, and such an actor
+ * can already upload an arbitrary APK for privileged install and scan the network from their own
+ * machine — so having the panel issue the request instead grants them a different source address and
+ * little else. Filtering destinations would break LAN-hosted mirrors, and could not be made sound
+ * without pinning the connection to the vetted address, which is disproportionate for a convenience
+ * feature on a home control panel.
+ *
+ * What IS enforced, because it is cheap: [SensitiveOperation.APK_FETCH] must be approved for the exact
+ * URL before any socket opens, so Hardened mode's approval remains the boundary it is meant to be.
+ * The residual accepted here is that an approved fetch may be redirected to a host the operator did
+ * not name; the bytes are still inspected and never returned to the caller, and installing them needs
+ * its own separate approval.
  */
 internal fun validApkFetchUrl(raw: String, maxChars: Int = APK_FETCH_URL_MAX_CHARS): String? {
     val trimmed = raw.trim()
@@ -320,7 +327,7 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
  *  did), while everything after the bytes land is identical for both sources. */
 private sealed interface StagedBytes {
     data object Written : StagedBytes
-    data class Refused(val status: HttpStatusCode, val error: String, val extra: String = "") : StagedBytes
+    data class Refused(val status: HttpStatusCode, val error: String) : StagedBytes
 }
 
 /**
@@ -369,7 +376,7 @@ private suspend fun stageInspectAndRespond(
         when (val written = writeBytes(staged, stagingLimit)) {
             is StagedBytes.Refused -> {
                 call.respondText(
-                    """{"ok":false,"error":${Json.str(written.error)}${written.extra}$owner}""",
+                    """{"ok":false,"error":${Json.str(written.error)}$owner}""",
                     ContentType.Application.Json,
                     written.status,
                 )
@@ -517,17 +524,8 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
     val lease = beginApkStaging(call, dependencies, echo, panelWork = true) ?: return
     val abort = DownloadAbort()
     dependencies.pending.attachPanelWork(lease, request, abort)
-    // The panel follows nothing it was not told to fetch. A server-chosen hop is captured and handed
-    // back so the operator can decide, which is what makes every destination the panel connects to one
-    // they typed and approved — leaving no unapproved destination whose admission would have to be
-    // proven to still hold at connect time.
-    var redirectTarget: String? = null
-    val followRedirect: (java.net.URL) -> Boolean = { target ->
-        redirectTarget = target.toString()
-        false
-    }
     stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
-        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort, followRedirect) }) {
+        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort) }) {
             AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
             // A ceiling the panel's own free space imposed is reported as storage, not as the operator
             // having named something too large, because those need different corrective action.
@@ -540,13 +538,6 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
                 StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
             AppInstaller.DownloadResult.Aborted ->
                 StagedBytes.Refused(CLIENT_CLOSED_REQUEST, "cancelled")
-            // Not a failure to retry: the operator has somewhere else to go, and the target is handed
-            // back so they can send the panel there deliberately rather than the server doing it.
-            AppInstaller.DownloadResult.RedirectRefused -> StagedBytes.Refused(
-                HttpStatusCode.BadGateway,
-                "redirect-refused",
-                redirectTarget?.let { ""","redirect":${Json.str(it)}""" }.orEmpty(),
-            )
             AppInstaller.DownloadResult.Failed ->
                 StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
         }
