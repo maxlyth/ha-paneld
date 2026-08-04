@@ -771,6 +771,11 @@ for absent_mode in fail absent; do
   assert_log_contains 'pm path android' \
     "absence ($absent_mode) is corroborated by a package that exists on every Android build"
   assert_log_contains '^adb .* install' "a clean panel ($absent_mode) reaches the APK install"
+  # Positive control for the refusal contracts below: the very pattern they require to be ABSENT is
+  # shown here to match a run that really does mutate the panel, so their silence is evidence rather
+  # than a pattern that could never match.
+  assert_log_contains '^adb .*( install | push |pm grant|pm clear|appops |settings put|am start)' \
+    "the mutation pattern the refusal contracts rely on does match a run that mutates ($absent_mode)"
 done
 
 # The fail-closed mutation gate is unchanged: when the package manager itself cannot answer, nothing
@@ -791,12 +796,13 @@ for unknown_case in fail:fail absent:absent hang:ok fail:hang; do
   assert_contains 'Nothing was installed or changed' "the refusal ($label) states what did not happen"
   assert_not_contains 'ha-paneld is not installed on this panel yet' "$LAST_OUTPUT" \
     "an undecided classification ($label) never claims a fresh install"
-  # The mutation proof: no APK install, no helper push, no adb-root escalation, no grants, no
-  # accessibility write and no config POST may appear in the call log.
+  # The mutation proof: no APK install, no helper push, no grant, no erase, no appops or settings
+  # write and no app launch may appear in the call log. The clean-install case above proves this same
+  # pattern DOES match when a run mutates, so passing here means the mutation genuinely did not start.
+  # Deliberately not asserted: `adb root` and a config POST, which this scenario never reaches even
+  # when it runs to completion, so requiring their absence would pass without exercising anything.
   assert_not_contains '^adb .*( install | push |pm grant|pm clear|appops |settings put|am start)' \
     "$MOCK_CALL_LOG" "no panel mutation is attempted ($label)"
-  assert_not_contains '^adb .* root$' "$MOCK_CALL_LOG" "no root escalation is attempted ($label)"
-  assert_not_contains '^curl .* -X POST' "$MOCK_CALL_LOG" "no configuration is written ($label)"
 done
 unset pm_mode live_mode label
 
