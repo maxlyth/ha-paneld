@@ -22,6 +22,7 @@ import io.ktor.server.testing.testApplication
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -407,7 +408,7 @@ class ControlPlaneRoutesTest {
         var installed: PendingUploadStore.Entry? = null
         var fileId = 0
         var approved = true
-        val approvalAsked = mutableListOf<Pair<SensitiveOperation, String>>()
+        val approvalAsked = mutableListOf<Triple<SensitiveOperation, String, String>>()
         val stagedFiles = mutableListOf<java.io.File>()
         val fetched = mutableListOf<Pair<String, Long>>()
         val owner = ApkFetchOwner()
@@ -439,8 +440,8 @@ class ControlPlaneRoutesTest {
                 controlPlaneRoutes(
                     dependencies(
                         apkUpload = upload,
-                        authorize = { call, operation, _, summary ->
-                            approvalAsked += operation to summary
+                        authorize = { call, operation, payload, summary ->
+                            approvalAsked += Triple(operation, payload, summary)
                             if (approved) true else {
                                 call.respondText(
                                     """{"ok":false,"error":"approval-required"}""",
@@ -480,7 +481,24 @@ class ControlPlaneRoutesTest {
         assertEquals(0, fetched.size)
         // The approver is told which host the panel would be aimed at, under its own operation.
         assertEquals(SensitiveOperation.APK_FETCH, approvalAsked.last().first)
-        assertEquals("Download an APK from example.test", approvalAsked.last().second)
+        assertEquals("Download an APK from example.test", approvalAsked.last().third)
+
+        // What is approved must be THE DESTINATION. An approval bound to anything else would let a
+        // granted approval be replayed to send the panel somewhere the operator never saw.
+        val approvedPayload = approvalAsked.last().second
+        assertFetch("https://elsewhere.test/app.apk", HttpStatusCode.Accepted, """{"ok":false,"error":"approval-required"}""")
+        assertNotEquals(
+            "a different destination must not reuse the same approval payload",
+            approvedPayload,
+            approvalAsked.last().second,
+        )
+        assertFetch(url, HttpStatusCode.Accepted, """{"ok":false,"error":"approval-required"}""")
+        assertEquals(
+            "the same destination must present the same approval payload, so an approval is usable on retry",
+            approvedPayload,
+            approvalAsked.last().second,
+        )
+        assertEquals(0, fetched.size)
         approved = true
 
         assertFetch(url, HttpStatusCode.ServiceUnavailable, """{"ok":false,"error":"stopping"$OWNER}""")

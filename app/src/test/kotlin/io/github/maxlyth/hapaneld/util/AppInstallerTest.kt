@@ -132,6 +132,19 @@ class AppInstallerTest {
         )
     }
 
+    /** A download whose owner cancelled before it began must not reach the network. This runs offline:
+     *  opening a URL connection performs no I/O, and the abort is observed before the first request. */
+    @Test fun downloadRefusesToStartWhenItsOwnerAlreadyCancelled() {
+        val destination = File.createTempFile("download-cancelled-", ".apk").also { it.deleteOnExit() }
+        val abort = DownloadAbort().apply { abort() }
+
+        assertEquals(
+            AppInstaller.DownloadResult.Aborted,
+            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort),
+        )
+        assertEquals(0L, destination.length())
+    }
+
     @Test fun refusesNonHttpScheme() {
         assertNull("file:// target must be refused", AppInstaller.httpsRedirect(github, "file:///etc/passwd"))
         assertNull("ftp:// target must be refused", AppInstaller.httpsRedirect(github, "ftp://host/app.apk"))

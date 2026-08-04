@@ -361,15 +361,17 @@ object AppInstaller {
         var current: URL = origin
         return try {
             repeat(5) {
-                if (abort?.isAborted == true) return DownloadResult.Aborted
                 val remainingMs = deadline.remainingMs()
                 if (remainingMs <= 0L) return DownloadResult.TimedOut
                 val conn = current.openConnection() as HttpURLConnection
                 conn.instanceFollowRedirects = false
                 conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
                 conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
-                // Registering before the first read is what makes a cancel effective: the copy loop is
-                // synchronous, so only closing the connection can free a thread already blocked in read().
+                // The single place a cancel is observed between hops. Registering before the first read
+                // is what makes it effective at all: the copy loop is synchronous, so only closing the
+                // connection can free a thread already blocked in read(). Attaching also reports an
+                // abort that arrived earlier, so no separate pre-check is needed — and a separate one
+                // would make this line impossible to prove, by answering before it is ever consulted.
                 if (abort != null && !abort.attach(conn)) return DownloadResult.Aborted
                 try {
                     when (conn.responseCode) {
