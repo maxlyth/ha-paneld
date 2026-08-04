@@ -160,10 +160,10 @@ class AppInstallerTest {
         assertEquals(0L, destination.length())
     }
 
-    /** The admission policy has to be consulted by the downloader, not merely exist. Driven offline
-     *  through the injected connection seam: a server sends one redirect, the policy refuses it, and
-     *  the refusal must be reported distinctly AND stop the chain rather than opening the next hop. */
-    @Test fun aRefusedRedirectStopsTheChainAndIsReportedAsSuch() {
+    /** The redirect decision has to be consulted by the downloader, not merely exist. Driven offline
+     *  through the injected connection seam: a server sends one redirect, the caller declines it, and
+     *  the chain must stop there rather than the next hop being opened. */
+    @Test fun aRedirectThatIsNotFollowedStopsTheChainAndIsReportedAsSuch() {
         val destination = File.createTempFile("download-redirect-", ".apk").also { it.deleteOnExit() }
         val opened = mutableListOf<String>()
         val offered = mutableListOf<String>()
@@ -187,8 +187,8 @@ class AppInstallerTest {
         )
 
         assertEquals(AppInstaller.DownloadResult.RedirectRefused, result)
-        assertEquals("the policy must see the hop the server chose", listOf("https://internal.example/app.apk"), offered)
-        assertEquals("a refused hop must not be opened", listOf("https://cdn.example/app.apk"), opened)
+        assertEquals("the caller must be told which hop the server chose", listOf("https://internal.example/app.apk"), offered)
+        assertEquals("a hop that is not followed must never be opened", listOf("https://cdn.example/app.apk"), opened)
         assertEquals(0L, destination.length())
     }
 

@@ -340,10 +340,10 @@ object AppInstaller {
      * `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate; the
      * Install-page URL source deliberately inherits the same rule rather than widening it.
      *
-     * [admitRedirect] additionally decides whether each server-chosen hop is somewhere the panel may be
-     * sent. The pinned callers admit everything, because their signer pin makes the route irrelevant —
-     * a substituted blob cannot install. A caller with no pin, where the destination itself is the
-     * security property, must supply a real policy; see [OutboundDestination].
+     * [followRedirect] decides whether each server-chosen hop is followed at all. The pinned callers
+     * follow everything, because their signer pin makes the route irrelevant — a substituted blob
+     * cannot install. A caller with no pin, where the destination itself is the security property,
+     * refuses instead and hands the target back to whoever is able to approve it.
      *
      * Bounded three ways, none of which trusts the peer: at most five redirect hops, a whole-operation
      * [DOWNLOAD_TOTAL_TIMEOUT_MS] deadline that a slow drip cannot outlast, and [maxBytes] enforced by
@@ -355,7 +355,7 @@ object AppInstaller {
         maxBytes: Long,
         abort: DownloadAbort? = null,
         openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
-        admitRedirect: (URL) -> Boolean = { true },
+        followRedirect: (URL) -> Boolean = { true },
     ): DownloadResult {
         val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
         // Held as a non-null local: `current` is reassigned from inside the redirect loop, so a nullable
@@ -387,9 +387,9 @@ object AppInstaller {
                             val next = httpsRedirect(current, loc)
                                 ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return DownloadResult.Failed }
                             // Nobody approved this destination — the server chose it. The caller decides
-                            // whether it is somewhere the panel is willing to be sent.
-                            if (!admitRedirect(next)) {
-                                Log.w(TAG, "refusing redirect to a destination outside the admitted set")
+                            // whether the panel is willing to be sent there at all.
+                            if (!followRedirect(next)) {
+                                Log.w(TAG, "not following a server-chosen redirect")
                                 return DownloadResult.RedirectRefused
                             }
                             current = next

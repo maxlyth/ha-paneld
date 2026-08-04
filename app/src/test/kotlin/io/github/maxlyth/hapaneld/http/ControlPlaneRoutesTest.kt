@@ -424,7 +424,6 @@ class ControlPlaneRoutesTest {
         val fetched = mutableListOf<Pair<String, Long>>()
         var redirectProbe: String? = null
         var admittedHop: Boolean? = null
-        val resolved = mutableMapOf<String, List<java.net.InetAddress>>()
         val pending = PendingUploadStore { "fetch-token" }
         val upload = ApkUploadRouteDependencies(
             enabled = { enabled },
@@ -441,13 +440,12 @@ class ControlPlaneRoutesTest {
             },
             maxBytes = 4,
             usableSpace = { usableSpace },
-            fetch = { url, dest, maxBytes, _, admitRedirect ->
+            fetch = { url, dest, maxBytes, _, followRedirect ->
                 fetched += url to maxBytes
-                redirectProbe?.let { admittedHop = admitRedirect(java.net.URL(it)) }
+                redirectProbe?.let { admittedHop = followRedirect(java.net.URL(it)) }
                 if (result == AppInstaller.DownloadResult.Succeeded) dest.writeBytes("good".toByteArray())
                 result
             },
-            resolve = { host -> resolved[host] ?: error("unexpected resolve of $host") },
         )
         application {
             routing {
@@ -551,33 +549,17 @@ class ControlPlaneRoutesTest {
         assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
-        // A hop the operator never approved is reported distinctly, because "this link cannot be used"
-        // and "try again" call for different actions.
+        // A server-chosen hop is never followed; the target comes back so the operator can send the
+        // panel there deliberately. That is what keeps every destination one they typed and approved.
         result = AppInstaller.DownloadResult.RedirectRefused
-        assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"redirect-refused"$OWNER}""")
+        redirectProbe = "https://cdn.example/real.apk"
+        assertFetch(
+            url,
+            HttpStatusCode.BadGateway,
+            """{"ok":false,"error":"redirect-refused","redirect":"https://cdn.example/real.apk"$OWNER}""",
+        )
+        assertEquals("the hop must be refused, never followed", false, admittedHop)
         assertFalse(stagedFiles.last().exists())
-
-        // The route must hand the downloader a policy that actually refuses an internal hop, and admits
-        // an ordinary public CDN hop — a redirect chain is how real APK sites serve downloads.
-        result = AppInstaller.DownloadResult.Succeeded
-        resolved["cdn.example"] = listOf(java.net.InetAddress.getByName("93.184.216.34"))
-        resolved["internal.example"] = listOf(java.net.InetAddress.getByName("10.1.2.5"))
-
-        redirectProbe = "https://internal.example/app.apk"
-        assertFetch(
-            url,
-            HttpStatusCode.OK,
-            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
-        )
-        assertEquals("an internal redirect must not be admitted", false, admittedHop)
-
-        redirectProbe = "https://cdn.example/app.apk"
-        assertFetch(
-            url,
-            HttpStatusCode.OK,
-            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
-        )
-        assertEquals("a public CDN redirect must be admitted", true, admittedHop)
         redirectProbe = null
 
         // Bytes that arrive but are not an APK are refused after inspection, and still leave nothing.

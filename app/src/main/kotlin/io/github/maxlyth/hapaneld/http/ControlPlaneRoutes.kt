@@ -7,7 +7,6 @@ import io.github.maxlyth.hapaneld.util.DownloadAbort
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
-import io.github.maxlyth.hapaneld.util.OutboundDestination
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
 import io.github.maxlyth.hapaneld.util.StreamDeadline
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -59,13 +58,11 @@ internal data class ApkUploadRouteDependencies(
     val receiveBody: (InputStream, OutputStream, Long) -> Long = { input, output, maxBytes ->
         DeadlineBoundedBody.copy(input, output, maxBytes, APK_UPLOAD_RECEIPT_DEADLINE_MS)
     },
-    /** Fetch [url] into a staging file, admitting only redirect hops the policy allows. */
+    /** Fetch [url] into a staging file, deciding per hop whether a server-chosen redirect is followed. */
     val fetch: (String, File, Long, DownloadAbort, (java.net.URL) -> Boolean) -> AppInstaller.DownloadResult =
-        { url, dest, maxBytes, abort, admitRedirect ->
-            AppInstaller.download(url, dest, maxBytes, abort, admitRedirect = admitRedirect)
+        { url, dest, maxBytes, abort, followRedirect ->
+            AppInstaller.download(url, dest, maxBytes, abort, followRedirect = followRedirect)
         },
-    /** Resolves a redirect target's addresses. Injected so the admission rule tests without a network. */
-    val resolve: (String) -> List<java.net.InetAddress> = { java.net.InetAddress.getAllByName(it).toList() },
 )
 
 /**
@@ -323,7 +320,7 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
  *  did), while everything after the bytes land is identical for both sources. */
 private sealed interface StagedBytes {
     data object Written : StagedBytes
-    data class Refused(val status: HttpStatusCode, val error: String) : StagedBytes
+    data class Refused(val status: HttpStatusCode, val error: String, val extra: String = "") : StagedBytes
 }
 
 /**
@@ -372,7 +369,7 @@ private suspend fun stageInspectAndRespond(
         when (val written = writeBytes(staged, stagingLimit)) {
             is StagedBytes.Refused -> {
                 call.respondText(
-                    """{"ok":false,"error":${Json.str(written.error)}$owner}""",
+                    """{"ok":false,"error":${Json.str(written.error)}${written.extra}$owner}""",
                     ContentType.Application.Json,
                     written.status,
                 )
@@ -520,12 +517,17 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
     val lease = beginApkStaging(call, dependencies, echo, panelWork = true) ?: return
     val abort = DownloadAbort()
     dependencies.pending.attachPanelWork(lease, request, abort)
-    val approvedHost = runCatching { URI(url).host }.getOrNull().orEmpty()
-    val admitRedirect: (java.net.URL) -> Boolean = { target ->
-        OutboundDestination.admitsRedirect(approvedHost, target, dependencies.resolve)
+    // The panel follows nothing it was not told to fetch. A server-chosen hop is captured and handed
+    // back so the operator can decide, which is what makes every destination the panel connects to one
+    // they typed and approved — leaving no unapproved destination whose admission would have to be
+    // proven to still hold at connect time.
+    var redirectTarget: String? = null
+    val followRedirect: (java.net.URL) -> Boolean = { target ->
+        redirectTarget = target.toString()
+        false
     }
     stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
-        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort, admitRedirect) }) {
+        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort, followRedirect) }) {
             AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
             // A ceiling the panel's own free space imposed is reported as storage, not as the operator
             // having named something too large, because those need different corrective action.
@@ -538,11 +540,13 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
                 StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
             AppInstaller.DownloadResult.Aborted ->
                 StagedBytes.Refused(CLIENT_CLOSED_REQUEST, "cancelled")
-            // The operator approved one destination; a server-chosen hop out of the admitted set is
-            // reported as such rather than as an ordinary failure, because the corrective action
-            // differs — this link cannot be used, as opposed to try again.
-            AppInstaller.DownloadResult.RedirectRefused ->
-                StagedBytes.Refused(HttpStatusCode.BadGateway, "redirect-refused")
+            // Not a failure to retry: the operator has somewhere else to go, and the target is handed
+            // back so they can send the panel there deliberately rather than the server doing it.
+            AppInstaller.DownloadResult.RedirectRefused -> StagedBytes.Refused(
+                HttpStatusCode.BadGateway,
+                "redirect-refused",
+                redirectTarget?.let { ""","redirect":${Json.str(it)}""" }.orEmpty(),
+            )
             AppInstaller.DownloadResult.Failed ->
                 StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
         }

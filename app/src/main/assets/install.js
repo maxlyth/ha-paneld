@@ -223,6 +223,7 @@
     'upload-timeout': 'the upload took too long',
     'fetch-timeout': 'the download stalled or took too long',
     'fetch-failed': 'the panel could not download that link',
+    'redirect-refused': 'that link redirects elsewhere',
     'cancelled': 'the download was cancelled',
     'invalid-request': 'the panel rejected this request identifier',
     'not-an-apk': 'that file is not a readable APK'
@@ -234,7 +235,15 @@
   function renderApkPreview(prev, d, failedLabel) {
     if (!prev) return;
     if (!d.ok) {
-      prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText(d.error)) + '</p>';
+      var extra = '';
+      // The panel deliberately does not follow a redirect the server chose. Show where it points and
+      // let the operator send the panel there themselves, so nothing is fetched on their behalf that
+      // they have not seen and approved.
+      if (d.error === 'redirect-refused' && d.redirect) {
+        extra = '<p class="note">It points to <b>' + esc(redirectHost(d.redirect)) + '</b>.</p>' +
+          '<button class="pbtn" style="margin-top:8px" data-redirect="' + esc(d.redirect) + '" onclick="apkUseRedirect(this)">Use that link</button>';
+      }
+      prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText(d.error)) + '</p>' + extra;
       scheduleInstallColumnAlignment();
       return;
     }
@@ -313,6 +322,20 @@
 
   // Names the request being stopped, so this can never cancel a download the operator has since
   // started in its place.
+  function redirectHost(value) {
+    try { return new URL(value).host; } catch (_) { return value; }
+  }
+
+  // Fills the field rather than fetching straight away: the operator presses Fetch themselves, so the
+  // new destination goes through the same approval as any link they typed.
+  window.apkUseRedirect = function (btn) {
+    var input = document.getElementById('apk-url');
+    if (!input) return;
+    input.value = btn.getAttribute('data-redirect') || '';
+    input.focus();
+    apkMsg('Link updated — press Fetch and inspect to continue.');
+  };
+
   window.apkCancelFetch = function () {
     var request = apkFetchRequest;
     if (!request) return;
