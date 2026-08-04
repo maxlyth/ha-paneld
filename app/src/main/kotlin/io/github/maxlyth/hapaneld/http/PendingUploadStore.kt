@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import android.os.SystemClock
+import io.github.maxlyth.hapaneld.util.DownloadAbort
 import java.io.File
 import java.util.UUID
 
@@ -32,8 +33,20 @@ internal class PendingUploadStore(
     private var receiving: Lease? = null
     private var active: Entry? = null
 
+    // Panel-side work belonging to the current reservation. Held HERE rather than in a second owner
+    // beside this store, because every way a reservation ends — superseded, aborted, staged, cleared,
+    // closed, expired — already runs through this class. A separate owner left seams at each of those
+    // points: an in-flight fetch outlived a disable, a shutdown and a replacing request.
+    private var receivingAbort: DownloadAbort? = null
+    private var receivingOwner: String? = null
+
+    // Declared when the slot is reserved, not when the abort handle arrives, so the gap between the two
+    // cannot make a fetch look like an un-retractable upload to a request trying to replace it.
+    private var receivingIsPanelWork = false
+
     @Synchronized
     fun open() {
+        stopPanelWork()
         active?.file?.delete()
         active = null
         receiving = null
@@ -41,21 +54,69 @@ internal class PendingUploadStore(
         open = true
     }
 
-    /** Exclusively reserve the upload slot before receiving a potentially slow request body. */
+    /**
+     * Exclusively reserve the upload slot before receiving a potentially slow request body.
+     *
+     * A new reservation **supersedes** work the panel was doing on the operator's behalf: an in-flight
+     * fetch is aborted and an already-staged token is retired, because both represent an intent the
+     * operator has just replaced. Leaving them would strand the panel for up to a download deadline or
+     * the entry TTL, and would answer the operator's newest action with "busy".
+     *
+     * What is NOT superseded is a request body still arriving from a client: the panel cannot retract
+     * someone else's upload stream, so that remains [BeginResult.Busy].
+     */
     @Synchronized
-    fun begin(): BeginResult {
+    fun begin(panelWork: Boolean = false): BeginResult {
         expireActive()
-        return when {
-            !open -> BeginResult.Closed
-            receiving != null || active != null -> BeginResult.Busy
-            else -> BeginResult.Granted(Lease(epoch, ++nextLeaseId).also { receiving = it })
+        if (!open) return BeginResult.Closed
+        if (receiving != null) {
+            if (!receivingIsPanelWork) return BeginResult.Busy
+            // Panel-side work: stop it. Its owning handler still releases its own lease and staging
+            // file, and its stage() will be refused because the reservation has moved on.
+            stopPanelWork()
         }
+        active?.let {
+            active = null
+            it.file.delete()
+        }
+        receivingIsPanelWork = panelWork
+        return BeginResult.Granted(Lease(epoch, ++nextLeaseId).also { receiving = it })
+    }
+
+    /** Bind panel-side work to the reservation that started it, so ending the reservation ends the work. */
+    @Synchronized
+    fun attachPanelWork(lease: Lease, owner: String, abort: DownloadAbort) {
+        if (!receiving.matches(lease)) {
+            // The reservation moved on while this request was being admitted; never start work for it.
+            abort.abort()
+            return
+        }
+        receivingAbort = abort
+        receivingOwner = owner
+    }
+
+    /** Stop the in-flight fetch only when [owner] is the request that started it. */
+    @Synchronized
+    fun cancelPanelWork(owner: String): Boolean {
+        if (receivingOwner != owner) return false
+        receivingAbort?.abort()
+        return true
+    }
+
+    private fun stopPanelWork() {
+        receivingAbort?.abort()
+        receivingAbort = null
+        receivingOwner = null
+        receivingIsPanelWork = false
     }
 
     /** Release a receive/inspection lease, deleting a staged entry if its response was not handed off. */
     @Synchronized
     fun abort(lease: Lease) {
-        if (receiving.matches(lease)) receiving = null
+        if (receiving.matches(lease)) {
+            receiving = null
+            stopPanelWork()
+        }
         active?.takeIf { it.epoch == lease.epoch && it.leaseId == lease.id }?.let {
             active = null
             it.file.delete()
@@ -70,6 +131,7 @@ internal class PendingUploadStore(
             return null
         }
         receiving = null
+        stopPanelWork()
         return Entry(newToken(), file, identity, epoch, lease.id, monotonicMs()).also { active = it }
     }
 
@@ -106,6 +168,7 @@ internal class PendingUploadStore(
 
     @Synchronized
     fun clear() {
+        stopPanelWork()
         active?.file?.delete()
         active = null
         receiving = null

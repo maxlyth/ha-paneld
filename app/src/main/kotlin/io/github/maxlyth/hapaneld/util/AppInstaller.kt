@@ -327,7 +327,7 @@ object AppInstaller {
      * review flow reports them separately, because an administrator fetching an APK from somewhere else
      * on the network needs to know whether the panel was refused, timed out, or hit the size ceiling.
      */
-    internal enum class DownloadResult { Succeeded, TooLarge, TimedOut, Aborted, Failed }
+    internal enum class DownloadResult { Succeeded, TooLarge, TimedOut, Aborted, RedirectRefused, Failed }
 
     /**
      * Download [url] to [dest], following redirects (GitHub release → CDN).
@@ -340,6 +340,11 @@ object AppInstaller {
      * `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate; the
      * Install-page URL source deliberately inherits the same rule rather than widening it.
      *
+     * [admitRedirect] additionally decides whether each server-chosen hop is somewhere the panel may be
+     * sent. The pinned callers admit everything, because their signer pin makes the route irrelevant —
+     * a substituted blob cannot install. A caller with no pin, where the destination itself is the
+     * security property, must supply a real policy; see [OutboundDestination].
+     *
      * Bounded three ways, none of which trusts the peer: at most five redirect hops, a whole-operation
      * [DOWNLOAD_TOTAL_TIMEOUT_MS] deadline that a slow drip cannot outlast, and [maxBytes] enforced by
      * [copyBeforeDeadline] on bytes actually read — a lying or absent `Content-Length` cannot widen it.
@@ -350,6 +355,7 @@ object AppInstaller {
         maxBytes: Long,
         abort: DownloadAbort? = null,
         openConnection: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
+        admitRedirect: (URL) -> Boolean = { true },
     ): DownloadResult {
         val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
         // Held as a non-null local: `current` is reassigned from inside the redirect loop, so a nullable
@@ -378,8 +384,15 @@ object AppInstaller {
                     when (conn.responseCode) {
                         in 300..399 -> {
                             val loc = conn.getHeaderField("Location") ?: return DownloadResult.Failed
-                            current = httpsRedirect(current, loc)
+                            val next = httpsRedirect(current, loc)
                                 ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return DownloadResult.Failed }
+                            // Nobody approved this destination — the server chose it. The caller decides
+                            // whether it is somewhere the panel is willing to be sent.
+                            if (!admitRedirect(next)) {
+                                Log.w(TAG, "refusing redirect to a destination outside the admitted set")
+                                return DownloadResult.RedirectRefused
+                            }
+                            current = next
                         }
                         200 -> {
                             val declared = conn.contentLengthLong

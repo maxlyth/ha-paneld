@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.util.DownloadAbort
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import io.github.maxlyth.hapaneld.util.OutboundDestination
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
 import io.github.maxlyth.hapaneld.util.StreamDeadline
 import io.github.maxlyth.hapaneld.util.UpdateChecker
@@ -58,10 +59,13 @@ internal data class ApkUploadRouteDependencies(
     val receiveBody: (InputStream, OutputStream, Long) -> Long = { input, output, maxBytes ->
         DeadlineBoundedBody.copy(input, output, maxBytes, APK_UPLOAD_RECEIPT_DEADLINE_MS)
     },
-    val fetch: (String, File, Long, DownloadAbort) -> AppInstaller.DownloadResult = { url, dest, maxBytes, abort ->
-        AppInstaller.download(url, dest, maxBytes, abort)
-    },
-    val fetchOwner: ApkFetchOwner = ApkFetchOwner(),
+    /** Fetch [url] into a staging file, admitting only redirect hops the policy allows. */
+    val fetch: (String, File, Long, DownloadAbort, (java.net.URL) -> Boolean) -> AppInstaller.DownloadResult =
+        { url, dest, maxBytes, abort, admitRedirect ->
+            AppInstaller.download(url, dest, maxBytes, abort, admitRedirect = admitRedirect)
+        },
+    /** Resolves a redirect target's addresses. Injected so the admission rule tests without a network. */
+    val resolve: (String) -> List<java.net.InetAddress> = { java.net.InetAddress.getAllByName(it).toList() },
 )
 
 /**
@@ -413,7 +417,8 @@ private suspend fun beginApkStaging(
     call: ApplicationCall,
     dependencies: ApkUploadRouteDependencies,
     owner: String = "",
-): PendingUploadStore.Lease? = when (val admission = dependencies.pending.begin()) {
+    panelWork: Boolean = false,
+): PendingUploadStore.Lease? = when (val admission = dependencies.pending.begin(panelWork)) {
     is PendingUploadStore.BeginResult.Granted -> admission.lease
     PendingUploadStore.BeginResult.Busy -> {
         call.respondText(
@@ -507,37 +512,37 @@ private suspend fun handleApkFetchFromUrl(call: ApplicationCall, routes: Control
         )
     ) return
     val echo = requestEcho(request)
-    val abort = dependencies.fetchOwner.begin(request)
-    if (abort == null) {
-        call.respondText(
-            """{"ok":false,"error":"upload-busy"$echo}""",
-            ContentType.Application.Json,
-            HttpStatusCode.Conflict,
-        )
-        return
+    // Reserving supersedes any panel-side work the operator has just replaced, so the previous fetch
+    // is stopped and its staged token retired rather than stranding this request behind them.
+    val lease = beginApkStaging(call, dependencies, echo, panelWork = true) ?: return
+    val abort = DownloadAbort()
+    dependencies.pending.attachPanelWork(lease, request, abort)
+    val approvedHost = runCatching { URI(url).host }.getOrNull().orEmpty()
+    val admitRedirect: (java.net.URL) -> Boolean = { target ->
+        OutboundDestination.admitsRedirect(approvedHost, target, dependencies.resolve)
     }
-    try {
-        val lease = beginApkStaging(call, dependencies, echo) ?: return
-        stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
-            when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort) }) {
-                AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
-                // A ceiling the panel's own free space imposed is reported as storage, not as the operator
-                // having named something too large, because those need different corrective action.
-                AppInstaller.DownloadResult.TooLarge -> if (stagingLimit < dependencies.maxBytes) {
-                    StagedBytes.Refused(HttpStatusCode.InsufficientStorage, "insufficient-storage")
-                } else {
-                    StagedBytes.Refused(HttpStatusCode.PayloadTooLarge, "fetch-too-large")
-                }
-                AppInstaller.DownloadResult.TimedOut ->
-                    StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
-                AppInstaller.DownloadResult.Aborted ->
-                    StagedBytes.Refused(CLIENT_CLOSED_REQUEST, "cancelled")
-                AppInstaller.DownloadResult.Failed ->
-                    StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
+    stageInspectAndRespond(call, dependencies, lease, declaredBytes = null, request = request) { staged, stagingLimit ->
+        when (withContext(Dispatchers.IO) { dependencies.fetch(url, staged, stagingLimit, abort, admitRedirect) }) {
+            AppInstaller.DownloadResult.Succeeded -> StagedBytes.Written
+            // A ceiling the panel's own free space imposed is reported as storage, not as the operator
+            // having named something too large, because those need different corrective action.
+            AppInstaller.DownloadResult.TooLarge -> if (stagingLimit < dependencies.maxBytes) {
+                StagedBytes.Refused(HttpStatusCode.InsufficientStorage, "insufficient-storage")
+            } else {
+                StagedBytes.Refused(HttpStatusCode.PayloadTooLarge, "fetch-too-large")
             }
+            AppInstaller.DownloadResult.TimedOut ->
+                StagedBytes.Refused(HttpStatusCode.RequestTimeout, "fetch-timeout")
+            AppInstaller.DownloadResult.Aborted ->
+                StagedBytes.Refused(CLIENT_CLOSED_REQUEST, "cancelled")
+            // The operator approved one destination; a server-chosen hop out of the admitted set is
+            // reported as such rather than as an ordinary failure, because the corrective action
+            // differs — this link cannot be used, as opposed to try again.
+            AppInstaller.DownloadResult.RedirectRefused ->
+                StagedBytes.Refused(HttpStatusCode.BadGateway, "redirect-refused")
+            AppInstaller.DownloadResult.Failed ->
+                StagedBytes.Refused(HttpStatusCode.BadGateway, "fetch-failed")
         }
-    } finally {
-        dependencies.fetchOwner.end(request)
     }
 }
 
@@ -553,7 +558,7 @@ private suspend fun handleApkFetchCancel(call: ApplicationCall, dependencies: Ap
         )
         return
     }
-    val cancelled = dependencies.fetchOwner.cancel(request)
+    val cancelled = dependencies.pending.cancelPanelWork(request)
     call.respondText("""{"ok":true,"cancelled":$cancelled}""", ContentType.Application.Json)
 }
 

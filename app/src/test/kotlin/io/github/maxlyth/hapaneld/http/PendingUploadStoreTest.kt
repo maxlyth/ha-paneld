@@ -42,7 +42,70 @@ class PendingUploadStoreTest {
 
     private fun file(name: String) = temporary.newFile(name).apply { writeText(name) }
 
-    @Test fun beginExclusivelyReservesReceiveAndStagedSlotsUntilAbortOrClaim() {
+    /** A reservation may supersede the operator's own previous intent, but never a body still arriving
+     *  from a client — the panel cannot retract someone else's upload stream. A superseded entry must
+     *  be genuinely dead: its token stops resolving and its file is deleted, so nothing can later be
+     *  installed under it. */
+    /** Panel-side work is bound to the reservation that started it, so every way a reservation ends
+     *  also ends the work. Before this was folded into the store, a disable, a shutdown and a replacing
+     *  request each left a download running against a panel that had already moved on. */
+    @Test fun everyWayAReservationEndsAlsoStopsThePanelWorkBoundToIt() {
+        fun freshStoreWithWork(): Pair<PendingUploadStore, io.github.maxlyth.hapaneld.util.DownloadAbort> {
+            val store = PendingUploadStore { "token" }.apply { open() }
+            val lease = granted(store.begin(panelWork = true))
+            val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
+            store.attachPanelWork(lease, "req", abort)
+            return store to abort
+        }
+
+        val (disabled, disabledWork) = freshStoreWithWork()
+        disabled.clear()
+        assertTrue("disabling the capability must stop an in-flight fetch", disabledWork.isAborted)
+
+        val (stopped, stoppedWork) = freshStoreWithWork()
+        stopped.close()
+        assertTrue("shutting down must stop an in-flight fetch", stoppedWork.isAborted)
+
+        val (restarted, restartedWork) = freshStoreWithWork()
+        restarted.open()
+        assertTrue("a restarted server must not leave the old fetch running", restartedWork.isAborted)
+
+        val (replaced, replacedWork) = freshStoreWithWork()
+        replaced.begin()
+        assertTrue("a replacing request must retire the fetch it supersedes", replacedWork.isAborted)
+
+        val (released, releasedWork) = freshStoreWithWork()
+        released.abort(granted(released.begin()))
+        assertTrue("releasing the reservation must stop its work", releasedWork.isAborted)
+    }
+
+    /** A cancel may only stop the request that started the work, never a replacement. */
+    @Test fun panelWorkIsCancellableOnlyByTheRequestThatOwnsIt() {
+        val store = PendingUploadStore { "token" }.apply { open() }
+        val lease = granted(store.begin(panelWork = true))
+        val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
+        store.attachPanelWork(lease, "mine", abort)
+
+        assertFalse("a foreign request must not cancel", store.cancelPanelWork("someone-else"))
+        assertFalse(abort.isAborted)
+        assertTrue(store.cancelPanelWork("mine"))
+        assertTrue(abort.isAborted)
+    }
+
+    /** Work admitted against a reservation that has already moved on must never start. */
+    @Test fun panelWorkAttachedToASupersededReservationIsStoppedImmediately() {
+        val store = PendingUploadStore { "token" }.apply { open() }
+        val stale = granted(store.begin(panelWork = true))
+        store.begin()
+        val abort = io.github.maxlyth.hapaneld.util.DownloadAbort()
+
+        store.attachPanelWork(stale, "stale", abort)
+
+        assertTrue("work for a superseded reservation must not run", abort.isAborted)
+        assertFalse("and it must not become cancellable under that owner", store.cancelPanelWork("stale"))
+    }
+
+    @Test fun beginRefusesAnArrivingBodyButSupersedesTheOperatorsPreviousStagedIntent() {
         var id = 0
         val store = PendingUploadStore { "token-${++id}" }.apply { open() }
         val firstLease = granted(store.begin())
@@ -52,9 +115,15 @@ class PendingUploadStoreTest {
         store.abort(firstLease)
         val secondLease = granted(store.begin())
         val staged = store.stage(secondLease, file("staged.apk"))!!
-        assertEquals(PendingUploadStore.BeginResult.Busy, store.begin())
 
-        assertEquals(staged.file, store.claim(staged.token)?.file)
+        // A staged entry is the last thing the operator asked for, not a lock held until its TTL.
+        val thirdLease = granted(store.begin())
+        assertNull("a superseded token must stop resolving", store.peek(staged.token))
+        assertNull("a superseded token must not be claimable", store.claim(staged.token))
+        assertFalse("a superseded staging file must be deleted", staged.file.exists())
+
+        val replacement = store.stage(thirdLease, file("replacement.apk"))!!
+        assertEquals(replacement.file, store.claim(replacement.token)?.file)
         assertTrue(store.begin() is PendingUploadStore.BeginResult.Granted)
     }
 

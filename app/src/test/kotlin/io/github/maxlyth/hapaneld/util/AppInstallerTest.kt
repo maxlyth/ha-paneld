@@ -151,7 +151,7 @@ class AppInstallerTest {
 
         assertEquals(
             AppInstaller.DownloadResult.Aborted,
-            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort) { connection },
+            AppInstaller.download("https://cdn.example/app.apk", destination, 1024L, abort, { connection }),
         )
         // The outcome alone cannot prove this: a failed request would also be reported as aborted once
         // the owner has cancelled. What must hold is that no request was ever issued.

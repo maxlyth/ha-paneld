@@ -375,7 +375,18 @@ class ControlPlaneRoutesTest {
             HttpStatusCode.OK,
             """{"ok":true,"token":"upload-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
         )
-        assertUpload("next", HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
+        // A further upload supersedes the staged one rather than being refused until its TTL; the
+        // superseded token is dead, so nothing can be installed under it.
+        assertUpload(
+            "next",
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"upload-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
+        )
+        assertUpload(
+            "good",
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"upload-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
+        )
         assertCommit("wrong-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
 
         val held = assertNotNullTicket(InstallProgress.start("held"))
@@ -411,7 +422,9 @@ class ControlPlaneRoutesTest {
         val approvalAsked = mutableListOf<Triple<SensitiveOperation, String, String>>()
         val stagedFiles = mutableListOf<java.io.File>()
         val fetched = mutableListOf<Pair<String, Long>>()
-        val owner = ApkFetchOwner()
+        var redirectProbe: String? = null
+        var admittedHop: Boolean? = null
+        val resolved = mutableMapOf<String, List<java.net.InetAddress>>()
         val pending = PendingUploadStore { "fetch-token" }
         val upload = ApkUploadRouteDependencies(
             enabled = { enabled },
@@ -428,12 +441,13 @@ class ControlPlaneRoutesTest {
             },
             maxBytes = 4,
             usableSpace = { usableSpace },
-            fetch = { url, dest, maxBytes, abort ->
+            fetch = { url, dest, maxBytes, _, admitRedirect ->
                 fetched += url to maxBytes
+                redirectProbe?.let { admittedHop = admitRedirect(java.net.URL(it)) }
                 if (result == AppInstaller.DownloadResult.Succeeded) dest.writeBytes("good".toByteArray())
                 result
             },
-            fetchOwner = owner,
+            resolve = { host -> resolved[host] ?: error("unexpected resolve of $host") },
         )
         application {
             routing {
@@ -537,6 +551,35 @@ class ControlPlaneRoutesTest {
         assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"$OWNER}""")
         assertFalse(stagedFiles.last().exists())
 
+        // A hop the operator never approved is reported distinctly, because "this link cannot be used"
+        // and "try again" call for different actions.
+        result = AppInstaller.DownloadResult.RedirectRefused
+        assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"redirect-refused"$OWNER}""")
+        assertFalse(stagedFiles.last().exists())
+
+        // The route must hand the downloader a policy that actually refuses an internal hop, and admits
+        // an ordinary public CDN hop — a redirect chain is how real APK sites serve downloads.
+        result = AppInstaller.DownloadResult.Succeeded
+        resolved["cdn.example"] = listOf(java.net.InetAddress.getByName("93.184.216.34"))
+        resolved["internal.example"] = listOf(java.net.InetAddress.getByName("10.1.2.5"))
+
+        redirectProbe = "https://internal.example/app.apk"
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
+        )
+        assertEquals("an internal redirect must not be admitted", false, admittedHop)
+
+        redirectProbe = "https://cdn.example/app.apk"
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
+        )
+        assertEquals("a public CDN redirect must be admitted", true, admittedHop)
+        redirectProbe = null
+
         // Bytes that arrive but are not an APK are refused after inspection, and still leave nothing.
         result = AppInstaller.DownloadResult.Succeeded
         identity = null
@@ -551,10 +594,13 @@ class ControlPlaneRoutesTest {
             """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
         )
 
-        // One staged APK at a time, whichever source produced it — a second fetch and an upload both
-        // contend for the same slot, so a replacement cannot appear behind an already-issued token.
-        assertFetch(url, HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"$OWNER}""")
-        assertUpload("next", HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
+        // A staged token is the operator's LAST intent, not a lock: starting another fetch retires it
+        // and issues a new one, rather than stranding them behind it until the TTL expires.
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"$OWNER}""",
+        )
         assertCommit("wrong-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
 
         // The unchanged commit route installs exactly the fetched bytes.
@@ -575,7 +621,6 @@ class ControlPlaneRoutesTest {
         var cancelReported: Boolean? = null
         var fileId = 0
         val stagedFiles = mutableListOf<java.io.File>()
-        val owner = ApkFetchOwner()
         val pending = PendingUploadStore { "fetch-token" }.apply { open() }
         val upload = ApkUploadRouteDependencies(
             enabled = { true },
@@ -586,9 +631,9 @@ class ControlPlaneRoutesTest {
             startInstall = { _, ticket -> InstallProgress.finish(ticket, "done") },
             maxBytes = 16,
             usableSpace = { Long.MAX_VALUE },
-            fetch = { _, dest, _, abort ->
+            fetch = { _, dest, _, abort, _ ->
                 // A cancel arriving mid-transfer, driven deterministically instead of with threads.
-                cancelDuring?.let { cancelReported = owner.cancel(it) }
+                cancelDuring?.let { cancelReported = pending.cancelPanelWork(it) }
                 if (abort.isAborted) {
                     AppInstaller.DownloadResult.Aborted
                 } else {
@@ -596,7 +641,6 @@ class ControlPlaneRoutesTest {
                     AppInstaller.DownloadResult.Succeeded
                 }
             },
-            fetchOwner = owner,
         )
         application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
         val url = "https://example.test/app.apk"
