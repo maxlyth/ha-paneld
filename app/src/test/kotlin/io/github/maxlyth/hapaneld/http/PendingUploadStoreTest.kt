@@ -79,6 +79,22 @@ class PendingUploadStoreTest {
         assertTrue("releasing the reservation must stop its work", releasedWork.isAborted)
     }
 
+    /** The race that matters: bytes can finish arriving while the operator is cancelling. Aborting the
+     *  transfer is then too late, so cancellation has to decide the outcome — no token may exist, at
+     *  any timing, once the operator has said stop. */
+    @Test fun aCancelledReservationCannotStageEvenIfItsBytesAlreadyArrived() {
+        val store = PendingUploadStore { "token" }.apply { open() }
+        val lease = granted(store.begin(panelWork = true))
+        store.attachPanelWork(lease, "mine", io.github.maxlyth.hapaneld.util.DownloadAbort())
+
+        assertTrue(store.cancelPanelWork("mine"))
+        assertTrue("the refusal must be attributable to the cancel", store.isCancelled(lease))
+
+        val completed = file("arrived-anyway.apk")
+        assertNull("a cancelled reservation must never mint a token", store.stage(lease, completed))
+        assertFalse("and its bytes must not survive", completed.exists())
+    }
+
     /** A cancel may only stop the request that started the work, never a replacement. */
     @Test fun panelWorkIsCancellableOnlyByTheRequestThatOwnsIt() {
         val store = PendingUploadStore { "token" }.apply { open() }

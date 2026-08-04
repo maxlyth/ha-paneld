@@ -619,6 +619,7 @@ class ControlPlaneRoutesTest {
     fun apkFetchCancellationStopsOnlyTheRequestThatOwnsItAndFreesTheSlot() = testApplication {
         var cancelDuring: String? = null
         var cancelReported: Boolean? = null
+        var cancelSucceedsAnyway = false
         var fileId = 0
         val stagedFiles = mutableListOf<java.io.File>()
         val pending = PendingUploadStore { "fetch-token" }.apply { open() }
@@ -634,7 +635,10 @@ class ControlPlaneRoutesTest {
             fetch = { _, dest, _, abort, _ ->
                 // A cancel arriving mid-transfer, driven deterministically instead of with threads.
                 cancelDuring?.let { cancelReported = pending.cancelPanelWork(it) }
-                if (abort.isAborted) {
+                if (cancelSucceedsAnyway) {
+                    dest.writeBytes("good".toByteArray())
+                    AppInstaller.DownloadResult.Succeeded
+                } else if (abort.isAborted) {
                     AppInstaller.DownloadResult.Aborted
                 } else {
                     dest.writeBytes("good".toByteArray())
@@ -661,6 +665,14 @@ class ControlPlaneRoutesTest {
         assertFetch(url, HttpStatusCode(499, "Client Closed Request"), """{"ok":false,"error":"cancelled"$OWNER}""")
         assertEquals(true, cancelReported)
         assertFalse("a cancelled download must leave nothing staged", stagedFiles.last().exists())
+
+        // The harder case: the transfer SUCCEEDS while the operator is cancelling. Reporting success
+        // and handing back an installable token would contradict what they were just told.
+        cancelSucceedsAnyway = true
+        assertFetch(url, HttpStatusCode(499, "Client Closed Request"), """{"ok":false,"error":"cancelled"$OWNER}""")
+        assertFalse("a cancelled fetch must not stage its bytes", stagedFiles.last().exists())
+        assertCommit("fetch-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
+        cancelSucceedsAnyway = false
 
         // Cancelling released the slot immediately: the next fetch is admitted, not answered busy.
         cancelDuring = null

@@ -44,6 +44,11 @@ internal class PendingUploadStore(
     // cannot make a fetch look like an un-retractable upload to a request trying to replace it.
     private var receivingIsPanelWork = false
 
+    // A cancel must decide the OUTCOME, not merely try to stop the transfer. Aborting alone left a
+    // race: bytes that had already arrived went on to be staged, so the operator was told the download
+    // was cancelled while a claimable token existed for the whole entry TTL.
+    private var receivingCancelled = false
+
     @Synchronized
     fun open() {
         stopPanelWork()
@@ -80,6 +85,7 @@ internal class PendingUploadStore(
             it.file.delete()
         }
         receivingIsPanelWork = panelWork
+        receivingCancelled = false
         return BeginResult.Granted(Lease(epoch, ++nextLeaseId).also { receiving = it })
     }
 
@@ -99,15 +105,21 @@ internal class PendingUploadStore(
     @Synchronized
     fun cancelPanelWork(owner: String): Boolean {
         if (receivingOwner != owner) return false
+        receivingCancelled = true
         receivingAbort?.abort()
         return true
     }
+
+    /** Whether [lease]'s work was cancelled, so a refusal can say so rather than blaming the link. */
+    @Synchronized
+    fun isCancelled(lease: Lease): Boolean = receiving.matches(lease) && receivingCancelled
 
     private fun stopPanelWork() {
         receivingAbort?.abort()
         receivingAbort = null
         receivingOwner = null
         receivingIsPanelWork = false
+        receivingCancelled = false
     }
 
     /** Release a receive/inspection lease, deleting a staged entry if its response was not handed off. */
@@ -126,7 +138,8 @@ internal class PendingUploadStore(
     /** Atomically convert the exclusive receive lease into the one inspected, commit-ready entry. */
     @Synchronized
     fun stage(lease: Lease, file: File, identity: UploadedApkIdentity? = null): Entry? {
-        if (!open || lease.epoch != epoch || !receiving.matches(lease) || active != null) {
+        // A cancelled reservation can never produce a token, however far its transfer had got.
+        if (!open || lease.epoch != epoch || !receiving.matches(lease) || active != null || receivingCancelled) {
             file.delete()
             return null
         }

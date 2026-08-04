@@ -391,10 +391,13 @@ private suspend fun stageInspectAndRespond(
         }
         val entry = dependencies.pending.stage(lease, staged, identity)
         if (entry == null) {
+            // A transfer that finished while the operator was cancelling must be reported as cancelled,
+            // not as a shutdown, and above all must not have produced a token.
+            val cancelled = dependencies.pending.isCancelled(lease)
             call.respondText(
-                """{"ok":false,"error":"stopping"$owner}""",
+                if (cancelled) """{"ok":false,"error":"cancelled"$owner}""" else """{"ok":false,"error":"stopping"$owner}""",
                 ContentType.Application.Json,
-                HttpStatusCode.ServiceUnavailable,
+                if (cancelled) CLIENT_CLOSED_REQUEST else HttpStatusCode.ServiceUnavailable,
             )
             return
         }
