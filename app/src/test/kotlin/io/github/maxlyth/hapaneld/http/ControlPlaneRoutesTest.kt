@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 import io.github.maxlyth.hapaneld.backup.PanelBackup
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
+import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.InstallProgress
@@ -22,6 +23,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -390,6 +392,144 @@ class ControlPlaneRoutesTest {
         assertFalse(InstallProgress.running)
     }
 
+    /** A URL is a source for the SAME review flow, so it must reach the same staged file, the same
+     *  token and the same commit route — and must refuse everything the upload route refuses, before
+     *  it touches the network. Each `fetched` assertion pins whether the download was actually
+     *  attempted, because a gate that passes by never running is the failure mode worth catching. */
+    @Test
+    fun apkFetchFromUrlRouteComposesCapabilityUrlAdmissionBoundedFailuresAndTokenHandoff() = testApplication {
+        var enabled = false
+        var rootAvailable = true
+        var stagingFails = false
+        var identity: UploadedApkIdentity? = UploadedApkIdentity("example.panel", "1.2.3", null)
+        var result = AppInstaller.DownloadResult.Succeeded
+        var usableSpace = Long.MAX_VALUE
+        var installed: PendingUploadStore.Entry? = null
+        var fileId = 0
+        val stagedFiles = mutableListOf<java.io.File>()
+        val fetched = mutableListOf<Pair<String, Long>>()
+        val pending = PendingUploadStore { "fetch-token" }
+        val upload = ApkUploadRouteDependencies(
+            enabled = { enabled },
+            rootAvailable = { rootAvailable },
+            pending = pending,
+            createStagingFile = {
+                if (stagingFails) error("no staging space")
+                temporary.newFile("fetch-${++fileId}.apk").also { stagedFiles += it }
+            },
+            inspect = { identity },
+            startInstall = { entry, progress ->
+                installed = entry
+                InstallProgress.finish(progress, "installed")
+            },
+            maxBytes = 4,
+            usableSpace = { usableSpace },
+            fetch = { url, dest, maxBytes ->
+                fetched += url to maxBytes
+                if (result == AppInstaller.DownloadResult.Succeeded) dest.writeBytes("good".toByteArray())
+                result
+            },
+        )
+        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+        val url = "https://example.test/app.apk"
+
+        assertFetch(url, HttpStatusCode.Forbidden, """{"ok":false,"error":"disabled"}""")
+
+        enabled = true
+        rootAvailable = false
+        assertFetch(url, HttpStatusCode.ServiceUnavailable, """{"ok":false,"error":"no-root"}""")
+        rootAvailable = true
+
+        // A refused scheme, a relative reference and an empty field are rejected as bad input, never as
+        // a failed download, so an operator can tell a typo from an unreachable host.
+        assertFetch("http://example.test/app.apk", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-url"}""")
+        assertFetch("example.test/app.apk", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-url"}""")
+        assertFetch("", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-url"}""")
+
+        assertFetch(url, HttpStatusCode.ServiceUnavailable, """{"ok":false,"error":"stopping"}""")
+
+        pending.open()
+        stagingFails = true
+        assertFetch(url, HttpStatusCode.InternalServerError, """{"ok":false,"error":"upload-staging-failed"}""")
+        stagingFails = false
+
+        usableSpace = 0L
+        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
+        assertFalse(stagedFiles.last().exists())
+
+        // Nothing above this line may have reached the network: capability, URL shape, lifetime and
+        // storage are all decided before the panel is asked to fetch anything.
+        assertEquals(0, fetched.size)
+
+        // A ceiling imposed by the panel's own free space reports as storage, not as an oversized file.
+        usableSpace = 2L
+        result = AppInstaller.DownloadResult.TooLarge
+        assertFetch(url, HttpStatusCode.InsufficientStorage, """{"ok":false,"error":"insufficient-storage"}""")
+        assertEquals(1, fetched.size)
+        assertEquals(url to 2L, fetched.last())
+        assertFalse(stagedFiles.last().exists())
+
+        usableSpace = Long.MAX_VALUE
+        assertFetch(url, HttpStatusCode.PayloadTooLarge, """{"ok":false,"error":"fetch-too-large"}""")
+        assertEquals(url to 4L, fetched.last())
+        assertFalse(stagedFiles.last().exists())
+
+        result = AppInstaller.DownloadResult.TimedOut
+        assertFetch(url, HttpStatusCode.RequestTimeout, """{"ok":false,"error":"fetch-timeout"}""")
+        assertFalse(stagedFiles.last().exists())
+
+        result = AppInstaller.DownloadResult.Failed
+        assertFetch(url, HttpStatusCode.BadGateway, """{"ok":false,"error":"fetch-failed"}""")
+        assertFalse(stagedFiles.last().exists())
+
+        // Bytes that arrive but are not an APK are refused after inspection, and still leave nothing.
+        result = AppInstaller.DownloadResult.Succeeded
+        identity = null
+        assertFetch(url, HttpStatusCode.BadRequest, """{"ok":false,"error":"not-an-apk"}""")
+        assertFalse(stagedFiles.last().exists())
+
+        // Every failure above released its lease: this fetch is admitted rather than answered busy.
+        identity = UploadedApkIdentity("example.panel", "1.2.3", null)
+        assertFetch(
+            url,
+            HttpStatusCode.OK,
+            """{"ok":true,"token":"fetch-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}""",
+        )
+
+        // One staged APK at a time, whichever source produced it — a second fetch and an upload both
+        // contend for the same slot, so a replacement cannot appear behind an already-issued token.
+        assertFetch(url, HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
+        assertUpload("next", HttpStatusCode.Conflict, """{"ok":false,"error":"upload-busy"}""")
+        assertCommit("wrong-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
+
+        // The unchanged commit route installs exactly the fetched bytes.
+        assertCommit("fetch-token", HttpStatusCode.OK, """{"status":"started"}""")
+        assertNotNull(installed)
+        assertTrue(installed!!.file.exists())
+        assertArrayEquals("good".toByteArray(), installed!!.file.readBytes())
+        installed!!.file.delete()
+        assertFalse(InstallProgress.running)
+    }
+
+    @Test fun apkFetchUrlAdmissionAcceptsOnlyExplicitBoundedHttpsLinks() {
+        assertEquals("https://example.test/app.apk", validApkFetchUrl("  https://example.test/app.apk  "))
+        assertEquals("HTTPS://example.test/app.apk", validApkFetchUrl("HTTPS://example.test/app.apk"))
+
+        assertNull(validApkFetchUrl("http://example.test/app.apk"))
+        assertNull(validApkFetchUrl("ftp://example.test/app.apk"))
+        assertNull(validApkFetchUrl("file:///data/local/tmp/app.apk"))
+        assertNull(validApkFetchUrl("example.test/app.apk"))
+        assertNull(validApkFetchUrl("/app.apk"))
+        assertNull(validApkFetchUrl(""))
+        assertNull(validApkFetchUrl("   "))
+        assertNull(validApkFetchUrl("https:///app.apk"))
+        assertNull(validApkFetchUrl("https://example.test/a b.apk"))
+
+        // The bound is on the whole link, and it is inclusive at the limit.
+        assertEquals("https://example.test/ok.apk", validApkFetchUrl("https://example.test/ok.apk", maxChars = 27))
+        assertNull(validApkFetchUrl("https://example.test/ok.apk", maxChars = 26))
+    }
+
     @Test fun bodyReaderEnforcesAbsoluteElapsedDeadlineWithoutSleeping() {
         var now = 0L
         val source = object : ByteArrayInputStream("payload".toByteArray()) {
@@ -546,6 +686,19 @@ class ControlPlaneRoutesTest {
         responseBody: String,
     ) {
         val response = client.post("/api/v1/install/apk") { setBody(body) }
+        assertEquals(status, response.status)
+        assertEquals(responseBody, response.bodyAsText())
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.assertFetch(
+        url: String,
+        status: HttpStatusCode,
+        responseBody: String,
+    ) {
+        val response = client.post("/api/v1/install/apk/from-url") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("url=" + java.net.URLEncoder.encode(url, "UTF-8"))
+        }
         assertEquals(status, response.status)
         assertEquals(responseBody, response.bodyAsText())
     }

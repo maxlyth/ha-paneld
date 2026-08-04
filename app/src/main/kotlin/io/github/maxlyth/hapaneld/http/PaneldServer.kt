@@ -3497,23 +3497,30 @@ $compRow
 
     /** "Install an APK" card (Install tab). ⚠ Root-installs an arbitrary user-supplied APK over the
      *  unauthenticated LAN-trust :8888 — carries a prominent in-card security warning, an enable toggle
-     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Root/helper-gated. */
+     *  (config.apkUploadAllowed), and a parse-then-confirm flow (see install.js). Root/helper-gated.
+     *
+     *  Two sources feed one review: a local file, or a link the panel fetches itself. The link exists
+     *  because a phone browser may refuse to offer a downloaded APK to the file picker at all, which
+     *  leaves upload-only administrators with no route. Both end at the same inspected staged file and
+     *  the same confirm-before-install button. */
     private fun apkCardHtml(root: Boolean): String {
         val body = if (!root) {
             """<p class="note">⚠ Installing an arbitrary APK needs root or the helper daemon — unavailable on this panel.</p>"""
         } else {
             val allowed = config.apkUploadAllowed
             """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
-                """<b>unauthenticated</b> LAN web UI. Only upload APKs you trust. """ +
+                """<b>unauthenticated</b> LAN web UI. Only install APKs you trust. """ +
                 """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
 <label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
 <div id="apk-ui"${if (allowed) "" else " style=\"display:none\""}>
 <label class="pbtn" style="cursor:pointer">⭱ Choose APK…<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
+<label style="margin-top:10px">Or fetch from a link<input type="url" id="apk-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/app.apk"></label>
+<button class="pbtn" style="margin-top:8px" onclick="apkFetchUrl()">⇩ Fetch and inspect</button>
 <div id="apk-preview" style="margin-top:10px"></div>
 </div>"""
         }
         return """<div class="card" data-layout-key="apk-install"><h2>Install an APK</h2>
-<p class="note">Sideload an app (e.g. a dashboard renderer) by uploading its APK — you'll see its package, version and signer before it installs.</p>
+<p class="note">Sideload an app (e.g. a dashboard renderer) from a file on your device or an <code>https://</code> link the panel downloads itself — either way you'll see its package, version and signer before it installs.</p>
 $body
 <p class="note" id="apk-msg"></p></div>"""
     }

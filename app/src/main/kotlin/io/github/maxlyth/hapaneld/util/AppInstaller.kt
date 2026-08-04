@@ -82,7 +82,8 @@ object AppInstaller {
             .getOrElse { return@withContext InstallOutcome.Retryable("download staging failed") }
         withStagedFiles { staged ->
             staged.stage(apk)
-            if (!download(url, apk, downloadLimit)) return@withStagedFiles InstallOutcome.Retryable("download failed")
+            if (download(url, apk, downloadLimit) != DownloadResult.Succeeded)
+                return@withStagedFiles InstallOutcome.Retryable("download failed")
             val why = verifyApk(context, apk.absolutePath, pin)
             if (why != null) {
                 Log.w(TAG, "refused install: $why")
@@ -295,16 +296,6 @@ object AppInstaller {
         else -> InstallRoute.NONE
     }
 
-    /**
-     * Download [url] to [dest], following redirects (GitHub release → CDN). True on success.
-     *
-     * HTTPS-only for every hop: the initial URL and each redirect target must be `https`, else the
-     * fetch is refused. The APK is signer-pinned after download ([verifyApk]), so a substituted blob
-     * still can't install — but refusing plaintext hops closes the residual downgrade (an
-     * `https→http` redirect would otherwise fetch the update over cleartext, leaking the request and
-     * letting a network attacker waste the download before the pin rejects it). All real callers use
-     * GitHub `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate.
-     */
     /** The download's size in bytes from a HEAD (following HTTPS redirects), or -1 if unknown. Used to
      *  preflight free space before committing to a large download. */
     private fun contentLength(url: String): Long = runCatching {
@@ -330,45 +321,85 @@ object AppInstaller {
         -1L
     }.getOrDefault(-1L)
 
-    private fun download(url: String, dest: File, maxBytes: Long): Boolean = runCatching {
+    /**
+     * Why a [download] did not produce bytes. The pinned [install] path collapses every non-[Succeeded]
+     * value into one retryable failure, exactly as it did when this returned a Boolean; the Install-page
+     * review flow reports them separately, because an administrator fetching an APK from somewhere else
+     * on the network needs to know whether the panel was refused, timed out, or hit the size ceiling.
+     */
+    internal enum class DownloadResult { Succeeded, TooLarge, TimedOut, Failed }
+
+    /**
+     * Download [url] to [dest], following redirects (GitHub release → CDN).
+     *
+     * HTTPS-only for every hop: the initial URL and each redirect target must be `https`, else the
+     * fetch is refused. The APK is signer-pinned after download ([verifyApk]) on the [install] path, so
+     * a substituted blob still can't install — but refusing plaintext hops closes the residual downgrade
+     * (an `https→http` redirect would otherwise fetch the update over cleartext, leaking the request and
+     * letting a network attacker waste the download before the pin rejects it). Real callers use GitHub
+     * `https` release URLs that redirect to `https` CDNs, so this rejects nothing legitimate; the
+     * Install-page URL source deliberately inherits the same rule rather than widening it.
+     *
+     * Bounded three ways, none of which trusts the peer: at most five redirect hops, a whole-operation
+     * [DOWNLOAD_TOTAL_TIMEOUT_MS] deadline that a slow drip cannot outlast, and [maxBytes] enforced by
+     * [copyBeforeDeadline] on bytes actually read — a lying or absent `Content-Length` cannot widen it.
+     */
+    internal fun download(url: String, dest: File, maxBytes: Long): DownloadResult {
         val deadline = MonotonicDeadline(DOWNLOAD_TOTAL_TIMEOUT_MS)
-        var current = URL(url).takeIf { it.protocol.equals("https", true) }
-            ?: run { Log.w(TAG, "refusing non-HTTPS URL"); return false }
-        repeat(5) {
-            val remainingMs = deadline.remainingMs()
-            if (remainingMs <= 0L) return false
-            val conn = current.openConnection() as HttpURLConnection
-            conn.instanceFollowRedirects = false
-            conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
-            conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
-            try {
-                when (conn.responseCode) {
-                    in 300..399 -> {
-                        val loc = conn.getHeaderField("Location") ?: return false
-                        current = httpsRedirect(current, loc)
-                            ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return false }
-                    }
-                    200 -> {
-                        val declared = conn.contentLengthLong
-                        if (declared > maxBytes) {
-                            Log.w(TAG, "refusing oversized APK response: $declared bytes")
-                            return false
-                        }
-                        conn.inputStream.use { input ->
-                            dest.outputStream().use { output ->
-                                copyBeforeDeadline(input, output, maxBytes, deadline::remainingMs)
-                            }
-                        }
-                        return dest.length() > 0
-                    }
-                    else -> return false
-                }
-            } finally {
-                conn.disconnect()
+        // Held as a non-null local: `current` is reassigned from inside the redirect loop, so a nullable
+        // captured var would never smart-cast.
+        val origin = runCatching { URL(url) }.getOrNull()?.takeIf { it.protocol.equals("https", true) }
+            ?: run {
+                Log.w(TAG, "refusing non-HTTPS or unparseable URL")
+                return DownloadResult.Failed
             }
+        var current: URL = origin
+        return try {
+            repeat(5) {
+                val remainingMs = deadline.remainingMs()
+                if (remainingMs <= 0L) return DownloadResult.TimedOut
+                val conn = current.openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = false
+                conn.connectTimeout = minOf(15_000L, remainingMs).coerceAtLeast(1L).toInt()
+                conn.readTimeout = minOf(60_000L, remainingMs).coerceAtLeast(1L).toInt()
+                try {
+                    when (conn.responseCode) {
+                        in 300..399 -> {
+                            val loc = conn.getHeaderField("Location") ?: return DownloadResult.Failed
+                            current = httpsRedirect(current, loc)
+                                ?: run { Log.w(TAG, "refusing non-HTTPS redirect"); return DownloadResult.Failed }
+                        }
+                        200 -> {
+                            val declared = conn.contentLengthLong
+                            if (declared > maxBytes) {
+                                Log.w(TAG, "refusing oversized APK response: $declared bytes")
+                                return DownloadResult.TooLarge
+                            }
+                            conn.inputStream.use { input ->
+                                dest.outputStream().use { output ->
+                                    copyBeforeDeadline(input, output, maxBytes, deadline::remainingMs)
+                                }
+                            }
+                            return if (dest.length() > 0) DownloadResult.Succeeded else DownloadResult.Failed
+                        }
+                        else -> return DownloadResult.Failed
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            }
+            DownloadResult.Failed
+        } catch (_: ByteLimitExceeded) {
+            Log.w(TAG, "refusing APK response beyond the byte ceiling")
+            DownloadResult.TooLarge
+        } catch (_: java.net.SocketTimeoutException) {
+            Log.w(TAG, "APK download stalled or exceeded its deadline")
+            DownloadResult.TimedOut
+        } catch (error: Exception) {
+            Log.w(TAG, "download error", error)
+            DownloadResult.Failed
         }
-        false
-    }.getOrElse { Log.w(TAG, "download error", it); false }
+    }
 
     /**
      * Resolve a redirect [location] (absolute or relative) against [base] and return it **only** if the

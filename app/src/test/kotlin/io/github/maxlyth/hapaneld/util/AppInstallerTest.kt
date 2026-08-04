@@ -93,6 +93,27 @@ class AppInstallerTest {
         assertEquals("/redirected/app.apk", next?.path)
     }
 
+    /** The scheme gate refuses before any socket is opened, so these are deterministic and offline.
+     *  They pin that a refusal is reported as [AppInstaller.DownloadResult.Failed] rather than as a
+     *  size or deadline outcome — the Install page words those three differently for the operator. */
+    @Test fun refusesUnusableDownloadUrlsWithoutTouchingTheNetwork() {
+        val destination = File.createTempFile("download-refusal-", ".apk").also { it.deleteOnExit() }
+
+        assertEquals(
+            AppInstaller.DownloadResult.Failed,
+            AppInstaller.download("http://cdn.example/app.apk", destination, 1024L),
+        )
+        assertEquals(
+            AppInstaller.DownloadResult.Failed,
+            AppInstaller.download("ftp://cdn.example/app.apk", destination, 1024L),
+        )
+        assertEquals(
+            AppInstaller.DownloadResult.Failed,
+            AppInstaller.download("not a url at all", destination, 1024L),
+        )
+        assertEquals(0L, destination.length())
+    }
+
     @Test fun refusesNonHttpScheme() {
         assertNull("file:// target must be refused", AppInstaller.httpsRedirect(github, "file:///etc/passwd"))
         assertNull("ftp:// target must be refused", AppInstaller.httpsRedirect(github, "ftp://host/app.apk"))

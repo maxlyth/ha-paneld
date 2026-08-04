@@ -201,6 +201,42 @@
     fetch('/api/v1/install/apk/allow', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'on=' + (cb.checked ? '1' : '0') }).catch(function () {});
   };
 
+  // Server refusal codes in the operator's words. An administrator doing this from a phone, away from
+  // the panel, cannot inspect logs — the difference between "too big", "stalled" and "unreachable" is
+  // the difference between knowing what to do next and guessing.
+  var APK_ERRORS = {
+    'disabled': 'APK install is switched off on this panel',
+    'no-root': 'this panel has no root or helper daemon',
+    'invalid-url': 'that is not a valid https:// link',
+    'upload-busy': 'the panel is still busy with another APK — try again shortly',
+    'stopping': 'the panel is shutting down',
+    'upload-staging-failed': 'the panel could not open a staging file',
+    'insufficient-storage': 'not enough free space on the panel',
+    'upload-too-large': 'that file is larger than the panel accepts',
+    'fetch-too-large': 'that file is larger than the panel accepts',
+    'upload-timeout': 'the upload took too long',
+    'fetch-timeout': 'the download stalled or took too long',
+    'fetch-failed': 'the panel could not download that link',
+    'not-an-apk': 'that file is not a readable APK'
+  };
+  function apkErrorText(code) { return APK_ERRORS[code] || code || 'error'; }
+
+  // Render the inspected identity + the approval-marked Confirm-install button. Shared by both APK
+  // sources so a fetched APK gets exactly the review an uploaded one does, from the same token.
+  function renderApkPreview(prev, d, failedLabel) {
+    if (!prev) return;
+    if (!d.ok) {
+      prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText(d.error)) + '</p>';
+      scheduleInstallColumnAlignment();
+      return;
+    }
+    prev.innerHTML = '<table class="dt"><tr><th>Package</th><td>' + esc(d.package) + '</td></tr>' +
+      '<tr><th>Version</th><td>' + esc(d.version) + '</td></tr>' +
+      '<tr><th>Signer SHA-256</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
+      '<button class="pbtn"' + hardenedApprovalAttrs + ' style="margin-top:8px" data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>';
+    scheduleInstallColumnAlignment();
+  }
+
   // Upload the chosen APK (raw body), then render its parsed identity + a Confirm-install button.
   window.apkPick = function (input) {
     var f = input.files && input.files[0]; if (!f) return;
@@ -209,25 +245,56 @@
     if (prev) { prev.innerHTML = '<p class="note">Uploading + inspecting ' + esc(f.name) + '…</p>'; scheduleInstallColumnAlignment(); }
     fetch('/api/v1/install/apk', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f })
       .then(function (r) { return r.json(); }).then(function (d) {
-        if (!prev) return;
-        if (!d.ok) { prev.innerHTML = '<p class="note">Upload failed: ' + esc(d.error || 'error') + '</p>'; scheduleInstallColumnAlignment(); return; }
-        prev.innerHTML = '<table class="dt"><tr><th>Package</th><td>' + esc(d.package) + '</td></tr>' +
-          '<tr><th>Version</th><td>' + esc(d.version) + '</td></tr>' +
-          '<tr><th>Signer SHA-256</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
-          '<button class="pbtn"' + hardenedApprovalAttrs + ' style="margin-top:8px" data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>';
-        scheduleInstallColumnAlignment();
+        renderApkPreview(prev, d, 'Upload failed');
       }).catch(function () {
         if (prev) prev.innerHTML = '<p class="note">Upload failed.</p>';
         scheduleInstallColumnAlignment();
       });
   };
 
+  // Have the panel fetch the APK itself. Same review, same token, same commit route as an upload —
+  // this only changes where the bytes come from. Cancel abandons the wait here; the panel discards
+  // whatever it staged, bounded by its own download deadline.
+  var apkFetchAbort = null;
+  window.apkFetchUrl = function () {
+    var input = document.getElementById('apk-url');
+    var url = input ? String(input.value || '').trim() : '';
+    var prev = document.getElementById('apk-preview');
+    if (!url) { apkMsg('Paste an https:// link to an APK first.'); return; }
+    apkMsg('');
+    if (prev) {
+      prev.innerHTML = '<p class="note">Downloading + inspecting…</p>' +
+        '<button class="pbtn" style="margin-top:8px" onclick="apkCancelFetch()">Cancel</button>';
+      scheduleInstallColumnAlignment();
+    }
+    apkFetchAbort = new AbortController();
+    fetch('/api/v1/install/apk/from-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'url=' + encodeURIComponent(url),
+      signal: apkFetchAbort.signal
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      apkFetchAbort = null;
+      renderApkPreview(prev, d, 'Download failed');
+    }).catch(function (error) {
+      apkFetchAbort = null;
+      if (prev) {
+        prev.innerHTML = (error && error.name === 'AbortError')
+          ? '<p class="note">Download cancelled.</p>'
+          : '<p class="note">Download failed.</p>';
+        scheduleInstallColumnAlignment();
+      }
+    });
+  };
+
+  window.apkCancelFetch = function () { if (apkFetchAbort) apkFetchAbort.abort(); };
+
   window.apkInstall = function (btn) {
     btn.disabled = true; apkMsg('Installing…');
     var body = 'token=' + encodeURIComponent(btn.getAttribute('data-token') || '');
     fetch('/api/v1/install/apk/commit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body }).then(approvalAwareJson).then(function (d) {
       if (d.status === 'busy') { apkMsg('Another install is running — try again shortly.'); btn.disabled = false; return; }
-      if (d.status === 'stale-or-missing') { apkMsg('This upload was replaced or expired — choose the APK again.'); btn.disabled = false; return; }
+      if (d.status === 'stale-or-missing') { apkMsg('This APK was replaced or expired — choose or fetch it again.'); btn.disabled = false; return; }
       if (d.status !== 'started') { apkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
       pollApk(0);
     }).catch(function (error) { apkMsg(requestFailure(error, 'Failed to start.')); btn.disabled = false; });
