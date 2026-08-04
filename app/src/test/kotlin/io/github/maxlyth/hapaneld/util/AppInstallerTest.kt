@@ -160,6 +160,38 @@ class AppInstallerTest {
         assertEquals(0L, destination.length())
     }
 
+    /** The admission policy has to be consulted by the downloader, not merely exist. Driven offline
+     *  through the injected connection seam: a server sends one redirect, the policy refuses it, and
+     *  the refusal must be reported distinctly AND stop the chain rather than opening the next hop. */
+    @Test fun aRefusedRedirectStopsTheChainAndIsReportedAsSuch() {
+        val destination = File.createTempFile("download-redirect-", ".apk").also { it.deleteOnExit() }
+        val opened = mutableListOf<String>()
+        val offered = mutableListOf<String>()
+
+        fun connectionFor(target: URL) = object : java.net.HttpURLConnection(target) {
+            override fun connect() = Unit
+            override fun usingProxy() = false
+            override fun disconnect() = Unit
+            override fun getResponseCode(): Int = 302
+            override fun getHeaderField(name: String): String? =
+                if (name == "Location") "https://internal.example/app.apk" else null
+        }
+
+        val result = AppInstaller.download(
+            "https://cdn.example/app.apk",
+            destination,
+            1024L,
+            null,
+            { target -> opened += target.toString(); connectionFor(target) },
+            { target -> offered += target.toString(); false },
+        )
+
+        assertEquals(AppInstaller.DownloadResult.RedirectRefused, result)
+        assertEquals("the policy must see the hop the server chose", listOf("https://internal.example/app.apk"), offered)
+        assertEquals("a refused hop must not be opened", listOf("https://cdn.example/app.apk"), opened)
+        assertEquals(0L, destination.length())
+    }
+
     @Test fun refusesNonHttpScheme() {
         assertNull("file:// target must be refused", AppInstaller.httpsRedirect(github, "file:///etc/passwd"))
         assertNull("ftp:// target must be refused", AppInstaller.httpsRedirect(github, "ftp://host/app.apk"))
