@@ -114,6 +114,24 @@ class AppInstallerTest {
         assertEquals(0L, destination.length())
     }
 
+    /** A size breach, a stall and everything else must stay distinguishable: the Install page turns
+     *  these into three different sentences, and an operator who is not at the panel has nothing else
+     *  to go on. Collapsing any two of them would leave the page telling them the wrong thing. */
+    @Test fun classifiesDownloadFailuresByWhatTheOperatorMustDoNext() {
+        assertEquals(
+            AppInstaller.DownloadResult.TooLarge,
+            AppInstaller.downloadFailure(ByteLimitExceeded(4L)),
+        )
+        assertEquals(
+            AppInstaller.DownloadResult.TimedOut,
+            AppInstaller.downloadFailure(java.net.SocketTimeoutException("read timed out")),
+        )
+        assertEquals(
+            AppInstaller.DownloadResult.Failed,
+            AppInstaller.downloadFailure(java.io.IOException("connection reset")),
+        )
+    }
+
     @Test fun refusesNonHttpScheme() {
         assertNull("file:// target must be refused", AppInstaller.httpsRedirect(github, "file:///etc/passwd"))
         assertNull("ftp:// target must be refused", AppInstaller.httpsRedirect(github, "ftp://host/app.apk"))

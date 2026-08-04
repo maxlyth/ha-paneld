@@ -74,7 +74,8 @@ internal fun validApkFetchUrl(raw: String, maxChars: Int = APK_FETCH_URL_MAX_CHA
     val trimmed = raw.trim()
     if (trimmed.isEmpty() || trimmed.length > maxChars) return null
     val parsed = runCatching { URI(trimmed) }.getOrNull() ?: return null
-    if (!parsed.isAbsolute || !parsed.scheme.equals("https", true)) return null
+    // An `https` scheme is what makes the reference absolute, so there is no separate absoluteness test.
+    if (!parsed.scheme.equals("https", true)) return null
     if (parsed.host.isNullOrBlank()) return null
     return trimmed
 }

@@ -389,13 +389,26 @@ object AppInstaller {
                 }
             }
             DownloadResult.Failed
-        } catch (_: ByteLimitExceeded) {
+        } catch (error: Exception) {
+            downloadFailure(error)
+        }
+    }
+
+    /**
+     * Classify a failed download. Kept separate from [download] because the distinction is only
+     * reachable through a live transfer otherwise, and it is the distinction the Install page shows an
+     * operator: a size breach must not be reported as an unreachable host, nor a stall as a refusal.
+     */
+    internal fun downloadFailure(error: Exception): DownloadResult = when (error) {
+        is ByteLimitExceeded -> {
             Log.w(TAG, "refusing APK response beyond the byte ceiling")
             DownloadResult.TooLarge
-        } catch (_: java.net.SocketTimeoutException) {
+        }
+        is java.net.SocketTimeoutException -> {
             Log.w(TAG, "APK download stalled or exceeded its deadline")
             DownloadResult.TimedOut
-        } catch (error: Exception) {
+        }
+        else -> {
             Log.w(TAG, "download error", error)
             DownloadResult.Failed
         }
