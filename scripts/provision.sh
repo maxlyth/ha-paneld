@@ -735,52 +735,66 @@ read_power_safety() {
 # of whether ha-paneld is installed.
 PACKAGE_MANAGER_LIVENESS_PKG="android"
 
-# Ask the panel BOTH questions in ONE bounded shell run, and prove the run completed.
+# Ask the panel BOTH questions in ONE bounded shell run, and prove that EVERY PART of it completed.
 #
-# An earlier attempt asked them as two separate `pm path` calls and tried to stay safe by listing the
-# exit statuses that must not be trusted. That list is the wrong shape of defence: it named 124 and
-# 137 and missed 130/143, so an interrupted query returned "no path", the second call corroborated
-# it, and an INTERRUPTED observation classified as absence — fail-open on the gate this is supposed
-# to hold. Enumerating statuses can only ever be as complete as the last person to think about it.
+# This has been wrong twice, in the same direction, so the reasoning is recorded rather than the
+# conclusion. First it asked two separate `pm path` calls and enumerated the exit statuses it would
+# not trust; that list missed the signal statuses, so an interrupted query read as absence. Then it
+# put both calls in one marker-bounded shell — but the markers only proved the SHELL finished. A
+# target `pm path` that died while the surrounding shell ran on still produced BEGIN, no path, and a
+# healthy framework answer, which read as absence again. On a panel that does have ha-paneld that is
+# worse than the original bug: it silently skips the pre-upgrade database snapshot, and it lets a
+# failed install roll helper state back on a "definitely missing" verdict that was never established.
 #
-# So the observation carries its own proof of completion instead. One shell run emits a nonce-marked
-# BEGIN, the ha-paneld paths, MID, the framework paths, and END. Every marker must appear exactly
-# once, in order, carrying this run's nonce. A truncated, killed, interrupted, replayed or partially
-# buffered answer cannot produce that sequence, so it is structurally incapable of yielding a verdict
-# rather than merely being on a list of statuses to reject. It also makes the two facts one
-# observation: the package manager is proved live BY THE SAME shell run that said nothing about
-# ha-paneld, instead of by a second round trip that could have raced it.
+# The lesson both times: a wrapper proving ITSELF complete says nothing about the commands inside it.
+# So each child's exit status is now emitted INTO the marked payload and validated with it. A child
+# that is killed reports 128+signal and can never be mistaken for one that answered "no such
+# package"; a child that never ran leaves its marker missing entirely.
 #
-# This is the file's established shape — see the `PROBE_READY` and `TRANSACTION_READY` probes and the
-# nonce-bound upgrade handshake.
+# The observation is trusted only when all four markers appear exactly once, in order, carrying this
+# run's nonce, and the command itself succeeded. Within that, the package manager must prove itself
+# live in THIS run (framework query exited 0 and named a real path), and the target query must have
+# completed normally before its silence is read as absence.
 #
-# Sets PACKAGE_PRESENCE to exactly one of:
-#   present  a non-empty `package:` path was returned for $PKG
-#   absent   $PKG named no path AND the framework package did, in the same completed run
-#   unknown  no trustworthy answer; callers must not read this as either state
+# Sets PACKAGE_PRESENCE to exactly one of: present, absent, unknown. Callers fail closed on unknown.
 classify_package_presence() {
   local seconds="$1" nonce out verdict status=0
   PACKAGE_PRESENCE="unknown"
   nonce="$(host_transaction_id)" || return 0
-  # Android's raw diagnostic is suppressed so each calling site owns the actionable message; the
-  # marked payload below, not this discarded stream, is the only thing a verdict is read from.
+  # `\$?` is escaped so the PANEL's shell expands each child's status, not this one.
   out="$(run_with_deadline "$seconds" "$ADB_COMMAND" -s "$TARGET" shell \
-    "echo HAPANELD_PKG_BEGIN:$nonce; pm path $PKG; echo HAPANELD_PKG_MID:$nonce; \
-     pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_PKG_END:$nonce" 2>/dev/null)" || status=$?
+    "echo HAPANELD_PKG_BEGIN:$nonce; pm path $PKG; echo HAPANELD_PKG_TARGET:$nonce:\$?; \
+     pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_PKG_LIVE:$nonce:\$?; \
+     echo HAPANELD_PKG_END:$nonce" 2>/dev/null)" || status=$?
   [ "$status" -eq 0 ] || return 0
-  # A path must be non-empty to count: a bare `package:` proves nothing, and accepting it would let a
-  # truncated line stand in for either presence or proof that the package manager is alive.
+  # A path counts only if it is absolute and free of whitespace. A bare `package:`, a relative
+  # fragment or a truncated line proves neither that the package is installed nor that the package
+  # manager is answering.
   verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" '
-    $0 == "HAPANELD_PKG_BEGIN:" n { if (seg != 0) bad = 1; seg = 1; next }
-    $0 == "HAPANELD_PKG_MID:" n   { if (seg != 1) bad = 1; seg = 2; next }
-    $0 == "HAPANELD_PKG_END:" n   { if (seg != 2) bad = 1; seg = 3; next }
-    seg == 1 && /^package:[^[:space:]]/ { target = 1 }
-    seg == 2 && /^package:[^[:space:]]/ { liveness = 1 }
+    /^HAPANELD_PKG_BEGIN:/  { split($0, a, ":"); if (a[2] != n || seg != 0) bad = 1; else seg = 1; next }
+    /^HAPANELD_PKG_TARGET:/ { split($0, a, ":")
+                              if (a[2] != n || seg != 1 || a[3] !~ /^[0-9]+$/) bad = 1
+                              else { trc = a[3]; seg = 2 }
+                              next }
+    /^HAPANELD_PKG_LIVE:/   { split($0, a, ":")
+                              if (a[2] != n || seg != 2 || a[3] !~ /^[0-9]+$/) bad = 1
+                              else { lrc = a[3]; seg = 3 }
+                              next }
+    /^HAPANELD_PKG_END:/    { split($0, a, ":"); if (a[2] != n || seg != 3) bad = 1; else seg = 4; next }
+    seg == 1 && /^package:/ { if ($0 ~ /^package:\/[^ \t]+$/) target = 1; else malformed = 1 }
+    seg == 2 && /^package:/ { if ($0 ~ /^package:\/[^ \t]+$/) liveness = 1; else malformed = 1 }
     END {
-      if (bad || seg != 3) { print "unknown"; exit }
-      if (target) { print "present"; exit }
-      if (liveness) { print "absent"; exit }
-      print "unknown"
+      # A `package:` line that is not an absolute, whitespace-free path is the panel saying something
+      # about the package that cannot be read. That is an untrustworthy answer, never a negative one:
+      # calling it absence would skip a database snapshot or roll back on a verdict never established.
+      if (bad || malformed || seg != 4) { print "unknown"; exit }
+      # The package manager must have proved itself inside this same observation.
+      if (lrc + 0 != 0 || !liveness) { print "unknown"; exit }
+      if (target) { print (trc + 0 == 0) ? "present" : "unknown"; exit }
+      # Silence is a real answer only from a child that completed normally. `pm` reports a missing
+      # package as 0 on some builds and 1 on others; anything else — and 128+signal in particular —
+      # means the child did not answer, which must never be read as absence.
+      print (trc + 0 == 0 || trc + 0 == 1) ? "absent" : "unknown"
     }')"
   case "$verdict" in
     present|absent) PACKAGE_PRESENCE="$verdict" ;;

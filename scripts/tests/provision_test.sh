@@ -239,6 +239,8 @@ run_provision() {
   MOCK_PM_LIVENESS_PID_FILE="${MOCK_PM_LIVENESS_PID_FILE:-}" \
   MOCK_PM_PROBE="${MOCK_PM_PROBE:-ok}" \
   MOCK_PM_VANISH_AFTER="${MOCK_PM_VANISH_AFTER:-}" \
+  MOCK_PM_TARGET_RC="${MOCK_PM_TARGET_RC:-}" \
+  MOCK_PM_LIVE_RC="${MOCK_PM_LIVE_RC:-}" \
   MOCK_PM_PROBE_PID_FILE="${MOCK_PM_PROBE_PID_FILE:-}" \
   MOCK_NO_INSTALLED_PACKAGE="${MOCK_NO_INSTALLED_PACKAGE:-0}" \
   MOCK_DB_CLEANUP="${MOCK_DB_CLEANUP:-ok}" \
@@ -801,18 +803,40 @@ done
 #   dead_pm      : the run completes but resolves nothing at all, proving nothing
 #   empty_path   : the run completes but names a bare `package:` with no path, which is not an answer
 #   complete_then_fail : every marker arrives, but the command itself reported failure
+# The `child` cases are the ones the previous implementation could not express and previously could not represent: the
+# OUTER shell completes perfectly, every marker arrives, and only a command INSIDE it dies. A wrapper
+# proving itself complete says nothing about the commands it wrapped, so each child's own status is
+# now part of the validated payload. A killed child reports 128+signal and can never be read as the
+# panel answering "no such package".
+#   child_killed / child_interrupted : the target query dies (137 / 130) while the shell runs on
+#   child_error                      : the target query fails for a reason that is not absence
+#   child_live_killed                : the framework query dies, so nothing proves the pm answered
+#   malformed_path / relative_path   : a `package:` line that is not an absolute, unbroken path
 for unknown_case in "probe hang" "probe truncated" "probe stale_nonce" "probe out_of_order" \
-                    "probe complete_then_fail" "resolve dead_pm" "resolve empty_path"; do
+                    "probe complete_then_fail" "resolve dead_pm" "resolve empty_path" \
+                    "child killed" "child interrupted" "child error" "child live_killed" \
+                    "resolve relative_path" "resolve contradictory"; do
   set -- $unknown_case
   kind="$1"; mode="$2"; label="$kind=$mode"
   probe_mode=ok; pm_mode=ok; live_mode=ok
+  target_rc=; live_rc=; no_pkg=1
   case "$kind:$mode" in
+    # A valid path from a child that reported failure is self-contradictory: the package must NOT be
+    # read as installed on an answer the child itself disowned. Needs a real package present, so this
+    # is the one case that does not model a clean panel.
+    resolve:contradictory) pm_mode=ok; target_rc=1; no_pkg=0 ;;
     probe:*) probe_mode="$mode" ;;
     resolve:dead_pm) pm_mode=fail; live_mode=fail ;;
     resolve:empty_path) pm_mode=empty_path; live_mode=empty_path ;;
+    resolve:relative_path) pm_mode=relative_path ;;
+    child:killed) pm_mode=fail; target_rc=137 ;;
+    child:interrupted) pm_mode=fail; target_rc=130 ;;
+    child:error) pm_mode=fail; target_rc=2 ;;
+    child:live_killed) pm_mode=fail; live_rc=137 ;;
   esac
   MOCK_STORAGE_HEALTH=transport-fail MOCK_PM_PROBE="$probe_mode" MOCK_PM_PATH="$pm_mode" \
-    MOCK_PM_LIVENESS="$live_mode" MOCK_NO_INSTALLED_PACKAGE=1 \
+    MOCK_PM_LIVENESS="$live_mode" MOCK_PM_TARGET_RC="$target_rc" MOCK_PM_LIVE_RC="$live_rc" \
+    MOCK_NO_INSTALLED_PACKAGE="$no_pkg" \
     run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
   assert_failure "an untrustworthy classification ($label) refuses before any mutation"
   assert_contains 'could not determine whether ha-paneld is already installed' \
@@ -828,7 +852,7 @@ for unknown_case in "probe hang" "probe truncated" "probe stale_nonce" "probe ou
   assert_not_contains '^adb .*( install | push |pm grant|pm clear|appops |settings put|am start)' \
     "$MOCK_CALL_LOG" "no panel mutation is attempted ($label)"
 done
-unset kind mode label probe_mode pm_mode live_mode
+unset kind mode label probe_mode pm_mode live_mode target_rc live_rc no_pkg
 
 # Every site that asks "is ha-paneld installed?" was changed, so each is covered directly here rather
 # than only through the one that happened to be reported. Leaving storage health healthy means the

@@ -26,17 +26,17 @@ adb_root_active() {
 # the query "fails" precisely because the package is not installed.
 #   ok      resolves to a path            fail  answers nothing, exit 1
 #   absent  answers, names no path, exit 0  hang  never answers, so the caller's deadline expires
-# Answer the nonce-marked package probe. MOCK_PM_PROBE models how the OBSERVATION itself fails,
-# independently of what the package manager would have said:
-#   ok           the whole marked sequence is emitted
-#   truncated    the END marker is lost, as when the run is killed or the transport dies mid-stream
-#   stale_nonce  a complete sequence carrying somebody else's nonce (replayed / buffered output)
-#   out_of_order MID is emitted before BEGIN
-#   hang         nothing is ever emitted, so the caller's deadline expires
-#   complete_then_fail  the whole sequence arrives, but the command still reports failure
+# Answer the nonce-marked package probe. Three INDEPENDENT axes, because conflating them is exactly
+# how this defect survived two reviews:
+#   MOCK_PM_PROBE      how the OBSERVATION as a whole fails
+#     ok / truncated (END lost) / stale_nonce / out_of_order / hang / complete_then_fail
+#   MOCK_PM_PATH       what the target child says      (ok / absent / fail / empty_path / relative_path)
+#   MOCK_PM_TARGET_RC  what the target child's status is when it did NOT answer normally, e.g. 137 for
+#                      a killed child or 2 for an internal error. This is the axis that was missing:
+#                      the outer shell completes perfectly while only the child inside it dies.
+#   MOCK_PM_LIVENESS / MOCK_PM_LIVE_RC   the same two axes for the framework query.
 pm_marked_probe_reply() {
-  local text="$1" nonce other
-  # The nonce is whatever the caller stamped into its BEGIN marker.
+  local text="$1" nonce other trc lrc
   nonce="${text#*HAPANELD_PKG_BEGIN:}"
   nonce="${nonce%%[!0-9a-f]*}"
   other="${MOCK_PM_PROBE:-ok}"
@@ -61,20 +61,34 @@ pm_marked_probe_reply() {
     while :; do /bin/sleep 1; done
   fi
   [ "$other" != stale_nonce ] || nonce="0123456789abcdef0123456789abcdef"
+  # A real `pm path` exits 0 when it names a path and non-zero when the package is simply absent.
+  case "${MOCK_PM_PATH:-ok}" in
+    ok) trc=0 ;;
+    *)  trc=1 ;;
+  esac
+  [ -z "${MOCK_PM_TARGET_RC:-}" ] || trc="$MOCK_PM_TARGET_RC"
+  case "${MOCK_PM_LIVENESS:-ok}" in
+    ok) lrc=0 ;;
+    *)  lrc=1 ;;
+  esac
+  [ -z "${MOCK_PM_LIVE_RC:-}" ] || lrc="$MOCK_PM_LIVE_RC"
   if [ "$other" = out_of_order ]; then
-    printf 'HAPANELD_PKG_MID:%s\n' "$nonce"
+    printf 'HAPANELD_PKG_TARGET:%s:%s\n' "$nonce" "$trc"
     printf 'HAPANELD_PKG_BEGIN:%s\n' "$nonce"
+    printf 'HAPANELD_PKG_LIVE:%s:%s\n' "$nonce" "$lrc"
     printf 'HAPANELD_PKG_END:%s\n' "$nonce"
     exit 0
   fi
   printf 'HAPANELD_PKG_BEGIN:%s\n' "$nonce"
   pm_marked_paths "${MOCK_PM_PATH:-ok}" 'package:/data/app/io.github.maxlyth.hapaneld/base.apk' \
     "$([ -f "$STATE_DIR/installed-apk" ] && echo yes || echo no)"
-  printf 'HAPANELD_PKG_MID:%s\n' "$nonce"
+  printf 'HAPANELD_PKG_TARGET:%s:%s\n' "$nonce" "$trc"
   pm_marked_paths "${MOCK_PM_LIVENESS:-ok}" 'package:/system/framework/framework-res.apk' yes
-  [ "$other" = truncated ] || printf 'HAPANELD_PKG_END:%s\n' "$nonce"
+  printf 'HAPANELD_PKG_LIVE:%s:%s\n' "$nonce" "$lrc"
   # Complete, nonce-bound output from a command that nonetheless failed. The markers alone cannot
   # catch this, so it is what makes the caller's exit-status check load-bearing rather than redundant.
+  [ "$other" != truncated ] || exit 0
+  printf 'HAPANELD_PKG_END:%s\n' "$nonce"
   [ "$other" != complete_then_fail ] || exit 1
   exit 0
 }
@@ -86,6 +100,7 @@ pm_marked_paths() {
   case "$mode" in
     ok) [ "$installed" = yes ] && printf '%s\n' "$path" ;;
     empty_path) printf 'package:\n' ;;
+    relative_path) printf 'package:data/app/base.apk\n' ;;
     absent|fail) ;;
     *) ;;
   esac
