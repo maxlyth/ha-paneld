@@ -11,9 +11,11 @@
 #      mutated there, so a killed run cannot leave a mutation applied.
 #   2. A non-zero suite exit is NOT accepted as a kill. A mutation that fails to compile, or a run that
 #      dies for an infrastructure reason, also exits non-zero while proving nothing about any assertion.
-#      A kill therefore requires BOTH a clean compile and at least one named red assertion in the JUnit
-#      XML. The `syntax` and `absent` negative controls below exercise those rejection paths on every
-#      run, so the classifier itself is evidence rather than an assumption.
+#      A kill therefore requires BOTH a clean compile and at least one named ASSERTION FAILURE in the
+#      JUnit XML. A JUnit <error> does not count: it means the test threw before reaching its assertion,
+#      so it says nothing about whether that assertion can fail. Three negative controls below — a sed
+#      that matches nothing, a mutation that will not compile, and one that compiles but throws at
+#      runtime — exercise every rejection path on each run, so the classifier is itself evidence.
 #
 # Usage: tools/logship-endpoint/mutation-battery.sh [<source-tree>]
 set -uo pipefail
@@ -50,27 +52,48 @@ run_suite() {
     --tests '*HaAreaProtocolTest*') > "$WT/run.log" 2>&1
 }
 
+# Names of tests whose ASSERTION failed, and separately those that THREW instead of asserting.
+#
+# The discriminator is the `type` attribute, NOT the element name. This toolchain (JUnit 4 via Gradle)
+# records an uncaught RuntimeException as <failure type="java.lang.RuntimeException"> and emits no
+# <error> elements at all — measured, not assumed: the "compiles but throws at runtime" control below
+# produces 19 failures and 0 errors. So filtering on the element name cannot tell a broken test from a
+# proven assertion. An assertion failure raises AssertionError (or its ComparisonFailure subclass);
+# anything else is a test that blew up before it asserted, and is not evidence.
 red_assertions() {
-  python3 - "$WT" <<'PY'
+  junit_outcomes assertion
+}
+
+errored_tests() {
+  junit_outcomes threw
+}
+
+junit_outcomes() {
+  python3 - "$WT" "$1" <<'PY'
 import glob, sys, xml.etree.ElementTree as ET
+want = sys.argv[2]
 names = []
 for p in glob.glob(sys.argv[1] + '/app/build/test-results/testDebugUnitTest/TEST-*.xml'):
     for tc in ET.parse(p).getroot().iter('testcase'):
-        if tc.find('failure') is not None or tc.find('error') is not None:
-            names.append(tc.get('name'))
-print('\n'.join(sorted(names)))
+        for node in list(tc.iter('failure')) + list(tc.iter('error')):
+            t = (node.get('type') or '')
+            asserted = t.endswith('AssertionError') or t.endswith('ComparisonFailure')
+            if (want == 'assertion') == asserted:
+                names.append(tc.get('name'))
+            break
+print('\n'.join(sorted(set(names))))
 PY
 }
 
-# verdict ∈ absent | no-compile | infrastructure | survived | killed
+# verdict ∈ absent | no-compile | test-error | infrastructure | survived | killed
 classify() {
   local target="$1" before="$2"
   [ "$before" = "$(sha256sum "$target" | cut -d' ' -f1)" ] && { echo absent; return; }
   compiles || { echo no-compile; return; }
   run_suite
-  local status=$? red
-  red="$(red_assertions)"
-  if [ -n "$red" ]; then echo killed
+  local status=$?
+  if [ -n "$(red_assertions)" ]; then echo killed
+  elif [ -n "$(errored_tests)" ]; then echo test-error
   elif [ "$status" -ne 0 ]; then echo infrastructure
   else echo survived
   fi
@@ -90,6 +113,9 @@ mutate() {
     if [ "$verdict" = killed ]; then
       printf '%-44s killed %s assertion(s)\n' "$name" "$(printf '%s' "$red" | grep -c . || true)"
       printf '%s\n' "$red" | sed 's/^/      /'
+    elif [ "$verdict" = test-error ]; then
+      printf '%-44s %s (expected — errored, not asserted: %s)\n' \
+        "$name" "$verdict" "$(errored_tests | head -1)"
     else
       printf '%-44s %s (expected — classifier path proved)\n' "$name" "$verdict"
     fi
@@ -116,6 +142,9 @@ mutate "control: sed matches nothing" "$ENDPOINT" \
 
 mutate "control: mutation does not compile" "$ENDPOINT" \
   's/^object LogShipEndpoint {/object LogShipEndpoint { fun ( = broken syntax here/' no-compile
+
+mutate "control: compiles but throws at runtime" "$ENDPOINT" \
+  's|if (ADDRESS_KEYS.none { it in update }) return null|throw RuntimeException("post-compilation control")|' test-error
 
 # --- real mutations --------------------------------------------------------------------------------
 mutate "canonicalUpdate never fires" "$ENDPOINT" \
