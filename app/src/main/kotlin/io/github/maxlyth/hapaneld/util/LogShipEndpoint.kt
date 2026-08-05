@@ -137,6 +137,47 @@ object LogShipEndpoint {
         return Endpoint(bare.substringBefore('%'), resolvedPort, resolvedProtocol)
     }
 
+    /** The three stored preference keys that together describe one sink destination. */
+    val ADDRESS_KEYS = setOf("log_ship_host", "log_ship_port", "log_ship_protocol")
+
+    /**
+     * Reconcile a partial update to [ADDRESS_KEYS] into one destination the three fields all describe.
+     *
+     * Without this, a host carrying its own scheme or port — `udp://collector.lan:1514`, from a
+     * hand-edited bundle or one exported before hosts were normalised — is stored verbatim while the
+     * separate Port and Protocol fields keep describing somewhere else. [resolve] then sends to what
+     * the host says, so shipping goes one place while every surface reports another: the settings lie
+     * about where logs go.
+     *
+     * **Precedence is the same one [resolve] applies at send time: an embedded scheme or port wins.**
+     * That is what makes a restore faithful — a panel whose stored host was `udp://collector.lan:1514`
+     * was really shipping UDP to 1514, so a bundle taken from it must reproduce that, not the stale
+     * Port and Protocol it also carried. Fields the host does not specify fall back to the update's
+     * own value, then to what is already stored.
+     *
+     * **Order-independent by construction:** inputs are read from [update] by key, so no result here
+     * depends on the order a caller happens to iterate its batch. Returns null when [update] touches
+     * none of [ADDRESS_KEYS], so a caller can skip staging entirely.
+     */
+    fun canonicalUpdate(
+        update: Map<String, String>,
+        storedHost: String,
+        storedPort: Int,
+        storedProtocol: String,
+    ): Map<String, String>? {
+        if (ADDRESS_KEYS.none { it in update }) return null
+        val endpoint = resolve(
+            host = update["log_ship_host"] ?: storedHost,
+            port = update["log_ship_port"]?.trim()?.toIntOrNull() ?: storedPort,
+            protocol = update["log_ship_protocol"] ?: storedProtocol,
+        )
+        return mapOf(
+            "log_ship_host" to endpoint.host,
+            "log_ship_port" to endpoint.port.toString(),
+            "log_ship_protocol" to endpoint.protocol,
+        )
+    }
+
     /** The canonical form of a recognised protocol or scheme word, or null if it names none. */
     private fun known(raw: String): String? {
         val v = raw.trim().lowercase(Locale.ROOT)

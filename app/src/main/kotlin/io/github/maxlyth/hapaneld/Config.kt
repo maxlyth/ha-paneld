@@ -518,6 +518,18 @@ class Config private constructor(
     internal fun stageImportDependencies(editor: SharedPreferences.Editor, accepted: Map<String, String>) {
         if (accepted["mqtt_user"]?.isEmpty() == true) editor.putString("mqtt_password", "")
 
+        // The sink's three fields must always describe one destination; see LogShipEndpoint.canonicalUpdate
+        // for the precedence and why an embedded address wins. Reconciled here rather than in the caller's
+        // per-key loop for two reasons: it reads the whole accepted map, so the result cannot depend on
+        // iteration order, and every applyAccepted path (import, revision rollback, restore) reaches it.
+        // Fallbacks read committed preferences, which is correct precisely for the keys this update does
+        // not carry — a staged read-back would be pre-commit and is never used here.
+        LogShipEndpoint.canonicalUpdate(accepted, logShipHost, logShipPort, logShipProtocol)?.let { fields ->
+            editor.putString("log_ship_host", fields.getValue("log_ship_host"))
+            editor.putInt("log_ship_port", fields.getValue("log_ship_port").toInt())
+            editor.putString("log_ship_protocol", fields.getValue("log_ship_protocol"))
+        }
+
         accepted["dashboard_package"]?.let { next ->
             if (next != dashboardPackage) editor.putBoolean("renderer_launch_pending", true)
         }

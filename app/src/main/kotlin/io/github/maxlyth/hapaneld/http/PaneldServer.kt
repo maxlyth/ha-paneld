@@ -3770,13 +3770,14 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         live: Map<String, String>,
         caps: Capabilities,
         hints: Map<String, String> = emptyMap(),
-        valueFormatter: ((String) -> String)? = null,
+        valueFormatter: SettingRowFormatter? = null,
     ): String? {
         val spec = SettingsRegistry.spec(key) ?: return null
         if (!spec.availableWhen(caps)) return null
         val raw = effectiveValue(spec, live)
         // NOTE the ordering: secret and BOOL specs resolve before [valueFormatter] is consulted, so a
-        // formatter attached to one of those keys is dead code. Live state that needs a formatter does
+        // formatter attached to one of those keys would be dead code. [SettingRowFormatter.of] refuses
+        // to build one, so that is now unrepresentable rather than merely documented. Live state does
         // not belong on a setting row at all — put it on a fact row (see CONTEXT_KEYS).
         val shown = when {
             spec.secret -> if (raw.isNotEmpty()) "set" else "—"
@@ -4290,8 +4291,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         keys.mapNotNull { key ->
             // A deliberately overridden area must say so wherever the value is shown — at rest it is
             // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
-            val areaFormatter: ((String) -> String)? =
-                if (key == "ha_area" && config.haAreaUserOverride) { raw -> "$raw (local override)" } else null
+            val areaFormatter: SettingRowFormatter? =
+                if (key == "ha_area" && config.haAreaUserOverride) {
+                    SettingRowFormatter.of(key) { raw -> "$raw (local override)" }
+                } else {
+                    null
+                }
             settingRowHtml(key, s.live, caps, hints, areaFormatter)
         }
     }.joinToString("\n")
@@ -4301,13 +4306,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         return listOf(
             "auto_brightness", "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
         ).mapNotNull { key ->
-            val formatter: ((String) -> String)? = when (key) {
-                "auto_brightness_minimum_percent" -> { raw ->
+            val formatter: SettingRowFormatter? = when (key) {
+                "auto_brightness_minimum_percent" -> SettingRowFormatter.of(key) { raw ->
                     raw.toIntOrNull()?.coerceIn(0, 100)?.let { percent ->
                         "$percent% (${AdaptiveLuxCurve.percentToBrightness(percent)})"
                     } ?: raw
                 }
-                "auto_brightness_sensitivity" -> { raw ->
+                "auto_brightness_sensitivity" -> SettingRowFormatter.of(key) { raw ->
                     raw.toIntOrNull()?.coerceIn(0, 100)?.let { "$it%" } ?: raw
                 }
                 else -> null
@@ -6460,6 +6465,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             skipped.add("zigbee_router")
             warn.add("legacy zigbee_router=false skipped to preserve untouched vendor gateway ownership")
         }
+        // Canonicalise the sink triple before it is previewed OR applied, so a dry run cannot advertise
+        // a destination the apply would not write. Applying it here is not what makes the stored fields
+        // consistent — Config.stageImportDependencies does that for every applyAccepted path — but doing
+        // it before the branch keeps preview and apply the same operation on the same values.
+        LogShipEndpoint.canonicalUpdate(accepted, config.logShipHost, config.logShipPort, config.logShipProtocol)
+            ?.let { accepted.putAll(it) }
         val strict = call.request.queryParameters["strict"] == "1"
         if ((strict && errors.isNotEmpty()) || (accepted.isEmpty() && errors.isNotEmpty())) {
             call.respondText(importJson("rejected", emptyList(), skipped, warn, errors), ContentType.Application.Json, HttpStatusCode.UnprocessableEntity)

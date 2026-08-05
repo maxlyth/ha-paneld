@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.util.LogShipEndpoint.SYSLOG_TCP
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint.SYSLOG_UDP
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LogShipEndpointTest {
@@ -170,4 +171,146 @@ class LogShipEndpointTest {
             resolve("collector.lan:70000"),
         )
     }
+
+    // ---- canonicalUpdate: the three stored fields always describe one destination -----------------
+
+    private val stored = Triple("stored.lan", 514, SYSLOG_TCP)
+
+    private fun canonical(vararg pairs: Pair<String, String>) =
+        LogShipEndpoint.canonicalUpdate(linkedMapOf(*pairs), stored.first, stored.second, stored.third)
+
+    @Test fun anUpdateTouchingNoAddressKeyStagesNothing() {
+        // The caller skips staging entirely rather than rewriting fields nobody asked to change.
+        assertNull(canonical("log_ship_enabled" to "true", "mqtt_broker" to "tcp://broker"))
+        assertNull(LogShipEndpoint.canonicalUpdate(emptyMap(), "stored.lan", 514, SYSLOG_TCP))
+    }
+
+    @Test fun anEmbeddedAddressRewritesAllThreeFieldsTogether() {
+        // The defect this exists for: stored verbatim, the host says udp/1514 while Port and Protocol
+        // still say 514/tcp, so shipping goes one place and every surface reports another.
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "1514",
+                "log_ship_protocol" to SYSLOG_UDP,
+            ),
+            canonical("log_ship_host" to "udp://collector.lan:1514"),
+        )
+    }
+
+    @Test fun anEmbeddedAddressOutranksTheSeparateFieldsInTheSameUpdate() {
+        // Legacy-bundle precedence. A panel whose stored host was `udp://collector.lan:1514` really was
+        // shipping UDP to 1514 — resolve() takes the destination from the host at send time — so a
+        // bundle taken from it must reproduce that, not the stale Port/Protocol it also carried.
+        val result = canonical(
+            "log_ship_host" to "udp://collector.lan:1514",
+            "log_ship_port" to "514",
+            "log_ship_protocol" to SYSLOG_TCP,
+        )
+        assertEquals("1514", result?.get("log_ship_port"))
+        assertEquals(SYSLOG_UDP, result?.get("log_ship_protocol"))
+    }
+
+    @Test fun theResultIsIndependentOfTheOrderTheBatchIsIterated() {
+        // Order-independence is the property the review named. Same three entries, all six insertion
+        // orders: a result that varied would mean the fix depended on how a caller built its map.
+        val entries = listOf(
+            "log_ship_host" to "udp://collector.lan:1514",
+            "log_ship_port" to "514",
+            "log_ship_protocol" to SYSLOG_TCP,
+        )
+        val results = permutations(entries).map { ordering ->
+            LogShipEndpoint.canonicalUpdate(
+                linkedMapOf(*ordering.toTypedArray()), stored.first, stored.second, stored.third,
+            )
+        }
+        assertEquals(6, results.size)
+        assertEquals(1, results.distinct().size)
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "1514",
+                "log_ship_protocol" to SYSLOG_UDP,
+            ),
+            results.first(),
+        )
+    }
+
+    @Test fun aPlainHostTakesTheUpdatesOwnPortAndProtocolThenTheStoredOnes() {
+        // Nothing embedded to outrank, so the explicit fields stand; absent ones fall back to stored.
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "6514",
+                "log_ship_protocol" to HTTP,
+            ),
+            canonical(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "6514",
+                "log_ship_protocol" to HTTP,
+            ),
+        )
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "514",
+                "log_ship_protocol" to SYSLOG_TCP,
+            ),
+            canonical("log_ship_host" to "collector.lan"),
+        )
+    }
+
+    @Test fun aPortOnlyUpdateStillRepairsAnAlreadyDesynchronisedStoredHost() {
+        // A panel upgraded from a build that stored the host verbatim is repaired by the next write
+        // touching any of the three, not left inconsistent until the host itself is edited again.
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "1514",
+                "log_ship_protocol" to SYSLOG_UDP,
+            ),
+            LogShipEndpoint.canonicalUpdate(
+                mapOf("log_ship_port" to "9999"), "udp://collector.lan:1514", 514, SYSLOG_TCP,
+            ),
+        )
+    }
+
+    @Test fun clearingTheHostIsNotMistakenForAnEmbeddedAddress() {
+        // Blank host means "stop shipping"; it must not resurrect a stored host or invent a port.
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "",
+                "log_ship_port" to "514",
+                "log_ship_protocol" to SYSLOG_TCP,
+            ),
+            canonical("log_ship_host" to ""),
+        )
+    }
+
+    @Test fun anAbsentFieldFallsBackToWhatIsStoredNotToTheRegistryDefault() {
+        // The stored port is deliberately not 514. A fallback hard-coded to the default would satisfy
+        // every other case in this file — they all store 514 — while silently retargeting any panel
+        // configured on a non-standard port the moment an unrelated field was edited.
+        assertEquals(
+            mapOf(
+                "log_ship_host" to "collector.lan",
+                "log_ship_port" to "6601",
+                "log_ship_protocol" to HTTP,
+            ),
+            LogShipEndpoint.canonicalUpdate(
+                mapOf("log_ship_host" to "collector.lan"), "old.lan", 6601, HTTP,
+            ),
+        )
+    }
+
+    @Test fun anUnparseablePortInTheUpdateFallsBackRatherThanThrowing() {
+        // Validation runs before this, but the fallback must not depend on that ordering.
+        assertEquals("514", canonical("log_ship_port" to "not-a-number")?.get("log_ship_port"))
+    }
+
+    private fun <T> permutations(items: List<T>): List<List<T>> =
+        if (items.size <= 1) listOf(items)
+        else items.flatMap { head ->
+            permutations(items - head).map { tail -> listOf(head) + tail }
+        }
 }
