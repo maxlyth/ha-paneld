@@ -1098,22 +1098,71 @@ class NavbarController(
 }
 
 /** Marker-backed ownership and affirmative readback for persistent display overscan. */
+/** Whether this platform implements the `wm overscan` subcommand the display crop depends on. */
+internal enum class OverscanSupport {
+    /** The subcommand exists; a crop can be applied and must therefore be recoverable. */
+    SUPPORTED,
+
+    /** The subcommand does not exist, so no crop can ever have been applied on this device. Modern
+     *  AOSP removed it: an rk3576 Android 14 panel answers `Unknown command: overscan`. */
+    UNIMPLEMENTED,
+
+    /** The probe could not run — typically root is not available right now. Says nothing about the
+     *  platform, so it must never be read as "no crop exists". */
+    UNKNOWN,
+}
+
 internal class NavbarOverscanRecovery(
     private val marker: DurableRecoveryMarker,
     private val run: (String) -> Boolean,
     private val runOutput: (String) -> String?,
 ) {
+    /** Cached once conclusive. A platform cannot gain or lose a shell subcommand without an OS change,
+     *  which would restart this process, so a definite answer is permanent for its lifetime. */
+    @Volatile private var cachedSupport: OverscanSupport? = null
+
     fun isArmed(): Boolean = marker.isArmed()
+
+    /**
+     * Probe whether the crop command exists.
+     *
+     * [runOutput] discards output whenever the shell exits non-zero, and `wm` exits non-zero for an
+     * unknown subcommand, so a bare invocation cannot distinguish "this platform has no overscan" from
+     * "root is unavailable". The probe therefore carries the inner command's own status out in its
+     * payload rather than letting the shell's exit status stand for it. Setting the crop to zero is a
+     * safe probe because both callers want no crop at that moment: the reset path is asking for exactly
+     * this, and the apply path overwrites it with the real height immediately afterwards.
+     *
+     * Only a definite answer is cached. An unrecognised failure is [OverscanSupport.UNKNOWN] and must
+     * stay re-probeable — caching it would be the same fail-open shape this class exists to remove.
+     */
+    internal fun support(): OverscanSupport {
+        cachedSupport?.let { return it }
+        val output = runOutput(SUPPORT_PROBE) ?: return OverscanSupport.UNKNOWN
+        val resolved = classifySupport(output)
+        if (resolved != OverscanSupport.UNKNOWN) cachedSupport = resolved
+        return resolved
+    }
 
     fun applyBottom(bottomPx: Int): Boolean {
         val bottom = bottomPx.coerceAtLeast(0)
-        if (bottom > 0 && !marker.arm()) return false
         if (bottom == 0) return resetAndVerify()
+        // Arming records that a crop may exist and must be undone. Doing that for a command the platform
+        // cannot run is what wedged the controller: the marker could never clear, so every later mode
+        // change — including the one back to Off — took the reset path and failed there forever. Where no
+        // crop is possible, report success and let the bar simply overlay the bottom of the content; the
+        // crop is cosmetic, and a drawn bar is far better than a navbar setting that can never change.
+        if (support() != OverscanSupport.SUPPORTED) return true
+        if (!marker.arm()) return false
         return run("wm overscan 0,0,0,$bottom")
     }
 
     fun resetAndVerify(): Boolean {
         if (!marker.isArmed()) return true
+        // A marker left behind on a platform with no overscan command describes a crop that cannot exist.
+        // Clear it instead of re-running a command that can never succeed. UNKNOWN deliberately falls
+        // through to the real readback: an unavailable root shell is not evidence that nothing is cropped.
+        if (support() == OverscanSupport.UNIMPLEMENTED) return marker.recoverIfArmed { true }
         return marker.recoverIfArmed {
             displayOverscanIsZero(runOutput(RESET_AND_READBACK))
         }
@@ -1122,6 +1171,33 @@ internal class NavbarOverscanRecovery(
     companion object {
         internal const val RESET_AND_READBACK =
             "wm overscan 0,0,0,0 && dumpsys display && dumpsys window policy"
+
+        /** Emitted by [SUPPORT_PROBE] carrying the crop command's own exit status. The shell's status
+         *  cannot serve: it has to stay zero for [runOutput] to hand back any payload at all. */
+        internal const val RC_MARKER = "hapaneld-overscan-rc"
+
+        /** Runs the exact command the crop uses, then reports that command's status inside the output. */
+        internal const val SUPPORT_PROBE = "wm overscan 0,0,0,0 2>&1; echo " + RC_MARKER + "=\$?"
+
+        /**
+         * Classify one probe payload.
+         *
+         * `SUPPORTED` requires positive evidence — the crop command itself reported success. Everything
+         * else is a failure, and only an explicit unknown-subcommand reply proves the platform lacks it.
+         * A denied permission, a missing `wm` binary, a dead window service, a differently worded refusal
+         * or a truncated payload are all indeterminate: they must not license arming the durable marker,
+         * and they must not license clearing one either.
+         */
+        internal fun classifySupport(output: String): OverscanSupport {
+            val status = RC_LINE.find(output)?.groupValues?.get(1)?.toIntOrNull()
+                ?: return OverscanSupport.UNKNOWN
+            if (status == 0) return OverscanSupport.SUPPORTED
+            if (UNKNOWN_COMMAND.containsMatchIn(output)) return OverscanSupport.UNIMPLEMENTED
+            return OverscanSupport.UNKNOWN
+        }
+
+        private val RC_LINE = Regex(Regex.escape(RC_MARKER) + "=(-?\\d+)")
+        private val UNKNOWN_COMMAND = Regex("unknown command", RegexOption.IGNORE_CASE)
 
         internal fun displayOverscanIsZero(output: String?): Boolean {
             val displayInfo = output.orEmpty().lineSequence()
