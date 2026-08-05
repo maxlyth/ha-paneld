@@ -15,8 +15,8 @@ import io.github.maxlyth.hapaneld.config.SettingsRegistry
  * snapshot and discarded, and an entire change rewording that string shipped nothing observable.
  *
  * Making the formatter a type rather than a bare lambda turns that mistake from silent into one that
- * cannot be expressed: [of] refuses a spec whose row can never reach a formatter, and the instance
- * carries the [key] it was built for, so it cannot be handed to a different row either.
+ * cannot be expressed: [of] refuses a spec whose row can never reach a formatter, and [formatFor]
+ * refuses a row other than the [key] the formatter was built for.
  *
  * The broader rule this encodes: a setting row states **configuration**. Live state does not belong on
  * one at all — render it as a fact row instead (see `CONTEXT_KEYS`, which formats nothing and is why
@@ -26,7 +26,17 @@ internal class SettingRowFormatter private constructor(
     val key: String,
     private val format: (String) -> String,
 ) {
-    operator fun invoke(raw: String): String = format(raw)
+    /**
+     * Format [raw] for the row identified by [rowKey], rejecting a row this formatter was not built for.
+     *
+     * The row key is passed in rather than trusted, so the binding is enforced where it is used instead
+     * of merely recorded on the instance. Callers already have both values in hand, and a mismatch is a
+     * static coding mistake — hoisting a formatter out of a per-key loop is the realistic way to make it.
+     */
+    fun formatFor(rowKey: String, raw: String): String {
+        require(rowKey == key) { "formatter for '$key' used on the '$rowKey' row" }
+        return format(raw)
+    }
 
     companion object {
         /** Whether `settingRowHtml` can reach a formatter for [spec] at all. */

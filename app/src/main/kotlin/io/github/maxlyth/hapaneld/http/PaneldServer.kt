@@ -3785,7 +3785,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
             // The built-in renderer sentinel has no package label — show its friendly name, not "builtin".
             raw == SystemController.BUILTIN_DASHBOARD -> "Built-in renderer"
-            else -> valueFormatter?.invoke(raw) ?: raw
+            else -> valueFormatter?.formatFor(key, raw) ?: raw
         }
         return """<tr><th>${esc(spec.label)}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
     }

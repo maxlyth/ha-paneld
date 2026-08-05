@@ -3,7 +3,6 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.config.SettingType
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -41,7 +40,7 @@ class SettingRowFormatterTest {
         listOf("ha_area", "auto_brightness_minimum_percent", "auto_brightness_sensitivity").forEach { key ->
             val formatter = SettingRowFormatter.of(key) { raw -> "$raw!" }
             assertEquals(key, formatter.key)
-            assertEquals("x!", formatter("x"))
+            assertEquals("x!", formatter.formatFor(key, "x"))
         }
     }
 
@@ -58,10 +57,17 @@ class SettingRowFormatterTest {
         assertTrue(specs.any { !SettingRowFormatter.formattable(it) })
     }
 
-    @Test fun aFormatterKnowsWhichRowItBelongsTo() {
-        // settingRowHtml rejects a formatter built for a different key; the binding is what lets it.
+    @Test fun aFormatterRefusesToRenderARowItWasNotBuiltFor() {
+        // The binding has to be enforced where it is used, not merely recorded on the instance. The
+        // realistic mistake is hoisting a formatter out of the per-key loop that builds it, after which
+        // every row would silently receive another row's suffix.
         val formatter = SettingRowFormatter.of("ha_area") { raw -> "$raw (local override)" }
-        assertEquals("ha_area", formatter.key)
-        assertFalse(formatter.key == "home_dashboard")
+
+        assertEquals("Office (local override)", formatter.formatFor("ha_area", "Office"))
+
+        val failure = runCatching { formatter.formatFor("home_dashboard", "lovelace/0") }.exceptionOrNull()
+        assertTrue("a mismatched row must be rejected", failure is IllegalArgumentException)
+        assertTrue(failure!!.message!!, failure.message!!.contains("ha_area"))
+        assertTrue(failure.message!!, failure.message!!.contains("home_dashboard"))
     }
 }
