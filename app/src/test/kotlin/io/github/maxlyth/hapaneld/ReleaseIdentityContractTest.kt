@@ -6,6 +6,6 @@ import org.junit.Test
 class ReleaseIdentityContractTest {
     @Test fun rc1CandidateOwnsVersionCode531() {
         assertEquals("0.9.7-rc1", BuildConfig.VERSION_NAME)
-        assertEquals(531, BuildConfig.VERSION_CODE)
+        assertEquals(533, BuildConfig.VERSION_CODE)
     }
 }
