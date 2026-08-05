@@ -19,6 +19,48 @@ class BundledProfileParityTest {
     private val bundled get() = BundledProfileFixtures.bundled
     private val bundledById get() = BundledProfileFixtures.bundledById
 
+    /**
+     * `has_native_navbar` gates whether `Native` may be chosen at all, and choosing it on a panel with
+     * no system bar leaves no navigation. So absence is the conservative default and only hardware we
+     * have actually verified may declare it — today that is the WF1589T alone.
+     */
+    @Test fun onlyVerifiedHardwareDeclaresANativeNavigationBar() {
+        assertEquals(
+            setOf("wf1589t"),
+            bundled.filter { it.document.platform.hasNativeNavbar }.map { it.document.id }.toSet(),
+        )
+        // Generic must stay conservative: unknown hardware is not assumed to have a system bar.
+        assertFalse(bundledById.getValue("generic").document.platform.hasNativeNavbar)
+        assertFalse(bundledById.getValue("nspanel-pro").document.platform.hasNativeNavbar)
+        // The declaration reaches the resolved profile, not just the parsed document.
+        assertTrue(bundledById.getValue("wf1589t").profile().hasNativeNavbar)
+        assertFalse(bundledById.getValue("nspanel-pro").profile().hasNativeNavbar)
+    }
+
+    @Test fun theNativeNavbarFieldIsDescribedToTheProfileEditorAndRejectsUnknownSiblings() {
+        val descriptor = ProfileMetadata.schema.fields.single { it.path == "platform.has_native_navbar" }
+        assertEquals("boolean", descriptor.type)
+        assertFalse("an unverified profile must be able to omit it", descriptor.required)
+
+        // The platform allowlist stays closed: adding one key must not open the block to any other.
+        val raw = ProfileYaml.serialize(bundledById.getValue("wf1589t").document)
+            .replace("  has_native_navbar: true", "  has_native_navbar: true\n  has_teleporter: true")
+        val rejected = ProfileYaml.parse(raw)
+        assertNull(rejected.document)
+        assertTrue(rejected.issues.any { it.path == "platform.has_teleporter" && it.message == "Unknown field." })
+    }
+
+    @Test fun theNativeNavbarDeclarationSurvivesASerializeParseRoundTrip() {
+        val document = bundledById.getValue("wf1589t").document
+        val reparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(document)).document)
+        assertTrue(reparsed.platform.hasNativeNavbar)
+        assertEquals(document, reparsed)
+
+        val plain = bundledById.getValue("nspanel-pro").document
+        val plainReparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(plain)).document)
+        assertFalse(plainReparsed.platform.hasNativeNavbar)
+    }
+
     @Test fun bundledCatalogHasUniqueIdsRawHashesAndExactlyOneGenericFallback() {
         assertTrue("no bundled profiles found", bundled.isNotEmpty())
 
@@ -488,7 +530,7 @@ class BundledProfileParityTest {
             "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
             "smt1019.yaml" to "7e4501901dd2566361163d7a154c992692a54842be4c8fd522b176bae61cda68",
             "tpa10.yaml" to "1aef00dc9ecde07bd2770a09dc40c48f19b6a6a303c5516202a889f005ce0653",
-            "wf1589t.yaml" to "ae485996a658e9c87f90fe6e2cd60cef5d7db14a275767aa1c2ba9ba0f08af65",
+            "wf1589t.yaml" to "bb077b5be035fc25c1366851a8fa55f97753b90c334ea9b07c7240e7aa797b18",
             "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf("community.cronos-lineageos18")

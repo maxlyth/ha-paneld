@@ -2086,8 +2086,17 @@ class PaneldService : Service() {
             "Proximity" to sensorRow(sensors.hasProximity(), profile.proximityTech, sensors.proximityDesc()),
             // a11y service = software back/recents nav, NOT physical buttons (NSPanel Pro has none).
             "Nav actions (a11y)" to yesNo(accessibilityEnabled()),
-            // Soft navbar overlay mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW).
-            "Navbar" to (config.navbarMode + if (config.navbarMode != "Off" && !canDrawOverlays()) " · no overlay permission" else ""),
+            // Soft navbar mode + whether the overlay can actually be drawn (SYSTEM_ALERT_WINDOW). Test the
+            // modes that draw a bar rather than "not Off": Native draws nothing either, so warning about a
+            // missing overlay permission there would be a false alarm on every natively-barred panel.
+            "Navbar" to (
+                config.navbarMode +
+                    if (config.navbarMode in NavbarController.OVERLAY_MODES && !canDrawOverlays()) {
+                        " · no overlay permission"
+                    } else {
+                        ""
+                    }
+                ),
             "Zigbee" to controllers.zigbee.status,
             "Relays" to controllers.relayCount.let { if (it > 0) it.toString() else "none" },
             "CPU profile" to (controllers.cpuTier ?: "n/a"),
@@ -2188,6 +2197,10 @@ class PaneldService : Service() {
                 hasCht8305 = profile.hasCht8305,
                 appCanSu = profile.appCanSu,
                 hasRecents = profile.hasRecents,
+                // Profile declaration only, deliberately not the Android/vendor navbar-visibility signals
+                // that seed the fresh-install default: those are known to misreport in both directions,
+                // and this decides whether "Native" may be selected rather than merely suggested.
+                hasNativeNavbar = profile.hasNativeNavbar,
                 cpuGovernors = controllers?.cpuGovernorsAvailable ?: cpu.available(),
                 // AdbController.available() is exactly Su.available(); reuse this snapshot's one root
                 // authority probe rather than opening another shell transaction.

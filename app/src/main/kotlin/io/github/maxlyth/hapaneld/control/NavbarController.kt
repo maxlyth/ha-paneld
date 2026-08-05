@@ -43,12 +43,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
  * whose firmware suppresses the native Android navigation bar — NSPanel Pro hardcodes
  * `config_showNavigationBar=false`, and both `policy_control` and `qemu.hw.mainkeys` are ignored —
  * so the user otherwise has no Back / Home / Recents. (Replaces the equivalent NSPanelToolsPro
- * feature for users who have uninstalled it.) Three modes:
+ * feature for users who have uninstalled it.) Four modes:
  *
  * - `Off` — no overlay.
  * - `Always on` — persistent bar pinned to the bottom edge.
  * - `Swipe reveal` — bar hidden; a thin bottom-edge touch strip reveals it for [AUTO_HIDE_MS], then
  *   it auto-hides.
+ * - `Native` — the firmware's own navigation bar has authority: this controller draws nothing,
+ *   reveals nothing and takes no bottom-edge touches, so the platform's Back / Home / Recents are
+ *   untouched. Physically identical to `Off`; the distinction is that `Off` means "no navigation
+ *   affordance was wanted" while `Native` means "the system already provides one". Offered only
+ *   where the device profile declares `has_native_navbar`, because choosing it on a panel with no
+ *   system bar would leave no navigation at all.
  *
  * Buttons (left→right): Back, Launcher, Dashboard, Recents, Reload, Brightness−/+, Volume−/+. The panel has no physical
  * buttons, so the bar doubles as a hardware-button surface — brightness and volume step locally with
@@ -266,7 +272,10 @@ class NavbarController(
         val previous = appliedMode
         // Permission failure must be side-effect free: in particular, never create a persistent crop that
         // cannot be accompanied by the bar which explains and controls it.
-        val permissionReady = target == MODE_OFF || ensureOverlayPermission()
+        // Only the modes that draw a bar need SYSTEM_ALERT_WINDOW. Off and Native both draw nothing, so
+        // neither may trigger the root appops grant — Native in particular runs on panels whose firmware
+        // already provides navigation, where asking for an overlay permission would be gratuitous.
+        val permissionReady = target !in OVERLAY_MODES || ensureOverlayPermission()
         if (!permissionReady || !isCurrent(work)) return false
 
         val transaction = transactNavbarMode(
@@ -333,7 +342,9 @@ class NavbarController(
     }
 
     private fun updateModeBindings(target: String) {
-        setVolumeReceiver(target != MODE_OFF)
+        // The receiver exists to keep the drawn bar's volume readout in step with external changes, so it
+        // is tied to the modes that draw one rather than to "not Off".
+        setVolumeReceiver(target in OVERLAY_MODES)
         synchronized(lifecycleLock) {
             BuiltinDashboard.setNavbarRevealHandler(
                 if (target == MODE_SWIPE && canDraw()) {
@@ -1041,7 +1052,12 @@ class NavbarController(
         const val MODE_OFF = "Off"
         const val MODE_ALWAYS = "Always on"
         const val MODE_SWIPE = "Swipe reveal"
-        val MODES = listOf(MODE_OFF, MODE_ALWAYS, MODE_SWIPE)
+        const val MODE_NATIVE = "Native"
+        val MODES = listOf(MODE_OFF, MODE_ALWAYS, MODE_SWIPE, MODE_NATIVE)
+
+        /** Modes whose bar this app draws, and which therefore need `SYSTEM_ALERT_WINDOW`. `Off` and
+         *  `Native` both draw nothing; only these two justify an overlay-permission warning. */
+        val OVERLAY_MODES = setOf(MODE_ALWAYS, MODE_SWIPE)
 
         private const val BAR_HEIGHT_DP = 56   // taller so the icons read at a glance
         // Swipe-reveal capture zone + threshold. Canonical values live in [BottomSwipeDetector] so the

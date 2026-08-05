@@ -177,7 +177,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val soc = map(root["soc"], "soc", setOf("model", "introduced_year", "cpu_cores"))
         val requires = map(root["requires"], "requires", setOf("min_core_version", "drivers"), required = true).orEmpty()
         val match = map(root["match"], "match", setOf("priority", "fallback", "any"), required = true).orEmpty()
-        val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents"), required = true).orEmpty()
+        val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents", "has_native_navbar"), required = true).orEmpty()
         val hardware = map(root["hardware"], "hardware", setOf(
             "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
             "relay_base_fallbacks", "button_led_gpio_base", "touch_click_gain",
@@ -265,6 +265,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 suForm = string(platform, "su_form", "platform", required = true).orEmpty(),
                 appCanSu = boolean(platform, "app_can_su", "platform", required = true) ?: false,
                 hasRecents = boolean(platform, "has_recents", "platform") ?: true,
+                hasNativeNavbar = boolean(platform, "has_native_navbar", "platform") ?: false,
             ),
             hardware = ProfileHardware(
                 led = ProfileLed(
@@ -607,6 +608,7 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "su_form" to platform.suForm,
         "app_can_su" to platform.appCanSu,
         "has_recents" to platform.hasRecents,
+        "has_native_navbar" to platform.hasNativeNavbar,
     ),
     "hardware" to linkedMapOf(
         "led" to linkedMapOf("mechanism" to hardware.led.mechanism, "transfer" to hardware.led.transfer),

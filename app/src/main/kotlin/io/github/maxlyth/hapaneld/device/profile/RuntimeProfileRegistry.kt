@@ -86,6 +86,7 @@ private object EmergencyDeviceProfile : DeviceProfile {
     override val appCanSu = false
     override val usesDaemon = false
     override val hasRecents = false
+    override val hasNativeNavbar = false
     override val ledMechanism = LedMechanism.NONE
     override val screenOff = ScreenOff.BRIGHTNESS_ZERO
     override val zigbeeGatewayDir: String? = null

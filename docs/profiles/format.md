@@ -119,6 +119,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `platform.su_form` | Required | `none`, `android` or `toolbox`. |
 | `platform.app_can_su` | Required | Boolean. Must be `false` when `su_form` is `none`; an `android` or `toolbox` form may still be declared with `false` for a sandbox-walled app. |
 | `platform.has_recents` | Optional; default `true` | Boolean. |
+| `platform.has_native_navbar` | Optional; default `false` | Boolean. Declare `true` only when the firmware draws Android's own navigation bar, which makes the `Native` navbar mode selectable. Leave it `false` unless you have verified it on the hardware: Android's `config_showNavigationBar` resource is unreliable in both directions, and selecting `Native` on a panel that has no system bar would leave no navigation at all. |
 | `hardware.led` | Required | Mapping containing the LED fields below. |
 | `hardware.led.mechanism` | Required | `none`, `autodetect`, `rk3576-ioctl`, `rk3576-ioctl-daemon` or `sysfs-daemon`. Daemon-only mechanisms are rejected when `platform.app_can_su` is `true`. |
 | `hardware.led.transfer` | Optional; default `identity` | `identity` or `rk3576-four-bit`. |

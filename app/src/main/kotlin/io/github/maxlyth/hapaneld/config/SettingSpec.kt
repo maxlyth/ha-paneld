@@ -62,6 +62,10 @@ data class Capabilities(
     val hasEvdevButtons: Boolean = false,
     val appCanSu: Boolean = false,
     val hasRecents: Boolean = false,
+    // The firmware draws Android's own navigation bar, so the soft overlay is unnecessary. Profile-declared
+    // only (see DeviceProfile.hasNativeNavbar) — the generic Android signals lie in both directions, and this
+    // gates whether "Native" may be chosen at all rather than merely seeding a default.
+    val hasNativeNavbar: Boolean = false,
     val ledAvailable: Boolean = false,
     val ledColorCapable: Boolean = false,
     val zigbeePresent: Boolean = false,
@@ -99,7 +103,10 @@ data class HaEntity(
     val component: String,        // light | switch | number | select | sensor | binary_sensor | text | button | event
     val objectSuffix: String,     // unique_id/object_id suffix; full id = "<panel>_<objectSuffix>"
     val name: String,             // HA entity name ("Wake on wave")
-    val body: String,             // entity-specific fields, comma-joined, no leading/trailing comma; {panel} = panel id
+    // Entity-specific fields, comma-joined, no leading/trailing comma. {panel} = panel id. {options} =
+    // the capability-filtered ENUM choices as a JSON array; use it instead of a literal list only when
+    // the spec carries `optionRequires`, so every other entity's payload stays a fixed string.
+    val body: String,
     val readOnly: Boolean = false,// publish-only (sensors): no /api/v1/config row, value comes from the runtime
 ) {
     /** State topic this entity reports on, e.g. `ha-paneld/<panel>/wake_on_wave/state`. */
@@ -110,19 +117,23 @@ data class HaEntity(
      * [deviceJson] is the shared `"device":{...}` fragment, [availJson] the shared availability
      * fragment — both produced once per publish by the caller. [enabledByDefault]=false appends the
      * soft-hide flag (entity exists in HA but disabled → no recorder load) for the advanced hide mode.
+     * [optionsJson] substitutes the `{options}` placeholder for a capability-filtered select; a body
+     * without the placeholder is unaffected, so this cannot perturb any other entity's bytes.
      */
     fun buildDiscoveryJson(
         panel: String,
         availJson: String,
         deviceJson: String,
         enabledByDefault: Boolean = true,
+        optionsJson: String? = null,
     ): String {
         val edb = if (enabledByDefault) "" else ""","enabled_by_default":false"""
         // object_id keys the HA entity_id to the stable panel_id, not the cosmetic device name —
         // matches the hand-written discovery payloads (discovery-identity anchoring).
         return "{\"name\":\"${jsonEsc(name)}\",\"object_id\":\"${panel}_$objectSuffix\"," +
             "\"unique_id\":\"${panel}_$objectSuffix\"," +
-            body.replace("{panel}", panel) + edb + ",$availJson,$deviceJson}"
+            body.replace("{panel}", panel).replace("{options}", optionsJson.orEmpty()) +
+            edb + ",$availJson,$deviceJson}"
     }
 
     companion object {
@@ -174,10 +185,31 @@ data class SettingSpec(
     // settable via POST /config, and carried in config bundles — just never rendered as a form field.
     val hidden: Boolean = false,
     val availableWhen: (Capabilities) -> Boolean = { true },
+    // Per-ENUM-choice capability gates, for the case where the setting itself is always meaningful but
+    // one of its choices is not. `availableWhen` cannot express this: hiding the whole setting would
+    // remove working choices too. A choice with no entry here is always offered.
+    val optionRequires: Map<String, (Capabilities) -> Boolean> = emptyMap(),
     val validate: (String) -> Validation = { Validation.Ok(it) },
 ) {
     /** True for publish-only sensor entities that have no settable value. */
     val readOnly: Boolean get() = ha?.readOnly == true
+
+    /**
+     * The ENUM choices this panel may actually select, in declared order. [options] stays the full
+     * static set — it is the durable validation vocabulary that config bundles and retired-spelling
+     * aliases resolve against — while this is what the Configure form and HA discovery offer.
+     */
+    fun optionsFor(caps: Capabilities): List<String> =
+        options.filter { optionRequires[it]?.invoke(caps) ?: true }
+
+    /**
+     * The `{options}` substitution for this spec's HA select, or null when it declares no per-choice
+     * gates and therefore carries no placeholder. Sole authority for that fragment so the published
+     * payload and any assertion about it cannot be computed two different ways.
+     */
+    fun discoveryOptionsJson(caps: Capabilities): String? =
+        if (optionRequires.isEmpty()) null
+        else optionsFor(caps).joinToString(",", "[", "]") { Json.str(it) }
 }
 
 // Typed coercions of a spec's canonical [SettingSpec.default] string. This makes the spec the single

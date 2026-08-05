@@ -52,7 +52,14 @@ class SettingsRegistryPresentationTest {
         assertFalse(spec.haExposedByDefault)
         assertEquals("select", spec.ha!!.component)
         assertEquals("navbar", spec.ha!!.objectSuffix)
-        assertTrue(spec.ha!!.body.contains("\"options\":[\"Off\",\"Always on\",\"Swipe reveal\"]"))
+        // The body carries the placeholder, not a literal list: the choices are capability-filtered per
+        // panel. What actually reaches Home Assistant is pinned byte-for-byte in DiscoveryParityTest.
+        assertTrue(spec.ha!!.body.contains("\"options\":{options}"))
+        assertEquals(listOf("Off", "Always on", "Swipe reveal"), spec.optionsFor(Capabilities()))
+        assertEquals(
+            listOf("Off", "Always on", "Swipe reveal", "Native"),
+            spec.optionsFor(Capabilities(hasNativeNavbar = true)),
+        )
     }
 
     @Test fun lastBootTimeRenamesPresentationWithoutChangingIdentity() {

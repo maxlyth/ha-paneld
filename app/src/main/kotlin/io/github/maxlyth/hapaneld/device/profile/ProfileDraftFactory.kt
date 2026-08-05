@@ -58,6 +58,8 @@ object ProfileDraftFactory {
                 suForm = "none",
                 appCanSu = false,
                 hasRecents = true,
+                // A draft describes unverified hardware, so it never claims a native navigation bar.
+                hasNativeNavbar = false,
             ),
             hardware = ProfileHardware(
                 led = ProfileLed("none", "identity"),

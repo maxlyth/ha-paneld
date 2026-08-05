@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.config.Capabilities
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -81,7 +82,7 @@ class ConfigPostBodyTest {
             source.indexOf("private fun configSchemaJson()"),
         )
         val receive = handler.indexOf("receiveBoundedConfigParameters(call) ?: return")
-        val validation = handler.indexOf("normalizeConfigPostParameters(received)")
+        val validation = handler.indexOf("normalizeConfigPostParameters(received")
         assertFalse(handler.contains("call.receiveParameters()"))
         val mutation = handler.indexOf("config.applyBatch")
         assertTrue(receive >= 0)
@@ -110,6 +111,28 @@ class ConfigPostBodyTest {
             handler.indexOf("applySetting(\"home_dashboard\"") >
                 handler.indexOf("if (persisted && !mutationPlan.isNoOp)"),
         )
+    }
+
+    @Test fun `admission refuses a capability-gated choice this panel cannot use`() {
+        val posted = Parameters.build { append("navbar_mode", "Native") }
+
+        // Default snapshot is all-false, so an unparameterized call is fail-closed.
+        val withoutCapability = normalizeConfigPostParameters(posted)
+        assertTrue(withoutCapability is ConfigPostParameters.Bad)
+        assertEquals(
+            "navbar_mode: Native is not available on this panel",
+            (withoutCapability as ConfigPostParameters.Bad).reason,
+        )
+
+        val withCapability = normalizeConfigPostParameters(posted, Capabilities(hasNativeNavbar = true))
+        assertEquals("Native", (withCapability as ConfigPostParameters.Ok).values["navbar_mode"])
+    }
+
+    @Test fun `admission still accepts the ungated navbar choices on any panel`() {
+        listOf("Off", "Always on", "Swipe reveal").forEach { mode ->
+            val result = normalizeConfigPostParameters(Parameters.build { append("navbar_mode", mode) })
+            assertEquals(mode, (result as ConfigPostParameters.Ok).values["navbar_mode"])
+        }
     }
 
     @Test fun `direct config admission normalizes every registered value before mutation`() {

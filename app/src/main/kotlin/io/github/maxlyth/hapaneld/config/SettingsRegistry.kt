@@ -119,11 +119,17 @@ object SettingsRegistry {
             key = "navbar_mode", type = SettingType.ENUM, group = "Behaviour",
             label = "Navbar mode", default = "Off",
             liveApply = true,
-            options = listOf("Off", "Always on", "Swipe reveal"),
-            help = "Soft on-screen navigation bar for panels with no native navbar.",
+            options = listOf("Off", "Always on", "Swipe reveal", "Native"),
+            // Native is offered only where the firmware draws its own bar. Everywhere else it would be
+            // a way to end up with no navigation at all, so it is withheld rather than merely discouraged.
+            optionRequires = mapOf("Native" to { caps: Capabilities -> caps.hasNativeNavbar }),
+            help = "Soft on-screen navigation bar for panels with no native navbar. Native leaves " +
+                "navigation to the panel's own Android bar and draws nothing. Note that hiding the " +
+                "Android system bars, from the built-in renderer's fullscreen setting or the Android " +
+                "dashboard lock, still hides a native bar.",
             ha = HaEntity(
                 "select", "navbar", "Navbar",
-                """"command_topic":"ha-paneld/{panel}/navbar/set","state_topic":"ha-paneld/{panel}/navbar/state","options":["Off","Always on","Swipe reveal"],"icon":"mdi:gesture-tap-button","entity_category":"config"""",
+                """"command_topic":"ha-paneld/{panel}/navbar/set","state_topic":"ha-paneld/{panel}/navbar/state","options":{options},"icon":"mdi:gesture-tap-button","entity_category":"config"""",
             ),
         ),
         SettingSpec(

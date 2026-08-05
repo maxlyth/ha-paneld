@@ -2524,6 +2524,16 @@ internal class MqttBridge(
     // acknowledges both privileged display state and the main-thread overlay mutation.
     private fun handleNavbar(payload: String) {
         val previous = config.navbarMode
+        // Unlike HTTP, this path coerces rather than rejects — NavbarController.normalise maps anything
+        // unrecognised onto Off and the result is then persisted. "Native" IS recognised, so without this
+        // guard a command aimed at the wrong panel would take away its drawn bar and leave no navigation
+        // at all. Keep the panel where it is and let the reconcile republish the canonical value, which
+        // snaps the Home Assistant select back.
+        if (!navbarModePermitted(payload.trim().trim('"'), config.hasNativeNavbar)) {
+            Log.w(TAG, "navbar: refusing $payload — this panel has no native navigation bar")
+            stateConverger.reconcile("navbar", force = true)
+            return
+        }
         applyAcknowledgedNavbarMode(
             payload = payload,
             previousMode = previous,
@@ -2950,12 +2960,20 @@ internal class MqttBridge(
             availableOverride: Boolean? = null,
             publishState: () -> Unit,
         ) {
-            val entity = requireNotNull(SettingsRegistry.spec(key)?.ha) { "HA entity missing from registry: $key" }
+            val spec = requireNotNull(SettingsRegistry.spec(key)) { "setting missing from registry: $key" }
+            val entity = requireNotNull(spec.ha) { "HA entity missing from registry: $key" }
+            // A spec with per-choice gates renders its {options} placeholder from the same capability
+            // snapshot the Configure form uses, so HA never offers a choice the panel would reject.
+            // Specs without gates carry no placeholder and keep their fixed payload bytes.
+            // Fail closed when the snapshot is unavailable: an all-false Capabilities drops every gated
+            // choice rather than offering one the panel may not honour, and always yields a valid array
+            // so a missing snapshot can never emit `"options":,`.
+            val optionsJson = spec.discoveryOptionsJson(capabilitySnapshot ?: Capabilities())
             exposable(
                 key = key,
                 component = entity.component,
                 objectId = "${panel}_${entity.objectSuffix}",
-                payload = { entity.buildDiscoveryJson(panel, availability, device) },
+                payload = { entity.buildDiscoveryJson(panel, availability, device, optionsJson = optionsJson) },
                 capabilitySnapshot = capabilitySnapshot,
                 availableOverride = availableOverride,
                 publishState = publishState,

@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.control.CpuController
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,6 +53,12 @@ class DiscoveryParityTest {
     private fun build(key: String): String =
         SettingsRegistry.spec(key)!!.ha!!.buildDiscoveryJson(panel, avail, device)
 
+    /** Publishes exactly as [MqttBridge] does, via the spec's own options authority. */
+    private fun buildFor(key: String, caps: Capabilities): String =
+        SettingsRegistry.spec(key)!!.let {
+            it.ha!!.buildDiscoveryJson(panel, avail, device, optionsJson = it.discoveryOptionsJson(caps))
+        }
+
     @Test fun wakeOnWaveMatchesLegacy() {
         assertEquals(
             """{"name":"Wake on wave","object_id":"test_wake_on_wave","unique_id":"test_wake_on_wave","command_topic":"ha-paneld/test/wake_on_wave/set","state_topic":"ha-paneld/test/wake_on_wave/state","icon":"mdi:gesture-tap","entity_category":"config",$avail,$device}""",
@@ -66,11 +73,26 @@ class DiscoveryParityTest {
         )
     }
 
+    /** A panel with no native bar publishes exactly the legacy three-choice payload, byte for byte. */
     @Test fun navbarModeMatchesLegacySelect() {
         assertEquals(
             """{"name":"Navbar","object_id":"test_navbar","unique_id":"test_navbar","command_topic":"ha-paneld/test/navbar/set","state_topic":"ha-paneld/test/navbar/state","options":["Off","Always on","Swipe reveal"],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}""",
-            build("navbar_mode"),
+            buildFor("navbar_mode", Capabilities()),
         )
+    }
+
+    @Test fun navbarModeOffersNativeOnlyWhereTheProfileDeclaresANativeBar() {
+        assertEquals(
+            """{"name":"Navbar","object_id":"test_navbar","unique_id":"test_navbar","command_topic":"ha-paneld/test/navbar/set","state_topic":"ha-paneld/test/navbar/state","options":["Off","Always on","Swipe reveal","Native"],"icon":"mdi:gesture-tap-button","entity_category":"config",$avail,$device}""",
+            buildFor("navbar_mode", Capabilities(hasNativeNavbar = true)),
+        )
+    }
+
+    /** A missing snapshot must still emit a well-formed array, never `"options":,`. */
+    @Test fun navbarModeDiscoveryNeverEmitsAnEmptyOptionsFragment() {
+        val payload = buildFor("navbar_mode", Capabilities())
+        assertFalse(payload.contains("\"options\":,"))
+        assertTrue(payload.contains("\"options\":[\"Off\","))
     }
 
     @Test fun ambientLightSensorMatchesLegacyDiscovery() {

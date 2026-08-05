@@ -1,6 +1,6 @@
 schema: 2
 id: wf1589t
-version: 2.0.2
+version: 2.0.3
 display_name: Electron WF1589T
 soc_class: rk3576
 soc:
@@ -52,6 +52,9 @@ platform:
   su_form: android
   app_can_su: true
   has_recents: true
+  # Android 14 on rk3576 draws its own navigation bar, so the soft overlay is unnecessary here and
+  # the Native navbar mode is offered. Verified on the WF1589T.
+  has_native_navbar: true
 hardware:
   led:
     mechanism: rk3576-ioctl

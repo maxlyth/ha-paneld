@@ -90,6 +90,7 @@ object ProfileMetadata {
             field("platform.su_form", "enum", true, "Supported su calling convention.", listOf("none", "android", "toolbox")),
             field("platform.app_can_su", "boolean", true, "Whether an ordinary app can attempt su."),
             field("platform.has_recents", "boolean", false, "Whether Android Recents is functional."),
+            field("platform.has_native_navbar", "boolean", false, "Whether the firmware draws its own Android navigation bar."),
             field("hardware.led.mechanism", "enum", true, "Built-in LED route.", listOf("none", "autodetect", "rk3576-ioctl", "rk3576-ioctl-daemon", "sysfs-daemon")),
             field("hardware.led.transfer", "enum", false, "Core-owned LED transfer function; defaults to identity.", listOf("identity", "rk3576-four-bit")),
             field("hardware.screen_off", "enum", true, "Preferred screen-off route.", listOf("brightness-zero", "su-blpower", "daemon-blpower")),

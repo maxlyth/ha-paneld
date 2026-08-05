@@ -5,6 +5,7 @@
 ### Added
 
 - **Reviewed APKs can now be fetched from an HTTPS URL.** The Install page downloads the package for inspection before presenting the existing approval and installation flow, with cancellation and bounded transfer handling on the panel.
+- **Panels that have their own Android navigation bar can now say so.** A new `Native` navbar mode hands navigation to the panel's built-in bar and draws nothing over it, so Back, Home and Recents behave exactly as the firmware provides them. Until now such panels had to use `Off`, which looked the same but could not be told apart from "no navigation wanted", and left the panel reporting a soft bar it was never going to draw. `Native` is offered only where the device profile declares a native bar — currently the Electron WF1589T — because selecting it on a panel without one would leave no way to navigate at all; profiles declare it with the new optional `platform.has_native_navbar` field. Note that hiding the Android system bars, either through the built-in renderer's fullscreen setting or the Android dashboard lock, still hides a native bar.
 
 ### Fixed
 

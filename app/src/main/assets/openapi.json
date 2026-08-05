@@ -249,7 +249,7 @@
           "auto_brightness_minimum_percent": { "type": "integer", "minimum": 4, "maximum": 95, "default": 4, "description": "Lowest automatic screen level as a percentage; proposals scale from this floor to full brightness" },
           "auto_brightness_sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50, "description": "How strongly the screen follows deviations from the learned ambient pattern" },
           "auto_brightness_ha_entity": { "type": "string", "pattern": "^(|sensor\\.[a-z0-9_]+)$", "description": "Home Assistant illuminance entity; blank uses the panel ambient-light sensor" },
-          "navbar_mode": { "type": "string", "enum": ["Off", "Always on", "Swipe reveal"] },
+          "navbar_mode": { "type": "string", "enum": ["Off", "Always on", "Swipe reveal", "Native"], "description": "Native is accepted only on panels whose device profile declares a native Android navigation bar; elsewhere it is rejected." },
           "cpu_governor": { "type": "string", "enum": ["Performance", "Efficiency", "Auto"] },
           "network_adb": { "type": "boolean" }, "zigbee_router": { "type": "boolean" },
           "home_dashboard": { "type": "string" }, "dashboard_idle_return_min": { "type": "integer", "minimum": 0, "maximum": 1440, "description": "Built-in renderer only" }, "companion_auto_update": { "type": "boolean" },

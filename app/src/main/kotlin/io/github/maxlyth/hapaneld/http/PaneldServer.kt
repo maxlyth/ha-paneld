@@ -619,8 +619,15 @@ internal fun shouldDiscoverHaUrlForMqttOnboarding(currentHaUrl: String, posted: 
  * clamped/ignored, and large identity strings could be repeated into every MQTT discovery payload.
  * Keeping this admission step ahead of applyBatch gives form, JSON and registry command paths the
  * same schema semantics and ensures a bad field cannot produce a partial commit.
+ *
+ * [caps] admits capability-gated ENUM choices (see [SettingSpec.optionRequires]). It defaults to an
+ * all-false snapshot so an unparameterized call is fail-closed: a gated choice is refused rather than
+ * waved through by a caller that had no snapshot to offer.
  */
-internal fun normalizeConfigPostParameters(raw: Parameters): ConfigPostParameters {
+internal fun normalizeConfigPostParameters(
+    raw: Parameters,
+    caps: Capabilities = Capabilities(),
+): ConfigPostParameters {
     val normalized = Parameters.build {
         for (name in raw.names()) {
             val all = raw.getAll(name).orEmpty()
@@ -631,7 +638,17 @@ internal fun normalizeConfigPostParameters(raw: Parameters): ConfigPostParameter
                 spec != null -> {
                     if (spec.readOnly) return ConfigPostParameters.Bad("$name: read-only")
                     when (val result = SettingValue.validate(spec, value)) {
-                        is Validation.Ok -> result.normalized
+                        is Validation.Ok -> {
+                            // A choice can be valid vocabulary yet unavailable on this hardware. Refuse it
+                            // here, where the failure is one explicit 400, rather than letting it persist
+                            // and be silently coerced back on the next read.
+                            if (spec.optionRequires.isNotEmpty() && result.normalized !in spec.optionsFor(caps)) {
+                                return ConfigPostParameters.Bad(
+                                    "$name: ${result.normalized} is not available on this panel",
+                                )
+                            }
+                            result.normalized
+                        }
                         is Validation.Bad -> return ConfigPostParameters.Bad(result.reason)
                     }
                 }
@@ -4830,7 +4847,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      */
     private suspend fun handleConfigPost(call: ApplicationCall) {
         val received = receiveBoundedConfigParameters(call) ?: return
-        val normalizedPost = when (val result = normalizeConfigPostParameters(received)) {
+        // Same capability snapshot the Configure form was rendered from, so a choice the form offered is
+        // the same set this admission step accepts.
+        val postCaps = liveCapabilities(snapStaleOk().caps)
+        val normalizedPost = when (val result = normalizeConfigPostParameters(received, postCaps)) {
             is ConfigPostParameters.Ok -> result.values
             is ConfigPostParameters.Bad -> {
                 call.respondText("${result.reason}\n", status = HttpStatusCode.BadRequest)
@@ -5723,7 +5743,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // no editable value but still render an expose pip, so the user can opt them into HA.
         val schemaSpecs = SettingsRegistry.SPECS.filter { (!it.readOnly || it.ha != null) && !it.hidden }
         val items = schemaSpecs.joinToString(",") { spec ->
-            val opts = spec.options.joinToString(",") { s(it) }
+            val opts = spec.optionsFor(caps).joinToString(",") { s(it) }
             val isHa = spec.ha != null
             val placeholder = hints[spec.key]?.let { "auto ($it)" } ?: when (spec.key) {
                 "manufacturer" -> profile.manufacturer
