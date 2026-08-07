@@ -169,6 +169,68 @@ class RelayControllerTest {
         }
     }
 
+    @Test fun provenGpioPreparationIsReusedAcrossWrites() {
+        val root = SequencedRootShell(mapOf("gpio147" to listOf("ready")))
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        assertTrue(r.ledSet(0, true))
+        assertTrue(r.ledSet(0, false))
+
+        // Issue #93: one privileged preparation round trip for the pin, not one per command.
+        assertEquals(1, root.outputRan.count { it.contains("gpio147") })
+        assertEquals(2, root.ran.count { it.contains("/sys/class/gpio/gpio147/value") })
+    }
+
+    @Test fun aFailedValueWriteInvalidatesTheProvenPreparation() {
+        val root = SequencedRootShell(
+            outputs = mapOf("gpio147" to listOf("ready")),
+            runResults = listOf(false, true),
+        )
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        assertFalse(r.ledSet(0, true))
+        assertTrue(r.ledSet(0, true))
+
+        // The failed write may mean the proven export/direction no longer holds; re-verify it.
+        assertEquals(2, root.outputRan.count { it.contains("gpio147") })
+    }
+
+    @Test fun aFailedPreparationIsNeverCached() {
+        val root = SequencedRootShell(mapOf("gpio147" to listOf("input", "ready")))
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        assertFalse(r.ledSet(0, true))
+        assertTrue(r.ledSet(0, true))
+
+        assertEquals(2, root.outputRan.count { it.contains("gpio147") })
+    }
+
+    @Test fun preparationDoesNotSurviveAControllerRestart() {
+        val root = SequencedRootShell(mapOf("gpio147" to listOf("ready", "ready")))
+
+        assertTrue(RelayController(fakeProfile(buttonLedGpioBase = 147), root).ledSet(0, true))
+        assertTrue(RelayController(fakeProfile(buttonLedGpioBase = 147), root).ledSet(0, true))
+
+        // A restart forgets proven pins, so a reboot-reset GPIO is re-verified on first use.
+        assertEquals(2, root.outputRan.count { it.contains("gpio147") })
+    }
+
+    @Test fun aSuccessfulReadNeverProvesPreparation() {
+        val root = SequencedRootShell(
+            mapOf(
+                "cat /sys/class/gpio/gpio147/value" to listOf("1"),
+                "gpio147" to listOf("ready"),
+            ),
+        )
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        repeat(3) { assertTrue(r.ledRead(0) == true) }
+        assertTrue(r.ledSet(0, true))
+
+        // Reads must not populate the preparation cache — only a proven `ready` write path may.
+        assertEquals(1, root.outputRan.count { it.contains("/sys/class/gpio/export") || it.contains("direction") })
+    }
+
     @Test fun outOfRangeButtonLedNeverAddressesAnotherGpio() {
         val ledBase = 147
         val outputs = (0 until 4).associate { "gpio${ledBase + it}" to "ready" }
@@ -183,8 +245,10 @@ class RelayControllerTest {
 
     private class SequencedRootShell(
         outputs: Map<String, List<String?>>,
+        runResults: List<Boolean> = emptyList(),
     ) : RootShell {
         private val outputs = outputs.mapValues { (_, values) -> values.toMutableList() }
+        private val runResults = runResults.toMutableList()
         val ran = mutableListOf<String>()
         val outputRan = mutableListOf<String>()
 
@@ -192,7 +256,7 @@ class RelayControllerTest {
 
         override fun run(cmd: String): Boolean {
             ran += cmd
-            return true
+            return if (runResults.isNotEmpty()) runResults.removeAt(0) else true
         }
 
         override fun runOutput(cmd: String): String? {

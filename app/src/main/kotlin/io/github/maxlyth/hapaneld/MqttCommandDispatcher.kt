@@ -20,6 +20,8 @@ internal class MqttCommandDispatcher(
     private val maxPendingActions: Int = DEFAULT_MAX_PENDING_ACTIONS,
     private val threadName: String = "mqtt-command-dispatch",
     private val resultWaitMs: Long = DEFAULT_RESULT_WAIT_MS,
+    private val nowNanos: () -> Long = System::nanoTime,
+    private val onQueueWait: (waitNanos: Long) -> Unit = {},
 ) {
     enum class Admission { ACCEPTED, COALESCED, REJECTED, CLOSED }
     enum class Execution { SUCCEEDED, FAILED, PENDING, SUPERSEDED, NOT_ADMITTED }
@@ -46,6 +48,7 @@ internal class MqttCommandDispatcher(
         val latestKey: String?,
         val action: () -> Boolean,
         val completion: CompletableFuture<Execution>?,
+        val submittedAtNanos: Long,
     )
 
     private val lock = Object()
@@ -62,11 +65,11 @@ internal class MqttCommandDispatcher(
 
     fun submitLatest(key: String, command: () -> Unit): Admission {
         require(key.isNotBlank())
-        return submit(Work(key, action = { command(); true }, completion = null))
+        return submit(Work(key, action = { command(); true }, completion = null, submittedAtNanos = nowNanos()))
     }
 
     fun submitAction(command: () -> Unit): Admission =
-        submit(Work(latestKey = null, action = { command(); true }, completion = null))
+        submit(Work(latestKey = null, action = { command(); true }, completion = null, submittedAtNanos = nowNanos()))
 
     /** Execute a state-setting command on the same ordered authority and report whether it ran. */
     fun runLatest(key: String, command: () -> Unit): Boolean = runLatestResult(key, command = command).executed
@@ -78,7 +81,7 @@ internal class MqttCommandDispatcher(
     ): RunResult {
         require(key.isNotBlank())
         val completion = CompletableFuture<Execution>()
-        val admission = submit(Work(key, action = { command(); true }, completion))
+        val admission = submit(Work(key, action = { command(); true }, completion, submittedAtNanos = nowNanos()))
         onAdmission(admission)
         val execution = if (admission == Admission.REJECTED || admission == Admission.CLOSED) {
             Execution.NOT_ADMITTED
@@ -190,6 +193,11 @@ internal class MqttCommandDispatcher(
                         if (it.latestKey == null) pendingActions--
                     }
                 }
+                // Receipt-to-execution wait, reported only for work that actually runs: a conflated
+                // entry's wait is meaningless (its replacement restarts the clock at its own submit).
+                // The sink is observability, not control flow — a throwing callback must not kill the
+                // one worker every live command depends on, so its failure is deliberately discarded.
+                runCatching { onQueueWait((nowNanos() - work.submittedAtNanos).coerceAtLeast(0L)) }
                 val execution = if (runCatching(work.action).getOrDefault(false)) {
                     Execution.SUCCEEDED
                 } else {

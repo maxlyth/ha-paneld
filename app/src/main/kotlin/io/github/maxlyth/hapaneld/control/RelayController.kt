@@ -14,7 +14,11 @@ import io.github.maxlyth.hapaneld.platform.RootShell
  * ([DeviceProfile.relayBase] + [DeviceProfile.relayBaseFallbacks] / [DeviceProfile.buttonLedGpioBase]); a
  * profile with none (every panel except the S9E) makes this controller inert with no su probes. Relay
  * class nodes are runtime-confirmed. Button LEDs are surfaced from the reviewed profile declaration,
- * then their GPIO is exported and verified only on an explicit [ledSet] write.
+ * then their GPIO is exported and verified only on an explicit [ledSet] write. A preparation proven
+ * `ready` is cached for the process lifetime so rapid commands pay one privileged round trip, not two;
+ * any failed preparation or failed value write invalidates the pin so the next command re-verifies
+ * export and direction (Issue #93 — every command re-ran the full preparation on the serialized root
+ * lane). Reads never consult or populate that cache.
  *
  * The nodes are root-owned, so writes go through [Su]. On a panel without `su` the capability simply
  * doesn't activate (graceful — like the other root-gated controllers).
@@ -33,6 +37,11 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     @Volatile private var resolvedBase: String? = null
     @Volatile private var resolvedRelayCount: Int? = if (candidateBases.isEmpty()) 0 else null
     @Volatile private var resolvedLedCount: Int = if (ledBase == null) 0 else BUTTON_LED_COUNT
+
+    // GPIOs whose output preparation was PROVEN (`ready`), guarded by the class monitor. Only ledSet
+    // populates or consults it; a failed value write removes the pin because the kernel state it
+    // proved (exported, direction out, writable value node) may no longer hold.
+    private val preparedGpios = mutableSetOf<Int>()
 
     /** Resolve immutable sysfs topology once. A failed privileged probe is deliberately not cached:
      * root access can become available after boot. State reads still avoid repeating successful
@@ -90,7 +99,20 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     fun set(n: Int, on: Boolean): Boolean {
         if (n !in 1..count()) return false
         val base = resolvedBase ?: return false
-        return root.writeSysfs("$base/relay$n", if (on) "1" else "0")
+        val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.RELAY_HARDWARE_WRITE)
+        var outcome = FeatureCostOutcome.FAILURE
+        try {
+            val ok = root.writeSysfs("$base/relay$n", if (on) "1" else "0")
+            if (ok) outcome = FeatureCostOutcome.SUCCESS
+            return ok
+        } finally {
+            FeatureCosts.registry.finishSynchronous(
+                FeatureCostOperation.RELAY_HARDWARE_WRITE,
+                started,
+                outcome = outcome,
+                workUnits = 1,
+            )
+        }
     }
 
     /** Current state of relay [n], retaining the legacy false fallback for existing callers. */
@@ -134,9 +156,26 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     fun ledSet(i: Int, on: Boolean): Boolean {
         if (i !in 0 until ledCount()) return false
         val gpio = ledBase?.plus(i) ?: return false
-        if (!ensureGpio(gpio)) return false
-        val node = ledNode(i) ?: return false
-        return root.writeSysfs(node, if (on) "1" else "0")
+        val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.RELAY_HARDWARE_WRITE)
+        var outcome = FeatureCostOutcome.FAILURE
+        try {
+            if (!ensureGpio(gpio)) return false
+            val node = ledNode(i) ?: return false
+            val ok = root.writeSysfs(node, if (on) "1" else "0")
+            if (ok) {
+                outcome = FeatureCostOutcome.SUCCESS
+            } else {
+                preparedGpios.remove(gpio)
+            }
+            return ok
+        } finally {
+            FeatureCosts.registry.finishSynchronous(
+                FeatureCostOperation.RELAY_HARDWARE_WRITE,
+                started,
+                outcome = outcome,
+                workUnits = 1,
+            )
+        }
     }
 
     /** Current state of button LED [i], retaining the legacy false fallback for existing callers. */
@@ -172,9 +211,27 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
 
     /** Export [gpio] if the kernel hasn't (the S9E exports only gpio113 at boot), set it to output, and
      * verify the resulting direction and writable value node in one privileged round trip. Any failure
-     * remains retryable: an input pin or partially initialised export must never be published as an LED. */
+     * remains retryable: an input pin or partially initialised export must never be published as an LED.
+     * A proven preparation is cached; only [ledSet]'s failed value write invalidates it. */
     private fun ensureGpio(gpio: Int): Boolean {
-        return root.prepareOutputGpio(gpio)
+        if (gpio in preparedGpios) return true
+        val started = FeatureCosts.registry.beginSynchronous(FeatureCostOperation.RELAY_GPIO_PREPARE)
+        var outcome = FeatureCostOutcome.FAILURE
+        try {
+            val ready = root.prepareOutputGpio(gpio)
+            if (ready) {
+                preparedGpios.add(gpio)
+                outcome = FeatureCostOutcome.SUCCESS
+            }
+            return ready
+        } finally {
+            FeatureCosts.registry.finishSynchronous(
+                FeatureCostOperation.RELAY_GPIO_PREPARE,
+                started,
+                outcome = outcome,
+                workUnits = 1,
+            )
+        }
     }
 
     private companion object {

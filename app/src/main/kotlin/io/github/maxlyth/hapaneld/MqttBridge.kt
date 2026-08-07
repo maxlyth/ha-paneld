@@ -849,7 +849,22 @@ internal class MqttBridge(
     private val familyRecoveryLock = Any()
     @Volatile private var selectedFamilyRoute: MqttSelectedFamilyRoute? = null
     @Volatile private var activeConnection: MqttConnectionLease? = null
-    private val commandDispatcher = MqttCommandDispatcher()
+    private val commandDispatcher = MqttCommandDispatcher(
+        onQueueWait = { waitNanos ->
+            FeatureCosts.registry.recordSynchronousElapsed(FeatureCostOperation.MQTT_COMMAND_QUEUE_WAIT, waitNanos)
+        },
+    )
+    // Relay/button-LED read-backs leave the command worker and coalesce latest-generation-wins, so a
+    // burst costs one privileged read, and a late read-back can never publish behind a newer command:
+    // the generation predicate travels into the converger and is re-evaluated under its admission
+    // lock, so an observation overtaken mid-flight is withdrawn instead of published.
+    // The scheduler is the RAW convergence pump, deliberately not dispatchStateWork: the bridge
+    // lifecycle wrapper DROPS tasks after retirement, which would strand the gate's open feature-cost
+    // span. Every task runs; cancellation lives inside reconcile, whose own gate no-ops after close().
+    private val relayReadbackGate = io.github.maxlyth.hapaneld.mqtt.CommandReadbackGate(
+        schedule = { task -> io.github.maxlyth.hapaneld.mqtt.StateConverger.dispatch(task) },
+        readback = { key, stillCurrent -> stateConverger.reconcile(key, force = true, admit = stillCurrent) },
+    )
     private val adbReassertWorker = LatestDispatcher.singleSlot<Unit>("mqtt-adb-reassert", consume = { adb.reassert() })
     private val discoveryAnnouncementLock = Any()
     private var buttonSubscription: ButtonBus.Subscription? = null
@@ -2474,19 +2489,23 @@ internal class MqttBridge(
     }
 
     // On-board relay (Smatek S9E). topic = ha-paneld/<panel>/relay<N>/set; payload ON/OFF.
+    // The write runs here on the ordered command worker; the physical read-back goes through the
+    // generation-guarded gate so bursts coalesce and a late read-back never publishes a superseded state.
     private fun handleRelay(topic: String, payload: String) {
         val n = topic.substringAfter("/relay").substringBefore("/set").toIntOrNull() ?: return
         val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
-        relay.set(n, on)
-        stateConverger.reconcile("relay$n", force = true)
+        if (!relayReadbackGate.command("relay$n") { relay.set(n, on) }) {
+            Log.w(TAG, "relay$n write failed; read-back will publish the physical state")
+        }
     }
 
     // S9E button LED. topic = ha-paneld/<panel>/button_led<N>/set (N 1-based); payload ON/OFF.
     private fun handleButtonLed(topic: String, payload: String) {
         val n = topic.substringAfter("/button_led").substringBefore("/set").toIntOrNull() ?: return
         val on = payload.trim().let { it.equals("ON", ignoreCase = true) || it == "1" }
-        relay.ledSet(n - 1, on)
-        stateConverger.reconcile("button_led$n", force = true)
+        if (!relayReadbackGate.command("button_led$n") { relay.ledSet(n - 1, on) }) {
+            Log.w(TAG, "button_led$n write failed; read-back will publish the physical state")
+        }
     }
 
     // CPU scaling governor (select). Quick su write; publishes the read-back governor.

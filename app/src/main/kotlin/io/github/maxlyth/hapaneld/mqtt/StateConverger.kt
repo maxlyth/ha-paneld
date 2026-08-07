@@ -57,11 +57,17 @@ class StateConverger(
         channels[channel.key] = Runtime(channel)
     }
 
-    fun reconcile(key: String, force: Boolean = false) {
-        lifecycle.runIfOpen(Unit) { reconcileAdmitted(key, force) }
+    /**
+     * [admit] is evaluated under this monitor immediately before a publish is committed, so a caller
+     * can withdraw a reconcile whose observation was overtaken (e.g. a command read-back superseded by
+     * a newer command mid-observation). A refused admission changes no channel state: the caller
+     * guarantees a later reconcile for the same channel is already ordered behind it.
+     */
+    fun reconcile(key: String, force: Boolean = false, admit: () -> Boolean = ALWAYS_ADMIT) {
+        lifecycle.runIfOpen(Unit) { reconcileAdmitted(key, force, admit) }
     }
 
-    private fun reconcileAdmitted(key: String, force: Boolean) {
+    private fun reconcileAdmitted(key: String, force: Boolean, admit: () -> Boolean) {
         val runtime = synchronized(this) { if (closed) null else channels[key] } ?: return
         val payload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
             is Observation.Known -> observation.payload.also {
@@ -104,7 +110,18 @@ class StateConverger(
                 return
             }
             if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
-            if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) return
+            if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) {
+                // A capacity refusal must not lose the observation. A CLEAN channel reconciled here
+                // (e.g. just commanded during a burst) would otherwise stay silent until the next
+                // periodic audit; dirty keeps it in the ACK pump's reconcileDirty drain.
+                runtime.dirty = true
+                updateBacklog()
+                return
+            }
+            // Last-instant withdrawal, under the monitor: an observation overtaken between the
+            // caller's own pre-check and this admission must not become a publish — the newer
+            // reconcile ordered behind it observes fresher hardware and owns the publication.
+            if (!admit()) return
             generation = ++runtime.generation
             runtime.sent = payload
             runtime.inFlight = true
@@ -246,6 +263,7 @@ class StateConverger(
 
     companion object {
         private const val MAX_IN_FLIGHT = 4
+        private val ALWAYS_ADMIT: () -> Boolean = { true }
         private val PUMP = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
             Thread(r, "state-convergence").apply { isDaemon = true }
         }

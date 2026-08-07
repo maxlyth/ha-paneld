@@ -47,6 +47,40 @@ class MqttCommandDispatcherTest {
         assertEquals(listOf("ON", "OFF"), states)
     }
 
+    @Test fun queueWaitIsMeasuredFromTheExecutedSubmissionOnly() {
+        val now = java.util.concurrent.atomic.AtomicLong(0L)
+        val waits = Collections.synchronizedList(mutableListOf<Long>())
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val finished = CountDownLatch(2)
+        val dispatcher = MqttCommandDispatcher(
+            threadName = "queue-wait-test",
+            nowNanos = now::get,
+            onQueueWait = { waits += it },
+        )
+
+        dispatcher.submitLatest("screen") {
+            entered.countDown()
+            assertTrue(release.await(5, TimeUnit.SECONDS))
+            finished.countDown()
+        }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        now.set(7L)
+        dispatcher.submitLatest("volume") { finished.countDown() }
+        now.set(9L)
+        // Conflation restarts the receipt clock: the replaced submission reports no wait at all.
+        assertEquals(
+            MqttCommandDispatcher.Admission.COALESCED,
+            dispatcher.submitLatest("volume") { finished.countDown() },
+        )
+        now.set(10L)
+        release.countDown()
+        assertTrue(finished.await(5, TimeUnit.SECONDS))
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+
+        assertEquals(listOf(0L, 1L), waits)
+    }
+
     @Test fun replacingAStateMovesItBehindOtherAcceptedTopics() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)

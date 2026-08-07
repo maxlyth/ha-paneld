@@ -47,6 +47,9 @@ enum class FeatureCostOperation(
     MDNS_PEER_REFRESH("mdns.peer_refresh"),
     RELAY_TOPOLOGY_DISCOVERY("hardware.relay_topology_discovery"),
     RELAY_STATE_READ("hardware.relay_state_read"),
+    RELAY_HARDWARE_WRITE("hardware.relay_write"),
+    RELAY_GPIO_PREPARE("hardware.relay_gpio_prepare", parentId = "hardware.relay_write"),
+    RELAY_READBACK("hardware.relay_readback"),
     AUTO_BRIGHTNESS_APPLY("display.auto_brightness_apply"),
     // Retired with the app-side shell poller. Keep the shipped ID in the fixed vocabulary so
     // projections remain comparable; the helper-side fallback runs in another process.
@@ -62,6 +65,7 @@ enum class FeatureCostOperation(
     NAVBAR_MODE_APPLY("navbar.mode_apply"),
     NAVBAR_ACTION("navbar.action"),
     MQTT_COMMAND_DISPATCH("mqtt.command_dispatch"),
+    MQTT_COMMAND_QUEUE_WAIT("mqtt.command_queue_wait"),
     MQTT_DISCOVERY_REANNOUNCE("mqtt.discovery_reannounce"),
     MQTT_HEARTBEAT_ADMISSION("mqtt.heartbeat_admission"),
     MQTT_HEARTBEAT_RECOVERY("mqtt.heartbeat_recovery"),

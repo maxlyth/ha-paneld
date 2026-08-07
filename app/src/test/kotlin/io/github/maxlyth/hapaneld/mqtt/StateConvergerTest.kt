@@ -379,6 +379,41 @@ class StateConvergerTest {
         assertEquals(1, sent.size)
     }
 
+    @Test fun capacityRefusalDoesNotSilentlyDropAJustCommandedState() {
+        var relay = "OFF"
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent)
+        for (n in 1..4) {
+            c.register(StateConverger.Channel("busy$n", "busy$n/state", observe = { StateConverger.Observation.Known("x") }))
+        }
+        c.register(StateConverger.Channel("relay1", "relay1/state", observe = { StateConverger.Observation.Known(relay) }))
+
+        // Converge every channel CLEAN first — the drop path only existed for a clean channel.
+        c.reconcile("busy1")
+        sent.single().done(true)   // the ACK pump drains the remaining registered-dirty channels
+        assertEquals(5, sent.size)
+        sent.drop(1).forEach { it.done(true) }
+        assertEquals(0, c.status().dirty)
+        assertEquals(0, c.status().inFlight)
+
+        // Four channels refill the bounded outbox, then a command's forced read-back arrives.
+        for (n in 1..4) c.reconcile("busy$n", force = true)
+        assertEquals(4, c.status().inFlight)
+        relay = "ON"
+        c.reconcile("relay1", force = true)
+
+        // Capacity refusal admits no fifth publish, but the observation must survive as dirty:
+        // the four admitted channels hold dirty until their ACK, and the refused relay1 makes five.
+        assertEquals(9, sent.size)
+        assertEquals(5, c.status().dirty)
+
+        // The first acknowledgement pumps the dirty drain and the commanded state publishes —
+        // not up to a full audit period later.
+        sent[5].done(true)
+        assertEquals("relay1/state", sent.last().topic)
+        assertEquals("ON", sent.last().payload)
+    }
+
     @Test fun semanticChangeBeatsNumericDeadband() {
         val equivalent = StateConverger.numericDeadband(5.0)
         assertTrue(equivalent("50", "53"))
