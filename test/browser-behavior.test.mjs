@@ -2761,3 +2761,170 @@ browserTest('dashboard scroll position survives a reload at every narrow width',
     await context.close();
   }
 });
+
+// --- APK upload discard + recovery (Issue #96) ---
+// The original report: upload an APK, realise it is the wrong one, press Back — the staged file
+// keeps the slot and every later upload answers "upload-busy" with no visible way out. These tests
+// drive the real install.js against the real markup shape and assert on the REQUESTS the page makes,
+// because the defect class is a UI that looks recovered while the panel still holds the bytes.
+
+function apkInstallCardFixture() {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="/info.css"></head><body>
+    <span id="hardened-approval-description"></span>
+    <div id="install-cards">
+      <div class="card" data-layout-key="apk-install"><h2>Install an APK</h2>
+        <label style="display:flex;flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="apk-allow" checked onchange="apkAllow(this)"> Enable APK install on this panel</label>
+        <div id="apk-ui">
+          <label class="pbtn" style="cursor:pointer">⭱ Choose APK…<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
+          <label style="margin-top:10px">Or fetch from a link<input type="url" id="apk-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/app.apk"></label>
+          <button class="pbtn" onclick="apkFetchUrl()">⇩ Fetch and inspect</button>
+          <div id="apk-preview" style="margin-top:10px"></div>
+        </div>
+        <p class="note" id="apk-msg"></p>
+      </div>
+    </div>
+    <script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/install.js"></script>
+  </body></html>`;
+}
+
+function apkIdentityResponse(token) {
+  return json({ ok: true, token, package: 'example.panel', version: '1.2.3', signer: 'unsigned' });
+}
+
+browserTest('APK preview offers Install and Cancel, and Cancel discards the exact token', async (t) => {
+  const calls = [];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/install/apk/pending') return json({ pending: false });
+    if (path === '/api/v1/install/apk') {
+      calls.push({ path, body: await requestBody(request) });
+      return apkIdentityResponse('tok-1');
+    }
+    if (path === '/api/v1/install/apk/discard') {
+      calls.push({ path, body: await requestBody(request) });
+      return json({ ok: true, discarded: true });
+    }
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('#apk-file', { name: 'wrong.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('apk-bytes') });
+
+  const install = page.getByRole('button', { name: 'Install example.panel' });
+  const cancel = page.getByRole('button', { name: 'Cancel' });
+  await install.waitFor();
+  assert.equal(await cancel.count(), 1, 'the inspected preview must offer Cancel beside Install');
+  assert.equal(await install.getAttribute('data-hardened-approval'), '', 'installing is the approval-gated act');
+  assert.equal(await cancel.getAttribute('data-hardened-approval'), null,
+    'cancel removes uncommitted bytes and must stay available in Hardened mode');
+  assert.match(await page.locator('#apk-preview').textContent(), /choose another file or link/);
+
+  await cancel.click();
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview')?.textContent.includes('Pending APK discarded.'),
+  ));
+  assert.deepEqual(calls.map((c) => c.path), ['/api/v1/install/apk', '/api/v1/install/apk/discard']);
+  assert.equal(calls[1].body, 'token=tok-1', 'the preview cancel must discard exactly the inspected entry');
+  assert.equal(await install.count(), 0, 'a discarded preview must not keep offering Install');
+});
+
+browserTest('Choosing another APK replaces the inspected one without a discard round-trip', async (t) => {
+  const calls = [];
+  let uploads = 0;
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/install/apk/pending') return json({ pending: false });
+    if (path === '/api/v1/install/apk') {
+      calls.push({ path, body: await requestBody(request) });
+      return apkIdentityResponse(`tok-${++uploads}`);
+    }
+    if (path === '/api/v1/install/apk/discard') calls.push({ path, body: await requestBody(request) });
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('#apk-file', { name: 'wrong.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('first') });
+  await page.getByRole('button', { name: 'Install example.panel' }).waitFor();
+
+  await page.setInputFiles('#apk-file', { name: 'right.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('second') });
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview button[data-token="tok-2"]') !== null,
+  ));
+  assert.deepEqual(calls.map((c) => c.path), ['/api/v1/install/apk', '/api/v1/install/apk'],
+    'replacement is one new upload — the server supersedes, no discard request needed');
+  assert.equal(calls[1].body, 'second', 'the replacement bytes are the newly chosen file');
+});
+
+browserTest('A reload surfaces the panel-held pending upload with a token-free Discard action', async (t) => {
+  const calls = [];
+  let pendingHeld = true;
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/install/apk/pending') return json(pendingHeld
+      ? { pending: true, package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
+      : { pending: false });
+    if (path === '/api/v1/install/apk/discard') {
+      calls.push({ path, body: await requestBody(request) });
+      pendingHeld = false;
+      return json({ ok: true, discarded: true });
+    }
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  const discard = page.getByRole('button', { name: 'Discard pending upload' });
+  await discard.waitFor();
+  assert.match(await page.locator('#apk-preview').textContent(), /example\.panel/,
+    'recovery must name what the panel is holding, not just offer a button');
+  assert.match(await page.locator('#apk-preview').textContent(), /replace it/,
+    'recovery must also teach the replacement route');
+
+  await discard.click();
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview')?.textContent.includes('Pending APK discarded.'),
+  ));
+  assert.deepEqual(calls.map((c) => c.path), ['/api/v1/install/apk/discard']);
+  assert.equal(calls[0].body, '', 'the recovery discard fires token-free — a reload lost the token');
+});
+
+browserTest('upload-busy offers Discard only when the panel actually holds a pending entry', async (t) => {
+  let pendingHeld = false;
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/install/apk/pending') return json(pendingHeld
+      ? { pending: true, package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
+      : { pending: false });
+    if (path === '/api/v1/install/apk') {
+      await requestBody(request);
+      return json({ ok: false, error: 'upload-busy' }, 409);
+    }
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+
+  // While the slot is genuinely receiving another transfer there is nothing to discard: the busy
+  // text stands alone, without a button that would answer "nothing was pending".
+  await page.setInputFiles('#apk-file', { name: 'a.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('a') });
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview')?.textContent.includes('busy with another APK'),
+  ));
+  await page.waitForTimeout(300);
+  assert.equal(await page.getByRole('button', { name: 'Discard pending upload' }).count(), 0,
+    'no discard offer when the probe says nothing is staged');
+
+  // Once a staged entry is what holds the slot, the same busy answer upgrades to a recovery action.
+  pendingHeld = true;
+  await page.setInputFiles('#apk-file', { name: 'b.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('b') });
+  await assert.doesNotReject(() => page.getByRole('button', { name: 'Discard pending upload' }).waitFor());
+  assert.match(await page.locator('#apk-preview').textContent(), /example\.panel/);
+});

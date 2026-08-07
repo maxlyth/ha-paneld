@@ -18,6 +18,12 @@ internal class PendingUploadStore(
         data object Closed : BeginResult
     }
 
+    enum class DiscardResult { DISCARDED, NOTHING_PENDING, DIFFERENT_PENDING }
+
+    /** The staged entry's inspected identity for state probes — existence and identity only, never the
+     *  token, because the token is the commit authority and this surface answers any LAN client. */
+    class PendingSummary internal constructor(val identity: UploadedApkIdentity?)
+
     class Lease internal constructor(internal val epoch: Long, internal val id: Long)
     class Entry internal constructor(
         val token: String,
@@ -159,6 +165,32 @@ internal class PendingUploadStore(
         val entry = active?.takeIf { open && it.token == token && it.file.exists() } ?: return null
         active = null
         return entry
+    }
+
+    /**
+     * Retire the inspected-but-uncommitted entry, deleting its staged file.
+     *
+     * [token] scopes the discard to the exact entry the caller inspected, so a stray click can never
+     * remove an entry someone staged in its place; null discards whatever is pending, which is the
+     * recovery path for a client whose token was lost to a reload. Neither form touches a body still
+     * being received or in-flight panel work — those have their own cancel — and a claimed entry is no
+     * longer here, so a discard can never disturb an install that has already started.
+     */
+    @Synchronized
+    fun discard(token: String? = null): DiscardResult {
+        expireActive()
+        val entry = active ?: return DiscardResult.NOTHING_PENDING
+        if (token != null && token != entry.token) return DiscardResult.DIFFERENT_PENDING
+        active = null
+        entry.file.delete()
+        return DiscardResult.DISCARDED
+    }
+
+    /** What is pending for a client that holds no token, or null when nothing is discardable. */
+    @Synchronized
+    fun pendingSummary(): PendingSummary? {
+        expireActive()
+        return active?.takeIf { open && it.file.exists() }?.let { PendingSummary(it.identity) }
     }
 
     /** Put a claim back after a busy race, unless a newer reservation or server lifetime owns the slot. */

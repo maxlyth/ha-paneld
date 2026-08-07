@@ -6,6 +6,7 @@ import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.InstallProgress
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsBytes
@@ -667,6 +668,76 @@ class ControlPlaneRoutesTest {
         assertCancel("nothing-in-flight", HttpStatusCode.OK, """{"ok":true,"cancelled":false}""")
     }
 
+    /** Discard is deliberately ungated, like the fetch cancel above: it must keep working while the
+     *  enable/root state changes around it, it removes uncommitted bytes rather than installing
+     *  anything, and it grants nothing a LAN client does not already have, because a new upload
+     *  already supersedes a staged entry. The pending probe is its read side, and because it answers
+     *  any LAN client it must name what is pending without ever carrying the commit token. (Issue #96) */
+    @Test fun apkDiscardRetiresOnlyThePendingEntryAndThePendingProbeNeverLeaksTheToken() = testApplication {
+        var enabled = true
+        var fileId = 0
+        val stagedFiles = mutableListOf<java.io.File>()
+        var installed: PendingUploadStore.Entry? = null
+        val pending = PendingUploadStore { "secret-token" }
+        val upload = ApkUploadRouteDependencies(
+            enabled = { enabled },
+            rootAvailable = { true },
+            pending = pending,
+            createStagingFile = { temporary.newFile("discard-${++fileId}.apk").also { stagedFiles += it } },
+            inspect = { UploadedApkIdentity("example.panel", "1.2.3", null) },
+            startInstall = { entry, progress ->
+                installed = entry
+                InstallProgress.finish(progress, "installed")
+            },
+            maxBytes = 16,
+        )
+        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+
+        val inspected = """{"ok":true,"token":"secret-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}"""
+
+        // Nothing pending answers an idempotent success, not an error — the recovery button fires blind.
+        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
+        assertPending("""{"pending":false}""")
+
+        pending.open()
+        assertUpload("good", HttpStatusCode.OK, inspected)
+
+        // The probe names the pending upload without its token — the token is the commit authority
+        // and must reach only the client that staged the upload.
+        val probeBody = assertPending("""{"pending":true,"package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
+        assertFalse("the probe must never carry the token", probeBody.contains("secret-token"))
+
+        // A token scoped to an entry this slot no longer holds removes nothing.
+        assertDiscard("token=wrong-token", HttpStatusCode.Conflict, """{"ok":false,"error":"different-pending"}""")
+        assertTrue("a mismatched discard must not delete the pending file", stagedFiles.last().exists())
+
+        // The exact token retires the entry, deletes its bytes and kills the commit route.
+        assertDiscard("token=secret-token", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+        assertFalse(stagedFiles.last().exists())
+        assertCommit("secret-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
+        assertPending("""{"pending":false}""")
+
+        // Token-free discard is the post-reload recovery: it removes whatever is pending.
+        assertUpload("next", HttpStatusCode.OK, inspected)
+        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+        assertFalse(stagedFiles.last().exists())
+
+        // Disabling the capability wedges neither cleanup surface — both still answer honestly.
+        enabled = false
+        assertPending("""{"pending":false}""")
+        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
+        enabled = true
+
+        // A committed upload has left the slot: a discard during its install touches nothing.
+        assertUpload("keep", HttpStatusCode.OK, inspected)
+        assertCommit("secret-token", HttpStatusCode.OK, """{"status":"started"}""")
+        assertNotNull(installed)
+        assertDiscard("token=secret-token", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
+        assertTrue("the install's bytes must be untouched by a later discard", installed!!.file.exists())
+        installed!!.file.delete()
+        assertFalse(InstallProgress.running)
+    }
+
     /** The abort must win a race it cannot see: an operator can press Cancel while the panel is still
      *  connecting, before there is any connection to close. */
     @Test fun downloadAbortRefusesAConnectionAttachedAfterTheOperatorCancelled() {
@@ -907,6 +978,27 @@ class ControlPlaneRoutesTest {
         }
         assertEquals(status, response.status)
         assertEquals(responseBody, response.bodyAsText())
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.assertDiscard(
+        body: String,
+        status: HttpStatusCode,
+        responseBody: String,
+    ) {
+        val response = client.post("/api/v1/install/apk/discard") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody(body)
+        }
+        assertEquals(status, response.status)
+        assertEquals(responseBody, response.bodyAsText())
+    }
+
+    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.assertPending(responseBody: String): String {
+        val response = client.get("/api/v1/install/apk/pending")
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = response.bodyAsText()
+        assertEquals(responseBody, body)
+        return body
     }
 
     private suspend fun io.ktor.server.testing.ApplicationTestBuilder.assertCommit(

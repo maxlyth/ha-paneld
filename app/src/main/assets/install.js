@@ -231,9 +231,13 @@
 
   // Render the inspected identity + the approval-marked Confirm-install button. Shared by both APK
   // sources so a fetched APK gets exactly the review an uploaded one does, from the same token.
+  // Cancel sits beside Install because the identity shown here is the moment the operator learns they
+  // picked the wrong file — the original report navigated Back here, and Back abandons the staged
+  // file without releasing it.
   function renderApkPreview(prev, d, failedLabel) {
     if (!prev) return;
     if (!d.ok) {
+      if (d.error === 'upload-busy') { renderApkBusyRecovery(prev, failedLabel); return; }
       prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText(d.error)) + '</p>';
       scheduleInstallColumnAlignment();
       return;
@@ -241,8 +245,49 @@
     prev.innerHTML = '<table class="dt"><tr><th>Package</th><td>' + esc(d.package) + '</td></tr>' +
       '<tr><th>Version</th><td>' + esc(d.version) + '</td></tr>' +
       '<tr><th>Signer SHA-256</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
-      '<button class="pbtn"' + hardenedApprovalAttrs + ' style="margin-top:8px" data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>';
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
+      '<button class="pbtn"' + hardenedApprovalAttrs + ' data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>' +
+      '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ Cancel</button>' +
+      '</div>' +
+      '<p class="note">Wrong APK? Cancel deletes it from the panel — or just choose another file or link, which replaces it.</p>';
     scheduleInstallColumnAlignment();
+  }
+
+  // "upload-busy" can mean two different situations needing different actions: a transfer is still
+  // arriving (wait), or an inspected upload is holding the slot (discard it). Ask the panel which,
+  // and only offer "Discard pending upload" when there is actually something to discard.
+  function renderApkBusyRecovery(prev, failedLabel) {
+    prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText('upload-busy')) + '</p>';
+    scheduleInstallColumnAlignment();
+    var mine = apkPreviewGeneration;
+    fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
+      if (mine !== apkPreviewGeneration || !d.pending) return;
+      renderApkPendingRecovery(prev, d);
+    }).catch(function () {});
+  }
+
+  // A staged upload survives the browser that made it. After a reload (token gone) or a busy answer,
+  // name what the panel is holding and offer to discard it — the discard is token-free, because the
+  // whole point is that this browser no longer has one.
+  function renderApkPendingRecovery(prev, d) {
+    if (!prev) return;
+    prev.innerHTML = '<p class="note">The panel is holding a previously inspected APK: <b>' + esc(d.package) + '</b> ' +
+      esc(d.version) + '. Uploading or fetching a new APK will replace it.</p>' +
+      '<button class="pbtn" onclick="apkDiscard(this)">✕ Discard pending upload</button>';
+    scheduleInstallColumnAlignment();
+  }
+
+  // After a page load the browser holds no preview token, but the panel may still be holding an
+  // inspected upload from before the reload. Probe and surface it rather than letting the operator
+  // rediscover it as an error.
+  function apkProbePending() {
+    var prev = document.getElementById('apk-preview');
+    if (!prev) return;
+    var mine = apkPreviewGeneration;
+    fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
+      if (mine !== apkPreviewGeneration || !d.pending) return;
+      renderApkPendingRecovery(prev, d);
+    }).catch(function () {});
   }
 
   // Upload the chosen APK (raw body), then render its parsed identity + a Confirm-install button.
@@ -322,6 +367,39 @@
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'request=' + encodeURIComponent(request)
     }).then(function () { apkMsg(''); }).catch(function () { apkMsg(''); });
+  };
+
+  // Cancel/Discard is the counterpart of Install: it retires the inspected upload and deletes its
+  // staged bytes on the panel. Token-scoped from the preview button, so it can only remove the exact
+  // entry the operator reviewed; token-free from the recovery button, whose token a reload lost. It
+  // never touches a running install — a committed APK has already left the pending slot.
+  window.apkDiscard = function (btn) {
+    var prev = document.getElementById('apk-preview');
+    var token = btn.getAttribute('data-token') || '';
+    var mine = ++apkPreviewGeneration;
+    btn.disabled = true;
+    apkMsg('');
+    fetch('/api/v1/install/apk/discard', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: token ? 'token=' + encodeURIComponent(token) : ''
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (mine !== apkPreviewGeneration) return;
+      if (d.ok) {
+        if (prev) {
+          prev.innerHTML = '<p class="note">' + (d.discarded ? 'Pending APK discarded.' : 'Nothing was pending — the panel is already free.') + '</p>';
+          scheduleInstallColumnAlignment();
+        }
+        return;
+      }
+      // different-pending: a newer upload owns the slot, so this stale view must not clear it.
+      // Re-render from the panel's truth instead.
+      apkProbePending();
+    }).catch(function (error) {
+      btn.disabled = false;
+      if (mine !== apkPreviewGeneration) return;
+      apkMsg(requestFailure(error, 'Failed to discard.'));
+    });
   };
 
   window.apkInstall = function (btn) {
@@ -572,6 +650,10 @@
     if (installCardMemoryReady && window.CardSizeMemory) window.CardSizeMemory.settle('install-cards', 1200);
   };
   scheduleInstallColumnAlignment();
+
+  // Recover visibility of a staged upload abandoned before this page load — back/refresh loses the
+  // preview token but not the panel-side file. (Issue #96)
+  apkProbePending();
 
   // Radio card: show it only when this panel actually has an EFR32 radio gateway.
   var initialRadioLoad = fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {

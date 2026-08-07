@@ -21,6 +21,7 @@ import io.ktor.server.request.receiveStream
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.coroutines.Dispatchers
@@ -268,6 +269,8 @@ internal fun Route.controlPlaneRoutes(dependencies: ControlPlaneRouteDependencie
         post("/install/apk") { handleApkUpload(call, dependencies.apkUpload) }
         post("/install/apk/from-url") { handleApkFetchFromUrl(call, dependencies) }
         post("/install/apk/fetch/cancel") { handleApkFetchCancel(call, dependencies.apkUpload) }
+        post("/install/apk/discard") { handleApkDiscard(call, dependencies.apkUpload) }
+        get("/install/apk/pending") { handleApkPending(call, dependencies.apkUpload) }
         post("/install/apk/commit") { handleApkCommit(call, dependencies) }
         post("/backup") { handleBackup(call, dependencies) }
     }
@@ -558,6 +561,51 @@ private suspend fun handleApkFetchCancel(call: ApplicationCall, dependencies: Ap
     }
     val cancelled = dependencies.pending.cancelPanelWork(request)
     call.respondText("""{"ok":true,"cancelled":$cancelled}""", ContentType.Application.Json)
+}
+
+/**
+ * Retires the inspected-but-uncommitted upload, deleting its staged bytes. (Issue #96)
+ *
+ * A missing or empty `token` discards whatever is pending — the recovery path for a browser whose
+ * token was lost to a reload — while a supplied token discards only that exact entry, so a stray
+ * click can never remove an upload someone staged in its place. Deliberately ungated, like the fetch
+ * cancel above: it must keep working while the enable/root state changes around it, it removes
+ * uncommitted bytes rather than installing anything, and it grants nothing a LAN client does not
+ * already have, because a new upload already supersedes a staged entry. No Hardened-mode approval
+ * either — cancellation must stay available there, and the physical boundary belongs to commit alone.
+ */
+private suspend fun handleApkDiscard(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
+    val parameters = receiveBoundedFormParameters(call) ?: return
+    val token = parameters["token"]?.takeIf { it.isNotEmpty() }
+    when (dependencies.pending.discard(token)) {
+        PendingUploadStore.DiscardResult.DISCARDED ->
+            call.respondText("""{"ok":true,"discarded":true}""", ContentType.Application.Json)
+        PendingUploadStore.DiscardResult.NOTHING_PENDING ->
+            call.respondText("""{"ok":true,"discarded":false}""", ContentType.Application.Json)
+        PendingUploadStore.DiscardResult.DIFFERENT_PENDING ->
+            call.respondText(
+                """{"ok":false,"error":"different-pending"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Conflict,
+            )
+    }
+}
+
+/** Answers whether an inspected-but-uncommitted APK is holding staged bytes, and what it is — never
+ *  its token, which is the commit authority and must reach only the client that staged the upload.
+ *  Ungated like the status poll: a probe answering "disabled" would hide exactly the state the
+ *  recovery UI needs, and when the capability is off there is never anything pending to reveal. */
+private suspend fun handleApkPending(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
+    val summary = dependencies.pending.pendingSummary()
+    if (summary == null) {
+        call.respondText("""{"pending":false}""", ContentType.Application.Json)
+        return
+    }
+    val identity = summary.identity
+    call.respondText(
+        """{"pending":true,"package":${Json.str(identity?.pkg ?: "")},"version":${Json.str(identity?.version ?: "")},"signer":${Json.str(identity?.signerSha256 ?: "unsigned")}}""",
+        ContentType.Application.Json,
+    )
 }
 
 /** Stages an arbitrary user-supplied APK on the unauthenticated LAN-trust surface, so the production source, origin, host, explicit-enable and root-capability gates must remain in force around this route. */
