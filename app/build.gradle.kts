@@ -210,6 +210,9 @@ dependencies {
     testImplementation(libs.moquette.broker)
     // Real org.json — the android.jar stub's returnDefaultValues would silently no-op JSON code under test.
     testImplementation(libs.org.json)
+    // Real SQLite over JDBC — deterministic reproduction of cross-connection WAL BUSY contention
+    // (Issue #91) that android.jar stubs cannot exercise; never packaged in the APK.
+    testImplementation(libs.sqlite.jdbc)
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.0")

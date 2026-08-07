@@ -2,9 +2,11 @@ package io.github.maxlyth.hapaneld.persistence
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.database.SQLException
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
+import io.github.maxlyth.hapaneld.storage.DatabaseBusyRetry
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import org.json.JSONArray
 import java.io.File
@@ -905,6 +907,8 @@ private class SqliteNamespacePersistence(
     private val legacy: SharedPreferences,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : StateNamespacePersistence {
+    private val busyRetry = DatabaseBusyRetry()
+
     override fun initialize(): Map<String, Any> {
         require(namespace.isNotBlank()) { "state namespace must not be blank" }
         importLegacyOnce()
@@ -966,20 +970,30 @@ private class SqliteNamespacePersistence(
         pruneRevisions(this)
     }
 
-    private fun writeTransaction(block: SQLiteDatabase.() -> Unit): Boolean = try {
-        val db = helper.writableDatabase
-        db.beginTransaction()
-        try {
-            db.block()
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
+    private fun writeTransaction(block: SQLiteDatabase.() -> Unit): Boolean {
+        // Config writes ride their own connection pool over the shared database file, so a BUSY here
+        // is the app's own maintenance briefly holding the write lock — expected concurrency, retried
+        // within one bounded budget before the unchanged latch path decides (Issue #91). Each attempt
+        // rolls back with its own throw, so a re-run cannot double-apply.
+        val retry = busyRetry.begin()
+        while (true) {
+            try {
+                val db = helper.writableDatabase
+                db.beginTransaction()
+                try {
+                    db.block()
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+                StorageHealthRuntime.recordDatabaseWriteSuccess()
+                return true
+            } catch (failure: Throwable) {
+                if (failure is SQLException && retry.admitRetry(failure, helper::isBusyRetryAbandoned)) continue
+                StorageHealthRuntime.recordDatabaseFailure("app_state:$namespace", failure)
+                return false
+            }
         }
-        StorageHealthRuntime.recordDatabaseWriteSuccess()
-        true
-    } catch (failure: Throwable) {
-        StorageHealthRuntime.recordDatabaseFailure("app_state:$namespace", failure)
-        false
     }
 
     private fun insertRevision(db: SQLiteDatabase, source: String): Long {

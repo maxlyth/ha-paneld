@@ -181,6 +181,7 @@ class StorageHealthTest {
         assertFalse(snapshot.toString().contains("hunter2"))
         assertEquals("database", snapshot.databaseFailureOperation)
         assertEquals("app-state-write", sanitizeDatabaseOperation("app_state:config"))
+        assertEquals("catalog-maintenance", sanitizeDatabaseOperation("catalog-maintenance"))
 
         val checkpoint = StorageHealthAuthority(StorageHealthPolicy()).recordDatabaseFailure(
             "database-checkpoint",

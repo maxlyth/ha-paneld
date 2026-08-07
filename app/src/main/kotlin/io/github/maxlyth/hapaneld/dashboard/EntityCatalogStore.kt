@@ -19,6 +19,7 @@ import io.github.maxlyth.hapaneld.metrics.MetricPayload
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.storage.DatabaseBusyRetry
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
@@ -33,20 +34,46 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     private val appContext: Context = context.applicationContext ?: context
     private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
     private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
+    private val busyRetry = DatabaseBusyRetry()
+
+    /** Closing races a retry backoff; the flag lets an in-flight run give up instead of sleeping on. */
+    @Volatile
+    private var busyRetryAbandoned = false
+
+    internal fun isBusyRetryAbandoned(): Boolean = busyRetryAbandoned
+
+    override fun close() {
+        busyRetryAbandoned = true
+        super.close()
+    }
     private val databaseBytesCacheLock = Any()
     private var databaseBytesCachedAt = Long.MIN_VALUE
     private var databaseUsageCachedValue = DatabaseUsage(0L, 0L, 0)
 
-    /** Report a completed catalog/history mutation, or latch its original SQLite failure and rethrow. */
+    /**
+     * Report a completed catalog/history mutation, or latch its original SQLite failure and rethrow.
+     *
+     * A failure classified BUSY is expected contention between this app's own connection pools, not
+     * storage-fault evidence, so it is re-attempted within one bounded [DatabaseBusyRetry] budget
+     * before the unchanged latch path decides. Every block is self-contained — its transaction rolls
+     * back with its own throw — so a re-run cannot double-apply. Non-BUSY failures never retry.
+     */
     private inline fun <T> observedWrite(
         operation: String,
         reportsSuccessfulWrite: (T) -> Boolean = { true },
         write: () -> T,
-    ): T = try {
-        write().also { if (reportsSuccessfulWrite(it)) StorageHealthRuntime.recordDatabaseWriteSuccess() }
-    } catch (failure: SQLException) {
-        StorageHealthRuntime.recordDatabaseFailure(operation, failure)
-        throw failure
+    ): T {
+        val retry = busyRetry.begin()
+        while (true) {
+            try {
+                return write().also { if (reportsSuccessfulWrite(it)) StorageHealthRuntime.recordDatabaseWriteSuccess() }
+            } catch (failure: SQLException) {
+                if (!retry.admitRetry(failure, ::isBusyRetryAbandoned)) {
+                    StorageHealthRuntime.recordDatabaseFailure(operation, failure)
+                    throw failure
+                }
+            }
+        }
     }
 
     /** Schema setup can contain a best-effort vaulted restore; never clear a failure it retained. */
@@ -288,8 +315,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             db.execSQL("DELETE FROM dashboard_entity_traffic_minute WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        maintainSoftLimit(now)
-    }
+    }.also { observedMaintenance(now) }
 
     fun recordAccess(instance: String, path: String, counts: Map<String, Long>, now: Long): Unit =
         observedWrite("catalog-access-history") {
@@ -315,8 +341,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        maintainSoftLimit(now)
-    }
+    }.also { observedMaintenance(now) }
 
     fun recordMetrics(instance: String, path: String, metrics: Map<String, Pair<Long, Long>>, now: Long): Unit =
         observedWrite("catalog-metric-history") {
@@ -348,8 +373,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        maintainSoftLimit(now)
-    }
+    }.also { observedMaintenance(now) }
 
     internal fun recordDashboardPerformance(samples: List<DashboardPerformanceAggregate>): Unit =
         observedWrite("dashboard-performance-history") {
@@ -1009,46 +1033,194 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
      * active set and all manual overrides are never removed by size maintenance. SQLite may keep freed
      * pages for reuse, so status reports live pages rather than the physical high-water mark.
      */
-    private fun maintainSoftLimit(now: Long) {
+    /**
+     * File-size maintenance boundary for callers whose own write already committed. Maintenance is
+     * both the main BUSY *source* (the purge) and a routine BUSY *victim*, so it gets the same
+     * bounded retry and its own operation name; its failure still latches, but never propagates —
+     * rethrowing after the caller's transaction committed would tell that caller a durable write
+     * failed when it succeeded, and once made the telemetry flusher drop an already-written batch.
+     * Success is reported only when maintenance actually wrote, so a gate-skipped pass can never
+     * masquerade as durable-write recovery evidence.
+     */
+    private fun observedMaintenance(now: Long) {
+        // The interval gate is consumed OUTSIDE the retried operation. An admission spent by an
+        // attempt that then failed BUSY would make the retry re-run into a refusing gate, ending the
+        // pass with neither the work retried nor the failure latched (failure mode found in `66c85f22`).
         if (!maintenanceGate.admit(now)) return
+        runCatching {
+            observedWrite("catalog-maintenance", reportsSuccessfulWrite = { it }) { maintainSoftLimit(now) }
+        }
+    }
+
+    /** @return true only if a durable write (purge chunk or vacuum step) actually executed. */
+    private fun maintainSoftLimit(now: Long): Boolean {
         val span = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_DB_MAINTENANCE)
         var observedBytes = 0L
         var appliedTiers = 0
+        var wrote = false
         try {
             val db = writableDatabase
+            val incrementalVacuum = ensureIncrementalAutoVacuum(db)
             fun refreshUsage(): Long = measureDatabaseUsage(db).also {
                 updateDatabaseUsageCache(now, it)
             }.usedBytes
             observedBytes = refreshUsage()
-            if (observedBytes <= SOFT_LIMIT_BYTES) return
-            db.execSQL("DELETE FROM dashboard_entity_traffic_minute WHERE minute<?", arrayOf((now - DAY_MS) / MINUTE_MS))
-            db.execSQL("$DELETE_MEMBERSHIP_FOR_PURGED_ENTITIES AND e.tombstone_at>0)")
-            db.execSQL("DELETE FROM entity WHERE tombstone_at>0")
-            db.execSQL(
-                """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE (instance,entity_id) NOT IN
-                   (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR referenced_at_runtime=1)""",
-            )
-            observedBytes = refreshUsage()
             if (observedBytes > SOFT_LIMIT_BYTES) {
-                db.execSQL(
-                    """UPDATE entity SET attributes_json='{}' WHERE (instance,entity_id) NOT IN
-                       (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR last_access_at>=?)""",
-                    arrayOf(now - RUNTIME_RETENTION_MS),
-                )
+                // Each statement runs in bounded rowid chunks, one autocommit transaction per chunk,
+                // so the write lock is released between chunks and a concurrent writer's own busy
+                // timeout can win in the gaps. One unbounded DELETE here held the lock ≥18 s under
+                // FULL auto-vacuum and latched a false BUSY storage failure (Issue #91).
+                wrote = chunkedWrite(
+                    db,
+                    """DELETE FROM dashboard_entity_traffic_minute WHERE rowid IN (
+                       SELECT rowid FROM dashboard_entity_traffic_minute WHERE minute<?
+                       LIMIT $MAINTENANCE_CHUNK_ROWS)""",
+                    arrayOf<Any?>((now - DAY_MS) / MINUTE_MS),
+                ) || wrote
+                wrote = chunkedWrite(
+                    db,
+                    """DELETE FROM dashboard_entity WHERE rowid IN (
+                       SELECT rowid FROM dashboard_entity WHERE pinned=0 AND excluded=0 AND EXISTS(
+                       SELECT 1 FROM entity e WHERE e.instance=dashboard_entity.instance
+                       AND e.entity_id=dashboard_entity.entity_id AND e.tombstone_at>0)
+                       LIMIT $MAINTENANCE_CHUNK_ROWS)""",
+                    emptyArray(),
+                ) || wrote
+                wrote = chunkedWrite(
+                    db,
+                    """DELETE FROM entity WHERE rowid IN (
+                       SELECT rowid FROM entity WHERE tombstone_at>0 LIMIT $MAINTENANCE_CHUNK_ROWS)""",
+                    emptyArray(),
+                ) || wrote
+                // The chunk predicate excludes rows the previous chunk already rewrote, so the loop
+                // strictly shrinks its candidate set and terminates.
+                wrote = chunkedWrite(
+                    db,
+                    """UPDATE entity SET attributes_json='{}',metadata_json='{}' WHERE rowid IN (
+                       SELECT rowid FROM entity WHERE (attributes_json!='{}' OR metadata_json!='{}')
+                       AND (instance,entity_id) NOT IN
+                       (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR referenced_at_runtime=1)
+                       LIMIT $MAINTENANCE_CHUNK_ROWS)""",
+                    emptyArray(),
+                ) || wrote
+                observedBytes = refreshUsage()
+                if (observedBytes > SOFT_LIMIT_BYTES) {
+                    wrote = chunkedWrite(
+                        db,
+                        """UPDATE entity SET attributes_json='{}' WHERE rowid IN (
+                           SELECT rowid FROM entity WHERE attributes_json!='{}'
+                           AND (instance,entity_id) NOT IN
+                           (SELECT instance,entity_id FROM dashboard_entity WHERE pinned=1 OR referenced_by_config=1 OR last_access_at>=?)
+                           LIMIT $MAINTENANCE_CHUNK_ROWS)""",
+                        arrayOf<Any?>(now - RUNTIME_RETENTION_MS),
+                    ) || wrote
+                    observedBytes = refreshUsage()
+                }
+                while (true) {
+                    val tier = RollupRetentionPolicy.nextTier(observedBytes, SOFT_LIMIT_BYTES, appliedTiers) ?: break
+                    applyRollupPressureTier(db, tier, now)
+                    wrote = true
+                    appliedTiers++
+                    observedBytes = refreshUsage()
+                }
+            }
+            if (incrementalVacuum) {
+                wrote = incrementalVacuumStep(db) || wrote
                 observedBytes = refreshUsage()
             }
-            while (true) {
-                val tier = RollupRetentionPolicy.nextTier(observedBytes, SOFT_LIMIT_BYTES, appliedTiers) ?: break
-                applyRollupPressureTier(db, tier, now)
-                appliedTiers++
-                observedBytes = refreshUsage()
-            }
+            return wrote
         } catch (error: Exception) {
             span.outcome(FeatureCostOutcome.FAILURE)
             throw error
         } finally {
             span.work(units = appliedTiers.toLong(), bytes = observedBytes).close()
         }
+    }
+
+    /**
+     * Runs one bounded statement repeatedly until its candidate set is exhausted, one autocommit
+     * transaction per chunk. Returns whether any row changed.
+     */
+    private fun chunkedWrite(db: SQLiteDatabase, sql: String, args: Array<Any?>): Boolean {
+        var any = false
+        while (true) {
+            val statement = db.compileStatement(sql)
+            val changed = try {
+                args.forEachIndexed { index, argument ->
+                    when (argument) {
+                        is Long -> statement.bindLong(index + 1, argument)
+                        is String -> statement.bindString(index + 1, argument)
+                        else -> throw IllegalArgumentException("unsupported maintenance bind type")
+                    }
+                }
+                statement.executeUpdateDelete()
+            } finally {
+                statement.close()
+            }
+            if (changed > 0) any = true
+            if (changed < MAINTENANCE_CHUNK_ROWS) return any
+        }
+    }
+
+    /**
+     * Android's platform SQLite is compiled with `SQLITE_DEFAULT_AUTOVACUUM=1`, so this database was
+     * silently created with FULL auto-vacuum: every large purge relocates and truncates pages inside
+     * its own commit, which held the write lock ≥18 s on panel eMMC (Issue #91). FULL↔INCREMENTAL is
+     * a plain header change that is legal at any time, so flip once and reclaim pages in bounded
+     * [incrementalVacuumStep] slices instead. NONE is left alone: enabling auto-vacuum on such a
+     * database requires a full `VACUUM`, whose temporary-space demand may worsen a low-space incident
+     * — never run it implicitly (storage-health remediation policy).
+     *
+     * @return true when the database is in INCREMENTAL mode and bounded reclamation may run.
+     */
+    private fun ensureIncrementalAutoVacuum(db: SQLiteDatabase): Boolean {
+        fun mode(): Long = db.rawQuery("PRAGMA auto_vacuum", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else AUTO_VACUUM_NONE
+        }
+        // The verification read runs inside a transaction so it uses the same primary connection the
+        // flip wrote through; a pooled read connection could hold a pre-flip snapshot and misreport a
+        // good conversion as failed — the false-failure class this lane exists to remove.
+        fun primaryConnectionMode(): Long {
+            db.beginTransaction()
+            try {
+                return mode().also { db.setTransactionSuccessful() }
+            } finally {
+                db.endTransaction()
+            }
+        }
+        return when (mode()) {
+            AUTO_VACUUM_INCREMENTAL -> true
+            AUTO_VACUUM_FULL -> {
+                db.execSQL("PRAGMA auto_vacuum=INCREMENTAL")
+                if (primaryConnectionMode() != AUTO_VACUUM_INCREMENTAL) {
+                    // A conversion that did not take is an anomaly, distinct from the deliberate NONE
+                    // branch below: stop the pass before any purge runs under FULL and latch it
+                    // visibly through the maintenance boundary instead of continuing silently.
+                    throw SQLException("auto_vacuum incremental conversion did not persist")
+                }
+                true
+            }
+            // NONE stays NONE: enabling auto-vacuum needs a full VACUUM, never run implicitly.
+            else -> false
+        }
+    }
+
+    /**
+     * Reclaims freelist pages in bounded slices, one short write transaction per pragma call, capped
+     * per maintenance pass so no single pass monopolizes the writer. Retains a small freelist for
+     * ordinary page reuse. Returns whether any slice ran.
+     */
+    private fun incrementalVacuumStep(db: SQLiteDatabase): Boolean {
+        fun freelist(): Long = db.rawQuery("PRAGMA freelist_count", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+        }
+        var vacuumedPages = 0L
+        while (vacuumedPages < MAX_VACUUM_PAGES_PER_PASS && freelist() > FREELIST_RETAINED_PAGES) {
+            // incremental_vacuum returns no rows, so execSQL both executes and fully steps it.
+            db.execSQL("PRAGMA incremental_vacuum($VACUUM_CHUNK_PAGES)")
+            vacuumedPages += VACUUM_CHUNK_PAGES
+        }
+        return vacuumedPages > 0L
     }
 
     /** Rewrite only derived telemetry rows. Each tier is transactionally replace-or-delete so a
@@ -1265,13 +1437,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
         }
-        // Proximity evidence is additive and already committed. File-size maintenance is best-effort
-        // here so its failure cannot make the runtime retry and double rollups or episodes.
-        runCatching { maintainSoftLimit(now) }.onFailure { failure ->
-            if (failure is SQLException) {
-                StorageHealthRuntime.recordDatabaseFailure("proximity-history-maintenance", failure)
-            }
-        }
+        observedMaintenance(now)
     }
 
     fun clearProximityLearning(fingerprint: String): Unit = observedWrite("proximity-history-reset") {
@@ -1389,7 +1555,30 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     fun storageHealthObservation(
         cancellationSignal: CancellationSignal? = null,
         checkedAtMillis: Long = System.currentTimeMillis(),
-    ): StorageHealthObservation = try {
+    ): StorageHealthObservation {
+        // A BUSY read (a checkpoint racing this probe) is the app's own concurrency; latching it
+        // would recreate the exact false failure this probe exists to verify away, so it gets the
+        // same bounded retry as writes. Cancellation propagates unlatched and also stops retrying.
+        val retry = busyRetry.begin()
+        while (true) {
+            try {
+                return readStorageHealthObservation(cancellationSignal, checkedAtMillis)
+            } catch (cancelled: OperationCanceledException) {
+                throw cancelled
+            } catch (failure: SQLException) {
+                val abandoned = { busyRetryAbandoned || cancellationSignal?.isCanceled == true }
+                if (!retry.admitRetry(failure, abandoned)) {
+                    StorageHealthRuntime.recordDatabaseFailure("storage-health-read", failure)
+                    throw failure
+                }
+            }
+        }
+    }
+
+    private fun readStorageHealthObservation(
+        cancellationSignal: CancellationSignal?,
+        checkedAtMillis: Long,
+    ): StorageHealthObservation {
         val db = readableDatabase
         val database = File(db.path)
         // A filesystem probe failure makes capacity unknown; it must not discard valid SQLite evidence
@@ -1408,7 +1597,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             }
         }
         val blockSize = statFs?.blockSizeLong?.coerceAtLeast(0L) ?: 0L
-        StorageHealthObservation(
+        return StorageHealthObservation(
             checkedAtMillis = checkedAtMillis,
             usableBytes = storageSaturatedMultiply(statFs?.availableBlocksLong?.coerceAtLeast(0L) ?: 0L, blockSize),
             totalBytes = storageSaturatedMultiply(statFs?.blockCountLong?.coerceAtLeast(0L) ?: 0L, blockSize),
@@ -1424,11 +1613,6 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             schemaVersion = db.version.coerceAtLeast(0),
             quickCheck = quickCheck,
         )
-    } catch (cancelled: OperationCanceledException) {
-        throw cancelled
-    } catch (failure: SQLException) {
-        StorageHealthRuntime.recordDatabaseFailure("storage-health-read", failure)
-        throw failure
     }
 
     private fun updateDatabaseUsageCache(now: Long, usage: DatabaseUsage) = synchronized(databaseBytesCacheLock) {
@@ -1502,6 +1686,18 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         private const val MAX_RANKING_CACHE_ENTRIES = 4
         private const val DATABASE_BYTES_CACHE_MS = 10_000L
         private const val MAINTENANCE_INTERVAL_MS = 10L * 60_000
+        /** Rows per maintenance chunk: small enough that one chunk's lock hold stays well under a
+         *  concurrent writer's busy timeout, large enough that a full purge stays a few dozen chunks. */
+        private const val MAINTENANCE_CHUNK_ROWS = 1_000
+        private const val AUTO_VACUUM_NONE = 0L
+        private const val AUTO_VACUUM_FULL = 1L
+        private const val AUTO_VACUUM_INCREMENTAL = 2L
+        /** ~1 MiB of 4 KiB pages per vacuum slice; each slice is its own short write transaction. */
+        private const val VACUUM_CHUNK_PAGES = 256L
+        /** Cap one maintenance pass's total reclamation (~20 MiB) so it never monopolizes the writer. */
+        private const val MAX_VACUUM_PAGES_PER_PASS = 5_120L
+        /** Small freelist retained for ordinary page reuse; below this, reclamation is not worth a lock. */
+        private const val FREELIST_RETAINED_PAGES = 512L
         private const val MAX_SQL_ID_FILTER = 800
         internal const val PERFORMANCE_RETENTION_DAYS = 7
         private const val PERFORMANCE_RETENTION_MINUTES = PERFORMANCE_RETENTION_DAYS * 24L * 60L
@@ -1965,29 +2161,41 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             db.execSQL("ALTER TABLE $staging RENAME TO $target")
         }
 
-        /** Flushes WAL into the main file so a single-file pre-migration copy is complete. */
-        private fun checkpointDatabaseFile(database: File): Boolean = try {
-            val completed = SQLiteDatabase.openDatabase(
-                database.path,
-                null,
-                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
-            ).use { opened ->
-                opened.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
-                    cursor.moveToFirst() && cursor.getInt(0) == 0
+        /**
+         * Flushes WAL into the main file so a single-file pre-migration copy is complete.
+         *
+         * The checkpoint opens its own raw connection, so a concurrent instance's routine write makes
+         * it report busy — the app's own concurrency, not a storage fault (Issue #91). A busy result
+         * or a BUSY-classified throw is re-attempted within one bounded budget before latching.
+         */
+        private fun checkpointDatabaseFile(database: File): Boolean {
+            val retry = DatabaseBusyRetry().begin()
+            while (true) {
+                try {
+                    val completed = SQLiteDatabase.openDatabase(
+                        database.path,
+                        null,
+                        SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+                    ).use { opened ->
+                        opened.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
+                            cursor.moveToFirst() && cursor.getInt(0) == 0
+                        }
+                    }
+                    if (completed) {
+                        StorageHealthRuntime.recordDatabaseWriteSuccess()
+                        return true
+                    }
+                    val busy = IllegalStateException("database is busy")
+                    if (!retry.admitRetry(busy)) {
+                        StorageHealthRuntime.recordDatabaseFailure("database-checkpoint", busy)
+                        return false
+                    }
+                } catch (failure: Throwable) {
+                    if (failure is SQLException && retry.admitRetry(failure)) continue
+                    StorageHealthRuntime.recordDatabaseFailure("database-checkpoint", failure)
+                    return false
                 }
             }
-            if (completed) {
-                StorageHealthRuntime.recordDatabaseWriteSuccess()
-            } else {
-                StorageHealthRuntime.recordDatabaseFailure(
-                    "database-checkpoint",
-                    IllegalStateException("database is busy"),
-                )
-            }
-            completed
-        } catch (failure: Throwable) {
-            StorageHealthRuntime.recordDatabaseFailure("database-checkpoint", failure)
-            false
         }
     }
 }

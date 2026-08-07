@@ -132,6 +132,7 @@
             <trusting group="com.google.guava"/>
             <trusting group="com.google.j2objc" name="j2objc-annotations" version="3.0.0"/>
          </trusted-key>
+         <trusted-key id="C1CBA75EC9BD0BAF8061935459E05CE618187ED4" group="org.xerial" name="sqlite-jdbc" version="3.50.3.0"/>
          <trusted-key id="C7BE5BCC9FEC15518CFDA882B0F3710FA64900E7" group="^com[.]google($|([.].*))" regex="true"/>
          <trusted-key id="CC6B4A61D74C88770267ADBDEB23D947B2B8E23C" group="org.jctools" name="jctools-core" version="2.1.2"/>
          <trusted-key id="CE3285F320685193D11FEA01F6CE9695C9318406" group="com.google.zxing"/>

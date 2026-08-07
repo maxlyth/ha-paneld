@@ -23,6 +23,9 @@ junit = "4.13.2"
 # Real org.json for JVM unit tests — the android.jar stub returns defaults (returnDefaultValues),
 # which would silently no-op any JSON-building code under test (e.g. the dashboard auth bridge).
 orgJson = "20260719"
+# Test-only real SQLite (JDBC): reproduces WAL writer-lock BUSY semantics between two connections
+# deterministically on the JVM (Issue #91). Never packaged in the APK.
+sqliteJdbc = "3.50.3.0"
 # 3.x raises the library bytecode floor from Java 8 to Java 11; retain 2.10 until it has separate
 # oldest-Android runtime qualification rather than coupling that risk to the build-tool migration.
 snakeyamlEngine = "2.10"
@@ -48,6 +51,7 @@ slf4j-android = { group = "org.slf4j", name = "slf4j-android", version.ref = "sl
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
 snakeyaml-engine = { group = "org.snakeyaml", name = "snakeyaml-engine", version.ref = "snakeyamlEngine" }
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
