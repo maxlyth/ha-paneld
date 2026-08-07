@@ -260,6 +260,8 @@
     prev.innerHTML = '<p class="note">' + failedLabel + ': ' + esc(apkErrorText('upload-busy')) + '</p>';
     scheduleInstallColumnAlignment();
     var mine = apkPreviewGeneration;
+    // A failed probe deliberately changes nothing: the busy text is already painted, and inventing a
+    // discard offer without knowing something is staged is the dishonesty this probe exists to avoid.
     fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
       if (mine !== apkPreviewGeneration || !d.pending) return;
       renderApkPendingRecovery(prev, d);
@@ -284,6 +286,9 @@
     var prev = document.getElementById('apk-preview');
     if (!prev) return;
     var mine = apkPreviewGeneration;
+    // Fail-quiet on purpose: this is a page-load enhancement, and a probe error must not paint a
+    // recovery card the panel never confirmed. A real pending entry resurfaces on the next action
+    // as upload-busy, which re-probes.
     fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
       if (mine !== apkPreviewGeneration || !d.pending) return;
       renderApkPendingRecovery(prev, d);
