@@ -186,7 +186,15 @@ class HardenedApprovalAssetContractTest {
             "<button class=\"pbtn\"\${hardenedApprovalAttrs()} onclick=\"repairCompUrl(this)\">⚙ Repair internal URL",
         ).forEach { snippet -> assertTrue("missing protected-action marker near $snippet", source.contains(snippet)) }
 
-        assertTrue(install.contains("'<button class=\"pbtn\"' + hardenedApprovalAttrs + ' style=\"margin-top:8px\" data-token=\"' + esc(d.token) + '\" onclick=\"apkInstall(this)\""))
+        assertTrue(install.contains("'<button class=\"pbtn\"' + hardenedApprovalAttrs + ' data-token=\"' + esc(d.token) + '\" onclick=\"apkInstall(this)\""))
+        assertTrue(
+            "the preview Cancel removes uncommitted bytes and must stay unshielded in Hardened mode",
+            install.contains("'<button class=\"pbtn\" data-token=\"' + esc(d.token) + '\" onclick=\"apkDiscard(this)\">✕ Cancel</button>'"),
+        )
+        assertTrue(
+            "the reload-recovery discard is the same unshielded cancellation",
+            install.contains("'<button class=\"pbtn\" onclick=\"apkDiscard(this)\">✕ Discard pending upload</button>'"),
+        )
         assertTrue(install.contains("'<button class=\"pbtn\"' + hardenedApprovalA11yAttrs + ' style=\"margin-top:8px\" onclick=\"restoreConfirm(this)\""))
         listOf(
             "hardenedApprovalCardTitle(\"Managed components\", conditional = true)",

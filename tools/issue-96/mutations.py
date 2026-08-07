@@ -134,6 +134,14 @@ MUTATIONS = {
         "browser",
         "A reload surfaces the panel-held pending upload with a token-free Discard action",
     ),
+    "cancel-gains-a-shield": (
+        INSTALL_JS,
+        "      '<button class=\"pbtn\" data-token=\"' + esc(d.token) + '\" onclick=\"apkDiscard(this)\">✕ Cancel</button>'",
+        "      '<button class=\"pbtn\"' + hardenedApprovalAttrs + ' data-token=\"' + esc(d.token) + '\" onclick=\"apkDiscard(this)\">✕ Cancel</button>'",
+        None,
+        "kotlin",
+        "protectedHtmlActionsCarryAnAlwaysVisibleAccessibleMarker",
+    ),
     # The no-op control proves the battery can tell a mutation from noise: every suite must stay
     # green, and the driver reports CONTROL-OK rather than crediting a kill.
     "control-no-op": (

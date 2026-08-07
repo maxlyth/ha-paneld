@@ -27,7 +27,8 @@ run_kotlin() { # -> 0 green, 1 red, 2 compile failure
   local log="$BATTERY_DIR/gradle.log"
   rm -rf "$KOTLIN_RESULTS"
   (cd "$WT" && ./gradlew :app:testDebugUnitTest \
-      --tests '*PendingUploadStoreTest' --tests '*ControlPlaneRoutesTest' -q) >"$log" 2>&1
+      --tests '*PendingUploadStoreTest' --tests '*ControlPlaneRoutesTest' \
+      --tests '*HardenedApprovalAssetContractTest' -q) >"$log" 2>&1
   local status=$?
   if [ $status -ne 0 ] && { grep -q '^e: ' "$log" || grep -q 'Compilation error' "$log"; }; then
     return 2
