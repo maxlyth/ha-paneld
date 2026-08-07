@@ -154,8 +154,8 @@ MUTATIONS = {
     ),
     "preview-cancel-drops-its-token": (
         INSTALL_JS,
-        "      body: token ? 'token=' + encodeURIComponent(token) : ''",
-        "      body: ''",
+        "      body: 'token=' + encodeURIComponent(token)",
+        "      body: 'token='",
         None,
         "browser",
         "APK preview offers Install and Cancel, and Cancel discards the exact token",
