@@ -306,8 +306,22 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
             identitySummary,
         )
     ) return
+    // The operation lane is taken BEFORE the entry is claimed, so a claim is final: the entry leaves
+    // the store only when its install genuinely starts, and there is no "claimed but might come back"
+    // window for a discard to be lied to in — the busy answer below leaves the entry pending, visible
+    // to the probe and discardable throughout. The lane is taken after authorize(), never before:
+    // Hardened approval can block on a human, and holding the exclusive lane through that would
+    // starve every other operation. No suspension point sits between start() and claim().
+    val progress = InstallProgress.start("APK")
+    if (progress == null) {
+        call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
+        return
+    }
     val claimed = dependencies.pending.claim(token)
     if (claimed == null) {
+        // The entry vanished between the approved peek and the lane grant (discarded, replaced or
+        // expired). Release the lane with an honest status rather than leaving it stranded busy.
+        InstallProgress.finish(progress, "Nothing installed: the pending APK was discarded, replaced or expired.")
         call.respondText(
             """{"status":"stale-or-missing"}""",
             ContentType.Application.Json,
@@ -315,15 +329,6 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
         )
         return
     }
-    val progress = InstallProgress.start("APK")
-    if (progress == null) {
-        dependencies.pending.restore(claimed)
-        call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
-        return
-    }
-    // The install is genuinely starting: close the claim window so a later discard naming this entry
-    // is told nothing is pending — truthfully, because nothing will reappear.
-    dependencies.pending.confirmClaim(claimed)
     dependencies.startInstall(claimed, progress)
     call.respondText("""{"status":"started"}""", ContentType.Application.Json)
 }
@@ -572,8 +577,8 @@ private suspend fun handleApkFetchCancel(call: ApplicationCall, dependencies: Ap
  * `token` is either the preview's commit token or the discard reference handed out by the pending
  * probe, so every discard is scoped to the exact entry its caller saw: a stale recovery card cannot
  * delete a replacement upload staged after its probe — it gets `different-pending` and must re-probe.
- * An entry inside the commit's claim window answers `install-in-flight` rather than a false "nothing
- * pending" that a busy answer would contradict by restoring the entry. Deliberately ungated, like the
+ * A committed entry is claimed only once its install genuinely starts (the commit route takes the
+ * operation lane first), so "nothing pending" is always durable truth. Deliberately ungated, like the
  * fetch cancel above: it must keep working while the enable/root state changes around it, it removes
  * uncommitted bytes rather than installing anything, and it grants nothing a LAN client does not
  * already have, because a new upload already supersedes a staged entry. No Hardened-mode approval
@@ -598,12 +603,6 @@ private suspend fun handleApkDiscard(call: ApplicationCall, dependencies: ApkUpl
         PendingUploadStore.DiscardResult.DIFFERENT_PENDING ->
             call.respondText(
                 """{"ok":false,"error":"different-pending"}""",
-                ContentType.Application.Json,
-                HttpStatusCode.Conflict,
-            )
-        PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT ->
-            call.respondText(
-                """{"ok":false,"error":"install-in-flight"}""",
                 ContentType.Application.Json,
                 HttpStatusCode.Conflict,
             )

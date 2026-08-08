@@ -676,6 +676,7 @@ class ControlPlaneRoutesTest {
     @Test fun apkDiscardRetiresOnlyThePendingEntryAndThePendingProbeNeverLeaksTheToken() = testApplication {
         var enabled = true
         var fileId = 0
+        var discardDuringAuthorize = false
         val stagedFiles = mutableListOf<java.io.File>()
         var installed: PendingUploadStore.Entry? = null
         val pending = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "secret-token" })
@@ -691,7 +692,21 @@ class ControlPlaneRoutesTest {
             },
             maxBytes = 16,
         )
-        application { routing { controlPlaneRoutes(dependencies(apkUpload = upload)) } }
+        application {
+            routing {
+                controlPlaneRoutes(
+                    dependencies(
+                        apkUpload = upload,
+                        // Models the operator discarding WHILE the commit awaits its Hardened approval
+                        // — the reorder's remaining race, forced deterministically.
+                        authorize = { _, _, _, _ ->
+                            if (discardDuringAuthorize) pending.discard("secret-token")
+                            true
+                        },
+                    ),
+                )
+            }
+        }
 
         val inspected = """{"ok":true,"token":"secret-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}"""
 
@@ -732,8 +747,9 @@ class ControlPlaneRoutesTest {
         assertDiscard("token=probe-ref", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
         enabled = true
 
-        // A committed upload has left the slot for good — confirmClaim closed the claim window, so a
-        // discard during the running install truthfully finds nothing and touches nothing.
+        // A committed upload was claimed only when its install genuinely started, so it has left the
+        // slot for good: a discard during the running install truthfully finds nothing, touches
+        // nothing, and nothing can reappear behind the answer.
         assertUpload("keep", HttpStatusCode.OK, inspected)
         assertCommit("secret-token", HttpStatusCode.OK, """{"status":"started"}""")
         assertNotNull(installed)
@@ -742,18 +758,31 @@ class ControlPlaneRoutesTest {
         installed!!.file.delete()
         assertFalse(InstallProgress.running)
 
-        // The busy race at the route level: commit claims, the operation lane is busy, the entry is
-        // restored — a discard mid-window is told install-in-flight, and afterwards acts on the truth.
+        // A busy operation lane refuses the commit BEFORE the entry is claimed, so the upload stays
+        // pending — probeable and discardable — for the whole busy period. Nothing was taken, so
+        // nothing has to come back: the state a shared claim marker used to misrepresent under
+        // overlapping commits simply does not exist.
         assertUpload("race", HttpStatusCode.OK, inspected)
         val held = assertNotNullTicket(InstallProgress.start("held"))
         try {
             assertCommit("secret-token", HttpStatusCode.OK, """{"status":"busy"}""")
+            assertPending("""{"pending":true,"discard":"probe-ref","package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
+            assertDiscard("token=secret-token", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+            assertFalse(stagedFiles.last().exists())
         } finally {
             InstallProgress.finish(held, "released")
         }
-        assertPending("""{"pending":true,"discard":"probe-ref","package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
-        assertDiscard("token=secret-token", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+        assertCommit("secret-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
+
+        // The reorder's remaining race: the operator discards while the commit is awaiting approval.
+        // The claim then finds nothing — and the just-taken operation lane must be released, because a
+        // stranded lane would block every later install, repair and restore.
+        assertUpload("approved-away", HttpStatusCode.OK, inspected)
+        discardDuringAuthorize = true
+        assertCommit("secret-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
+        discardDuringAuthorize = false
         assertFalse(stagedFiles.last().exists())
+        assertOperationLaneReleased()
     }
 
     /** The abort must win a race it cannot see: an operator can press Cancel while the panel is still

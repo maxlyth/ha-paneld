@@ -57,27 +57,34 @@ MUTATIONS = {
         "kotlin",
         "aStaleRecoveryReferenceCannotRemoveAReplacementUpload",
     ),
-    "claim-window-reported-free": (
-        STORE,
-        "        claimedForInstall?.takeIf { ref == it.token || ref == it.discardId }?.let {\n"
-        "            return DiscardResult.INSTALL_IN_FLIGHT\n"
-        "        }\n",
-        "",
-        None,
-        "kotlin",
-        "aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing",
-    ),
-    "restore-keeps-the-claim-window-open": (
-        STORE,
-        "    fun restore(entry: Entry): Boolean {\n        if (claimedForInstall === entry) claimedForInstall = null\n",
-        "    fun restore(entry: Entry): Boolean {\n",
-        None,
-        "kotlin",
-        "aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing",
-    ),
-    "install-start-keeps-the-claim-window-open": (
+    # The design under review: the operation lane is taken BEFORE the entry is claimed, so a busy
+    # commit never removes the entry and there is no claim window for a discard to be lied to in.
+    # This mutation swaps the order back — the entry is taken first and silently lost on busy — and
+    # the held-lane route sequence (pending stays probeable and discardable through a busy answer)
+    # must go red.
+    "claim-before-ticket": (
         ROUTES,
-        "    dependencies.pending.confirmClaim(claimed)\n",
+        "    val progress = InstallProgress.start(\"APK\")\n"
+        "    if (progress == null) {\n"
+        "        call.respondText(\"\"\"{\"status\":\"busy\"}\"\"\", ContentType.Application.Json)\n"
+        "        return\n"
+        "    }\n"
+        "    val claimed = dependencies.pending.claim(token)\n"
+        "    if (claimed == null) {",
+        "    val claimed = dependencies.pending.claim(token)\n"
+        "    val progress = InstallProgress.start(\"APK\")\n"
+        "    if (progress == null) {\n"
+        "        call.respondText(\"\"\"{\"status\":\"busy\"}\"\"\", ContentType.Application.Json)\n"
+        "        return\n"
+        "    }\n"
+        "    if (claimed == null) {",
+        None,
+        "kotlin",
+        "apkDiscardRetiresOnlyThePendingEntryAndThePendingProbeNeverLeaksTheToken",
+    ),
+    "busy-lane-leaks-on-stale-claim": (
+        ROUTES,
+        "        InstallProgress.finish(progress, \"Nothing installed: the pending APK was discarded, replaced or expired.\")\n",
         "",
         None,
         "kotlin",

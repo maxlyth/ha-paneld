@@ -379,8 +379,8 @@
   // Cancel/Discard is the counterpart of Install: it retires the inspected upload and deletes its
   // staged bytes on the panel. Every discard is scoped — the preview button carries the commit token,
   // the recovery button the probe's discard reference — so it can only remove the exact entry the
-  // operator is looking at. It never touches a running install: a committed APK has already left the
-  // pending slot, and one mid-decision answers install-in-flight rather than pretending to be free.
+  // operator is looking at. It never touches a running install: an entry is claimed only when its
+  // install genuinely starts, so a committed APK has left the pending slot for good.
   window.apkDiscard = function (btn) {
     var prev = document.getElementById('apk-preview');
     var token = btn.getAttribute('data-token') || '';
@@ -400,12 +400,10 @@
         }
         return;
       }
-      // Refused: this view is stale (a newer upload owns the slot) or the entry is mid-commit. Say
-      // which, then repaint from the panel's truth instead of leaving a card that lies.
+      // Refused: this view is stale — a newer upload owns the slot. Say so, then repaint from the
+      // panel's truth instead of leaving a card that lies.
       if (prev) {
-        prev.innerHTML = '<p class="note">' + (d.error === 'install-in-flight'
-          ? 'This APK is mid-install — nothing to discard.'
-          : 'The pending upload changed — checking what the panel is holding…') + '</p>';
+        prev.innerHTML = '<p class="note">The pending upload changed — checking what the panel is holding…</p>';
         scheduleInstallColumnAlignment();
       }
       apkProbePending();

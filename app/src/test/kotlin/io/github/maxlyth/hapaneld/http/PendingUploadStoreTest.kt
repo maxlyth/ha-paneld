@@ -158,24 +158,6 @@ class PendingUploadStoreTest {
         assertTrue(store.begin() is PendingUploadStore.BeginResult.Granted)
     }
 
-    @Test fun busyClaimRestoresOnlyWhenNoNewerUploadOwnsTheSlot() {
-        var id = 0
-        val store = PendingUploadStore { "token-${++id}" }.apply { open() }
-        val lease = granted(store.begin())
-        val first = store.stage(lease, file("claimed.apk"))!!
-        val claim = store.claim(first.token)!!
-
-        assertTrue(store.restore(claim))
-        val claimedAgain = store.claim(first.token)!!
-        assertEquals(claim.file, claimedAgain.file)
-        val newerLease = granted(store.begin())
-        val newerFile = file("new.apk")
-        assertFalse(store.restore(claimedAgain))
-        assertFalse(claimedAgain.file.exists())
-        val newer = store.stage(newerLease, newerFile)!!
-        assertEquals(newer.file, store.claim(newer.token)?.file)
-    }
-
     @Test fun closeInvalidatesSlowUploadsAndDeletesCurrentAndFutureFiles() {
         val store = PendingUploadStore { "token" }.apply { open() }
         val lease = granted(store.begin())
@@ -269,40 +251,34 @@ class PendingUploadStoreTest {
         assertNotNull("and must still be committable", store.peek(current.token))
     }
 
-    /** The review's second finding: between claim and the busy/start decision, "nothing pending" is a
-     *  false completion — a busy answer restores the entry moments later, contradicting it. Inside
-     *  that window a discard naming the entry (by either reference) is told an install is in flight
-     *  and deletes nothing; once restore reopens the truth, the same discard succeeds. */
-    @Test fun aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing() {
-        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "token" }).apply { open() }
-        val staged = store.stage(granted(store.begin()), file("claim-window.apk"))!!
-        val reference = store.pendingSummary()!!.discardId
-        val claim = store.claim(staged.token)!!
+    /** A claim is final — the commit route takes the operation lane BEFORE claiming, so an entry
+     *  leaves this store exactly once, when its install genuinely starts. "Nothing pending" is then
+     *  durable truth (nothing can ever reappear), the install's bytes are untouchable, and an
+     *  overlapping second upload lives a fully independent life — the interleaving that broke a
+     *  shared claim marker (commit B's window erasing commit A's) is unrepresentable by construction,
+     *  because there is no window state to share. */
+    @Test fun aClaimIsFinalSoNothingPendingIsDurableTruthAcrossOverlappingCommits() {
+        var id = 0
+        val store = PendingUploadStore(newDiscardId = { "ref-${++id}" }, newToken = { "token-$id" }).apply { open() }
+        val a = store.stage(granted(store.begin()), file("commit-a.apk"))!!
+        val refA = store.pendingSummary()!!.discardId
+        val claimedA = store.claim(a.token)!!
 
-        assertEquals(PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT, store.discard(staged.token))
-        assertEquals(PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT, store.discard(reference))
-        assertTrue("an in-flight decision's bytes must be untouched", claim.file.exists())
-        assertEquals("an unrelated reference still hears the plain truth", PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard("someone-else"))
-
-        assertTrue(store.restore(claim))
-        assertEquals("after the busy restore the discard acts on the truth", PendingUploadStore.DiscardResult.DISCARDED, store.discard(staged.token))
-        assertFalse(claim.file.exists())
-    }
-
-    /** Once the install genuinely starts the claim window closes: the entry has left the store for
-     *  good, a discard naming it truthfully finds nothing, and the install's bytes are untouchable. */
-    @Test fun anInstallThatActuallyStartsClosesTheClaimWindow() {
-        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "token" }).apply { open() }
-        val staged = store.stage(granted(store.begin()), file("committed.apk"))!!
-        val reference = store.pendingSummary()!!.discardId
-        val claim = store.claim(staged.token)!!
-
-        store.confirmClaim(claim)
-
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(staged.token))
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(reference))
-        assertTrue("a started install's bytes must be untouched", claim.file.exists())
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(a.token))
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(refA))
+        assertTrue("install A's bytes are untouchable", claimedA.file.exists())
         assertNull("and nothing reappears behind the answer", store.pendingSummary())
+
+        // Upload B overlaps A's running install: pending, probeable and discardable on its own, and
+        // neither its life nor its death disturbs A.
+        val b = store.stage(granted(store.begin()), file("commit-b.apk"))!!
+        assertEquals(PendingUploadStore.DiscardResult.DIFFERENT_PENDING, store.discard(a.token))
+        assertTrue(b.file.exists())
+        val refB = store.pendingSummary()!!.discardId
+        assertEquals(PendingUploadStore.DiscardResult.DISCARDED, store.discard(refB))
+        assertFalse(b.file.exists())
+        assertTrue("A's install never notices B's lifecycle", claimedA.file.exists())
+        assertEquals("and A still never reappears", PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(a.token))
     }
 
     /** Discard owns only the slot's PENDING occupant: a body still arriving is someone's upload
@@ -361,8 +337,7 @@ class PendingUploadStoreTest {
      *  — existence and inspected identity — and nothing more. It reports only genuinely discardable
      *  state: a claimed, expired or vanished entry is not worth advertising. */
     @Test fun pendingSummaryDescribesOnlyADiscardableEntry() {
-        var now = 1_000L
-        val store = PendingUploadStore(monotonicMs = { now }, ttlMs = 100L, newToken = { "token" }).apply { open() }
+        val store = PendingUploadStore { "token" }.apply { open() }
         assertNull(store.pendingSummary())
 
         val identity = UploadedApkIdentity("example.panel", "1.2.3", "ab".repeat(32))
@@ -370,12 +345,12 @@ class PendingUploadStoreTest {
         assertEquals(identity, store.pendingSummary()?.identity)
 
         assertNotNull(store.claim(staged.token))
-        assertNull("a claimed entry is being installed, not pending", store.pendingSummary())
-        assertTrue(store.restore(staged))
-        assertNotNull("a restored claim is pending again", store.pendingSummary())
+        assertNull("a claimed entry is being installed, not pending — durably", store.pendingSummary())
 
-        staged.file.delete()
-        assertNull("a vanished file is not discardable state", store.pendingSummary())
+        val vanished = PendingUploadStore { "token" }.apply { open() }
+        val ghost = vanished.stage(granted(vanished.begin()), file("vanishing.apk"), identity)!!
+        ghost.file.delete()
+        assertNull("a vanished file is not discardable state", vanished.pendingSummary())
     }
 
     @Test fun pendingSummaryGoesQuietOnExpiry() {
