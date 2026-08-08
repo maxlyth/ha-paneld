@@ -395,7 +395,7 @@
       if (mine !== apkPreviewGeneration) return;
       if (d.ok) {
         if (prev) {
-          prev.innerHTML = '<p class="note">' + (d.discarded ? 'Pending APK discarded.' : 'Nothing was pending — the panel is already free.') + '</p>';
+          prev.innerHTML = '<p class="note">' + (d.discarded ? 'Pending APK discarded.' : 'No staged APK is pending.') + '</p>';
           scheduleInstallColumnAlignment();
         }
         return;
@@ -421,6 +421,8 @@
       if (d.status === 'busy') { apkMsg('Another install is running — try again shortly.'); btn.disabled = false; return; }
       if (d.status === 'stale-or-missing') { apkMsg('This APK was replaced or expired — choose or fetch it again.'); btn.disabled = false; return; }
       if (d.status !== 'started') { apkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
+      var prev = document.getElementById('apk-preview');
+      if (prev) prev.querySelectorAll('button').forEach(function (action) { action.disabled = true; });
       pollApk(0);
     }).catch(function (error) { apkMsg(requestFailure(error, 'Failed to start.')); btn.disabled = false; });
   };

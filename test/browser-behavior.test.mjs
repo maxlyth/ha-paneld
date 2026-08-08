@@ -2831,6 +2831,47 @@ browserTest('APK preview offers Install and Cancel, and Cancel discards the exac
   assert.equal(await install.count(), 0, 'a discarded preview must not keep offering Install');
 });
 
+browserTest('APK preview retires Cancel when installation starts', async (t) => {
+  const calls = [];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/install/apk/pending') return json({ pending: false });
+    if (path === '/api/v1/install/apk') {
+      await requestBody(request);
+      return apkIdentityResponse('tok-start');
+    }
+    if (path === '/api/v1/install/apk/commit') {
+      calls.push({ path, body: await requestBody(request) });
+      return json({ status: 'started' });
+    }
+    if (path === '/api/v1/install/apk/discard') {
+      calls.push({ path, body: await requestBody(request) });
+      return json({ ok: true, discarded: false });
+    }
+    if (path === '/api/v1/install/status') return json({ running: true });
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('#apk-file', { name: 'install.apk', mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from('apk-bytes') });
+
+  const install = page.getByRole('button', { name: 'Install example.panel' });
+  const cancel = page.getByRole('button', { name: 'Cancel' });
+  await install.waitFor();
+  await install.click();
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-msg')?.textContent.includes('Installing'),
+  ));
+  assert.equal(await install.isDisabled(), true, 'Install stays retired after the panel accepts the commit');
+  assert.equal(await cancel.isDisabled(), true, 'Cancel cannot claim the panel is free after installation starts');
+  await cancel.evaluate((button) => button.click());
+  await page.waitForTimeout(100);
+  assert.deepEqual(calls, [{ path: '/api/v1/install/apk/commit', body: 'token=tok-start' }],
+    'a retired Cancel action must not issue a discard request for an APK now owned by the installer');
+});
+
 browserTest('Choosing another APK replaces the inspected one without a discard round-trip', async (t) => {
   const calls = [];
   let uploads = 0;
