@@ -2861,9 +2861,12 @@ browserTest('APK preview retires Cancel when installation starts', async (t) => 
   const cancel = page.getByRole('button', { name: 'Cancel' });
   await install.waitFor();
   await install.click();
-  await assert.doesNotReject(() => page.waitForFunction(
-    () => document.querySelector('#apk-msg')?.textContent.includes('Installing'),
-  ));
+  await assert.doesNotReject(() => page.waitForFunction(() => {
+    const actions = Array.from(document.querySelectorAll('#apk-preview button'));
+    return document.querySelector('#apk-msg')?.textContent.includes('Installing')
+      && actions.length === 2
+      && actions.every((action) => action.disabled);
+  }));
   assert.equal(await install.isDisabled(), true, 'Install stays retired after the panel accepts the commit');
   assert.equal(await cancel.isDisabled(), true, 'Cancel cannot claim the panel is free after installation starts');
   await cancel.evaluate((button) => button.click());
