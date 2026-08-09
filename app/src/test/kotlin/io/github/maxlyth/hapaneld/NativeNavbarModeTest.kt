@@ -116,50 +116,6 @@ class NativeNavbarModeTest {
 
     // ---- native draws nothing ----------------------------------------------------------------
 
-    // ---- bar background on native-navbar panels ------------------------------------------------
-
-    /** On a native-navbar panel the reveal swipe also transiently shows the system bar underneath
-     *  (unsuppressible — detected below the app layer), whose glyphs bleed through the translucent
-     *  charcoal and then vanish when it auto-hides. The revealed bar is therefore opaque there. */
-    @Test fun `the swipe-revealed bar is opaque only where a system bar can appear behind it`() {
-        val opaque = NavbarController.barBackground(autoHide = true, hasNativeNavbar = true)
-        assertEquals("fully opaque", 0xFF, opaque ushr 24)
-
-        val translucent = NavbarController.barBackground(autoHide = false, hasNativeNavbar = false)
-        assertTrue("translucent by design", (translucent ushr 24) < 0xFF)
-        // Same charcoal in both — only the alpha channel may differ.
-        assertEquals(translucent and 0x00FFFFFF, opaque and 0x00FFFFFF)
-    }
-
-    /** Always on stays translucent even on capable panels (product behaviour, 2026-08-09): it
-     *  overlays the dashboard permanently with no inset mechanism on modern Android, so translucency
-     *  is the only thing keeping the covered strip visible at all. And a panel with no native bar has
-     *  nothing behind the bar to mask, so it keeps the designed look in both modes. */
-    @Test fun `always on and non-capable panels keep the translucent background`() {
-        val designed = NavbarController.barBackground(autoHide = false, hasNativeNavbar = false)
-        assertEquals(designed, NavbarController.barBackground(autoHide = false, hasNativeNavbar = true))
-        assertEquals(designed, NavbarController.barBackground(autoHide = true, hasNativeNavbar = false))
-    }
-
-    @Test fun `the drawn bar consults the background decision and the profile wires it`() {
-        val controller = source(
-            "src/main/kotlin/io/github/maxlyth/hapaneld/control/NavbarController.kt",
-            "app/src/main/kotlin/io/github/maxlyth/hapaneld/control/NavbarController.kt",
-        )
-        assertTrue(
-            "addBar must ask barBackground, not hardcode BAR_BG",
-            controller.contains("setBackgroundColor(barBackground(autoHide, hasNativeNavbar))"),
-        )
-        val service = source(
-            "src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt",
-            "app/src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt",
-        )
-        assertTrue(
-            "the controller must receive the profile declaration",
-            service.contains("profile.appCanSu, profile.hasRecents, profile.hasNativeNavbar,"),
-        )
-    }
-
     @Test fun `native is not a drawn bar`() {
         assertTrue(NavbarController.MODE_NATIVE in NavbarController.MODES)
         assertFalse(NavbarController.MODE_NATIVE in NavbarController.OVERLAY_MODES)

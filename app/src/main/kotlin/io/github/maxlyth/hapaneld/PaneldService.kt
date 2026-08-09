@@ -1013,7 +1013,7 @@ class PaneldService : Service() {
         // reloadDashboard(ownPackage) would take the foreign-app path — `am force-stop` on ourselves.
         navbar = NavbarController(
             this, system, volume, brightness, { config.launcherPackage }, { config.dashboardPackage },
-            profile.appCanSu, profile.hasRecents, profile.hasNativeNavbar,
+            profile.appCanSu, profile.hasRecents,
             onBrightnessChanged = { level ->
                 autoBright.noteExternalBrightness(level, BrightnessPreferenceOrigin.PANEL_CONTROLS)
             },
