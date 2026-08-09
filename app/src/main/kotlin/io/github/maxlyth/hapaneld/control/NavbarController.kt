@@ -81,6 +81,11 @@ class NavbarController(
     private val appCanSu: Boolean,
     // Omit the Recents button on panels whose firmware has no overview screen (e.g. Tuya TPA10).
     private val hasRecents: Boolean,
+    // The firmware draws its own navigation bar (profile-declared). On such panels the bottom-edge
+    // swipe that reveals our bar also transiently reveals the hidden system bar underneath — that
+    // reveal is detected below the app layer and cannot be suppressed — so the revealed bar goes
+    // opaque to mask it (see [barBackground]).
+    private val hasNativeNavbar: Boolean,
     // Notify HA after a LOCAL navbar change so light.<panel>_screen / number.<panel>_volume don't go
     // stale (the bar steps brightness/volume directly, bypassing the MQTT command path).
     private val onBrightnessChanged: (Int) -> Unit = {},
@@ -497,7 +502,7 @@ class NavbarController(
         }
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(BAR_BG)
+            setBackgroundColor(barBackground(autoHide, hasNativeNavbar))
             gravity = Gravity.CENTER_VERTICAL
         }
         // Wide panels (e.g. landscape TPA10) keep the ±-pairs with the live % readout; narrow panels (a
@@ -1074,6 +1079,26 @@ class NavbarController(
         private const val TIGHTEN = 0.65f      // triple-member cell weight vs nav's 1.0 → ~35% tighter spacing
         private val BAR_BG = 0xC2282C34.toInt() // charcoal @ ~76% — translucent but still reads solid
         private val PRESS_TINT = 0x55FFFFFF.toInt() // press-feedback flash (~33% white)
+
+        /**
+         * Background for one drawn bar.
+         *
+         * The swipe-revealed bar on a native-navbar panel is fully opaque: the same bottom-edge swipe
+         * also transiently reveals the hidden system bar underneath (`BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`
+         * — detected below the app layer, so it cannot be suppressed, and it is also the platform's
+         * never-strand escape hatch). Behind the ~76% translucent charcoal its glyphs bleed through
+         * between our buttons and then vanish when it auto-hides at ~3s while ours stays ~5s — a visible
+         * double-draw. Opaque, ours masks it completely, and being transient the brief occlusion of
+         * dashboard content underneath costs nothing.
+         *
+         * `Always on` stays translucent deliberately (product behaviour, 2026-08-09): with no inset
+         * mechanism on modern Android it overlays the dashboard permanently, and translucency is the only
+         * thing keeping the covered strip visible at all — an opaque permanent bar would fully obscure
+         * content with no way to scroll it into view. Panels without a native bar keep the translucent
+         * look in both modes; there is nothing behind the bar to mask.
+         */
+        internal fun barBackground(autoHide: Boolean, hasNativeNavbar: Boolean): Int =
+            if (autoHide && hasNativeNavbar) BAR_BG or 0xFF000000.toInt() else BAR_BG
         private const val AUTO_HIDE_MS = 5000L  // +25% over 4000 — 4s felt too brief in use
         private const val ANIM_MS = 220L       // swipe-reveal slide in/out duration
         private const val VALUE_WIDTH_THRESHOLD_DP = 600 // wide panels (TPA10) get the % readout; square NSPanels don't
