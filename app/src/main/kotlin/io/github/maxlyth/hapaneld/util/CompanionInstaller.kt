@@ -16,6 +16,8 @@ object CompanionInstaller {
     const val MINIMAL_PKG = "io.homeassistant.companion.android.minimal"
     val SUPPORTED_PACKAGES = listOf(FULL_PKG, MINIMAL_PKG)
 
+    internal data class RendererChoice(val packageName: String, val label: String)
+
     private const val TAG = "ha-paneld/companion"
     private const val REPO = "home-assistant/android"
     private val APK_MATCH: (String) -> Boolean = { it == "app-minimal-release.apk" }
@@ -26,9 +28,28 @@ object CompanionInstaller {
             runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
         }
 
-    fun installedPackages(context: Context): Set<String> =
-        SUPPORTED_PACKAGES.filterTo(linkedSetOf()) {
-            runCatching { context.packageManager.getPackageInfo(it, 0) }.isSuccess
+    fun installedPackages(context: Context): Set<String> = installedPackages { packageName ->
+        context.packageManager.getPackageInfo(packageName, 0)
+    }
+
+    /** Probe every supported variant independently so one installed Companion cannot mask the other. */
+    internal fun installedPackages(requireInstalled: (String) -> Unit): Set<String> =
+        SUPPORTED_PACKAGES.filterTo(linkedSetOf()) { packageName ->
+            runCatching { requireInstalled(packageName) }.isSuccess
+        }
+
+    /** Stable Configure choices for the installed supported Companion variants. The authoritative
+     *  package set and labels stay on the server; arbitrary launchable apps are not renderers. */
+    internal fun rendererChoices(installedPackages: Set<String>): List<RendererChoice> =
+        SUPPORTED_PACKAGES.filter { it in installedPackages }.map { packageName ->
+            RendererChoice(
+                packageName = packageName,
+                label = when (packageName) {
+                    FULL_PKG -> "Home Assistant Companion (full)"
+                    MINIMAL_PKG -> "Home Assistant Companion (minimal)"
+                    else -> error("unsupported Companion package")
+                },
+            )
         }
 
     /** Up to [limit] recent versions on [channel] for the Install-tab picker. Releases above this

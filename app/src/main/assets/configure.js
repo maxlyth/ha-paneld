@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
-  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, apps = [], radio = null;
+  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, apps = [], rendererChoices = [], radio = null;
   var savedValues = {}, savedExpose = {};
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
@@ -340,20 +340,18 @@
       });
       return s;
     }
-    // Dashboard-app picker: the normal automatic choice is ha-paneld's built-in renderer. A foreign
-    // dashboard remains available when it is already explicitly configured, but installed apps are not
-    // promoted as competing renderer choices.
+    // Dashboard-app picker: Auto and ha-paneld's built-in renderer remain first. The server adds only
+    // installed supported Companion variants; arbitrary launchable apps never become renderer choices.
     if (f.picker === "renderer") {
       var cur = v == null ? "" : v;
       var sel = el("select", { class: "pkgsel" });
       sel.appendChild(el("option", { value: "", text: f.placeholder || "auto" }));
       var seen = { "": true };
-      // The built-in renderer is the only normal choice. Keep a configured external selection visible
-      // below so changing unrelated settings never discards it.
       var KNOWN = [
         { pkg: "builtin", label: "Built-in renderer (ha-paneld)" }
-      ];
+      ].concat(rendererChoices);
       KNOWN.forEach(function (r) {
+        if (!r || !r.pkg || seen[r.pkg]) return;
         seen[r.pkg] = true;
         var op = el("option", { value: r.pkg, text: r.label });
         if (r.pkg === cur) op.selected = true;
@@ -361,11 +359,7 @@
       });
       // A currently-set external renderer is preserved so it isn't silently lost.
       if (cur && !seen[cur]) {
-        var labels = {
-          "io.homeassistant.companion.android": "Home Assistant Companion (configured)",
-          "io.homeassistant.companion.android.minimal": "Home Assistant Companion (minimal, configured)"
-        };
-        var o2 = el("option", { value: cur, text: labels[cur] || (cur + " · configured external renderer") });
+        var o2 = el("option", { value: cur, text: cur + " · configured external renderer" });
         o2.selected = true; sel.appendChild(o2);
       }
       sel.addEventListener("change", function () {
@@ -2540,6 +2534,7 @@
         autoSleepPrerequisite = { eligible: false, phase: "checking", area_name: "" };
       }
       apps = (res[2] && res[2].apps) || [];
+      rendererChoices = (res[2] && Array.isArray(res[2].renderers)) ? res[2].renderers : [];
       // Normalize bool values to the "true"/"false" strings the toggle compares against.
       schema.forEach(function (f) {
         if (f.type === "BOOL" && typeof values[f.key] === "boolean") values[f.key] = values[f.key] ? "true" : "false";

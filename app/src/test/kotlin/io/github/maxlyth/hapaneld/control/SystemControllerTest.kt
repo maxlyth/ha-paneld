@@ -32,6 +32,7 @@ class SystemControllerTest {
 
     private val OWN = "io.github.maxlyth.hapaneld"
     private val MIN = "io.homeassistant.companion.android.minimal" // HA Companion (minimal)
+    private val FULL = "io.homeassistant.companion.android" // HA Companion (full)
     private val VENDOR = "com.vendor.launcher"
 
     /** Build a controller. [daemon] = null means the daemon is unavailable (su path); a map (even empty)
@@ -450,6 +451,23 @@ class SystemControllerTest {
         assertTrue("stale SETHOME falls through to su", root.ran.contains("cmd package set-home-activity $MIN/Home"))
     }
 
+    @Test fun ensureHomeSwitchesBetweenInstalledCompanionVariants() {
+        listOf(FULL to MIN, MIN to FULL).forEach { (current, target) ->
+            val env = FakeSystemEnv(
+                installed = setOf(FULL, MIN),
+                homes = listOf(ActivityRef(FULL, "Home"), ActivityRef(MIN, "Home")),
+                default = ActivityRef(current, "Home"),
+            )
+            val command = "SETHOME $target/Home"
+            val (controller, root, daemon) = sc(env, daemon = mapOf(command to "OK"))
+
+            controller.ensureDashboardHome(target)
+
+            assertEquals("$current -> $target must reassign HOME", listOf(command), daemon.sent)
+            assertTrue(root.ran.isEmpty())
+        }
+    }
+
     @Test fun ensureHomeNoopWhenTargetHasNoHomeActivity() {
         val env = FakeSystemEnv(installed = setOf(MIN), homes = emptyList(), default = ActivityRef("android", "R"))
         val (c, root, d) = sc(env, daemon = null, su = true)
@@ -463,6 +481,21 @@ class SystemControllerTest {
         val (c, root, _) = sc(env, daemon = null, su = true)
         c.launchHome(MIN)
         assertTrue(root.ran.contains("am start -n $MIN/.Main"))
+    }
+
+    @Test fun bothCompanionVariantsCanBeForegroundedThroughTheirOwnLaunchComponents() {
+        listOf(FULL, MIN).forEach { packageName ->
+            val component = "$packageName/.Main"
+            val env = FakeSystemEnv(
+                installed = setOf(FULL, MIN),
+                launchers = mapOf(FULL to "$FULL/.Main", MIN to "$MIN/.Main"),
+            )
+            val (controller, root, _) = sc(env, daemon = null, su = true)
+
+            controller.launchHome(packageName)
+
+            assertEquals("foreground $packageName", listOf("am start -n $component"), root.ran)
+        }
     }
 
     @Test fun launchHomeBusyNeverFallsBackToSuOrDirectStart() {

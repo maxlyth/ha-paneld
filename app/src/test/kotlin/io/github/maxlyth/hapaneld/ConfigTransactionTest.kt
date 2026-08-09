@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.control.fakeProfile
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -852,6 +853,26 @@ class ConfigTransactionTest {
 
         assertTrue(config.completeRendererLaunch())
         assertFalse(config.rendererLaunchPending)
+    }
+
+    @Test fun companionToBuiltinRoundTripSurvivesProcessRecreation() {
+        val prefs = fakePreferences(initial = mapOf("dashboard_package" to "builtin"))
+        val firstProcess = Config(prefs.instance)
+
+        assertTrue(firstProcess.applyBatch {
+            firstProcess.setDashboardPackage(CompanionInstaller.MINIMAL_PKG)
+        })
+        val companionProcess = Config(prefs.instance)
+        assertEquals(CompanionInstaller.MINIMAL_PKG, companionProcess.dashboardPackage)
+        assertTrue(companionProcess.rendererLaunchPending)
+        assertTrue(companionProcess.completeRendererLaunch())
+
+        assertTrue(companionProcess.applyBatch {
+            companionProcess.setDashboardPackage("builtin")
+        })
+        val builtinProcess = Config(prefs.instance)
+        assertEquals("builtin", builtinProcess.dashboardPackage)
+        assertTrue(builtinProcess.rendererLaunchPending)
     }
 
     @Test fun importedRendererSwitchStagesLaunchHandoffInTheSameCommit() {

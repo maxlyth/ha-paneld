@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **Installed Home Assistant Companion apps remain available in the Dashboard picker.** Switching to ha-paneld's built-in renderer no longer removes the route back to an installed full or minimal Companion app. Auto, the built-in renderer and an explicitly configured third-party renderer remain available as before.
 - **Panels recover promptly after a transient SQLite busy failure.** Storage-health verification now retries after bounded 5, 15 and 30 second delays, coalesces overlapping recovery requests, and clears the warning only after a later clean integrity check and durable write prove recovery.
 - **Fresh installations now fail closed when Android's package manager is unresponsive.** The installer distinguishes a genuinely absent app from an incomplete package query before deciding whether backups or helper recovery are required.
 - **Imported and restored log-shipping destinations now stay coherent.** An address containing its own protocol or port updates all three stored sink fields atomically, so the displayed configuration matches the endpoint used at runtime.

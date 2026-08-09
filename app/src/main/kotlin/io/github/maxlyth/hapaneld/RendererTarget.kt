@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.util.AndroidInput
+import io.github.maxlyth.hapaneld.util.CompanionInstaller
 
 /**
  * The dashboard renderer a configured selection resolves to. Shared by the resolver's policies so the
@@ -28,20 +29,20 @@ internal sealed interface RendererTarget {
  *  - [attributionOf] — which package a smoothness sample is charged to, derived from the resolved
  *    target (built-in maps to the real ha-paneld package). It is not foreground evidence.
  *
- * The legacy Companion package set is kept here only for reclaiming a HOME assignment previously made by
- * an older Auto policy. It is never an automatic dashboard selection.
+ * The known Companion package set is kept here only for reclaiming a HOME assignment ha-paneld made for
+ * an older Auto policy or an explicit Companion choice. It is never an automatic dashboard selection.
  */
 internal object RendererResolver {
     /** Sentinel `dashboard_package` value selecting the built-in renderer. */
     const val BUILTIN = "builtin"
 
-    /** Former Auto candidates, retained solely to clean up an old ha-paneld-managed HOME assignment. */
+    /** Companion targets whose ha-paneld-managed HOME assignment may be safely replaced. */
     val LEGACY_COMPANION_PACKAGES: List<String> = listOf(
-        "io.homeassistant.companion.android.minimal",
-        "io.homeassistant.companion.android",
+        CompanionInstaller.MINIMAL_PKG,
+        CompanionInstaller.FULL_PKG,
     )
 
-    /** Dashboard renderers an older ha-paneld Auto policy may have set as HOME and can safely reclaim. */
+    /** Dashboard renderers ha-paneld may have set as HOME and can safely reclaim. */
     val LEGACY_COMPANION_PACKAGE_SET: Set<String> = LEGACY_COMPANION_PACKAGES.toSet()
 
     /** Built-in selection: Auto (blank), the [BUILTIN] sentinel, or the own-package alias tolerated as a

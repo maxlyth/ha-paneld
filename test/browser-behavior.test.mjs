@@ -543,6 +543,137 @@ browserTest('Configure rejects an invalid brightness floor before a save request
   await assert.doesNotReject(page.locator('#cfg-msg').getByText('Minimum brightness must be between 4 and 95.').waitFor());
 });
 
+browserTest('Configure renderer picker reflects the installed Companion catalogue across save and reload', async (t) => {
+  const full = { pkg: 'io.homeassistant.companion.android', label: 'Home Assistant Companion (full)' };
+  const minimal = { pkg: 'io.homeassistant.companion.android.minimal', label: 'Home Assistant Companion (minimal)' };
+  const arbitrary = { pkg: 'com.example.launchable', label: 'Unrelated launcher' };
+  const schema = [
+    { key: 'dashboard_package', label: 'Dashboard app', group: 'Dashboard', type: 'STRING', picker: 'renderer', placeholder: 'Auto', available: true },
+  ];
+  let dashboardPackage = 'builtin';
+  let renderers = [];
+  const posts = [];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const params = new URLSearchParams(await requestBody(request));
+        posts.push(Object.fromEntries(params));
+        if (params.has('dashboard_package')) dashboardPackage = params.get('dashboard_package');
+        return json({ ok: true, status: 'applied', applied: ['dashboard_package'], pending: [], message: 'Saved.' });
+      }
+      return json({ settings: { dashboard_package: dashboardPackage }, ha_expose: {}, ha_auth: {} });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [arbitrary], renderers });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/discovery') return json({});
+    if (path === '/health') return { body: 'ok cfg=renderer-picker' };
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  async function pickerOptions() {
+    await page.locator('#cfg-dashboard_package select').waitFor();
+    return page.locator('#cfg-dashboard_package select option').evaluateAll((options) =>
+      options.map((option) => ({ value: option.value, label: option.textContent, selected: option.selected })));
+  }
+  async function assertCatalogue(nextRenderers, expected) {
+    renderers = nextRenderers;
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 5_000 });
+    assert.deepEqual(await pickerOptions(), expected);
+  }
+  const auto = { value: '', label: 'Auto', selected: false };
+  const builtin = { value: 'builtin', label: 'Built-in renderer (ha-paneld)', selected: true };
+  const fullOption = { value: full.pkg, label: full.label, selected: false };
+  const minimalOption = { value: minimal.pkg, label: minimal.label, selected: false };
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.deepEqual(await pickerOptions(), [auto, builtin], 'neither Companion variant installed');
+  await assertCatalogue([full], [auto, builtin, fullOption]);
+  await assertCatalogue([minimal], [auto, builtin, minimalOption]);
+  await assertCatalogue([full, minimal], [auto, builtin, fullOption, minimalOption]);
+  assert.equal(await page.locator(`option[value="${arbitrary.pkg}"]`).count(), 0,
+    'an arbitrary launchable app must not become a renderer');
+
+  await page.locator('#cfg-dashboard_package select').selectOption(minimal.pkg);
+  const companionSaved = page.waitForResponse((response) => response.url().endsWith('/api/v1/config') && response.request().method() === 'POST');
+  await page.locator('#savebtn').click();
+  await companionSaved;
+  await page.locator('#cfg-msg').getByText('Saved.').waitFor();
+  assert.deepEqual(posts.at(-1), { dashboard_package: minimal.pkg });
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.equal(await page.locator('#cfg-dashboard_package select').inputValue(), minimal.pkg,
+    'saved Companion survives a page reload');
+
+  await page.locator('#cfg-dashboard_package select').selectOption('builtin');
+  const builtinSaved = page.waitForResponse((response) => response.url().endsWith('/api/v1/config') && response.request().method() === 'POST');
+  await page.locator('#savebtn').click();
+  await builtinSaved;
+  await page.locator('#cfg-msg').getByText('Saved.').waitFor();
+  assert.deepEqual(posts.at(-1), { dashboard_package: 'builtin' });
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.equal(await page.locator('#cfg-dashboard_package select').inputValue(), 'builtin',
+    'switching back to Built-in survives a page reload');
+});
+
+browserTest('Configure retains an explicit renderer when the app catalogue fails', async (t) => {
+  const minimal = 'io.homeassistant.companion.android.minimal';
+  const thirdParty = 'com.example.wallpanel';
+  const schema = [
+    { key: 'dashboard_package', label: 'Dashboard app', group: 'Dashboard', type: 'STRING', picker: 'renderer', placeholder: 'Auto', available: true },
+    { key: 'friendly_name', label: 'Panel name', group: 'Identity', type: 'STRING', available: true },
+  ];
+  let dashboardPackage = minimal;
+  let friendlyName = 'Wall panel';
+  const posts = [];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const params = new URLSearchParams(await requestBody(request));
+        posts.push(Object.fromEntries(params));
+        if (params.has('dashboard_package')) dashboardPackage = params.get('dashboard_package');
+        if (params.has('friendly_name')) friendlyName = params.get('friendly_name');
+        return json({ ok: true, status: 'applied', applied: [...params.keys()], pending: [], message: 'Saved.' });
+      }
+      return json({ settings: { dashboard_package: dashboardPackage, friendly_name: friendlyName }, ha_expose: {}, ha_auth: {} });
+    }
+    if (path === '/api/v1/apps') return { status: 500, headers: { 'content-type': 'text/plain' }, body: 'catalogue unavailable' };
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/discovery') return json({});
+    if (path === '/health') return { body: 'ok cfg=renderer-catalogue-failure' };
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.equal(await page.locator('#cfg-dashboard_package select').inputValue(), minimal,
+    'a configured supported Companion remains selected when its catalogue cannot be queried');
+  assert.deepEqual(
+    await page.locator('#cfg-dashboard_package select option').evaluateAll((options) => options.map((option) => option.value)),
+    ['', 'builtin', minimal],
+  );
+
+  dashboardPackage = thirdParty;
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.equal(await page.locator('#cfg-dashboard_package select').inputValue(), thirdParty,
+    'a configured third-party renderer remains selected');
+  await page.locator('#cfg-friendly_name input').fill('Kitchen wall panel');
+  const saved = page.waitForResponse((response) => response.url().endsWith('/api/v1/config') && response.request().method() === 'POST');
+  await page.locator('#savebtn').click();
+  await saved;
+  await page.locator('#cfg-msg').getByText('Saved.').waitFor();
+  assert.deepEqual(posts.at(-1), { friendly_name: 'Kitchen wall panel' },
+    'an unrelated save must not erase the renderer hidden by a failed catalogue');
+  assert.equal(dashboardPackage, thirdParty);
+});
+
 browserTest('Sensitivity preview survives transient HA source loss during save', async (t) => {
   const source = 'sensor.office_illuminance';
   const revision = 'ambient-source-revision';

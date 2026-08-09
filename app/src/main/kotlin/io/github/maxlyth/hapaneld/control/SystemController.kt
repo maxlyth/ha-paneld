@@ -260,15 +260,16 @@ class SystemController(
     }
 
     /**
-     * Keep the dashboard app (HA Companion) as the default home.
+     * Keep the selected foreign dashboard app as the default home.
      *
      * Our [AdminLauncherActivity] declares `CATEGORY_HOME` so it's a selectable / last-resort launcher.
      * The side effect: Android **clears the default-home association** whenever a package adds or changes
      * a HOME activity (i.e. every ha-paneld install/update) — after which pressing Home pops a chooser
      * instead of booting straight to the dashboard. So on boot we re-assert the dashboard app as the
-     * default home, but only when home is unowned (the system resolver) or owned by *us* — a deliberate
-     * third-party launcher set as home is left alone. If the dashboard app isn't installed we do nothing,
-     * leaving our admin launcher as the genuine last-resort home.
+     * default home when home is unowned (the system resolver), owned by *us*, or still assigned to a
+     * supported Companion renderer ha-paneld previously selected. A deliberate third-party launcher set
+     * as home is left alone. If the dashboard app isn't installed we do nothing, leaving our admin launcher
+     * as the genuine last-resort home.
      */
     fun ensureDashboardHome(dashboardPkg: String, builtinReady: Boolean = true) {
         val target = resolveDashboard(dashboardPkg)
@@ -278,8 +279,9 @@ class SystemController(
         if (target.isBlank()) { Log.i(TAG, "ensureHome: no dashboard app installed; leaving home as-is"); return }
         val current = env.defaultHome()?.pkg
         if (current == target) return                                   // already correct
-        // Respect a real third-party launcher the user chose; only reclaim from "no default" or ourselves.
-        if (current != null && current != "android" && current != env.ownPackage) return
+        // Respect a real third-party launcher the user chose. A known Companion HOME is one ha-paneld
+        // may previously have assigned, so switching between installed renderer variants must reclaim it.
+        if (current != null && current != "android" && current != env.ownPackage && current !in KNOWN_RENDERER_HOMES) return
         val comp = env.homeActivities().firstOrNull { it.pkg == target }?.component
         if (comp == null) { Log.w(TAG, "ensureHome: $target has no HOME activity"); return }
         Log.i(TAG, "ensureHome: default home was '$current' -> $comp")
@@ -380,10 +382,10 @@ class SystemController(
         internal fun isBuiltinSelection(pkg: String, ownPackage: String): Boolean =
             RendererResolver.isBuiltinSelection(pkg, ownPackage)
 
-        /** Dashboard renderers ha-paneld itself may have set as the default home ([ensureDashboardHome])
-         *  — [ensureBuiltinHome] is allowed to reclaim HOME from these when switching to the built-in
-         *  renderer; anything else as home is a deliberate third-party launcher and is left alone.
-         *  The one Auto-candidate order lives in [RendererResolver]. */
+        /** Dashboard renderers ha-paneld itself may have set as the default home ([ensureDashboardHome]).
+         *  A later supported-renderer or built-in selection may reclaim HOME from these; anything else as
+         *  home is a deliberate third-party launcher and is left alone. The package identities live in
+         *  [RendererResolver], sourced from [io.github.maxlyth.hapaneld.util.CompanionInstaller]. */
         internal val KNOWN_RENDERER_HOMES = RendererResolver.LEGACY_COMPANION_PACKAGE_SET
 
         // Vendor kiosk apps that register CATEGORY_HOME but aren't real launchers — the navbar Launcher
