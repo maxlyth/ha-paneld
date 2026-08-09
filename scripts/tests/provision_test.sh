@@ -890,6 +890,13 @@ assert_not_contains 'pm clear' "$MOCK_CALL_LOG" "nothing is erased while presenc
 # indefinitely. A target that has genuinely gone must be reported as gone, not as an unusable panel.
 HAPANELD_SKIP_AUTO_EXPORT=1 HAPANELD_RESET_CONFIRM=RESET MOCK_PM_VANISH_AFTER=1 \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --reset-config
+
+assert_count() {
+  actual="$1"; expected="$2"; description="$3"
+  if [ "$actual" -eq "$expected" ] 2>/dev/null; then pass "$description"
+  else fail_test "$description (expected $expected, got ${actual:-nothing})"; fi
+}
+
 # This case turns on WHICH observation the package vanishes between, so the coupling is asserted
 # rather than assumed: a confirmed reset classifies exactly twice, once before the prompt and once
 # immediately before erasing, and MOCK_PM_VANISH_AFTER=1 removes the package between the two. If that
@@ -4662,11 +4669,6 @@ assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Ho
 # a bound like -le 1 is also satisfied by a run that never staged anything.
 DEVICE_ADB_STATE_DIR="$TMP/device-data-adb-hapaneld"
 count_device_artifacts() { find "$DEVICE_ADB_STATE_DIR" -maxdepth 1 -name "$1" 2>/dev/null | wc -l | tr -d ' '; }
-assert_count() {
-  actual="$1"; expected="$2"; description="$3"
-  if [ "$actual" -eq "$expected" ] 2>/dev/null; then pass "$description"
-  else fail_test "$description (expected $expected, got ${actual:-nothing})"; fi
-}
 
 # A successful run leaves no staging behind.
 rm -rf "$DEVICE_ADB_STATE_DIR"
