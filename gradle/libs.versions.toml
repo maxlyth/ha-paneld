@@ -9,12 +9,12 @@ swiperefresh = "1.2.0"
 # androidx.webkit — WebSettingsCompat force-dark for the pre-Android-13 panels' WebViews.
 webkit = "1.12.1"
 # Ktor CIO server — coroutine-based, no Netty thread-per-connection. Hosts :8888.
-ktor = "3.5.1"
+ktor = "3.5.2"
 # HiveMQ MQTT 5 client. NIO (pure-Java) transport => ABI-agnostic (covers 32-bit armeabi-v7a panels).
 # Do NOT add the websocket module (AGP 8.2+ "No matching variant" bug) or epoll native transport.
 hivemq = "1.3.17"
 # Test-only embeddable MQTT 5 broker. Production continues to depend only on the HiveMQ client.
-moquette = "0.18.5"
+moquette = "0.18.6"
 # JmDNS — cross-API-level mDNS advertise with TXT records (NsdManager TXT handling is weak).
 jmdns = "3.6.3"
 coroutines = "1.11.0"
