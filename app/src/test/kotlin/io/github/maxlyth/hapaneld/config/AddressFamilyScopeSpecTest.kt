@@ -5,7 +5,7 @@ import org.junit.Test
 
 /**
  * Upgrade-visible semantic pin: `mqtt_address_family` retains its key for compatibility but now
- * governs the MQTT broker connection AND the panel's Home Assistant connections. An existing
+ * governs the MQTT broker connection AND the panel's Home Assistant WebSocket connections. An existing
  * non-default value therefore broadens on upgrade, and the user-visible label/help must say so —
  * this pins the semantic tokens, not sentence wording.
  */
