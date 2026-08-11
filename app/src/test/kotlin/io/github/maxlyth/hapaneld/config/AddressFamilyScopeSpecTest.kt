@@ -15,5 +15,9 @@ class AddressFamilyScopeSpecTest {
         val surface = spec.label + " " + spec.help
         assertTrue("names MQTT: $surface", surface.contains("MQTT"))
         assertTrue("names Home Assistant: $surface", surface.contains("Home Assistant"))
+        // The qualifier is part of the pinned semantic: the policy governs WebSocket connections,
+        // and claiming plain Home Assistant "connections" overstates it — REST reads iterate
+        // addresses natively and do not consult this setting.
+        assertTrue("names the WebSocket qualifier: $surface", surface.contains("WebSocket"))
     }
 }
