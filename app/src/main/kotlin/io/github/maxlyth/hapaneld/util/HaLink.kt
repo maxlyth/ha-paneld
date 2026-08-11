@@ -1,8 +1,6 @@
 package io.github.maxlyth.hapaneld.util
 
 import android.util.Log
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
@@ -36,7 +34,6 @@ object HaLink {
     private const val TAG = "HaLink"
     private const val JSON = "application/json"
     private const val FORM = "application/x-www-form-urlencoded"
-    internal const val MAX_WS_FRAME_BYTES = 16L * 1024L * 1024L
     internal const val WS_RESOLUTION_DEADLINE_MS = 15_000L
     internal const val MAX_HTTP_RESPONSE_BYTES = 2L * 1024L * 1024L
     internal const val MAX_TOKEN_RESPONSE_BYTES = 64L * 1024L
@@ -61,12 +58,18 @@ object HaLink {
     /** Resolve through the built-in renderer's already-authenticated HA connection. The returned link is
      * deliberately based on [base], not an unrelated advertised internal/external URL: the same native
      * endpoint which rendered the panel is the authoritative server and reverse-proxy base path. */
-    fun resolveWithAccessToken(base: String, token: String, deviceNames: Collection<String>): String? {
+    fun resolveWithAccessToken(
+        base: String,
+        token: String,
+        deviceNames: Collection<String>,
+        preferIpv4: Boolean = false,
+        ipv4Only: Boolean = false,
+    ): String? {
         if (base.isBlank() || token.isBlank()) return null
         return runCatching {
             val normalized = base.trim().trimEnd('/')
             val slugs = deviceNames.map(::slug).filter(String::isNotBlank).distinct()
-            val devId = deviceIdViaWs(normalized, token, slugs)
+            val devId = deviceIdViaWs(normalized, token, slugs, preferIpv4, ipv4Only)
                 ?: run { Log.i(TAG, "no HA entity matching ${slugs.joinToString()}"); return null }
             "$normalized/config/devices/device/$devId".also { Log.i(TAG, "native HA device link resolved") }
         }.onFailure { Log.i(TAG, "native resolve failed: ${it.message}") }.getOrNull()
@@ -220,9 +223,15 @@ object HaLink {
      * the device id of the first entity whose entity_id object-part starts with a requested slug. Each entry is
      * compact: `ei` = entity_id, `di` = device id.
      */
-    private fun deviceIdViaWs(base: String, token: String, deviceSlugs: Collection<String>): String? = runBlocking {
+    private fun deviceIdViaWs(
+        base: String,
+        token: String,
+        deviceSlugs: Collection<String>,
+        preferIpv4: Boolean = false,
+        ipv4Only: Boolean = false,
+    ): String? = runBlocking {
         val wsUrl = base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/websocket"
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME_BYTES } }
+        val client = HaWebSocketClients.client(preferIpv4 = preferIpv4, ipv4Only = ipv4Only)
         try {
             withTimeoutOrNull(WS_RESOLUTION_DEADLINE_MS) {
                 var devId: String? = null

@@ -177,7 +177,7 @@ dependencies {
     // Ktor WS client — used by HaLink to read HA's non-admin `config/entity_registry/list_for_display`
     // (which carries each entity's device id) to resolve this panel's device-settings URL.
     implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.websockets)
 
     // MQTT 5 auto-discovery + state publishing.

@@ -1,8 +1,8 @@
 package io.github.maxlyth.hapaneld.sensors
 
 import io.github.maxlyth.hapaneld.Config
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
+import io.github.maxlyth.hapaneld.util.HaWebSocketClients
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -30,7 +30,10 @@ internal class HaCurrentUserClient(
     private val auth: HaApiSessionProvider,
     private val transport: HaCurrentUserTransport = KtorHaCurrentUserTransport(),
 ) {
-    constructor(config: Config) : this(DashboardHaApiSessionProvider(config))
+    constructor(config: Config) : this(
+        DashboardHaApiSessionProvider(config),
+        KtorHaCurrentUserTransport { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
+    )
 
     suspend fun status(): HaCurrentUserStatus {
         var session = auth.resolve(false)
@@ -70,9 +73,12 @@ internal class HaCurrentUserClient(
     }
 }
 
-private class KtorHaCurrentUserTransport : HaCurrentUserTransport {
+private class KtorHaCurrentUserTransport(
+    private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy = { MqttAddressFamilyPolicy.AUTOMATIC },
+) : HaCurrentUserTransport {
     override suspend fun read(baseUrl: String, accessToken: String): JSONObject = withContext(Dispatchers.IO) {
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_FRAME_BYTES } }
+        val policy = socketFamilyPolicy()
+        val client = HaWebSocketClients.client(preferIpv4 = policy.initialPreferIpv4, ipv4Only = policy.ipv4Only)
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(TIMEOUT_MS) {
@@ -113,6 +119,5 @@ private class KtorHaCurrentUserTransport : HaCurrentUserTransport {
     private companion object {
         const val REQUEST_ID = 1
         const val TIMEOUT_MS = 15_000L
-        const val MAX_FRAME_BYTES = 256L * 1024L
     }
 }

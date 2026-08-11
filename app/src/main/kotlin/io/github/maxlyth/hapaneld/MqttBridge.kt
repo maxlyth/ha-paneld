@@ -1981,8 +1981,11 @@ internal class MqttBridge(
                                 }
                             },
                         ).session?.accessToken ?: return@Thread
+                        val familyPolicy = MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily)
                         val link = HaLink.resolveWithAccessToken(
                             nativeBase, token, listOf(panel, runtimeFriendlyName),
+                            preferIpv4 = familyPolicy.initialPreferIpv4,
+                            ipv4Only = familyPolicy.ipv4Only,
                         ) ?: return@Thread
                         lifecycle.runIfOpen(Unit) {
                             if (stillCurrent()) config.setHaDeviceUrl(link, target)

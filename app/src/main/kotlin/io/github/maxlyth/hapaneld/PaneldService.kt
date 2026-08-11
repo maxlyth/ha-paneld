@@ -111,6 +111,7 @@ import io.github.maxlyth.hapaneld.sensors.HaExactEntityStreamOwner
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
 import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
 import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
@@ -921,7 +922,10 @@ class PaneldService : Service() {
         haExactEntityStream = HaExactEntityStreamOwner(
             scope = scope,
             auth = haSessionAuthority,
-            transport = KtorHaExactEntityStreamTransport(haApi),
+            transport = KtorHaExactEntityStreamTransport(
+                haApi,
+                socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
+            ),
             monotonicMillis = { android.os.SystemClock.elapsedRealtime() },
         )
         haAmbientLux = HaAmbientLuxSubscriber(

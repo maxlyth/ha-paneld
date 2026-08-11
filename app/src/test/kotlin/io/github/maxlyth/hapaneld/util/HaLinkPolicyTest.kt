@@ -10,7 +10,9 @@ import org.junit.Assert.assertThrows
 
 class HaLinkPolicyTest {
     @Test fun websocketResolutionIsBoundedForUntrustedConfiguredEndpoints() {
-        assertTrue(HaLink.MAX_WS_FRAME_BYTES in 1L..(32L * 1024L * 1024L))
+        // The former MAX_WS_FRAME_BYTES bound left with the CIO engine (the OkHttp engine refuses
+        // frame-size configuration; see HaWebSocketClientsFailoverTest); the one-deadline wall
+        // around connect+auth+query remains the resolver's protection.
         assertTrue(HaLink.WS_RESOLUTION_DEADLINE_MS in 1_000L..30_000L)
     }
 

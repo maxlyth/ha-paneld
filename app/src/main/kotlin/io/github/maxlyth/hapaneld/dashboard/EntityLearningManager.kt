@@ -17,8 +17,8 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.github.maxlyth.hapaneld.util.HaWebSocketClients
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.websocket.Frame
@@ -612,7 +612,7 @@ class EntityLearningManager(
                 dashboardCost.work(
                     units = it.metadata.size.toLong(),
                     // String length is the allocation-free work-size proxy used by the other browser
-                    // parsers. Encoding a dashboard admitted up to MAX_WS_FRAME solely for telemetry can
+                    // parsers. Encoding a multi-megabyte admitted dashboard solely for telemetry can
                     // otherwise create a second tens-of-megabytes buffer on memory-constrained panels.
                     bytes = it.configJson.length.toLong(),
                 )
@@ -1771,7 +1771,11 @@ class EntityLearningManager(
         block: suspend (suspend (JSONObject) -> JSONObject) -> Unit,
     ) {
         val ws = EntityFilterProtocol.upstreamWebSocketUrl(base)
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME } }
+        val policy = MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily)
+        val client = HaWebSocketClients.client(
+            preferIpv4 = policy.initialPreferIpv4,
+            ipv4Only = policy.ipv4Only,
+        )
         var session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession? = null
         try {
             val activeSession = withEntityLearningDeadline(WS_CONNECT_TIMEOUT_MS) { client.webSocketSession(ws) }
@@ -1820,7 +1824,6 @@ class EntityLearningManager(
         private const val WS_SOCKET_TIMEOUT_MS = 90_000L
         private const val MAX_RESPONSE_FRAMES = 32
         private const val MAX_TARGETS = 500
-        private const val MAX_WS_FRAME = 32L * 1024 * 1024
         private const val HOURLY_CHECK_MS = 60L * 60_000
         private const val DAILY_SYNC_MS = 24L * HOURLY_CHECK_MS
         // Long enough for the first filtered load's own telemetry to finish arriving (it is what

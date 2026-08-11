@@ -4,8 +4,8 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.util.BoundedStreams
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
+import io.github.maxlyth.hapaneld.util.HaWebSocketClients
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -238,7 +238,9 @@ internal class HaPresenceSourceManager(
     ) : this(
         scope,
         DashboardHaApiSessionProvider(config),
-        KtorHaPresenceTransport(),
+        KtorHaPresenceTransport(
+            socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
+        ),
         streamOwner,
         offerAggregate,
         exclusions = ConfigHaPresenceExclusions(config),
@@ -795,7 +797,9 @@ internal class HaPresenceSourceManager(
 }
 
 /** Bounded one-shot registry/history transport; it has no retry, subscription or liveness loop. */
-internal class KtorHaPresenceTransport : HaPresenceTransport {
+internal class KtorHaPresenceTransport(
+    private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy = { MqttAddressFamilyPolicy.AUTOMATIC },
+) : HaPresenceTransport {
     override suspend fun registry(baseUrl: String, accessToken: String): HaPresenceRegistrySnapshot {
         var devices: JSONObject? = null
         var areas: JSONObject? = null
@@ -845,7 +849,8 @@ internal class KtorHaPresenceTransport : HaPresenceTransport {
         accessToken: String,
         block: suspend (suspend (JSONObject) -> JSONObject) -> Unit,
     ) {
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME_BYTES } }
+        val policy = socketFamilyPolicy()
+        val client = HaWebSocketClients.client(preferIpv4 = policy.initialPreferIpv4, ipv4Only = policy.ipv4Only)
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(CONNECT_TIMEOUT_MS) {
@@ -935,7 +940,6 @@ internal class KtorHaPresenceTransport : HaPresenceTransport {
         const val REQUEST_TIMEOUT_MS = 20_000L
         const val HTTP_TIMEOUT_MS = 15_000
         const val HISTORY_TIMEOUT_MS = 20_000
-        const val MAX_WS_FRAME_BYTES = 4L * 1024L * 1024L
         const val MAX_STATES_BYTES = 64L * 1024L * 1024L
         const val MAX_HISTORY_BYTES = 4L * 1024L * 1024L
     }

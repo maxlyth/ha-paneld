@@ -4,7 +4,8 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
+import io.github.maxlyth.hapaneld.util.HaWebSocketClients
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
@@ -947,6 +948,7 @@ internal class HaExactEntityStreamOwner(
 
 internal class KtorHaExactEntityStreamTransport(
     private val rest: HaAmbientTransport = KtorHaAmbientTransport(),
+    private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy = { MqttAddressFamilyPolicy.AUTOMATIC },
 ) : HaExactEntityStreamTransport {
     override suspend fun subscribe(
         baseUrl: String,
@@ -961,7 +963,8 @@ internal class KtorHaExactEntityStreamTransport(
         watchRegistry: Boolean,
     ): HaExactEntityConnection = withContext(Dispatchers.IO) {
         require(entityIds.isNotEmpty() || watchRegistry)
-        val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = MAX_WS_FRAME_BYTES } }
+        val policy = socketFamilyPolicy()
+        val client = HaWebSocketClients.client(preferIpv4 = policy.initialPreferIpv4, ipv4Only = policy.ipv4Only)
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(CONNECT_TIMEOUT_MS) {
@@ -1087,7 +1090,6 @@ internal class KtorHaExactEntityStreamTransport(
         const val MAX_ERROR_CHARS = 240
         const val CONNECT_TIMEOUT_MS = 15_000L
         const val AUTH_TIMEOUT_MS = 15_000L
-        const val MAX_WS_FRAME_BYTES = 2L * 1024L * 1024L
     }
 }
 
