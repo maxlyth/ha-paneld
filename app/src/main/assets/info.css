@@ -353,6 +353,17 @@ body.hdr-hide-brand .hdr .brand{display:none}
    not only the select, otherwise a long area name can make the browser-owned popup escape its card. */
 .frow .fctl .ha-area-picker{width:min(260px,100%);min-width:0;max-width:100%}
 .frow .fctl .ha-area-picker select{display:block;width:100%;min-width:0;max-width:100%}
+/* Home-dashboard picker: a native select with a Custom path input revealed beneath it. The wrapper is
+   constrained like the Area picker so a long dashboard title cannot push the browser's own popup out
+   of the card. The [hidden] rule is load-bearing — .hd-custom sets display, which would otherwise beat
+   the hidden attribute's UA style and leave the input permanently visible. */
+.frow .fctl .hd-picker{display:flex;flex-direction:column;gap:6px;width:min(260px,100%);min-width:0;max-width:100%}
+.frow .fctl .hd-picker select{display:block;width:100%;min-width:0;max-width:100%}
+.hd-custom{display:flex;flex-direction:column;gap:4px}
+.hd-custom[hidden]{display:none}
+.frow .fctl .hd-custom input{display:block;width:100%;min-width:0;max-width:100%}
+.hd-custom-note{overflow-wrap:anywhere}
+.hd-custom-note.warn{color:var(--setup-fg)}
 /* Expose-to-HA toggle: an icon button (no checkbox) drawn with an inline link / broken-link SVG.
    Linked = bright accent (highlight); unlinked = muted grey. Overrides the generic button{} box. */
 .pip{display:inline-flex;align-items:center;justify-content:center;align-self:center;line-height:0;
@@ -429,6 +440,10 @@ body.hdr-hide-brand .hdr .brand{display:none}
 /* Wizard selects match the form's field metrics — browser-default select text read as tiny against the
    1rem inputs on hardware review; proportionate, not dominant, not minuscule. */
 .wiz select{width:100%;font:inherit;font-size:1rem;min-height:42px;padding:8px 10px;margin:6px 0;background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px}
+/* The Custom dashboard-path input sits directly beneath the wizard's select and has to read as the
+   same control family; the generic input metrics are visibly smaller than .wiz select on hardware. */
+.wiz .hd-custom-input{font-size:1rem;min-height:42px;padding:8px 10px;margin:6px 0}
+.wiz .hd-custom-note{display:block;color:var(--dim);line-height:1.45}
 .wiz-fld{display:block;margin:14px 0}
 .wiz-fld>b{display:block;margin-bottom:5px;font-size:.92rem}
 .wiz-fld>small{display:block;color:var(--dim);margin-top:5px;line-height:1.45}

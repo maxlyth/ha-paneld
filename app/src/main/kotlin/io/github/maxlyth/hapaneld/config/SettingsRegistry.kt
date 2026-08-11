@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
+import io.github.maxlyth.hapaneld.util.DashboardPath
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import java.util.Locale
 
@@ -348,7 +349,27 @@ object SettingsRegistry {
             label = "Home dashboard", default = "", picker = "ha_dashboard", scope = Scope.DEVICE,
             liveApply = true,
             maxChars = 2_048,
-            help = "Dashboard used by reload and idle return. Auto lets Home Assistant choose.",
+            help = "Dashboard used by reload and idle return. Auto lets Home Assistant choose. " +
+                "Custom accepts a specific view, e.g. /dashboard-name/tab-name.",
+            validate = { raw ->
+                // Blank and bare-root spellings mean "follow the account default" and name no dashboard,
+                // so they carry nothing to check. Everything else is canonicalized through the SAME rule
+                // the renderer admits routes with, which is the point: a path the form accepts can no
+                // longer be one the renderer silently discards as malformed. Whether the dashboard
+                // exists is deliberately NOT decided here — the account's list is a runtime fact, the
+                // catalogue may be unreachable, and a dashboard may be created after the panel is set
+                // up. That case is a visible warning in both pickers, not a rejected save.
+                // Every spelling of "follow the account default" is stored as the blank sentinel. `/`,
+                // `//` and a bare root with only a query or fragment all mean Auto to the renderer, but
+                // stored verbatim they are absent from the dashboard list, so both pickers would reopen
+                // in Custom showing a path the panel is not actually using.
+                if (DashboardPath.followsAccountDefault(raw)) Validation.Ok("")
+                else DashboardPath.canonical(raw, preserveRoute = true)?.let(Validation::Ok)
+                    ?: Validation.Bad(
+                        "home_dashboard: expected a dashboard path on this Home Assistant, " +
+                            "e.g. /lovelace or /dashboard-name/tab-name",
+                    )
+            },
         ),
         SettingSpec(
             key = "dashboard_fullscreen", type = SettingType.BOOL, group = "Dashboard",

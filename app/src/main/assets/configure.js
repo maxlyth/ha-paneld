@@ -14,6 +14,30 @@
   // render so a failed query, credential change or Home Assistant area edit can recover immediately.
   var haAreaSeed = null, haAreaSeedGeneration = 0, haAreaCatalogRequest = 0, haAreaUserOverride = false;
   var homeDashboardDefault = { explicit: false, path: "" };
+  // Sentinel for the "Custom…" option. Not a reachable path: a real dashboard root must match
+  // ^[a-z0-9][a-z0-9_-]*$, which no leading underscore can satisfy, so it can never collide.
+  var CUSTOM_DASHBOARD = "__custom__";
+  // A fast client-side reject for the shapes that can never address a dashboard (a URL, a protocol-
+  // relative host, a traversal, whitespace). It is deliberately NOT the authority — SettingsRegistry's
+  // home_dashboard validator is, running the same rule the renderer admits routes with — so this only
+  // has to be tight enough to catch a typo before the round trip, never to be trusted.
+  //
+  // Evaluated through new RegExp, never as an HTML `pattern` attribute: current Chromium compiles
+  // `pattern` with the `v` flag, where the unescaped `/` and `?` in `[^/?#\s]` are invalid, and a
+  // browser that cannot parse a pattern silently IGNORES the constraint. That made this check inert on
+  // Configure while the wizard's identical expression worked, and no string-comparing contract test
+  // could see the difference. A trailing slash is accepted because the server canonicalizes `/office/`
+  // to `/office`; the client must never refuse what the authority would accept.
+  var DASHBOARD_PATH_PATTERN = "\\s*/?[a-z0-9][a-z0-9_-]*(?:/[^/?#]*)*(?:\\?[^#]*)?(?:#.*)?\\s*";
+  function wellFormedDashboardPath(path) {
+    return new RegExp("^(?:" + DASHBOARD_PATH_PATTERN + ")$").test(String(path || ""));
+  }
+  // The dashboard root a path belongs to (/office/view?k=1 → /office), or "" when it has none.
+  function dashboardRootOf(path) {
+    var route = String(path || "").trim().split("?")[0].split("#")[0];
+    var first = route.split("/").filter(function (s) { return s !== ""; })[0] || "";
+    return /^[a-z0-9][a-z0-9_-]*$/.test(first) ? "/" + first : "";
+  }
   var haPickerCleanups = [];
   var haPickerCleanup = function () {
     haPickerCleanups.splice(0).forEach(function (cleanup) { cleanup(); });
@@ -399,6 +423,12 @@
     // maintainer chose clean-over-icons. The wizard's dedicated page keeps the icon list; this form
     // keeps HA's GROUPING via native optgroups, which is the part that carries real information.
     // Auto intentionally remains first; a legacy/custom configured path is preserved rather than silently lost.
+    // "Custom…" reveals a plain text input UNDER the select, which is how a specific view below a
+    // dashboard root (/office/kitchen) is entered — Home Assistant's list endpoint only ever
+    // returns roots. A revealed input, rather than an editable combobox, is what keeps the earlier
+    // hardware verdict intact: nothing floats, nothing escapes the card, the native popup still owns
+    // the list. A configured path that is not in the list now lands here instead of in a dead-end
+    // option, so it can finally be edited on the panel.
     if (f.picker === "ha_dashboard") {
       var currentDashboard = v == null ? "" : v;
       var dashboardSelect = el("select", { class: "pkgsel" });
@@ -425,36 +455,83 @@
           host.appendChild(option);
         });
       });
-      if (currentDashboard && !dashboardPaths[currentDashboard]) {
-        dashboardSelect.appendChild(el("option", {
-          value: currentDashboard, text: currentDashboard + " · configured dashboard"
-        }));
-        dashboardSelect.value = currentDashboard;
+      var customActive = !!currentDashboard && !dashboardPaths[currentDashboard];
+      dashboardSelect.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: "Custom — enter a dashboard path…" }));
+      if (customActive) dashboardSelect.value = CUSTOM_DASHBOARD;
+      var customInput = el("input", {
+        type: "text", class: "hd-custom-input", value: currentDashboard,
+        placeholder: "/dashboard-name/tab-name", id: "cfg-home_dashboard-path",
+        maxlength: f.maxLength || 2048, "aria-label": "Dashboard path",
+        "aria-describedby": "cfg-home_dashboard-path-note",
+      });
+      // The note explains what the value will DO (including the fallback warning), so it is wired to the
+      // input for assistive technology and announced politely as it changes rather than only on focus.
+      var customNote = el("small", { class: "hd-area-note hd-custom-note",
+        id: "cfg-home_dashboard-path-note", role: "status", "aria-live": "polite" });
+      var customWrap = el("div", { class: "hd-custom" }, [customInput, customNote]);
+      // The renderer resolves an explicit path against the dashboards this account can see and falls
+      // back to its default when the ROOT is not one of them — silently, by design. Once a path can be
+      // typed that silence becomes the likeliest failure, so say it here instead. It stays a warning
+      // and never blocks the save: the list may be unfetched, and the dashboard may not exist yet.
+      function refreshCustomNote() {
+        var typedPath = customInput.value.trim();
+        var root = dashboardRootOf(typedPath);
+        var unknown = root && homeDashboardQueried && homeDashboardItems.length && !dashboardPaths[root];
+        customNote.textContent = unknown
+          ? root + " is not a dashboard this panel’s Home Assistant account can see — the panel will fall"
+            + " back to its default until that dashboard exists."
+          : "A path on this Home Assistant, starting with a dashboard from the list above.";
+        customNote.classList.toggle("warn", !!unknown);
+      }
+      // Validity is decided here rather than by the browser's pattern engine, and is cleared entirely
+      // whenever Custom is not the live control. A hidden control that stays invalid blocks Save with
+      // nothing on screen to fix — reportValidity() cannot show anything on an invisible field — so an
+      // abandoned malformed path would make every later Auto or listed save fail for no visible reason.
+      function validateCustom() {
+        var typedPath = customInput.value.trim();
+        customInput.setCustomValidity(
+          !typedPath || wellFormedDashboardPath(typedPath) ? ""
+            : "Enter a dashboard path such as /dashboard-name/tab-name.",
+        );
+      }
+      function syncCustom() {
+        var on = dashboardSelect.value === CUSTOM_DASHBOARD;
+        customWrap.hidden = !on;
+        // Required only while it is the live control, so an empty box cannot be saved as a silent Auto.
+        customInput.required = on;
+        // Disabled when it is not: barred from constraint validation, and skipped by the row scan.
+        customInput.disabled = !on;
+        if (on) { validateCustom(); refreshCustomNote(); }
       }
       dashboardSelect.addEventListener("change", function () {
-        values[f.key] = dashboardSelect.value;
+        syncCustom();
+        values[f.key] = dashboardSelect.value === CUSTOM_DASHBOARD ? customInput.value.trim() : dashboardSelect.value;
         setDirty(f.key);
+        if (dashboardSelect.value === CUSTOM_DASHBOARD) customInput.focus();
       });
+      customInput.addEventListener("input", function () {
+        values[f.key] = customInput.value.trim();
+        setDirty(f.key);
+        validateCustom();
+        refreshCustomNote();
+      });
+      syncCustom();
+      var notes = [];
       if (!homeDashboardQueried) {
-        return el("div", {}, [dashboardSelect,
-          el("small", { class: "hd-area-note", text:
-            "Couldn’t fetch this account’s dashboard list from Home Assistant yet. Try again after the connection recovers." })]);
-      }
-      if (!homeDashboardItems.length) {
-        dashboardSelect.disabled = true;
-        return el("div", {}, [dashboardSelect,
-          el("small", { class: "hd-area-note", text:
-            "This account cannot access any dashboards. Create one or grant access in Home Assistant." })]);
-      }
-      if (!homeDashboardDefault.explicit && !currentDashboard) {
+        notes.push(el("small", { class: "hd-area-note", text:
+          "Couldn’t fetch this account’s dashboard list from Home Assistant yet. Try again after the connection recovers." }));
+      } else if (!homeDashboardItems.length) {
+        notes.push(el("small", { class: "hd-area-note", text:
+          "This account cannot access any dashboards. Create one or grant access in Home Assistant." }));
+      } else if (!homeDashboardDefault.explicit && !currentDashboard) {
         // The demotion rule, in native terms: Auto still exists but the field says why picking a real
         // dashboard is the recommendation when the account carries no server-side default.
-        var wrap = el("div", {}, [dashboardSelect,
-          el("small", { class: "hd-area-note", text:
-            "This account has no default dashboard set — pick the dashboard this panel should show." })]);
-        return wrap;
+        notes.push(el("small", { class: "hd-area-note", text:
+          "This account has no default dashboard set — pick the dashboard this panel should show." }));
       }
-      return dashboardSelect;
+      // The select is never disabled now, even with no listed dashboards: Custom is still a legal
+      // answer then, and it is exactly the case where someone needs to type a path by hand.
+      return el("div", { class: "hd-picker" }, [dashboardSelect, customWrap].concat(notes));
     }
     // Home Assistant Area: a pop-up list of HA's REAL areas, never free text — nobody knows what to type,
     // the names live in HA. The stored value is the panel's REQUEST; Home Assistant's own value is
@@ -2497,8 +2574,18 @@
       var field = schema[i];
       if (!dirtyValues[field.key]) continue;
       var row = document.getElementById("cfg-" + field.key);
-      var control = row && row.querySelector ? row.querySelector("input,select,textarea") : null;
-      if (!control || control.disabled || !control.checkValidity || control.checkValidity()) continue;
+      // The first INVALID control in the row, not the row's first control. A row may carry more than
+      // one — the dashboard picker is a select plus a revealed custom-path input — and the leading
+      // control is typically the valid one while the control being edited is not. Taking the first
+      // match would report the row as valid and let the bad value reach the server.
+      var controls = row && row.querySelectorAll ? row.querySelectorAll("input,select,textarea") : [];
+      var control = null;
+      for (var c = 0; c < controls.length; c++) {
+        if (controls[c].disabled || !controls[c].checkValidity || controls[c].checkValidity()) continue;
+        control = controls[c];
+        break;
+      }
+      if (!control) continue;
       var range = field.min != null && field.max != null ? " between " + field.min + " and " + field.max : "";
       var message = range ? field.label + " must be" + range + "." : field.label + " has an invalid value.";
       return { field: field, control: control, message: message };

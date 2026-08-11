@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.dashboard
 
+import io.github.maxlyth.hapaneld.util.DashboardPath
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -55,8 +56,6 @@ object EntityLearningProtocol {
     private val ENTITY_ID = Regex("(?<![a-z0-9_])[a-z0-9_]+\\.[a-z0-9_]+(?![a-z0-9_])")
     private val DIRECT_ENTITY_ID = Regex("^[a-z0-9_]+\\.[a-z0-9_]+$")
     private val TARGET_REGISTRY_ID = Regex("^[A-Za-z0-9_-]+$")
-    private val DASHBOARD_PATH_SEGMENT = Regex("^[a-z0-9][a-z0-9_-]*$")
-    private val URL_SCHEME = Regex("^[a-z][a-z0-9+.-]*:", RegexOption.IGNORE_CASE)
     private val TARGET_KEYS = setOf("entity_id", "device_id", "area_id", "floor_id", "label_id")
     private val EXPANDABLE_TARGET_KEYS = TARGET_KEYS - "entity_id"
     private val TEMPLATE_MARKERS = listOf("{{", "{%", "[[[", "hass.states", "states[")
@@ -264,7 +263,7 @@ object EntityLearningProtocol {
             val dashboard = dashboards.optJSONObject(index) ?: continue
             if (dashboard.optBoolean("require_admin") && !isAdmin) continue
             val urlPath = dashboard.optString("url_path").trim().trim('/')
-            if (urlPath.isNotBlank() && !DASHBOARD_PATH_SEGMENT.matches(urlPath)) continue
+            if (urlPath.isNotBlank() && !DashboardPath.isRootSegment(urlPath)) continue
             val path = if (urlPath.isBlank() || urlPath == "lovelace") "/lovelace" else "/$urlPath"
             if (!seenPaths.add(path)) continue
             val title = dashboard.optString("title").trim().ifBlank {
@@ -363,43 +362,12 @@ object EntityLearningProtocol {
     private val PANEL_DASHBOARD_ORDER = listOf("home", "light", "security", "climate", "energy", "maintenance")
     private val MDI_ICON_NAME = Regex("^mdi:[a-z0-9-]+$")
 
-    private fun normalizedDashboardCandidate(raw: String?, preserveRoute: Boolean): String? {
-        val value = raw?.trim().orEmpty()
-        if (value.isBlank() || value.startsWith("//") || '\\' in value || value.any(Char::isISOControl) ||
-            URL_SCHEME.containsMatchIn(value)
-        ) return null
-        val routeEnd = listOf(value.indexOf('?'), value.indexOf('#')).filter { it >= 0 }.minOrNull() ?: value.length
-        val route = value.substring(0, routeEnd).trim('/')
-        val segments = route.split('/').filter(String::isNotBlank)
-        val root = segments.firstOrNull()
-        if (root == null || root == "null" || !DASHBOARD_PATH_SEGMENT.matches(root)) return null
-        if (preserveRoute && segments.drop(1).any { !safeDashboardSuffixSegment(it) }) return null
-        return if (preserveRoute) "/$route${value.substring(routeEnd)}" else "/${segments.first()}"
-    }
+    // Route well-formedness lives in util/DashboardPath so the renderer and the `home_dashboard`
+    // setting's validator cannot drift apart. Membership of the authenticated list stays here.
+    private fun normalizedDashboardCandidate(raw: String?, preserveRoute: Boolean): String? =
+        DashboardPath.canonical(raw, preserveRoute)
 
-    /** Chromium canonicalizes percent-encoded dot/slash segments before navigation; reject them here. */
-    private fun safeDashboardSuffixSegment(segment: String): Boolean {
-        val decoded = StringBuilder(segment.length)
-        var index = 0
-        while (index < segment.length) {
-            val char = if (segment[index] == '%') {
-                if (index + 2 >= segment.length) return false
-                val byte = segment.substring(index + 1, index + 3).toIntOrNull(16) ?: return false
-                index += 3
-                byte.toChar()
-            } else {
-                segment[index].also { index++ }
-            }
-            if (char == '/' || char == '\\' || char.isISOControl()) return false
-            decoded.append(char)
-        }
-        return decoded.toString() !in setOf(".", "..")
-    }
-
-    private fun dashboardRoot(value: String): String? {
-        val candidate = normalizedDashboardCandidate(value, preserveRoute = false) ?: return null
-        return candidate
-    }
+    private fun dashboardRoot(value: String): String? = DashboardPath.root(value)
 
     fun canonical(value: Any): String = when (value) {
         is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { key ->

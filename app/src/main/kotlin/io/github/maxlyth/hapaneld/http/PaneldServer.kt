@@ -880,9 +880,15 @@ internal fun planDirectConfigMutation(
     posted.forEach { (key, value) ->
         val spec = SettingsRegistry.spec(key)
         val unchangedSecretPlaceholder = spec?.secret == true && value.isEmpty()
-        val equivalent = when (key) {
-            "home_dashboard" -> normalizeDashboardEntityPath(value) ==
-                normalizeDashboardEntityPath(before[key].orEmpty())
+        // "Unchanged" means the write would not alter STORED state, which is the canonical form the
+        // validator produces compared against the raw value already held. Comparing renderer semantics
+        // instead made canonicalization unreachable: replacing a stored `/` or `/?kiosk` with the blank
+        // that means "follow the account default" resolves identically, so it was discarded as a no-op
+        // and the stale spelling survived — reopening the picker in Custom after the user had chosen and
+        // saved Auto. A stored value that is already canonical still compares equal, so re-saving an
+        // unchanged setting remains a no-op.
+        val equivalent = when (val validated = spec?.let { SettingValue.validate(it, value) }) {
+            is Validation.Ok -> validated.normalized == before[key].orEmpty()
             else -> before[key] == value
         }
         if (!unchangedSecretPlaceholder && !equivalent) changed += key

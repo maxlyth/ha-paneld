@@ -88,13 +88,41 @@ class DirectConfigMutationPlanTest {
         ).requiresReconfigure)
     }
 
-    @Test fun `secret placeholder and canonical dashboard path are unchanged`() {
+    @Test fun `secret placeholder and an already canonical dashboard path are unchanged`() {
         val plan = planDirectConfigMutation(
-            posted = mapOf("ha_token" to "", "home_dashboard" to "/lovelace/home/"),
-            before = mapOf("ha_token" to "secret", "home_dashboard" to "lovelace/home"),
+            posted = mapOf("ha_token" to "", "home_dashboard" to "/lovelace/home"),
+            before = mapOf("ha_token" to "secret", "home_dashboard" to "/lovelace/home"),
         )
 
         assertTrue(plan.isNoOp)
+    }
+
+    @Test fun `a stored dashboard path that is not canonical is rewritten rather than skipped`() {
+        // Previously this compared RENDERER semantics, so any spelling that resolved the same way was
+        // discarded as a no-op and the stored value could never be canonicalized. "Unchanged" now means
+        // the write would not alter stored state.
+        val plan = planDirectConfigMutation(
+            posted = mapOf("home_dashboard" to "/lovelace/home/"),
+            before = mapOf("home_dashboard" to "lovelace/home"),
+        )
+
+        assertFalse(plan.isNoOp)
+        assertTrue("home_dashboard" in plan.changedKeys)
+    }
+
+    @Test fun `choosing the account default over a legacy root spelling reaches storage`() {
+        // The defect this pins: `/` and blank resolve identically, so the blank write was skipped and
+        // the stale root survived — reopening the picker in Custom after the user had chosen and saved
+        // Auto. Every legacy spelling of "follow the account default" must plan a real write.
+        for (stored in listOf("/", "//", "/?kiosk", "/#view")) {
+            val plan = planDirectConfigMutation(
+                posted = mapOf("home_dashboard" to ""),
+                before = mapOf("home_dashboard" to stored),
+            )
+
+            assertFalse(plan.isNoOp, "stored $stored was treated as already blank")
+            assertTrue("home_dashboard" in plan.changedKeys)
+        }
     }
 
     @Test fun `pending desired is idempotent and can be explicitly cancelled`() {

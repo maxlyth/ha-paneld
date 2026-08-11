@@ -3144,3 +3144,250 @@ browserTest('upload-busy offers Discard only when the panel actually holds a pen
   await assert.doesNotReject(() => page.getByRole('button', { name: 'Discard pending upload' }).waitFor());
   assert.match(await page.locator('#apk-preview').textContent(), /example\.panel/);
 });
+
+// ---- Home dashboard: choosing a specific VIEW, not only a dashboard root (issue #90) --------------
+// Home Assistant's list endpoint returns dashboard ROOTS, so a view below one (/dashboard-test/office)
+// can only ever be typed. These drive the real control and assert on the value that reaches the config
+// POST, because every failure this feature can have is a wrong-but-plausible saved path: the sentinel
+// leaking out, an empty box meaning Auto, or a stale custom value surviving a switch back to the list.
+
+const DASHBOARD_CATALOG = {
+  queried: true,
+  items: [
+    { path: '/lovelace', title: 'Overview', icon: 'mdi:view-dashboard', group: 'dashboard' },
+    { path: '/office', title: 'Office', icon: 'mdi:desk', group: 'dashboard' },
+  ],
+  default: { explicit: true, path: '/lovelace' },
+};
+
+function dashboardHarness(options = {}) {
+  const state = { posts: [], current: options.current ?? '/office' };
+  const schema = [{
+    key: 'home_dashboard', label: 'Home dashboard', group: 'Dashboard', type: 'STRING',
+    picker: 'ha_dashboard', maxLength: 2048, available: true,
+  }];
+  const routes = async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.posts.push(body.get('home_dashboard'));
+        return json({});
+      }
+      // configure.js only fetches the dashboard catalogue for a configured Home Assistant, so the
+      // connected state is part of the fixture rather than incidental to it.
+      return json({ settings: { home_dashboard: state.current, ha_url: 'http://ha.local:8123' }, ha_expose: {}, ha_auth: { configured: true } });
+    }
+    if (path === '/api/v1/config/home-dashboards') return json(options.catalog ?? DASHBOARD_CATALOG);
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=test' };
+  };
+  return { state, routes };
+}
+
+async function openDashboardPicker(t, options = {}) {
+  const { state, routes } = dashboardHarness(options);
+  const harness = await startHarness(routes);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage(options.viewport ? { viewport: options.viewport } : {});
+  // Roomier than this file's usual 1.5s: these walks make several round trips (catalogue fetch, then a
+  // save per transition), and one run timed out at 2s while a Gradle gate was saturating the machine.
+  // It bounds a wait, so it cannot mask a wrong value — only a slow one.
+  page.setDefaultTimeout(10_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  const row = page.locator('#cfg-home_dashboard');
+  const select = row.locator('select');
+  // The catalogue lands on a second request; wait for a real dashboard option so the assertions below
+  // are never racing an empty select. Options inside a closed select are never "visible" to Playwright,
+  // so this waits on the DOM rather than on visibility.
+  await page.waitForFunction(() => {
+    const select = document.querySelector('#cfg-home_dashboard select');
+    return !!(select && select.querySelector('option[value="__custom__"]'));
+  });
+  return { page, row, select, input: row.locator('input.hd-custom-input'), state };
+}
+
+// Arm the request wait BEFORE the action that causes it: the POST can complete faster than a listener
+// registered afterwards can attach, which reads as "never saved" rather than as a race.
+async function savedOnce(page, act) {
+  const posted = page.waitForRequest((r) => r.url().endsWith('/api/v1/config') && r.method() === 'POST');
+  await act();
+  await posted;
+  // Wait for the save to SETTLE, not merely to be sent. cfgSave() returns early while a save is in
+  // flight, so a second click landing before the first completes is silently dropped and its POST never
+  // happens — which surfaces as a timeout on the next wait rather than as a visible failure.
+  await page.waitForFunction(() => {
+    const button = document.getElementById('savebtn');
+    return !!button && button.disabled;
+  });
+}
+
+browserTest('A custom dashboard view is posted exactly as typed', async (t) => {
+  const { page, select, input, state } = await openDashboardPicker(t);
+
+  await select.selectOption('__custom__');
+  await input.fill('/dashboard-test/office');
+  await savedOnce(page, () => page.locator('#savebtn').click());
+
+  // The sentinel must never be what gets saved, and the view must survive intact.
+  assert.deepEqual(state.posts, ['/dashboard-test/office']);
+});
+
+browserTest('An empty custom dashboard path never reaches the server as Auto', async (t) => {
+  const { page, select, input, state } = await openDashboardPicker(t);
+
+  // The field opens prefilled with the path this panel is already on, so emptying it is a deliberate
+  // act — and still must not be saved as a blank, which the server would read as Auto.
+  await select.selectOption('__custom__');
+  await input.fill('');
+  await page.locator('#savebtn').click();
+
+  await assert.rejects(
+    page.waitForRequest((r) => r.url().endsWith('/api/v1/config') && r.method() === 'POST', { timeout: 300 }),
+    /Timeout/,
+  );
+  assert.deepEqual(state.posts, []);
+  await assert.doesNotReject(page.locator('#cfg-msg').getByText('Home dashboard has an invalid value.').waitFor());
+});
+
+browserTest('A configured view path opens in Custom mode and stays editable', async (t) => {
+  const { select, input } = await openDashboardPicker(t, { current: '/dashboard-test/office' });
+
+  // Previously this arrived as an inert "· configured dashboard" option that could not be corrected.
+  assert.equal(await select.inputValue(), '__custom__');
+  assert.equal(await input.inputValue(), '/dashboard-test/office');
+  assert.equal(await input.isVisible(), true);
+});
+
+browserTest('Switching Custom to Auto and to a listed dashboard posts each choice', async (t) => {
+  const { page, select, input, state } = await openDashboardPicker(t, { current: '/dashboard-test/office' });
+
+  await select.selectOption('');
+  assert.equal(await input.isVisible(), false, 'the path input must be hidden once Auto is chosen');
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, [''], 'Auto must post a blank, not the abandoned custom path');
+
+  await select.selectOption('/lovelace');
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, ['', '/lovelace']);
+});
+
+browserTest('Returning to Custom without retyping still posts the retained path', async (t) => {
+  const { page, select, input, state } = await openDashboardPicker(t, { current: '/office' });
+
+  // Leaving Custom and coming back exercises the select handler against an input that already holds a
+  // value — the one route where the sentinel could become the saved value with no later input event to
+  // repair it. The trip has to END somewhere other than the stored value, or the form is legitimately
+  // clean and there is nothing to save.
+  await select.selectOption('__custom__');
+  await input.fill('/dashboard-test/office');
+  await select.selectOption('/lovelace');
+  await select.selectOption('__custom__');
+  assert.equal(await input.inputValue(), '/dashboard-test/office');
+
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, ['/dashboard-test/office']);
+});
+
+browserTest('A view under an unknown dashboard warns but is still saveable', async (t) => {
+  const { page, row, select, input, state } = await openDashboardPicker(t);
+
+  await select.selectOption('__custom__');
+  await input.fill('/dashboard-test/office');
+  // The renderer would silently fall back to the account default here, so the warning is the only
+  // thing standing between the user and a panel showing the wrong dashboard for no visible reason.
+  await assert.doesNotReject(row.locator('.hd-custom-note.warn').waitFor());
+
+  await input.fill('/office/upper-floor');
+  await assert.doesNotReject(row.locator('.hd-custom-note:not(.warn)').waitFor());
+
+  // …and an unknown root must never block the save: the dashboard may not exist yet.
+  await input.fill('/dashboard-test/office');
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, ['/dashboard-test/office']);
+});
+
+browserTest('The dashboard picker fits a 480px panel without overflowing its card', async (t) => {
+  const { row, select, input } = await openDashboardPicker(t, {
+    current: '/dashboard-test/office', viewport: { width: 480, height: 480 },
+  });
+
+  const rowBox = await row.boundingBox();
+  for (const [name, locator] of [['select', select], ['custom path input', input]]) {
+    const box = await locator.boundingBox();
+    assert.ok(box.width > 0, `${name} has no width at 480px`);
+    assert.ok(
+      box.x >= rowBox.x - 1 && box.x + box.width <= rowBox.x + rowBox.width + 1,
+      `${name} overflows its row at 480px (${box.x}+${box.width} vs ${rowBox.x}+${rowBox.width})`,
+    );
+  }
+});
+
+browserTest('Custom is reachable when the account can see no dashboards at all', async (t) => {
+  // The branch that used to disable the control outright — which is precisely when a path has to be
+  // typed by hand: a non-admin account that sees nothing, or a catalogue Home Assistant will not return.
+  const { page, select, input, state } = await openDashboardPicker(t, {
+    current: '',
+    catalog: { queried: true, items: [], default: { explicit: false, path: '' } },
+  });
+
+  assert.equal(await select.isDisabled(), false, 'the picker must stay usable with an empty catalogue');
+  await select.selectOption('__custom__');
+  await input.fill('/office/kitchen');
+  await savedOnce(page, () => page.locator('#savebtn').click());
+
+  assert.deepEqual(state.posts, ['/office/kitchen']);
+});
+
+browserTest('A malformed Custom path left behind never blocks a later Auto or listed save', async (t) => {
+  // A path input that keeps a validity constraint while it is not the live control leaves an INVALID
+  // hidden control in the row once a malformed value is typed and then abandoned. The row-wide validity
+  // scan finds it, Save is refused, and reportValidity() on something invisible shows nothing — a save
+  // that can never succeed with no cause on screen.
+  const { page, select, input, state } = await openDashboardPicker(t, { current: '/office' });
+
+  await select.selectOption('__custom__');
+  await input.fill('http://elsewhere.example/x');   // rejected by the client pattern
+  await select.selectOption('');                    // Auto: the bad value is now hidden, not cleared
+
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, [''], 'Auto must save even after an abandoned malformed Custom path');
+
+  await select.selectOption('__custom__');
+  await input.fill('..//bad');
+  await select.selectOption('/lovelace');           // a listed dashboard, same trap
+  await savedOnce(page, () => page.locator('#savebtn').click());
+  assert.deepEqual(state.posts, ['', '/lovelace']);
+});
+
+browserTest('The client never refuses a dashboard route the server would accept', async (t) => {
+  // Shared matrix, not a second opinion. Two independently maintained expressions once agreed as
+  // strings while differing in behaviour, so both sides read test/fixtures/dashboard-path-parity.json.
+  // Exact parity is unreachable — the server percent-decodes to reject traversal and a client
+  // expression cannot — so the contract is one-directional: the client may be a superset, never
+  // stricter. A stricter client blocks a legal route, worst when the catalogue is unavailable and
+  // Custom is the only way in.
+  const matrix = JSON.parse(await readFile(join(process.cwd(), 'fixtures', 'dashboard-path-parity.json'), 'utf8'));
+  const { select, input } = await openDashboardPicker(t, { current: '/office' });
+  await select.selectOption('__custom__');
+
+  const refused = [];
+  for (const route of matrix.serverAccepts) {
+    await input.fill(route);
+    if (!(await input.evaluate((el) => el.checkValidity()))) refused.push(route);
+  }
+  assert.deepEqual(refused, [], 'client refused routes the server admits');
+
+  // The client is a superset by design, so it is not asked to mirror every server refusal — only to
+  // catch the shapes worth stopping before the round trip. Deciding traversal needs decoding it does
+  // not do, which is precisely why the server stays the authority.
+  const admitted = [];
+  for (const route of matrix.clientMustReject) {
+    await input.fill(route);
+    if (await input.evaluate((el) => el.checkValidity())) admitted.push(route);
+  }
+  assert.deepEqual(admitted, [], 'client admitted routes it must catch before the round trip');
+});

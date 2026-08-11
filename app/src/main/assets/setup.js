@@ -710,6 +710,19 @@
 
   var hdCatalog = null;   // {items, default} from the read-only list endpoint; null = not loaded/failed
   var hdArea = null;      // {areas, device, admin, queried, requested} from the ha-area endpoint
+  var hdCustom = false;   // "Custom…" is the live control, so the typed path owns the answer
+  // Sentinel for the Custom option. A real dashboard root must match ^[a-z0-9][a-z0-9_-]*$, so a
+  // leading underscore can never collide with one. Kept identical to configure.js by contract test.
+  var CUSTOM_DASHBOARD = "__custom__";
+  var DASHBOARD_PATH_PATTERN = "\\s*/?[a-z0-9][a-z0-9_-]*(?:/[^/?#]*)*(?:\\?[^#]*)?(?:#.*)?\\s*";
+  function dashboardRootOf(path) {
+    var route = String(path || "").trim().split("?")[0].split("#")[0];
+    var first = route.split("/").filter(function (s) { return s !== ""; })[0] || "";
+    return /^[a-z0-9][a-z0-9_-]*$/.test(first) ? "/" + first : "";
+  }
+  function wellFormedDashboardPath(path) {
+    return new RegExp("^(?:" + DASHBOARD_PATH_PATTERN + ")$").test(String(path || ""));
+  }
   var mqttPreflightWaived = null; // broker URL whose failed pre-flight the user chose to override
 
   function homeDashboardCard() {
@@ -810,8 +823,9 @@
     // Preselection: an already-configured value wins; else the account default's CONCRETE row; else a
     // placeholder that keeps the primary button waiting for a real choice.
     var preselect = current || (def.explicit ? def.path : null);
-    var sel = el("select", { id: "wiz-home_dashboard",
-      onchange: function (e) { typed.home_dashboard = e.target.value; paintHomeDashboardChoice(); } });
+    // One change handler, attached below once the custom-path controls exist: selecting Custom must
+    // never leave the sentinel sitting in the answer, even transiently.
+    var sel = el("select", { id: "wiz-home_dashboard" });
     if (preselect === null) {
       var ph = el("option", { value: "", text: "Choose a dashboard…" });
       ph.disabled = true; ph.selected = true;
@@ -835,16 +849,55 @@
       });
       sel.appendChild(og);
     });
-    if (preselect && !seen[preselect]) {
-      var extra = el("option", { value: preselect, text: preselect + " · configured dashboard" });
-      extra.selected = true;
-      sel.appendChild(extra);
-    }
+    // Home Assistant's list endpoint returns dashboard ROOTS only, so a specific view below one
+    // (/office/kitchen) can never appear as an option — it has to be typed. A configured path
+    // that is not in the list opens here rather than as an uneditable row, which is what finally lets
+    // it be corrected on the panel itself.
+    var customActive = !!preselect && !seen[preselect];
+    sel.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: "Custom — enter a dashboard path…" }));
+    if (customActive) { hdCustom = true; typed.home_dashboard = preselect; }
+    if (hdCustom) sel.value = CUSTOM_DASHBOARD;
     if (!def.explicit && !current) {
       host.appendChild(el("p", { class: "wiz-consequence", text:
         "This account has no default dashboard set — pick the dashboard this panel should show." }));
     }
     host.appendChild(sel);
+    var customValue = hdCustom && typed.home_dashboard !== undefined ? typed.home_dashboard
+      : (preselect || "");
+    var customInput = el("input", { type: "text", id: "wiz-home_dashboard_custom", class: "hd-custom-input",
+      value: customValue, placeholder: "/dashboard-name/tab-name", "aria-label": "Dashboard path",
+      "aria-describedby": "wiz-home_dashboard_custom_note" });
+    var customNote = el("small", { class: "hd-area-note hd-custom-note",
+      id: "wiz-home_dashboard_custom_note", role: "status", "aria-live": "polite" });
+    var customWrap = el("div", { class: "hd-custom" }, [customInput, customNote]);
+    // The renderer resolves an explicit path against this account's dashboards and quietly falls back
+    // to its default when the ROOT is not one of them. Once a path can be typed, that silence is the
+    // likeliest way to end up on the wrong dashboard, so name it here. A warning, never a block: the
+    // list may have failed to load, and the dashboard may not have been created yet.
+    function refreshCustomNote() {
+      var root = dashboardRootOf(typed.home_dashboard);
+      var unknown = root && hdCatalog && hdCatalog.queried && items.length && !seen[root];
+      customNote.textContent = unknown
+        ? root + " is not a dashboard this account can see — the panel will fall back to its default"
+          + " until that dashboard exists."
+        : "A path on this Home Assistant, starting with a dashboard from the list.";
+      customNote.classList.toggle("warn", !!unknown);
+    }
+    customInput.addEventListener("input", function () {
+      typed.home_dashboard = customInput.value.trim();
+      refreshCustomNote();
+      paintHomeDashboardChoice();
+    });
+    customWrap.hidden = !hdCustom;
+    host.appendChild(customWrap);
+    sel.addEventListener("change", function () {
+      hdCustom = sel.value === CUSTOM_DASHBOARD;
+      customWrap.hidden = !hdCustom;
+      typed.home_dashboard = hdCustom ? customInput.value.trim() : sel.value;
+      if (hdCustom) { refreshCustomNote(); customInput.focus(); }
+      paintHomeDashboardChoice();
+    });
+    if (hdCustom) refreshCustomNote();
     paintHomeDashboardChoice();
   }
 
@@ -856,8 +909,12 @@
       : (journey.home_dashboard && journey.home_dashboard.value ||
         (hdCatalog === null ? undefined : (def.explicit ? def.path : undefined)));
     var noDashboards = !!(hdCatalog && hdCatalog.queried && !(hdCatalog.items || []).length);
-    b.disabled = chosen === undefined || noDashboards;
-    b.textContent = chosen === "" ? "Follow the account’s default" : "Use this dashboard";
+    // With Custom live the answer is whatever has been typed so far, so the button waits for a path
+    // that could actually address a dashboard. An empty box must never submit as "" — that is Auto,
+    // and silently following the account default is the opposite of what Custom was chosen for.
+    var customIncomplete = hdCustom && !(chosen && wellFormedDashboardPath(chosen));
+    b.disabled = chosen === undefined || customIncomplete || (noDashboards && !hdCustom);
+    b.textContent = chosen === "" && !hdCustom ? "Follow the account’s default" : "Use this dashboard";
   }
 
   /* Save the SETTING first and record the ANSWER second — same load-bearing order as the entity filter:
@@ -869,6 +926,13 @@
       : (journey.home_dashboard && journey.home_dashboard.value ||
         (hdCatalog === null ? undefined : (def.explicit ? def.path : undefined)));
     if (chosen === undefined) { stepErr("Pick a dashboard first."); return; }
+    // The button is already disabled for this, so reaching here means the DOM was driven some other
+    // way. Refuse rather than post a blank as Auto — the server would accept it, and the panel would
+    // quietly follow the account default instead of the view the user came here to set.
+    if (hdCustom && !(chosen && wellFormedDashboardPath(chosen))) {
+      stepErr("Enter a dashboard path, for example /dashboard-name/tab-name.");
+      return;
+    }
     lockStep(true);
     button.disabled = true;
     button.textContent = "Saving…";
