@@ -17,6 +17,7 @@ class FamilyPlannedDnsTest {
 
     private val v6a: InetAddress = InetAddress.getByName("2001:db8::1")
     private val v6b: InetAddress = InetAddress.getByName("2001:db8::2")
+    private val v6c: InetAddress = InetAddress.getByName("2001:db8::3")
     private val v4a: InetAddress = InetAddress.getByName("192.0.2.1")
     private val v4b: InetAddress = InetAddress.getByName("192.0.2.2")
 
@@ -68,6 +69,15 @@ class FamilyPlannedDnsTest {
                 expected.message.orEmpty().contains("Force IPv4"),
             )
         }
+    }
+
+    @Test fun everyAddressSurvivesWhenTheTrailingFamilyIsLarger() {
+        // One A record ahead of several AAAAs (a dual-stack host shape under Prefer
+        // IPv4): the interleave loop must run until BOTH families are exhausted. A loop keyed on
+        // the leading family alone silently drops the extra trailing addresses - and a dropped
+        // address is a fallback route that no longer exists.
+        val ordered = dns(preferIpv4 = true, answers = listOf(v6a, v6b, v6c, v4a)).lookup("ha.example")
+        assertEquals(listOf(v4a, v6a, v6b, v6c), ordered)
     }
 
     @Test fun singleFamilyAnswersPassThroughUnchanged() {

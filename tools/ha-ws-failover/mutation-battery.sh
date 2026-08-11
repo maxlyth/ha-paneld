@@ -24,23 +24,25 @@ TESTS=(
   --tests 'io.github.maxlyth.hapaneld.util.HaWebSocketClientsTlsTest'
 )
 
-# name | file | sed expression | named assertion (test method)
+# name @@ file @@ sed expression @@ named assertion (test method)
 MUTATIONS=(
-  'policy-prefer-ignored|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/val ipv4Leads = preferIpv4 || all.firstOrNull() is Inet4Address/val ipv4Leads = all.firstOrNull() is Inet4Address/|preferIpv4LeadsWithARecordsAndKeepsEveryAddress'
-  'force-empty-guard-dead|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/if (v4.isEmpty()) {/if (false) {/|forceIpv4OnAnIpv6OnlyHostFailsWithAClearVerdict'
-  'force-filter-dropped|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/            return v4$/            return all/|forceIpv4NeverEmitsAnIpv6Address'
-  'interleave-becomes-concat|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/if (leadIterator.hasNext()) interleaved.add(leadIterator.next())/while (leadIterator.hasNext()) interleaved.add(leadIterator.next())/|aDeadLeadingFamilyCostsExactlyOneRouteBeforeTheSibling'
-  'trail-family-dropped|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/while (leadIterator.hasNext() || trailIterator.hasNext())/while (leadIterator.hasNext())/|automaticKeepsTheResolversLeadingFamily'
-  'resolver-injection-dropped|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/systemLookup = resolver)/systemLookup = { Dns.SYSTEM.lookup(it) })/|refusedRouteFallsBackToTheNextAddress'
-  'connect-timeout-unbounded|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/connectTimeout(routeConnectTimeoutMs, TimeUnit.MILLISECONDS)/connectTimeout(0, TimeUnit.MILLISECONDS)/|aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout'
-  'fast-fallback-disabled|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/fastFallback(true)/fastFallback(false)/|blackHoledRouteStillReachesTheLiveSiblingWithinTheCallerDeadline'
-  'tls-trust-not-applied|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/if (tls != null) sslSocketFactory/if (false) sslSocketFactory/|aMatchingHostnameCompletesTheTlsUpgrade'
-  'control-comment-only|app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt|s/One shared construction path/One shared, control-touched construction path/|CONTROL'
+  'policy-prefer-ignored@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/val ipv4Leads = preferIpv4 || all.firstOrNull() is Inet4Address/val ipv4Leads = all.firstOrNull() is Inet4Address/@@preferIpv4LeadsWithARecordsAndKeepsEveryAddress'
+  'force-empty-guard-dead@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/if (v4.isEmpty()) {/if (false) {/@@forceIpv4OnAnIpv6OnlyHostFailsWithAClearVerdict'
+  'force-filter-dropped@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/            return v4$/            return all/@@forceIpv4NeverEmitsAnIpv6Address'
+  'interleave-becomes-concat@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/if (leadIterator.hasNext()) interleaved.add(leadIterator.next())/while (leadIterator.hasNext()) interleaved.add(leadIterator.next())/@@aDeadLeadingFamilyCostsExactlyOneRouteBeforeTheSibling'
+  'trail-family-dropped@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/while (leadIterator.hasNext() || trailIterator.hasNext())/while (leadIterator.hasNext())/@@everyAddressSurvivesWhenTheTrailingFamilyIsLarger'
+  'resolver-injection-dropped@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/systemLookup = resolver)/systemLookup = { Dns.SYSTEM.lookup(it) })/@@refusedRouteFallsBackToTheNextAddress'
+  'connect-timeout-unbounded@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/connectTimeout(routeConnectTimeoutMs, TimeUnit.MILLISECONDS)/connectTimeout(0, TimeUnit.MILLISECONDS)/@@aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout'
+  'fast-fallback-disabled@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/fastFallback(true)/fastFallback(false)/@@blackHoledRouteStillReachesTheLiveSiblingWithinTheCallerDeadline'
+  'tls-trust-not-applied@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/if (tls != null) sslSocketFactory/if (tls != null \&\& false) sslSocketFactory/@@aMatchingHostnameCompletesTheTlsUpgrade'
+  'control-comment-only@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/One shared construction path/One shared, control-touched construction path/@@CONTROL'
 )
 
 overall=0
 for entry in "${MUTATIONS[@]}"; do
-  IFS='|' read -r NAME FILE SED_EXPR ASSERTION <<<"$entry"
+  NAME="${entry%%@@*}"; rest="${entry#*@@}"
+  FILE="${rest%%@@*}"; rest="${rest#*@@}"
+  SED_EXPR="${rest%@@*}"; ASSERTION="${rest##*@@}"
   WT="$(mktemp -d "/tmp/mut-ws-${NAME}-XXXXXX")"
   git -C "$SRC" archive HEAD | tar -x -C "$WT"
 
