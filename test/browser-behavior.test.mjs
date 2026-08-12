@@ -3213,7 +3213,12 @@ async function openDashboardPicker(t, options = {}) {
 // Arm the request wait BEFORE the action that causes it: the POST can complete faster than a listener
 // registered afterwards can attach, which reads as "never saved" rather than as a race.
 async function savedOnce(page, act) {
+  // Both waits are armed BEFORE the click: a wait armed afterwards can miss a response that has
+  // already arrived, which is its own source of phantom timeouts.
   const posted = page.waitForRequest((r) => r.url().endsWith('/api/v1/config') && r.method() === 'POST');
+  const reloaded = page.waitForResponse(
+    (r) => r.url().endsWith('/api/v1/config') && r.request().method() === 'GET',
+  );
   await act();
   await posted;
   // Wait for the save to SETTLE, not merely to be sent. cfgSave() returns early while a save is in
@@ -3223,6 +3228,11 @@ async function savedOnce(page, act) {
     const button = document.getElementById('savebtn');
     return !!button && button.disabled;
   });
+  // Settling is not the end of the save. cfgSave() clears dirty (which disables the button) and THEN
+  // reloads the form from the server, and that render pass rebuilds every control from the value just
+  // stored. A caller that interacts between those two points has its selection overwritten mid-step —
+  // which is why choosing Custom straight after a save timed out on a permanently disabled input.
+  await reloaded;
 }
 
 browserTest('A custom dashboard view is posted exactly as typed', async (t) => {
