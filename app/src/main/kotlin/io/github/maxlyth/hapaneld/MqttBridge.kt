@@ -32,6 +32,7 @@ import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.hardware.LedController
 import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
@@ -2661,8 +2662,23 @@ internal class MqttBridge(
     }
 
     private fun handleHomeDashboard(payload: String, previousValue: String? = null) {
-        val path = toLocalPath(payload) // normalise to a leading-slash local path (or "" to clear)
-        val target = if (path == "/") "" else path
+        // One authority decides what a home dashboard may be: the setting's own validator, which the
+        // config API and both pickers already use. This function serves two callers with different
+        // histories — an MQTT command arrives unvalidated, live apply arrives already canonical — and the
+        // former URL-to-local-path conversion was wrong for both. It let MQTT retain a route the API
+        // would have refused, and it rewrote an accepted route whose query or fragment merely CONTAINED
+        // "://" into a different dashboard. Neither caller wants a second, weaker opinion here.
+        val spec = SettingsRegistry.spec("home_dashboard")
+        val target = when (val validated = spec?.let { SettingValue.validate(it, payload) }) {
+            is Validation.Ok -> validated.normalized
+            else -> {
+                // Refuse rather than coerce, then republish so the entity cannot go on showing a value
+                // the panel did not accept. The route itself is not logged; it names the owner's rooms.
+                Log.w(TAG, "home_dashboard command refused: not a well-formed dashboard route")
+                stateConverger.reconcile("home_dashboard", force = true)
+                return
+            }
+        }
         val changed = target != (previousValue ?: config.homeDashboard)
         config.setHomeDashboard(target)
         if (changed) onDashboardTargetChanged()
@@ -2681,8 +2697,10 @@ internal class MqttBridge(
             return
         }
         system.reloadDashboard(config.dashboardPackage)
-        val home = toLocalPath(config.homeDashboard)
-        if (config.homeDashboard.isNotBlank() && home.isNotEmpty() && home != "/") {
+        // Already canonical by construction, so it is the local path to deep-link as stored. Re-running
+        // it through scheme stripping would corrupt a legal route whose query happens to contain "://".
+        val home = config.homeDashboard
+        if (home.isNotBlank() && home != "/") {
             reloadNavigationFuture?.cancel(false)
             reloadNavigationFuture = try {
                 authScheduler.schedule({

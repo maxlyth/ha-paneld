@@ -69,6 +69,28 @@ class HomeDashboardSpecTest {
         assertEquals("/not-created-yet/office", accepted("/not-created-yet/office"))
     }
 
+    @Test fun `a scheme inside a query or fragment is opaque state, not an absolute URL`() {
+        // The write path used to send every value through a URL-to-local-path conversion that searched
+        // for "://" ANYWHERE in the string. A legal route carrying a link in its own query therefore
+        // matched inside itself and was silently rewritten to a different dashboard after a successful
+        // save. Only a scheme at the START makes a value absolute; one inside query or fragment state
+        // belongs to the dashboard being addressed, so it survives byte for byte.
+        assertEquals(
+            "/lovelace/view?url=https://example.invalid/x",
+            accepted("/lovelace/view?url=https://example.invalid/x"),
+        )
+        assertEquals("/office/view#ref=ws://bridge", accepted("/office/view#ref=ws://bridge"))
+    }
+
+    @Test fun `the shapes a command path used to coerce are canonicalized or refused, never rewritten`() {
+        // MQTT persisted through a weaker conversion than the API's, so these two shapes could be
+        // retained in a form the renderer and Configure then disagreed about. One authority now decides:
+        // a trailing slash is canonicalized away, and traversal is refused outright rather than flattened
+        // into some other dashboard's route.
+        assertEquals("/office", accepted("/office/"))
+        rejected("/office/../evil")
+    }
+
     @Test fun `the setting still lives on the Dashboard card and applies without a restart`() {
         assertEquals(SettingType.STRING, spec.type)
         assertEquals("Dashboard", spec.group)
