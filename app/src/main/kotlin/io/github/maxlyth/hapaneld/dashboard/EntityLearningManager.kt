@@ -78,15 +78,30 @@ internal class HomeDashboardResolutionAuthority {
     suspend fun resolve(
         key: Key,
         stillCurrent: () -> Boolean,
+        /** Skip the process-local answer and read Home Assistant again, then republish the result.
+         *  The launch cache refreshes behind an already rendering provisional page and PROMISES a
+         *  live answer: reusing this cache there would silently miss an account-default change, a
+         *  removed dashboard or a revoked access across a warm activity relaunch. */
+        forceLive: Boolean = false,
         read: suspend () -> EntityLearningProtocol.HomeDashboardResolution?,
     ): EntityLearningProtocol.HomeDashboardResolution? = mutex.withLock {
-        cached?.takeIf { it.key == key }?.resolution?.takeIf { stillCurrent() } ?: run {
+        cached?.takeIf { !forceLive && it.key == key }?.resolution?.takeIf { stillCurrent() } ?: run {
             if (!stillCurrent()) return@withLock null
+            // A null READ is a transient failure (socket, auth, cancellation) and changes nothing:
+            // the previous positive answer stays, so a flaky moment cannot erase a working target.
             val resolution = read() ?: return@withLock null
             if (!stillCurrent()) return@withLock null
-            // A true zero is authoritative only for that read. The recovery screen explicitly tells
-            // the user to create/grant a dashboard and retry, so NONE must not make that retry inert.
-            if (resolution.path != null) cached = Cached(key, resolution)
+            // A completed read reporting NO legal dashboard is authoritative for the account, so it
+            // must also RETIRE any positive answer this process is still holding. Merely declining
+            // to cache the zero left the stale positive in place, where an ordinary later resolve
+            // replayed it and the launch cache persisted and opened a path the account cannot reach.
+            // The zero itself is still not cached: the recovery screen tells the user to create or
+            // grant a dashboard and retry, and that retry must reach Home Assistant again.
+            if (resolution.path != null) {
+                cached = Cached(key, resolution)
+            } else {
+                cached = cached?.takeIf { it.key != key }
+            }
             resolution
         }
     }
@@ -1352,9 +1367,11 @@ class EntityLearningManager(
     internal suspend fun resolveHomeDashboard(
         homeDashboard: String,
         stillCurrent: () -> Boolean = { true },
+        forceLive: Boolean = false,
     ): EntityLearningProtocol.HomeDashboardResolution? = homeDashboardAuthority.resolve(
         homeDashboardAuthorityKey(homeDashboard),
         stillCurrent,
+        forceLive,
     ) {
         homeDashboardResolution(homeDashboard, stillCurrent)
     }
@@ -2807,12 +2824,13 @@ object EntityLearningRuntime {
     suspend fun resolveHomeDashboard(
         homeDashboard: String,
         stillCurrent: () -> Boolean = { true },
+        forceLive: Boolean = false,
     ): EntityLearningProtocol.HomeDashboardResolution? {
         // Service ownership can legitimately wait behind a predecessor's bounded teardown. The activity
         // scope cancels this await on destruction; an arbitrary short timeout would strand a healthy
         // same-process restart on a manual Retry screen before its new owner has had a chance to attach.
         val manager = current ?: withTimeoutOrNull(45_000L) { attachment.await() } ?: return null
-        val resolved = manager.resolveHomeDashboard(homeDashboard, stillCurrent)
+        val resolved = manager.resolveHomeDashboard(homeDashboard, stillCurrent, forceLive)
         return resolved.takeIf { current === manager && stillCurrent() }
     }
     fun canIgnoreBlockingIssues(): Boolean = current?.canIgnoreAllBlockingIssues() ?: false

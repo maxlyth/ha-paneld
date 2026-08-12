@@ -56,6 +56,7 @@ import io.github.maxlyth.hapaneld.dashboard.shouldInstallDashboardTrafficObserve
 import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
+import io.github.maxlyth.hapaneld.dashboard.HomeDashboardLaunchCache
 import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -154,6 +155,9 @@ internal class HomeDashboardResolutionAttemptGate {
 private data class OwnedHomeDashboardResolution(
     val owner: HomeDashboardResolutionOwner,
     val resolution: EntityLearningProtocol.HomeDashboardResolution,
+    /** False while the value is the persisted launch cache — already rendering, awaiting the live
+     *  answer that confirms, corrects or (on a confirmed empty list) replaces it. */
+    val confirmed: Boolean = true,
 )
 
 internal class EntityFilterRetryPolicy(
@@ -258,6 +262,13 @@ class DashboardActivity : AppCompatActivity() {
     private var homeDashboardJob: Job? = null
     private var homeDashboardCheckingOwner: HomeDashboardResolutionOwner? = null
     private var homeDashboardResolution: OwnedHomeDashboardResolution? = null
+    // Deliberate-navigation generation (see noteDeliberateDashboardNavigation) and the generation at
+    // which the provisional cached page was chosen; correction applies only while they still match.
+    private var dashboardNavigationEpoch = 0L
+    private var provisionalHomeDashboardEpoch: Long? = null
+    // Full dashboard route the app itself last aimed the page at. Frontend-observed navigation away
+    // from it is the user moving, and outranks a pending cache correction.
+    private var appNavigatedDashboardRoute: String? = null
     private val homeDashboardAttempts = HomeDashboardResolutionAttemptGate()
     // One automatic-recovery owner for EVERY blocked admission screen. A wall panel has nobody
     // standing at it, so a blocked screen without a timer stays blocked after its cause clears —
@@ -273,7 +284,14 @@ class DashboardActivity : AppCompatActivity() {
     private val admissionRetry = Runnable {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched) return@Runnable
         Log.i(TAG, "renderer admission auto-retry firing")
-        retryAdmission(resetBackoff = false)
+        // A provisional cached dashboard is already rendering: retry the live resolution behind it
+        // without invalidating what the user is watching. Everything else keeps the original
+        // clear-and-rebuild retry.
+        if (homeDashboardResolution?.confirmed == false) {
+            buildAndLoad(Config(this))
+        } else {
+            retryAdmission(resetBackoff = false)
+        }
     }
     private val admissionCountdownTick = Runnable { onAdmissionCountdownTick() }
 
@@ -1232,6 +1250,8 @@ class DashboardActivity : AppCompatActivity() {
         applyForceDark(w)
         val targetPath = nav ?: resolvedHomeDashboard(config)
         val url = ExternalAuthProtocol.dashboardUrl(config.haUrl, targetPath)
+        noteDeliberateDashboardNavigation()
+        noteAppNavigationTarget(targetPath)
         val generation = rendererGeneration
         if (android.os.Build.VERSION.SDK_INT < 29) {
             // The theme write must COMPLETE before the navigation — evaluateJavascript is async (queued
@@ -1471,8 +1491,47 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     private fun sendBusNavigate(path: String) {
+        noteDeliberateDashboardNavigation()
+        noteAppNavigationTarget(path)
         val session = externalBusSession ?: return
         dispatchBus(externalBus.navigate(session, path))
+    }
+
+    /** Every navigation that CHOOSES a target — bus navigates (user, MQTT, idle return, correction),
+     *  full loads of a chosen URL, and navigation observed inside the frontend itself — bumps this.
+     *  Mechanical reloads of the same target do not. The async cache correction compares against it
+     *  so it can never overwrite a navigation that arrived after the provisional page was chosen. */
+    private fun noteDeliberateDashboardNavigation() {
+        dashboardNavigationEpoch++
+    }
+
+    /** Record what the app itself last aimed the page at, so frontend-observed navigation to the
+     *  SAME dashboard (our own load echoing back, or a redirect within it) is not mistaken for the
+     *  user going somewhere else. */
+    private fun noteAppNavigationTarget(path: String) {
+        appNavigatedDashboardRoute = path
+    }
+
+    /** True when a frontend-observed location names a different dashboard from the one the app last
+     *  aimed at — i.e. genuine user/SPA navigation away from it. An unparseable or same-root
+     *  location is deliberately NOT treated as foreign: over-counting would cancel legitimate
+     *  corrections, and the correction is a convenience while being pulled off a page is not. */
+    private fun observedDashboardNavigationIsForeign(url: String): Boolean {
+        val observed = runCatching { android.net.Uri.parse(url).path }.getOrNull() ?: return false
+        val claimed = appNavigatedDashboardRoute ?: return false
+        // Once the frontend has connected, the page belongs to the user: ANY route change is their
+        // choice, including a view change inside the same dashboard (/office -> /office/view-2),
+        // which a root-only comparison silently allowed a delayed correction to overrule. Before the
+        // first connection the page is still OUR load settling — the frontend normalising to a
+        // default view, or a server redirect — so only a different dashboard root counts, otherwise
+        // every launch would cancel its own correction.
+        val foreign = if (frontendConnected) {
+            HomeDashboardLaunchCache.sameDashboardRoute(observed, claimed).not()
+        } else {
+            HomeDashboardLaunchCache.dashboardRootOf(observed) != HomeDashboardLaunchCache.dashboardRootOf(claimed)
+        }
+        if (foreign) appNavigatedDashboardRoute = observed
+        return foreign
     }
 
     /** The only app→frontend external-bus evaluation site. Commands are produced by the typed
@@ -2265,6 +2324,7 @@ class DashboardActivity : AppCompatActivity() {
         homeDashboardJob = null
         homeDashboardCheckingOwner = null
         homeDashboardResolution = null
+        provisionalHomeDashboardEpoch = null
         homeDashboardAttempts.invalidate()
         if (resetRetry) admissionRetryPolicy.reset()
     }
@@ -2321,7 +2381,8 @@ class DashboardActivity : AppCompatActivity() {
     /** Resolve before WebView creation; entity learning may be disabled or may never have scanned. */
     private fun resolveHomeDashboardAndLoad(config: Config) {
         val owner = homeDashboardOwner(config)
-        homeDashboardResolution?.takeIf { it.owner == owner }?.let { owned ->
+        val owned = homeDashboardResolution?.takeIf { it.owner == owner }
+        if (owned != null && owned.confirmed) {
             if (owned.resolution.path == null) {
                 showBlockedAdmissionScreen(
                     "No Home Assistant dashboards available",
@@ -2334,20 +2395,71 @@ class DashboardActivity : AppCompatActivity() {
             }
             return
         }
+        // Cached reconstruction comes BEFORE the in-flight-job early return. A renderer crash while
+        // the authenticated resolution is running would otherwise leave the panel blank until that
+        // resolution finishes or fails — defeating the immediate cached fallback at the one moment
+        // it is most needed.
+        if (web == null) {
+            (owned?.resolution?.path ?: config.cachedHomeDashboardLaunchPath())?.let { path ->
+                if (owned == null) {
+                    homeDashboardResolution = OwnedHomeDashboardResolution(
+                        owner,
+                        EntityLearningProtocol.HomeDashboardResolution(
+                            path, EntityLearningProtocol.HomeDashboardSource.CACHED,
+                        ),
+                        confirmed = false,
+                    )
+                }
+                Log.i(TAG, "home dashboard rebuilt from cache path=$path while a resolution was pending")
+                buildCompatibleAndLoad(config)
+                provisionalHomeDashboardEpoch = dashboardNavigationEpoch
+            }
+        }
         if (homeDashboardCheckingOwner == owner && homeDashboardJob?.isActive == true) return
         homeDashboardJob?.cancel()
         val ticket = homeDashboardAttempts.start(owner)
         homeDashboardCheckingOwner = owner
-        showAdmissionProgressScreen(
-            "Selecting the Home Assistant dashboard",
-            "Checking the signed-in account’s dashboard list and defaults before opening the renderer.",
-        )
+        // Launch accelerator: the last path a live resolution produced for this exact owner (endpoint +
+        // credential + configured home_dashboard) navigates immediately, and the authenticated
+        // resolution below re-runs behind the rendering page. Its answer always wins — the same path
+        // confirms the page, a different one corrects it, a confirmed empty list clears the cache.
+        var provisionalPath = homeDashboardResolution?.takeIf { it.owner == owner && !it.confirmed }
+            ?.resolution?.path
+        if (provisionalPath == null && owned == null) {
+            config.cachedHomeDashboardLaunchPath()?.let { cached ->
+                provisionalPath = cached
+                homeDashboardResolution = OwnedHomeDashboardResolution(
+                    owner,
+                    EntityLearningProtocol.HomeDashboardResolution(
+                        cached, EntityLearningProtocol.HomeDashboardSource.CACHED,
+                    ),
+                    confirmed = false,
+                )
+                Log.i(TAG, "home dashboard launched from cache path=$cached — refreshing the authenticated list")
+                buildCompatibleAndLoad(config)
+                provisionalHomeDashboardEpoch = dashboardNavigationEpoch
+            }
+        }
+        if (provisionalPath == null) {
+            showAdmissionProgressScreen(
+                "Selecting the Home Assistant dashboard",
+                "Checking the signed-in account’s dashboard list and defaults before opening the renderer.",
+            )
+        }
         homeDashboardJob = activityScope.launch {
             val resolution = withContext(Dispatchers.IO) {
-                EntityLearningRuntime.resolveHomeDashboard(owner.configuredPath) {
-                    !destroyed && BuiltinDashboard.ownsActivity(activityOwner) &&
-                        homeDashboardAttempts.owns(ticket, homeDashboardOwner(Config(this@DashboardActivity)))
-                }
+                EntityLearningRuntime.resolveHomeDashboard(
+                    owner.configuredPath,
+                    stillCurrent = {
+                        !destroyed && BuiltinDashboard.ownsActivity(activityOwner) &&
+                            homeDashboardAttempts.owns(ticket, homeDashboardOwner(Config(this@DashboardActivity)))
+                    },
+                    // Refreshing behind a rendered provisional page PROMISES a live answer, so the
+                    // process-local authority must not answer for it: a warm relaunch would
+                    // otherwise miss an account-default change, a removed dashboard or revoked
+                    // access and confirm the cached path against a stale in-process result.
+                    forceLive = provisionalPath != null,
+                )
             }
             val currentConfig = Config(this@DashboardActivity)
             val currentOwner = homeDashboardOwner(currentConfig)
@@ -2355,29 +2467,130 @@ class DashboardActivity : AppCompatActivity() {
                 !homeDashboardAttempts.owns(ticket, currentOwner)
             ) return@launch
             homeDashboardCheckingOwner = null
+            val shownPath = homeDashboardResolution
+                ?.takeIf { it.owner == currentOwner && !it.confirmed }
+                ?.resolution?.path
             if (resolution == null) {
-                showBlockedAdmissionScreen(
-                    "Home Assistant dashboard list unavailable",
-                    "The panel could not read the signed-in account’s dashboards. Check the Home Assistant " +
-                        "connection and credentials; it will retry automatically.",
-                    AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
-                )
+                // A transient failure neither erases the persisted cache nor tears down the page it
+                // admitted: with the provisional dashboard rendering, retry quietly behind it.
+                if (shownPath == null || web == null) {
+                    showBlockedAdmissionScreen(
+                        "Home Assistant dashboard list unavailable",
+                        "The panel could not read the signed-in account’s dashboards. Check the Home Assistant " +
+                            "connection and credentials; it will retry automatically.",
+                        AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
+                    )
+                } else {
+                    cancelAdmissionAutoRetry()
+                    admissionRetryPolicy.nextDelayMs(
+                        admissionRetryClass(AdmissionOutcome.DASHBOARD_LIST_UNREADABLE),
+                    )?.let { armAdmissionAutoRetry(it, "Home Assistant dashboard list unavailable") }
+                }
                 return@launch
             }
             admissionRetryPolicy.reset()
             homeDashboardResolution = OwnedHomeDashboardResolution(currentOwner, resolution)
+            val launchOwner = HomeDashboardLaunchCache.ownerFingerprint(
+                currentOwner.authOwner, currentOwner.configuredPath,
+            )
             if (resolution.path == null) {
+                // Confirmed by a COMPLETED list read — distinct from the transient branch above: the
+                // account has no legal dashboards, so replaying the cache next launch would navigate
+                // somewhere the list just proved unreachable. The cache goes with the screen.
+                if (!currentConfig.clearHomeDashboardLaunchPathIfOwned(launchOwner)) {
+                    // The durable delete did not commit, so the stale row is still there for the next
+                    // launch (or a Retry) to replay. Reporting the settled no-dashboard state here
+                    // would claim a convergence that did not happen; keep the retry armed instead so
+                    // the invalidation is attempted again.
+                    Log.e(TAG, "home dashboard cache invalidation did not commit — retrying before settling")
+                    showBlockedAdmissionScreen(
+                        "No Home Assistant dashboards available",
+                        "The signed-in account cannot access any legal dashboards, and the panel could not " +
+                            "clear its stored dashboard. Create or grant access to a dashboard in Home " +
+                            "Assistant; the panel will keep retrying.",
+                        AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
+                    )
+                    return@launch
+                }
                 showBlockedAdmissionScreen(
                     "No Home Assistant dashboards available",
                     "The signed-in account cannot access any legal dashboards. Create or grant access to " +
                         "a dashboard in Home Assistant, then retry.",
                     AdmissionOutcome.NO_LEGAL_DASHBOARD,
                 )
-            } else {
-                Log.i(TAG, "home dashboard resolved source=${resolution.source} path=${resolution.path}")
-                buildCompatibleAndLoad(currentConfig)
+                return@launch
+            }
+            currentConfig.setHomeDashboardLaunchPathIfOwned(launchOwner, resolution.path)
+            Log.i(TAG, "home dashboard resolved source=${resolution.source} path=${resolution.path}")
+            val provisionalEpoch = provisionalHomeDashboardEpoch
+            provisionalHomeDashboardEpoch = null
+            when {
+                shownPath == null || web == null -> buildCompatibleAndLoad(currentConfig)
+                HomeDashboardLaunchCache.refreshOutcome(shownPath, resolution) ==
+                    HomeDashboardLaunchCache.RefreshOutcome.CORRECTED -> {
+                    // A navigation chosen AFTER the provisional page (MQTT navigate, idle return,
+                    // pull-to-refresh target, a relaunch load) outranks the correction: the resolved
+                    // value is already stored for every later navigation, but the page the user is
+                    // looking at is not yanked back.
+                    if (dashboardNavigationEpoch != provisionalEpoch) {
+                        Log.i(
+                            TAG,
+                            "home dashboard corrected $shownPath -> ${resolution.path} in store only — newer navigation wins on screen",
+                        )
+                    } else {
+                        Log.i(TAG, "home dashboard corrected $shownPath -> ${resolution.path} (cached path superseded)")
+                        navigateAfterHomeDashboardCorrection(resolution.path)
+                    }
+                }
+                else -> Unit // CONFIRMED — the rendering page is already the resolved dashboard
             }
         }
+    }
+
+    /** Move an already rendering page onto the corrected home dashboard: instantly over the external
+     *  bus when the frontend is live, otherwise a fresh load of the corrected target — a mid-load or
+     *  interstitial page would otherwise finish on the superseded dashboard and stay there.
+     *
+     *  A bus navigate has no page-load events, so its completion is PROVEN, not assumed: one bounded
+     *  verification reads the page's location afterwards and, if the correction did not land (and no
+     *  newer navigation arrived meanwhile), escalates to the full corrected load, whose handshake
+     *  watchdog then owns convergence. Without this a silently dropped bus command would leave the
+     *  screen on the superseded dashboard while store and resolution both claim the corrected one. */
+    private fun navigateAfterHomeDashboardCorrection(path: String) {
+        val w = web ?: return
+        if (frontendConnected && !authLatched && !interstitialShown) {
+            sendBusNavigate(path)
+            val issuedEpoch = dashboardNavigationEpoch
+            val generation = rendererGeneration
+            main.postDelayed(
+                {
+                    if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return@postDelayed
+                    if (!rendererCurrent(generation, web) || dashboardNavigationEpoch != issuedEpoch) return@postDelayed
+                    val currentPath = runCatching { android.net.Uri.parse(web?.url).path }.getOrNull()
+                    if (!HomeDashboardLaunchCache.correctionConverged(currentPath, path)) {
+                        Log.w(TAG, "home dashboard correction unverified after bus navigate — loading the corrected target")
+                        loadCorrectedHomeDashboard()
+                    }
+                },
+                CORRECTION_VERIFY_MS,
+            )
+            return
+        }
+        loadCorrectedHomeDashboard()
+    }
+
+    /** Full-load half of the correction: the same rotate + load + watchdog route every other fresh
+     *  navigation uses, reading the corrected target through [currentUrl]. */
+    private fun loadCorrectedHomeDashboard() {
+        val w = web ?: return
+        if (!rotateBusDocument(w, Config(this), rendererGeneration)) return
+        interstitialShown = false
+        noteDeliberateDashboardNavigation()
+        val target = currentUrl(Config(this))
+        noteAppNavigationTarget(android.net.Uri.parse(target).path.orEmpty())
+        expectPageStart(target)
+        w.loadUrl(target)
+        onLoadStarted()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -2468,7 +2681,9 @@ class DashboardActivity : AppCompatActivity() {
         }
         root = container
         setContentView(container)
+        noteDeliberateDashboardNavigation()
         val target = currentUrl(config)
+        noteAppNavigationTarget(android.net.Uri.parse(target).path.orEmpty())
         expectPageStart(target)
         w.loadUrl(target)
         onLoadStarted()
@@ -2916,6 +3131,12 @@ class DashboardActivity : AppCompatActivity() {
                 if (!rendererCurrent(generation, view)) return true
                 val allowed = dashboardNavigationAllowed(config.haUrl, request.url.toString())
                 if (allowed && request.isForMainFrame) {
+                    // Ownership transfers when the navigation BEGINS. doUpdateVisitedHistory alone is
+                    // too late: a correction completing between these two callbacks would overwrite a
+                    // main-frame navigation the user had already started.
+                    if (observedDashboardNavigationIsForeign(request.url.toString())) {
+                        noteDeliberateDashboardNavigation()
+                    }
                     if (!rotateBusDocument(view, config, generation)) return true
                     expectPageStart(request.url.toString())
                     onLoadStarted()
@@ -2934,9 +3155,13 @@ class DashboardActivity : AppCompatActivity() {
                     return
                 }
                 if (expected == url) return
-                // Redirects and renderer-initiated reloads can bypass shouldOverrideUrlLoading. Rotate
-                // only the typed document context here; both listeners were attached before the first
-                // load and remain installed throughout this navigation.
+                // Redirects and renderer-initiated reloads can bypass shouldOverrideUrlLoading. They
+                // are real navigations that were previously only claimed at doUpdateVisitedHistory,
+                // leaving a window in which a delayed correction could still win; claim here too.
+                // `expected == url` above already returned for echoes of app-issued loads.
+                if (observedDashboardNavigationIsForeign(url)) noteDeliberateDashboardNavigation()
+                // Rotate only the typed document context here; both listeners were attached before the
+                // first load and remain installed throughout this navigation.
                 runCatching { beginBusDocument(view, config, generation) }
                     .onSuccess { onLoadStarted() }
                     .onFailure {
@@ -2948,6 +3173,16 @@ class DashboardActivity : AppCompatActivity() {
                             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )
                     }
+            }
+
+            // Real navigation inside Home Assistant's own frontend — a tapped link, a back gesture,
+            // or an SPA history change that never reaches onPageStarted. The launch-cache correction
+            // must observe THIS, not only the app's own dispatch sites: a user who walks away from
+            // the provisional dashboard while the background answer is still pending would otherwise
+            // be yanked back by the delayed correction.
+            override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                if (!rendererCurrent(generation, view)) return
+                if (observedDashboardNavigationIsForeign(url)) noteDeliberateDashboardNavigation()
             }
 
             // Stop the pull-to-refresh spinner once the (main-frame) load settles, success or error, so
@@ -3067,6 +3302,7 @@ class DashboardActivity : AppCompatActivity() {
         private const val BG_DARK = 0xFF121212.toInt()
         private const val LIGHT_REFRESH_SPINNER_MS = 800L       // bus navigate is instant; brief spinner ack
         private const val HARD_REFRESH_WINDOW_MS = 6_000L       // second pull inside this = full hard reload
+        private const val CORRECTION_VERIFY_MS = 10_000L        // bus correction must prove itself by then
         private const val IDLE_CHECK_MS = 60_000L               // idle return-to-home tick
         private const val AUTH_INVALID_LATCH = 3                // consecutive auth-invalid events → latch
         private const val REFRESH_REJECT_LATCH = 2              // consecutive definitive refresh rejections → latch

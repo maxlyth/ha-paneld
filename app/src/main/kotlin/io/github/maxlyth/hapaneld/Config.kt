@@ -17,6 +17,7 @@ import io.github.maxlyth.hapaneld.config.defaultBool
 import io.github.maxlyth.hapaneld.config.defaultFloat
 import io.github.maxlyth.hapaneld.config.defaultInt
 import io.github.maxlyth.hapaneld.config.defaultLong
+import io.github.maxlyth.hapaneld.dashboard.HomeDashboardLaunchCache
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.DurableVisibilityPreferences
@@ -746,6 +747,56 @@ class Config private constructor(
             putString("dashboard_ha_version", version.take(64))
         }
     }
+
+    /** The persisted launch cache's live owner: endpoint + stable credential + configured
+     *  home_dashboard, one-way hashed (see [HomeDashboardLaunchCache.ownerFingerprint]). */
+    internal fun homeDashboardLaunchOwner(): String = synchronized(CONFIG_LOCK) {
+        HomeDashboardLaunchCache.ownerFingerprint(haAuthSnapshot().stableOwner(), homeDashboard)
+    }
+
+    /**
+     * Last home-dashboard path a live, list-validated resolution produced for the CURRENT owner.
+     * A relaunch accelerator only, the dashboard analogue of [cachedHaServerVersion]: the renderer
+     * may navigate to it immediately while the authenticated resolution re-runs, and that live
+     * answer always supersedes it. Any HA instance, account or explicit-path change makes the row
+     * unreadable by owner mismatch; a corrupt stored value fails closed to a live resolution.
+     */
+    internal fun cachedHomeDashboardLaunchPath(): String? = synchronized(CONFIG_LOCK) {
+        prefs.getString("dashboard_launch_path_owner", null)
+            ?.takeIf { it == homeDashboardLaunchOwner() }
+            ?.let { HomeDashboardLaunchCache.sanitizedStoredPath(prefs.getString("dashboard_launch_path", null)) }
+    }
+
+    /** Persist only while [ownerFingerprint] still names the live owner, so a resolution that raced
+     *  a credential/endpoint/setting change cannot stamp the new identity with the old answer. */
+    internal fun setHomeDashboardLaunchPathIfOwned(ownerFingerprint: String, path: String): Boolean =
+        synchronized(CONFIG_LOCK) {
+            if (homeDashboardLaunchOwner() != ownerFingerprint) return@synchronized false
+            // Store the resolved route verbatim or not at all. Truncating an over-long path would
+            // manufacture a DIFFERENT route that Home Assistant's dashboard list never validated,
+            // and the next launch would navigate straight to it; declining to accelerate that launch
+            // is the safe outcome, since the live resolution still produces the real target.
+            if (path.length > HomeDashboardLaunchCache.MAX_STORED_PATH_CHARS) return@synchronized false
+            if (prefs.getString("dashboard_launch_path_owner", null) == ownerFingerprint &&
+                prefs.getString("dashboard_launch_path", null) == path
+            ) return@synchronized true
+            durableCommit {
+                putString("dashboard_launch_path_owner", ownerFingerprint)
+                putString("dashboard_launch_path", path)
+            }
+        }
+
+    /** A CONFIRMED no-legal-dashboards answer is the one case that must erase the accelerator —
+     *  otherwise every relaunch replays a path the completed list read just proved unreachable.
+     *  Transient failures never reach here. */
+    internal fun clearHomeDashboardLaunchPathIfOwned(ownerFingerprint: String): Boolean =
+        synchronized(CONFIG_LOCK) {
+            if (homeDashboardLaunchOwner() != ownerFingerprint) return@synchronized false
+            durableCommit {
+                remove("dashboard_launch_path_owner")
+                remove("dashboard_launch_path")
+            }
+        }
 
     /** Access token the built-in renderer hands the HA frontend via the external-auth bridge. Either a
      *  long-lived access token (set once at provisioning) OR the current short-lived access token kept

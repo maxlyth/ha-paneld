@@ -30,7 +30,9 @@ object EntityLearningProtocol {
      */
     data class HomeDashboardDefault(val explicit: Boolean = false, val path: String = "")
 
-    enum class HomeDashboardSource { EXPLICIT, USER_DEFAULT, SYSTEM_DEFAULT, FIRST_LEGAL, NONE }
+    /** CACHED marks a provisional local replay of the persisted last-resolved path while the live
+     *  resolution re-runs; [resolveHomeDashboard] itself never produces it. */
+    enum class HomeDashboardSource { EXPLICIT, USER_DEFAULT, SYSTEM_DEFAULT, FIRST_LEGAL, CACHED, NONE }
 
     /** One authenticated, list-validated renderer decision. A null path means HA reported no legal dashboards. */
     data class HomeDashboardResolution(
@@ -351,6 +353,14 @@ object EntityLearningProtocol {
         }
         return HomeDashboardResolution()
     }
+
+    /**
+     * The canonical form of a dashboard route, admitted by exactly the rules the renderer resolution
+     * uses: a legal root segment, and suffix segments free of dot segments, separators, control
+     * characters and percent-encoded equivalents. Exposed so a route READ BACK from storage can be
+     * admitted by the same semantics that produced it, rather than by a weaker local copy.
+     */
+    fun canonicalDashboardRoute(raw: String?): String? = normalizedDashboardCandidate(raw, preserveRoute = true)
 
     /** Accept only well-formed `mdi:` icon names; anything else renders as the client-side fallback. */
     private fun sanitizedIconName(icon: String?): String {
