@@ -1,9 +1,8 @@
 package io.github.maxlyth.hapaneld.util
 
 import android.util.Log
-import io.ktor.client.plugins.websocket.WebSockets
-import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -34,6 +33,7 @@ object HaLink {
     private const val TAG = "HaLink"
     private const val JSON = "application/json"
     private const val FORM = "application/x-www-form-urlencoded"
+    internal const val MAX_WS_FRAME_BYTES = 16L * 1024L * 1024L
     internal const val WS_RESOLUTION_DEADLINE_MS = 15_000L
     internal const val MAX_HTTP_RESPONSE_BYTES = 2L * 1024L * 1024L
     internal const val MAX_TOKEN_RESPONSE_BYTES = 64L * 1024L
@@ -41,12 +41,19 @@ object HaLink {
     internal const val MAX_OAUTH_EXPIRES_IN_SEC = 365L * 24L * 60L * 60L
 
     /** @param base HA origin from zeroconf, e.g. "https://hass.example". @return device-page URL or null. */
-    fun resolve(base: String, user: String, pass: String, deviceNames: Collection<String>): String? {
+    fun resolve(
+        base: String,
+        user: String,
+        pass: String,
+        deviceNames: Collection<String>,
+        preferIpv4: Boolean,
+        ipv4Only: Boolean,
+    ): String? {
         if (user.isBlank() || pass.isBlank()) return null // anonymous broker → can't auth
         return runCatching {
             val token = login(base, user, pass) ?: return null
             val slugs = deviceNames.map(::slug).filter(String::isNotBlank).distinct()
-            val devId = deviceIdViaWs(base, token, slugs)
+            val devId = deviceIdViaWs(base, token, slugs, preferIpv4, ipv4Only)
                 ?: run { Log.i(TAG, "no HA entity matching ${slugs.joinToString()}"); return null }
             // Build the link off HA's canonical internal_url (so logging in via the broker host still yields a
             // tidy hass.example link), falling back to the URL we logged in at.
@@ -62,8 +69,8 @@ object HaLink {
         base: String,
         token: String,
         deviceNames: Collection<String>,
-        preferIpv4: Boolean = false,
-        ipv4Only: Boolean = false,
+        preferIpv4: Boolean,
+        ipv4Only: Boolean,
     ): String? {
         if (base.isBlank() || token.isBlank()) return null
         return runCatching {
@@ -223,30 +230,39 @@ object HaLink {
      * the device id of the first entity whose entity_id object-part starts with a requested slug. Each entry is
      * compact: `ei` = entity_id, `di` = device id.
      */
-    private fun deviceIdViaWs(
+    internal fun deviceIdViaWs(
         base: String,
         token: String,
         deviceSlugs: Collection<String>,
-        preferIpv4: Boolean = false,
-        ipv4Only: Boolean = false,
+        preferIpv4: Boolean,
+        ipv4Only: Boolean,
+        resolver: ((String) -> List<java.net.InetAddress>)? = null,
     ): String? = runBlocking {
         val wsUrl = base.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/websocket"
-        val client = HaWebSocketClients.client(preferIpv4 = preferIpv4, ipv4Only = ipv4Only)
+        val client = HaWebSocketClients.client(preferIpv4 = preferIpv4, ipv4Only = ipv4Only, resolver = resolver)
         try {
             withTimeoutOrNull(WS_RESOLUTION_DEADLINE_MS) {
                 var devId: String? = null
-                client.webSocket(wsUrl) {
-                    (incoming.receive() as? Frame.Text)?.readText() // auth_required
-                    send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
-                    if (!(incoming.receive() as? Frame.Text)?.readText().orEmpty().contains("auth_ok")) return@webSocket
-                    send(Frame.Text("""{"id":1,"type":"config/entity_registry/list_for_display"}"""))
-                    // Read frames until the id:1 result (skip any interleaved events/pongs). The whole
-                    // connect/auth/query exchange has one deadline, so a silent endpoint cannot strand
-                    // the service's resolver thread indefinitely.
-                    repeat(8) {
-                        val msg = (incoming.receive() as? Frame.Text)?.readText() ?: return@repeat
-                        if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlugs); return@webSocket }
+                val session = HaWebSocketClients.open(client, wsUrl, MAX_WS_FRAME_BYTES)
+                try {
+                    with(session) {
+                        (incoming.receive() as? Frame.Text)?.readText() // auth_required
+                        send(Frame.Text(JSONObject().put("type", "auth").put("access_token", token).toString()))
+                        if ((incoming.receive() as? Frame.Text)?.readText().orEmpty().contains("auth_ok")) {
+                            send(Frame.Text("""{"id":1,"type":"config/entity_registry/list_for_display"}"""))
+                            // Read frames until the id:1 result (skip any interleaved events/pongs). The whole
+                            // connect/auth/query exchange has one deadline, so a silent endpoint cannot strand
+                            // the service's resolver thread indefinitely.
+                            run frames@{
+                                repeat(8) {
+                                    val msg = (incoming.receive() as? Frame.Text)?.readText() ?: return@repeat
+                                    if (msg.contains("\"id\":1")) { devId = matchDeviceId(msg, deviceSlugs); return@frames }
+                                }
+                            }
+                        }
                     }
+                } finally {
+                    session.close()
                 }
                 devId
             }

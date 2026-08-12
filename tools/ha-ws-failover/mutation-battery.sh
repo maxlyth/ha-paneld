@@ -22,6 +22,7 @@ TESTS=(
   --tests 'io.github.maxlyth.hapaneld.util.FamilyPlannedDnsTest'
   --tests 'io.github.maxlyth.hapaneld.util.HaWebSocketClientsFailoverTest'
   --tests 'io.github.maxlyth.hapaneld.util.HaWebSocketClientsTlsTest'
+  --tests 'io.github.maxlyth.hapaneld.util.HaLinkPolicyTest'
 )
 
 # name @@ file @@ sed expression @@ named assertion (test method)
@@ -35,6 +36,9 @@ MUTATIONS=(
   'connect-timeout-unbounded@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/connectTimeout(routeConnectTimeoutMs, TimeUnit.MILLISECONDS)/connectTimeout(0, TimeUnit.MILLISECONDS)/@@aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout'
   'fast-fallback-disabled@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/fastFallback(true)/fastFallback(false)/@@blackHoledRouteStillReachesTheLiveSiblingWithinTheCallerDeadline'
   'tls-trust-not-applied@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/if (tls != null) sslSocketFactory/if (tls != null \&\& false) sslSocketFactory/@@aMatchingHostnameCompletesTheTlsUpgrade'
+  'bound-check-dropped@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/if (size > maxInboundFrameBytes) {/if (false) {/@@anOversizedInboundFrameFailsTheSessionInsteadOfDelivering'
+  'link-policy-threading-dropped@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaLink.kt@@s/preferIpv4 = preferIpv4, ipv4Only = ipv4Only, resolver = resolver/preferIpv4 = false, ipv4Only = false, resolver = resolver/@@deviceLinkResolutionHonorsForceIpv4'
+  'cancellation-bound-assertion-control@@app/src/test/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClientsFailoverTest.kt@@s/cancelMs < 3_000/cancelMs < 0/@@cancellationDuringADeadConnectReturnsPromptly'
   'control-comment-only@@app/src/main/kotlin/io/github/maxlyth/hapaneld/util/HaWebSocketClients.kt@@s/One shared construction path/One shared, control-touched construction path/@@CONTROL'
 )
 

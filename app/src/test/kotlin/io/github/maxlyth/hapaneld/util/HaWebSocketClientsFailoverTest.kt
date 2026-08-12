@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -28,9 +29,10 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
- * Behavioral cover for the a field failure: the HA host's AAAA was black-holed from the
- * panel's segment while its A record worked, and every previous WebSocket client dialed exactly one
- * resolved address, so the panel could never render despite a fully working IPv4 path. These tests
+ * Behavioral cover for the stranded-panel defect: a Home Assistant host whose AAAA is black-holed
+ * from the panel's network segment while its A record works, where every previous WebSocket client
+ * dialed exactly one resolved address, so the panel could never render despite a fully working
+ * IPv4 path. These tests
  * drive the shared factory against real sockets: a dead route (refused, or a saturated backlog that
  * swallows SYNs like the real black-hole) listed ahead of a live sibling must still connect within
  * the callers' 15 s outer deadline.
@@ -190,8 +192,8 @@ class HaWebSocketClientsFailoverTest {
 
     @Test fun aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout() {
         // Force IPv4 against a dead IPv4 is a single-route walk: only the configured per-route
-        // connect timeout bounds it. The captured device log.s `connect_timeout=unknown ms` is what this pins
-        // against returning.
+        // connect timeout bounds it. An unbounded engine connect ("connect_timeout=unknown ms" in
+        // the field failure this lane fixes) is what this pins against returning.
         val blackHole = ServerSocket().apply { bind(InetSocketAddress(deadLoopback, 0), 1) }
         try {
             assumeTrue("platform would not saturate the backlog", saturate(blackHole))
@@ -230,35 +232,30 @@ class HaWebSocketClientsFailoverTest {
         try {
             assumeTrue("platform would not saturate the backlog", saturate(blackHole))
             val client = HaWebSocketClients.client(
-                routeConnectTimeoutMs = 10_000,
+                routeConnectTimeoutMs = 30_000,
                 resolver = { listOf(deadLoopback) },
             )
-            val released = CountDownLatch(1)
             try {
                 runBlocking {
                     val attempt = launch(Dispatchers.IO) {
-                        try {
+                        runCatching {
                             client.webSocketSession("ws://ha.test:${blackHole.localPort}/api/websocket")
-                            fail("black-holed connect must not succeed")
-                        } catch (expected: CancellationException) {
-                            throw expected
-                        } catch (expected: Exception) {
-                            // A raced abort may surface as an I/O failure instead — also prompt.
-                        } finally {
-                            released.countDown()
                         }
                     }
                     delay(300)
-                    attempt.cancel()
-                    attempt.join()
+                    val cancelStart = System.nanoTime()
+                    // Fail-closed: a cancellation that rides out the 30 s connect timeout cannot
+                    // pass — join is bounded well below it and the elapsed time is asserted.
+                    withTimeout(5_000) { attempt.cancelAndJoin() }
+                    val cancelMs = (System.nanoTime() - cancelStart) / 1_000_000
+                    assertTrue(
+                        "cancellation released the caller in ${cancelMs}ms, far below the 30s connect timeout",
+                        cancelMs < 3_000,
+                    )
                 }
             } finally {
                 client.close()
             }
-            assertTrue(
-                "cancelled connect released its caller promptly",
-                released.await(3, TimeUnit.SECONDS),
-            )
         } finally {
             blackHole.close()
         }
@@ -267,19 +264,45 @@ class HaWebSocketClientsFailoverTest {
     // ---- payload bounds ------------------------------------------------------------------------
 
     @Test fun multiMegabytePayloadSurvivesTheEngineSwap() {
-        // Large entity catalogs can produce multi-megabyte payloads. The swap
-        // must not shrink what a fleet currently relies on.
+        // Large entity catalogs flow through these sockets as multi-megabyte frames. The engine
+        // swap must not shrink what deployed panels currently rely on.
         val payload = 5 * 1024 * 1024
         WsAcceptor(InetAddress.getByName("127.0.0.1"), payloadBytes = payload).use { server ->
             val client = HaWebSocketClients.client()
             try {
                 runBlocking {
                     val session = withTimeout(30_000) {
-                        client.webSocketSession("ws://127.0.0.1:${server.port}/api/websocket")
+                        HaWebSocketClients.open(client, "ws://127.0.0.1:${server.port}/api/websocket", 16L * 1024 * 1024)
                     }
                     val frame = withTimeout(30_000) { session.incoming.receive() }
                     val text = (frame as Frame.Text).readText()
                     assertEquals(payload, text.length)
+                    session.close()
+                }
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    @Test fun anOversizedInboundFrameFailsTheSessionInsteadOfDelivering() {
+        // The pre-delivery contract the CIO engine used to enforce natively: a frame above the
+        // configured bound must never reach the caller as a successful message. The wrapper closes
+        // the session (1009 TOO_BIG) and receivers fail with FrameTooBigException.
+        val bound = 256 * 1024
+        WsAcceptor(InetAddress.getByName("127.0.0.1"), payloadBytes = bound * 4).use { server ->
+            val client = HaWebSocketClients.client()
+            try {
+                runBlocking {
+                    val session = withTimeout(30_000) {
+                        HaWebSocketClients.open(client, "ws://127.0.0.1:${server.port}/api/websocket", bound.toLong())
+                    }
+                    try {
+                        withTimeout(30_000) { session.incoming.receive() }
+                        fail("a ${bound * 4} byte frame was delivered despite the $bound byte bound")
+                    } catch (expected: io.ktor.websocket.FrameTooBigException) {
+                        // the named contract: oversized fails, never silent delivery
+                    }
                     session.close()
                 }
             } finally {

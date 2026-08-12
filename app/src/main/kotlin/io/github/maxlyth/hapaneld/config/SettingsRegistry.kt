@@ -106,12 +106,12 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "mqtt_address_family", type = SettingType.ENUM, group = "MQTT",
-            label = "Broker address family", default = DEFAULT_MQTT_ADDRESS_FAMILY, tier = Tier.ADVANCED,
+            label = "MQTT + Home Assistant address family", default = DEFAULT_MQTT_ADDRESS_FAMILY, tier = Tier.ADVANCED,
             scope = Scope.DEVICE,
             options = listOf(DEFAULT_MQTT_ADDRESS_FAMILY, "Prefer IPv4", "Force IPv4"),
-            help = "Automatic learns a working route and falls back between IPv6 and IPv4. " +
-                "Prefer IPv4 keeps IPv6 as a fallback; Force IPv4 rejects brokers with no IPv4 address. " +
-                "The panel's Home Assistant WebSocket connections follow the same policy.",
+            help = "Applies to the MQTT broker connection and the panel's Home Assistant connections. " +
+                "Automatic learns a working route and falls back between IPv6 and IPv4. " +
+                "Prefer IPv4 keeps IPv6 as a fallback; Force IPv4 rejects endpoints with no IPv4 address.",
         ),
 
         // ---- Behaviour ---------------------------------------------------------------------------

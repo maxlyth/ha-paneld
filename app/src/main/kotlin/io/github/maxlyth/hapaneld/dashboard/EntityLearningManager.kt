@@ -1778,7 +1778,7 @@ class EntityLearningManager(
         )
         var session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession? = null
         try {
-            val activeSession = withEntityLearningDeadline(WS_CONNECT_TIMEOUT_MS) { client.webSocketSession(ws) }
+            val activeSession = withEntityLearningDeadline(WS_CONNECT_TIMEOUT_MS) { HaWebSocketClients.open(client, ws, MAX_WS_FRAME) }
             session = activeSession
             withEntityLearningDeadline(WS_SOCKET_TIMEOUT_MS) {
                 with(activeSession) {
@@ -1818,6 +1818,7 @@ class EntityLearningManager(
         private const val MAX_PERFORMANCE_PENDING = 24
         private const val PERFORMANCE_FLUSH_MS = 60_000L
         private const val SYNC_TIMEOUT_MS = 120_000L
+        private const val MAX_WS_FRAME = 32L * 1024 * 1024
         private const val WS_CONNECT_TIMEOUT_MS = 15_000L
         private const val WS_AUTH_TIMEOUT_MS = 15_000L
         private const val WS_REQUEST_TIMEOUT_MS = 20_000L

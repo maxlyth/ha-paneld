@@ -854,7 +854,7 @@ internal class KtorHaPresenceTransport(
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(CONNECT_TIMEOUT_MS) {
-                client.webSocketSession(EntityFilterProtocol.upstreamWebSocketUrl(baseUrl))
+                HaWebSocketClients.open(client, EntityFilterProtocol.upstreamWebSocketUrl(baseUrl), MAX_WS_FRAME_BYTES)
             }
             socket = active
             authenticate(active, accessToken)
@@ -936,6 +936,7 @@ internal class KtorHaPresenceTransport(
         const val MAX_RESPONSE_FRAMES = 32
         const val MAX_ERROR_CHARS = 240
         const val CONNECT_TIMEOUT_MS = 15_000L
+        const val MAX_WS_FRAME_BYTES = 4L * 1024L * 1024L
         const val AUTH_TIMEOUT_MS = 15_000L
         const val REQUEST_TIMEOUT_MS = 20_000L
         const val HTTP_TIMEOUT_MS = 15_000

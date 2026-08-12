@@ -10,10 +10,28 @@ import org.junit.Assert.assertThrows
 
 class HaLinkPolicyTest {
     @Test fun websocketResolutionIsBoundedForUntrustedConfiguredEndpoints() {
-        // The former MAX_WS_FRAME_BYTES bound left with the CIO engine (the OkHttp engine refuses
-        // frame-size configuration; see HaWebSocketClientsFailoverTest); the one-deadline wall
-        // around connect+auth+query remains the resolver's protection.
+        assertTrue(HaLink.MAX_WS_FRAME_BYTES in 1L..(32L * 1024L * 1024L))
         assertTrue(HaLink.WS_RESOLUTION_DEADLINE_MS in 1_000L..30_000L)
+    }
+
+    @Test fun deviceLinkResolutionHonorsForceIpv4() {
+        // Both resolve entry points take non-defaulted policy parameters, so no caller can omit
+        // them; this pins that the policy genuinely reaches the socket: an IPv6-only answer under
+        // Force IPv4 must fail with the named policy verdict rather than dial IPv6.
+        val v6only = listOf(java.net.InetAddress.getByName("2001:db8::1"))
+        try {
+            HaLink.deviceIdViaWs(
+                "ws://ha.test:9", "token", listOf("panel"),
+                preferIpv4 = true, ipv4Only = true, resolver = { v6only },
+            )
+            org.junit.Assert.fail("expected the Force IPv4 policy verdict")
+        } catch (expected: Exception) {
+            val chain = generateSequence<Throwable>(expected) { it.cause }.toList()
+            assertTrue(
+                "failure names the Force IPv4 conflict, was: $chain",
+                chain.any { it.message.orEmpty().contains("Force IPv4") },
+            )
+        }
     }
 
     @Test fun httpResolutionResponsesAreBoundedBeforeTextDecoding() {

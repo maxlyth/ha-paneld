@@ -73,6 +73,8 @@ internal class HaCurrentUserClient(
     }
 }
 
+private const val MAX_FRAME_BYTES = 256L * 1024L
+
 private class KtorHaCurrentUserTransport(
     private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy = { MqttAddressFamilyPolicy.AUTOMATIC },
 ) : HaCurrentUserTransport {
@@ -82,7 +84,7 @@ private class KtorHaCurrentUserTransport(
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(TIMEOUT_MS) {
-                client.webSocketSession(io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol.upstreamWebSocketUrl(baseUrl))
+                HaWebSocketClients.open(client, io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol.upstreamWebSocketUrl(baseUrl), MAX_FRAME_BYTES)
             }
             socket = active
             withTimeout(TIMEOUT_MS) {

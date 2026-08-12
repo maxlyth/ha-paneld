@@ -2000,8 +2000,11 @@ internal class MqttBridge(
                     val base = discoverHaUrl(credentials.broker) ?: brokerHttpsUrl(credentials.broker) ?: return@Thread
                     val target = HaLink.resolutionTarget(base, panel)
                     if (config.haDeviceLinkIsFresh(target, System.currentTimeMillis(), HA_LINK_TTL_MS)) return@Thread
+                    val linkFamilyPolicy = MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily)
                     val link = HaLink.resolve(
                         base, credentials.user, credentials.password, listOf(panel, runtimeFriendlyName),
+                        preferIpv4 = linkFamilyPolicy.initialPreferIpv4,
+                        ipv4Only = linkFamilyPolicy.ipv4Only,
                     ) ?: return@Thread
                     lifecycle.runIfOpen(Unit) {
                         if (config.haUrl.isBlank() && config.panelId == panel &&

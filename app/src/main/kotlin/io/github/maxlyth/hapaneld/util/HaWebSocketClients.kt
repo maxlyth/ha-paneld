@@ -2,7 +2,16 @@ package io.github.maxlyth.hapaneld.util
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocketSession
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.DefaultWebSocketSession
+import io.ktor.websocket.Frame
+import io.ktor.websocket.FrameTooBigException
+import io.ktor.websocket.close
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.produce
 import okhttp3.Dns
 import java.net.Inet4Address
 import java.net.Inet6Address
@@ -47,10 +56,10 @@ internal object HaWebSocketClients {
         tls: TlsTrust? = null,
         resolver: ((String) -> List<InetAddress>)? = null,
     ): HttpClient = HttpClient(OkHttp) {
-        // No maxFrameSize: the OkHttp engine REJECTS any custom value at session start ("Max frame
-        // size switch is not supported"), so the previous per-site 2-32 MB bounds are structurally
-        // unavailable here. Pinned by HaWebSocketClientsFailoverTest; incoming message size is
-        // bounded only by what the trusted Home Assistant endpoint sends.
+        // No engine-level maxFrameSize: the OkHttp engine REJECTS any custom value at session
+        // start ("Max frame size switch is not supported"), pinned by HaWebSocketClientsFailoverTest.
+        // The former per-site inbound bounds are enforced instead by [open], which every caller
+        // uses: an oversized frame fails the session with [FrameTooBigException] before delivery.
         install(WebSockets)
         engine {
             config {
@@ -69,6 +78,45 @@ internal object HaWebSocketClients {
             }
         }
     }
+
+    /**
+     * Open a WebSocket session whose inbound frames are bounded. This restores the pre-delivery
+     * size contract the CIO engine enforced natively: a frame larger than [maxInboundFrameBytes]
+     * is never handed to the caller — the session is closed with TOO_BIG (1009) and receivers fail
+     * with [FrameTooBigException], exactly the failure shape the former engine produced. The bound
+     * is checked before delivery to the application; the engine's own transient buffering of the
+     * arriving frame is not affected.
+     */
+    suspend fun open(
+        client: HttpClient,
+        urlString: String,
+        maxInboundFrameBytes: Long,
+    ): DefaultClientWebSocketSession {
+        val session = client.webSocketSession(urlString)
+        return DefaultClientWebSocketSession(
+            session.call,
+            InboundBoundedWebSocketSession(session, maxInboundFrameBytes),
+        )
+    }
+}
+
+/** Delegates everything except [incoming], which enforces the inbound frame bound. */
+internal class InboundBoundedWebSocketSession(
+    private val delegate: DefaultWebSocketSession,
+    private val maxInboundFrameBytes: Long,
+) : DefaultWebSocketSession by delegate {
+    private val boundedIncoming: ReceiveChannel<Frame> = produce(capacity = 0) {
+        for (frame in delegate.incoming) {
+            val size = frame.data.size
+            if (size > maxInboundFrameBytes) {
+                delegate.close(CloseReason(CloseReason.Codes.TOO_BIG, "inbound frame exceeds $maxInboundFrameBytes bytes"))
+                throw FrameTooBigException(size.toLong())
+            }
+            send(frame)
+        }
+    }
+
+    override val incoming: ReceiveChannel<Frame> get() = boundedIncoming
 }
 
 /**

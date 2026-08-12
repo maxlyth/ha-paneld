@@ -968,7 +968,7 @@ internal class KtorHaExactEntityStreamTransport(
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(CONNECT_TIMEOUT_MS) {
-                client.webSocketSession(EntityFilterProtocol.upstreamWebSocketUrl(baseUrl))
+                HaWebSocketClients.open(client, EntityFilterProtocol.upstreamWebSocketUrl(baseUrl), MAX_WS_FRAME_BYTES)
             }
             socket = active
             authenticate(active, accessToken)
@@ -1089,6 +1089,7 @@ internal class KtorHaExactEntityStreamTransport(
         )
         const val MAX_ERROR_CHARS = 240
         const val CONNECT_TIMEOUT_MS = 15_000L
+        const val MAX_WS_FRAME_BYTES = 2L * 1024L * 1024L
         const val AUTH_TIMEOUT_MS = 15_000L
     }
 }
