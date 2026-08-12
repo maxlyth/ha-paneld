@@ -1041,6 +1041,12 @@ class PaneldServer internal constructor(
     private val profileReport: () -> PassiveProfileReport? = { null },
     private val profileProbe: (String) -> PassiveProfileReport? = { null },
     private val onProfileRestart: () -> Boolean = { false },
+    /**
+     * Durable panel state was replaced underneath the running process. Live owners of that state
+     * must re-read it before they write again, or a restore is silently overwritten by whatever
+     * they were already holding in memory.
+     */
+    private val onDurableStateRestored: () -> Unit = {},
     private val profileRestartAllowed: () -> Boolean = { true },
     private val onProfileRestartAbort: (String) -> Boolean = { false },
     private val provisioningReader: ProvisioningReader? = null,
@@ -4082,7 +4088,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val CONTEXT_KEYS = listOf(
         "MQTT state", "State convergence", "Local-state sync", "App database", "Security mode", "Audio playback",
-        "Log shipping",
+        "Log shipping", "Wi-Fi stability",
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
         "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
@@ -7353,6 +7359,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                                 restoredStateRows = runCatching {
                                     AppState.applyRestoredRows(appContext, restorableState)
                                 }.getOrDefault(0)
+                                if (restoredStateRows > 0) {
+                                    // Never fatal, exactly like the write above: the restore is
+                                    // already durable, and a live re-read failing must not undo it.
+                                    runCatching { onDurableStateRestored() }
+                                }
                             }
                             val payload = profilePayload?.payload ?: return@afterApply
                             profileResult = requireNotNull(profileAdmin).restoreBackup(

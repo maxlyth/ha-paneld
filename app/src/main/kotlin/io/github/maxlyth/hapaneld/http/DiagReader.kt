@@ -376,7 +376,7 @@ object DiagReader {
         "ha-paneld", "Android", "Firmware", "Device", "CPU", "RAM", "Storage", "Display",
         "System WebView", "HA Companion", "MQTT state", "Security mode", "Keep panel responsive", "Prevent idle dim", "Android dashboard lock",
         "LED", "Nav actions (a11y)", "Navbar", "Zigbee", "Relays", "Network ADB", "Audio playback",
-        "App database", "Product version", "Local-state sync", "State convergence",
+        "App database", "Product version", "Local-state sync", "State convergence", "Wi-Fi stability",
     )
 
     internal fun publicPanelFacts(facts: Map<String, String>): Map<String, String> =

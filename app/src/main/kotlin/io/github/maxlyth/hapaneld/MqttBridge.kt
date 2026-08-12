@@ -53,6 +53,7 @@ import io.github.maxlyth.hapaneld.mqtt.MqttFinalPublish
 import io.github.maxlyth.hapaneld.metrics.PanelMetrics
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticDemand
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticSnapshot
+import io.github.maxlyth.hapaneld.control.WifiOutageCounts
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectionGeneration
 import io.github.maxlyth.hapaneld.mqtt.MqttFamilyPreference
@@ -123,6 +124,27 @@ internal fun hiddenReadOnlyStateTopic(key: String, panel: String): String? =
     SettingsRegistry.spec(key)?.ha?.takeIf { it.readOnly }?.stateTopic(panel)
 
 private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
+
+/** Whether the published count is a total or a known lower bound, so HA never records a floor as exact. */
+internal fun wifiOutageMqttAttributes(counts: WifiOutageCounts): String =
+    JSONObject().put("is_lower_bound", counts.saturated).toString()
+
+/**
+ * What the outage-attributes topic should carry right now.
+ *
+ * The attributes share the count's opt-in: hiding the sensor must CLEAR the retained payload rather
+ * than leave a stale `is_lower_bound` alive in the broker for an entity nobody exposed. Pure so the
+ * expose/hide/reconnect boundary is checked by behaviour, not by reading the bridge's source.
+ */
+internal fun wifiOutageAttributeObservation(
+    exposed: Boolean,
+    counts: WifiOutageCounts?,
+): io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation =
+    if (!exposed || counts == null) {
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unavailable
+    } else {
+        io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known(wifiOutageMqttAttributes(counts))
+    }
 
 /** Path-free, bounded Home Assistant attributes derived from the shared immutable snapshot. */
 internal fun storageHealthMqttAttributes(snapshot: StorageHealthSnapshot): String {
@@ -827,6 +849,7 @@ internal class MqttBridge(
     private val runtimeMqttPassword: String = config.mqttPassword,
     private val runtimeMqttAddressFamily: String = config.mqttAddressFamily,
     private val wifiDiagnostics: (WifiDiagnosticDemand) -> WifiDiagnosticSnapshot = { WifiDiagnosticSnapshot() },
+    private val wifiOutages: () -> WifiOutageCounts? = { null },
     private val learnedProximityEligibility: () -> Boolean = { false },
     private val onAutoSleepConfigChanged: (Boolean) -> Unit = {},
 ) {
@@ -1100,6 +1123,7 @@ internal class MqttBridge(
     private val attrZigbeeHealth = "ha-paneld/$panel/zigbee_gateway_health/attributes"
     private val stateStorageHealth = "ha-paneld/$panel/storage_health/state"
     private val attrStorageHealth = "ha-paneld/$panel/storage_health/attributes"
+    private val attrWifiOutages = "ha-paneld/$panel/diag_wifi_outages_24h/attributes"
     private val cmdAutoBright = "ha-paneld/$panel/auto_brightness/set"
     private val stateAutoBright = "ha-paneld/$panel/auto_brightness/state"
     private val stateCommandTopics by lazy {
@@ -1260,6 +1284,18 @@ internal class MqttBridge(
             equivalent = io.github.maxlyth.hapaneld.mqtt.StateConverger.numericDeadband(1.0)) {
             if (config.haExposed("humidity", true)) lastHumidity?.let { known(Math.round(it).toString()) } ?: unknown
             else unknown
+        }
+
+        // The integer alone cannot say "this is a floor", so the saturation flag rides with it as an
+        // attribute; without it Home Assistant records a capped 200 as an exact measurement.
+        channel("diag_wifi_outages_attributes", attrWifiOutages) {
+            // The attributes ride with the count and share its opt-in: a hidden sensor must not keep
+            // a retained attribute payload alive in the broker for an entity nobody exposed.
+            val exposed = config.haExposed(
+                "diag_wifi_outages_24h",
+                requireNotNull(SettingsRegistry.spec("diag_wifi_outages_24h")).haExposedByDefault,
+            )
+            wifiOutageAttributeObservation(exposed, wifiOutages())
         }
 
         val diagDeadband = mapOf(
@@ -3551,6 +3587,9 @@ internal class MqttBridge(
             rssi = true,
             privilegedRoute = capabilityShape.current().live.networkAdb,
         )).rssiDbm?.toString()
+        // Rolling outage counts stay published (retained last value) through a Wi-Fi dropout —
+        // that dropout is exactly what they exist to report — so they are not WIFI_DIAGNOSTIC_KEYS.
+        "diag_wifi_outages_24h" -> wifiOutages()?.last24h?.toString()
         // Room climate — apply the calibration offset to temperature; humidity is reported whole-percent.
         "room_temp" -> PanelMetrics.shared.roomClimate()?.tempC?.let { String.format(java.util.Locale.US, "%.1f", it + config.roomTempOffsetC) }
         "room_humidity" -> PanelMetrics.shared.roomClimate()?.humidityPct?.let { String.format(java.util.Locale.US, "%.0f", it) }
@@ -3751,7 +3790,7 @@ internal class MqttBridge(
         // Diagnostic sensors published via the opt-in exposable() gate (all default local-only).
         private val DIAG_KEYS = listOf(
             "diag_ip", "diag_cpu", "diag_memory", "diag_soc_temp", "diag_boot",
-            "diag_wifi_ssid", "diag_wifi_rssi",
+            "diag_wifi_ssid", "diag_wifi_rssi", "diag_wifi_outages_24h",
         )
         // Room climate sensors — available only on panels with a CHT8305 (see hasCht8305).
         private val ROOM_KEYS = listOf("room_temp", "room_humidity")
@@ -3996,7 +4035,9 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "sensor" to "${panel}_diag_ip", "sensor" to "${panel}_diag_cpu",
     "sensor" to "${panel}_diag_memory", "sensor" to "${panel}_diag_soc_temp",
     "sensor" to "${panel}_diag_boot", "sensor" to "${panel}_diag_wifi_ssid",
-    "sensor" to "${panel}_diag_wifi_rssi", "sensor" to "${panel}_diag_schema_reconcile",
+    "sensor" to "${panel}_diag_wifi_rssi",
+    "sensor" to "${panel}_diag_wifi_outages_24h", "sensor" to "${panel}_diag_wifi_outages_7d",
+    "sensor" to "${panel}_diag_schema_reconcile",
     "sensor" to "${panel}_storage_health",
     "button" to "${panel}_reload", "button" to "${panel}_reboot",
     "button" to "${panel}_launcher", "button" to "${panel}_home",
@@ -4028,7 +4069,7 @@ internal fun mqttDiscoveryCleanupMarker(
     return if (profileIdentity.isEmpty()) shape else "$shape|p${profileIdentity.length}:$profileIdentity"
 }
 
-private const val MQTT_DISCOVERY_SHAPE_REVISION = 4
+private const val MQTT_DISCOVERY_SHAPE_REVISION = 5
 
 /** Cleanup for a renamed panel is owned by the replacement connection and therefore retries with it. */
 internal fun mqttStalePanelCleanup(stalePanel: String?, currentPanel: String): List<MqttCleanupPublication> {
@@ -4042,6 +4083,10 @@ internal fun mqttStalePanelCleanup(stalePanel: String?, currentPanel: String): L
 
 internal fun mqttRetiredStateTopics(panel: String): Set<String> = setOf(
     "ha-paneld/$panel/diag_schema_reconcile/state",
+    // Retired before release; its retained state must be cleared too, or a same-version upgrade
+    // leaves a ghost entity holding a stale count.
+    "ha-paneld/$panel/diag_wifi_outages_7d/state",
+    "ha-paneld/$panel/diag_wifi_outages_7d/attributes",
 )
 
 /** Avoid a late offline/online race on an in-place rebuild; retire identities or old brokers explicitly.

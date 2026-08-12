@@ -159,4 +159,17 @@ class SettingsRegistryPresentationTest {
         assertTrue(rssi.ha!!.body.contains("\"unit_of_measurement\":\"dBm\""))
         assertTrue(rssi.ha!!.body.contains("\"entity_category\":\"diagnostic\""))
     }
+
+    /** Outage counters follow the Wi-Fi diagnostics shape: opt-in, capability-gated, diagnostic. */
+    @Test fun wifiOutageCountersRemainOptInDiagnosticsGatedOnWifi() {
+        for (key in listOf("diag_wifi_outages_24h")) {
+            val spec = SettingsRegistry.spec(key)!!
+            assertEquals("Diagnostics", spec.group)
+            assertFalse(spec.haExposedByDefault)
+            assertFalse(spec.availableWhen(Capabilities()))
+            assertTrue(spec.availableWhen(Capabilities(hasWifi = true)))
+            assertTrue(spec.ha!!.readOnly)
+            assertTrue(spec.ha!!.body.contains("\"entity_category\":\"diagnostic\""))
+        }
+    }
 }

@@ -750,6 +750,21 @@ object SettingsRegistry {
                 readOnly = true,
             ),
         ),
+        // Rolling Wi-Fi outage counts — actual loss of the panel's Wi-Fi default network, observed
+        // through ConnectivityManager. Never derived from the Home Assistant socket or the MQTT
+        // broker, whose restarts are not the network's fault. See control/WifiOutageTracker.kt.
+        SettingSpec(
+            key = "diag_wifi_outages_24h", type = SettingType.INT, group = "Diagnostics",
+            label = "Wi-Fi outages (24 h)", default = "",
+            help = "Short Wi-Fi dropouts in the rolling last 24 hours. Counts loss of the panel's active Wi-Fi connection only — Home Assistant or broker outages are never counted. If the panel had to cap what it stores, the sensor's is_lower_bound attribute says the value is a floor.",
+            haExposedByDefault = false,
+            availableWhen = { it.hasWifi },
+            ha = HaEntity(
+                "sensor", "diag_wifi_outages_24h", "Wi-Fi outages (24 h)",
+                """"state_topic":"ha-paneld/{panel}/diag_wifi_outages_24h/state","json_attributes_topic":"ha-paneld/{panel}/diag_wifi_outages_24h/attributes","state_class":"measurement","icon":"mdi:wifi-alert","entity_category":"diagnostic"""",
+                readOnly = true,
+            ),
+        ),
 
         // ---- Room climate (exact authenticated input layouts only) ----------------------------------
         // Real environmental sensors (NOT entity_category=diagnostic), reported by default like the

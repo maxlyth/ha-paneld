@@ -58,6 +58,40 @@ class DiscoveryTombstoneCoverageTest {
         assertTrue(diagnosticObservation("diag_cpu", exposed = true, value = null) == Observation.Known("unknown"))
     }
 
+    @Test fun hidingTheOutageSensorClearsItsRetainedAttributes() {
+        val exact = io.github.maxlyth.hapaneld.control.WifiOutageCounts(last24h = 3, saturated = false)
+        val floor = io.github.maxlyth.hapaneld.control.WifiOutageCounts(last24h = 200, saturated = true)
+        // Exposed: the attribute states plainly whether the number is a total or a floor.
+        assertTrue(
+            io.github.maxlyth.hapaneld.wifiOutageAttributeObservation(exposed = true, counts = exact) ==
+                Observation.Known("""{"is_lower_bound":false}"""),
+        )
+        assertTrue(
+            io.github.maxlyth.hapaneld.wifiOutageAttributeObservation(exposed = true, counts = floor) ==
+                Observation.Known("""{"is_lower_bound":true}"""),
+        )
+        // Hidden, or with no tracker yet: the retained payload is cleared, never left behind for an
+        // entity nobody exposed — the same rule the read-only diagnostics already follow.
+        assertTrue(
+            io.github.maxlyth.hapaneld.wifiOutageAttributeObservation(exposed = false, counts = floor) ==
+                Observation.Unavailable,
+        )
+        assertTrue(
+            io.github.maxlyth.hapaneld.wifiOutageAttributeObservation(exposed = true, counts = null) ==
+                Observation.Unavailable,
+        )
+    }
+
+    @Test fun theRetiredWeeklySensorsStateAndAttributesAreBothCleared() {
+        val retired = mqttRetiredStateTopics("test")
+        assertTrue("ha-paneld/test/diag_wifi_outages_7d/state" in retired)
+        assertTrue("ha-paneld/test/diag_wifi_outages_7d/attributes" in retired)
+        // A panel rename republishes the same retirement set, so neither half can survive it.
+        val cleanup = mqttStalePanelCleanup("old", "test").map { it.topic }
+        assertTrue("ha-paneld/old/diag_wifi_outages_7d/state" in cleanup)
+        assertTrue("ha-paneld/old/diag_wifi_outages_7d/attributes" in cleanup)
+    }
+
     @Test fun unchangedPanelIdNeedsNoReplacementCleanup() {
         assertTrue(mqttStalePanelCleanup("same", "same").isEmpty())
         assertTrue(mqttStalePanelCleanup(null, "same").isEmpty())

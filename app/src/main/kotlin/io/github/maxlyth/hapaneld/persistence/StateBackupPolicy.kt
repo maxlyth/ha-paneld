@@ -47,6 +47,9 @@ object StateBackupPolicy {
         "performance-binding" to Disposition.DEVICE_LOCAL,
         "shizuku-consent" to Disposition.DEVICE_LOCAL,
         "power-safety-acknowledgement" to Disposition.DEVICE_LOCAL,
+        // Rolling Wi-Fi outage counts describe this panel's mounting position and network
+        // environment — meaningful across a reinstall of the same panel, wrong on any other.
+        "wifi-stability" to Disposition.DEVICE_LOCAL,
 
         // Runtime scratch: a manual brightness override in progress, the live-setting journal, and
         // crash-loop counters whose whole purpose is to describe *this* boot.

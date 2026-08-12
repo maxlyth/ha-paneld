@@ -74,7 +74,7 @@ class MqttProtocolPolicyTest {
             mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker:1883") ==
                 mqttDiscoveryCleanupMarker("0.9.3", "panel.example@aaa", "tcp://broker:1883"),
         )
-        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "", "tcp://broker:1883") == "0.9.3|d4|b17:tcp://broker:1883")
+        assertTrue(mqttDiscoveryCleanupMarker("0.9.3", "", "tcp://broker:1883") == "0.9.3|d5|b17:tcp://broker:1883")
     }
 
     @Test fun connectedPanelReannouncesOnlyWhenItsLiveConfigurationAddressChanges() {

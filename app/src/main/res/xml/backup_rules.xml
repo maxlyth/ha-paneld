@@ -15,6 +15,9 @@
     <!-- Exact pre-mutation HOME, app-op and audio state belongs to the source Android install. -->
     <exclude domain="sharedpref" path="ha-paneld-controller-state.xml" />
     <exclude domain="sharedpref" path="ha-paneld-power-safety-acknowledgement.xml" />
+    <!-- Wi-Fi outage history describes the source panel's mounting position and network; on any
+         other device it would report another home's outages as this one's. -->
+    <exclude domain="sharedpref" path="ha-paneld-wifi-stability.xml" />
     <!-- SQLite/XML bridge hashes are install-local migration state, not portable user settings. -->
     <exclude domain="sharedpref" path="ha-paneld-state-bridge.xml" />
     <!-- Unified state includes credentials and panel-local recovery/controller state. -->

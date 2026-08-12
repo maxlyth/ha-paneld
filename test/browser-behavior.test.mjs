@@ -128,6 +128,7 @@ function autoSleepHydrationSchema() {
     field('diag_ip', 'Diagnostics'), field('diag_cpu', 'Diagnostics', 'INT'),
     field('diag_memory', 'Diagnostics', 'INT'), field('diag_soc_temp', 'Diagnostics', 'FLOAT'),
     field('diag_boot', 'Diagnostics'), field('diag_wifi_rssi', 'Diagnostics', 'INT'),
+    field('diag_wifi_outages_24h', 'Diagnostics', 'INT'),
   ];
 }
 

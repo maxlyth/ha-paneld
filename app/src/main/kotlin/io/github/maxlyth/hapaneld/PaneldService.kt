@@ -55,8 +55,10 @@ import io.github.maxlyth.hapaneld.control.OverlayWakeTap
 import io.github.maxlyth.hapaneld.control.ScreenController
 import io.github.maxlyth.hapaneld.control.WakeOutcome
 import io.github.maxlyth.hapaneld.control.AndroidWifiDiagnostics
+import io.github.maxlyth.hapaneld.control.AndroidWifiOutageStore
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticDemand
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticAdmissionTracker
+import io.github.maxlyth.hapaneld.control.WifiOutageTracker
 import io.github.maxlyth.hapaneld.control.availability
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
@@ -777,6 +779,7 @@ class PaneldService : Service() {
     )
     private lateinit var sensors: SensorReporter
     private lateinit var wifiDiagnostics: AndroidWifiDiagnostics
+    private lateinit var wifiOutageTracker: WifiOutageTracker
     private lateinit var logShipper: LogShipper
     private lateinit var logCaptureApp: LogCapture
     private lateinit var logCaptureSystem: LogCapture
@@ -892,6 +895,7 @@ class PaneldService : Service() {
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
         appliedNetworkConfiguration = currentNetworkConfigurationSnapshot()
         sensors = SensorReporter(this, config, profile)
+        wifiOutageTracker = WifiOutageTracker(store = AndroidWifiOutageStore(this))
         wifiDiagnostics = AndroidWifiDiagnostics(this) {
             Su.runOutputIsolatedBounded(
                 "cmd wifi status 2>/dev/null || dumpsys wifi",
@@ -1284,6 +1288,7 @@ class PaneldService : Service() {
             profileReport = passiveProfileProbe::report,
             profileProbe = { passiveProfileProbe.report() },
             onProfileRestart = { profileRestart.request() },
+            onDurableStateRestored = { wifiOutageTracker.adoptRestoredRecord() },
             profileRestartAllowed = { !InstallProgress.running },
             onProfileRestartAbort = profileRegistry::abortPendingActivation,
             provisioningReader = provisioningReader,
@@ -1358,6 +1363,7 @@ class PaneldService : Service() {
             runtimeMqttPassword = credentials.password,
             runtimeMqttAddressFamily = credentials.addressFamily,
             wifiDiagnostics = wifiDiagnostics::snapshot,
+            wifiOutages = { wifiOutageTracker.counts() },
             learnedProximityEligibility = sensors::hasLearnedProximity,
             onAutoSleepConfigChanged = {
                 acceptCommittedAutoSleepSetting(liveSettingAuthority) { autoSleep.refresh() }
@@ -2124,6 +2130,9 @@ class PaneldService : Service() {
             "Audio playback" to audio.snapshot().statusText(),
         )
         appDatabase?.let { extras["App database"] = it }
+        // Rolling Wi-Fi outage counts — shown only once the 7-day window has at least one episode,
+        // so a stable panel (or an Ethernet panel) never carries a permanent zero row.
+        wifiOutageTracker.statusText()?.let { extras["Wi-Fi stability"] = it }
         if (pv.isNotEmpty()) extras["Product version"] = pv
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.
@@ -2988,7 +2997,13 @@ class PaneldService : Service() {
 
             override fun onAvailable(network: Network) {
                 defaultNetwork = network
-                observeTransport(network, cm.getNetworkCapabilities(network))
+                val capabilities = cm.getNetworkCapabilities(network)
+                // Identity only: the outage tracker is told WHICH network arrived, never what this
+                // synchronous snapshot thinks its transport is. That snapshot can predate the
+                // authoritative onCapabilitiesChanged, and crediting an episode from it invents or
+                // discards outages on stale information.
+                wifiOutageTracker.onDefaultAvailable(network.hashCode().toLong())
+                observeTransport(network, capabilities)
                 mdnsRuntimeReconciler.networkChanged(
                     cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address },
                 )
@@ -3020,11 +3035,19 @@ class PaneldService : Service() {
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (network == defaultNetwork) {
+                    wifiOutageTracker.onTransportChanged(
+                        network.hashCode().toLong(),
+                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                    )
+                }
                 observeTransport(network, capabilities)
             }
 
             override fun onLost(network: Network) {
                 if (network != defaultNetwork) return
+                // Behind the identity guard, so a make-before-break handover never reads as an outage.
+                wifiOutageTracker.onDefaultLost()
                 observeTransport(network, null)
                 mdnsRuntimeReconciler.networkLost()
                 defaultNetwork = null

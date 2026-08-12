@@ -162,6 +162,13 @@ class DiscoveryParityTest {
         )
     }
 
+    @Test fun wifiOutageCountersAreDiagnosticMeasurementSensors() {
+        assertEquals(
+            """{"name":"Wi-Fi outages (24 h)","object_id":"test_diag_wifi_outages_24h","unique_id":"test_diag_wifi_outages_24h","state_topic":"ha-paneld/test/diag_wifi_outages_24h/state","json_attributes_topic":"ha-paneld/test/diag_wifi_outages_24h/attributes","state_class":"measurement","icon":"mdi:wifi-alert","entity_category":"diagnostic",$avail,$device}""",
+            build("diag_wifi_outages_24h"),
+        )
+    }
+
     @Test fun adaptiveBrightnessTuningRemainsPanelLocal() {
         assertNull(SettingsRegistry.spec("auto_brightness_minimum_percent")!!.ha)
         assertNull(SettingsRegistry.spec("auto_brightness_response_percent")!!.ha)
