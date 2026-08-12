@@ -85,6 +85,191 @@ class HaExactEntityStreamOwnerTest {
 
         assertEquals(0, transport.subscribeCount)
         assertEquals(HaExactEntityStreamPhase.DISABLED, observer.statuses.last().phase)
+        // Demanding nothing still owns nothing after the lifecycle demand was added beside the others.
+        assertTrue(transport.lifecycleWatches.isEmpty())
+        owner.close()
+    }
+
+    @Test fun `lifecycle demand alone owns a socket and subscribes for lifecycle events`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val observer = RecordingObserver()
+        val owner = owner(dispatcher, transport, observer)
+
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+
+        assertEquals(1, transport.subscribeCount)
+        assertEquals(listOf(true), transport.lifecycleWatches)
+        assertEquals("no entity demand accompanies it", listOf(emptySet<String>()), transport.subscriptions)
+        owner.close()
+    }
+
+    @Test fun `disabling the lifecycle watch releases the socket it was holding open`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val observer = RecordingObserver()
+        val owner = owner(dispatcher, transport, observer)
+
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+        owner.replaceLifecycleWatch(false)
+        runCurrent()
+        advanceTimeBy(24L * 60L * 60_000L)
+        runCurrent()
+
+        assertEquals("no reconnect may follow a withdrawn demand", 1, transport.subscribeCount)
+        owner.close()
+    }
+
+    @Test fun `a rejected lifecycle subscription does not tear down the shared stream`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val observer = RecordingObserver()
+        val signals = mutableListOf<HaLifecycleSignal>()
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signals += it }
+
+        owner.replaceAmbientSource(ENTITY_A)
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+
+        // Home Assistant refuses each lifecycle subscription, as it does for a non-admin user. Were this
+        // still an HaProtocolException the stream would resubscribe three times and then park for good,
+        // taking ambient light and automatic sleep down with it.
+        repeat(5) { connection.messages.trySend(HaExactSocketMessage.LifecycleRejected) }
+        runCurrent()
+        advanceTimeBy(10L * 60_000L)
+        runCurrent()
+
+        assertEquals("the stream must not reconnect", 1, transport.subscribeCount)
+        assertEquals(HaExactEntityStreamPhase.LIVE, observer.statuses.last().phase)
+        assertTrue("the consumer is told it will learn nothing", signals.contains(HaLifecycleSignal.Rejected))
+        owner.close()
+    }
+
+    @Test fun `lifecycle frames are delivered while entity hydration is still pending`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        // Hydration will BLOCK: the REST state is a deferred we deliberately leave incomplete.
+        val pendingHydration = CompletableDeferred<JSONObject?>()
+        transport.states[ENTITY_A] = pendingHydration
+        val observer = RecordingObserver()
+        val signals = mutableListOf<HaLifecycleSignal>()
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signals += it }
+
+        owner.replaceAmbientSource(ENTITY_A)
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+
+        // A non-admin refusal arrives IMMEDIATELY after subscribing, and a restart can land at any
+        // moment. Both used to be consumed and discarded by the hydration loop, a deaf window of up
+        // to the 20-second hydration timeout.
+        connection.messages.trySend(HaExactSocketMessage.LifecycleRejected)
+        connection.messages.trySend(HaExactSocketMessage.Lifecycle(HaLifecycleEvent.STOP))
+        runCurrent()
+
+        assertTrue("hydration must still be pending for this test to prove anything", pendingHydration.isActive)
+        assertTrue("the refusal must not wait for hydration", signals.contains(HaLifecycleSignal.Rejected))
+        assertTrue(
+            "nor must a restart event",
+            signals.contains(HaLifecycleSignal.Event(HaLifecycleEvent.STOP)),
+        )
+
+        pendingHydration.complete(state(ENTITY_A, "1"))
+        runCurrent()
+        owner.close()
+    }
+
+    @Test fun `lifecycle events reach the observer in arrival order and are never coalesced`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val observer = RecordingObserver()
+        val events = mutableListOf<HaLifecycleEvent>()
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signal ->
+            if (signal is HaLifecycleSignal.Event) events += signal.event
+        }
+
+        owner.replaceAmbientSource(ENTITY_A)
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+
+        listOf(
+            HaLifecycleEvent.STOP,
+            HaLifecycleEvent.FINAL_WRITE,
+            HaLifecycleEvent.CLOSE,
+            HaLifecycleEvent.START,
+            HaLifecycleEvent.STARTED,
+        ).forEach { connection.messages.trySend(HaExactSocketMessage.Lifecycle(it)) }
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                HaLifecycleEvent.STOP,
+                HaLifecycleEvent.FINAL_WRITE,
+                HaLifecycleEvent.CLOSE,
+                HaLifecycleEvent.START,
+                HaLifecycleEvent.STARTED,
+            ),
+            events,
+        )
+        owner.close()
+    }
+
+    @Test fun `the lifecycle observer is told when the socket proves live and when it drops`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val first = FakeConnection()
+        val second = FakeConnection()
+        val transport = FakeTransport(first, second)
+        val observer = RecordingObserver()
+        val phases = mutableListOf<HaExactEntityStreamPhase>()
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signal ->
+            if (signal is HaLifecycleSignal.Transport) phases += signal.phase
+        }
+
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+        assertTrue("a completed connection reports LIVE", phases.contains(HaExactEntityStreamPhase.LIVE))
+
+        first.messages.close()
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertTrue(
+            "a lost socket reports RECONNECTING",
+            phases.contains(HaExactEntityStreamPhase.RECONNECTING),
+        )
+        owner.close()
+    }
+
+    @Test fun `lifecycle signals stop at an unbound observer`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection)
+        val observer = RecordingObserver()
+        var signals = 0
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signals++ }
+
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+        val delivered = signals
+        assertTrue("the bound observer received something to begin with", delivered > 0)
+
+        owner.unbindLifecycle()
+        connection.messages.trySend(HaExactSocketMessage.Lifecycle(HaLifecycleEvent.STOP))
+        runCurrent()
+
+        assertEquals("an unbound observer receives nothing further", delivered, signals)
         owner.close()
     }
 
@@ -675,6 +860,7 @@ class HaExactEntityStreamOwnerTest {
         var subscribeCount = 0
         val subscriptions = mutableListOf<Set<String>>()
         val registryWatches = mutableListOf<Boolean>()
+        val lifecycleWatches = mutableListOf<Boolean>()
 
         override suspend fun subscribe(
             baseUrl: String,
@@ -689,10 +875,20 @@ class HaExactEntityStreamOwnerTest {
             accessToken: String,
             entityIds: Set<String>,
             watchRegistry: Boolean,
+        ): HaExactEntityConnection =
+            subscribe(baseUrl, accessToken, entityIds, watchRegistry, watchLifecycle = false)
+
+        override suspend fun subscribe(
+            baseUrl: String,
+            accessToken: String,
+            entityIds: Set<String>,
+            watchRegistry: Boolean,
+            watchLifecycle: Boolean,
         ): HaExactEntityConnection {
             subscribeCount++
             subscriptions += entityIds
             registryWatches += watchRegistry
+            lifecycleWatches += watchLifecycle
             if (rejectSubscriptions-- > 0) throw HaAuthenticationException("rejected")
             if (subscribeTimeouts-- > 0) awaitCancellation()
             if (protocolSubscriptionFailures-- > 0) throw HaProtocolException("invalid handshake")

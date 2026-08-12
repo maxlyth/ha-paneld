@@ -38,6 +38,7 @@ import io.github.maxlyth.hapaneld.control.AutoBrightnessController
 import io.github.maxlyth.hapaneld.control.AutoSleepController
 import io.github.maxlyth.hapaneld.control.BootChimeController
 import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.BrightnessPreferenceOrigin
 import io.github.maxlyth.hapaneld.control.CpuController
 import io.github.maxlyth.hapaneld.control.CompanionDb
@@ -110,6 +111,8 @@ import io.github.maxlyth.hapaneld.sensors.HaAmbientSourceValidation
 import io.github.maxlyth.hapaneld.sensors.HaAmbientSourcePhase
 import io.github.maxlyth.hapaneld.sensors.DashboardHaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaExactEntityStreamOwner
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleCoordinator
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
@@ -610,6 +613,7 @@ internal data class ConfigOwnerRefreshPlan(
     val keepAwake: Boolean,
     val launcherHome: Boolean,
     val rendererTarget: Boolean,
+    val haLifecycle: Boolean,
 )
 
 internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefreshPlan {
@@ -623,8 +627,32 @@ internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefres
         keepAwake = "keep_awake" in changedKeys,
         launcherHome = changedKeys.any(setOf("launcher_package", "dashboard_package", "ha_url")::contains),
         rendererTarget = changedKeys.any((ha + setOf("dashboard_package", "home_dashboard"))::contains),
+        // Lifecycle demand follows the renderer selection AND the credentials, because it is only worth
+        // holding a socket open for a panel that both renders a dashboard and can authenticate.
+        haLifecycle = changedKeys.any((ha + "dashboard_package")::contains),
     )
 }
+
+/**
+ * Whether to hold the shared Home Assistant socket open purely to observe lifecycle events.
+ *
+ * Pure — unit-tested in `HaLifecycleDemandTest`. Kept separate from the renderer so the rule is stated
+ * once: only the built-in renderer has a native surface to show the outage on, and without credentials
+ * there is nothing to authenticate with.
+ */
+internal fun haLifecycleWatchWanted(builtinRendererSelected: Boolean, credentialsPresent: Boolean): Boolean =
+    builtinRendererSelected && credentialsPresent
+
+/**
+ * Whether a lifecycle-watch refresh may run now. Pure so the deferral is provable.
+ *
+ * Enabling waits for the CURRENT renderer to settle, on every path — the launch-latency decision is
+ * void if an onboarding save can open the socket early through a different door. Disabling is never
+ * deferred: settlement resets when a renderer is released, so a deferred disable after deselecting the
+ * built-in renderer would wait forever while the socket stayed open.
+ */
+internal fun haLifecycleRefreshPermitted(rendererSettled: Boolean, wanted: Boolean): Boolean =
+    rendererSettled || !wanted
 
 internal fun nextLiveSettingRetryAttempt(currentAttempt: Int, maximumAttempts: Int = 3): Int? =
     (currentAttempt + 1).takeIf { it < maximumAttempts }
@@ -790,6 +818,8 @@ class PaneldService : Service() {
     private lateinit var autoSleep: AutoSleepController
     private lateinit var haAmbientLux: HaAmbientLuxSubscriber
     private lateinit var haExactEntityStream: HaExactEntityStreamOwner
+    private lateinit var haLifecycle: HaLifecycleCoordinator
+    private val rendererSettledForLifecycle: () -> Unit = { runCatching { refreshHaLifecycleWatch() } }
     private lateinit var haSiteMetadata: HaSiteMetadataClient
     private var brightnessObserver: ContentObserver? = null
     private var haCandidateIdentity = ""
@@ -932,6 +962,27 @@ class PaneldService : Service() {
             ),
             monotonicMillis = { android.os.SystemClock.elapsedRealtime() },
         )
+        haLifecycle = HaLifecycleCoordinator(
+            // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to
+            // step the panel's clock, and the back-online window must not be shortened or extended by it.
+            nowMs = { android.os.SystemClock.elapsedRealtime() },
+            onChanged = {
+                // Read the canonical snapshot rather than trusting a payload, so a diagnostic line
+                // cannot report something the machine no longer holds.
+                Log.i(TAG, "Home Assistant lifecycle: ${HaLifecycleRuntime.snapshot()?.state?.wireValue}")
+                BuiltinDashboard.onHaLifecycleChanged()
+            },
+        )
+        haExactEntityStream.bindLifecycle(haLifecycle)
+        // One atomic install: the coordinator and its MQTT read arrive together, so no reader can pair
+        // this service's coordinator with a predecessor's bridge. The supplier reads the bridge's
+        // canonical serialized connection state through the runtime owner, so it follows reconfigure()'s
+        // bridge reassignment and never keeps a copy that a stale callback could overwrite; it is
+        // null-safe across the swap window and before first configuration.
+        HaLifecycleRuntime.install(haLifecycle)
+        // Tell a live renderer ownership changed, so a card rendered from a predecessor's state is
+        // re-read against this service's rather than surviving the replacement.
+        BuiltinDashboard.onHaLifecycleChanged()
         haAmbientLux = HaAmbientLuxSubscriber(
             scope = scope,
             auth = haSessionAuthority,
@@ -1307,6 +1358,12 @@ class PaneldService : Service() {
             server.invalidateCapabilitySnapshot()
             runtime.observe()?.value?.mqtt?.notifyLearnedProximityChanged()
         }
+        // Deferred, NOT run here: opening an authenticated socket purely to watch lifecycle events must
+        // not compete with the renderer's startup, which is the panel's most contended moment. The
+        // renderer reports when it has settled and the demand is evaluated then. Fires immediately if it
+        // had already settled, so a service restart behind a live renderer is not left waiting. Held as
+        // a field so teardown can clear exactly this identity.
+        BuiltinDashboard.setRendererSettledListener(rendererSettledForLifecycle)
     }
 
     private fun buildMqtt(
@@ -1314,6 +1371,18 @@ class PaneldService : Service() {
         stalePanelId: String? = null,
     ): MqttBridge {
         val credentials = identity.mqttCredentials()
+        // One lease per bridge generation. Registering it retires the previous generation's
+        // MQTT-sourced lifecycle claims — the birth that would retract them is not retained, so the
+        // replacement channel gets no replay — and makes every superseded bridge's queued callback a
+        // no-op. The connection read is derived from the live bridge, never copied.
+        val lease = HaLifecycleRuntime.MqttLease()
+        if (::haLifecycle.isInitialized &&
+            HaLifecycleRuntime.installMqttLease(haLifecycle, lease) {
+                runtime.observe()?.value?.mqtt?.isConnected() == true
+            }
+        ) {
+            BuiltinDashboard.onHaLifecycleChanged()
+        }
         return MqttBridge(
             config, brightness, screen, led, ledEffect, navigate, volume, system, navbar, watchdog, touchSound, bootChime, zigbee, relay, cpu, adb,
             accessibilityEnabled(), profile.evdevButtons.isNotEmpty(),
@@ -1368,6 +1437,9 @@ class PaneldService : Service() {
             onAutoSleepConfigChanged = {
                 acceptCommittedAutoSleepSetting(liveSettingAuthority) { autoSleep.refresh() }
             },
+            // This bridge generation's lease, registered with the runtime as the live broker channel
+            // just below. A bridge that outlives its service OR its own replacement cannot report.
+            haLifecycleLease = lease,
         )
     }
 
@@ -1994,6 +2066,36 @@ class PaneldService : Service() {
         if (ownerRefresh.rendererTarget) {
             io.github.maxlyth.hapaneld.http.PerfReader.updateRendererTarget(rendererTargetSnapshot())
         }
+        if (ownerRefresh.haLifecycle) runCatching { refreshHaLifecycleWatch() }
+    }
+
+    /**
+     * Start or stop the lifecycle watch to match the current renderer and credentials. Safe to call
+     * repeatedly: an unchanged demand is a no-op inside the stream owner.
+     */
+    private fun refreshHaLifecycleWatch() {
+        if (!::haExactEntityStream.isInitialized || !::system.isInitialized) return
+        val wanted = haLifecycleWatchWanted(
+            builtinRendererSelected = system.isBuiltinDashboardTarget(config.dashboardPackage),
+            credentialsPresent = config.haUrl.isNotBlank() &&
+                (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()),
+        )
+        // The deferral gates ENABLING only. Deferring a disable would strand the socket open after the
+        // built-in renderer is deselected — the released renderer resets settled, so the disabling
+        // refresh would wait for a settle that is never coming.
+        if (!haLifecycleRefreshPermitted(BuiltinDashboard.rendererSettled, wanted)) return
+        haExactEntityStream.replaceLifecycleWatch(wanted)
+        val watchChanged = HaLifecycleRuntime.setWatching(haLifecycle, wanted)
+        // A refusal describes a session on the route just switched off; keeping it would show the next
+        // session's user a verdict they were never given.
+        if (!wanted) haLifecycle.onSocketWatchStopped()
+        // Switching the watch off retires everything consumers can render (an unreportable holder
+        // answers null), so they must be told — otherwise the native card keeps describing an outage
+        // for a feature that is no longer watching, and redraws it from that state on resume.
+        if (watchChanged) BuiltinDashboard.onHaLifecycleChanged()
+        // Warm the brand mark now rather than during an outage, when Home Assistant is exactly what is
+        // unreachable. Off the main thread; failure is silent and leaves a text-only banner.
+        if (wanted) scope.launch(Dispatchers.IO) { HaBrandIcon.prefetch(this@PaneldService, config.haUrl) }
     }
 
     /** Controller reads shared by the dashboard facts, live values and capability projection. */
@@ -3404,6 +3506,12 @@ class PaneldService : Service() {
             }
             if (::haExactEntityStream.isInitialized) {
                 closeOwner("HA exact entity stream") { haExactEntityStream.close() }
+                // Identity-gated: a successor service may already have installed its own coordinator by
+                // the time this (possibly deadline-late) teardown runs, and erasing it would blank the
+                // successor's live tracking. Only when THIS service's installation was actually cleared
+                // is the renderer poked, so a card rendering the dead state is re-read and hidden.
+                if (HaLifecycleRuntime.uninstall(haLifecycle)) BuiltinDashboard.onHaLifecycleChanged()
+                BuiltinDashboard.clearRendererSettledListener(rendererSettledForLifecycle)
             }
             closeOwner("sensors") { sensorPersistenceClosed.set(sensors.stop()) }
             if (::autoBright.isInitialized) {

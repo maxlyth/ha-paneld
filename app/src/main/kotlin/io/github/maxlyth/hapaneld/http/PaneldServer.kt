@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.sensors.HaLifecycle
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceUpdate
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisite
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisitePhase
@@ -574,6 +577,24 @@ internal interface AutoSleepHttpApi {
                 HaPresenceSourceUpdate.UNAVAILABLE
         }
     }
+}
+
+/**
+ * The lifecycle suffix on `/health`, rendered from ONE atomic snapshot so the state and its source can
+ * never come from different moments. Empty when the panel is not watching or no service owns lifecycle
+ * tracking, which keeps the line unchanged for every existing consumer. `ha_src` appears only when a
+ * source actually OBSERVED the state: the initial `normal` and a locally noticed `connection_lost` are
+ * the panel's own inferences, and naming a source for them would claim an observation nobody made.
+ * Pure — unit-tested in `HaLifecycleSurfaceContractTest`.
+ */
+internal fun haLifecycleHealthToken(watching: Boolean, snap: HaLifecycle.Snapshot?): String {
+    if (!watching || snap == null) return ""
+    val src = snap.source?.let { " ha_src=${it.name.lowercase()}" }.orEmpty()
+    // The refusal rides the same observation because the diagnostics row explains it and that row is
+    // now refreshed from this line; deriving it from a second read would reintroduce the divergence
+    // between surfaces that the one-shot banner had.
+    val refused = if (snap.refused) " ha_refused=1" else ""
+    return " ha=${snap.state.wireValue}$src$refused"
 }
 
 internal fun autoSleepHistoryHours(hours: String?): Int {
@@ -1498,7 +1519,7 @@ class PaneldServer internal constructor(
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}\n")
                 }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
@@ -1535,7 +1556,7 @@ class PaneldServer internal constructor(
                         )
                     } ?: unavailableProfileRoutes()
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}\n")
                     }
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
@@ -3146,6 +3167,7 @@ ${navBar(active)}</div>
 <!-- Load switcher.js immediately after the header it measures so responsive collapse finishes before page
      content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
 <script src="/assets/switcher.js"></script>
+<div id="halifebar" class="setup" style="display:none"></div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
 $extraScripts<script src="/assets/power-safety.js"></script>
@@ -4086,9 +4108,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     }
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
+    private val HA_LIFECYCLE_FACT = "HA lifecycle"
+
     private val CONTEXT_KEYS = listOf(
         "MQTT state", "State convergence", "Local-state sync", "App database", "Security mode", "Audio playback",
-        "Log shipping", "Wi-Fi stability",
+        "Log shipping", "Wi-Fi stability", HA_LIFECYCLE_FACT,
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
         "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
@@ -4103,11 +4127,23 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private fun contextRowsHtml(s: Snap, h: HealthInputs): String {
         val rows = CONTEXT_KEYS.mapNotNull { key ->
+            // The lifecycle state changes DURING an outage, so this row is rendered from the live
+            // snapshot rather than the stale-while-revalidate facts cache AND is then kept current by
+            // the same ten-second `/health` poll that drives the banner — one observation feeding every
+            // lifecycle surface. A server-rendered advisory banner used to sit alongside it; it was
+            // DELETED rather than synchronised, because a one-shot render cannot retract itself and left
+            // an outage warning on screen after recovery.
+            // The lifecycle row is rendered even when there is nothing to say yet — as an empty cell the
+            // poll can fill. Omitting it meant a panel that began watching AFTER the page was rendered
+            // (the watch waits for the renderer to settle) had no element to populate, so the row could
+            // never appear without a reload: a surface that can only ever go from present to absent.
+            val current = if (key == HA_LIFECYCLE_FACT) (HaLifecycleRuntime.statusText() ?: "") else s.facts[key]
             // Log shipping earns a live row only while it is on; when it is off the Behaviour card's
             // "Ship logs" already says so, and a permanent "off" here is noise.
-            s.facts[key]?.takeUnless { key == "Log shipping" && it == LOG_SHIP_STATUS_OFF }?.let { value ->
+            current?.takeUnless { key == "Log shipping" && it == LOG_SHIP_STATUS_OFF }?.let { value ->
                 val label = if (key == "MQTT state") "MQTT connection / auth timing" else key
-                "<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>"
+                val cellId = if (key == HA_LIFECYCLE_FACT) " id=\"halifecell\"" else ""
+                "<tr><th>${esc(label)}</th><td$cellId>${esc(value)}</td></tr>"
             }
         }.toMutableList()
         h.webView.reportingQuirk?.let {
@@ -4134,6 +4170,15 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     /** The setup / health / update banners — everything above the cards. Needs the facts map (MQTT
      *  state), so on a cold start it hydrates with the rest. */
+    /**
+     * The lifecycle suffix on `/health`. Appended rather than given its own endpoint because every page
+     * already polls `/health` every ten seconds through `buildwatch.js`, so this needs no new route and
+     * no second poll loop. Absent entirely when the panel is not watching, which keeps the line unchanged
+     * for every existing consumer.
+     */
+    private fun haLifecycleHealthToken(): String =
+        haLifecycleHealthToken(HaLifecycleRuntime.watching, HaLifecycleRuntime.snapshot())
+
     private fun bannersHtml(s: Snap, h: HealthInputs): String {
         val storage = HealthAudit.storage(storageHealth())
         val mqtt = s.facts["MQTT"] ?: "disabled"
@@ -4167,6 +4212,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // Order: storage/database safety first, then actively-broken render states, render findings
         // (WebView / renderer / updates), and finally the needs-config setup notice. On the dashboard the
         // ad-hoc warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
+        // The lifecycle banner leads: while Home Assistant is going away or coming back, that explains
+        // most of what else the page is about to report.
         return storage.bannerHtml() + PowerSafetyPresentation.bannerHtml(
             powerSafetyAdvisory(s.privilege),
             inlineRepair = true,

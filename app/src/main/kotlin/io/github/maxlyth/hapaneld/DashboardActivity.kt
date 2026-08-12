@@ -194,6 +194,33 @@ class DashboardActivity : AppCompatActivity() {
     private var web: WebView? = null
     private var swipe: SwipeRefreshLayout? = null
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
+    private var lifecycleBar: HaLifecycleBar? = null            // native HA outage bar, lives inside `root`
+
+    /**
+     * Marshals to the UI thread because the state machine is driven from the service's IO scope.
+     * Registered for the activity's whole life, not just while a WebView exists, so the bar is correct
+     * the moment one is built.
+     */
+    /**
+     * A poke, not a payload: the bar re-reads the one source of truth. Marshals to the UI thread because
+     * the state machine is driven from the service's IO scope.
+     */
+    private val haLifecycleListener: () -> Unit = {
+        main.post { if (!destroyed) redrawLifecycleBar() }
+    }
+
+    private fun redrawLifecycleBar() {
+        // ONE snapshot read: state, source and remaining lifetime from the same instant, or null when
+        // no service owns lifecycle tracking — which hides the bar, so a card cannot outlive the
+        // service whose state it was rendering.
+        lifecycleBar?.update(io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime.snapshot())
+    }
+
+    /** Drop the bar with its container. Every content-view swap must reach here, or it outlives its root. */
+    private fun detachLifecycleBar() {
+        lifecycleBar?.detach()
+        lifecycleBar = null
+    }
     private var entityFilterSignature = "disabled"
     private var entityFilterLease: EntityFilterTelemetry.Lease? = null
     private var entityFilterNativeHold: EntityFilterNativeHold? = null
@@ -506,6 +533,7 @@ class DashboardActivity : AppCompatActivity() {
         // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
         // connectivity returns if the frontend isn't connected — registered for the activity's lifetime.
         BuiltinDashboard.setScreenListener(screenListener)
+        BuiltinDashboard.setHaLifecycleListener(haLifecycleListener)
         // Adopt the CURRENT screen state — an instance created while the panel is dark (a relaunch at
         // night) must not assume the screen is on: it would arm the handshake watchdog against a page
         // that's about to be frozen, and never freeze the WebView until the next real transition.
@@ -541,6 +569,7 @@ class DashboardActivity : AppCompatActivity() {
         entityFilterLease = null
         BuiltinDashboard.releaseActivityOwner(activityOwner)
         BuiltinDashboard.clearScreenListener(screenListener)
+        BuiltinDashboard.clearHaLifecycleListener(haLifecycleListener)
         netCallback?.let { cb -> runCatching { conn?.unregisterNetworkCallback(cb) } }
         main.removeCallbacksAndMessages(null)
         teardownWeb()
@@ -564,6 +593,7 @@ class DashboardActivity : AppCompatActivity() {
         clearBusTimeouts()
         main.removeCallbacks(watchdog)
         main.removeCallbacks(darkSettle)
+        detachLifecycleBar()
         customView?.let { view -> runCatching { root?.removeView(view) } }
         runCatching { customViewCallback?.onCustomViewHidden() }
         customView = null
@@ -1327,6 +1357,8 @@ class DashboardActivity : AppCompatActivity() {
         if (event == ExternalBusProtocol.ConnectionEvent.CONNECTED) {
             frontendConnected = true
             BuiltinDashboard.recordConnected(SystemClock.elapsedRealtime()) // TTI: load-start → interactive
+            // Launch is over: the lifecycle socket may now be demanded without competing with startup.
+            BuiltinDashboard.onRendererSettled(activityOwner)
             // First-ever proven render: from here on, an unfinished setup journey is a REPAIR of a panel
             // that once worked, and the wizard words it that way instead of reading like a factory reset.
             if (::activityConfig.isInitialized && !activityConfig.setupEverCompleted) {
@@ -1653,6 +1685,7 @@ class DashboardActivity : AppCompatActivity() {
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
         cancelAdmissionAutoRetry()
+        detachLifecycleBar()
         val dm = resources.displayMetrics
         val density = dm.density
         val hDp = (dm.heightPixels / density).toInt()
@@ -1886,6 +1919,10 @@ class DashboardActivity : AppCompatActivity() {
         applyFullscreen()
         applyOverscroll()
         applyZoom()
+        // Reconcile the outage card with the canonical clock on wake: `postDelayed` runs on uptime,
+        // which pauses through deep sleep while the canonical window does not, so a recovery notice
+        // that lapsed during sleep would otherwise stay visible until its stalled timer caught up.
+        redrawLifecycleBar()
     }
 
     /** The foreground built-in renderer owns its timeout policy directly. This is the standard Android
@@ -2682,6 +2719,11 @@ class DashboardActivity : AppCompatActivity() {
         root = container
         setContentView(container)
         noteDeliberateDashboardNavigation()
+        // Attached to the same frame the fullscreen-video view uses, so the dashboard keeps rendering
+        // underneath. Seeded from the CURRENT state because a renderer rebuilt mid-outage must not come
+        // up looking calm.
+        lifecycleBar = HaLifecycleBar.attach(this, container)
+            .also { redrawLifecycleBar() }
         val target = currentUrl(config)
         noteAppNavigationTarget(android.net.Uri.parse(target).path.orEmpty())
         expectPageStart(target)
@@ -3105,6 +3147,7 @@ class DashboardActivity : AppCompatActivity() {
                     externalBusSession = null
                     v2BridgeDocument = null
                     v2ListenerView = null
+                    detachLifecycleBar()
                     authQueue.clear()
                     v2Handshake.reset()
                     clearBusTimeouts()

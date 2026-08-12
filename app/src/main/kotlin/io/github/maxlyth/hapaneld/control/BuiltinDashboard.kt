@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.control
 
+
 /**
  * Process-local foreground state of the built-in [io.github.maxlyth.hapaneld.DashboardActivity].
  *
@@ -20,6 +21,10 @@ object BuiltinDashboard {
         val owner = ++nextActivityOwner
         activityOwner = owner
         authLatched = false
+        // A new renderer generation begins unsettled. The release-side reset alone misses Android's
+        // overlapping replacement, where the predecessor's late release is identity-blocked and would
+        // leave the successor inheriting a settlement it has not earned.
+        rendererSettled = false
         return owner
     }
 
@@ -38,6 +43,11 @@ object BuiltinDashboard {
         activityOwner = 0L
         authLatched = false
         foreground = false
+        // Settlement is CURRENT-generation truth, not a process-lifetime latch: the renderer that
+        // settled is gone, so the next one must settle for itself before launch-deferred work resumes.
+        // Owner-gated like the rest of this block, so a predecessor's late release cannot un-settle a
+        // live replacement.
+        rendererSettled = false
     }
 
     // --- foreground state + change fan-out (navbar overlay-strip suppression) ---
@@ -287,4 +297,89 @@ object BuiltinDashboard {
      *  cleared when a reload/navigate arrives or the frontend connects. */
     @Volatile var authLatched = false
         private set
+
+    // Home Assistant lifecycle fan-out to the live renderer.
+    //
+    // The poke carries NO state on purpose. A cached copy of the state, its source or a timestamp here
+    // would each need its own invalidation rule — a copy is how a recovery notice gets resurrected by a
+    // renderer rebuilt after it expired, and how delivery races itself between commit and callback. A
+    // payload-free poke cannot go stale and cannot arrive out of order: the renderer reads the one
+    // source of truth when it is told something changed.
+    //
+    // Registration is lock-serialized because activity and service lifetimes overlap: an identity check
+    // followed by a clear is two steps, and a successor registering between them would be wiped by its
+    // predecessor. The listener is INVOKED outside the lock — it marshals into an activity, and calling
+    // foreign code under a lock invites a re-entrant deadlock.
+    private val haLifecycleListenerLock = Any()
+    private var haLifecycleListener: (() -> Unit)? = null
+
+    /** Renderer registers its "re-read and redraw" handler here (and marshals to the UI thread itself). */
+    internal fun setHaLifecycleListener(l: (() -> Unit)?) {
+        synchronized(haLifecycleListenerLock) { haLifecycleListener = l }
+    }
+
+    /** Clear only if still [l], so a destroyed activity cannot wipe a newer instance's registration. */
+    internal fun clearHaLifecycleListener(l: () -> Unit) {
+        synchronized(haLifecycleListenerLock) {
+            if (haLifecycleListener === l) haLifecycleListener = null
+        }
+    }
+
+    /** The service calls this when the lifecycle state changed; no-op when no renderer is listening. */
+    internal fun onHaLifecycleChanged() {
+        val listener = synchronized(haLifecycleListenerLock) { haLifecycleListener }
+        listener?.invoke()
+    }
+
+    // --- deferred lifecycle demand ---
+    //
+    // Opening an authenticated Home Assistant socket purely to watch lifecycle events is worth doing,
+    // but not DURING launch: on these SoCs the renderer's own startup is the most contended moment the
+    // panel has, and this would add an auth-and-connect round trip competing with it. The renderer
+    // reports its first successful load and the service demands the socket only then. Nothing is lost
+    // but a few seconds of socket-route detection during startup — a window in which an outage notice
+    // is least useful anyway, and which MQTT covers regardless.
+    // Registration, identity-checked clearing and settle all cross ONE ownership boundary. An identity
+    // check followed by a separate volatile write is two steps: a successor service registering between
+    // them is erased by its predecessor's teardown, which strands the successor waiting for a settle
+    // signal that has already happened. Listeners are INVOKED outside the lock — they reach into an
+    // Activity, and calling foreign code under a lock invites a re-entrant deadlock.
+    private val rendererSettledLock = Any()
+    private var rendererSettledListener: (() -> Unit)? = null
+
+    @Volatile var rendererSettled = false
+        private set
+
+    internal fun setRendererSettledListener(l: (() -> Unit)?) {
+        val fireNow = synchronized(rendererSettledLock) {
+            rendererSettledListener = l
+            rendererSettled
+        }
+        if (fireNow) l?.invoke()
+    }
+
+    /** Clear only if still [l], so a stopped service is neither retained nor called by a later renderer. */
+    internal fun clearRendererSettledListener(l: () -> Unit) {
+        synchronized(rendererSettledLock) {
+            if (rendererSettledListener === l) rendererSettledListener = null
+        }
+    }
+
+    /**
+     * Called by the renderer when its frontend connects, naming the activity lease it belongs to.
+     * Idempotent per settled period, and IGNORED from a superseded activity: settlement is
+     * current-generation truth, so a predecessor whose frontend connects late — while Android is
+     * already replacing it — must not settle on behalf of the generation that took over. The token is
+     * the same [acquireActivityOwner] lease every other cross-generation write here is checked
+     * against, rather than a second notion of ownership.
+     */
+    internal fun onRendererSettled(owner: Long) {
+        val listener = synchronized(rendererSettledLock) {
+            if (!ownsActivity(owner)) return
+            if (rendererSettled) return
+            rendererSettled = true
+            rendererSettledListener
+        }
+        listener?.invoke()
+    }
 }

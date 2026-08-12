@@ -114,7 +114,123 @@ internal sealed interface HaExactSocketMessage {
     data class Missing(val entityId: String) : HaExactSocketMessage
     data class Pong(val id: Int) : HaExactSocketMessage
     data object RegistryChanged : HaExactSocketMessage
+
+    /**
+     * One Home Assistant lifecycle event. The type is resolved from the subscription id we chose, not
+     * from the frame body, so no event payload is ever read or forwarded.
+     */
+    data class Lifecycle(val event: HaLifecycleEvent) : HaExactSocketMessage
+
+    /**
+     * Home Assistant refused a lifecycle subscription. Deliberately a message rather than an exception:
+     * these types are absent from the non-admin allowlist, and a throw here would tear down the shared
+     * stream that ambient light and automatic sleep depend on.
+     */
+    data object LifecycleRejected : HaExactSocketMessage
+
     data object Other : HaExactSocketMessage
+}
+
+/** What the lifecycle consumer is told, without exposing the socket itself. */
+internal sealed interface HaLifecycleSignal {
+    data class Event(val event: HaLifecycleEvent) : HaLifecycleSignal
+
+    data object Rejected : HaLifecycleSignal
+    data class Transport(val phase: HaExactEntityStreamPhase) : HaLifecycleSignal
+}
+
+internal fun interface HaLifecycleObserver {
+    fun onSignal(signal: HaLifecycleSignal)
+}
+
+/**
+ * The Home Assistant WebSocket command ids for one connection.
+ *
+ * Extracted from the transport so the arithmetic is assertable without a socket. It has to be exact:
+ * ping replies are correlated by subtracting [pingIdOffset], so a ping id that collides with any
+ * subscription id would make a subscription's own reply look like a pong and silently defeat the
+ * liveness check.
+ *
+ * Pure — unit-tested in `HaSubscriptionIdsTest`.
+ */
+internal data class HaSubscriptionIds(
+    val entityBatchIds: List<Int>,
+    val registryIds: Set<Int>,
+    val lifecycleIds: Map<Int, HaLifecycleEvent>,
+    val pingIdOffset: Int,
+) {
+    val allSubscriptionIds: Set<Int> get() = entityBatchIds.toSet() + registryIds + lifecycleIds.keys
+}
+
+internal fun haSubscriptionIds(
+    entityBatchCount: Int,
+    watchRegistry: Boolean,
+    watchLifecycle: Boolean,
+    registryEventCount: Int,
+): HaSubscriptionIds {
+    require(entityBatchCount >= 0 && registryEventCount >= 0)
+    val entityIds = (0 until entityBatchCount).map { HA_FIRST_SUBSCRIPTION_ID + it }
+    val registryIds = if (!watchRegistry) emptySet() else
+        (0 until registryEventCount).map { entityBatchCount + it + 1 }.toSet()
+    val lifecycleIds = if (!watchLifecycle) emptyMap() else
+        HaLifecycleEvent.entries.associateBy { entityBatchCount + registryIds.size + it.rank }
+    return HaSubscriptionIds(
+        entityBatchIds = entityIds,
+        registryIds = registryIds,
+        lifecycleIds = lifecycleIds,
+        pingIdOffset = entityBatchCount + registryIds.size + lifecycleIds.size,
+    )
+}
+
+private const val HA_FIRST_SUBSCRIPTION_ID = 1
+
+/** Where an inbound `event` frame belongs, decided from its subscription id alone. */
+internal sealed interface HaEventRoute {
+    data object Registry : HaEventRoute
+    data class Lifecycle(val event: HaLifecycleEvent) : HaEventRoute
+    data object Entities : HaEventRoute
+}
+
+internal fun haEventRoute(
+    id: Int,
+    registryIds: Set<Int>,
+    lifecycleIds: Map<Int, HaLifecycleEvent>,
+): HaEventRoute = when {
+    id in registryIds -> HaEventRoute.Registry
+    lifecycleIds.containsKey(id) -> HaEventRoute.Lifecycle(lifecycleIds.getValue(id))
+    else -> HaEventRoute.Entities
+}
+
+/** What a failed `result` frame means for the shared stream. */
+internal sealed interface HaResultOutcome {
+    data object Ignored : HaResultOutcome
+
+    data object LifecycleRejected : HaResultOutcome
+    data class Fatal(val message: String) : HaResultOutcome
+}
+
+/**
+ * Classify a `result` frame.
+ *
+ * This is a pure function precisely so the non-fatal branch is provable. The lifecycle event types are
+ * absent from Home Assistant's non-admin subscribe allowlist, so a refusal is routine — and treating it
+ * as fatal would park the shared stream after three attempts and take ambient light and automatic sleep
+ * down with it on every non-admin panel.
+ *
+ * Unit-tested in `HaSocketFrameRoutingTest`.
+ */
+internal fun haResultOutcome(
+    json: JSONObject,
+    lifecycleIds: Set<Int>,
+    maxErrorChars: Int,
+): HaResultOutcome = when {
+    json.optBoolean("success") -> HaResultOutcome.Ignored
+    json.optInt("id") in lifecycleIds -> HaResultOutcome.LifecycleRejected
+    else -> HaResultOutcome.Fatal(
+        json.optJSONObject("error")?.optString("message")?.take(maxErrorChars)
+            ?.takeIf(String::isNotBlank)
+            ?: "Home Assistant rejected the entity subscription",
+    )
 }
 
 internal interface HaExactEntityConnection {
@@ -131,6 +247,13 @@ internal interface HaExactEntityStreamTransport {
         entityIds: Set<String>,
         watchRegistry: Boolean,
     ): HaExactEntityConnection = subscribe(baseUrl, accessToken, entityIds)
+    suspend fun subscribe(
+        baseUrl: String,
+        accessToken: String,
+        entityIds: Set<String>,
+        watchRegistry: Boolean,
+        watchLifecycle: Boolean,
+    ): HaExactEntityConnection = subscribe(baseUrl, accessToken, entityIds, watchRegistry)
     suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject?
 }
 
@@ -168,12 +291,13 @@ internal class HaExactEntityStreamOwner(
         val ambient: String?,
         val presence: Set<String>,
         val watchRegistry: Boolean = false,
+        val watchLifecycle: Boolean = false,
     ) {
         val union: Set<String> = buildSet {
             ambient?.let(::add)
             addAll(presence)
         }
-        val active: Boolean get() = union.isNotEmpty() || watchRegistry
+        val active: Boolean get() = union.isNotEmpty() || watchRegistry || watchLifecycle
     }
 
     private sealed interface PendingCallback {
@@ -209,6 +333,12 @@ internal class HaExactEntityStreamOwner(
             val run: Long,
             val target: () -> Unit,
         ) : PendingCallback
+
+        data class Lifecycle(
+            val run: Long,
+            val target: HaLifecycleObserver,
+            val signal: HaLifecycleSignal,
+        ) : PendingCallback
     }
 
     private val generation = AtomicLong()
@@ -220,6 +350,7 @@ internal class HaExactEntityStreamOwner(
     @Volatile private var ambientObserver: HaExactEntityStreamObserver? = null
     @Volatile private var presenceObserver: HaPresenceFeedObserver? = null
     @Volatile private var registryChangeObserver: (() -> Unit)? = null
+    @Volatile private var lifecycleObserver: HaLifecycleObserver? = null
     private var drainingCallbacks = false
     private var presenceRevision = 0L
     private var presencePhase = HaExactEntityStreamPhase.DISABLED
@@ -274,6 +405,29 @@ internal class HaExactEntityStreamOwner(
 
     fun unbindRegistryChanges() {
         synchronized(lock) { registryChangeObserver = null }
+    }
+
+    fun bindLifecycle(next: HaLifecycleObserver) {
+        synchronized(lock) {
+            check(!stopped) { "exact entity stream owner is closed" }
+            check(lifecycleObserver == null || lifecycleObserver === next) {
+                "lifecycle observer is already bound"
+            }
+            lifecycleObserver = next
+        }
+    }
+
+    fun unbindLifecycle() {
+        synchronized(lock) { lifecycleObserver = null }
+    }
+
+    /**
+     * Keeps the shared Home Assistant socket alive for lifecycle events. Unlike the entity and registry
+     * demands this can be the ONLY reason a socket exists, which is deliberate: a panel that renders a
+     * dashboard needs to explain a server outage even when it subscribes to no entity at all.
+     */
+    fun replaceLifecycleWatch(enabled: Boolean) {
+        replaceRequest { it.copy(watchLifecycle = enabled) }
     }
 
     fun replaceAmbientSource(nextEntityId: String?) {
@@ -366,6 +520,7 @@ internal class HaExactEntityStreamOwner(
             ambientObserver = null
             presenceObserver = null
             registryChangeObserver = null
+            lifecycleObserver = null
             if (!drainingCallbacks && callbackQueue.isNotEmpty()) {
                 drainingCallbacks = true
                 drain = true
@@ -401,6 +556,7 @@ internal class HaExactEntityStreamOwner(
                             checkNotNull(session.accessToken),
                             expected.union,
                             expected.watchRegistry,
+                            expected.watchLifecycle,
                         )
                     }
                 }
@@ -510,6 +666,18 @@ internal class HaExactEntityStreamOwner(
                     messages.onReceive { message ->
                         if (message == HaExactSocketMessage.RegistryChanged) {
                             publishRegistryChanged(run)
+                            return@onReceive
+                        }
+                        // Lifecycle frames do not depend on entity hydration and must not wait for it:
+                        // a non-admin refusal arrives IMMEDIATELY after subscribing, and a restart can
+                        // land at any moment — both were silently discarded here until hydration
+                        // finished, which on a slow Home Assistant is a 20-second deaf window.
+                        if (message is HaExactSocketMessage.Lifecycle) {
+                            publishLifecycle(run, HaLifecycleSignal.Event(message.event))
+                            return@onReceive
+                        }
+                        if (message == HaExactSocketMessage.LifecycleRejected) {
+                            publishLifecycle(run, HaLifecycleSignal.Rejected)
                             return@onReceive
                         }
                         if (message is HaExactSocketMessage.State || message is HaExactSocketMessage.Missing) {
@@ -638,8 +806,26 @@ internal class HaExactEntityStreamOwner(
                 recordActivity = recordActivity,
             )
             HaExactSocketMessage.RegistryChanged -> publishRegistryChanged(run)
+            is HaExactSocketMessage.Lifecycle -> publishLifecycle(run, HaLifecycleSignal.Event(message.event))
+            HaExactSocketMessage.LifecycleRejected -> publishLifecycle(run, HaLifecycleSignal.Rejected)
             else -> Unit
         }
+    }
+
+    private fun publishLifecycle(run: Long, signal: HaLifecycleSignal) {
+        var drain = false
+        synchronized(lock) {
+            if (stopped || generation.get() != run || !request.watchLifecycle) return
+            val target = lifecycleObserver ?: return
+            // Deliberately NOT coalesced the way registry changes are: order is the whole meaning here,
+            // and collapsing "stop" into "started" would erase the outage this feature exists to report.
+            callbackQueue.addLast(PendingCallback.Lifecycle(run, target, signal))
+            if (!drainingCallbacks) {
+                drainingCallbacks = true
+                drain = true
+            }
+        }
+        if (drain) drainCallbacks()
     }
 
     private fun publishRegistryChanged(run: Long) {
@@ -684,6 +870,9 @@ internal class HaExactEntityStreamOwner(
             ))
         }
         if (expected.presence.isNotEmpty()) publishPresenceStatus(run, phase, detail, attempt)
+        // The detail string is withheld on purpose: it can carry a Home Assistant error message, and the
+        // lifecycle consumer only needs to know whether the socket is proven live or gone.
+        if (expected.watchLifecycle) publishLifecycle(run, HaLifecycleSignal.Transport(phase))
     }
 
     private fun publishAmbientStatus(run: Long, next: HaExactEntityStreamStatus) {
@@ -873,6 +1062,9 @@ internal class HaExactEntityStreamOwner(
                             is PendingCallback.RegistryChanged -> candidate.takeIf {
                                 !stopped && generation.get() == it.run && registryChangeObserver === it.target
                             }
+                            is PendingCallback.Lifecycle -> candidate.takeIf {
+                                !stopped && generation.get() == it.run && lifecycleObserver === it.target
+                            }
                         }
                     }
                     if (accepted == null) drainingCallbacks = false
@@ -885,6 +1077,7 @@ internal class HaExactEntityStreamOwner(
                     is PendingCallback.AmbientUpdate -> safeCallback { next.target.onUpdate(next.update) }
                     is PendingCallback.Presence -> safeCallback { next.target.onSnapshot(next.snapshot) }
                     is PendingCallback.RegistryChanged -> safeCallback(next.target)
+                    is PendingCallback.Lifecycle -> safeCallback { next.target.onSignal(next.signal) }
                 }
             }
         } catch (error: Error) {
@@ -961,8 +1154,17 @@ internal class KtorHaExactEntityStreamTransport(
         accessToken: String,
         entityIds: Set<String>,
         watchRegistry: Boolean,
+    ): HaExactEntityConnection =
+        subscribe(baseUrl, accessToken, entityIds, watchRegistry, watchLifecycle = false)
+
+    override suspend fun subscribe(
+        baseUrl: String,
+        accessToken: String,
+        entityIds: Set<String>,
+        watchRegistry: Boolean,
+        watchLifecycle: Boolean,
     ): HaExactEntityConnection = withContext(Dispatchers.IO) {
-        require(entityIds.isNotEmpty() || watchRegistry)
+        require(entityIds.isNotEmpty() || watchRegistry || watchLifecycle)
         val policy = socketFamilyPolicy()
         val client = HaWebSocketClients.client(preferIpv4 = policy.initialPreferIpv4, ipv4Only = policy.ipv4Only)
         var socket: DefaultClientWebSocketSession? = null
@@ -973,28 +1175,38 @@ internal class KtorHaExactEntityStreamTransport(
             socket = active
             authenticate(active, accessToken)
             val batches = presenceSubscriptionBatches(entityIds)
+            val ids = haSubscriptionIds(batches.size, watchRegistry, watchLifecycle, REGISTRY_EVENTS.size)
             batches.forEachIndexed { index, batch ->
                 active.send(Frame.Text(JSONObject()
-                    .put("id", SUBSCRIPTION_ID + index)
+                    .put("id", ids.entityBatchIds[index])
                     .put("type", "subscribe_entities")
                     .put("entity_ids", JSONArray(batch.sorted()))
                     .toString()))
             }
-            val registryIds = if (watchRegistry) REGISTRY_EVENTS.mapIndexed { index, eventType ->
-                val id = batches.size + index + 1
+            REGISTRY_EVENTS.forEachIndexed { index, eventType ->
+                val id = ids.registryIds.elementAtOrNull(index) ?: return@forEachIndexed
                 active.send(Frame.Text(JSONObject()
                     .put("id", id)
                     .put("type", "subscribe_events")
                     .put("event_type", eventType)
                     .toString()))
-                id
-            }.toSet() else emptySet()
+            }
+            // Subscribed by EXACT type, never as a match-all listener: `homeassistant_close` is excluded
+            // from match-all, so only an explicit subscription can observe the final shutdown stage.
+            ids.lifecycleIds.forEach { (id, event) ->
+                active.send(Frame.Text(JSONObject()
+                    .put("id", id)
+                    .put("type", "subscribe_events")
+                    .put("event_type", event.wireValue)
+                    .toString()))
+            }
             KtorExactEntityConnection(
                 client,
                 active,
                 HaCompressedEntityProjection(entityIds),
-                registryIds,
-                batches.size + registryIds.size,
+                ids.registryIds,
+                ids.lifecycleIds,
+                ids.pingIdOffset,
             )
         } catch (error: Exception) {
             runCatching { socket?.close() }
@@ -1033,6 +1245,7 @@ internal class KtorHaExactEntityStreamTransport(
         private val socket: DefaultClientWebSocketSession,
         private val projection: HaCompressedEntityProjection,
         private val registrySubscriptionIds: Set<Int>,
+        private val lifecycleSubscriptionIds: Map<Int, HaLifecycleEvent>,
         private val pingIdOffset: Int,
     ) : HaExactEntityConnection {
         private val pending = ArrayDeque<HaExactSocketMessage>()
@@ -1044,17 +1257,27 @@ internal class KtorHaExactEntityStreamTransport(
                 if (frame !is Frame.Text) continue
                 val json = JSONObject(frame.readText())
                 return when (json.optString("type")) {
-                    "event" -> {
-                        if (json.optInt("id") in registrySubscriptionIds) {
-                            return HaExactSocketMessage.RegistryChanged
+                    "event" -> when (
+                        val route = haEventRoute(
+                            json.optInt("id"),
+                            registrySubscriptionIds,
+                            lifecycleSubscriptionIds,
+                        )
+                    ) {
+                        HaEventRoute.Registry -> HaExactSocketMessage.RegistryChanged
+                        // The id identifies the type, so the event body is never opened.
+                        is HaEventRoute.Lifecycle -> HaExactSocketMessage.Lifecycle(route.event)
+                        HaEventRoute.Entities -> {
+                            pending.addAll(projection.applyAll(json.optJSONObject("event") ?: JSONObject()))
+                            if (pending.isEmpty()) HaExactSocketMessage.Other else pending.removeFirst()
                         }
-                        pending.addAll(projection.applyAll(json.optJSONObject("event") ?: JSONObject()))
-                        if (pending.isEmpty()) HaExactSocketMessage.Other else pending.removeFirst()
                     }
-                    "result" -> if (json.optBoolean("success")) HaExactSocketMessage.Other else {
-                        val message = json.optJSONObject("error")?.optString("message")
-                            ?.take(MAX_ERROR_CHARS).orEmpty()
-                        throw HaProtocolException(message.ifBlank { "Home Assistant rejected the entity subscription" })
+                    "result" -> when (
+                        val outcome = haResultOutcome(json, lifecycleSubscriptionIds.keys, MAX_ERROR_CHARS)
+                    ) {
+                        HaResultOutcome.Ignored -> HaExactSocketMessage.Other
+                        HaResultOutcome.LifecycleRejected -> HaExactSocketMessage.LifecycleRejected
+                        is HaResultOutcome.Fatal -> throw HaProtocolException(outcome.message)
                     }
                     "pong" -> HaExactSocketMessage.Pong(
                         (json.optLong("id", -1L) - pingIdOffset.toLong()).toInt(),
