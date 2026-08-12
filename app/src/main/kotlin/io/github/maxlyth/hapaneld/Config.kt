@@ -1773,18 +1773,29 @@ class Config private constructor(
         edit { putBoolean("auto_brightness", on) }
     }
 
-    /** Strength of deviations from the learned ambient-light baseline; 50 is the balanced response. */
-    val autoBrightnessSensitivity: Int
-        get() = intPref("auto_brightness_sensitivity").coerceIn(0, 100)
-    fun setAutoBrightnessSensitivity(value: Int) {
-        edit { putInt("auto_brightness_sensitivity", value.coerceIn(0, 100)) }
+    /**
+     * Percent of the deviation from the learned ambient baseline that is applied to the screen, once the
+     * engine has admitted the deviation as real. Not a promise that the screen tracks raw lux: positive
+     * excursions are gated by boost admission and release, and while the pattern is still being learned
+     * the effective level follows the smoothed measurement regardless of this value.
+     */
+    val autoBrightnessResponsePercent: Int
+        get() = intPref(SettingsRegistry.RESPONSE_PERCENT_KEY).coerceIn(0, 100)
+    fun setAutoBrightnessResponsePercent(value: Int) {
+        edit { putInt(SettingsRegistry.RESPONSE_PERCENT_KEY, value.coerceIn(0, 100)) }
     }
 
     /** Lowest automatic target in user-facing percent; the actuator's visible floor remains absolute. */
     val autoBrightnessMinimumPercent: Int
-        get() = intPref("auto_brightness_minimum_percent").coerceIn(4, 95)
+        get() = intPref("auto_brightness_minimum_percent")
+            .coerceIn(SettingsRegistry.MINIMUM_AUTOMATIC_PERCENT, SettingsRegistry.MAX_AUTOMATIC_MINIMUM_PERCENT)
     fun setAutoBrightnessMinimumPercent(value: Int) {
-        edit { putInt("auto_brightness_minimum_percent", value.coerceIn(4, 95)) }
+        edit {
+            putInt(
+                "auto_brightness_minimum_percent",
+                value.coerceIn(SettingsRegistry.MINIMUM_AUTOMATIC_PERCENT, SettingsRegistry.MAX_AUTOMATIC_MINIMUM_PERCENT),
+            )
+        }
     }
 
     /** Exact HA illuminance entity selected instead of the local ALS; blank uses the panel sensor. */
@@ -2082,9 +2093,9 @@ class Config private constructor(
      * forward, not silently reset to its default. No-op (and cheap) while already current; call once at
      * startup before the store is read. Committed synchronously so a reboot can't race the write.
      */
-    fun migrateLiveStore() {
+    fun migrateLiveStore(): Boolean {
         val from = storedSchema
-        if (from == SettingsRegistry.SCHEMA) return
+        if (from == SettingsRegistry.SCHEMA) return true
         val specs = SettingsRegistry.SPECS.filterNot { it.readOnly || it.transient }
         val current = specs.associate { it.key to getRaw(it) }
         val (migrated, warnings) = Migrations.migrate(from, current)
@@ -2094,6 +2105,26 @@ class Config private constructor(
             val next = migrated[spec.key] ?: continue
             if (next != current[spec.key]) stage(ed, spec, next)
         }
+        // Schema 6 moves the adaptive response to a new key, so the chain cannot carry it here: the
+        // retired key is no longer a registered setting and never appears in the map built above. This
+        // is the one place that can read it, and the one place that can tell a stored value from a
+        // defaulted one.
+        //
+        // The schema marker decides whether there is anything to carry. A store at schema 2 or later has
+        // booted a build that shipped the setting, so its response — chosen or defaulted — must survive.
+        // A store still on the schema-1 sentinel is either genuinely fresh or predates the setting
+        // entirely (v0.9.4 shipped schema 1 with no sensitivity setting; v0.9.5 shipped schema 2 with
+        // it), and in both cases has no previous response, so the current default is correct.
+        if (from >= SettingsRegistry.FIRST_SCHEMA_WITH_SENSITIVITY &&
+            !prefs.contains(SettingsRegistry.RESPONSE_PERCENT_KEY)
+        ) {
+            val legacy = prefs.getInt(
+                SettingsRegistry.LEGACY_SENSITIVITY_KEY,
+                SettingsRegistry.LEGACY_NEUTRAL_SENSITIVITY,
+            )
+            ed.putInt(SettingsRegistry.RESPONSE_PERCENT_KEY, Migrations.rescaleSensitivity(legacy))
+        }
+        ed.remove(SettingsRegistry.LEGACY_SENSITIVITY_KEY)
         // A schema-3 live store may have relied on the old true fallbacks without ever materializing
         // them. Preserve that upgrade behavior, while fresh schema-1 stores receive schema-4 defaults.
         if (from == 3) {
@@ -2104,8 +2135,23 @@ class Config private constructor(
             }
         }
         ed.putInt("config_schema", SettingsRegistry.SCHEMA)
-        ed.commit()
-        Log.i(TAG, "migrated live config store: schema $from -> ${SettingsRegistry.SCHEMA}")
+        // The schema marker moves in the SAME transaction as the values it describes, so a failed commit
+        // leaves the store wholly at its old schema and the migration is simply retried at the next
+        // start. That is the fail-closed direction, but only if the result is actually read: this used to
+        // log success unconditionally, which would report a semantic migration as done when nothing had
+        // been written. A schema-6 store that silently kept schema-5 state is exactly the condition an
+        // operator needs to see in the log, so it is reported as an error and the outcome is returned.
+        val committed = ed.commit()
+        if (committed) {
+            Log.i(TAG, "migrated live config store: schema $from -> ${SettingsRegistry.SCHEMA}")
+        } else {
+            Log.e(
+                TAG,
+                "live config store migration $from -> ${SettingsRegistry.SCHEMA} did not commit; " +
+                    "the store remains at schema $from and the migration will be retried",
+            )
+        }
+        return committed
     }
 
     /** Whether an HA-capable setting is currently exposed to Home Assistant (per-panel override). */

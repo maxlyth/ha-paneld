@@ -286,12 +286,12 @@ internal class AutoBrightnessController(
 
     internal fun historyRows(): List<AmbientHistoryMinute> = history.history()
     @Synchronized internal fun chartPoints(
-        sensitivity: Int = config.autoBrightnessSensitivity,
+        sensitivity: Int = config.autoBrightnessResponsePercent,
         minimumPercent: Int = config.autoBrightnessMinimumPercent,
     ): List<AdaptiveChartPoint> = chartSnapshot(sensitivity, minimumPercent).points
 
     @Synchronized internal fun chartSnapshot(
-        sensitivity: Int = config.autoBrightnessSensitivity,
+        sensitivity: Int = config.autoBrightnessResponsePercent,
         minimumPercent: Int = config.autoBrightnessMinimumPercent,
     ): AutoBrightnessChartSnapshot {
         reconcileHistorySource()
@@ -385,7 +385,7 @@ internal class AutoBrightnessController(
             elapsedMs = elapsed,
             lux = lux,
             baseline = estimate,
-            sensitivity = config.autoBrightnessSensitivity,
+            sensitivity = config.autoBrightnessResponsePercent,
             conditionElapsedMs = conditionElapsed,
             minimumBrightness = AdaptiveLuxCurve.percentToBrightness(config.autoBrightnessMinimumPercent),
         ) ?: return CALM_EVALUATION_MS

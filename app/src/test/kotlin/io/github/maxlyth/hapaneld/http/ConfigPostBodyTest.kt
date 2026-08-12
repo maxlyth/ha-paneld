@@ -193,13 +193,17 @@ class ConfigPostBodyTest {
     }
 
     @Test fun `automatic brightness minimum preserves the visible floor at config admission`() {
-        listOf("4", "95").forEach { value ->
+        listOf("4", "99").forEach { value ->
+            // Asserted before the cast: an unchecked cast on a narrowed bound raises ClassCastException,
+            // which is an error rather than a failure, so the accept case could not be credited as
+            // covered by anything that mutates the bound.
             val result = normalizeConfigPostParameters(Parameters.build {
                 append("auto_brightness_minimum_percent", value)
-            }) as ConfigPostParameters.Ok
-            assertEquals(value, result.values["auto_brightness_minimum_percent"])
+            })
+            assertTrue("$value must be admitted", result is ConfigPostParameters.Ok)
+            assertEquals(value, (result as ConfigPostParameters.Ok).values["auto_brightness_minimum_percent"])
         }
-        listOf("3", "96").forEach { value ->
+        listOf("3", "100").forEach { value ->
             val result = normalizeConfigPostParameters(Parameters.build {
                 append("auto_brightness_minimum_percent", value)
             })

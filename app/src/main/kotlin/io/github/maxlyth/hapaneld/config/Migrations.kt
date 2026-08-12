@@ -35,7 +35,39 @@ object Migrations {
         Migration { values ->
             values.putIfAbsent("mqtt_address_family", SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY)
         },
+        // Schema 5 stored the adaptive response on a scale where 50 was neutral and everything above it
+        // amplified beyond the measured light. Schema 6 retires that key for a new one holding the
+        // fraction of the decided deviation that is applied, so full response is 100 and the amplifying
+        // half is gone. Doubling carries the old choice exactly up to the old neutral; above it there is
+        // no equivalent, so it lands on full response.
+        //
+        // Only fills the new key when the bundle does not already carry one, which is what separates a
+        // genuine pre-schema-6 bundle from the live store. The live store presents every registered
+        // setting through its default, so the new key is always present there and this transform must
+        // not act; Config.migrateLiveStore owns that path, where a stored value can be told apart from
+        // a defaulted one. The retired key is dropped so an upgraded bundle cannot reintroduce it.
+        Migration { values ->
+            val legacy = values.remove(SettingsRegistry.LEGACY_SENSITIVITY_KEY)?.trim()?.toIntOrNull()
+            values.putIfAbsent(
+                SettingsRegistry.RESPONSE_PERCENT_KEY,
+                // Absent means the exporting panel sat on the schema-5 default, whose equivalent is full
+                // response. Leaving it absent would hand the panel the new default, a weaker response.
+                rescaleSensitivity(legacy ?: SettingsRegistry.LEGACY_NEUTRAL_SENSITIVITY).toString(),
+            )
+        },
     )
+
+    /**
+     * A schema-5 sensitivity to its schema-6 equivalent: exact up to the old neutral, full response above.
+     *
+     * Bounded BEFORE scaling, not after. An imported value is arbitrary attacker- or corruption-supplied
+     * text that merely parses as an `Int`, and doubling it first lets a large value overflow to a
+     * negative number that then clamps LOW — the opposite of the intended saturation.
+     */
+    internal fun rescaleSensitivity(legacy: Int): Int = legacy.coerceIn(0, LEGACY_FULL_RESPONSE) * 2
+
+    /** The schema-5 value that already meant full response; everything above it amplified past it. */
+    private const val LEGACY_FULL_RESPONSE = 50
 
     /**
      * Upgrade [values] from [fromSchema] to [SettingsRegistry.SCHEMA]. Returns the migrated map plus

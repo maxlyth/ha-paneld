@@ -17,7 +17,7 @@ class PerformanceBindingTest {
         val adaptiveKeys = setOf(
             "auto_brightness",
             "auto_brightness_minimum_percent",
-            "auto_brightness_sensitivity",
+            "auto_brightness_response_percent",
             "auto_brightness_ha_entity",
         )
 

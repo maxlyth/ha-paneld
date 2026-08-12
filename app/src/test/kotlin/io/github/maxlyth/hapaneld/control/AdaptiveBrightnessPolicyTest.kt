@@ -102,13 +102,15 @@ class AdaptiveBrightnessPolicyTest {
         assertFalse(normal.brighterThanExpected)
     }
 
-    @Test fun sensitivityZeroUsesBaselineWhileNeutralAndHighRemainProgressive() {
+    @Test fun sensitivityIsTheFractionOfMeasuredDeviationApplied() {
         assertEquals(0.0, adaptiveSensitivityGain(0), 0.0)
-        assertEquals(0.5, adaptiveSensitivityGain(25), 0.0)
-        assertEquals(1.0, adaptiveSensitivityGain(50), 0.0)
-        assertEquals(2.0, adaptiveSensitivityGain(100), 0.0)
+        assertEquals(0.25, adaptiveSensitivityGain(25), 0.0)
+        assertEquals(0.5, adaptiveSensitivityGain(50), 0.0)
+        // The top of the scale follows the measurement exactly. Nothing amplifies past it, because a
+        // gain above 1.0 would drive the screen beyond the light the sensor actually reported.
+        assertEquals(1.0, adaptiveSensitivityGain(100), 0.0)
         assertEquals(0.0, adaptiveSensitivityGain(-1), 0.0)
-        assertEquals(2.0, adaptiveSensitivityGain(101), 0.0)
+        assertEquals(1.0, adaptiveSensitivityGain(101), 0.0)
 
         val row = historyRow(NOW / AMBIENT_MINUTE_MS, 25.0)
         fun projected(sensitivity: Int) = AdaptiveChartProjection.fiveMinute(
@@ -179,7 +181,8 @@ class AdaptiveBrightnessPolicyTest {
 
     @Test fun chartProjectionIsFiveMinuteAndPartitionAgnostic() {
         val rows = (0 until 12).map { historyRow(NOW / AMBIENT_MINUTE_MS + it, (it + 1).toDouble()) }
-        val points = AdaptiveChartProjection.fiveMinute(rows, expectedLogLux = { ln1p(20.0) })
+        // 100 is the schema-6 spelling of the gain this test used when the parameter was defaulted.
+        val points = AdaptiveChartProjection.fiveMinute(rows, sensitivity = 100, expectedLogLux = { ln1p(20.0) })
         assertEquals(3, points.size)
         assertEquals(20.0, points.first().expectedLux, 0.0001)
         assertTrue(points.first().maxLux >= points.first().minLux)

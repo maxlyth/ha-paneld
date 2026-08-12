@@ -75,7 +75,7 @@ class ConfigAccessorDefaultCoherenceTest {
         // Numeric defaults.
         assertEquals(0, c.dashboardIdleReturnMin)
         assertEquals(100, c.dashboardZoom)
-        assertEquals(50, c.autoBrightnessSensitivity)
+        assertEquals(50, c.autoBrightnessResponsePercent)
         assertEquals(4, c.autoBrightnessMinimumPercent)
         assertEquals(514, c.logShipPort)
         assertEquals(0L, c.haTokenExpiry)
@@ -140,7 +140,7 @@ class ConfigAccessorDefaultCoherenceTest {
             "silence_boot_chime" to c.silenceBootChime.toString(),
             "dashboard_idle_return_min" to c.dashboardIdleReturnMin.toString(),
             "dashboard_zoom" to c.dashboardZoom.toString(),
-            "auto_brightness_sensitivity" to c.autoBrightnessSensitivity.toString(),
+            "auto_brightness_response_percent" to c.autoBrightnessResponsePercent.toString(),
             "auto_brightness_minimum_percent" to c.autoBrightnessMinimumPercent.toString(),
             "log_ship_port" to c.logShipPort.toString(),
             "ha_token_expiry" to c.haTokenExpiry.toString(),

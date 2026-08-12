@@ -108,7 +108,7 @@ function autoSleepHydrationSchema() {
     field('dark_mode', 'Display', 'BOOL'),
     field('auto_brightness_ha_entity', 'Display', 'STRING', { picker: 'ha_illuminance' }),
     field('auto_brightness', 'Display', 'BOOL'), field('auto_brightness_minimum_percent', 'Display', 'INT'),
-    field('auto_brightness_sensitivity', 'Display', 'INT'),
+    field('auto_brightness_response_percent', 'Display', 'INT'),
     field('cpu_governor', 'System', 'ENUM'), field('zigbee_router', 'System', 'BOOL'),
     field('prevent_idle_dim', 'Behaviour', 'BOOL'), field('keep_awake', 'Behaviour', 'BOOL'),
     field('dashboard_package', 'Dashboard', 'STRING', { picker: 'renderer' }),
@@ -138,7 +138,7 @@ function autoSleepHydrationSettings(source) {
     ha_url: 'https://ha.example', ha_token: '', home_dashboard: '',
     dashboard_package: 'builtin', dashboard_zoom: '100', auto_sleep: 'true', touch_sound: 'false',
     auto_brightness: 'true', auto_brightness_ha_entity: source, auto_brightness_minimum_percent: '10',
-    auto_brightness_sensitivity: '50', log_ship_enabled: 'false',
+    auto_brightness_response_percent: '50', log_ship_enabled: 'false',
   };
 }
 
@@ -516,7 +516,7 @@ browserTest('Configure rejects an invalid brightness floor before a save request
   let configPosts = 0;
   const schema = [
     { key: 'auto_brightness', label: 'Adaptive brightness', group: 'Display', type: 'BOOL', available: true },
-    { key: 'auto_brightness_minimum_percent', label: 'Minimum brightness', group: 'Display', type: 'INT', min: 4, max: 95, available: true },
+    { key: 'auto_brightness_minimum_percent', label: 'Minimum brightness', group: 'Display', type: 'INT', min: 4, max: 99, available: true },
   ];
   const harness = await startHarness((path, request) => {
     if (path === '/api/v1/config/schema') return json(schema);
@@ -540,7 +540,7 @@ browserTest('Configure rejects an invalid brightness floor before a save request
   await page.locator('#savebtn').click();
   await assert.rejects(page.waitForRequest((request) => request.url().endsWith('/api/v1/config') && request.method() === 'POST', { timeout: 200 }), /Timeout/);
   assert.equal(configPosts, 0);
-  await assert.doesNotReject(page.locator('#cfg-msg').getByText('Minimum brightness must be between 4 and 95.').waitFor());
+  await assert.doesNotReject(page.locator('#cfg-msg').getByText('Minimum brightness must be between 4 and 99.').waitFor());
 });
 
 browserTest('Configure renderer picker reflects the installed Companion catalogue across save and reload', async (t) => {
@@ -685,20 +685,20 @@ browserTest('Sensitivity preview survives transient HA source loss during save',
   const schema = [
     { key: 'auto_brightness_ha_entity', label: 'Ambient source', group: 'Display', type: 'STRING', available: true },
     { key: 'auto_brightness', label: 'Adaptive brightness', group: 'Display', type: 'BOOL', available: true },
-    { key: 'auto_brightness_sensitivity', label: 'Sensitivity', group: 'Display', type: 'INT', min: 0, max: 100, available: true },
+    { key: 'auto_brightness_response_percent', label: 'Sensitivity', group: 'Display', type: 'INT', min: 0, max: 100, available: true },
   ];
   const harness = await startHarness(async (path, request) => {
     if (path === '/api/v1/config/schema') return json(schema);
     if (path === '/api/v1/config') {
       if (request.method === 'POST') {
-        sensitivity = new URLSearchParams(await requestBody(request)).get('auto_brightness_sensitivity');
+        sensitivity = new URLSearchParams(await requestBody(request)).get('auto_brightness_response_percent');
         transientlyUnavailable = true;
         return json({ ok: true });
       }
       return json({ settings: {
         auto_brightness_ha_entity: source,
         auto_brightness: 'true',
-        auto_brightness_sensitivity: sensitivity,
+        auto_brightness_response_percent: sensitivity,
       }, ha_expose: {}, ha_auth: {} });
     }
     if (path === '/api/v1/apps') return json({ apps: [] });
@@ -727,8 +727,8 @@ browserTest('Sensitivity preview survives transient HA source loss during save',
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   await page.locator('#auto-brightness-learning').waitFor();
 
-  await page.locator('#cfg-auto_brightness_sensitivity input').fill('10');
-  await page.waitForFunction(() => document.querySelector('#auto-brightness-learning')?.textContent.includes('Sensitivity 10'));
+  await page.locator('#cfg-auto_brightness_response_percent input').fill('10');
+  await page.waitForFunction(() => document.querySelector('#auto-brightness-learning')?.textContent.includes('Sensitivity 10%'));
   assert.ok(sensitivityQueries.includes(10), `missing live sensitivity preview: ${sensitivityQueries}`);
 
   await page.locator('#savebtn').click();

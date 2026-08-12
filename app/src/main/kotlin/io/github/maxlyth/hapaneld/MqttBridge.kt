@@ -2450,7 +2450,7 @@ internal class MqttBridge(
 
     private fun handleAutoBrightnessSensitivity(payload: String) {
         val value = payload.trim().trim('"').toIntOrNull() ?: return
-        config.setAutoBrightnessSensitivity(value)
+        config.setAutoBrightnessResponsePercent(value)
         autoBright.reapplyLatest()
     }
 
@@ -2956,7 +2956,7 @@ internal class MqttBridge(
             "network_adb" -> handleNetAdb(onOff)
             "zigbee_router" -> handleZigbee(onOff)
             "auto_brightness_minimum_percent" -> handleAutoBrightnessMinimum(value)
-            "auto_brightness_sensitivity" -> handleAutoBrightnessSensitivity(value)
+            "auto_brightness_response_percent" -> handleAutoBrightnessSensitivity(value)
             "auto_brightness_ha_entity" -> handleAutoBrightnessHaEntity(value)
             "cpu_governor" -> handleCpuGov(value)
             "navbar_mode" -> handleNavbar(value)

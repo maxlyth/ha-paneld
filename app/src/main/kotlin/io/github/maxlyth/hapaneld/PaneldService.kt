@@ -1587,7 +1587,7 @@ class PaneldService : Service() {
         override fun historyJson(hours: Int, sensitivity: Int?, minimumPercent: Int?): String {
             val nowEpochMinute = System.currentTimeMillis() / 60_000L
             val cutoffMinute = nowEpochMinute - hours * 60L
-            val previewSensitivity = sensitivity ?: config.autoBrightnessSensitivity
+            val previewSensitivity = sensitivity ?: config.autoBrightnessResponsePercent
             val previewMinimum = minimumPercent ?: config.autoBrightnessMinimumPercent
             val snapshot = autoBright.chartSnapshot(
                 previewSensitivity,

@@ -155,7 +155,23 @@ class MigrationsTest {
         val (migrated, warnings) = Migrations.migrate(bundle.schema, bundle.values)
 
         assertTrue("public 0.9.5 must migrate directly without an unknown intermediate step", warnings.isEmpty())
-        bundle.values.forEach { (key, value) -> assertEquals("value changed for $key", value, migrated[key]) }
+        // Every value is carried forward untouched EXCEPT the retired sensitivity key, which schema 6
+        // replaces with a differently-scaled key rather than redefining in place. Named and asserted
+        // rather than loosening the preservation rule for everything.
+        val retired = setOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY)
+        bundle.values.forEach { (key, value) ->
+            if (key !in retired) assertEquals("value changed for $key", value, migrated[key])
+        }
+        assertEquals("50", bundle.values[SettingsRegistry.LEGACY_SENSITIVITY_KEY])
+        assertEquals(
+            "the schema-5 neutral must become schema-6 full response, preserving its gain exactly",
+            "100",
+            migrated[SettingsRegistry.RESPONSE_PERCENT_KEY],
+        )
+        assertFalse(
+            "the retired key must not survive migration; an older build would read it under its own scale",
+            migrated.containsKey(SettingsRegistry.LEGACY_SENSITIVITY_KEY),
+        )
         assertEquals("false", migrated["auto_sleep"])
         assertTrue("the public fixture must be older than the current schema", SettingsRegistry.SCHEMA > bundle.schema)
         migrated.forEach { (key, value) ->
@@ -190,6 +206,88 @@ class MigrationsTest {
 
         assertEquals("Prefer IPv4", migrated["mqtt_address_family"])
         assertTrue(warnings.isEmpty())
+    }
+
+    @Test fun schemaFiveRescalesEveryStoredSensitivityToItsExactGain() {
+        // Schema 5 gain was value/50; schema 6 gain is value/100. Doubling is exact, not approximate,
+        // for the whole band at or below the old neutral, which is where tuned panels actually sit.
+        listOf(0 to "0", 5 to "10", 10 to "20", 25 to "50", 50 to "100").forEach { (legacy, expected) ->
+            val (migrated, warnings) = Migrations.migrate(
+                5,
+                mapOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY to legacy.toString()),
+            )
+
+            assertEquals("legacy $legacy", expected, migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+            assertTrue(warnings.isEmpty())
+        }
+    }
+
+    @Test fun schemaFiveClampsTheRetiredAmplifyingRangeToFullFollow() {
+        // Above the old neutral the schema-5 curve amplified past the measured light. Schema 6 has no
+        // representation for that, so those panels land on full follow. The lane's one behaviour change.
+        listOf("51", "75", "100").forEach { legacy ->
+            val (migrated, _) = Migrations.migrate(5, mapOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY to legacy))
+
+            assertEquals("legacy $legacy", "100", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+        }
+    }
+
+    @Test fun schemaFiveGivesAnAbsentSensitivityTheLegacyDefaultResponse() {
+        // A bundle without the key was written by a panel sitting on the schema-5 default, whose gain
+        // was 1.0. Leaving it absent would hand the panel the schema-6 default instead, which is half
+        // that — a silent behaviour change on import.
+        val (migrated, _) = Migrations.migrate(5, mapOf("mqtt_broker" to "tcp://ha:1883"))
+
+        assertEquals("100", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+    }
+
+    @Test fun schemaFiveRejectsAMalformedSensitivityRatherThanCarryingItForward() {
+        val (migrated, _) = Migrations.migrate(5, mapOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY to "balanced"))
+
+        assertEquals("100", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+    }
+
+    @Test fun schemaFiveNeverCarriesTheRetiredKeyForwardUnderTheNewScale() {
+        // The whole reason schema 6 uses a new key: an older build tolerates a newer bundle and keeps
+        // the values it recognises, so a surviving retired key would be read on the schema-5 scale where
+        // the same number means double the response.
+        val (migrated, _) = Migrations.migrate(5, mapOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY to "10"))
+
+        assertFalse(migrated.containsKey(SettingsRegistry.LEGACY_SENSITIVITY_KEY))
+        assertEquals("20", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+    }
+
+    @Test fun schemaFiveLeavesAnAlreadyMigratedResponseAlone() {
+        // The live store presents every registered setting through its default, so the new key is always
+        // present on that path and this transform must not act. Only a genuine pre-schema-6 bundle,
+        // which cannot contain the new key, gets a value filled in here.
+        val (migrated, _) = Migrations.migrate(
+            5,
+            mapOf(
+                SettingsRegistry.RESPONSE_PERCENT_KEY to "35",
+                SettingsRegistry.LEGACY_SENSITIVITY_KEY to "10",
+            ),
+        )
+
+        assertEquals("35", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
+        assertFalse(migrated.containsKey(SettingsRegistry.LEGACY_SENSITIVITY_KEY))
+    }
+
+    @Test fun theRescaleClampsHighRatherThanOverflowingLow() {
+        // An imported value is arbitrary text that merely parses as an Int. Doubling before bounding
+        // overflows to a negative number for a large one, which would then clamp LOW - the opposite of
+        // saturation, and a silently dark panel rather than a bright one.
+        assertEquals(100, Migrations.rescaleSensitivity(Int.MAX_VALUE))
+        assertEquals(100, Migrations.rescaleSensitivity(Int.MAX_VALUE / 2 + 1))
+        assertEquals(100, Migrations.rescaleSensitivity(1_500_000_000))
+        assertEquals(0, Migrations.rescaleSensitivity(Int.MIN_VALUE))
+        assertEquals(0, Migrations.rescaleSensitivity(-1))
+
+        val (migrated, _) = Migrations.migrate(
+            5,
+            mapOf(SettingsRegistry.LEGACY_SENSITIVITY_KEY to Int.MAX_VALUE.toString()),
+        )
+        assertEquals("100", migrated[SettingsRegistry.RESPONSE_PERCENT_KEY])
     }
 
     @Test fun newerThanCurrentToleratesWithWarning() {

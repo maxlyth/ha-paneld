@@ -164,7 +164,7 @@ class DiscoveryParityTest {
 
     @Test fun adaptiveBrightnessTuningRemainsPanelLocal() {
         assertNull(SettingsRegistry.spec("auto_brightness_minimum_percent")!!.ha)
-        assertNull(SettingsRegistry.spec("auto_brightness_sensitivity")!!.ha)
+        assertNull(SettingsRegistry.spec("auto_brightness_response_percent")!!.ha)
         assertNull(SettingsRegistry.spec("auto_brightness_ha_entity")!!.ha)
         assertNull(SettingsRegistry.spec("brightness_bias"))
         assertNull(SettingsRegistry.spec("ambient_lux"))

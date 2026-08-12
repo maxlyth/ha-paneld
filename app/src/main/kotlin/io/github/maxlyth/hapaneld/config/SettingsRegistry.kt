@@ -20,10 +20,58 @@ import java.util.Locale
 object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
-    const val SCHEMA = 5
+    const val SCHEMA = 6
     const val MAX_PANEL_ID_CHARS = 63
     const val DEFAULT_SILENCE_BOOT_CHIME = true
     const val DEFAULT_MQTT_ADDRESS_FAMILY = "Automatic"
+
+    /**
+     * Lowest automatic screen percentage the actuator can actually distinguish, and therefore the floor
+     * of the Minimum level control. Raw brightness is floored at BrightnessController.MIN_VISIBLE (10 of
+     * 255) so a dim command can never blank the panel, which means every percentage below this one
+     * resolves to that same raw level: the control would appear to move while the screen did not.
+     *
+     * Derived as ceil(MIN_VISIBLE * 100 / 255) = ceil(3.92) = 4. Kept as a literal rather than computed
+     * from the controller so the config package does not depend on the control package; the equality is
+     * enforced by test instead, which fails if either number moves.
+     */
+    const val MINIMUM_AUTOMATIC_PERCENT = 4
+
+    /**
+     * Highest automatic floor the Minimum level control offers. 99 rather than 100 because at 100 the
+     * floor reaches full brightness and automatic control has no range left to act in — enabled, but
+     * indistinguishable from switched off. Unlike the lower bound this is a judgement, not a derivation.
+     */
+    const val MAX_AUTOMATIC_MINIMUM_PERCENT = 99
+
+    /**
+     * Schema 6 carries the adaptive response under a NEW key rather than redefining the schema-5 one.
+     *
+     * The scales are incompatible: schema 5 read 100 as double response, schema 6 reads it as full
+     * response. Older builds deliberately tolerate a newer bundle and keep the values they recognise, so
+     * reusing the key would let a rollback or a cross-version import read a schema-6 number under
+     * schema-5 meaning and then make that reading durable at its next migration. A distinct key cannot be
+     * misread: a schema-5 build simply does not know it and falls back to its own stored value.
+     */
+    const val RESPONSE_PERCENT_KEY = "auto_brightness_response_percent"
+
+    /** The retired schema-5 key. Read only by migration, and never registered as a current setting. */
+    const val LEGACY_SENSITIVITY_KEY = "auto_brightness_sensitivity"
+
+    /** The sensitivity default that schema 5 and earlier stored, in that era's doubled-gain units. */
+    const val LEGACY_NEUTRAL_SENSITIVITY = 50
+
+    /**
+     * Lowest live-store schema that can carry a schema-5 sensitivity choice worth preserving.
+     *
+     * Verified against release history rather than assumed: v0.9.4 shipped `SCHEMA = 1` with no
+     * sensitivity setting at all, while v0.9.5-rc1 and v0.9.5 shipped `SCHEMA = 2` with the setting and
+     * called `migrateLiveStore()` at startup. Any panel that has the setting has therefore booted 0.9.5
+     * or later and been stamped with a schema marker of at least 2. A store still presenting the
+     * schema-1 sentinel is either genuinely fresh or predates the setting, and in both cases has no
+     * previous response to carry forward.
+     */
+    const val FIRST_SCHEMA_WITH_SENSITIVITY = 2
     private const val MAX_PANEL_ID_INPUT_CHARS = 255
     private val HA_ILLUMINANCE_ENTITY = Regex("^sensor\\.[a-z0-9_]+$")
 
@@ -226,17 +274,23 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "auto_brightness_minimum_percent", type = SettingType.INT, group = "Display",
-            label = "Minimum level", default = "4", min = 4.0, max = 95.0, step = 1.0,
+            label = "Minimum level",
+            default = MINIMUM_AUTOMATIC_PERCENT.toString(),
+            min = MINIMUM_AUTOMATIC_PERCENT.toDouble(),
+            max = MAX_AUTOMATIC_MINIMUM_PERCENT.toDouble(),
+            step = 1.0,
             liveApply = true,
             scope = Scope.DEVICE,
             help = "Lowest automatic screen level as a percentage. Proposals scale from this floor to full brightness; manual brightness can still go lower.",
         ),
         SettingSpec(
-            key = "auto_brightness_sensitivity", type = SettingType.INT, group = "Display",
-            label = "Sensitivity", default = "50", min = 0.0, max = 100.0, step = 5.0,
+            key = RESPONSE_PERCENT_KEY, type = SettingType.INT, group = "Display",
+            label = "Sensitivity", default = "50", min = 0.0, max = 100.0, step = 1.0,
             liveApply = true,
             scope = Scope.DEVICE,
-            help = "How strongly the screen follows deviations from its learned ambient-light pattern (50 = balanced).",
+            help = "How much of the difference from the learned ambient-light pattern is applied to the screen, " +
+                "once the engine has decided a change is real. Lower values keep the screen closer to its learned " +
+                "daily pattern. While the pattern is still being learned the screen follows the measured light directly.",
         ),
 
         SettingSpec(

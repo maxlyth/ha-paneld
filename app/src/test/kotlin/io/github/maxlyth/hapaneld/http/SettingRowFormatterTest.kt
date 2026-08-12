@@ -37,7 +37,7 @@ class SettingRowFormatterTest {
     @Test fun everyKeyProductionActuallyFormatsIsFormattable() {
         // The call sites in behaviourRowsHtml and displayRowsHtml. If a future row formats a new key,
         // add it here — this list failing is the signal that the key cannot carry a formatter at all.
-        listOf("ha_area", "auto_brightness_minimum_percent", "auto_brightness_sensitivity").forEach { key ->
+        listOf("ha_area", "auto_brightness_minimum_percent", "auto_brightness_response_percent").forEach { key ->
             val formatter = SettingRowFormatter.of(key) { raw -> "$raw!" }
             assertEquals(key, formatter.key)
             assertEquals("x!", formatter.formatFor(key, "x"))

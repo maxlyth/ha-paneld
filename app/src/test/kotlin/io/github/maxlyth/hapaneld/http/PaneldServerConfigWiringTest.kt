@@ -30,7 +30,7 @@ class PaneldServerConfigWiringTest {
         val registryKeys = SettingsRegistry.liveApplyKeys()
         val expectedKeys = setOf(
             "auto_brightness", "auto_brightness_ha_entity", "auto_brightness_minimum_percent",
-            "auto_brightness_sensitivity", "auto_sleep", "companion_auto_update",
+            "auto_brightness_response_percent", "auto_sleep", "companion_auto_update",
             "companion_update_channel", "cpu_governor", "ha_area", "home_dashboard", "kiosk_lock",
             "navbar_mode", "network_adb", "prevent_idle_dim", "self_update", "silence_boot_chime",
             "touch_sound", "update_channel", "wake_on_wave", "watchdog_enabled", "webview_auto_update",

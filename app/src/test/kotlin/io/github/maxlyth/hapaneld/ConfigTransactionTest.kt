@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.control.fakeProfile
 import io.github.maxlyth.hapaneld.device.DeviceProfile
@@ -194,7 +195,7 @@ class ConfigTransactionTest {
         config.setAutoBrightnessMinimumPercent(0)
         assertEquals(4, config.autoBrightnessMinimumPercent)
         config.setAutoBrightnessMinimumPercent(100)
-        assertEquals(95, config.autoBrightnessMinimumPercent)
+        assertEquals(99, config.autoBrightnessMinimumPercent)
     }
 
     @Test fun hardenedSecurityAndOwnedNetworkAdbAreDurablyMutuallyExclusive() {
@@ -478,6 +479,72 @@ class ConfigTransactionTest {
         explicitConfig.migrateLiveStore()
         assertFalse(explicitConfig.wakeOnWave)
         assertFalse(explicitConfig.haExposed("auto_sleep", true))
+    }
+
+    /**
+     * Schema 6 moves the adaptive response to a new key, so every pre-schema-6 store reaches this code
+     * without one. What separates "carry the old response forward" from "use the new default" is the
+     * schema marker, and that discriminator is backed by release history rather than by inference:
+     * v0.9.4 shipped schema 1 with no sensitivity setting at all, while v0.9.5 shipped schema 2 with the
+     * setting and ran this migration at startup. A store that has the setting has therefore been stamped
+     * at 2 or later; a store still on the schema-1 sentinel never had one.
+     */
+    @Test fun theResponseMigrationCarriesEveryUpgradeShapeAndLeavesAFreshInstallOnItsDefault() {
+        val default = SettingsRegistry.spec(SettingsRegistry.RESPONSE_PERCENT_KEY)!!.default.toInt()
+        val legacyImage = Migrations.rescaleSensitivity(SettingsRegistry.LEGACY_NEUTRAL_SENSITIVITY)
+
+        // Fresh install: the schema-1 sentinel, nothing materialized, no previous response to carry.
+        val fresh = fakePreferences()
+        val freshConfig = Config(fresh.instance)
+        assertTrue(freshConfig.migrateLiveStore())
+        assertEquals(default, freshConfig.autoBrightnessResponsePercent)
+        assertFalse(fresh.values.containsKey(SettingsRegistry.RESPONSE_PERCENT_KEY))
+
+        // An 0.9.5-era panel that never opened the control. This is the shape the review called
+        // indistinguishable from fresh state: no materialized sensitivity key. The schema marker is what
+        // tells them apart, and a panel with the setting always has one.
+        val untouched = fakePreferences(initial = mapOf("config_schema" to 2))
+        val untouchedConfig = Config(untouched.instance)
+        assertTrue(untouchedConfig.migrateLiveStore())
+        assertEquals(legacyImage, untouchedConfig.autoBrightnessResponsePercent)
+
+        // An explicitly tuned panel: rescaled to the identical gain, and the retired key removed so no
+        // older build can read the new number under the old scale.
+        val tuned = fakePreferences(initial = mapOf(
+            "config_schema" to 5,
+            SettingsRegistry.LEGACY_SENSITIVITY_KEY to 5,
+        ))
+        val tunedConfig = Config(tuned.instance)
+        assertTrue(tunedConfig.migrateLiveStore())
+        assertEquals(10, tunedConfig.autoBrightnessResponsePercent)
+        assertFalse(tuned.values.containsKey(SettingsRegistry.LEGACY_SENSITIVITY_KEY))
+
+        // A panel that already ran schema 6 keeps exactly what it has.
+        val current = fakePreferences(initial = mapOf(
+            "config_schema" to SettingsRegistry.SCHEMA,
+            SettingsRegistry.RESPONSE_PERCENT_KEY to 12,
+        ))
+        val currentConfig = Config(current.instance)
+        assertTrue(currentConfig.migrateLiveStore())
+        assertEquals(12, currentConfig.autoBrightnessResponsePercent)
+    }
+
+    /**
+     * A semantic migration that reports success without writing would leave the panel running one
+     * schema's numbers under another's meaning. The schema marker moves in the same transaction as the
+     * values, so a failed commit must leave the store wholly unmigrated AND must be reported.
+     */
+    @Test fun aFailedLiveStoreMigrationIsReportedAndLeavesTheStoreAtItsOldSchema() {
+        val prefs = fakePreferences(
+            initial = mapOf("config_schema" to 5, SettingsRegistry.LEGACY_SENSITIVITY_KEY to 5),
+            commitSucceeds = false,
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse("a migration that did not commit must not report success", config.migrateLiveStore())
+        assertEquals(5, prefs.values["config_schema"])
+        assertEquals(5, prefs.values[SettingsRegistry.LEGACY_SENSITIVITY_KEY])
+        assertFalse(prefs.values.containsKey(SettingsRegistry.RESPONSE_PERCENT_KEY))
     }
 
     @Test fun everyWakeOnWaveWriteInvalidatesAlreadyAdmittedGestureWork() {

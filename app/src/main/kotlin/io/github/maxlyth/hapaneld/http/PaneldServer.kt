@@ -271,7 +271,7 @@ internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
     "dark_mode",
     "auto_brightness",
     "auto_brightness_minimum_percent",
-    "auto_brightness_sensitivity",
+    "auto_brightness_response_percent",
     "auto_brightness_ha_entity",
     "cpu_governor",
     "keep_awake",
@@ -600,9 +600,12 @@ internal fun autoBrightnessHistoryParameters(
         it.toIntOrNull()?.takeIf { value -> value in 0..100 }
             ?: throw IllegalArgumentException("sensitivity must be between 0 and 100")
     }
+    val minimumRange = SettingsRegistry.MINIMUM_AUTOMATIC_PERCENT..SettingsRegistry.MAX_AUTOMATIC_MINIMUM_PERCENT
     val boundedMinimum = minimumPercent?.let {
-        it.toIntOrNull()?.takeIf { value -> value in 4..95 }
-            ?: throw IllegalArgumentException("minimum_percent must be between 4 and 95")
+        it.toIntOrNull()?.takeIf { value -> value in minimumRange }
+            ?: throw IllegalArgumentException(
+                "minimum_percent must be between ${minimumRange.first} and ${minimumRange.last}",
+            )
     }
     return AutoBrightnessHistoryParameters(boundedHours, boundedSensitivity, boundedMinimum)
 }
@@ -4338,7 +4341,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // Display and install-backed values, each deep-linking to its owning surface.
     private fun displayRowsHtml(s: Snap): String {
         return listOf(
-            "auto_brightness", "auto_brightness_minimum_percent", "auto_brightness_sensitivity", "auto_brightness_ha_entity",
+            "auto_brightness", "auto_brightness_minimum_percent", "auto_brightness_response_percent", "auto_brightness_ha_entity",
         ).mapNotNull { key ->
             val formatter: SettingRowFormatter? = when (key) {
                 "auto_brightness_minimum_percent" -> SettingRowFormatter.of(key) { raw ->
@@ -4346,7 +4349,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                         "$percent% (${AdaptiveLuxCurve.percentToBrightness(percent)})"
                     } ?: raw
                 }
-                "auto_brightness_sensitivity" -> SettingRowFormatter.of(key) { raw ->
+                "auto_brightness_response_percent" -> SettingRowFormatter.of(key) { raw ->
                     raw.toIntOrNull()?.coerceIn(0, 100)?.let { "$it%" } ?: raw
                 }
                 else -> null

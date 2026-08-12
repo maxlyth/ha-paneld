@@ -776,13 +776,13 @@
     if (f.maxLength != null) inp.maxLength = f.maxLength;
     if (f.step != null) inp.step = f.step;
     if (f.type === "FLOAT" && f.step == null) inp.step = "any";
-    if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") && !ambientLightSourceReady()) {
+    if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_response_percent") && !ambientLightSourceReady()) {
       inp.disabled = true;
       inp.title = "Select an ambient light source first.";
     }
     inp.addEventListener("input", function () {
       values[f.key] = inp.value; setDirty(f.key);
-      if (f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") queueAutoBrightnessHistory();
+      if (f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_response_percent") queueAutoBrightnessHistory();
     });
     return inp;
   }
@@ -1139,6 +1139,21 @@
     return "Updated " + date.toLocaleString() + " (" + relative + ")";
   }
 
+  // Preview bounds come from /api/v1/config/schema, never from literals here. A copy in this file
+  // disagrees with the server the moment either bound moves, and the failure is silent: an in-range
+  // value outside the stale copy loses its query parameter, so the chart quietly projects the STORED
+  // value while the operator believes they are previewing the one they just typed. That is exactly
+  // what a hard-coded 95 did once the ceiling rose. A value outside the server's own bounds is still
+  // omitted rather than sent — it would only earn a 400 — and the control is already invalid, so the
+  // save gate reports it.
+  function autoBrightnessPreviewSuffix(param, key) {
+    var field = null;
+    for (var i = 0; i < schema.length; i++) if (schema[i].key === key) { field = schema[i]; break; }
+    var value = parseInt(values[key], 10);
+    if (!isFinite(value) || !field || field.min == null || field.max == null) return "";
+    return value < field.min || value > field.max ? "" : param + encodeURIComponent(value);
+  }
+
   function autoBrightnessProjectionSensitivity() {
     if (!autoBrightHistory) return null;
     var value = parseInt(autoBrightHistory.sensitivity, 10);
@@ -1184,12 +1199,8 @@
     if (autoBrightLoading && !force) return;
     autoBrightLoading = true;
     var request = ++autoBrightRequest;
-    var sensitivity = parseInt(values.auto_brightness_sensitivity, 10);
-    var sensitivitySuffix = isFinite(sensitivity) && sensitivity >= 0 && sensitivity <= 100
-      ? "&sensitivity=" + encodeURIComponent(sensitivity) : "";
-    var minimum = parseInt(values.auto_brightness_minimum_percent, 10);
-    var minimumSuffix = isFinite(minimum) && minimum >= 4 && minimum <= 95
-      ? "&minimum_percent=" + encodeURIComponent(minimum) : "";
+    var sensitivitySuffix = autoBrightnessPreviewSuffix("&sensitivity=", "auto_brightness_response_percent");
+    var minimumSuffix = autoBrightnessPreviewSuffix("&minimum_percent=", "auto_brightness_minimum_percent");
     var succeeded = false;
     Promise.all([
       fetch("/api/v1/auto-brightness", { cache: "no-store" }).then(function (r) { if (!r.ok) throw r.status; return r.json(); }),
@@ -1314,7 +1325,7 @@
     if (dayCount > autoBrightnessLineDays()) detail += " · earlier history shown as weekly range";
     if (bucket) detail += " · " + bucket + " minute buckets";
     var projectionSensitivity = autoBrightnessProjectionSensitivity();
-    if (projectionSensitivity != null) detail += " · Sensitivity " + projectionSensitivity;
+    if (projectionSensitivity != null) detail += " · Sensitivity " + projectionSensitivity + "%";
     detail += " · " + autoBrightnessFreshness();
     var panel = el("div", { class: "autobright-panel", id: "auto-brightness-learning" }, [
       el("div", { class: "autobright-head" }, [
@@ -2076,7 +2087,7 @@
     }
     var ctl = el("div", { class: "fctl" }, f.readOnly ? [pip(f)] : [pip(f), valueControl]);
     // Anchor id so dashboard "edit" icons can deep-link straight to this setting.
-    var dependencyDisabled = (f.key === "auto_brightness" || f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") && !ambientLightSourceReady();
+    var dependencyDisabled = (f.key === "auto_brightness" || f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_response_percent") && !ambientLightSourceReady();
     return el("div", {
       class: "frow" + (f.available ? "" : " muted") + (dependencyDisabled ? " dependency-disabled" : ""),
       id: "cfg-" + f.key
@@ -2084,7 +2095,7 @@
   }
 
   function shouldRenderRow(f) {
-    if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_sensitivity") && values.auto_brightness !== "true") return false;
+    if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_response_percent") && values.auto_brightness !== "true") return false;
     return true;
   }
 
@@ -2584,7 +2595,7 @@
           msg.textContent = ok ? outcomeMessage : "Saved (reload failed — refresh the page).";
           var autoBrightnessSettingChanged = Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness") ||
               Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_minimum_percent") ||
-              Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_sensitivity") ||
+              Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_response_percent") ||
               autoBrightnessSourceChanged;
           if (autoBrightnessSourceChanged || (ok && autoBrightnessSettingChanged)) {
             loadAutoBrightnessData(true);

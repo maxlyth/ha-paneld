@@ -34,9 +34,23 @@ class AutoBrightnessHttpApiTest {
     }
 
     @Test fun `history query defaults and enforces public bounds`() {
-        assertEquals(AutoBrightnessHistoryParameters(168, null, null), autoBrightnessHistoryParameters(null, null))
-        assertEquals(AutoBrightnessHistoryParameters(1, 0, 4), autoBrightnessHistoryParameters("1", "0", "4"))
-        assertEquals(AutoBrightnessHistoryParameters(168, 100, 95), autoBrightnessHistoryParameters("168", "100", "95"))
+        // The accepted cases go through runCatching so that narrowing a bound turns this assertion RED
+        // rather than throwing out of the test. A bare call proves the bound only by not exploding, and
+        // an escaped IllegalArgumentException is an error, not a failure — a mutation battery cannot
+        // credit it, and neither should a reader.
+        assertEquals(
+            AutoBrightnessHistoryParameters(168, null, null),
+            runCatching { autoBrightnessHistoryParameters(null, null) }.getOrNull(),
+        )
+        assertEquals(
+            AutoBrightnessHistoryParameters(1, 0, 4),
+            runCatching { autoBrightnessHistoryParameters("1", "0", "4") }.getOrNull(),
+        )
+        assertEquals(
+            "the published ceiling must be accepted, not merely not-rejected",
+            AutoBrightnessHistoryParameters(168, 100, 99),
+            runCatching { autoBrightnessHistoryParameters("168", "100", "99") }.getOrNull(),
+        )
 
         listOf("0", "169", "not-a-number").forEach { hours ->
             assertTrue(runCatching { autoBrightnessHistoryParameters(hours, null) }.isFailure)
@@ -44,7 +58,7 @@ class AutoBrightnessHttpApiTest {
         listOf("-1", "101", "balanced").forEach { sensitivity ->
             assertTrue(runCatching { autoBrightnessHistoryParameters(null, sensitivity) }.isFailure)
         }
-        listOf("3", "96", "balanced").forEach { minimum ->
+        listOf("3", "100", "balanced").forEach { minimum ->
             assertTrue(runCatching { autoBrightnessHistoryParameters(null, null, minimum) }.isFailure)
         }
     }

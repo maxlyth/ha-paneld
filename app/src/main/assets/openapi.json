@@ -247,8 +247,8 @@
           "watchdog_enabled": { "type": "boolean" }, "touch_sound": { "type": "boolean" },
           "silence_boot_chime": { "type": "boolean", "default": true, "description": "Mute the firmware startup chime; enabled by default so panels reboot silently" }, "keep_awake": { "type": "boolean", "description": "Disabling an enabled guard requires physical POWER_CONFIGURATION approval for a remote Hardened-mode Config request" },
           "auto_brightness": { "type": "boolean" },
-          "auto_brightness_minimum_percent": { "type": "integer", "minimum": 4, "maximum": 95, "default": 4, "description": "Lowest automatic screen level as a percentage; proposals scale from this floor to full brightness" },
-          "auto_brightness_sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50, "description": "How strongly the screen follows deviations from the learned ambient pattern" },
+          "auto_brightness_minimum_percent": { "type": "integer", "minimum": 4, "maximum": 99, "default": 4, "description": "Lowest automatic screen level as a percentage; proposals scale from this floor to full brightness. The floor of 4 is the first percentage the backlight can distinguish from its never-blank minimum" },
+          "auto_brightness_response_percent": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50, "description": "Percent of an admitted deviation from the learned ambient pattern that is applied to the screen; 0 uses the learned pattern alone. Replaces the retired auto_brightness_sensitivity, whose scale is not comparable" },
           "auto_brightness_ha_entity": { "type": "string", "pattern": "^(|sensor\\.[a-z0-9_]+)$", "description": "Home Assistant illuminance entity; blank uses the panel ambient-light sensor" },
           "navbar_mode": { "type": "string", "enum": ["Off", "Always on", "Swipe reveal", "Native"], "description": "Native is accepted only on panels whose device profile declares a native Android navigation bar; elsewhere it is rejected." },
           "cpu_governor": { "type": "string", "enum": ["Performance", "Efficiency", "Auto"] },
@@ -406,8 +406,8 @@
       "get": { "summary": "Seven-day ambient-light learning projection", "description": "Returns bounded aggregate lux buckets and the learned expected pattern. A sensitivity override previews proposed brightness without changing config. Browser requests must pass same-origin Fetch Metadata admission; headerless LAN automation remains supported.", "tags": ["display"],
         "parameters": [
           { "name": "hours", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 168, "default": 168 } },
-          { "name": "sensitivity", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100 }, "description": "Optional what-if preview; 50 is balanced" },
-          { "name": "minimum_percent", "in": "query", "schema": { "type": "integer", "minimum": 4, "maximum": 95 }, "description": "Optional minimum automatic brightness percentage for what-if preview" }
+          { "name": "sensitivity", "in": "query", "schema": { "type": "integer", "minimum": 0, "maximum": 100 }, "description": "Optional what-if preview; the percent of an admitted deviation that is applied" },
+          { "name": "minimum_percent", "in": "query", "schema": { "type": "integer", "minimum": 4, "maximum": 99 }, "description": "Optional minimum automatic brightness percentage for what-if preview" }
         ],
         "responses": { "200": { "description": "{available,hours,bucket_minutes,sensitivity,minimum_percent,minimum_brightness,now_epoch_minute,sourceRevision,latestEpochMinute,time_zone,points:[{epochMinute,localDay,minuteOfDay,dayAge,observedMeanLux,minLux,maxLux,expectedLux,proposedBrightness}]} (sensitivity and minimum_percent identify the projection inputs; sourceRevision is an opaque partition identity; latestEpochMinute is the newest returned five-minute point; localDay, minuteOfDay, and dayAge use the panel timezone)" }, "400": { "description": "hours, sensitivity, or minimum_percent outside the public bounds" }, "403": { "description": "Cross-origin or unverifiable browser request refused; headerless LAN automation remains supported" } }
       }

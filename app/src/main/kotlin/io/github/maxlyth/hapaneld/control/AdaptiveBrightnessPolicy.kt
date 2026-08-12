@@ -11,7 +11,6 @@ import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.ln1p
 import kotlin.math.max
-import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -580,17 +579,28 @@ internal data class AdaptiveChartPoint(
     val proposedBrightness: Int,
 )
 
-/** Neutral at 50, baseline-only at 0, and up to double residual response at 100. */
-internal fun adaptiveSensitivityGain(sensitivity: Int): Double {
-    val bounded = sensitivity.coerceIn(0, 100)
-    return if (bounded <= 50) bounded / 50.0 else 2.0.pow((bounded - 50) / 50.0)
-}
+/**
+ * Fraction of the CONDITIONED deviation from the learned pattern that reaches the screen.
+ *
+ * The engine blends rather than amplifies — `expectedLog + gain * conditionedResidual` — so 0 uses the
+ * learned pattern alone. There is deliberately no value above 100: a gain over 1.0 would drive the
+ * screen past the light the sensor actually reported.
+ *
+ * 100 is NOT "follows the measured light exactly", and the difference is not pedantic. A positive
+ * excursion is weighted by boost admission and release, so an unadmitted brightening reaches the screen
+ * at weight zero however high this value is, and in [AdaptiveModelMode.COLD_START] the effective level
+ * is the smoothed measurement with this value never consulted. What this scales is the residual the
+ * engine has already decided to act on.
+ */
+internal fun adaptiveSensitivityGain(sensitivity: Int): Double = sensitivity.coerceIn(0, 100) / 100.0
 
 internal object AdaptiveChartProjection {
     /** At most 2,016 five-minute points for a seven-day window. */
     fun fiveMinute(
         rows: List<AmbientHistoryMinute>,
-        sensitivity: Int = 50,
+        // Deliberately not defaulted: a defaulted sensitivity silently reinterprets whenever the scale
+        // changes, and this projection must show exactly what the caller is previewing.
+        sensitivity: Int,
         brightnessRange: AdaptiveBrightnessRange = AdaptiveBrightnessRange.FIXED,
         minimumBrightness: Int = BrightnessController.MIN_VISIBLE,
         expectedLogLux: (Long) -> Double,

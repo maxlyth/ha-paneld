@@ -85,11 +85,19 @@ class AutoBrightnessUiContractTest {
         assertTrue("smoothing must be display-only and applied within discontinuity-split runs", "smoothedRunValues(run, field, day.age)" in source)
         assertTrue("missing buckets and DST discontinuities must split lines", "point.minute - previous.minute !== bucketMinutes" in source && "point.minuteOfDay - previous.minuteOfDay !== bucketMinutes" in source)
         assertTrue("chart bitmap must be redrawn after layout changes", "setTimeout(drawAutoBrightnessChart, 100)" in source)
-        assertTrue("sensitivity edits must reproject history", "f.key === \"auto_brightness_sensitivity\"" in source)
+        assertTrue("sensitivity edits must reproject history", "f.key === \"auto_brightness_response_percent\"" in source)
         assertTrue("history must echo the sensitivity used for its projection", "put(\"sensitivity\", previewSensitivity)" in service)
         assertTrue("the chart must identify the sensitivity used for its proposed line", "Sensitivity \" + projectionSensitivity" in source)
         assertTrue("minimum edits must reproject history", "f.key === \"auto_brightness_minimum_percent\"" in source)
         assertTrue("minimum preview must use the server projection", "&minimum_percent=" in source)
+        // A bound copied into this file drifts from the registry silently, and the failure mode is not
+        // an error: the query parameter is dropped and the chart projects the STORED value while the
+        // operator believes they are previewing the one they just typed. A hard-coded 95 did exactly
+        // that once the ceiling rose to 99, so the preview must read its range from the served schema.
+        assertTrue(
+            "preview bounds must come from the served schema, never a literal in this file",
+            "field.min == null || field.max == null" in source && "value < field.min || value > field.max" in source,
+        )
         assertTrue("chart must retain the spike envelope", "min_lux" in source && "max_lux" in source)
         assertTrue("sensitivity preview must draw proposed brightness", "proposedBrightness" in source && "yBrightness" in source)
         assertTrue("brightness axis must use user-facing percentages", "ctx.fillText(\"100%\"" in source && "ctx.fillText(\"0%\"" in source)
@@ -146,7 +154,7 @@ class AutoBrightnessUiContractTest {
         assertTrue("the first setting in every card must not have a divider", ".card>h2+.frow{border-top:0}" in css)
         assertTrue("auto-brightness must join the preceding ambient source", "#cfg-auto_brightness_ha_entity + #cfg-auto_brightness" in css)
         assertTrue("minimum must join the auto-brightness toggle", "#cfg-auto_brightness + #cfg-auto_brightness_minimum_percent" in css)
-        assertTrue("sensitivity must join the minimum control", "#cfg-auto_brightness_minimum_percent + #cfg-auto_brightness_sensitivity" in css)
+        assertTrue("sensitivity must join the minimum control", "#cfg-auto_brightness_minimum_percent + #cfg-auto_brightness_response_percent" in css)
         assertTrue("learning panel must join the adaptive controls", ".autobright-panel{margin-top:0;padding-top:0;border-top:0}" in css)
         assertTrue("panel updater channel must join its toggle", "#cfg-self_update + #cfg-update_channel" in css)
         assertTrue("Companion updater channel must join its toggle", "#cfg-companion_auto_update + #cfg-companion_update_channel" in css)
@@ -163,7 +171,7 @@ class AutoBrightnessUiContractTest {
         assertTrue("catalog selections must be available with numeric lux", "item.available === true && typeof lux === \"number\" && isFinite(lux)" in source)
         assertTrue(
             "minimum and sensitivity must be disabled without a source",
-            "f.key === \"auto_brightness_minimum_percent\" || f.key === \"auto_brightness_sensitivity\"" in source,
+            "f.key === \"auto_brightness_minimum_percent\" || f.key === \"auto_brightness_response_percent\"" in source,
         )
         assertTrue(
             "retained learning must survive a temporarily unavailable configured source",
