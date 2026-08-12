@@ -19,6 +19,9 @@ internal data class HaApiSession(
     val accessToken: String?,
     val rejected: Boolean = false,
     val owner: HaAuthOwner? = null,
+    /** Set when the token is absent because minting it failed in TRANSPORT (certificate, DNS, timeout,
+     *  5xx) — never when the server rejected the credential or none is configured. */
+    val transientDetail: String? = null,
 )
 
 internal fun interface HaApiSessionProvider {
@@ -45,6 +48,7 @@ internal class DashboardHaApiSessionProvider(
             result.session?.accessToken,
             result.rejected,
             current.takeIf { ownsSession }?.stableOwner(),
+            result.transientDetail,
         )
     }
 }

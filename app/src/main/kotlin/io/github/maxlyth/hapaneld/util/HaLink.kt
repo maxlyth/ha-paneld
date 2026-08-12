@@ -105,7 +105,9 @@ object HaLink {
     sealed class Refresh {
         data class Success(val tokens: TokenSet) : Refresh()
         object Rejected : Refresh()
-        object Transient : Refresh()
+        /** [detail] names the transport failure (certificate, DNS, timeout, HTTP 5xx) so an admission
+         *  screen can point at the real fault instead of blaming the credential. */
+        data class Transient(val detail: String? = null) : Refresh()
     }
 
     data class OAuthTokens(
@@ -189,16 +191,17 @@ object HaLink {
         )
         val access = json.optString("access_token").takeIf { it.isNotBlank() }
         // A 200 without a token is a server oddity, not a revocation — treat as transient.
-        if (access == null) Refresh.Transient else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
+        if (access == null) Refresh.Transient("token refresh returned no access token")
+        else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
     } catch (e: HttpError) {
         Log.i(TAG, "refresh failed: HTTP ${e.code}")
         // Home Assistant uses 400 for invalid refresh requests, including a wrong required client id,
         // and 403 for an inactive user. These unchanged requests cannot recover by retrying; 5xx from a
         // restart or proxy and 404 from a wrong endpoint remain transient/configuration evidence.
-        if (e.code in intArrayOf(400, 401, 403)) Refresh.Rejected else Refresh.Transient
+        if (e.code in intArrayOf(400, 401, 403)) Refresh.Rejected else Refresh.Transient("token refresh failed: HTTP ${e.code}")
     } catch (e: Exception) {
         Log.i(TAG, "refresh failed: ${e.message}")
-        Refresh.Transient
+        Refresh.Transient(e.message)
     }
 
     /** HA frontend login flow with username/password → short-lived access token, or null. */

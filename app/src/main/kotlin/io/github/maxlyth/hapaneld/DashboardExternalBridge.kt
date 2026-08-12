@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.sensors.DashboardHaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAmbientTransport
+import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
@@ -140,17 +141,13 @@ internal class DashboardV2CompatibilityProbe(
     suspend fun check(): DashboardV2ProbeResult = withContext(workerDispatcher) {
         try {
             var session = auth.resolve(force = false)
-            if (session.rejected || session.accessToken.isNullOrBlank()) {
-                return@withContext DashboardV2ProbeResult.AuthenticationFailed
-            }
+            blockedBy(session)?.let { return@withContext it }
             val response = try {
-                transport.config(session.baseUrl, session.accessToken)
+                transport.config(session.baseUrl, requireNotNull(session.accessToken))
             } catch (_: HaAuthenticationException) {
                 session = auth.resolve(force = true)
-                if (session.rejected || session.accessToken.isNullOrBlank()) {
-                    return@withContext DashboardV2ProbeResult.AuthenticationFailed
-                }
-                transport.config(session.baseUrl, session.accessToken)
+                blockedBy(session)?.let { return@withContext it }
+                transport.config(session.baseUrl, requireNotNull(session.accessToken))
             }
             val rawVersion = (response.opt("version") as? String)?.trim()?.take(MAX_VERSION_CHARS)
             val parsed = HomeAssistantVersion.parse(rawVersion)
@@ -163,12 +160,26 @@ internal class DashboardV2CompatibilityProbe(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
-            DashboardV2ProbeResult.Unavailable(
-                error.message?.replace(Regex("[\\r\\n\\t]+"), " ")?.trim()?.take(240)
-                    ?.takeIf(String::isNotBlank) ?: "Home Assistant version is unavailable",
-            )
+            unavailable(error.message)
         }
     }
+
+    /** A missing token is an authentication verdict only when the server refused it or none is
+     *  configured. When minting failed in TRANSPORT (certificate, DNS, timeout, 5xx) the credential
+     *  was never judged, so the honest verdict is unavailability naming the fault — which also lets a
+     *  previously verified version admit the renderer instead of parking the panel. */
+    private fun blockedBy(session: HaApiSession): DashboardV2ProbeResult? = when {
+        session.rejected -> DashboardV2ProbeResult.AuthenticationFailed
+        !session.accessToken.isNullOrBlank() -> null
+        session.transientDetail != null -> unavailable(session.transientDetail)
+        else -> DashboardV2ProbeResult.AuthenticationFailed
+    }
+
+    private fun unavailable(detail: String?): DashboardV2ProbeResult.Unavailable =
+        DashboardV2ProbeResult.Unavailable(
+            detail?.replace(Regex("[\\r\\n\\t]+"), " ")?.trim()?.take(240)
+                ?.takeIf(String::isNotBlank) ?: "Home Assistant version is unavailable",
+        )
 
     private companion object {
         const val MAX_VERSION_CHARS = 64

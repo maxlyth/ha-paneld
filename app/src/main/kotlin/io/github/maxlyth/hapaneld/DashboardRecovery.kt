@@ -323,6 +323,205 @@ internal class DashboardRetryPolicy(
     }
 }
 
+/** How a blocked renderer-admission verdict may recover on its own. Classified by the caller so the
+ * policy stays pure: [FROM_BASE] backs off exponentially toward the ceiling (transport faults, where
+ * the server's return should be noticed quickly), [AT_CEILING] probes only at the ceiling cadence
+ * (verdicts only a server-side repair can change — re-enabled users, restored dashboards),
+ * [MANUAL_ONLY] never arms (a wrong HA version or a missing WebView capability is not time-driven). */
+internal enum class AdmissionRetryClass { FROM_BASE, AT_CEILING, MANUAL_ONLY }
+
+/**
+ * What the panel actually learned when renderer admission was blocked. Every blocked screen names one
+ * of these, so recovery policy is decided in one place instead of screen by screen.
+ */
+internal enum class AdmissionOutcome {
+    /** The check never completed: certificate, DNS, timeout or 5xx while reaching Home Assistant. */
+    TRANSPORT_FAILED,
+
+    /** The signed-in account's dashboard list could not be read. */
+    DASHBOARD_LIST_UNREADABLE,
+
+    /** The panel's own sign-in page did not load; its server restarts during reconfigures. */
+    SIGN_IN_PAGE_UNREACHABLE,
+
+    /** Home Assistant loaded but never posted the V2 handshake. The WebView is capable and the page is
+     *  reachable, so a later load can still complete it — a missed exchange, not a missing capability. */
+    BRIDGE_HANDSHAKE_MISSED,
+
+    /** Home Assistant answered with a version string that cannot be parsed — a degraded proxy answer or
+     *  a prerelease build. An answer arrived, but it settles nothing. */
+    VERSION_UNVERIFIABLE,
+
+    /** The server refused the credential, or no credential is configured. */
+    CREDENTIAL_REFUSED,
+
+    /** The signed-in account can reach no legal dashboard. */
+    NO_LEGAL_DASHBOARD,
+
+    /** Home Assistant is older than the supported floor. */
+    UNSUPPORTED_HA,
+
+    /** This Android System WebView cannot provide the secure bridge at all — the capability itself is
+     *  absent, which no amount of asking again will change. */
+    BRIDGE_UNAVAILABLE,
+
+    /** The WebView advertises the capability but attaching, installing or retaining the bridge threw.
+     *  That is a failed setup on a capable provider — a provider update or process death mid-session
+     *  looks exactly like this — and creating a fresh WebView can succeed, so it is not terminal. */
+    BRIDGE_ATTACH_FAILED,
+}
+
+/**
+ * The recovery rule, decided by one question asked in two parts: **can this change without anyone
+ * touching the panel, and if so will the panel ever be told?**
+ *
+ * - **An incomplete check** — the panel could not reach the server, could not read what it asked for,
+ *   or got nothing it can act on. It knows nothing yet, the situation usually clears quickly, and
+ *   noticing promptly is the whole point: fast ladder.
+ * - **A definitive answer that only the server can change, with no event to carry the news** — an
+ *   unusable version string, and an account that can currently reach no dashboard. Creating a
+ *   dashboard or fixing a degraded response happens entirely server-side and nothing tells the panel,
+ *   so asking again slowly is the only way it will ever find out. Ceiling cadence, never the fast
+ *   ladder: these are not urgent, and a parked panel that never asks again is the defect this whole
+ *   change exists to remove.
+ * - **A definitive answer the panel will learn about by event, or that a person must act on** — a
+ *   refused or absent credential is repaired by editing the connection, which relaunches admission
+ *   immediately, so a timer would only repeat an unchanged rejected request; an unsupported server and
+ *   an incapable WebView are maintainer-designated terminal outcomes. No timer.
+ *
+ * Note the pairs that look alike and are not: a WebView that cannot bridge at all is terminal, while
+ * one that failed to attach the bridge it does support is retried; a handshake Home Assistant never
+ * completed is retried, while a version it reported as too old is not.
+ *
+ * A timer is therefore absent only where it would add nothing, never merely because the answer sounded
+ * final. Every retry runs the full admission sequence, which invalidates any cached resolution first,
+ * so a slow probe genuinely re-asks rather than replaying the answer that blocked the panel.
+ */
+internal fun admissionRetryClass(outcome: AdmissionOutcome): AdmissionRetryClass = when (outcome) {
+    AdmissionOutcome.TRANSPORT_FAILED,
+    AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
+    AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
+    AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
+    AdmissionOutcome.BRIDGE_ATTACH_FAILED,
+    -> AdmissionRetryClass.FROM_BASE
+
+    AdmissionOutcome.VERSION_UNVERIFIABLE,
+    AdmissionOutcome.NO_LEGAL_DASHBOARD,
+    -> AdmissionRetryClass.AT_CEILING
+
+    AdmissionOutcome.CREDENTIAL_REFUSED,
+    AdmissionOutcome.UNSUPPORTED_HA,
+    AdmissionOutcome.BRIDGE_UNAVAILABLE,
+    -> AdmissionRetryClass.MANUAL_ONLY
+}
+
+/**
+ * Retry cadence for blocked renderer-admission screens. A wall panel has nobody standing at it to
+ * press Retry, so a blocked screen with no timer turns a server-side outage that has already been
+ * repaired into a panel outage that lasts until someone walks to the device. Exponential back-off
+ * with a ceiling measured in minutes, plus symmetric jitter so many panels recovering from one shared
+ * server event do not retry in lockstep against a service that is just getting back up. The jittered
+ * delay is computed exactly once per arm; the caller counts down to the same number it armed.
+ */
+internal class AdmissionRetryPolicy(
+    private val baseMs: Long = 5_000L,
+    private val ceilingMs: Long = 300_000L,
+    private val jitterFraction: Double = 0.2,
+    private val jitterSource: () -> Double = { Math.random() },
+) {
+    init {
+        require(baseMs in 1..ceilingMs)
+        require(jitterFraction in 0.0..0.5)
+    }
+
+    private var nextUnjitteredMs = baseMs
+
+    /** The delay to arm now, jittered, or null when the class never retries automatically. Only
+     *  [AdmissionRetryClass.FROM_BASE] advances the ladder; a ceiling-cadence arm leaves it alone. */
+    fun nextDelayMs(retryClass: AdmissionRetryClass): Long? {
+        val unjittered = when (retryClass) {
+            AdmissionRetryClass.MANUAL_ONLY -> return null
+            AdmissionRetryClass.AT_CEILING -> ceilingMs
+            AdmissionRetryClass.FROM_BASE -> nextUnjitteredMs.also {
+                nextUnjitteredMs = (nextUnjitteredMs * 2).coerceAtMost(ceilingMs)
+            }
+        }
+        val offset = (jitterSource().coerceIn(0.0, 1.0) * 2.0 - 1.0) * unjittered * jitterFraction
+        return (unjittered + offset.toLong()).coerceAtLeast(1_000L)
+    }
+
+    fun reset() {
+        nextUnjitteredMs = baseMs
+    }
+}
+
+/**
+ * Owns *when the visible countdown may work*, separately from the retry it describes. Pure and
+ * clock-injected so the whole lifecycle — arm, tick, lose visibility, regain it, disarm — is
+ * executable in tests rather than asserted by reading the activity's source.
+ *
+ * The rule it enforces: the retry deadline survives everything, because an unattended panel is exactly
+ * the one that must still recover; only the per-second repaint is suspended, and it is suspended
+ * whenever the screen is not actually in front of somebody. "In front of somebody" is top-visibility,
+ * not merely resumed: a translucent Overview on Android 10+ can take top-resumed status without ever
+ * calling `onPause`, and repainting behind it is invisible work.
+ */
+internal class AdmissionCountdownOwner(private val nowMs: () -> Long) {
+    private var deadlineMs = 0L
+    private var visible = false
+
+    /** What the caller should do after any state change. */
+    data class Paint(val text: String?, val scheduleNextTickMs: Long?)
+
+    val armed: Boolean get() = deadlineMs != 0L
+
+    fun arm(delayMs: Long): Paint {
+        deadlineMs = nowMs() + delayMs
+        return paint()
+    }
+
+    fun disarm() {
+        deadlineMs = 0L
+    }
+
+    /** Top-visibility changed. Returning to visible reconciles immediately, so the first thing seen is
+     *  the true remaining time rather than a stale figure or a blank. */
+    fun onVisibilityChanged(nowVisible: Boolean): Paint {
+        visible = nowVisible
+        return paint()
+    }
+
+    fun onTick(): Paint = paint()
+
+    /** Null text means "do not repaint"; null schedule means "do not run again until something changes". */
+    private fun paint(): Paint {
+        if (!armed || !visible) return Paint(null, null)
+        val remaining = deadlineMs - nowMs()
+        return Paint(admissionRetryCountdown(remaining), if (remaining > 0L) COUNTDOWN_TICK_MS else null)
+    }
+
+    private companion object { const val COUNTDOWN_TICK_MS = 1_000L }
+}
+
+/**
+ * Which lifecycle callback owns countdown visibility on this Android tier.
+ *
+ * `onTopResumedActivityChanged` exists from API 29 and is the precise signal — a translucent Overview
+ * can take top-resumed status without pausing the activity. Below 29 it is never delivered at all, so
+ * resume/pause must own visibility there or the countdown would stay blank forever while the retry it
+ * describes keeps firing invisibly.
+ */
+internal fun resumeOwnsAdmissionVisibility(sdkInt: Int): Boolean = sdkInt < 29
+
+/** Countdown copy for an armed admission retry — a real number, not a spinner. Ceils so the text
+ *  never reads 0 while the retry is still pending. */
+internal fun admissionRetryCountdown(remainingMs: Long): String {
+    val totalSec = (remainingMs.coerceAtLeast(0L) + 999L) / 1_000L
+    val min = totalSec / 60
+    val sec = totalSec % 60
+    return if (min > 0) "Retrying automatically in ${min}m ${sec}s" else "Retrying automatically in ${sec}s"
+}
+
 /** 0..950 launch-progress scale. Never claims completion: the real completion signal is Android's
  * network callback, after which the launch view is immediately replaced by the dashboard. */
 internal fun networkWaitProgress(elapsedMs: Long, estimateMs: Long): Int {

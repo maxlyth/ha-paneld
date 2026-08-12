@@ -2,6 +2,8 @@ package io.github.maxlyth.hapaneld
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -293,6 +295,204 @@ class DashboardRecoveryTest {
             "http://127.0.0.1:8888/api/v1/ha/oauth/panel-start?ha_url=https%3A%2F%2Fha.example%3A8123",
             panelHaOAuthStartUrl("https://ha.example:8123/"),
         )
+    }
+
+    @Test fun `an incomplete admission check recovers on its own`() {
+        // The panel never got an answer it can act on, and every one of these clears server-side with
+        // nobody at the panel — so each must arm the fast ladder.
+        listOf(
+            AdmissionOutcome.TRANSPORT_FAILED,
+            AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
+            AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
+            AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
+            AdmissionOutcome.BRIDGE_ATTACH_FAILED,
+        ).forEach { assertEquals(it.name, AdmissionRetryClass.FROM_BASE, admissionRetryClass(it)) }
+    }
+
+    @Test fun `a server-repairable answer nobody will announce is probed slowly`() {
+        // Creating a dashboard, or a proxy that stops mangling the version, happens entirely
+        // server-side and nothing tells the panel — so asking again slowly is the only way it finds
+        // out. This is the round-2 regression: NO_LEGAL_DASHBOARD was latched and its resolution
+        // cached, so restoring access left the panel blocked until somebody touched it.
+        listOf(
+            AdmissionOutcome.VERSION_UNVERIFIABLE,
+            AdmissionOutcome.NO_LEGAL_DASHBOARD,
+        ).forEach { assertEquals(it.name, AdmissionRetryClass.AT_CEILING, admissionRetryClass(it)) }
+    }
+
+    @Test fun `a failed bridge attachment on a capable WebView is retried, unlike a missing capability`() {
+        // The capability check and the attachment attempt are different evidence: a provider update or
+        // process death mid-session fails attachment on a WebView that genuinely supports the bridge,
+        // and a fresh WebView can succeed. Only the absent capability is terminal.
+        assertEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.BRIDGE_ATTACH_FAILED))
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.BRIDGE_UNAVAILABLE))
+    }
+
+    @Test fun `resume owns countdown visibility only where the top-resumed callback does not exist`() {
+        // onTopResumedActivityChanged arrives from API 29. Below that it is never delivered, so without
+        // a resume-owned path the countdown would stay blank forever while its retry fired invisibly.
+        assertTrue("API 26 has no top-resumed callback", resumeOwnsAdmissionVisibility(26))
+        assertTrue("API 28 has no top-resumed callback", resumeOwnsAdmissionVisibility(28))
+        assertFalse("API 29 delivers the precise signal", resumeOwnsAdmissionVisibility(29))
+        assertFalse(resumeOwnsAdmissionVisibility(34))
+    }
+
+    @Test fun `an answer carried by an event or owned by a person never runs a timer`() {
+        // A refused or absent credential is repaired by editing the connection, which relaunches
+        // admission immediately — a timer would only repeat the same rejected request. The other two
+        // are maintainer-designated terminal outcomes.
+        listOf(
+            AdmissionOutcome.CREDENTIAL_REFUSED,
+            AdmissionOutcome.UNSUPPORTED_HA,
+            AdmissionOutcome.BRIDGE_UNAVAILABLE,
+        ).forEach { assertEquals(it.name, AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(it)) }
+    }
+
+    @Test fun `a missed handshake and a refused credential are classified oppositely`() {
+        // The two boundaries that were previously inverted, pinned against each other: a capable
+        // WebView that simply missed the exchange recovers, while a refused credential does not.
+        assertEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED))
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
+        // ...and a missed handshake is not the same evidence as a WebView that cannot bridge at all.
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.BRIDGE_UNAVAILABLE))
+        // No blocked outcome may be left without any route back: only the two maintainer-designated
+        // terminal outcomes and the event-repaired credential are allowed to have no timer at all.
+        val latched = AdmissionOutcome.entries.filter { admissionRetryClass(it) == AdmissionRetryClass.MANUAL_ONLY }
+        assertEquals(
+            setOf(
+                AdmissionOutcome.CREDENTIAL_REFUSED,
+                AdmissionOutcome.UNSUPPORTED_HA,
+                AdmissionOutcome.BRIDGE_UNAVAILABLE,
+            ),
+            latched.toSet(),
+        )
+    }
+
+    @Test fun `an unusable answer is retried slowly, not on the fast ladder`() {
+        assertEquals(AdmissionRetryClass.AT_CEILING, admissionRetryClass(AdmissionOutcome.VERSION_UNVERIFIABLE))
+    }
+
+    @Test fun `every admission outcome is classified deliberately`() {
+        // A new outcome must be given a class here rather than inheriting one, so the exhaustive set
+        // is asserted by size and by every value resolving.
+        assertEquals(10, AdmissionOutcome.entries.size)
+        AdmissionOutcome.entries.forEach { assertNotNull(it.name, admissionRetryClass(it)) }
+    }
+
+    // --- the visible countdown, driven as a lifecycle rather than asserted from source ---
+
+    private class Clock(var now: Long = 0L) : () -> Long { override fun invoke() = now }
+
+    @Test fun `an armed countdown paints and reschedules only while it is visible`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+
+        // Armed while nothing is visible yet: no repaint, nothing scheduled — but it IS armed.
+        val armed = owner.arm(30_000L)
+        assertTrue(owner.armed)
+        assertNull(armed.text)
+        assertNull(armed.scheduleNextTickMs)
+
+        val shown = owner.onVisibilityChanged(true)
+        assertEquals("Retrying automatically in 30s", shown.text)
+        assertEquals(1_000L, shown.scheduleNextTickMs)
+
+        clock.now += 10_000L
+        val tick = owner.onTick()
+        assertEquals("Retrying automatically in 20s", tick.text)
+        assertEquals(1_000L, tick.scheduleNextTickMs)
+    }
+
+    @Test fun `losing top visibility stops the repaint without disarming the retry`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+        owner.arm(60_000L)
+        owner.onVisibilityChanged(true)
+
+        val hidden = owner.onVisibilityChanged(false)
+        assertNull("a hidden countdown must not repaint", hidden.text)
+        assertNull("a hidden countdown must not reschedule per-second work", hidden.scheduleNextTickMs)
+        assertTrue("the retry it describes must survive being hidden", owner.armed)
+        // Ticks that were already in flight when visibility was lost do nothing either.
+        clock.now += 5_000L
+        assertNull(owner.onTick().text)
+        assertNull(owner.onTick().scheduleNextTickMs)
+        assertTrue(owner.armed)
+    }
+
+    @Test fun `returning to visibility reconciles to the true remaining time immediately`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+        owner.arm(120_000L)
+        owner.onVisibilityChanged(true)
+        owner.onVisibilityChanged(false)
+
+        clock.now += 45_000L                       // hidden for 45s
+        val back = owner.onVisibilityChanged(true)
+        assertEquals("Retrying automatically in 1m 15s", back.text)
+        assertEquals(1_000L, back.scheduleNextTickMs)
+    }
+
+    @Test fun `an elapsed countdown paints its final figure and stops rescheduling`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+        owner.arm(5_000L)
+        owner.onVisibilityChanged(true)
+
+        clock.now += 5_000L
+        val done = owner.onTick()
+        assertEquals("Retrying automatically in 0s", done.text)
+        assertNull("nothing more to count", done.scheduleNextTickMs)
+    }
+
+    @Test fun `a disarmed countdown never paints even while visible`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+        owner.arm(30_000L)
+        owner.onVisibilityChanged(true)
+        owner.disarm()
+
+        assertFalse(owner.armed)
+        assertNull(owner.onTick().text)
+        assertNull(owner.onVisibilityChanged(true).text)
+    }
+
+    @Test fun `admission retries back off from the base and stop growing at the ceiling`() {
+        val policy = AdmissionRetryPolicy(jitterSource = { 0.5 })   // 0.5 → zero jitter offset
+        val ladder = generateSequence { policy.nextDelayMs(AdmissionRetryClass.FROM_BASE) }.take(8).toList()
+        assertEquals(listOf(5_000L, 10_000L, 20_000L, 40_000L, 80_000L, 160_000L, 300_000L, 300_000L), ladder)
+    }
+
+    @Test fun `jitter spreads the armed delay symmetrically and is bounded`() {
+        val low = AdmissionRetryPolicy(jitterSource = { 0.0 }).nextDelayMs(AdmissionRetryClass.AT_CEILING)
+        val high = AdmissionRetryPolicy(jitterSource = { 1.0 }).nextDelayMs(AdmissionRetryClass.AT_CEILING)
+        assertEquals(240_000L, low)      // 300s − 20%
+        assertEquals(360_000L, high)     // 300s + 20%
+        // The jittered floor keeps a pathological small base from arming a sub-second hammer.
+        assertEquals(1_000L, AdmissionRetryPolicy(baseMs = 1_000L, jitterSource = { 0.0 }).nextDelayMs(AdmissionRetryClass.FROM_BASE))
+    }
+
+    @Test fun `ceiling-cadence and manual-only arms never advance the transport ladder`() {
+        val policy = AdmissionRetryPolicy(jitterSource = { 0.5 })
+        assertEquals(300_000L, policy.nextDelayMs(AdmissionRetryClass.AT_CEILING))
+        assertEquals(null, policy.nextDelayMs(AdmissionRetryClass.MANUAL_ONLY))
+        assertEquals("a ceiling probe must not inflate the next transport retry", 5_000L, policy.nextDelayMs(AdmissionRetryClass.FROM_BASE))
+    }
+
+    @Test fun `manual retry resets the admission backoff`() {
+        val policy = AdmissionRetryPolicy(jitterSource = { 0.5 })
+        policy.nextDelayMs(AdmissionRetryClass.FROM_BASE)
+        policy.nextDelayMs(AdmissionRetryClass.FROM_BASE)
+        policy.reset()
+        assertEquals(5_000L, policy.nextDelayMs(AdmissionRetryClass.FROM_BASE))
+    }
+
+    @Test fun `admission countdown is a ceiled real number, never zero while pending`() {
+        assertEquals("Retrying automatically in 47s", admissionRetryCountdown(47_000L))
+        assertEquals("Retrying automatically in 1s", admissionRetryCountdown(1L))
+        assertEquals("Retrying automatically in 0s", admissionRetryCountdown(0L))
+        assertEquals("Retrying automatically in 5m 0s", admissionRetryCountdown(300_000L))
+        assertEquals("Retrying automatically in 4m 1s", admissionRetryCountdown(240_001L))
     }
 
     @Test fun `document start origins mirror allowed scheme upgrades without broadening authority`() {

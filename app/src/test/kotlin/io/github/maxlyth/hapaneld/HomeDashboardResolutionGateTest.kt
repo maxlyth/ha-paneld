@@ -47,7 +47,9 @@ class HomeDashboardResolutionGateTest {
         )
 
         assertTrue(resolver.contains("EntityLearningRuntime.resolveHomeDashboard"))
-        assertTrue(resolver.contains("main.postDelayed(homeDashboardRetry, delay)"))
+        // An unreadable dashboard list is an incomplete check, so it recovers on its own — the screen
+        // must never be terminal.
+        assertTrue(resolver.contains("AdmissionOutcome.DASHBOARD_LIST_UNREADABLE"))
         assertTrue(reconnect.contains("currentUrl(Config(this))"))
         assertTrue(networkRecovery.contains("invalidateHomeDashboardResolution(resetRetry = false)"))
         assertTrue(target.contains("homeDashboardResolution"))

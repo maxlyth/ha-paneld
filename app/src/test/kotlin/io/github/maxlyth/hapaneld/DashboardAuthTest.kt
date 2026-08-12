@@ -74,7 +74,7 @@ class DashboardAuthTest {
     @Test fun `transient failure falls back to a still-usable cached token`() {
         // Cached token has 30s left (< skew so a refresh was attempted) but the refresh failed
         // transiently → reuse it, and do NOT report revoked.
-        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Transient })
+        val r = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Transient() })
         assertEquals("cached", r.session!!.accessToken)
         assertEquals(30L, r.session!!.expiresInSec)
         assertNull("no persist on a failed refresh", r.persist)
@@ -82,9 +82,47 @@ class DashboardAuthTest {
     }
 
     @Test fun `transient failure with a fully-expired token fails closed but not rejected`() {
-        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> HaLink.Refresh.Transient })
+        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> HaLink.Refresh.Transient() })
         assertNull(r.session)
         assertFalse("HA being down must never read as rejected login settings", r.rejected)
+    }
+
+    // --- transport-failure detail: a fail-closed transient names the fault ---
+
+    @Test fun `fail-closed transient carries the transport failure detail`() {
+        val r = DashboardAuth.resolve(
+            "https://ha", "dead", "refr", NOW - 100, NOW, false,
+            { _, _ -> HaLink.Refresh.Transient("Trust anchor for certification path not found") },
+        )
+        assertNull(r.session)
+        assertEquals("Trust anchor for certification path not found", r.transientDetail)
+    }
+
+    @Test fun `fail-closed transient without a message still names a transport failure`() {
+        val r = DashboardAuth.resolve("https://ha", "dead", "refr", NOW - 100, NOW, false, { _, _ -> HaLink.Refresh.Transient() })
+        assertEquals("Home Assistant token refresh failed", r.transientDetail)
+    }
+
+    @Test fun `forced transient failure carries the detail too`() {
+        val r = DashboardAuth.resolve(
+            "https://ha", "rejected", "refr", NOW + 3600, NOW, true,
+            { _, _ -> HaLink.Refresh.Transient("connect timed out") },
+        )
+        assertNull(r.session)
+        assertEquals("connect timed out", r.transientDetail)
+    }
+
+    @Test fun `cached-token fallback and terminal rejection carry no transient detail`() {
+        val fallback = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Transient("blip") })
+        assertEquals("cached", fallback.session!!.accessToken)
+        assertNull("a served session is not a transport failure", fallback.transientDetail)
+        val rejected = DashboardAuth.resolve("https://ha", "cached", "refr", NOW + 30, NOW, false, { _, _ -> HaLink.Refresh.Rejected })
+        assertNull("a server refusal must never read as a transport failure", rejected.transientDetail)
+    }
+
+    @Test fun `unconfigured and static-blank models carry no transient detail`() {
+        assertNull(DashboardAuth.resolve("", "", "", 0, NOW, false, ::neverRefresh).transientDetail)
+        assertNull(DashboardAuth.resolve("https://ha", "", "", 0, NOW, false, ::neverRefresh).transientDetail)
     }
 
     // --- terminal rejection: fail closed AND say so ---
@@ -111,7 +149,7 @@ class DashboardAuthTest {
     }
 
     @Test fun `force with transient failure fails closed - never re-hands the rejected token`() {
-        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Transient })
+        val r = DashboardAuth.resolve("https://ha", "rejected", "refr", NOW + 3600, NOW, true, { _, _ -> HaLink.Refresh.Transient() })
         assertNull("must not re-hand the rejected token on a forced refresh", r.session)
         assertFalse("transient stays non-rejected even under force", r.rejected)
     }

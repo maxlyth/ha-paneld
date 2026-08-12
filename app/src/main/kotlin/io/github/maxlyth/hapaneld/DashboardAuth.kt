@@ -33,8 +33,15 @@ object DashboardAuth {
     /** Outcome of [resolve]: a session to reply with (or null = fail closed), when a refresh happened
      *  the (access, epoch-expiry) to persist so the next handshake reuses it, and [rejected] when the
      *  server terminally refused the unchanged refresh request. Home Assistant can reject either the
-     *  token or its required OAuth client id; a transient refresh failure never sets [rejected]. */
-    data class Result(val session: Session?, val persist: Pair<String, Long>? = null, val rejected: Boolean = false)
+     *  token or its required OAuth client id; a transient refresh failure never sets [rejected] — it
+     *  fails closed with [transientDetail] naming the transport fault, so a caller can distinguish
+     *  "could not reach the server to mint a token" from "the server refused" or "never signed in". */
+    data class Result(
+        val session: Session?,
+        val persist: Pair<String, Long>? = null,
+        val rejected: Boolean = false,
+        val transientDetail: String? = null,
+    )
 
     internal fun retainIfOwned(
         expected: CredentialOwner,
@@ -95,7 +102,8 @@ object DashboardAuth {
             // frontend will re-ask and a recovered network can still succeed). On a non-forced
             // near-expiry refresh, reuse the cached token while it has any life left.
             is HaLink.Refresh.Transient ->
-                if (!force && access.isNotBlank() && ttl > 0) Result(Session(access, ttl)) else Result(null)
+                if (!force && access.isNotBlank() && ttl > 0) Result(Session(access, ttl))
+                else Result(null, transientDetail = fresh.detail ?: "Home Assistant token refresh failed")
         }
     }
 

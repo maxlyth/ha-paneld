@@ -259,12 +259,23 @@ class DashboardActivity : AppCompatActivity() {
     private var homeDashboardCheckingOwner: HomeDashboardResolutionOwner? = null
     private var homeDashboardResolution: OwnedHomeDashboardResolution? = null
     private val homeDashboardAttempts = HomeDashboardResolutionAttemptGate()
-    private val homeDashboardRetryPolicy = DashboardRetryPolicy()
-    private val homeDashboardRetry = Runnable {
+    // One automatic-recovery owner for EVERY blocked admission screen. A wall panel has nobody
+    // standing at it, so a blocked screen without a timer stays blocked after its cause clears —
+    // recoverable only by a physical tap or an app restart. The timer and the manual Retry button run
+    // the same sequence; the button also resets the back-off because a present human should not wait
+    // out a timer.
+    private val admissionRetryPolicy = AdmissionRetryPolicy()
+    // The retry deadline and the visible countdown are owned separately on purpose: the countdown may
+    // legitimately stop while the retry must not. Uptime is the Handler's own clock, so a deep sleep
+    // freezes the displayed figure and the pending callback together.
+    private val admissionCountdown = AdmissionCountdownOwner { SystemClock.uptimeMillis() }
+    private var admissionCountdownView: TextView? = null
+    private val admissionRetry = Runnable {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched) return@Runnable
-        invalidateHomeDashboardResolution(resetRetry = false)
-        buildAndLoad(Config(this))
+        Log.i(TAG, "renderer admission auto-retry firing")
+        retryAdmission(resetBackoff = false)
     }
+    private val admissionCountdownTick = Runnable { onAdmissionCountdownTick() }
 
     /** Endpoint the on-panel Home Assistant sign-in is currently showing, so a relaunch does not restart it. */
     private var signInShownForUrl: String? = null
@@ -592,10 +603,11 @@ class DashboardActivity : AppCompatActivity() {
         true
     } catch (error: ExternalV2BridgeUnavailable) {
         Log.e(TAG, "secure V2 listener attachment failed", error)
-        showV2CompatibilityScreen(
-            "Secure dashboard bridge unavailable",
-            "Android System WebView could not attach the secure V2 native bridge. Update or repair " +
-                "Android System WebView, then retry.",
+        showBlockedAdmissionScreen(
+            "Secure dashboard bridge interrupted",
+            "Android System WebView could not attach the secure V2 native bridge. The panel will retry " +
+                "automatically; if it keeps failing, update or repair Android System WebView.",
+            AdmissionOutcome.BRIDGE_ATTACH_FAILED,
         )
         false
     }
@@ -1066,6 +1078,7 @@ class DashboardActivity : AppCompatActivity() {
     /** Hand off to ha-paneld's admin launcher and finish — the never-strand fallback for a missing
      *  WebView or a crash-looping renderer. */
     private fun fallbackToLauncher() {
+        cancelAdmissionAutoRetry()
         runCatching {
             startActivity(Intent(this, AdminLauncherActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure { Log.e(TAG, "admin-launcher fallback failed: ${it.message}") }
@@ -1076,6 +1089,7 @@ class DashboardActivity : AppCompatActivity() {
      *  surface for a fresh install or cleared configuration; the admin launcher is only for explicit
      *  panel-admin entry and crash/recovery administration. */
     private fun fallbackToFirstRunSurface() {
+        cancelAdmissionAutoRetry()
         runCatching {
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure { Log.e(TAG, "first-run surface fallback failed: ${it.message}") }
@@ -1262,10 +1276,11 @@ class DashboardActivity : AppCompatActivity() {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || frontendConnected || !screenAwake || authLatched) return
         val session = externalBusSession
         if (session != null && v2Handshake.onTimeout(session)) {
-            showV2CompatibilityScreen(
+            showBlockedAdmissionScreen(
                 "Secure external bridge not detected",
                 "Home Assistant loaded without its required V2 native-host handshake. Confirm Home Assistant " +
                     "2026.4.2+ and update Android System WebView, then retry.",
+                AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
             )
             return
         }
@@ -1578,6 +1593,7 @@ class DashboardActivity : AppCompatActivity() {
     /** One quiet startup state while Android brings networking up. This is native rather than cached
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
+        cancelAdmissionAutoRetry()
         val dm = resources.displayMetrics
         val density = dm.density
         val hDp = (dm.heightPixels / density).toInt()
@@ -1804,6 +1820,8 @@ class DashboardActivity : AppCompatActivity() {
     // predate translucent Overview, so resume/pause suffices there).
     override fun onResume() {
         super.onResume()
+        // Below API 29 onTopResumedActivityChanged is never delivered, so resume owns visibility there.
+        if (resumeOwnsAdmissionVisibility(android.os.Build.VERSION.SDK_INT)) onAdmissionVisibilityChanged(true)
         BuiltinDashboard.setActivityForeground(activityOwner, true)
         if (::activityConfig.isInitialized) applyRendererScreenPolicy()
         applyFullscreen()
@@ -1857,9 +1875,16 @@ class DashboardActivity : AppCompatActivity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyFullscreen()
     }
-    override fun onPause() { BuiltinDashboard.setActivityForeground(activityOwner, false); super.onPause() }
+    override fun onPause() {
+        onAdmissionVisibilityChanged(false)            // the retry stays armed; only the repaint stops
+        BuiltinDashboard.setActivityForeground(activityOwner, false)
+        super.onPause()
+    }
     override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
         super.onTopResumedActivityChanged(isTopResumedActivity)
+        if (!resumeOwnsAdmissionVisibility(android.os.Build.VERSION.SDK_INT)) {
+            onAdmissionVisibilityChanged(isTopResumedActivity)
+        }
         BuiltinDashboard.setActivityForeground(activityOwner, isTopResumedActivity)
     }
 
@@ -1903,12 +1928,24 @@ class DashboardActivity : AppCompatActivity() {
         if (android.os.Build.VERSION.SDK_INT in 29..32) web?.let { applyForceDark(it) }
     }
 
+    /** A blocked admission screen. [outcome] is not defaulted: every blocked screen must say what the
+     *  panel learned, and [admissionRetryClass] — not this call site — decides whether that recovers on
+     *  its own. Progress screens use [showAdmissionProgressScreen] instead. */
+    private fun showBlockedAdmissionScreen(title: String, detail: String, outcome: AdmissionOutcome) =
+        showV2CompatibilityScreen(title, detail, "Retry", admissionRetryClass(outcome))
+
+    /** A screen that reports work in flight; it is replaced by that work's outcome, so it never arms. */
+    private fun showAdmissionProgressScreen(title: String, detail: String) =
+        showV2CompatibilityScreen(title, detail, null, AdmissionRetryClass.MANUAL_ONLY)
+
     private fun showV2CompatibilityScreen(
         title: String,
         detail: String,
-        retryLabel: String? = "Retry",
+        retryLabel: String?,
+        autoRetry: AdmissionRetryClass,
     ) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        cancelAdmissionAutoRetry()
         if (web != null) teardownWeb()
         val density = resources.displayMetrics.density
         val dark = Config(this).dashboardThemeDark ?: true
@@ -1933,14 +1970,7 @@ class DashboardActivity : AppCompatActivity() {
             retryLabel?.let { label ->
                 addView(Button(this@DashboardActivity).apply {
                     text = label
-                    setOnClickListener {
-                        invalidateHomeDashboardResolution()
-                        compatibilityCheckingOwner = null
-                        compatibilityReadyUrl = null
-                        compatibilityAttempts.invalidate()
-                        v2Handshake.reset()
-                        buildAndLoad(Config(this@DashboardActivity))
-                    }
+                    setOnClickListener { retryAdmission(resetBackoff = true) }
                 })
             }
             addView(Button(this@DashboardActivity).apply {
@@ -1949,6 +1979,16 @@ class DashboardActivity : AppCompatActivity() {
                     startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
                 }
             })
+        }
+        // The retry countdown is deliberately a real number under the actions, not a spinner. The
+        // jittered delay is computed once, below, and this row counts down to that exact figure.
+        val autoRetryDelayMs = if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)
+        val countdown = autoRetryDelayMs?.let {
+            TextView(this).apply {
+                setTextColor(subtle)
+                textSize = 13f
+                gravity = Gravity.CENTER
+            }
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1966,6 +2006,12 @@ class DashboardActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { topMargin = (22 * density).toInt(); gravity = Gravity.CENTER_HORIZONTAL })
+            countdown?.let {
+                addView(it, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = (14 * density).toInt() })
+            }
         }
         val container = FrameLayout(this).apply {
             setBackgroundColor(bg)
@@ -1977,6 +2023,10 @@ class DashboardActivity : AppCompatActivity() {
         }
         root = container
         setContentView(container)
+        if (autoRetryDelayMs != null) {
+            admissionCountdownView = countdown
+            armAdmissionAutoRetry(autoRetryDelayMs, title)
+        }
         Log.w(TAG, "$title: $detail")
     }
 
@@ -2016,10 +2066,11 @@ class DashboardActivity : AppCompatActivity() {
         }
         val owner = DashboardV2CompatibilityOwner(url, config.haAuthSnapshot().stableOwner())
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            showV2CompatibilityScreen(
+            showBlockedAdmissionScreen(
                 "Secure dashboard bridge unavailable",
                 "The built-in renderer requires an Android System WebView with WebMessageListener support. " +
                     "Update or repair Android System WebView, then retry. Other configured renderers are unaffected.",
+                AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return
         }
@@ -2031,10 +2082,9 @@ class DashboardActivity : AppCompatActivity() {
         compatibilityJob?.cancel()
         val compatibilityTicket = compatibilityAttempts.start(owner)
         compatibilityCheckingOwner = owner
-        showV2CompatibilityScreen(
+        showAdmissionProgressScreen(
             "Checking Home Assistant compatibility",
             "The built-in renderer requires Home Assistant 2026.4.2 or newer and the secure V2 native bridge.",
-            retryLabel = null,
         )
         compatibilityJob = activityScope.launch {
             val result = DashboardV2CompatibilityProbe(
@@ -2065,20 +2115,27 @@ class DashboardActivity : AppCompatActivity() {
                 is DashboardV2Admission.Blocked -> when (val blocked = admission.result) {
                     is DashboardV2ProbeResult.UnsupportedHa -> {
                         config.setHaServerVersionIfOwned(url, blocked.version)
-                        showV2CompatibilityScreen(
+                        showBlockedAdmissionScreen(
                             "Home Assistant upgrade required",
                             "The built-in renderer requires Home Assistant 2026.4.2 or newer " +
                                 "(detected ${blocked.version}). " +
                                 "Upgrade Home Assistant and retry, or select another renderer.",
+                            AdmissionOutcome.UNSUPPORTED_HA,
                         )
                     }
-                    is DashboardV2ProbeResult.Unverifiable -> showV2CompatibilityScreen(
+                    // A degraded proxy or captive-portal response lands here too, so probe again at
+                    // the ceiling cadence rather than never.
+                    is DashboardV2ProbeResult.Unverifiable -> showBlockedAdmissionScreen(
                         "Home Assistant version unverifiable",
                         "Home Assistant did not report a recognized stable version" +
                             blocked.version?.let { " (detected $it)" }.orEmpty() +
                             ". The V2-only built-in renderer cannot start safely; update Home Assistant and retry.",
+                        AdmissionOutcome.VERSION_UNVERIFIABLE,
                     )
-                    DashboardV2ProbeResult.AuthenticationFailed -> showV2CompatibilityScreen(
+                    // A genuine server refusal (or a never-signed-in panel) needs a human, but a
+                    // re-enabled HA user or a restored server can also repair it server-side, which a
+                    // parked panel would otherwise never notice — probe at the ceiling cadence.
+                    DashboardV2ProbeResult.AuthenticationFailed -> showBlockedAdmissionScreen(
                         if (config.haToken.isBlank() && config.haRefreshToken.isBlank()) {
                             "Home Assistant sign-in needed"
                         } else {
@@ -2090,11 +2147,13 @@ class DashboardActivity : AppCompatActivity() {
                             "The panel could not authenticate the compatibility check. Repair the Home Assistant " +
                                 "connection in Configure, then retry."
                         },
+                        AdmissionOutcome.CREDENTIAL_REFUSED,
                     )
-                    is DashboardV2ProbeResult.Unavailable -> showV2CompatibilityScreen(
+                    is DashboardV2ProbeResult.Unavailable -> showBlockedAdmissionScreen(
                         "Home Assistant version unavailable",
                         "The panel could not verify the required Home Assistant 2026.4.2+ version. " +
                             "Check the connection and retry. ${blocked.detail}",
+                        AdmissionOutcome.TRANSPORT_FAILED,
                     )
                     is DashboardV2ProbeResult.Compatible -> error("compatible result cannot be blocked")
                 }
@@ -2105,6 +2164,7 @@ class DashboardActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun showPhysicalHaSignIn(haUrl: String) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        cancelAdmissionAutoRetry()
         // Already showing sign-in for this exact URL: keep the live WebView. Every config save relaunches
         // this activity, and the browser form posts on each save, so rebuilding here would discard a
         // part-typed Home Assistant password whenever anything else was saved from another device.
@@ -2166,10 +2226,11 @@ class DashboardActivity : AppCompatActivity() {
                         }, SIGN_IN_LOAD_RETRY_MS)
                         return
                     }
-                    showV2CompatibilityScreen(
+                    showBlockedAdmissionScreen(
                         "Home Assistant sign-in unavailable",
                         "The panel could not load the Home Assistant sign-in page. Check the Home Assistant URL " +
                             "or use Browser sign-in from Configure.",
+                        AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
                     )
                 }
             }
@@ -2205,8 +2266,56 @@ class DashboardActivity : AppCompatActivity() {
         homeDashboardCheckingOwner = null
         homeDashboardResolution = null
         homeDashboardAttempts.invalidate()
-        main.removeCallbacks(homeDashboardRetry)
-        if (resetRetry) homeDashboardRetryPolicy.reset()
+        if (resetRetry) admissionRetryPolicy.reset()
+    }
+
+    /** The one admission retry sequence — the automatic timer and the manual Retry button both run
+     *  exactly this, so the two recovery paths cannot diverge. */
+    private fun retryAdmission(resetBackoff: Boolean) {
+        if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
+        invalidateHomeDashboardResolution(resetRetry = resetBackoff)
+        compatibilityCheckingOwner = null
+        compatibilityReadyUrl = null
+        compatibilityAttempts.invalidate()
+        v2Handshake.reset()
+        buildAndLoad(Config(this))
+    }
+
+    /** Disarm the admission auto-retry and its countdown. Every function that replaces the activity's
+     *  content view MUST call this first: the timer belongs to the blocked screen that armed it, and a
+     *  survivor firing under a healthy dashboard would tear that dashboard down to re-probe. */
+    private fun cancelAdmissionAutoRetry() {
+        admissionCountdown.disarm()
+        admissionCountdownView = null
+        main.removeCallbacks(admissionRetry)
+        main.removeCallbacks(admissionCountdownTick)
+    }
+
+    private fun armAdmissionAutoRetry(delayMs: Long, title: String) {
+        main.postDelayed(admissionRetry, delayMs)
+        applyAdmissionPaint(admissionCountdown.arm(delayMs))
+        Log.i(TAG, "admission auto-retry armed in ${delayMs}ms ($title)")
+    }
+
+    /** The owner decides whether to repaint and whether to run again; this only carries out the verdict.
+     *  A detached view is treated as not visible, so a replaced screen cannot keep a stale row alive. */
+    private fun applyAdmissionPaint(paint: AdmissionCountdownOwner.Paint) {
+        main.removeCallbacks(admissionCountdownTick)
+        val view = admissionCountdownView?.takeIf { it.isAttachedToWindow } ?: return
+        paint.text?.let { view.text = it }
+        paint.scheduleNextTickMs?.let { main.postDelayed(admissionCountdownTick, it) }
+    }
+
+    private fun onAdmissionCountdownTick() {
+        if (destroyed) return
+        applyAdmissionPaint(admissionCountdown.onTick())
+    }
+
+    /** Top-visibility, not merely resumed: a translucent Overview can take top-resumed status without
+     *  calling onPause, and repainting behind it is invisible work. The retry stays armed throughout. */
+    private fun onAdmissionVisibilityChanged(visible: Boolean) {
+        if (destroyed) return
+        applyAdmissionPaint(admissionCountdown.onVisibilityChanged(visible))
     }
 
     /** Resolve before WebView creation; entity learning may be disabled or may never have scanned. */
@@ -2214,10 +2323,11 @@ class DashboardActivity : AppCompatActivity() {
         val owner = homeDashboardOwner(config)
         homeDashboardResolution?.takeIf { it.owner == owner }?.let { owned ->
             if (owned.resolution.path == null) {
-                showV2CompatibilityScreen(
+                showBlockedAdmissionScreen(
                     "No Home Assistant dashboards available",
                     "The signed-in account cannot access any legal dashboards. Create or grant access to " +
                         "a dashboard in Home Assistant, then retry.",
+                    AdmissionOutcome.NO_LEGAL_DASHBOARD,
                 )
             } else {
                 buildCompatibleAndLoad(config)
@@ -2225,14 +2335,12 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         if (homeDashboardCheckingOwner == owner && homeDashboardJob?.isActive == true) return
-        main.removeCallbacks(homeDashboardRetry)
         homeDashboardJob?.cancel()
         val ticket = homeDashboardAttempts.start(owner)
         homeDashboardCheckingOwner = owner
-        showV2CompatibilityScreen(
+        showAdmissionProgressScreen(
             "Selecting the Home Assistant dashboard",
             "Checking the signed-in account’s dashboard list and defaults before opening the renderer.",
-            retryLabel = null,
         )
         homeDashboardJob = activityScope.launch {
             val resolution = withContext(Dispatchers.IO) {
@@ -2248,23 +2356,22 @@ class DashboardActivity : AppCompatActivity() {
             ) return@launch
             homeDashboardCheckingOwner = null
             if (resolution == null) {
-                val delay = homeDashboardRetryPolicy.connectionFailureDelay(wasConnected = false)
-                homeDashboardRetryPolicy.afterRetry()
-                main.postDelayed(homeDashboardRetry, delay)
-                showV2CompatibilityScreen(
+                showBlockedAdmissionScreen(
                     "Home Assistant dashboard list unavailable",
                     "The panel could not read the signed-in account’s dashboards. Check the Home Assistant " +
                         "connection and credentials; it will retry automatically.",
+                    AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
                 )
                 return@launch
             }
-            homeDashboardRetryPolicy.reset()
+            admissionRetryPolicy.reset()
             homeDashboardResolution = OwnedHomeDashboardResolution(currentOwner, resolution)
             if (resolution.path == null) {
-                showV2CompatibilityScreen(
+                showBlockedAdmissionScreen(
                     "No Home Assistant dashboards available",
                     "The signed-in account cannot access any legal dashboards. Create or grant access to " +
                         "a dashboard in Home Assistant, then retry.",
+                    AdmissionOutcome.NO_LEGAL_DASHBOARD,
                 )
             } else {
                 Log.i(TAG, "home dashboard resolved source=${resolution.source} path=${resolution.path}")
@@ -2281,6 +2388,10 @@ class DashboardActivity : AppCompatActivity() {
             showWaitingForEntityBootstrap()
             return
         }
+        // Admission succeeded: a surviving blocked-screen timer firing under the live dashboard would
+        // tear it down to re-probe, so it dies here, and the back-off starts fresh next time.
+        cancelAdmissionAutoRetry()
+        admissionRetryPolicy.reset()
         main.removeCallbacks(entityBootstrapCheck)
         entityBootstrapBlockedCount = -1
         val generation = rendererGate.open()
@@ -2313,10 +2424,11 @@ class DashboardActivity : AppCompatActivity() {
                 return
             }
             if (e is ExternalV2BridgeUnavailable) {
-                showV2CompatibilityScreen(
-                    "Secure dashboard bridge unavailable",
-                    "Android System WebView could not install the secure V2 native bridge. Update or repair " +
-                        "Android System WebView, then retry.",
+                showBlockedAdmissionScreen(
+                    "Secure dashboard bridge interrupted",
+                    "Android System WebView could not install the secure V2 native bridge. The panel will " +
+                        "retry automatically; if it keeps failing, update or repair Android System WebView.",
+                    AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                 )
                 return
             }
@@ -2396,6 +2508,7 @@ class DashboardActivity : AppCompatActivity() {
      * network, nothing to churn — it exists only so the first dashboard the user sees is the filtered one.
      */
     private fun showWaitingForEntityFilterAnswer() {
+        cancelAdmissionAutoRetry()
         main.removeCallbacks(entityBootstrapCheck)
         main.removeCallbacks(entityFilterAnswerCheck)
         teardownWeb()
@@ -2465,6 +2578,7 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     private fun showWaitingForEntityBootstrap() {
+        cancelAdmissionAutoRetry()
         main.removeCallbacks(entityBootstrapCheck)
         teardownWeb()
         val filterHold = entityFilterNativeHold
@@ -2827,10 +2941,11 @@ class DashboardActivity : AppCompatActivity() {
                     .onSuccess { onLoadStarted() }
                     .onFailure {
                         Log.e(TAG, "secure V2 document rotation failed", it)
-                        showV2CompatibilityScreen(
-                            "Secure dashboard bridge unavailable",
-                            "Android System WebView could not retain the secure V2 native bridge. " +
-                                "Update or repair Android System WebView, then retry.",
+                        showBlockedAdmissionScreen(
+                            "Secure dashboard bridge interrupted",
+                            "Android System WebView could not retain the secure V2 native bridge. The panel " +
+                                "will retry automatically; if it keeps failing, update or repair Android System WebView.",
+                            AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )
                     }
             }
@@ -2938,6 +3053,7 @@ class DashboardActivity : AppCompatActivity() {
         private const val TAG = "ha-paneld/dashboard"
         private const val SIGN_IN_LOAD_RETRIES_MAX = 4
         private const val SIGN_IN_LOAD_RETRY_MS = 4_000L
+        private const val ADMISSION_COUNTDOWN_TICK_MS = 1_000L  // repaint cadence of the visible retry countdown
         // Tightened once commit-from-catalog made the happy bootstrap take milliseconds (maintainer,
         // round-10): the net now assumes seconds are normal and anything past twenty is a fault.
         private const val BOOTSTRAP_HOLD_HONESTY_MS = 20_000L

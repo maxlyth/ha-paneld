@@ -99,6 +99,82 @@ class DashboardV2CompatibilityProbeTest {
         assertEquals(DashboardV2ProbeResult.Unavailable("network failed"), unavailable)
     }
 
+    // A TLS trust failure during the token refresh must render as transport unavailability naming the
+    // fault, not as an authentication rejection that sends diagnosis at the credentials.
+    @Test fun `transport-failed refresh is unavailable with the failure detail, not an auth rejection`() = runTest {
+        var networkCalls = 0
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider {
+                HaApiSession(URL, null, rejected = false, transientDetail = "Trust anchor for certification path not found")
+            },
+            ConfigTransport { networkCalls++; JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.Unavailable("Trust anchor for certification path not found"), result)
+        assertEquals(0, networkCalls)
+    }
+
+    @Test fun `transport failure during the forced refresh is unavailable, not an auth rejection`() = runTest {
+        // A real 401 on /api/config forces one refresh; the mint then dies in transport. The panel
+        // could not prove anything about the credential, so the verdict is unavailability.
+        val sessions = ArrayDeque(
+            listOf(
+                HaApiSession(URL, "old"),
+                HaApiSession(URL, null, rejected = false, transientDetail = "connect timed out"),
+            ),
+        )
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { sessions.removeFirst() },
+            ConfigTransport { throw HaAuthenticationException("rejected") },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.Unavailable("connect timed out"), result)
+    }
+
+    @Test fun `absent credentials with no transport failure still reject`() = runTest {
+        // Guards the correction's scope: a panel that was never signed in must keep the sign-in
+        // verdict — only a named transport failure reclassifies.
+        var networkCalls = 0
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, rejected = false) },
+            ConfigTransport { networkCalls++; JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.AuthenticationFailed, result)
+        assertEquals(0, networkCalls)
+    }
+
+    @Test fun `transient refresh detail is scrubbed and bounded like transport errors`() = runTest {
+        val noisy = "line one\nline two\t\tpadded   " + "x".repeat(400)
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, transientDetail = noisy) },
+            ConfigTransport { JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        // Assert the classification before casting: an unchecked cast turns the most important
+        // regression (transport misread as an auth rejection) into a ClassCastException, which is a
+        // test that errors rather than one that fails — and an error proves nothing about the contract.
+        assertTrue("a transport failure must classify as Unavailable, got $result", result is DashboardV2ProbeResult.Unavailable)
+        val detail = (result as DashboardV2ProbeResult.Unavailable).detail
+        assertFalse(detail.contains("\n"))
+        assertTrue(detail.length <= 240)
+        assertTrue(detail.startsWith("line one line two"))
+    }
+
+    // The synergy the classification fix buys: a transport-failed refresh with a previously verified
+    // eligible version now admits the renderer on the cache instead of parking the panel.
+    @Test fun `transport-failed refresh with a cached verified version admits the renderer`() = runTest {
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, transientDetail = "connect timed out") },
+            ConfigTransport { JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(
+            DashboardV2Admission.Compatible("2026.5.0", live = false),
+            DashboardV2Admission.resolve(result, "2026.5.0"),
+        )
+    }
+
     private fun probe(sessions: List<HaApiSession>, response: JSONObject): DashboardV2CompatibilityProbe {
         val remaining = ArrayDeque(sessions)
         return DashboardV2CompatibilityProbe(
