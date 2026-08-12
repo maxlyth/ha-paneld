@@ -848,8 +848,8 @@
   // week's spread is better served by one region than by four more lines nobody could separate.
   function autoBrightnessLineDays() { return 3; }
 
-  // Age hierarchy for those three days. Every dimension is arithmetic or core canvas state, so the
-  // chart renders the same on every modern engine.
+  // Age hierarchy for those three days. Every dimension uses arithmetic and core canvas state, so the
+  // encoding does not disappear when an engine omits an optional drawing effect.
   //
   // The blur is required — it is what makes a previous day read as background rather than as another
   // competing line. What it must NOT use is the `filter` property on the 2D context, which is how this
