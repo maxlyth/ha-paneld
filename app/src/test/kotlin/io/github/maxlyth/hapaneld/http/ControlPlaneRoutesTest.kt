@@ -678,7 +678,7 @@ class ControlPlaneRoutesTest {
         var fileId = 0
         val stagedFiles = mutableListOf<java.io.File>()
         var installed: PendingUploadStore.Entry? = null
-        val pending = PendingUploadStore { "secret-token" }
+        val pending = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "secret-token" })
         val upload = ApkUploadRouteDependencies(
             enabled = { enabled },
             rootAvailable = { true },
@@ -695,19 +695,23 @@ class ControlPlaneRoutesTest {
 
         val inspected = """{"ok":true,"token":"secret-token","package":"example.panel","version":"1.2.3","signer":"unsigned"}"""
 
-        // Nothing pending answers an idempotent success, not an error — the recovery button fires blind.
-        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
+        // A discard must name what it removes; a blind discard was the review's stale-card finding.
+        assertDiscard("", HttpStatusCode.BadRequest, """{"ok":false,"error":"invalid-request"}""")
+        // A scoped discard when nothing is pending is an idempotent success, not an error.
+        assertDiscard("token=probe-ref", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
         assertPending("""{"pending":false}""")
 
         pending.open()
         assertUpload("good", HttpStatusCode.OK, inspected)
 
-        // The probe names the pending upload without its token — the token is the commit authority
-        // and must reach only the client that staged the upload.
-        val probeBody = assertPending("""{"pending":true,"package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
+        // The probe names the pending upload and its discard reference — never the commit token,
+        // which is the install authority and must reach only the client that staged the upload.
+        val probeBody = assertPending("""{"pending":true,"discard":"probe-ref","package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
         assertFalse("the probe must never carry the token", probeBody.contains("secret-token"))
+        // And the reference it hands out cannot commit anything.
+        assertCommit("probe-ref", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
 
-        // A token scoped to an entry this slot no longer holds removes nothing.
+        // A reference to an entry this slot no longer holds removes nothing.
         assertDiscard("token=wrong-token", HttpStatusCode.Conflict, """{"ok":false,"error":"different-pending"}""")
         assertTrue("a mismatched discard must not delete the pending file", stagedFiles.last().exists())
 
@@ -717,18 +721,19 @@ class ControlPlaneRoutesTest {
         assertCommit("secret-token", HttpStatusCode.Conflict, """{"status":"stale-or-missing"}""")
         assertPending("""{"pending":false}""")
 
-        // Token-free discard is the post-reload recovery: it removes whatever is pending.
+        // The probe's reference is the post-reload recovery: it removes exactly the probed entry.
         assertUpload("next", HttpStatusCode.OK, inspected)
-        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+        assertDiscard("token=probe-ref", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
         assertFalse(stagedFiles.last().exists())
 
         // Disabling the capability wedges neither cleanup surface — both still answer honestly.
         enabled = false
         assertPending("""{"pending":false}""")
-        assertDiscard("", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
+        assertDiscard("token=probe-ref", HttpStatusCode.OK, """{"ok":true,"discarded":false}""")
         enabled = true
 
-        // A committed upload has left the slot: a discard during its install touches nothing.
+        // A committed upload has left the slot for good — confirmClaim closed the claim window, so a
+        // discard during the running install truthfully finds nothing and touches nothing.
         assertUpload("keep", HttpStatusCode.OK, inspected)
         assertCommit("secret-token", HttpStatusCode.OK, """{"status":"started"}""")
         assertNotNull(installed)
@@ -736,6 +741,19 @@ class ControlPlaneRoutesTest {
         assertTrue("the install's bytes must be untouched by a later discard", installed!!.file.exists())
         installed!!.file.delete()
         assertFalse(InstallProgress.running)
+
+        // The busy race at the route level: commit claims, the operation lane is busy, the entry is
+        // restored — a discard mid-window is told install-in-flight, and afterwards acts on the truth.
+        assertUpload("race", HttpStatusCode.OK, inspected)
+        val held = assertNotNullTicket(InstallProgress.start("held"))
+        try {
+            assertCommit("secret-token", HttpStatusCode.OK, """{"status":"busy"}""")
+        } finally {
+            InstallProgress.finish(held, "released")
+        }
+        assertPending("""{"pending":true,"discard":"probe-ref","package":"example.panel","version":"1.2.3","signer":"unsigned"}""")
+        assertDiscard("token=secret-token", HttpStatusCode.OK, """{"ok":true,"discarded":true}""")
+        assertFalse(stagedFiles.last().exists())
     }
 
     /** The abort must win a race it cannot see: an operator can press Cancel while the panel is still

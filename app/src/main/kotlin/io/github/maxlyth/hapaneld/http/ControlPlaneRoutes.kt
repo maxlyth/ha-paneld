@@ -321,6 +321,9 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
         call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
         return
     }
+    // The install is genuinely starting: close the claim window so a later discard naming this entry
+    // is told nothing is pending — truthfully, because nothing will reappear.
+    dependencies.pending.confirmClaim(claimed)
     dependencies.startInstall(claimed, progress)
     call.respondText("""{"status":"started"}""", ContentType.Application.Json)
 }
@@ -564,20 +567,30 @@ private suspend fun handleApkFetchCancel(call: ApplicationCall, dependencies: Ap
 }
 
 /**
- * Retires the inspected-but-uncommitted upload, deleting its staged bytes. (Issue #96)
+ * Retires the inspected-but-uncommitted upload named by `token`, deleting its staged bytes. (Issue #96)
  *
- * A missing or empty `token` discards whatever is pending — the recovery path for a browser whose
- * token was lost to a reload — while a supplied token discards only that exact entry, so a stray
- * click can never remove an upload someone staged in its place. Deliberately ungated, like the fetch
- * cancel above: it must keep working while the enable/root state changes around it, it removes
+ * `token` is either the preview's commit token or the discard reference handed out by the pending
+ * probe, so every discard is scoped to the exact entry its caller saw: a stale recovery card cannot
+ * delete a replacement upload staged after its probe — it gets `different-pending` and must re-probe.
+ * An entry inside the commit's claim window answers `install-in-flight` rather than a false "nothing
+ * pending" that a busy answer would contradict by restoring the entry. Deliberately ungated, like the
+ * fetch cancel above: it must keep working while the enable/root state changes around it, it removes
  * uncommitted bytes rather than installing anything, and it grants nothing a LAN client does not
  * already have, because a new upload already supersedes a staged entry. No Hardened-mode approval
  * either — cancellation must stay available there, and the physical boundary belongs to commit alone.
  */
 private suspend fun handleApkDiscard(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
     val parameters = receiveBoundedFormParameters(call) ?: return
-    val token = parameters["token"]?.takeIf { it.isNotEmpty() }
-    when (dependencies.pending.discard(token)) {
+    val ref = parameters["token"].orEmpty()
+    if (ref.isEmpty()) {
+        call.respondText(
+            """{"ok":false,"error":"invalid-request"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest,
+        )
+        return
+    }
+    when (dependencies.pending.discard(ref)) {
         PendingUploadStore.DiscardResult.DISCARDED ->
             call.respondText("""{"ok":true,"discarded":true}""", ContentType.Application.Json)
         PendingUploadStore.DiscardResult.NOTHING_PENDING ->
@@ -588,13 +601,21 @@ private suspend fun handleApkDiscard(call: ApplicationCall, dependencies: ApkUpl
                 ContentType.Application.Json,
                 HttpStatusCode.Conflict,
             )
+        PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT ->
+            call.respondText(
+                """{"ok":false,"error":"install-in-flight"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Conflict,
+            )
     }
 }
 
 /** Answers whether an inspected-but-uncommitted APK is holding staged bytes, and what it is — never
  *  its token, which is the commit authority and must reach only the client that staged the upload.
- *  Ungated like the status poll: a probe answering "disabled" would hide exactly the state the
- *  recovery UI needs, and when the capability is off there is never anything pending to reveal. */
+ *  The `discard` field is the entry's discard reference: it scopes a recovery discard to exactly this
+ *  entry and carries no install authority (it cannot peek, claim or commit). Ungated like the status
+ *  poll: a probe answering "disabled" would hide exactly the state the recovery UI needs, and when
+ *  the capability is off there is never anything pending to reveal. */
 private suspend fun handleApkPending(call: ApplicationCall, dependencies: ApkUploadRouteDependencies) {
     val summary = dependencies.pending.pendingSummary()
     if (summary == null) {
@@ -603,7 +624,7 @@ private suspend fun handleApkPending(call: ApplicationCall, dependencies: ApkUpl
     }
     val identity = summary.identity
     call.respondText(
-        """{"pending":true,"package":${Json.str(identity?.pkg ?: "")},"version":${Json.str(identity?.version ?: "")},"signer":${Json.str(identity?.signerSha256 ?: "unsigned")}}""",
+        """{"pending":true,"discard":${Json.str(summary.discardId)},"package":${Json.str(identity?.pkg ?: "")},"version":${Json.str(identity?.version ?: "")},"signer":${Json.str(identity?.signerSha256 ?: "unsigned")}}""",
         ContentType.Application.Json,
     )
 }

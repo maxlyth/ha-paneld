@@ -9,6 +9,7 @@ import java.util.UUID
 internal class PendingUploadStore(
     private val monotonicMs: () -> Long = SystemClock::elapsedRealtime,
     private val ttlMs: Long = DEFAULT_TTL_MS,
+    private val newDiscardId: () -> String = { UUID.randomUUID().toString() },
     private val newToken: () -> String = { UUID.randomUUID().toString() },
 ) {
     sealed interface BeginResult {
@@ -18,17 +19,20 @@ internal class PendingUploadStore(
         data object Closed : BeginResult
     }
 
-    enum class DiscardResult { DISCARDED, NOTHING_PENDING, DIFFERENT_PENDING }
+    enum class DiscardResult { DISCARDED, NOTHING_PENDING, DIFFERENT_PENDING, INSTALL_IN_FLIGHT }
 
-    /** The staged entry's inspected identity for state probes — existence and identity only, never the
-     *  token, because the token is the commit authority and this surface answers any LAN client. */
-    class PendingSummary internal constructor(val identity: UploadedApkIdentity?)
+    /** The staged entry's inspected identity plus its discard reference for state probes — never the
+     *  token, because the token is the commit authority and this surface answers any LAN client. The
+     *  [discardId] scopes a recovery discard to exactly this entry while carrying no install
+     *  authority: it cannot peek, claim or commit anything. */
+    class PendingSummary internal constructor(val identity: UploadedApkIdentity?, val discardId: String)
 
     class Lease internal constructor(internal val epoch: Long, internal val id: Long)
     class Entry internal constructor(
         val token: String,
         val file: File,
         val identity: UploadedApkIdentity?,
+        internal val discardId: String,
         internal val epoch: Long,
         internal val leaseId: Long,
         internal val stagedAtMs: Long,
@@ -39,6 +43,12 @@ internal class PendingUploadStore(
     private var open = false
     private var receiving: Lease? = null
     private var active: Entry? = null
+
+    // The entry a commit has claimed while it decides whether its install can actually start. In that
+    // window the entry is neither pending nor gone: a busy answer will restore it. A discard naming it
+    // must be told the truth ("an install is deciding") rather than "nothing pending" — the review
+    // found that false completion contradicted by the entry reappearing seconds later.
+    private var claimedForInstall: Entry? = null
 
     // Panel-side work belonging to the current reservation. Held HERE rather than in a second owner
     // beside this store, because every way a reservation ends — superseded, aborted, staged, cleared,
@@ -62,6 +72,7 @@ internal class PendingUploadStore(
         active?.file?.delete()
         active = null
         receiving = null
+        claimedForInstall = null
         epoch++
         open = true
     }
@@ -148,7 +159,7 @@ internal class PendingUploadStore(
         }
         receiving = null
         stopPanelWork()
-        return Entry(newToken(), file, identity, epoch, lease.id, monotonicMs()).also { active = it }
+        return Entry(newToken(), file, identity, newDiscardId(), epoch, lease.id, monotonicMs()).also { active = it }
     }
 
     /** Read the immutable inspected identity without transferring the staged file. */
@@ -158,29 +169,45 @@ internal class PendingUploadStore(
         return active?.takeIf { open && it.token == token && it.file.exists() }
     }
 
-    /** Transfer ownership only to the client that received this exact upload's inspection token. */
+    /** Transfer ownership only to the client that received this exact upload's inspection token.
+     *  Opens the claim window: until [confirmClaim] or [restore], a discard naming this entry is told
+     *  an install is in flight rather than that nothing is pending. */
     @Synchronized
     fun claim(token: String): Entry? {
         expireActive()
         val entry = active?.takeIf { open && it.token == token && it.file.exists() } ?: return null
         active = null
+        claimedForInstall = entry
         return entry
     }
 
+    /** The claimed install is genuinely starting: the claim window closes and the entry has left the
+     *  store for good, so a later discard naming it finds nothing — and nothing will reappear. */
+    @Synchronized
+    fun confirmClaim(entry: Entry) {
+        if (claimedForInstall === entry) claimedForInstall = null
+    }
+
     /**
-     * Retire the inspected-but-uncommitted entry, deleting its staged file.
+     * Retire the inspected-but-uncommitted entry named by [ref], deleting its staged file.
      *
-     * [token] scopes the discard to the exact entry the caller inspected, so a stray click can never
-     * remove an entry someone staged in its place; null discards whatever is pending, which is the
-     * recovery path for a client whose token was lost to a reload. Neither form touches a body still
-     * being received or in-flight panel work — those have their own cancel — and a claimed entry is no
-     * longer here, so a discard can never disturb an install that has already started.
+     * [ref] is either the entry's commit token (the preview client holds it) or its [Entry.discardId]
+     * (a reload-recovery client got it from [pendingSummary]). Every discard is scoped: a reference to
+     * an entry this slot no longer holds removes nothing, so a stale recovery card can never delete a
+     * replacement upload staged after its probe — that unscoped blind discard was a known failure mode.
+     * A discard never touches a body still being received or in-flight panel work (each has its own
+     * cancel), and an entry inside the commit's claim window answers [DiscardResult.INSTALL_IN_FLIGHT]
+     * so the caller re-asks instead of being told "nothing pending" moments before a busy answer
+     * restores the entry.
      */
     @Synchronized
-    fun discard(token: String? = null): DiscardResult {
+    fun discard(ref: String): DiscardResult {
         expireActive()
+        claimedForInstall?.takeIf { ref == it.token || ref == it.discardId }?.let {
+            return DiscardResult.INSTALL_IN_FLIGHT
+        }
         val entry = active ?: return DiscardResult.NOTHING_PENDING
-        if (token != null && token != entry.token) return DiscardResult.DIFFERENT_PENDING
+        if (ref != entry.token && ref != entry.discardId) return DiscardResult.DIFFERENT_PENDING
         active = null
         entry.file.delete()
         return DiscardResult.DISCARDED
@@ -190,12 +217,14 @@ internal class PendingUploadStore(
     @Synchronized
     fun pendingSummary(): PendingSummary? {
         expireActive()
-        return active?.takeIf { open && it.file.exists() }?.let { PendingSummary(it.identity) }
+        return active?.takeIf { open && it.file.exists() }?.let { PendingSummary(it.identity, it.discardId) }
     }
 
-    /** Put a claim back after a busy race, unless a newer reservation or server lifetime owns the slot. */
+    /** Put a claim back after a busy race, unless a newer reservation or server lifetime owns the slot.
+     *  Always closes the claim window, so a discard that was told "in flight" can now act on the truth. */
     @Synchronized
     fun restore(entry: Entry): Boolean {
+        if (claimedForInstall === entry) claimedForInstall = null
         if (expired(entry, monotonicMs())) {
             entry.file.delete()
             return false
@@ -214,6 +243,7 @@ internal class PendingUploadStore(
         active?.file?.delete()
         active = null
         receiving = null
+        claimedForInstall = null
     }
 
     @Synchronized

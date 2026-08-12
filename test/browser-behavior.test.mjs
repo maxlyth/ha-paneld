@@ -2860,13 +2860,13 @@ browserTest('Choosing another APK replaces the inspected one without a discard r
   assert.equal(calls[1].body, 'second', 'the replacement bytes are the newly chosen file');
 });
 
-browserTest('A reload surfaces the panel-held pending upload with a token-free Discard action', async (t) => {
+browserTest('A reload surfaces the panel-held pending upload with a probe-scoped Discard action', async (t) => {
   const calls = [];
   let pendingHeld = true;
   const harness = await startHarness(async (path, request) => {
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/install/apk/pending') return json(pendingHeld
-      ? { pending: true, package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
+      ? { pending: true, discard: 'pid-1', package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
       : { pending: false });
     if (path === '/api/v1/install/apk/discard') {
       calls.push({ path, body: await requestBody(request) });
@@ -2891,7 +2891,48 @@ browserTest('A reload surfaces the panel-held pending upload with a token-free D
     () => document.querySelector('#apk-preview')?.textContent.includes('Pending APK discarded.'),
   ));
   assert.deepEqual(calls.map((c) => c.path), ['/api/v1/install/apk/discard']);
-  assert.equal(calls[0].body, '', 'the recovery discard fires token-free — a reload lost the token');
+  assert.equal(calls[0].body, 'token=pid-1',
+    'the recovery discard is scoped by the probe reference — a reload lost the commit token, and a blind discard could delete a replacement');
+});
+
+browserTest('A stale recovery card cannot delete a replacement upload and repaints the truth', async (t) => {
+  const calls = [];
+  let probes = 0;
+  const entries = [
+    { pending: true, discard: 'pid-1', package: 'example.panel', version: '1.2.3', signer: 'unsigned' },
+    { pending: true, discard: 'pid-2', package: 'replacement.panel', version: '9.9.9', signer: 'unsigned' },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/radio') return json({ present: false });
+    // First probe (page load) sees the original entry; every later probe sees the replacement that
+    // another client staged in the meantime.
+    if (path === '/api/v1/install/apk/pending') return json(entries[probes++ === 0 ? 0 : 1]);
+    if (path === '/api/v1/install/apk/discard') {
+      const body = await requestBody(request);
+      calls.push({ path, body });
+      if (body === 'token=pid-1') return json({ ok: false, error: 'different-pending' }, 409);
+      return json({ ok: true, discarded: true });
+    }
+  }, apkInstallCardFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  const discard = page.getByRole('button', { name: 'Discard pending upload' });
+  await discard.waitFor();
+  await discard.click();
+
+  // The stale reference removed nothing; the page re-probed and now names the replacement.
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview')?.textContent.includes('replacement.panel'),
+  ));
+  await page.getByRole('button', { name: 'Discard pending upload' }).click();
+  await assert.doesNotReject(() => page.waitForFunction(
+    () => document.querySelector('#apk-preview')?.textContent.includes('Pending APK discarded.'),
+  ));
+  assert.deepEqual(calls.map((c) => c.body), ['token=pid-1', 'token=pid-2'],
+    'each discard names exactly the entry its card was painted from; the refused one deleted nothing');
 });
 
 browserTest('upload-busy offers Discard only when the panel actually holds a pending entry', async (t) => {
@@ -2899,7 +2940,7 @@ browserTest('upload-busy offers Discard only when the panel actually holds a pen
   const harness = await startHarness(async (path, request) => {
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/install/apk/pending') return json(pendingHeld
-      ? { pending: true, package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
+      ? { pending: true, discard: 'pid-busy', package: 'example.panel', version: '1.2.3', signer: 'unsigned' }
       : { pending: false });
     if (path === '/api/v1/install/apk') {
       await requestBody(request);

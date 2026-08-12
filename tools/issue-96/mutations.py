@@ -31,8 +31,8 @@ MUTATIONS = {
     ),
     "mismatch-still-discards": (
         STORE,
-        "        if (token != null && token != entry.token) return DiscardResult.DIFFERENT_PENDING",
-        "        if (token != null && token != entry.token) {\n"
+        "        if (ref != entry.token && ref != entry.discardId) return DiscardResult.DIFFERENT_PENDING",
+        "        if (ref != entry.token && ref != entry.discardId) {\n"
         "            active = null\n"
         "            entry.file.delete()\n"
         "            return DiscardResult.DIFFERENT_PENDING\n"
@@ -41,26 +41,60 @@ MUTATIONS = {
         "kotlin",
         "aTokenScopedDiscardNeverRemovesAnEntryItDidNotInspect",
     ),
-    "tokenless-discard-refused": (
+    "probe-reference-is-the-commit-token": (
         STORE,
-        "        if (token != null && token != entry.token) return DiscardResult.DIFFERENT_PENDING",
-        "        if (token == null || token != entry.token) return DiscardResult.DIFFERENT_PENDING",
+        "?.let { PendingSummary(it.identity, it.discardId) }",
+        "?.let { PendingSummary(it.identity, it.token) }",
         None,
         "kotlin",
-        "tokenFreeDiscardIsTheRecoveryPathForABrowserThatLostItsToken",
+        "theProbeReferenceCarriesNoInstallAuthority",
+    ),
+    "any-reference-discards": (
+        STORE,
+        "        if (ref != entry.token && ref != entry.discardId) return DiscardResult.DIFFERENT_PENDING\n",
+        "",
+        None,
+        "kotlin",
+        "aStaleRecoveryReferenceCannotRemoveAReplacementUpload",
+    ),
+    "claim-window-reported-free": (
+        STORE,
+        "        claimedForInstall?.takeIf { ref == it.token || ref == it.discardId }?.let {\n"
+        "            return DiscardResult.INSTALL_IN_FLIGHT\n"
+        "        }\n",
+        "",
+        None,
+        "kotlin",
+        "aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing",
+    ),
+    "restore-keeps-the-claim-window-open": (
+        STORE,
+        "    fun restore(entry: Entry): Boolean {\n        if (claimedForInstall === entry) claimedForInstall = null\n",
+        "    fun restore(entry: Entry): Boolean {\n",
+        None,
+        "kotlin",
+        "aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing",
+    ),
+    "install-start-keeps-the-claim-window-open": (
+        ROUTES,
+        "    dependencies.pending.confirmClaim(claimed)\n",
+        "",
+        None,
+        "kotlin",
+        "apkDiscardRetiresOnlyThePendingEntryAndThePendingProbeNeverLeaksTheToken",
     ),
     "discard-aborts-panel-work": (
         STORE,
-        "    fun discard(token: String? = null): DiscardResult {\n        expireActive()",
-        "    fun discard(token: String? = null): DiscardResult {\n        expireActive()\n        stopPanelWork()",
+        "    fun discard(ref: String): DiscardResult {\n        expireActive()",
+        "    fun discard(ref: String): DiscardResult {\n        expireActive()\n        stopPanelWork()",
         None,
         "kotlin",
         "discardNeverTouchesAnArrivingBodyOrInFlightPanelWork",
     ),
     "discard-clears-receiving": (
         STORE,
-        "    fun discard(token: String? = null): DiscardResult {\n        expireActive()",
-        "    fun discard(token: String? = null): DiscardResult {\n        expireActive()\n        receiving = null",
+        "    fun discard(ref: String): DiscardResult {\n        expireActive()",
+        "    fun discard(ref: String): DiscardResult {\n        expireActive()\n        receiving = null",
         None,
         "kotlin",
         "discardNeverTouchesAnArrivingBodyOrInFlightPanelWork",
@@ -132,7 +166,23 @@ MUTATIONS = {
         "  // preview token but not the panel-side file. (Issue #96)",
         None,
         "browser",
-        "A reload surfaces the panel-held pending upload with a token-free Discard action",
+        "A reload surfaces the panel-held pending upload with a probe-scoped Discard action",
+    ),
+    "recovery-card-drops-its-reference": (
+        INSTALL_JS,
+        "      '<button class=\"pbtn\" data-token=\"' + esc(d.discard) + '\" onclick=\"apkDiscard(this)\">✕ Discard pending upload</button>'",
+        "      '<button class=\"pbtn\" onclick=\"apkDiscard(this)\">✕ Discard pending upload</button>'",
+        None,
+        "browser",
+        "A reload surfaces the panel-held pending upload with a probe-scoped Discard action",
+    ),
+    "stale-refusal-never-repaints": (
+        INSTALL_JS,
+        "      apkProbePending();\n    }).catch(function (error) {\n      btn.disabled = false;",
+        "    }).catch(function (error) {\n      btn.disabled = false;",
+        None,
+        "browser",
+        "A stale recovery card cannot delete a replacement upload and repaints the truth",
     ),
     "cancel-gains-a-shield": (
         INSTALL_JS,

@@ -269,13 +269,15 @@
   }
 
   // A staged upload survives the browser that made it. After a reload (token gone) or a busy answer,
-  // name what the panel is holding and offer to discard it — the discard is token-free, because the
-  // whole point is that this browser no longer has one.
+  // name what the panel is holding and offer to discard it. The button carries the probe's discard
+  // reference — not the commit token, which this surface never sees — so the discard is scoped to
+  // exactly the entry being shown: if a newer upload has replaced it, the panel refuses and this page
+  // re-probes rather than deleting something the operator never saw.
   function renderApkPendingRecovery(prev, d) {
     if (!prev) return;
     prev.innerHTML = '<p class="note">The panel is holding a previously inspected APK: <b>' + esc(d.package) + '</b> ' +
       esc(d.version) + '. Uploading or fetching a new APK will replace it.</p>' +
-      '<button class="pbtn" onclick="apkDiscard(this)">✕ Discard pending upload</button>';
+      '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ Discard pending upload</button>';
     scheduleInstallColumnAlignment();
   }
 
@@ -375,9 +377,10 @@
   };
 
   // Cancel/Discard is the counterpart of Install: it retires the inspected upload and deletes its
-  // staged bytes on the panel. Token-scoped from the preview button, so it can only remove the exact
-  // entry the operator reviewed; token-free from the recovery button, whose token a reload lost. It
-  // never touches a running install — a committed APK has already left the pending slot.
+  // staged bytes on the panel. Every discard is scoped — the preview button carries the commit token,
+  // the recovery button the probe's discard reference — so it can only remove the exact entry the
+  // operator is looking at. It never touches a running install: a committed APK has already left the
+  // pending slot, and one mid-decision answers install-in-flight rather than pretending to be free.
   window.apkDiscard = function (btn) {
     var prev = document.getElementById('apk-preview');
     var token = btn.getAttribute('data-token') || '';
@@ -387,7 +390,7 @@
     fetch('/api/v1/install/apk/discard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: token ? 'token=' + encodeURIComponent(token) : ''
+      body: 'token=' + encodeURIComponent(token)
     }).then(function (r) { return r.json(); }).then(function (d) {
       if (mine !== apkPreviewGeneration) return;
       if (d.ok) {
@@ -397,8 +400,14 @@
         }
         return;
       }
-      // different-pending: a newer upload owns the slot, so this stale view must not clear it.
-      // Re-render from the panel's truth instead.
+      // Refused: this view is stale (a newer upload owns the slot) or the entry is mid-commit. Say
+      // which, then repaint from the panel's truth instead of leaving a card that lies.
+      if (prev) {
+        prev.innerHTML = '<p class="note">' + (d.error === 'install-in-flight'
+          ? 'This APK is mid-install — nothing to discard.'
+          : 'The pending upload changed — checking what the panel is holding…') + '</p>';
+        scheduleInstallColumnAlignment();
+      }
       apkProbePending();
     }).catch(function (error) {
       btn.disabled = false;

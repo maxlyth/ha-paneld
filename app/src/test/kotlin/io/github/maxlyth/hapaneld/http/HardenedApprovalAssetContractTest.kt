@@ -192,8 +192,8 @@ class HardenedApprovalAssetContractTest {
             install.contains("'<button class=\"pbtn\" data-token=\"' + esc(d.token) + '\" onclick=\"apkDiscard(this)\">✕ Cancel</button>'"),
         )
         assertTrue(
-            "the reload-recovery discard is the same unshielded cancellation",
-            install.contains("'<button class=\"pbtn\" onclick=\"apkDiscard(this)\">✕ Discard pending upload</button>'"),
+            "the reload-recovery discard is the same unshielded cancellation, scoped by the probe's reference",
+            install.contains("'<button class=\"pbtn\" data-token=\"' + esc(d.discard) + '\" onclick=\"apkDiscard(this)\">✕ Discard pending upload</button>'"),
         )
         assertTrue(install.contains("'<button class=\"pbtn\"' + hardenedApprovalA11yAttrs + ' style=\"margin-top:8px\" onclick=\"restoreConfirm(this)\""))
         listOf(

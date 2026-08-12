@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.http
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -208,16 +209,52 @@ class PendingUploadStoreTest {
         assertTrue("the slot must be free again", store.begin() is PendingUploadStore.BeginResult.Granted)
     }
 
-    /** After a reload the browser holds no token; the recovery discard must still work — and stay
-     *  honest when it finds nothing. */
-    @Test fun tokenFreeDiscardIsTheRecoveryPathForABrowserThatLostItsToken() {
-        val store = PendingUploadStore { "token" }.apply { open() }
+    /** After a reload the browser holds no token; the probe's discard reference is the recovery path,
+     *  and it must stay honest when the entry is already gone. */
+    @Test fun theProbeReferenceDiscardsExactlyTheEntryItDescribes() {
+        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "token" }).apply { open() }
         val staged = store.stage(granted(store.begin()), file("reloaded.apk"))!!
+        val reference = store.pendingSummary()!!.discardId
 
-        assertEquals(PendingUploadStore.DiscardResult.DISCARDED, store.discard(null))
+        assertEquals(PendingUploadStore.DiscardResult.DISCARDED, store.discard(reference))
         assertFalse(staged.file.exists())
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(null))
+        assertNull("a discarded token must stop resolving", store.peek(staged.token))
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(reference))
         assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard("token"))
+    }
+
+    /** The probe's reference is deliberately powerless beyond discarding: handing out install
+     *  authority to any LAN client that asked "what is pending?" would bypass the token handoff. */
+    @Test fun theProbeReferenceCarriesNoInstallAuthority() {
+        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "secret-token" }).apply { open() }
+        val staged = store.stage(granted(store.begin()), file("probed-authority.apk"))!!
+        val reference = store.pendingSummary()!!.discardId
+
+        assertNotEquals("the reference must not BE the commit token", staged.token, reference)
+        assertNull("the reference must not read the entry", store.peek(reference))
+        assertNull("the reference must not claim the entry", store.claim(reference))
+        assertNotNull("while the real token still commits", store.peek(staged.token))
+    }
+
+    /** The review's first finding: client A's recovery card probes entry X, client B replaces it with
+     *  Y, then A clicks Discard. The stale reference must remove NOTHING — never the replacement A
+     *  has not seen — and the replacement must stay fully committable. */
+    @Test fun aStaleRecoveryReferenceCannotRemoveAReplacementUpload() {
+        var id = 0
+        val store = PendingUploadStore(newDiscardId = { "ref-${++id}" }, newToken = { "token-$id" }).apply { open() }
+        store.stage(granted(store.begin()), file("first-probe.apk"))!!
+        val staleReference = store.pendingSummary()!!.discardId
+
+        val replacement = store.stage(granted(store.begin()), file("replacement.apk"))!!
+
+        assertEquals(PendingUploadStore.DiscardResult.DIFFERENT_PENDING, store.discard(staleReference))
+        assertTrue("the replacement must be untouched", replacement.file.exists())
+        assertNotNull("and must still be committable", store.peek(replacement.token))
+
+        val freshReference = store.pendingSummary()!!.discardId
+        assertNotEquals(staleReference, freshReference)
+        assertEquals("a re-probe yields a reference that works", PendingUploadStore.DiscardResult.DISCARDED, store.discard(freshReference))
+        assertFalse(replacement.file.exists())
     }
 
     /** A stray click on a stale preview must never remove an upload someone staged in its place. */
@@ -232,20 +269,40 @@ class PendingUploadStoreTest {
         assertNotNull("and must still be committable", store.peek(current.token))
     }
 
-    /** A committed upload has left the slot, so a discard arriving during the install finds nothing
-     *  and the install's bytes are untouchable. The busy-race restore stays honest: once the claim is
-     *  put back the entry genuinely reappears, discardable again. */
-    @Test fun discardCannotReachAClaimedEntryAndTheBusyRestoreRaceStaysHonest() {
-        val store = PendingUploadStore { "token" }.apply { open() }
-        val staged = store.stage(granted(store.begin()), file("claimed.apk"))!!
+    /** The review's second finding: between claim and the busy/start decision, "nothing pending" is a
+     *  false completion — a busy answer restores the entry moments later, contradicting it. Inside
+     *  that window a discard naming the entry (by either reference) is told an install is in flight
+     *  and deletes nothing; once restore reopens the truth, the same discard succeeds. */
+    @Test fun aDiscardDuringTheCommitClaimWindowIsToldInFlightNotNothing() {
+        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "token" }).apply { open() }
+        val staged = store.stage(granted(store.begin()), file("claim-window.apk"))!!
+        val reference = store.pendingSummary()!!.discardId
         val claim = store.claim(staged.token)!!
 
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(staged.token))
-        assertTrue("a running install's bytes must be untouched", claim.file.exists())
+        assertEquals(PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT, store.discard(staged.token))
+        assertEquals(PendingUploadStore.DiscardResult.INSTALL_IN_FLIGHT, store.discard(reference))
+        assertTrue("an in-flight decision's bytes must be untouched", claim.file.exists())
+        assertEquals("an unrelated reference still hears the plain truth", PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard("someone-else"))
 
         assertTrue(store.restore(claim))
-        assertEquals(PendingUploadStore.DiscardResult.DISCARDED, store.discard(staged.token))
+        assertEquals("after the busy restore the discard acts on the truth", PendingUploadStore.DiscardResult.DISCARDED, store.discard(staged.token))
         assertFalse(claim.file.exists())
+    }
+
+    /** Once the install genuinely starts the claim window closes: the entry has left the store for
+     *  good, a discard naming it truthfully finds nothing, and the install's bytes are untouchable. */
+    @Test fun anInstallThatActuallyStartsClosesTheClaimWindow() {
+        val store = PendingUploadStore(newDiscardId = { "probe-ref" }, newToken = { "token" }).apply { open() }
+        val staged = store.stage(granted(store.begin()), file("committed.apk"))!!
+        val reference = store.pendingSummary()!!.discardId
+        val claim = store.claim(staged.token)!!
+
+        store.confirmClaim(claim)
+
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(staged.token))
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(reference))
+        assertTrue("a started install's bytes must be untouched", claim.file.exists())
+        assertNull("and nothing reappears behind the answer", store.pendingSummary())
     }
 
     /** Discard owns only the slot's PENDING occupant: a body still arriving is someone's upload
@@ -253,12 +310,12 @@ class PendingUploadStoreTest {
     @Test fun discardNeverTouchesAnArrivingBodyOrInFlightPanelWork() {
         val store = PendingUploadStore { "token" }.apply { open() }
         val receiving = granted(store.begin())
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(null))
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard("any-ref"))
         assertNotNull("the receive must go on to stage after a discard", store.stage(receiving, file("still-arriving.apk")))
 
         val fetching = PendingUploadStore { "token" }.apply { open() }
         val admitted = fetching.begin("req") as PendingUploadStore.BeginResult.Granted
-        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, fetching.discard(null))
+        assertEquals(PendingUploadStore.DiscardResult.NOTHING_PENDING, fetching.discard("any-ref"))
         assertFalse("panel work must not be aborted by a discard", admitted.abort!!.isAborted)
         assertNotNull("and must still be able to stage", fetching.stage(admitted.lease, file("still-fetching.apk")))
     }

@@ -20,7 +20,7 @@ git -C "$SRC_ROOT" worktree add --detach "$WT" HEAD >/dev/null 2>&1 || { echo "c
 ln -s "$SRC_ROOT/test/node_modules" "$WT/test/node_modules"
 
 KOTLIN_RESULTS="$WT/app/build/test-results/testDebugUnitTest"
-BROWSER_PATTERN='APK preview|Choosing another APK|reload surfaces|upload-busy offers'
+BROWSER_PATTERN='APK preview|Choosing another APK|reload surfaces|upload-busy offers|stale recovery card'
 overall=0
 
 run_kotlin() { # -> 0 green, 1 red, 2 compile failure
