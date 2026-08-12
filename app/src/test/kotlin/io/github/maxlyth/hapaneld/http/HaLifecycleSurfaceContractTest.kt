@@ -182,7 +182,8 @@ class HaLifecycleSurfaceContractTest {
     }
 
     @Test fun theDiagnosticsCardHasARowForTheLifecycleState() {
-        assertTrue(server.contains("\"Log shipping\", HA_LIFECYCLE_FACT,"))
+        val contextKeys = server.substringAfter("private val CONTEXT_KEYS").substringBefore("private val BEHAVIOUR_FACT_KEYS")
+        assertTrue(contextKeys.contains("HA_LIFECYCLE_FACT"))
     }
 
     /**

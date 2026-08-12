@@ -27,7 +27,7 @@ class HomeDashboardLaunchContractTest {
     )
 
     private val retry = source.substring(
-        source.indexOf("private val homeDashboardRetry"),
+        source.indexOf("private val admissionRetry = Runnable"),
         source.indexOf("/** Endpoint the on-panel Home Assistant sign-in is currently showing"),
     )
 
@@ -50,10 +50,12 @@ class HomeDashboardLaunchContractTest {
     @Test fun `a transient failure keeps the cache and retries quietly behind a rendering page`() {
         val failure = resolver.substring(
             resolver.indexOf("if (resolution == null)"),
-            resolver.indexOf("homeDashboardRetryPolicy.reset()"),
+            resolver.indexOf("admissionRetryPolicy.reset()"),
         )
-        // The retry is scheduled unconditionally; the teardown screen is gated on nothing rendering.
-        assertTrue(failure.contains("main.postDelayed(homeDashboardRetry, delay)"))
+        // Both branches retain automatic recovery through the shared admission retry owner; the
+        // teardown screen is gated on nothing rendering.
+        assertTrue(failure.contains("showBlockedAdmissionScreen("))
+        assertTrue(failure.contains("armAdmissionAutoRetry(it"))
         val screen = failure.indexOf("\"Home Assistant dashboard list unavailable\"")
         val gate = failure.indexOf("if (shownPath == null || web == null)")
         assertTrue(gate in 0 until screen)
@@ -64,7 +66,7 @@ class HomeDashboardLaunchContractTest {
 
     @Test fun `a confirmed empty dashboard list clears the cache with the screen`() {
         val confirmedNone = resolver.substring(
-            resolver.indexOf("if (resolution.path == null)", resolver.indexOf("homeDashboardRetryPolicy.reset()")),
+            resolver.indexOf("if (resolution.path == null)", resolver.indexOf("admissionRetryPolicy.reset()")),
             resolver.indexOf("setHomeDashboardLaunchPathIfOwned"),
         )
         assertTrue(confirmedNone.contains("clearHomeDashboardLaunchPathIfOwned(launchOwner)"))
@@ -134,18 +136,21 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `the scheduled retry never invalidates a provisional page it would blank`() {
-        assertTrue(retry.contains("if (homeDashboardResolution?.confirmed != false) invalidateHomeDashboardResolution"))
+        assertTrue(retry.contains("if (homeDashboardResolution?.confirmed == false)"))
+        assertTrue(retry.contains("buildAndLoad(Config(this))"))
+        assertTrue(retry.contains("retryAdmission(resetBackoff = false)"))
     }
 
     @Test fun `a failed durable invalidation keeps retrying instead of reporting convergence`() {
         val confirmedNone = resolver.substring(
-            resolver.indexOf("if (resolution.path == null)", resolver.indexOf("homeDashboardRetryPolicy.reset()")),
+            resolver.indexOf("if (resolution.path == null)", resolver.indexOf("admissionRetryPolicy.reset()")),
             resolver.indexOf("setHomeDashboardLaunchPathIfOwned"),
         )
         // The return value is consumed, not discarded: a stale row that survives deletion would be
         // replayed by the next launch or a Retry while the screen claimed a settled state.
         assertTrue(confirmedNone.contains("if (!currentConfig.clearHomeDashboardLaunchPathIfOwned(launchOwner))"))
-        assertTrue(confirmedNone.contains("main.postDelayed(homeDashboardRetry, delay)"))
+        assertTrue(confirmedNone.contains("showBlockedAdmissionScreen("))
+        assertTrue(confirmedNone.contains("AdmissionOutcome.DASHBOARD_LIST_UNREADABLE"))
         assertTrue(confirmedNone.contains("clear its stored dashboard"))
     }
 
