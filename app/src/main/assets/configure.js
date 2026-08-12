@@ -827,12 +827,76 @@
     }).sort(function (a, b) { return b.age - a.age; });
   }
 
+  // Age hierarchy for the days that are drawn individually.
+  // Every dimension uses arithmetic and core canvas state rather than an optional filter effect, so
+  // the intended softening remains present when an engine omits that effect.
+  //
+  // The blur is required — it is what makes a previous day read as background rather than as another
+  // competing line. What it must NOT use is the `filter` property on the 2D context, which is how this
+  // was first written: Chromium and the panel WebView applied it while Safari showed no softening, so
+  // the same history rendered as two different charts. That difference is silent, which is the real
+  // damage: the radius was tuned in a browser that was showing no effect and reached 52px at day-age 6
+  // without anyone ever seeing the result. A capability probe is not a fix either — skipping the call
+  // leaves the day unsoftened rather than giving it a fallback. So the radius below is real and the
+  // blur is genuinely drawn; see the feathered stroke in line() for how it is realised portably.
+  // How many days are drawn as lines. The rest of the week survives as the painted min/max region.
+  //
+  // Seven days times three traces was twenty-one lines, and adjacent days could not be told apart at
+  // any combination of opacity, blur and colour. That is not a tuning failure: seven ordered steps do
+  // not fit between today's saturated colour and the dimmest step still visible on the card, so the
+  // encoding was being asked for more levels than the space holds. Three days fit comfortably, and the
+  // week's spread is better served by one region than by four more lines nobody could separate.
+  function autoBrightnessLineDays() { return 3; }
+
+  // Age hierarchy for those three days. Every dimension is arithmetic or core canvas state, so the
+  // chart renders the same on every modern engine.
+  //
+  // The blur is required — it is what makes a previous day read as background rather than as another
+  // competing line. What it must NOT use is the `filter` property on the 2D context, which is how this
+  // was first written: Chromium and the panel WebView applied it while Safari showed no softening, so
+  // the same history rendered as two different charts. That difference is silent, which is the real
+  // damage: the radius was tuned in a browser that was showing no effect and reached 52px at day-age 6
+  // without anyone ever seeing the result. A capability probe is not a fix either — skipping the call
+  // leaves the day unsoftened rather than giving it a fallback. So the radius below is real and the
+  // blur is genuinely drawn; see the feathered stroke in line() for how it is realised portably.
+  //
+  // Opacity is deliberately NOT part of the ramp. Ink conservation already dims a blurred trace by
+  // roughly the ratio of its spread to its width, so an extra alpha cut on top bleached the older days
+  // until they read as grey. Age is carried by radius and width alone, with chroma compensating.
   function autoBrightnessDayStyle(age) {
-    var boundedAge = Math.max(0, Math.min(6, age));
+    var boundedAge = Math.max(0, Math.min(autoBrightnessLineDays() - 1, age));
     return {
-      alpha: [1, .28, .20, .14, .10, .07, .05][boundedAge],
-      blurPx: boundedAge === 0 ? 0 : 5 * Math.pow(1.6, boundedAge - 1)
+      blurPx: [0, 1.2, 3.2][boundedAge],
+      widthPx: [1.8, 1.5, 1.3][boundedAge]
     };
+  }
+
+  // The blur's cross-section, as [fraction of the radius, share of the layer's opacity], widest first.
+  // Held in its own function so the whole age encoding can be swapped in one place when tuning against
+  // real renderers — the comparison harness overrides this and autoBrightnessDayStyle and nothing else.
+  // Weighted toward the core. Ink is conserved, so a flat profile spends most of it on the widest,
+  // faintest pass and the peak opacity collapses — at radius 3 the spread is over five times the line
+  // width, which puts the core near 5% alpha. A saturated colour at 5% over a near-black card composites
+  // to almost the background, so the trace goes grey and loses its hue entirely. Concentrating the ink
+  // in the middle keeps a coloured core with a soft edge, which is what a blurred line should look like.
+  function autoBrightnessFeather() {
+    return [[1, .06], [.72, .12], [.4, .22], [0, .6]];
+  }
+
+  // Compensates a blurred trace's colour. A faint mark loses its hue toward whatever is behind it, and
+  // ink conservation makes a heavily blurred day faint by construction — so the more a day is blurred,
+  // the more chroma its source colour needs in order to still read as blue, amber or purple rather than
+  // as grey. Pushes the colour away from its own luminance grey; clamping means this can only ever
+  // saturate, never wash toward white, which is what made an earlier light-to-dark ramp unusable.
+  // Pure arithmetic on purpose — the CSS colour-mixing functions and relative colour syntax have
+  // uneven engine support, and canvas takes a plain colour string anyway.
+  function autoBrightnessAgedColor(color, blurPx) {
+    var amount = 1 + blurPx * .13;
+    var channels = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
+    var grey = .299 * channels[0] + .587 * channels[1] + .114 * channels[2];
+    return "rgb(" + channels.map(function (channel) {
+      return Math.max(0, Math.min(255, Math.round(grey + (channel - grey) * amount)));
+    }).join(",") + ")";
   }
 
   function autoBrightnessSmoothing(age) {
@@ -926,37 +990,89 @@
       if (run.length) result.push(run);
       return result;
     }
-    function line(day, field, color, widthPx, projectY) {
+    // Draws one trace, optionally blurred. The blur is a feathered stroke: the same path is stroked
+    // several times, from widthPx + 2 * blurPx down to widthPx, each pass at a fraction of the layer's
+    // opacity. Those passes composite into a smooth-edged band with no hard core, which is what a
+    // blurred line looks like — a stroke widened by 2r and falling off toward its edges IS the line
+    // convolved with a radius-r kernel, to the accuracy this chart needs.
+    //
+    // It is done this way rather than with a canvas filter because stroking and globalAlpha are widely
+    // implemented core 2D operations, so every target receives the same visual encoding even though
+    // rasterisation details can differ. It is also cheap: a handful of extra strokes per trace, no pixel
+    // readback, no offscreen buffer, nothing to allocate per frame.
+    function line(day, field, color, widthPx, projectY, blurPx) {
+      var featherPasses = autoBrightnessFeather();
       runs(day.points, field).forEach(function (run) {
         var values = smoothedRunValues(run, field, day.age);
         ctx.beginPath();
         run.forEach(function (point, index) {
           if (!index) ctx.moveTo(x(point), projectY(values[index])); else ctx.lineTo(x(point), projectY(values[index]));
         });
-        ctx.strokeStyle = color; ctx.lineWidth = widthPx;
-        ctx.stroke();
+        ctx.strokeStyle = color;
+        if (!blurPx) { ctx.lineWidth = widthPx; ctx.stroke(); return; }
+        var layerAlpha = ctx.globalAlpha;
+        // Conserve ink. A blur SPREADS a line's brightness over a wider area; it must never add more.
+        // Without this the passes simply stack, so a blurred trace lights more pixels than the sharp one
+        // and reads as bolder and glowing rather than smudged — the opposite of receding into the
+        // background. Scaling the opacities by width/spread-width keeps the total roughly equal to the
+        // unblurred stroke, so more blur automatically means more transparency.
+        // Approximate on purpose: alpha compositing is not additive, so overlapping passes retain a
+        // little more than this predicts. Close enough that blur reads as softening, not highlighting.
+        var spreadInk = 0;
+        featherPasses.forEach(function (pass) { spreadInk += (widthPx + 2 * blurPx * pass[0]) * pass[1]; });
+        var conserve = spreadInk > 0 ? widthPx / spreadInk : 1;
+        featherPasses.forEach(function (pass) {
+          ctx.globalAlpha = layerAlpha * pass[1] * conserve;
+          ctx.lineWidth = widthPx + 2 * blurPx * pass[0];
+          ctx.stroke();
+        });
+        ctx.globalAlpha = layerAlpha;
       });
     }
-    days.forEach(function (day) {
-      var style = autoBrightnessDayStyle(day.age);
-      ctx.save(); ctx.globalAlpha = style.alpha;
-      if ("filter" in ctx) ctx.filter = "blur(" + style.blurPx.toFixed(2) + "px)";
-      runs(day.points, "mean").forEach(function (run) {
-        var maxValues = smoothedRunValues(run, "max", day.age, "mean");
-        var minValues = smoothedRunValues(run, "min", day.age, "mean");
-        ctx.fillStyle = "rgba(74,158,255,.16)"; ctx.beginPath();
-        run.forEach(function (point, index) {
-          var yy = y(maxValues[index]);
-          if (!index) ctx.moveTo(x(point), yy); else ctx.lineTo(x(point), yy);
-        });
-        run.slice().reverse().forEach(function (point, reverseIndex) {
-          ctx.lineTo(x(point), y(minValues[minValues.length - reverseIndex - 1]));
-        });
-        ctx.closePath(); ctx.fill();
+    // The whole week's spread, as one painted region between the lowest and highest reading seen at each
+    // time of day. Painted FIRST so the day lines sit on top of it, and tinted with the lux hue rather
+    // than a neutral: the region IS the lux range, and a grey fill reads as haze over the background
+    // instead of as something deliberate. It carries every day, including the ones drawn as lines, so
+    // the days beyond the third are represented here rather than dropped.
+    var lowest = {}, highest = {};
+    points.forEach(function (point) {
+      var slot = point.minuteOfDay;
+      var low = point.min == null ? point.mean : point.min;
+      var high = point.max == null ? point.mean : point.max;
+      if (lowest[slot] == null || low < lowest[slot]) lowest[slot] = low;
+      if (highest[slot] == null || high > highest[slot]) highest[slot] = high;
+    });
+    // Split on missing data exactly as the day traces do. A single polygon over every sampled slot
+    // would bridge periods the week has no observations for, painting a filled region across a gap and
+    // asserting a range that was never measured — the same defect the run-splitting in runs() exists to
+    // prevent for lines, and more misleading here because a fill looks like coverage.
+    var slots = Object.keys(lowest).map(Number).sort(function (a, b) { return a - b; });
+    var spans = [], span = [];
+    slots.forEach(function (slot) {
+      if (span.length && slot - span[span.length - 1] !== bucketMinutes) { spans.push(span); span = []; }
+      span.push(slot);
+    });
+    if (span.length) spans.push(span);
+    ctx.fillStyle = "rgba(74,158,255,.15)";
+    spans.forEach(function (run) {
+      if (run.length < 2) return;
+      ctx.beginPath();
+      run.forEach(function (slot, index) {
+        var yy = y(highest[slot]);
+        if (!index) ctx.moveTo(pad.left + slot / 1440 * plotW, yy); else ctx.lineTo(pad.left + slot / 1440 * plotW, yy);
       });
-      line(day, "mean", "#4a9eff", 1.6, y);
-      line(day, "expected", "#f1bd52", 1.4, y);
-      line(day, "brightness", "#b77cff", 1.4, yBrightness);
+      run.slice().reverse().forEach(function (slot) {
+        ctx.lineTo(pad.left + slot / 1440 * plotW, y(lowest[slot]));
+      });
+      ctx.closePath(); ctx.fill();
+    });
+    // Oldest of the three first, so today is stroked last and stays on top of its neighbours.
+    days.filter(function (day) { return day.age < autoBrightnessLineDays(); }).forEach(function (day) {
+      var style = autoBrightnessDayStyle(day.age);
+      ctx.save();
+      line(day, "mean", autoBrightnessAgedColor("#4a9eff", style.blurPx), style.widthPx, y, style.blurPx);
+      line(day, "expected", autoBrightnessAgedColor("#f1bd52", style.blurPx), style.widthPx, y, style.blurPx);
+      line(day, "brightness", autoBrightnessAgedColor("#b77cff", style.blurPx), style.widthPx, yBrightness, style.blurPx);
       ctx.restore();
     });
     ctx.fillStyle = "#888"; ctx.font = "11px sans-serif";
@@ -1193,7 +1309,9 @@
     resume.onclick = function () { runAutoBrightnessAction("/api/v1/auto-brightness/resume", resume); };
     var bucket = autoBrightHistory && (autoBrightHistory.bucket_minutes || autoBrightHistory.bucketMinutes);
     var dayCount = autoBrightnessChartDays(normalizedChartPoints()).length;
-    var detail = dayCount + (dayCount === 1 ? " day" : " days") + " overlaid · older days fade";
+    var lineDayCount = Math.min(dayCount, autoBrightnessLineDays());
+    var detail = lineDayCount + (lineDayCount === 1 ? " day" : " days") + " drawn individually";
+    if (dayCount > autoBrightnessLineDays()) detail += " · earlier history shown as weekly range";
     if (bucket) detail += " · " + bucket + " minute buckets";
     var projectionSensitivity = autoBrightnessProjectionSensitivity();
     if (projectionSensitivity != null) detail += " · Sensitivity " + projectionSensitivity;
@@ -1203,7 +1321,7 @@
         el("div", {}, [el("strong", { text: "Daily ambient learning" }), el("small", { text: autoBrightnessSummary() })]),
         el("div", { class: "autobright-actions" }, [reset, resume])
       ]),
-      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": "24-hour ambient pattern with up to seven days overlaid" }),
+      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": "24-hour ambient-light pattern: the three most recent days drawn individually, with the rest of the week shown as a shaded minimum-to-maximum range" }),
       el("div", { class: "autobright-legend" }, [
         el("span", { class: "observed", text: "Observed" }),
         el("span", { class: "expected", text: "Learned baseline" }),

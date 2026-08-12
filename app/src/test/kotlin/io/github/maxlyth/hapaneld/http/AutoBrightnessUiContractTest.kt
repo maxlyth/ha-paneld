@@ -34,9 +34,52 @@ class AutoBrightnessUiContractTest {
         assertTrue("rolling history must omit the zero-opacity eighth date", "point.dayAge < 7" in source)
         assertTrue("chart must use a fixed 24-hour axis", "p.minuteOfDay / 1440" in source && "\"24:00\"" in source)
         assertTrue("plot must use full canvas width with both scales labelled inside", "left: 0, right: 0" in source && "pad.left + 5" in source && "width - pad.right - 5" in source)
-        assertTrue("yesterday must become a subtle reference and older days must fade further", "alpha: [1, .28, .20, .14, .10, .07, .05][boundedAge]" in source)
-        assertTrue("historical blur must start at five pixels and grow by sixty percent per day", "5 * Math.pow(1.6, boundedAge - 1)" in source)
-        assertTrue("historical blur must use canvas filtering without a sharp-centre shadow", "ctx.filter = \"blur(" in source && "ctx.shadowBlur" !in source)
+        // Seven days times three traces was twenty-one lines and adjacent days could not be separated at
+        // any opacity, blur or colour step - seven ordered levels do not fit between today's saturated
+        // colour and the dimmest step still visible on the card. The chart now draws three days and
+        // collapses the rest of the week into one painted min/max region.
+        assertTrue("only the three most recent days may be drawn as lines", "function autoBrightnessLineDays() { return 3; }" in source)
+        assertTrue("the day loop must be bounded by that count", "day.age < autoBrightnessLineDays()" in source)
+        assertTrue("older days must thin as well as soften", "widthPx: [1.8, 1.5, 1.3][boundedAge]" in source)
+        assertTrue("the per-day width must reach the traces", source.split("style.widthPx, ").size == 4)
+        // Opacity is deliberately absent from the ramp: ink conservation already dims a blurred trace,
+        // and cutting alpha on top of that bleached the older days until they read as grey.
+        assertFalse("age must not be carried by an opacity ramp on top of the blur", "alpha: [1," in source)
+        // The week's spread is one painted region, drawn BEFORE the day lines so they sit on top of it,
+        // and tinted with the lux hue because a neutral fill reads as haze rather than as deliberate paint.
+        assertTrue("the week must collapse into a painted min/max region", "ctx.fillStyle = \"rgba(74,158,255,.15)\"" in source)
+        assertTrue("the region must span every day, not just the drawn ones", "if (lowest[slot] == null || low < lowest[slot])" in source && "if (highest[slot] == null || high > highest[slot])" in source)
+        // The fill must break wherever the week has no observations, exactly as the day traces do. One
+        // polygon over every sampled slot bridges the gap and paints a range that was never measured -
+        // more misleading than the equivalent line defect, because a filled area reads as coverage.
+        assertTrue("the region must break on missing data rather than bridge it", "if (span.length && slot - span[span.length - 1] !== bucketMinutes)" in source && "spans.forEach" in source)
+        assertTrue("the region must be painted before the day lines", source.indexOf("rgba(74,158,255,.15)") < source.indexOf("day.age < autoBrightnessLineDays()"))
+        assertFalse("the retired per-day envelope must not linger", "style.band" in source)
+        assertTrue("visible detail must describe individually drawn days and the weekly range", "\" days\") + \" drawn individually\"" in source && "earlier history shown as weekly range" in source)
+        assertFalse("visible detail must not describe the retired seven-line fade", "overlaid · older days fade" in source)
+        assertTrue("canvas accessibility text must describe the current encoding", "the three most recent days drawn individually, with the rest of the week shown as a shaded minimum-to-maximum range" in source)
+        // A faint mark loses hue toward the ground, so a more heavily blurred day needs more chroma to
+        // still read as blue, amber or purple. Clamped, so this can only saturate, never wash to white.
+        assertTrue("blurred traces must be chroma-compensated", "var amount = 1 + blurPx * .13" in source && "grey + (channel - grey) * amount" in source)
+        assertFalse("colour must not be computed by an unevenly supported CSS syntax", "color-mix" in source)
+        assertTrue("older days must carry a real blur radius, clearly stepped", "blurPx: [0, 1.2, 3.2][boundedAge]" in source)
+        assertTrue("the blur radius must be passed to every trace", source.split("style.blurPx);").size == 4)
+        // The blur must be DRAWN, not delegated to the 2D context's filter property. That was the first
+        // implementation: Chromium and the panel WebView applied it while Safari showed
+        // no visible softening, so the same history rendered as two different charts and the radius was
+        // tuned blind to 52px. A capability probe is not a fallback either — it silently drops the blur
+        // instead of substituting one. The wider rule this encodes: Safari is a first-class target for
+        // this UI, so a web API that only some engines implement is not acceptable without a real
+        // fallback, and a capability probe is not one.
+        assertTrue("the blur must be drawn as a feathered stroke", "ctx.lineWidth = widthPx + 2 * blurPx * pass[0]" in source && "featherPasses" in source)
+        // A blur SPREADS a line's brightness; it must never add more. Without normalising the pass
+        // opacities by width/spread-width the passes simply stack, so a blurred trace lights more
+        // pixels than the sharp one and reads as bolder and glowing rather than receding.
+        assertTrue("blurring must conserve ink rather than add it", "var conserve = spreadInk > 0 ? widthPx / spreadInk : 1" in source && "pass[1] * conserve" in source)
+        assertFalse("the blur must not be delegated to a renderer-dependent canvas filter", "ctx.filter" in source)
+        assertFalse("a canvas filter capability probe must not gate the blur", "\"filter\" in ctx" in source)
+        assertFalse("the blur must not migrate to an equally uneven shadow blur", "ctx.shadowBlur" in source)
+        assertFalse("portable encoding must not claim pixel-identical engine rasterisation", "same picture on every engine" in source || "renders the same on every modern engine" in source)
         assertTrue("today must remain raw while older days receive wider median filtering", "medianWindow: [1, 3, 5, 7, 9, 11, 13][boundedAge]" in source)
         assertTrue("older days must receive progressively wider weighted smoothing", "averageWindow: [1, 1, 3, 5, 7, 9, 11][boundedAge]" in source)
         assertTrue("smoothing must be display-only and applied within discontinuity-split runs", "smoothedRunValues(run, field, day.age)" in source)
