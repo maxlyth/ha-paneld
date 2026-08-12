@@ -55,9 +55,9 @@ class DashboardScreenPolicyTest {
 
     private fun dashboardSource() = File("src/main/kotlin/io/github/maxlyth/hapaneld/DashboardActivity.kt").readText()
 
-    /** A window from each screen title large enough to include the whole showV2CompatibilityScreen call. */
+    /** A window from each blocked-screen call large enough to include its outcome. */
     private fun callWindows(source: String, title: String): List<String> =
-        Regex(Regex.escape("\"$title\"")).findAll(source).map {
+        Regex("showBlockedAdmissionScreen\\(\\s*" + Regex.escape("\"$title\"")).findAll(source).map {
             source.substring(it.range.first, minOf(source.length, it.range.first + 700))
         }.toList()
 
@@ -75,7 +75,10 @@ class DashboardScreenPolicyTest {
         assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Secure external bridge not detected"))
         assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant version unverifiable"))
         assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant upgrade required"))
-        assertEquals(listOf("NO_LEGAL_DASHBOARD", "NO_LEGAL_DASHBOARD"), outcomeOf("No Home Assistant dashboards available"))
+        assertEquals(
+            listOf("NO_LEGAL_DASHBOARD", "DASHBOARD_LIST_UNREADABLE", "NO_LEGAL_DASHBOARD"),
+            outcomeOf("No Home Assistant dashboards available"),
+        )
         // One permanent-incapability screen; the three attachment failures are separate, retryable evidence.
         assertEquals(listOf("BRIDGE_UNAVAILABLE"), outcomeOf("Secure dashboard bridge unavailable"))
         assertEquals(List(3) { "BRIDGE_ATTACH_FAILED" }, outcomeOf("Secure dashboard bridge interrupted"))
@@ -188,8 +191,21 @@ class DashboardScreenPolicyTest {
 
     @Test fun theJitteredDelayIsComputedOncePerPaintAndProgressScreensNeverArm() {
         val source = dashboardSource()
-        assertEquals(1, Regex(Regex.escape("admissionRetryPolicy.nextDelayMs(")).findAll(source).count())
-        assertTrue(source.contains("if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)"))
+        val painter = source.substring(
+            source.indexOf("private fun showV2CompatibilityScreen("),
+            source.indexOf("private fun retryAdmission(resetBackoff: Boolean)"),
+        )
+        assertEquals(1, Regex(Regex.escape("admissionRetryPolicy.nextDelayMs(")).findAll(painter).count())
+        assertTrue(painter.contains("if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)"))
+
+        // A provisional dashboard remains on screen, so this recovery route deliberately does not
+        // repaint. It still owns one independently computed delay and arms the shared retry owner.
+        val resolver = source.substring(
+            source.indexOf("private fun resolveHomeDashboardAndLoad"),
+            source.indexOf("private fun navigateAfterHomeDashboardCorrection"),
+        )
+        assertTrue(resolver.contains("admissionRetryPolicy.nextDelayMs("))
+        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"Home Assistant dashboard list unavailable\")"))
     }
 
     @Test fun theCountdownAndTheRetryCallbackShareTheHandlerClock() {
