@@ -84,7 +84,7 @@ jobs:
           cache-provider: basic
 
       - name: Test, lint, and build APKs
-        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease --stacktrace
+        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |

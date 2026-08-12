@@ -4,7 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.maxlyth.hapaneld.CoreInstrumentation
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO as ClientCio
+import io.ktor.client.engine.okhttp.OkHttp as ClientOkHttp
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.request.get
 import io.ktor.server.cio.CIO as ServerCio
@@ -18,17 +18,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Proves the production Ktor engine and client can load and exchange bytes on the fleet API floor. */
+/** Proves the production CIO server and OkHttp client can exchange bytes at the supported API floor. */
 @CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class KtorCioRuntimeTest {
-    @Test fun cioServerAndClientRunOnAndroid() = runBlocking {
+    @Test fun cioServerAndOkHttpClientRunOnAndroid() = runBlocking {
         val server = embeddedServer(ServerCio, host = "::", port = 0) {
             routing {
                 get("/health") { call.respondText("ok") }
             }
         }
-        val client = HttpClient(ClientCio) {
+        val client = HttpClient(ClientOkHttp) {
             install(WebSockets)
         }
         try {
