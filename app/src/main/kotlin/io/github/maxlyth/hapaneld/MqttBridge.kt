@@ -55,6 +55,8 @@ import io.github.maxlyth.hapaneld.control.WifiDiagnosticSnapshot
 import io.github.maxlyth.hapaneld.mqtt.MqttTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectionGeneration
 import io.github.maxlyth.hapaneld.mqtt.MqttFamilyPreference
+import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
+import io.github.maxlyth.hapaneld.mqtt.MqttRoutePlanner
 import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.mqtt.mqttFamilyBrokerIdentity
 import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
@@ -397,7 +399,7 @@ private data class MqttSelectedFamilyRoute(
     val preferIpv4: Boolean,
 )
 
-internal enum class MqttAddressFamily(val label: String) { IPV4("IPv4"), IPV6("IPv6") }
+enum class MqttAddressFamily(val label: String) { IPV4("IPv4"), IPV6("IPv6") }
 
 internal fun mqttAddressFamily(address: java.net.InetAddress?): MqttAddressFamily? = when (address) {
     is java.net.Inet4Address -> MqttAddressFamily.IPV4
@@ -414,6 +416,7 @@ internal fun mqttAnnouncementRecoveryIdentity(
     profileIdentity: String,
     user: String,
     password: String,
+    addressFamilyPolicy: String = SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY,
     buildVersionCode: Int = BuildConfig.VERSION_CODE,
 ): String {
     // Internal candidates share VERSION_NAME. Every installed build is a legitimate new bounded
@@ -426,6 +429,7 @@ internal fun mqttAnnouncementRecoveryIdentity(
         profileIdentity,
         user,
         password,
+        addressFamilyPolicy,
     )
         .joinToString(separator = "") { "${it.length}:$it" }
     return MessageDigest.getInstance("SHA-256")
@@ -582,6 +586,30 @@ internal class MqttRecoveryAuthority(
 
     private fun MqttRecoverySnapshot.matches(ticket: MqttRecoveryTicket): Boolean =
         revision == ticket.authorityRevision && familyConnectAttempt == ticket.familyConnectAttempt
+}
+
+/**
+ * Cross-layer CONNACK boundary: broker progress becomes observable before the lifecycle can become
+ * `announcing`. This makes `announcing`/`connected` with a never-recorded first ACK unreachable from
+ * the production connection-event path; no speculative first-ACK timer is needed.
+ */
+internal fun recordMqttConnack(
+    authority: MqttRecoveryAuthority,
+    connectionGeneration: Long,
+    applicationReadyEver: Boolean,
+    addressFamily: MqttAddressFamily?,
+    nowMs: Long,
+): MqttRecoverySnapshot {
+    authority.updateProgress(
+        MqttBrokerProgress(nowMs.coerceAtLeast(1L), connectionGeneration),
+    )
+    authority.updateLifecycleWithAddressFamily(
+        state = "announcing",
+        connectionGeneration = connectionGeneration,
+        applicationReadyEver = applicationReadyEver,
+        addressFamily = addressFamily,
+    )
+    return authority.snapshot()
 }
 
 internal fun reconcileRejectedMqttRecovery(
@@ -796,6 +824,7 @@ internal class MqttBridge(
     private val runtimeBroker: String = config.mqttBroker,
     private val runtimeMqttUser: String = config.mqttUser,
     private val runtimeMqttPassword: String = config.mqttPassword,
+    private val runtimeMqttAddressFamily: String = config.mqttAddressFamily,
     private val wifiDiagnostics: (WifiDiagnosticDemand) -> WifiDiagnosticSnapshot = { WifiDiagnosticSnapshot() },
     private val learnedProximityEligibility: () -> Boolean = { false },
     private val onAutoSleepConfigChanged: (Boolean) -> Unit = {},
@@ -831,8 +860,13 @@ internal class MqttBridge(
      * had just typed correctly (first hardware walks, 2-for-2). Callers use this to report a stale
      * generation as "connecting" instead of parroting a verdict the new credentials never earned.
      */
-    internal fun servesCredentials(broker: String, user: String, password: String): Boolean =
-        runtimeBroker.trim() == broker.trim() && runtimeMqttUser == user && runtimeMqttPassword == password
+    internal fun servesMqttConfiguration(
+        broker: String,
+        user: String,
+        password: String,
+        addressFamily: String,
+    ): Boolean = runtimeBroker.trim() == broker.trim() && runtimeMqttUser == user &&
+        runtimeMqttPassword == password && runtimeMqttAddressFamily == addressFamily
 
     /** Whether the active connection uses TLS (a ssl:///mqtts:// broker URL). Surfaced on the info page
      *  + /diag so a TLS setup is visible. */
@@ -976,7 +1010,13 @@ internal class MqttBridge(
         val auth = if (a.consecutiveRejects == 0) "auth-ok" else
             "${a.state} · rejects ${a.consecutiveRejects} · attempt ${a.retryAttempt} · next ${a.nextRetryMs?.let { ((it - now).coerceAtLeast(0) / 1000).toString() + "s" } ?: "none"}"
         val lastAuth = a.lastSuccessMs?.let { "${((now - it).coerceAtLeast(0) / 1000)}s ago" } ?: "never"
-        return "${recovery.state} · $transport · last-ok $age · last-auth $lastAuth · $auth · prefer ${if (familyPreference.preferIpv4) "IPv4" else "IPv6"}"
+        val policy = MqttAddressFamilyPolicy.fromConfig(runtimeMqttAddressFamily)
+        val familyPolicy = if (policy == MqttAddressFamilyPolicy.AUTOMATIC) {
+            "Automatic (next ${if (familyPreference.preferIpv4) "IPv4" else "IPv6"})"
+        } else {
+            policy.configValue
+        }
+        return "${recovery.state} · $transport · last-ok $age · last-auth $lastAuth · $auth · family $familyPolicy"
     }
 
     private val panel = runtimePanelId
@@ -1308,8 +1348,15 @@ internal class MqttBridge(
         // Linearize the explicit fresh-client boundary before clearing bridge state. A delayed event from
         // the prior client must not overwrite this attempt while it is waiting for its first CONNACK.
         connectionEventDispatcher.supersede()
-        val credentials = MqttCredentialsSnapshot(runtimeBroker, runtimeMqttUser, runtimeMqttPassword)
-        authRecovery.configure("${credentials.broker}\u0000${credentials.user}\u0000${credentials.password}")
+        val credentials = MqttCredentialsSnapshot(
+            runtimeBroker,
+            runtimeMqttUser,
+            runtimeMqttPassword,
+            runtimeMqttAddressFamily,
+        )
+        authRecovery.configure(
+            "${credentials.broker}\u0000${credentials.user}\u0000${credentials.password}\u0000${credentials.addressFamily}",
+        )
         activeConnection = null
         connectionGeneration.clear()
         announcementReadiness.clear()
@@ -1350,12 +1397,14 @@ internal class MqttBridge(
             val (host, port) = ep.host to ep.port
             tlsActive = ep.tls
             val familyIdentity = checkNotNull(mqttFamilyBrokerIdentity(broker))
+            val familyPolicy = MqttAddressFamilyPolicy.fromConfig(credentials.addressFamily)
             val announcementIdentity = mqttAnnouncementRecoveryIdentity(
                 familyIdentity,
                 panel,
                 profileIdentity,
                 credentials.user,
                 credentials.password,
+                familyPolicy.configValue,
             )
             synchronized(announcementBudgetLock) {
                 // This latch is process-wide rather than bridge-wide: a runtime replacement can complete
@@ -1374,23 +1423,34 @@ internal class MqttBridge(
                     state = "connecting",
                     connectionGeneration = connectionGeneration.currentOrNull(),
                 )
-                val selected = familyPreference.selectForConnect(familyIdentity, attempt)
+                val learned = familyPreference.selectForConnect(familyIdentity, attempt)
+                val selected = if (familyPolicy == MqttAddressFamilyPolicy.AUTOMATIC) {
+                    learned
+                } else {
+                    familyPolicy.initialPreferIpv4
+                }
                 MqttSelectedFamilyRoute(familyIdentity, attempt, selected).also {
                     selectedFamilyRoute = it
                 }
             }
-            // Happy-eyeballs: resolve the host and connect to a chosen address family, so a flaky family
-            // (e.g. the PX30 panels' idle-IPv6 stall) is survived by flipping the preference on the next
-            // reconnect and landing on the family that holds. Falls back to the raw host when it's a
-            // literal, resolution fails, or nothing is returned (HiveMQ then resolves it itself).
-            val selectedAddress = runCatching {
-                BrokerEndpoint.select(
-                    java.net.InetAddress.getAllByName(host).toList(),
-                    selectedRoute.preferIpv4,
-                )
-            }.getOrNull()
-            val connectHost = selectedAddress?.let { BrokerEndpoint.hostString(it) } ?: host
-            val connectAddressFamily = mqttAddressFamily(selectedAddress)
+            val routePlanner = MqttRoutePlanner(
+                logicalHost = host,
+                port = port,
+                policy = familyPolicy,
+                initialPreferIpv4 = selectedRoute.preferIpv4,
+                // A retained Automatic route gets the established watchdog grace. All other first
+                // attempts may suppress one failed family immediately, without changing reconnect backoff.
+                rapidInitialFallbackAllowed = familyPolicy != MqttAddressFamilyPolicy.AUTOMATIC ||
+                    !familyPreference.awaitingProgress,
+            )
+            val initialRoute = routePlanner.resolveInitial()
+            if (initialRoute == null) {
+                connectionGeneration.clear()
+                publishRecoveryLifecycleState("unreachable")
+                Log.w(TAG, "MQTT Force IPv4 found no IPv4 address for the configured broker")
+                return
+            }
+            val connectAddressFamily = initialRoute.family
             if (!recoveryAuthority.updateAddressFamily(selectedRoute.connectAttempt, connectAddressFamily)) return
 
             // The client lifecycle — build, connect, the connected/disconnected listeners, and the
@@ -1403,7 +1463,7 @@ internal class MqttBridge(
             // reconnect this client internally, so successful connection callbacks own generation changes.
             transport.connect(
                 MqttConnectConfig(
-                    host = connectHost,
+                    host = host,
                     port = port,
                     tls = ep.tls,
                     clientId = "ha-paneld-$panel",
@@ -1417,17 +1477,24 @@ internal class MqttBridge(
                     // credentials, and a leaked probe client used to reconnect forever (broker-log
                     // evidence). Configured, credentialed connections keep auto-reconnect.
                     automaticReconnect = credentials.user.isNotEmpty() || configuredBroker.isNotEmpty(),
+                    routePlanner = routePlanner,
                 ),
                 object : MqttCallbacks {
-                    override fun onConnected(connection: MqttConnectionLease) =
-                        this@MqttBridge.onConnected(connection, connectAddressFamily)
+                    override fun onConnected(
+                        connection: MqttConnectionLease,
+                        addressFamily: MqttAddressFamily?,
+                    ) = this@MqttBridge.onConnected(connection, addressFamily)
                     override fun onDisconnected(
                         connection: MqttConnectionLease?,
                         causeMessage: String?,
                     ) = this@MqttBridge.onDisconnected(connection, causeMessage)
                 },
             )
-            Log.i(TAG, "MQTT connecting to $connectHost:$port (host=$host, prefer=${if (selectedRoute.preferIpv4) "IPv4" else "IPv6"}) for $panel")
+            Log.i(
+                TAG,
+                "MQTT connecting to $host:$port " +
+                    "(policy=${familyPolicy.configValue}, route=${connectAddressFamily?.label ?: "DNS"}) for $panel",
+            )
         } catch (e: Exception) {
             Log.w(TAG, "MQTT connect failed", e)
         }
@@ -1463,6 +1530,13 @@ internal class MqttBridge(
         }
 
     internal fun stageAlternateFamilyForReconnect(baseline: MqttRecoveryTicket): MqttRecoveryTicket? {
+        if (MqttAddressFamilyPolicy.fromConfig(runtimeMqttAddressFamily) !=
+            MqttAddressFamilyPolicy.AUTOMATIC
+        ) {
+            // Explicit policy is the durable bound. A steady-state watchdog rebuild may retry it, but
+            // must not persist an opposing learned preference behind the user's back.
+            return recoveryTicketForReconnect(baseline)
+        }
         var identity: String? = null
         val selected = synchronized(familyRecoveryLock) {
             if (recoveryTicketForReconnect(baseline) == null) return null
@@ -1601,14 +1675,24 @@ internal class MqttBridge(
                         !transport.isCurrent(event.connection)
                     ) return@runIfOpen null
                     val generation = connectionGeneration.advance()
+                    event.addressFamily?.let { connectedFamily ->
+                        selectedFamilyRoute = selectedFamilyRoute?.copy(
+                            preferIpv4 = connectedFamily == MqttAddressFamily.IPV4,
+                        )
+                    }
                     MqttConnectAnnouncement(generation, event.connection).also {
                         activeConnection = event.connection
                         authRecovery.authenticated(SystemClock.elapsedRealtime())
                         // CONNACK is transport liveness, not application readiness.
                         announcementReadiness.begin(it)
-                        markOk(generation)
+                        recordMqttConnack(
+                            authority = recoveryAuthority,
+                            connectionGeneration = generation,
+                            applicationReadyEver = recoveryAuthority.snapshot().applicationReadyEver,
+                            addressFamily = event.addressFamily,
+                            nowMs = SystemClock.elapsedRealtime(),
+                        )
                         stateConverger.markAllDirty()
-                        publishRecoveryLifecycleStateWithAddressFamily("announcing", event.addressFamily)
                     }
                 } ?: return
                 when (connectAnnouncementDispatcher.submit(announcement)) {
@@ -1746,7 +1830,12 @@ internal class MqttBridge(
                     publishRecoveryLifecycleState("connected", applicationReadyEver = true)
                     // Restored-family grace ends only at application readiness, never at CONNACK or an
                     // unrelated heartbeat ACK that can succeed while discovery remains wedged.
-                    selectedFamilyRoute?.let { selected ->
+                    selectedFamilyRoute
+                        ?.takeIf {
+                            MqttAddressFamilyPolicy.fromConfig(runtimeMqttAddressFamily) ==
+                                MqttAddressFamilyPolicy.AUTOMATIC
+                        }
+                        ?.let { selected ->
                         val confirmed = synchronized(familyRecoveryLock) {
                             familyPreference.confirmConnectedRoute(
                                 selected.brokerIdentity,

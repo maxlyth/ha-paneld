@@ -175,6 +175,23 @@ class MigrationsTest {
         assertTrue(w.isEmpty())
     }
 
+    @Test fun schemaFourAddsAutomaticMqttAddressFamilyPolicy() {
+        val (migrated, warnings) = Migrations.migrate(4, mapOf("mqtt_broker" to "tcp://ha:1883"))
+
+        assertEquals("Automatic", migrated["mqtt_address_family"])
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test fun schemaFourPreservesAnExplicitMqttAddressFamilyPolicy() {
+        val (migrated, warnings) = Migrations.migrate(
+            4,
+            mapOf("mqtt_address_family" to "Prefer IPv4"),
+        )
+
+        assertEquals("Prefer IPv4", migrated["mqtt_address_family"])
+        assertTrue(warnings.isEmpty())
+    }
+
     @Test fun newerThanCurrentToleratesWithWarning() {
         val (m, w) = Migrations.migrate(SettingsRegistry.SCHEMA + 5, mapOf("a" to "1"))
         assertEquals(mapOf("a" to "1"), m)

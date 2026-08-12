@@ -505,6 +505,21 @@ class ConfigTransactionTest {
         assertFalse(prefs.values.containsKey("mqtt_broker"))
     }
 
+    @Test fun mqttAddressFamilyPolicyCommitsWithTheConnectionTuple() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        config.setMqtt("tcp://broker:1883", "panel", "secret", "force ipv4")
+
+        assertEquals("Force IPv4", config.mqttAddressFamily)
+        assertEquals("Force IPv4", config.mqttCredentialsSnapshot().addressFamily)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            config.setMqtt("tcp://other:1883", "other", "changed", "IPv7")
+        }
+        assertEquals("tcp://broker:1883", config.mqttBroker)
+        assertEquals("Force IPv4", config.mqttAddressFamily)
+    }
+
     @Test fun registryStagesOauthExpiryAsLongWithoutTruncation() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)
@@ -1450,6 +1465,7 @@ class ConfigTransactionTest {
             "mqtt_broker" to "ssl://broker.local:8883",
             "mqtt_user" to "panel",
             "mqtt_password" to "secret",
+            "mqtt_address_family" to "Force IPv4",
             "ha_url" to "https://ha.local",
             "ha_token" to "access",
             "ha_refresh_token" to "refresh",
@@ -1459,7 +1475,7 @@ class ConfigTransactionTest {
         val config = Config(prefs.instance)
 
         assertEquals(
-            MqttCredentialsSnapshot("ssl://broker.local:8883", "panel", "secret"),
+            MqttCredentialsSnapshot("ssl://broker.local:8883", "panel", "secret", "Force IPv4"),
             config.mqttCredentialsSnapshot(),
         )
         assertEquals(

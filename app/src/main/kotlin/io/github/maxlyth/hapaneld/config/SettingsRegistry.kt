@@ -20,9 +20,10 @@ import java.util.Locale
 object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
-    const val SCHEMA = 4
+    const val SCHEMA = 5
     const val MAX_PANEL_ID_CHARS = 63
     const val DEFAULT_SILENCE_BOOT_CHIME = true
+    const val DEFAULT_MQTT_ADDRESS_FAMILY = "Automatic"
     private const val MAX_PANEL_ID_INPUT_CHARS = 255
     private val HA_ILLUMINANCE_ENTITY = Regex("^sensor\\.[a-z0-9_]+$")
 
@@ -102,6 +103,14 @@ object SettingsRegistry {
             label = "Password", default = "", tier = Tier.BASIC, scope = Scope.DEVICE, secret = true,
             maxChars = 4_096,
             help = "Blank on save keeps the current password.",
+        ),
+        SettingSpec(
+            key = "mqtt_address_family", type = SettingType.ENUM, group = "MQTT",
+            label = "Broker address family", default = DEFAULT_MQTT_ADDRESS_FAMILY, tier = Tier.ADVANCED,
+            scope = Scope.DEVICE,
+            options = listOf(DEFAULT_MQTT_ADDRESS_FAMILY, "Prefer IPv4", "Force IPv4"),
+            help = "Automatic learns a working route and falls back between IPv6 and IPv4. " +
+                "Prefer IPv4 keeps IPv6 as a fallback; Force IPv4 rejects brokers with no IPv4 address.",
         ),
 
         // ---- Behaviour ---------------------------------------------------------------------------

@@ -11,7 +11,8 @@ fun classifyDisconnect(causeMessage: String?): String {
     val m = (causeMessage ?: "").uppercase()
     return when {
         Regex("NOT_AUTHORIZED|BAD_USER_NAME|PASSWORD|AUTHENTICAT|BANNED").containsMatchIn(m) -> "auth-failed"
-        Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|RESET|NO ROUTE|CONNECTION|FAILED").containsMatchIn(m) -> "unreachable"
+        Regex("REFUSED|TIMEOUT|UNREACHABLE|UNRESOLVED|UNKNOWNHOST|RESET|NOROUTETOHOST|NO ROUTE|CONNECTION|FAILED")
+            .containsMatchIn(m) -> "unreachable"
         else -> "disconnected"
     }
 }

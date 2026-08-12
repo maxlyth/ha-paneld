@@ -145,6 +145,7 @@ class ConfigPostBodyTest {
             append("tame_vendor_packages", "com.vendor.one, com.vendor.two com.vendor.one")
             append("ha_token_expiry", "42")
             append("mqtt_password", "  exact password  ")
+            append("mqtt_address_family", "prefer ipv4")
         }) as ConfigPostParameters.Ok
         assertEquals("Example Panel", result.values["friendly_name"])
         assertEquals("true", result.values["dashboard_fullscreen"])
@@ -153,6 +154,7 @@ class ConfigPostBodyTest {
         assertEquals("com.vendor.one com.vendor.two", result.values["tame_vendor_packages"])
         assertEquals("42", result.values["ha_token_expiry"])
         assertEquals("  exact password  ", result.values["mqtt_password"])
+        assertEquals("Prefer IPv4", result.values["mqtt_address_family"])
     }
 
     @Test fun `direct config admission rejects invalid or amplifying values atomically`() {
@@ -163,6 +165,7 @@ class ConfigPostBodyTest {
             Parameters.build { append("ha_expose_missing", "true") },
             Parameters.build { append("tame_vendor_packages", "com.good;reboot") },
             Parameters.build { append("ha_token_expiry", "-1") },
+            Parameters.build { append("mqtt_address_family", "IPv7") },
             Parameters.build { append("typo_setting", "true") },
             Parameters.build { append("friendly_name", "one"); append("friendly_name", "two") },
         ).forEach { parameters ->

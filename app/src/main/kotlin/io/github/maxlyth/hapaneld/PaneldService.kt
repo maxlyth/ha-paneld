@@ -553,10 +553,12 @@ internal class NetworkRuntimeIdentity(
     internal val broker: String,
     private val user: String,
     private val password: String,
+    private val addressFamily: String = SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY,
 ) {
     override fun equals(other: Any?): Boolean = other is NetworkRuntimeIdentity &&
         panelId == other.panelId && friendlyName == other.friendlyName && httpPort == other.httpPort &&
-        broker == other.broker && user == other.user && password == other.password
+        broker == other.broker && user == other.user && password == other.password &&
+        addressFamily == other.addressFamily
 
     override fun hashCode(): Int {
         var result = panelId.hashCode()
@@ -565,13 +567,14 @@ internal class NetworkRuntimeIdentity(
         result = 31 * result + broker.hashCode()
         result = 31 * result + user.hashCode()
         result = 31 * result + password.hashCode()
+        result = 31 * result + addressFamily.hashCode()
         return result
     }
 
     override fun toString(): String = "NetworkRuntimeIdentity(redacted)"
 
     internal fun mqttCredentials(): MqttCredentialsSnapshot =
-        MqttCredentialsSnapshot(broker, user, password)
+        MqttCredentialsSnapshot(broker, user, password, addressFamily)
 }
 
 internal data class MqttProjectionIdentity(
@@ -1212,7 +1215,13 @@ class PaneldService : Service() {
             // instead — the wizard was blaming freshly-typed correct credentials for it.
             mqttState = {
                 val bridge = runtime.current().mqtt
-                if (bridge.servesCredentials(config.mqttBroker, config.mqttUser, config.mqttPassword)) {
+                if (bridge.servesMqttConfiguration(
+                        config.mqttBroker,
+                        config.mqttUser,
+                        config.mqttPassword,
+                        config.mqttAddressFamily,
+                    )
+                ) {
                     bridge.state
                 } else "connecting"
             },
@@ -1343,6 +1352,7 @@ class PaneldService : Service() {
             runtimeBroker = credentials.broker,
             runtimeMqttUser = credentials.user,
             runtimeMqttPassword = credentials.password,
+            runtimeMqttAddressFamily = credentials.addressFamily,
             wifiDiagnostics = wifiDiagnostics::snapshot,
             learnedProximityEligibility = sensors::hasLearnedProximity,
             onAutoSleepConfigChanged = {
@@ -1917,6 +1927,7 @@ class PaneldService : Service() {
             credentials.broker.trim(),
             credentials.user,
             credentials.password,
+            credentials.addressFamily,
         )
     }
 

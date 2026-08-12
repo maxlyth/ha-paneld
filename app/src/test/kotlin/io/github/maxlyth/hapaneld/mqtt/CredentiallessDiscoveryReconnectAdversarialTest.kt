@@ -31,7 +31,10 @@ class CredentiallessDiscoveryReconnectAdversarialTest {
             transport.connect(
                 broker.config(clientId).copy(automaticReconnect = false),
                 object : MqttCallbacks {
-                    override fun onConnected(connection: MqttConnectionLease) {
+                    override fun onConnected(
+                        connection: MqttConnectionLease,
+                        addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+                    ) {
                         connections.incrementAndGet()
                         firstConnected.countDown()
                     }

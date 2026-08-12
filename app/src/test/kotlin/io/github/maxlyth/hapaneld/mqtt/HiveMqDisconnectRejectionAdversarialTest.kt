@@ -22,7 +22,10 @@ class HiveMqDisconnectRejectionAdversarialTest {
             transport.connect(
                 broker.config(clientId).copy(automaticReconnect = true),
                 object : MqttCallbacks {
-                    override fun onConnected(connection: MqttConnectionLease) = connected.countDown()
+                    override fun onConnected(
+                        connection: MqttConnectionLease,
+                        addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+                    ) = connected.countDown()
                     override fun onDisconnected(
                         connection: MqttConnectionLease?,
                         causeMessage: String?,

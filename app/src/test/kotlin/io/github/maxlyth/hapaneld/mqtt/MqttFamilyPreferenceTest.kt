@@ -270,6 +270,26 @@ class MqttFamilyPreferenceTest {
         assertEquals(2, attempts)
     }
 
+    @Test fun `same-client family failover is learned only when application readiness confirms it`() {
+        var storedIpv4 = false
+        val preference = MqttFamilyPreference(
+            load = { null },
+            persist = { _, ipv4 -> storedIpv4 = ipv4; true },
+            clear = { true },
+        )
+
+        assertFalse(preference.selectForConnect("tcp://broker-a:1883", connectAttempt = 7L))
+        assertTrue(
+            preference.confirmConnectedRoute(
+                "tcp://broker-a:1883",
+                connectAttempt = 7L,
+                selectedPreferIpv4 = true,
+            ),
+        )
+        assertTrue(preference.preferIpv4)
+        assertTrue(storedIpv4)
+    }
+
     @Test fun `failed stale-broker invalidation is surfaced`() {
         var failures = 0
         val preference = MqttFamilyPreference(

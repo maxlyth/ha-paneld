@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.mqtt.MqttConnectionLease
+import io.github.maxlyth.hapaneld.mqtt.MqttConnectionGeneration
 import io.github.maxlyth.hapaneld.mqtt.MqttFamilyPreference
 import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import java.util.concurrent.CountDownLatch
@@ -14,6 +15,44 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MqttRecoveryAuthorityTest {
+    @Test fun `transport connected event records CONNACK before announcing is observable`() {
+        val authority = MqttRecoveryAuthority(
+            initialState = "connecting",
+            initialProgress = MqttBrokerProgress(0L, null),
+        )
+        val generations = MqttConnectionGeneration()
+        val completed = CountDownLatch(1)
+        val observed = java.util.concurrent.atomic.AtomicReference<MqttRecoverySnapshot>()
+        lateinit var dispatcher: MqttConnectionEventDispatcher
+        dispatcher = MqttConnectionEventDispatcher { sequenced ->
+            if (!dispatcher.isCurrent(sequenced)) return@MqttConnectionEventDispatcher
+            val event = sequenced.event as MqttConnectionEvent.Connected
+            observed.set(
+                recordMqttConnack(
+                    authority = authority,
+                    connectionGeneration = generations.advance(),
+                    applicationReadyEver = false,
+                    addressFamily = event.addressFamily,
+                    nowMs = 42L,
+                ),
+            )
+            completed.countDown()
+        }
+        try {
+            dispatcher.submit(
+                MqttConnectionEvent.Connected(MqttConnectionLease(), MqttAddressFamily.IPV4),
+            )
+            assertTrue(completed.await(2, TimeUnit.SECONDS))
+            val snapshot = observed.get()
+            assertEquals("announcing", snapshot.state)
+            assertEquals(42L, snapshot.brokerProgress.lastOkMs)
+            assertEquals(snapshot.connectionGeneration, snapshot.brokerProgress.connectionGeneration)
+            assertEquals(MqttAddressFamily.IPV4, snapshot.addressFamily)
+        } finally {
+            dispatcher.closeAndJoin(2_000)
+        }
+    }
+
     @Test fun `installed build change opens a new announcement recovery epoch`() {
         fun identity(versionCode: Int) = mqttAnnouncementRecoveryIdentity(
             brokerIdentity = "tcp://broker:1883",

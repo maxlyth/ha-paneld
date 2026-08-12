@@ -19,45 +19,106 @@ class HiveMqTransport : MqttTransport {
     private data class Session(
         val client: Mqtt5AsyncClient?,
         val connection: MqttConnectionLease?,
+        val route: MqttDialRoute?,
     )
 
     private val sessionLock = Any()
-    private var session = Session(null, null)
+    private var session = Session(null, null, null)
 
     override fun connect(config: MqttConnectConfig, callbacks: MqttCallbacks) {
         var self: Mqtt5AsyncClient? = null
         var builder = MqttClient.builder()
             .useMqttVersion5()
             .identifier(config.clientId)
-            .serverHost(config.host)
-            .serverPort(config.port)
             .addConnectedListener {
                 synchronized(sessionLock) {
                     if (session.client === self) {
                         val lease = MqttConnectionLease()
-                        session = Session(checkNotNull(self), lease)
+                        val route = session.route
+                        session = Session(checkNotNull(self), lease, route)
+                        config.routePlanner?.markConnected(route)
                         // Production callbacks perform one fixed-cardinality enqueue. Keeping that enqueue
                         // in the tuple lock preserves transition order against a replacement client.
-                        callbacks.onConnected(lease)
+                        callbacks.onConnected(lease, route?.family)
                     }
                 }
             }
             .addDisconnectedListener { ctx ->
-                val (current, reconnectAllowed) = synchronized(sessionLock) {
-                    if (session.client !== self) false to false
+                val (current, reconnectAllowed, preConnackFailure) = synchronized(sessionLock) {
+                    if (session.client !== self) DisconnectDecision.NOT_CURRENT
                     else {
                         val lease = session.connection
-                        session = Session(checkNotNull(self), null)
-                        true to callbacks.onDisconnected(
-                            lease,
-                            ctx.cause?.message ?: ctx.cause?.toString(),
+                        val route = session.route
+                        session = Session(checkNotNull(self), null, route)
+                        DisconnectDecision(
+                            current = true,
+                            reconnectAllowed = callbacks.onDisconnected(
+                                lease,
+                                ctx.cause?.message ?: ctx.cause?.toString(),
+                            ),
+                            preConnackFailure = lease == null,
                         )
                     }
                 }
                 if (!current || !reconnectAllowed) {
                     runCatching { ctx.reconnector.reconnect(false) } // zombie: kill its auto-reconnect
+                } else if (config.automaticReconnect && config.routePlanner != null) {
+                    val networkFailure = classifyDisconnect(
+                        ctx.cause?.message ?: ctx.cause?.toString(),
+                    ) == "unreachable"
+                    val routeFuture = config.routePlanner.resolveReconnect(
+                        preConnackFailure = preConnackFailure,
+                        networkFailure = networkFailure,
+                    )
+                    ctx.reconnector.reconnectWhen(routeFuture) { route, failure ->
+                        if (failure != null || route == null) {
+                            runCatching { ctx.reconnector.reconnect(false) }
+                        } else {
+                            val reconnected = synchronized(sessionLock) {
+                                if (session.client !== self) false else try {
+                                    route.socketAddress()?.let { socketAddress ->
+                                        ctx.reconnector.transportConfig()
+                                            .serverAddress(socketAddress)
+                                            .applyTransportConfig()
+                                    }
+                                    session = Session(checkNotNull(self), null, route)
+                                    ctx.reconnector.reconnect(true)
+                                    true
+                                } catch (routeFailure: Throwable) {
+                                    // Do not silently strand a current client if Hive rejects its
+                                    // transport update. The bridge records the failure and its ordinary
+                                    // watchdog can replace this client after reconnect is disabled below.
+                                    callbacks.onDisconnected(
+                                        null,
+                                        "MQTT route reconfiguration failed: " +
+                                            (routeFailure.message ?: routeFailure.javaClass.simpleName),
+                                    )
+                                    false
+                                }
+                            }
+                            if (!reconnected) runCatching { ctx.reconnector.reconnect(false) }
+                        }
+                    }
                 }
             }
+        val initialRoute = config.routePlanner?.currentRoute
+        val initialAddress = initialRoute?.socketAddress()
+        builder = if (initialAddress != null) {
+            builder.serverAddress(initialAddress)
+        } else {
+            builder.serverHost(config.host).serverPort(config.port)
+        }
+        if (config.routePlanner != null) {
+            // Pin HiveMQ 1.3.17's current socket default for family-planned connections. A black-holed
+            // first family therefore reaches the sibling within this bound, while steady reconnects
+            // keep the timing they already had rather than inheriting the 60-second MQTT CONNECT bound.
+            builder = builder.transportConfig()
+                .socketConnectTimeout(
+                    ADDRESS_FAMILY_CONNECT_TIMEOUT_SECONDS,
+                    java.util.concurrent.TimeUnit.SECONDS,
+                )
+                .applyTransportConfig()
+        }
         // ssl:///mqtts:// broker → TLS with the default JVM trust store (CA-signed cert validates).
         // Auto-reconnect so a network blip / broker restart never permanently orphans a CONFIGURED
         // panel; re-subscribe + re-publish discovery happen in onConnected on every connect. The
@@ -66,7 +127,7 @@ class HiveMqTransport : MqttTransport {
         if (config.tls) builder = builder.sslWithDefaultConfig()
         val c = builder.buildAsync()
         self = c
-        synchronized(sessionLock) { session = Session(c, null) }
+        synchronized(sessionLock) { session = Session(c, null, initialRoute) }
         val connect = c.connectWith()
             .keepAlive(config.keepAliveSeconds)
             // Advertise an application-sized inbound ceiling in CONNECT. HiveMQ enforces it while
@@ -92,7 +153,7 @@ class HiveMqTransport : MqttTransport {
 
     override fun disconnectDetached(): java.util.concurrent.CompletableFuture<Unit> {
         val old = synchronized(sessionLock) {
-            session.client.also { session = Session(null, null) }
+            session.client.also { session = Session(null, null, null) }
         }
         return old?.let { disconnectBounded(it) }
             ?: java.util.concurrent.CompletableFuture.completedFuture(Unit)
@@ -109,7 +170,7 @@ class HiveMqTransport : MqttTransport {
         val detach = {
             if (finished.compareAndSet(false, true)) {
                 synchronized(sessionLock) {
-                    if (session.client === c) session = Session(null, null)
+                    if (session.client === c) session = Session(null, null, null)
                 }
                 disconnectBounded(c).whenComplete { _, failure ->
                     if (failure == null) completion.complete(Unit)
@@ -214,6 +275,7 @@ class HiveMqTransport : MqttTransport {
     internal companion object {
         const val MAX_INBOUND_PACKET_BYTES = 64 * 1024
         const val MAX_INBOUND_IN_FLIGHT = 16
+        const val ADDRESS_FAMILY_CONNECT_TIMEOUT_SECONDS = 10L
         private val TEARDOWN = MqttTeardownGate()
         private val FINAL_PUBLISH = MqttFinalPublishGate()
 
@@ -251,6 +313,16 @@ class HiveMqTransport : MqttTransport {
         }
 
         private const val DISCONNECT_TIMEOUT_MS = 2_000L
+    }
+
+    private data class DisconnectDecision(
+        val current: Boolean,
+        val reconnectAllowed: Boolean,
+        val preConnackFailure: Boolean,
+    ) {
+        companion object {
+            val NOT_CURRENT = DisconnectDecision(false, false, false)
+        }
     }
 }
 

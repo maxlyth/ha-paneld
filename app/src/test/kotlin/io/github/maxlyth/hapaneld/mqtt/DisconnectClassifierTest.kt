@@ -4,6 +4,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class DisconnectClassifierTest {
+    @Test fun `Netty no-route exception is a network failure`() {
+        assertEquals(
+            "unreachable",
+            classifyDisconnect("io.netty.channel.AbstractChannel\$AnnotatedNoRouteToHostException"),
+        )
+        assertEquals("unreachable", classifyDisconnect("java.net.UnknownHostException"))
+    }
+
 
     @Test fun authFailures() {
         assertEquals("auth-failed", classifyDisconnect("CONNACK reason NOT_AUTHORIZED"))

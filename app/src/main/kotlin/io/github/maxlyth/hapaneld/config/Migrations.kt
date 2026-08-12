@@ -32,6 +32,9 @@ object Migrations {
                 values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}$key", "true")
             }
         },
+        Migration { values ->
+            values.putIfAbsent("mqtt_address_family", SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY)
+        },
     )
 
     /**

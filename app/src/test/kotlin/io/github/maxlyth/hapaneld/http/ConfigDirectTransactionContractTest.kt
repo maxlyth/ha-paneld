@@ -32,6 +32,17 @@ class ConfigDirectTransactionContractTest {
         assertFalse(handler.contains("snapInvalidate()\n        onReconfigure()"))
     }
 
+    @Test fun `MQTT address family joins the bespoke atomic connection commit`() {
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleConfigPost"),
+            source.indexOf("private fun recordLiveApplyOutcome"),
+        )
+
+        assertTrue(handler.contains("broker != null || user != null || pw != null || mqttAddressFamily != null"))
+        assertTrue(handler.contains("pw, mqttAddressFamily,"))
+        assertTrue(source.contains("\\\"mqtt_address_family\\\":\${s(config.mqttAddressFamily)}"))
+    }
+
     @Test fun `direct save owns operation lane across persistence dispatch and response`() {
         val handler = source.substring(
             source.indexOf("private suspend fun handleConfigPost"),

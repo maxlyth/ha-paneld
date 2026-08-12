@@ -5197,6 +5197,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     )
                     val broker = p["mqtt_broker"]?.trim()
                     val user = p["mqtt_user"]?.trim()
+                    val mqttAddressFamily = p["mqtt_address_family"]?.trim()
                     // Blank password keeps the current one; clearing the username clears the password too.
                     val brokerChanged = broker != null && broker != config.mqttBroker
                     val pw = when {
@@ -5205,8 +5206,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                             p["mqtt_password"]?.takeIf { it.isNotEmpty() } ?: ""
                         else -> p["mqtt_password"]?.takeIf { it.isNotEmpty() }
                     }
-                    if (broker != null || user != null || pw != null) config.setMqtt(
-                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw,
+                    if (broker != null || user != null || pw != null || mqttAddressFamily != null) config.setMqtt(
+                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw, mqttAddressFamily,
                     )
                     // Built-in renderer connection — same semantics: blank token keeps the current one;
                     // clearing the URL clears the token too (no orphaned HA credential on the panel).
@@ -8137,6 +8138,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             "\"mqtt_broker\":${s(config.mqttBroker)}," +
             "\"mqtt_user\":${s(config.mqttUser)}," +
             "\"mqtt_password_set\":${config.mqttPassword.isNotEmpty()}," +
+            "\"mqtt_address_family\":${s(config.mqttAddressFamily)}," +
             "\"dashboard_package\":${s(config.dashboardPackage)}," +
             "\"launcher_package\":${s(config.launcherPackage)}," +
             "\"tame_vendor_packages\":${s(config.tameVendorPackagesRaw)}," +

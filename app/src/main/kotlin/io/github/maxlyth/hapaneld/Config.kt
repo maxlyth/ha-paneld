@@ -33,6 +33,7 @@ internal data class MqttCredentialsSnapshot(
     val broker: String,
     val user: String,
     val password: String,
+    val addressFamily: String = SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY,
 )
 
 internal enum class AutoSleepWriteResult { UNCHANGED, COMMITTED, FAILED }
@@ -378,15 +379,18 @@ class Config private constructor(
     val mqttBroker: String get() = stringPref("mqtt_broker")
     val mqttUser: String get() = stringPref("mqtt_user")
     val mqttPassword: String get() = stringPref("mqtt_password")
+    val mqttAddressFamily: String get() = stringPref("mqtt_address_family")
 
     /** One immutable durable-state generation for connection setup; consumers must not combine
-     * three independent getters across a concurrent credential commit. */
+     * independent broker, credential, and route-policy getters across a concurrent commit. */
     internal fun mqttCredentialsSnapshot(): MqttCredentialsSnapshot = synchronized(CONFIG_LOCK) {
         val all = prefs.all
         MqttCredentialsSnapshot(
             broker = all["mqtt_broker"] as? String ?: "",
             user = all["mqtt_user"] as? String ?: "",
             password = all["mqtt_password"] as? String ?: "",
+            addressFamily = all["mqtt_address_family"] as? String
+                ?: SettingsRegistry.DEFAULT_MQTT_ADDRESS_FAMILY,
         )
     }
 
@@ -684,11 +688,17 @@ class Config private constructor(
             ?: Build.MODEL).ifBlank { Build.MODEL }
 
     /** Persist MQTT settings (used by the HTTP config page). A null password leaves it unchanged. */
-    fun setMqtt(broker: String, user: String, password: String?) {
+    fun setMqtt(broker: String, user: String, password: String?, addressFamily: String? = null) {
+        val normalizedAddressFamily = addressFamily?.let { raw ->
+            val spec = checkNotNull(SettingsRegistry.spec("mqtt_address_family"))
+            (SettingValue.validate(spec, raw) as? Validation.Ok)?.normalized
+                ?: throw IllegalArgumentException("mqtt_address_family: unsupported value")
+        }
         edit {
             putString("mqtt_broker", broker)
             putString("mqtt_user", user)
             if (password != null) putString("mqtt_password", password)
+            if (normalizedAddressFamily != null) putString("mqtt_address_family", normalizedAddressFamily)
         }
     }
 

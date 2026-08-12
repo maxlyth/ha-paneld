@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.mqtt
 
+import io.github.maxlyth.hapaneld.MqttAddressFamily
 import java.util.concurrent.CompletableFuture
 
 /**
@@ -72,13 +73,15 @@ data class MqttConnectConfig(
      * successful anonymous session that later drops is re-established by the bridge's own watchdog.
      */
     val automaticReconnect: Boolean = true,
+    /** Concrete-address owner. Null preserves the ordinary HiveMQ hostname-resolution path. */
+    val routePlanner: MqttRoutePlanner? = null,
 )
 
 /** Lifecycle callbacks the transport invokes for the LIVE client only (superseded clients are filtered).
  * Implementations must remain constant-time: HiveMqTransport calls them inside its tiny session lock so
  * client/lease transition order and callback enqueue order cannot diverge. */
 interface MqttCallbacks {
-    fun onConnected(connection: MqttConnectionLease)
+    fun onConnected(connection: MqttConnectionLease, addressFamily: MqttAddressFamily? = null)
     /** False suppresses HiveMQ's in-place reconnect; the owner will build a fresh client. */
     fun onDisconnected(connection: MqttConnectionLease?, causeMessage: String?): Boolean
 }

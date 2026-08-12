@@ -151,7 +151,8 @@ class PaneldServiceStartupTest {
             broker: String = "tcp://ha.local:1883",
             user: String = "user",
             password: String = "secret",
-        ) = NetworkRuntimeIdentity(panel, friendly, 8888, broker, user, password)
+            addressFamily: String = "Automatic",
+        ) = NetworkRuntimeIdentity(panel, friendly, 8888, broker, user, password, addressFamily)
 
         assertEquals(identity(), identity())
         assertFalse(identity() == identity(panel = "other"))
@@ -159,6 +160,7 @@ class PaneldServiceStartupTest {
         assertFalse(identity() == identity(broker = "ssl://ha.local:8883"))
         assertFalse(identity() == identity(user = "other"))
         assertFalse(identity() == identity(password = "other"))
+        assertFalse(identity() == identity(addressFamily = "Force IPv4"))
         assertEquals("NetworkRuntimeIdentity(redacted)", identity().toString())
     }
 

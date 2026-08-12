@@ -102,6 +102,7 @@ class ConfigAccessorDefaultCoherenceTest {
             "mqtt_broker" to c.mqttBroker,
             "mqtt_user" to c.mqttUser,
             "mqtt_password" to c.mqttPassword,
+            "mqtt_address_family" to c.mqttAddressFamily,
             "dashboard_package" to c.dashboardPackage,
             "ha_url" to c.haUrl,
             "ha_token" to c.haToken,

@@ -53,6 +53,7 @@ class FleetScopeSpecTest {
         val deviceLocal = listOf(
             "mqtt_user",
             "mqtt_password",
+            "mqtt_address_family",
             "auto_sleep",
             "auto_brightness_minimum_percent",
             "auto_brightness_sensitivity",

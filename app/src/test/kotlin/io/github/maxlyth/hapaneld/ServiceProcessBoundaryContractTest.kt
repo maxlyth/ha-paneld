@@ -207,6 +207,7 @@ class ServiceProcessBoundaryContractTest {
 
     @Test fun mqttRecoveryAuthorityIsThePrimaryConnectionStateSource() {
         val mqtt = source("MqttBridge.kt")
+        val service = source("PaneldService.kt")
         assertTrue(mqtt.contains("val state: String get() = recoveryAuthority.snapshot().state"))
         assertTrue(mqtt.contains("val lastOkMs: Long get() = recoveryAuthority.snapshot().brokerProgress.lastOkMs"))
         assertFalse(mqtt.contains("@Volatile var state:"))
@@ -216,10 +217,32 @@ class ServiceProcessBoundaryContractTest {
             .forEach { state ->
                 assertTrue("missing atomic MQTT state transition: $state",
                     mqtt.contains("publishRecoveryLifecycleState(\"$state\"") ||
-                        mqtt.contains("publishRecoveryLifecycleStateWithAddressFamily(\"$state\""))
+                        mqtt.contains("publishRecoveryLifecycleStateWithAddressFamily(\"$state\"") ||
+                        (state == "announcing" && mqtt.contains("state = \"announcing\"")))
             }
+        val connack = mqtt.substring(
+            mqtt.indexOf("internal fun recordMqttConnack("),
+            mqtt.indexOf("internal fun reconcileRejectedMqttRecovery("),
+        )
+        assertTrue(
+            connack.indexOf("authority.updateProgress(") <
+                connack.indexOf("authority.updateLifecycleWithAddressFamily("),
+        )
+        val connectedEvent = mqtt.substring(
+            mqtt.indexOf("is MqttConnectionEvent.Connected -> {"),
+            mqtt.indexOf("is MqttConnectionEvent.Disconnected ->"),
+        )
+        assertTrue(connectedEvent.contains("recordMqttConnack("))
+        assertTrue(
+            connectedEvent.indexOf("recordMqttConnack(") <
+                connectedEvent.indexOf("stateConverger.markAllDirty()"),
+        )
         assertTrue(mqtt.contains("publishRecoveryLifecycleState(authRecovery.snapshot(now).state)"))
         assertTrue(mqtt.contains("else publishRecoveryLifecycleState(event.state)"))
+        assertTrue(
+            service.contains("bridge.servesMqttConfiguration(") &&
+                service.contains("config.mqttAddressFamily,"),
+        )
     }
 
     @Test fun hiveTransportPublishesTupleTransitionsAndCallbackEnqueuesInOneOrder() {
@@ -234,9 +257,14 @@ class ServiceProcessBoundaryContractTest {
         )
 
         assertTrue(connected.contains("synchronized(sessionLock)"))
-        assertTrue(connected.indexOf("session = Session(") < connected.indexOf("callbacks.onConnected(lease)"))
+        assertTrue(connected.indexOf("session = Session(") < connected.indexOf("callbacks.onConnected(lease,"))
         assertTrue(disconnected.contains("synchronized(sessionLock)"))
         assertTrue(disconnected.indexOf("session = Session(") < disconnected.indexOf("callbacks.onDisconnected("))
+        assertTrue(
+            hive.contains("builder.transportConfig()") &&
+                hive.contains(".socketConnectTimeout(") &&
+                hive.contains("ADDRESS_FAMILY_CONNECT_TIMEOUT_SECONDS = 10L"),
+        )
         assertFalse(hive.contains("@Volatile private var client"))
         assertFalse(hive.contains("@Volatile private var connectionLease"))
     }

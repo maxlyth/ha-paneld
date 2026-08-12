@@ -133,7 +133,8 @@ internal class MqttFamilyPreference(
         val confirmsFailedWrite = pendingRouteConfirmation?.let {
             it.connectAttempt == connectAttempt && it.preferIpv4 == selectedPreferIpv4
         } == true
-        if (!repairsUnconsumedStage && !confirmsFailedWrite) return true
+        val confirmsInPlaceFailover = preferIpv4 != selectedPreferIpv4
+        if (!repairsUnconsumedStage && !confirmsFailedWrite && !confirmsInPlaceFailover) return true
         if (!persist(brokerIdentity, selectedPreferIpv4)) return false
         preferIpv4 = selectedPreferIpv4
         awaitingProgress = false

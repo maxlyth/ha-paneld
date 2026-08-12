@@ -240,6 +240,7 @@
           "friendly_name": { "type": "string" }, "manufacturer": { "type": "string" }, "model": { "type": "string" },
           "mqtt_broker": { "type": "string", "description": "tcp://host:1883; blank = auto-discover HA on the LAN" },
           "mqtt_user": { "type": "string" }, "mqtt_password": { "type": "string", "description": "blank = unchanged" },
+          "mqtt_address_family": { "type": "string", "enum": ["Automatic", "Prefer IPv4", "Force IPv4"], "default": "Automatic" },
           "dashboard_package": { "type": "string" }, "launcher_package": { "type": "string" },
           "wake_on_wave": { "type": "boolean" }, "auto_sleep": { "type": "boolean", "default": false, "description": "Enable the device-local presence-aware sleep policy; manual screen control remains separate" },
           "prevent_idle_dim": { "type": "boolean", "description": "Disabling an enabled guard requires physical POWER_CONFIGURATION approval for a remote Hardened-mode Config request; direct MQTT disable commands are rejected in Hardened mode" },

@@ -8,6 +8,10 @@ import io.github.maxlyth.hapaneld.MqttConnectAnnouncement
 import io.github.maxlyth.hapaneld.MqttConnectAnnouncementDispatcher
 import io.github.maxlyth.hapaneld.MqttConnectionEvent
 import io.github.maxlyth.hapaneld.MqttConnectionEventDispatcher
+import io.github.maxlyth.hapaneld.MqttBrokerProgress
+import io.github.maxlyth.hapaneld.MqttRecoveryAuthority
+import io.github.maxlyth.hapaneld.MqttRecoverySnapshot
+import io.github.maxlyth.hapaneld.recordMqttConnack
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -28,6 +32,102 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class HiveMqTransportBrokerTest {
+    @Test(timeout = 30_000)
+    fun advertisedButUnroutableAaaaFallsThroughToIpv4OnSameClientReconnect() {
+        EmbeddedBroker().use { broker ->
+            val resolutions = AtomicInteger()
+            val planner = MqttRoutePlanner(
+                logicalHost = "mqtt.test.invalid",
+                port = broker.port,
+                policy = MqttAddressFamilyPolicy.AUTOMATIC,
+                initialPreferIpv4 = false,
+                rapidInitialFallbackAllowed = true,
+                resolver = MqttBrokerResolver {
+                    resolutions.incrementAndGet()
+                    // AAAA is syntactically valid and advertised, but this test namespace has no
+                    // IPv6 route. This reproduces the DNS-present/route-absent failure mode.
+                    listOf(InetAddress.getByName("2001:db8::dead"), InetAddress.getByName("127.0.0.1"))
+                },
+            )
+            assertEquals(io.github.maxlyth.hapaneld.MqttAddressFamily.IPV6, planner.resolveInitial()?.family)
+            val connected = CountDownLatch(1)
+            val disconnected = CountDownLatch(1)
+            val disconnects = AtomicInteger()
+            val connectedFamily = AtomicReference<io.github.maxlyth.hapaneld.MqttAddressFamily?>()
+            val recovery = MqttRecoveryAuthority("connecting", MqttBrokerProgress(0L, null))
+            val recoverySnapshot = AtomicReference<MqttRecoverySnapshot>()
+            val connectionGenerations = MqttConnectionGeneration()
+            lateinit var connectionEvents: MqttConnectionEventDispatcher
+            connectionEvents = MqttConnectionEventDispatcher { sequenced ->
+                if (!connectionEvents.isCurrent(sequenced)) return@MqttConnectionEventDispatcher
+                val event = sequenced.event as? MqttConnectionEvent.Connected
+                    ?: return@MqttConnectionEventDispatcher
+                val generation = connectionGenerations.advance()
+                recoverySnapshot.set(
+                    recordMqttConnack(recovery, generation, false, event.addressFamily, nowMs = 42L),
+                )
+                connected.countDown()
+            }
+            val disconnectCause = AtomicReference<String?>()
+            val transport = HiveMqTransport()
+            val startedAt = System.nanoTime()
+            try {
+                transport.connect(
+                    broker.config("family-failover-${UUID.randomUUID()}").copy(
+                        host = "mqtt.test.invalid",
+                        routePlanner = planner,
+                    ),
+                    object : MqttCallbacks {
+                        override fun onConnected(
+                            connection: MqttConnectionLease,
+                            addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+                        ) {
+                            connectedFamily.set(addressFamily)
+                            connectionEvents.submit(MqttConnectionEvent.Connected(connection, addressFamily))
+                        }
+
+                        override fun onDisconnected(
+                            connection: MqttConnectionLease?,
+                            causeMessage: String?,
+                        ): Boolean {
+                            disconnects.incrementAndGet()
+                            disconnectCause.set(causeMessage)
+                            disconnected.countDown()
+                            return true
+                        }
+                    },
+                )
+
+                disconnected.awaitOrFail("unroutable advertised AAAA was not attempted first")
+                assertTrue(
+                    connected.await(15, TimeUnit.SECONDS),
+                    "transport did not suppress failed IPv6 and reconnect over IPv4 " +
+                        "(cause=${disconnectCause.get()}, route=${planner.currentRoute?.family}, " +
+                        "resolutions=${resolutions.get()})",
+                )
+                assertTrue(
+                    TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startedAt) < 20,
+                    "initial family failover fell back to the minute-scale steady-state watchdog",
+                )
+                assertEquals(io.github.maxlyth.hapaneld.MqttAddressFamily.IPV4, connectedFamily.get())
+                assertEquals(
+                    1,
+                    disconnects.get(),
+                    "the failed IPv6 family was retried before the freshly resolved IPv4 route",
+                )
+                assertTrue(resolutions.get() >= 2, "automatic reconnect reused stale DNS resolution")
+                assertEquals(io.github.maxlyth.hapaneld.MqttAddressFamily.IPV4, planner.currentRoute?.family)
+                val announced = recoverySnapshot.get()
+                assertEquals("announcing", announced.state)
+                assertEquals(42L, announced.brokerProgress.lastOkMs)
+                assertEquals(announced.connectionGeneration, announced.brokerProgress.connectionGeneration)
+            } finally {
+                transport.disconnectDetached()
+                connectionEvents.closeAndJoin(2_000)
+            }
+        }
+    }
+
     @Test(timeout = 20_000)
     fun connectedAnnouncementBackpressureCannotBlockPubAckProcessing() {
         EmbeddedBroker().use { broker ->
@@ -66,7 +166,10 @@ class HiveMqTransportBrokerTest {
                 announcement.submit(MqttConnectAnnouncement(sequenced.sequence, connected.connection))
             }
             val callbacks = object : MqttCallbacks {
-                override fun onConnected(connection: MqttConnectionLease) {
+                override fun onConnected(
+                    connection: MqttConnectionLease,
+                    addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+                ) {
                     connectionEvents.submit(MqttConnectionEvent.Connected(connection))
                     callbackReturned.countDown()
                 }
@@ -509,7 +612,10 @@ class HiveMqTransportBrokerTest {
         val disconnected = AtomicInteger(0)
         val connection = AtomicReference<MqttConnectionLease>()
 
-        override fun onConnected(connection: MqttConnectionLease) {
+        override fun onConnected(
+            connection: MqttConnectionLease,
+            addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+        ) {
             this.connection.set(connection)
             connected.countDown()
         }
