@@ -256,6 +256,7 @@ object DiagReader {
         storage: StorageHealthSnapshot = StorageHealthSnapshot.UNCHECKED,
         powerSafety: io.github.maxlyth.hapaneld.control.PowerSafetyAssessment? = null,
         renderer: io.github.maxlyth.hapaneld.RendererAdmissionPresentation? = null,
+        wifiStabilityChronic: Boolean = false,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
         val routes = privilege
@@ -269,7 +270,7 @@ object DiagReader {
         if (facts.isNotEmpty()) {
             appendLine()
             appendLine("[panel]")
-            for ((k, v) in publicPanelFacts(facts)) appendLine("$k=$v")
+            for ((k, v) in publicPanelFacts(facts, wifiStabilityChronic)) appendLine("$k=$v")
         }
         appendLine()
         appendLine("[build] fingerprint=${Build.FINGERPRINT}")
@@ -378,15 +379,29 @@ object DiagReader {
 
     /** Public-issue fact boundary. Deliberately allowlisted rather than denylisted: runtime-profile names,
      *  custom sensor descriptions, package namespaces and configured network destinations stay private. */
+    private const val WIFI_STABILITY_FACT = "Wi-Fi stability"
+
     private val PUBLIC_PANEL_FACTS = setOf(
         "ha-paneld", "Android", "Firmware", "Device", "CPU", "RAM", "Storage", "Display",
         "System WebView", "HA Companion", "MQTT state", "Security mode", "Keep panel responsive", "Prevent idle dim", "Android dashboard lock",
         "LED", "Nav actions (a11y)", "Navbar", "Zigbee", "Relays", "Network ADB", "Audio playback",
-        "App database", "Product version", "Local-state sync", "State convergence", "Wi-Fi stability",
+        "App database", "Product version", "Local-state sync", "State convergence", WIFI_STABILITY_FACT,
     )
 
-    internal fun publicPanelFacts(facts: Map<String, String>): Map<String, String> =
-        facts.filterKeys { it in PUBLIC_PANEL_FACTS }
+    /**
+     * The public-safe subset of [facts] for the pasted report.
+     *
+     * [wifiStabilityChronic] is the one conditional member: the panel's own diagnostics card shows
+     * every Wi-Fi episode, but this report is terse by design and is read by somebody triaging a bug,
+     * so the line enters it only once the instability is chronic (`wifiOutageChronic`, decided from
+     * the same outage read that produced the fact). Defaulting to omission is the fail-safe direction
+     * for text that leaves the panel.
+     */
+    internal fun publicPanelFacts(
+        facts: Map<String, String>,
+        wifiStabilityChronic: Boolean = false,
+    ): Map<String, String> =
+        facts.filterKeys { it in PUBLIC_PANEL_FACTS && (wifiStabilityChronic || it != WIFI_STABILITY_FACT) }
 
     internal fun vendorTameSummary(candidates: List<TameController.Candidate>): String {
         val installed = candidates.count { it.installed }

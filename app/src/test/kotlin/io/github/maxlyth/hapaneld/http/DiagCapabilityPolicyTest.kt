@@ -455,6 +455,29 @@ class DiagCapabilityPolicyTest {
         assertFalse(public.values.joinToString().contains(privateValue))
     }
 
+    /**
+     * The Wi-Fi line is the one allowlisted fact that is also conditional. The panel's own card shows
+     * every episode; this report is terse by design and is read by somebody triaging a bug, so the
+     * line enters it only once the instability is chronic.
+     */
+    @Test fun theWifiStabilityLineEntersThePastedReportOnlyWhenTheInstabilityIsChronic() {
+        val facts = linkedMapOf(
+            "ha-paneld" to "0.9.7-rc1 (build 563)",
+            "Wi-Fi stability" to "2 outages in the last 24 h",
+        )
+
+        assertEquals(
+            listOf("ha-paneld"),
+            DiagReader.publicPanelFacts(facts, wifiStabilityChronic = false).keys.toList(),
+        )
+        assertEquals(
+            listOf("ha-paneld", "Wi-Fi stability"),
+            DiagReader.publicPanelFacts(facts, wifiStabilityChronic = true).keys.toList(),
+        )
+        // Text that leaves the panel fails closed: a caller that says nothing gets no line.
+        assertFalse(DiagReader.publicPanelFacts(facts).containsKey("Wi-Fi stability"))
+    }
+
     @Test fun vendorTameDiagnosticsExposeCountsWithoutProfilePackageIdentifiers() {
         val packageName = "private.example.vendor.panel"
         val line = DiagReader.vendorTameSummary(

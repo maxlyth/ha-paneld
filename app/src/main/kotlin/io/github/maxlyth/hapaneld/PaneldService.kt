@@ -60,6 +60,9 @@ import io.github.maxlyth.hapaneld.control.AndroidWifiOutageStore
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticDemand
 import io.github.maxlyth.hapaneld.control.WifiDiagnosticAdmissionTracker
 import io.github.maxlyth.hapaneld.control.WifiOutageTracker
+import io.github.maxlyth.hapaneld.control.WifiOutageCounts
+import io.github.maxlyth.hapaneld.control.wifiOutageChronic
+import io.github.maxlyth.hapaneld.control.wifiOutageStatusText
 import io.github.maxlyth.hapaneld.control.availability
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.control.SystemController
@@ -2146,8 +2149,12 @@ class PaneldService : Service() {
     private fun managementProjection(privilege: PrivilegedRouteObservation): ManagementProjection {
         val controllers = observeManagementControllers(privilege)
         val diagnostic = DiagReader.capabilities(this, profile, privilege)
+        // ONE outage read feeds both the diagnostics row and the /diag gate. Reading the tracker
+        // twice would let an episode age out between them, and a report could then omit the line
+        // while printing a row that says the Wi-Fi needs attention, or the reverse.
+        val wifi = wifiOutageTracker.counts()
         return ManagementProjection(
-            facts = panelInfo(controllers, diagnostic.rgbLedReady),
+            facts = panelInfo(controllers, diagnostic.rgbLedReady, wifi),
             live = projectLiveValues(
                 cpuTier = controllers.cpuTier,
                 networkAdbPersisted = controllers.networkAdbPersisted,
@@ -2155,6 +2162,7 @@ class PaneldService : Service() {
             ),
             capabilities = capabilitiesSnapshot(privilege, controllers),
             capabilityRows = diagnostic.rows,
+            wifiChronic = wifiOutageChronic(wifi),
         )
     }
 
@@ -2162,6 +2170,7 @@ class PaneldService : Service() {
     private fun panelInfo(
         controllers: ManagementControllerObservation,
         rgbLedReady: Boolean,
+        wifiOutages: WifiOutageCounts,
     ): Map<String, String> {
         // activeBroker reflects auto-discovery (tcp://<ha-ip>:1883) when no broker is configured.
         val broker = mqtt.activeBroker.ifBlank { config.mqttBroker }
@@ -2232,9 +2241,9 @@ class PaneldService : Service() {
             "Audio playback" to audio.snapshot().statusText(),
         )
         appDatabase?.let { extras["App database"] = it }
-        // Rolling Wi-Fi outage counts — shown only once the 7-day window has at least one episode,
-        // so a stable panel (or an Ethernet panel) never carries a permanent zero row.
-        wifiOutageTracker.statusText()?.let { extras["Wi-Fi stability"] = it }
+        // Rolling 24-hour Wi-Fi outage count — present only once the window holds an episode or
+        // dropped evidence, so a stable panel (or an Ethernet panel) never carries a zero row.
+        wifiOutageStatusText(wifiOutages)?.let { extras["Wi-Fi stability"] = it }
         if (pv.isNotEmpty()) extras["Product version"] = pv
         // Recent "changed outside MQTT" events (brightness/volume/backlight/governor) — shown only when
         // something has actually synced, so it doesn't clutter a steady panel. Flows to /diag too.

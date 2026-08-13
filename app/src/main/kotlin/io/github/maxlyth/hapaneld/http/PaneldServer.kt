@@ -954,6 +954,10 @@ internal data class ManagementProjection(
     val live: Map<String, String>,
     val capabilities: Capabilities,
     val capabilityRows: List<DiagReader.Cap>,
+    /** Whether the Wi-Fi instability behind the `Wi-Fi stability` fact is chronic, decided from the
+     *  SAME outage read that produced the fact — so the `/diag` gate can never disagree with the
+     *  text it is gating. Undefaulted on purpose: a new caller must state it. */
+    val wifiChronic: Boolean,
 )
 
 internal data class ConfigDiscoverySuggestions(
@@ -3887,6 +3891,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val densityCur: Int?,
         val densityBase: Int?,
         val fontScale: Float,
+        val wifiChronic: Boolean,
     )
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
@@ -4001,6 +4006,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             densityCur = d.current,
             densityBase = d.base,
             fontScale = d.fontScale,
+            wifiChronic = management.wifiChronic,
         )
     }
     private val diagCache = Cached(DIAG_TTL_MS) {
@@ -4022,6 +4028,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             storage = storageHealth(),
             powerSafety = powerSafety(),
             renderer = rendererAdmission(),
+            wifiStabilityChronic = management.wifiChronic,
         )
     }
 

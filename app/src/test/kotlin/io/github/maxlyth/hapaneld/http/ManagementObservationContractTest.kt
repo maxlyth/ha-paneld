@@ -86,7 +86,7 @@ class ManagementObservationContractTest {
             "relay.ledCount()",
         ).forEach { call -> assertEquals(call, 1, Regex(Regex.escape(call)).findAll(observe).count()) }
         assertTrue(projection.contains("val controllers = observeManagementControllers(privilege)"))
-        assertTrue(projection.contains("facts = panelInfo(controllers, diagnostic.rgbLedReady)"))
+        assertTrue(projection.contains("facts = panelInfo(controllers, diagnostic.rgbLedReady, wifi)"))
         assertTrue(projection.contains("capabilities = capabilitiesSnapshot(privilege, controllers)"))
         assertTrue(projection.contains("capabilityRows = diagnostic.rows"))
         assertFalse(facts.contains("zigbee.status()"))

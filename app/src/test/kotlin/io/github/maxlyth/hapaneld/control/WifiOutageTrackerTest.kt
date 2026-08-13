@@ -630,6 +630,35 @@ class WifiOutageTrackerTest {
         )
     }
 
+    // ---- chronic: the bar for entering the pasted /diag report -------------------------------------
+
+    @Test fun anOrdinaryDayOfBlipsIsNotChronic() {
+        // The panel's own card still shows these. A pasted bug report should not carry them: a
+        // handful of four-second blips is not evidence about the bug somebody is reporting.
+        for (count in 0 until WifiOutageTracker.ATTENTION_24H) {
+            assertFalse(
+                "$count outages must not reach a bug report",
+                wifiOutageChronic(WifiOutageCounts(last24h = count, saturated = false)),
+            )
+        }
+    }
+
+    @Test fun theAttentionThresholdIsAlsoTheChronicThreshold() {
+        // One bar, not two: whatever tells the panel's owner the link needs attention is exactly
+        // what a maintainer reading their report needs to know.
+        assertTrue(
+            wifiOutageChronic(WifiOutageCounts(last24h = WifiOutageTracker.ATTENTION_24H, saturated = false)),
+        )
+    }
+
+    @Test fun droppedEvidenceIsChronicEvenWhenTheSurvivingCountIsSmall() {
+        // Saturation means episodes were evicted at the retention bound, or that provenance was
+        // unreadable and failed closed — so the number is a floor, not a total. Reading only the
+        // count would omit the line from precisely the panel whose report most needs it.
+        assertTrue(wifiOutageChronic(WifiOutageCounts(last24h = 0, saturated = true)))
+        assertTrue(wifiOutageChronic(WifiOutageCounts(last24h = 1, saturated = true)))
+    }
+
 
     private companion object {
         // Aligned to an exact hour boundary so window arithmetic in tests is by inspection.

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -69,8 +70,47 @@ class WifiOutageWiringContractTest {
     }
 
     @Test fun runtimeDiagnosticsRowSuppressesACleanPanel() {
-        // statusText() is null while the last 24 hours are clean; the row must vanish, not show zero.
-        assertTrue(service.contains("""wifiOutageTracker.statusText()?.let { extras["Wi-Fi stability"] = it }"""))
+        // The row value is null while the last 24 hours are clean; it must vanish, not show zero.
+        assertTrue(service.contains("""wifiOutageStatusText(wifiOutages)?.let { extras["Wi-Fi stability"] = it }"""))
+    }
+
+    /**
+     * The diagnostics row and the `/diag` gate answer different questions about the SAME moment, so
+     * they must be derived from one read. Two reads could straddle an episode ageing out of the
+     * window and produce a report that omits the line while printing a row saying the Wi-Fi needs
+     * attention — a self-contradicting bug report, which is worse than either answer alone.
+     */
+    @Test fun theRowAndTheDiagGateAreDerivedFromOneOutageRead() {
+        val projection = service.substring(
+            service.indexOf("private fun managementProjection("),
+            service.indexOf("/** Ordered facts for the info page"),
+        )
+        assertTrue(projection.contains("val wifi = wifiOutageTracker.counts()"))
+        assertTrue(projection.contains("facts = panelInfo(controllers, diagnostic.rgbLedReady, wifi)"))
+        assertTrue(projection.contains("wifiChronic = wifiOutageChronic(wifi)"))
+        assertEquals(
+            "the projection must read the tracker exactly once",
+            1,
+            Regex("""wifiOutageTracker\.counts\(\)""").findAll(projection).count(),
+        )
+    }
+
+    /**
+     * `/diag` is pasted into bug reports and is terse by design, so the Wi-Fi line belongs there only
+     * once the instability is chronic — and the decision it gates on must be the projection's, not a
+     * second opinion formed later inside the report.
+     */
+    @Test fun theDiagReportGatesTheWifiLineOnThatSameDecision() {
+        val server = source("http/PaneldServer.kt")
+        assertTrue(server.contains("wifiChronic = management.wifiChronic"))
+        assertTrue(server.contains("wifiStabilityChronic = management.wifiChronic"))
+        // Every CALL (the declaration is excluded by the lookbehind) must pass the decision, so no
+        // second site can reinstate the line unconditionally by relying on the omit-by-default arg.
+        val reader = source("http/DiagReader.kt")
+        assertEquals(
+            listOf("facts, wifiStabilityChronic"),
+            Regex("""(?<!fun )publicPanelFacts\(([^)]*)\)""").findAll(reader).map { it.groupValues[1] }.toList(),
+        )
     }
 
     @Test fun outageCountersStayRetainedThroughTheDropoutTheyReport() {

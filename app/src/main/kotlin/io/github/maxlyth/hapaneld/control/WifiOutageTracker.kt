@@ -88,6 +88,43 @@ internal fun parseWifiOutageRecord(raw: String?): WifiOutageRecord? {
 internal fun wifiOutageAttention(last24h: Int): Boolean = last24h >= WifiOutageTracker.ATTENTION_24H
 
 /**
+ * Whether the instability is CHRONIC — the bar for entering the `/diag` report, which is pasted into
+ * bug reports and is terse by design. The panel's own diagnostics card shows every episode, because
+ * somebody reading that card is already asking about this panel; a pasted report should carry the
+ * line only when the network is plausibly part of the story.
+ *
+ * Saturation qualifies on its own and deliberately ignores the count. It means episodes were evicted
+ * at the retention bound, or that their provenance was unreadable and failed closed, so the number is
+ * an explicit floor rather than a total — a state that can carry a LOW `last24h` while being the
+ * worst thing this tracker can report. A rule that read only the count would omit the line from
+ * exactly the panel whose report most needs it.
+ */
+internal fun wifiOutageChronic(counts: WifiOutageCounts): Boolean =
+    counts.saturated || wifiOutageAttention(counts.last24h)
+
+/**
+ * Diagnostics row value for [counts], or null while the last 24 hours are clean — a permanent
+ * "0 outages" row is noise, so a stable panel shows nothing at all.
+ *
+ * Pure and separate from the tracker so one `counts()` read can feed both the row and the `/diag`
+ * gate: a report must never include a line that disagrees with the text beside it.
+ */
+internal fun wifiOutageStatusText(counts: WifiOutageCounts): String? {
+    // A zero count with dropped evidence still in-window is not a clean panel: the cap threw
+    // away episodes we can no longer place. Saying nothing there would hide the worst case.
+    if (counts.last24h <= 0 && !counts.saturated) return null
+    val noun = if (counts.last24h == 1 && !counts.saturated) "outage" else "outages"
+    // A capped day is a floor, and says so rather than presenting the cap as the total.
+    val floor = if (counts.saturated) "at least " else ""
+    val base = "$floor${counts.last24h} $noun in the last 24 h"
+    return if (wifiOutageAttention(counts.last24h)) {
+        "$base — repeated drops; the Wi-Fi link needs attention"
+    } else {
+        base
+    }
+}
+
+/**
  * Counts default-network Wi-Fi outages in the last 24 hours, so repeated short dropouts become a
  * standing diagnostic.
  *
@@ -287,25 +324,12 @@ internal class WifiOutageTracker(
     }
 
     /**
-     * Runtime-diagnostics row value, or null while the last 24 hours are clean — a permanent
-     * "0 outages" row is noise, so a stable panel shows nothing at all.
+     * Runtime-diagnostics row value, or null while the last 24 hours are clean. Convenience over
+     * [wifiOutageStatusText]; a caller that also needs the `/diag` gate reads [counts] once and calls
+     * both pure functions itself rather than reading the tracker twice.
      */
     @Synchronized
-    fun statusText(): String? {
-        val counts = counts()
-        // A zero count with dropped evidence still in-window is not a clean panel: the cap threw
-        // away episodes we can no longer place. Saying nothing there would hide the worst case.
-        if (counts.last24h <= 0 && !counts.saturated) return null
-        val noun = if (counts.last24h == 1 && !counts.saturated) "outage" else "outages"
-        // A capped day is a floor, and says so rather than presenting the cap as the total.
-        val floor = if (counts.saturated) "at least " else ""
-        val base = "$floor${counts.last24h} $noun in the last 24 h"
-        return if (wifiOutageAttention(counts.last24h)) {
-            "$base — repeated drops; the Wi-Fi link needs attention"
-        } else {
-            base
-        }
-    }
+    fun statusText(): String? = wifiOutageStatusText(counts())
 
     companion object {
         const val RECORD_VERSION = 5
