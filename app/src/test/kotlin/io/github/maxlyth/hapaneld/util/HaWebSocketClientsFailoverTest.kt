@@ -15,9 +15,7 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -33,9 +31,11 @@ import org.junit.Test
  * from the panel's network segment while its A record works, where every previous WebSocket client
  * dialed exactly one resolved address, so the panel could never render despite a fully working
  * IPv4 path. These tests
- * drive the shared factory against real sockets: a dead route (refused, or a saturated backlog that
- * swallows SYNs like the real black-hole) listed ahead of a live sibling must still connect within
- * the callers' 15 s outer deadline.
+ * drive the shared factory against real sockets: a dead route listed ahead of a live sibling must
+ * still connect within the callers' 15 s outer deadline. The dead route is either an unrouted
+ * documentation address, whose SYNs genuinely vanish, or a port this test owns without listening on,
+ * which refuses immediately — both are real conditions the test controls end to end rather than
+ * approximations built out of accept-queue saturation.
  *
  * The in-file [WsAcceptor] is a minimal RFC 6455 responder (101 upgrade + unmasked server frames),
  * deliberately dependency-free so this file exercises the production client stack alone.
@@ -47,9 +47,9 @@ class HaWebSocketClientsFailoverTest {
     private class WsAcceptor(
         bindAddress: InetAddress,
         private val payloadBytes: Int = 0,
-        port: Int = 0,
+        prebound: ServerSocket? = null,
     ) : AutoCloseable {
-        val server = ServerSocket().apply { bind(InetSocketAddress(bindAddress, port), 16) }
+        val server = prebound ?: ServerSocket().apply { bind(InetSocketAddress(bindAddress, 0), 16) }
         val port: Int get() = server.localPort
         val upgrades = AtomicInteger()
         private val thread = Thread {
@@ -68,13 +68,17 @@ class HaWebSocketClientsFailoverTest {
                     .digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()),
             )
             val out = s.getOutputStream()
+            // Count BEFORE the response is written. The client returns from webSocketSession() the
+            // moment it reads this 101, so a count published afterwards is a plain data race: the
+            // test can reach its assertion while this thread is still between flush and increment.
+            // Incrementing first orders the count ahead of the only thing the client waits on.
+            upgrades.incrementAndGet()
             out.write(
                 ("HTTP/1.1 101 Switching Protocols\r\n" +
                     "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
                     "Sec-WebSocket-Accept: $accept\r\n\r\n").toByteArray(),
             )
             out.flush()
-            upgrades.incrementAndGet()
             if (payloadBytes > 0) writeTextFrame(out, ByteArray(payloadBytes) { 'a'.code.toByte() })
             // Hold the connection open until the client closes it.
             runCatching { while (s.getInputStream().read() >= 0) Unit }
@@ -111,153 +115,198 @@ class HaWebSocketClientsFailoverTest {
         override fun close() { server.close() }
     }
 
-    /** Loopback aliases: distinct IPv4 loopback addresses let one port carry a dead and a live route. */
+    private companion object {
+        /**
+         * Timing assertions here separate two mechanisms, so each bound is derived from the
+         * configured timeout that the losing mechanism would have to wait out — never from an
+         * observed duration. Keeping the two far apart is what makes them load-tolerant: this suite
+         * runs in the composed-wave gate beside other builds, and a bound that merely sits above a
+         * fast local run turns host contention into a false failure for every lane in the wave.
+         */
+        const val ROUTE_TIMEOUT_MS = 20_000L
+
+        /** Racing connects in ~250 ms; sequential iteration cannot finish before ROUTE_TIMEOUT_MS. */
+        const val RACED_MAX_MS = 10_000L
+
+        /**
+         * OkHttp's own default connect timeout. Losing the configured value lands at this or, if
+         * it is dropped to zero, at no bound at all; the assertion only needs to sit below the
+         * shorter of the two.
+         */
+        const val ENGINE_DEFAULT_CONNECT_MS = 10_000L
+
+        /**
+         * Prompt cancellation releases in milliseconds. This keeps a real discriminator — a sixth
+         * of the 30 s connect timeout, so "released early" cannot be satisfied by simply finishing
+         * before it — while leaving room for a loaded scheduler.
+         */
+        const val PROMPT_CANCEL_MAX_MS = 5_000L
+    }
+
+    /**
+     * The dead route is a real black hole, not a simulated one: RFC 5737 documentation space is not
+     * routed anywhere, so the SYN is dropped exactly as it was on the panel segment whose AAAA went
+     * nowhere. Nothing to saturate, no accept queue to fill, no port to own — an unrouted address is
+     * dead at every port and is not a shared resource another build can take.
+     */
+    private val blackHoledAddress: InetAddress = InetAddress.getByName("192.0.2.1")
+
     private val liveLoopback: InetAddress = InetAddress.getByName("127.0.0.2")
-    private val deadLoopback: InetAddress = InetAddress.getByName("127.0.0.1")
+    private val refusingLoopback: InetAddress = InetAddress.getByName("127.0.0.1")
 
     private fun loopbackAliasAvailable(): Boolean = runCatching {
         ServerSocket().use { it.bind(InetSocketAddress(liveLoopback, 0)); true }
     }.getOrDefault(false)
 
-    /** Fill a backlog-1 listener until new SYNs are swallowed (Linux drops them once the accept
-     *  queue is full) — the deterministic stand-in for a black-holed route. Returns false when the
-     *  platform will not saturate, so callers can skip rather than flake. */
-    private fun saturate(server: ServerSocket): Boolean {
-        val holders = mutableListOf<Socket>()
-        repeat(24) {
-            val probe = Socket()
-            val connected = runCatching {
-                probe.connect(InetSocketAddress(server.inetAddress, server.localPort), 300)
-            }.isSuccess
-            if (!connected) { probe.close(); return true }
-            holders.add(probe) // keep the queue occupied for the test's lifetime
-        }
-        return false
-    }
-
     // ---- route iteration -----------------------------------------------------------------------
 
     @Test fun refusedRouteFallsBackToTheNextAddress() {
         assumeTrue("no loopback alias in this environment", loopbackAliasAvailable())
-        WsAcceptor(liveLoopback).use { live ->
-            // Nothing listens on 127.0.0.1 at the same port: the first route is REFUSED, which is
-            // the fast-failing sibling of the black-hole. CIO died here; the factory must walk on.
-            val client = HaWebSocketClients.client(resolver = { listOf(deadLoopback, liveLoopback) })
-            try {
-                runBlocking {
-                    val session = withTimeout(15_000) { client.webSocketSession("ws://ha.test:${live.port}/api/websocket") }
-                    session.close()
-                }
-            } finally {
-                client.close()
-            }
-            assertEquals("exactly one upgrade reached the live route", 1, live.upgrades.get())
-        }
-    }
-
-    @Test fun blackHoledRouteStillReachesTheLiveSiblingWithinTheCallerDeadline() {
-        assumeTrue("no loopback alias in this environment", loopbackAliasAvailable())
-        val blackHole = ServerSocket().apply { bind(InetSocketAddress(deadLoopback, 0), 1) }
-        try {
-            assumeTrue("platform would not saturate the backlog", saturate(blackHole))
-            // The dead and live routes share ONE port on different loopback addresses, exactly like
-            // one hostname resolving to a black-holed and a working address: the first route's SYNs
-            // are swallowed by the saturated queue, and only address iteration can reach the sibling.
-            WsAcceptor(liveLoopback, port = blackHole.localPort).use { live ->
-                val elapsedStart = System.nanoTime()
+        // The refusing half is OURS for the whole test - bound, never listened on - so the first
+        // route cannot quietly become live under us, and its RST is immediate rather than probed
+        // for. Refusal is the fast-failing sibling of the black hole; CIO died here and the factory
+        // must walk on.
+        LoopbackPortPair.refusedAndLive(refusingLoopback, liveLoopback, liveBacklog = 16).use { routes ->
+            WsAcceptor(liveLoopback, prebound = routes.live).use { live ->
                 val client = HaWebSocketClients.client(
-                    routeConnectTimeoutMs = 2_000,
-                    resolver = { listOf(deadLoopback, liveLoopback) },
+                    resolver = { listOf(refusingLoopback, liveLoopback) },
                 )
                 try {
                     runBlocking {
                         val session = withTimeout(15_000) {
-                            client.webSocketSession("ws://ha.test:${live.port}/api/websocket")
+                            client.webSocketSession("ws://ha.test:${routes.port}/api/websocket")
                         }
                         session.close()
                     }
                 } finally {
                     client.close()
                 }
-                val elapsedMs = (System.nanoTime() - elapsedStart) / 1_000_000
-                // Faster than one sequential route timeout (2 s) proves the concurrent family race
-                // (fast fallback) is live, not just eventual iteration - expected ~250 ms.
-                assertTrue("connected in ${elapsedMs}ms, beating the 2s sequential route timeout", elapsedMs < 2_000)
-                assertEquals(1, live.upgrades.get())
+                assertEquals("exactly one upgrade reached the live route", 1, live.upgrades.get())
             }
-        } finally {
-            blackHole.close()
         }
     }
 
-    @Test fun aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout() {
-        // Force IPv4 against a dead IPv4 is a single-route walk: only the configured per-route
-        // connect timeout bounds it. An unbounded engine connect ("connect_timeout=unknown ms" in
-        // the field failure this lane fixes) is what this pins against returning.
-        val blackHole = ServerSocket().apply { bind(InetSocketAddress(deadLoopback, 0), 1) }
-        try {
-            assumeTrue("platform would not saturate the backlog", saturate(blackHole))
+    @Test fun blackHoledRouteStillReachesTheLiveSiblingWithinTheCallerDeadline() {
+        // One hostname, a black-holed address ahead of a working one - the field condition itself.
+        // The dead half is unrouted documentation space, so its SYNs vanish without any queue to
+        // saturate, and only address iteration can reach the sibling.
+        WsAcceptor(InetAddress.getByName("127.0.0.1")).use { live ->
+            val elapsedStart = System.nanoTime()
             val client = HaWebSocketClients.client(
-                routeConnectTimeoutMs = 1_000,
-                resolver = { listOf(deadLoopback) },
+                routeConnectTimeoutMs = ROUTE_TIMEOUT_MS,
+                resolver = { listOf(blackHoledAddress, InetAddress.getByName("127.0.0.1")) },
             )
-            val start = System.nanoTime()
             try {
                 runBlocking {
-                    try {
-                        withTimeout(15_000) {
-                            client.webSocketSession("ws://ha.test:${blackHole.localPort}/api/websocket")
-                        }
-                        fail("a black-holed only route must not connect")
-                    } catch (expected: Exception) {
-                        // any failure shape is fine; the bound under test is WHEN it fails
+                    val session = withTimeout(ROUTE_TIMEOUT_MS + 10_000) {
+                        client.webSocketSession("ws://ha.test:${live.port}/api/websocket")
                     }
+                    session.close()
                 }
             } finally {
                 client.close()
             }
-            val elapsedMs = (System.nanoTime() - start) / 1_000_000
+            val elapsedMs = (System.nanoTime() - elapsedStart) / 1_000_000
+            // The bound separates two HYPOTHESES rather than measuring a wall-clock budget: racing
+            // the families (fast fallback) connects in ~250 ms, while walking them sequentially
+            // cannot beat one dead-route timeout. RACED_MAX_MS sits far above the former and
+            // strictly below the latter, so host load has to stretch the connect 40x before it can
+            // reach a verdict the mechanism does not justify.
             assertTrue(
-                "failed in ${elapsedMs}ms - the 1s configured timeout applied (default would be 10s+)",
-                elapsedMs < 8_000,
+                "connected in ${elapsedMs}ms; sequential iteration could not beat ${ROUTE_TIMEOUT_MS}ms",
+                elapsedMs < RACED_MAX_MS,
             )
-        } finally {
-            blackHole.close()
+            assertEquals(1, live.upgrades.get())
         }
     }
 
-    @Test fun cancellationDuringADeadConnectReturnsPromptly() {
-        assumeTrue("no loopback alias in this environment", loopbackAliasAvailable())
-        val blackHole = ServerSocket().apply { bind(InetSocketAddress(deadLoopback, 0), 1) }
+    @Test fun aDeadOnlyRouteFailsWithinTheConfiguredConnectTimeout() {
+        // A single black-holed route is a one-address walk: only the configured per-route connect
+        // timeout bounds it. An unbounded engine connect ("connect_timeout=unknown ms" in the field
+        // failure this lane fixes) is what this pins against returning.
+        val client = HaWebSocketClients.client(
+            routeConnectTimeoutMs = 1_000,
+            resolver = { listOf(blackHoledAddress) },
+        )
+        val start = System.nanoTime()
         try {
-            assumeTrue("platform would not saturate the backlog", saturate(blackHole))
+            runBlocking {
+                try {
+                    withTimeout(15_000) {
+                        client.webSocketSession("ws://ha.test:4711/api/websocket")
+                    }
+                    fail("a black-holed only route must not connect")
+                } catch (expected: Exception) {
+                    // any failure shape is fine; the bound under test is WHEN it fails
+                }
+            }
+        } finally {
+            client.close()
+        }
+        val elapsedMs = (System.nanoTime() - start) / 1_000_000
+        // Strictly below the engine default: a dropped configuration cannot land here, because
+        // OkHttp would still be waiting. The 1s configured value leaves most of that span as load
+        // headroom rather than as a budget the box has to meet.
+        assertTrue(
+            "failed in ${elapsedMs}ms - the 1s configured timeout applied, not the " +
+                "${ENGINE_DEFAULT_CONNECT_MS}ms engine default",
+            elapsedMs < ENGINE_DEFAULT_CONNECT_MS - 1_000,
+        )
+    }
+
+    @Test fun cancellationWhileAnAttemptIsOutstandingReturnsPromptly() {
+        // The cancellation has to land while an attempt is genuinely outstanding, and that must be
+        // OBSERVED rather than inferred. A latch in the resolver did not do it: the resolver runs
+        // before the dial, so cancelling on it could cancel with nothing yet in flight and "prompt"
+        // would be trivially true - a pass for a reason the test never meant to check.
+        //
+        // So the far end is a listener this test owns which accepts and then says nothing. The latch
+        // is counted down inside accept(), so it fires only once a real connection exists and the
+        // client is waiting on a server that will never answer. That is an attempt outstanding by
+        // observation, and it is strictly more than the previous version claimed.
+        val accepted = CountDownLatch(1)
+        val held = mutableListOf<Socket>()
+        ServerSocket().apply { bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 4) }.use { stalling ->
+            val acceptor = Thread {
+                runCatching {
+                    while (!stalling.isClosed) {
+                        val socket = stalling.accept()
+                        synchronized(held) { held.add(socket) }
+                        accepted.countDown()
+                    }
+                }
+            }.apply { isDaemon = true; start() }
             val client = HaWebSocketClients.client(
                 routeConnectTimeoutMs = 30_000,
-                resolver = { listOf(deadLoopback) },
+                resolver = { listOf(InetAddress.getByName("127.0.0.1")) },
             )
             try {
                 runBlocking {
                     val attempt = launch(Dispatchers.IO) {
                         runCatching {
-                            client.webSocketSession("ws://ha.test:${blackHole.localPort}/api/websocket")
+                            client.webSocketSession("ws://ha.test:${stalling.localPort}/api/websocket")
                         }
                     }
-                    delay(300)
+                    assertTrue(
+                        "no connection ever reached the far end, so cancellation was never exercised",
+                        accepted.await(15, TimeUnit.SECONDS),
+                    )
                     val cancelStart = System.nanoTime()
-                    // Fail-closed: a cancellation that rides out the 30 s connect timeout cannot
-                    // pass — join is bounded well below it and the elapsed time is asserted.
-                    withTimeout(5_000) { attempt.cancelAndJoin() }
+                    // Fail-closed, and still a real discriminator: "prompt" has to mean released in
+                    // a small fraction of the 30 s timeout, not merely before it. The join timeout
+                    // sits above the assertion so the assertion owns the verdict.
+                    withTimeout(15_000) { attempt.cancelAndJoin() }
                     val cancelMs = (System.nanoTime() - cancelStart) / 1_000_000
                     assertTrue(
-                        "cancellation released the caller in ${cancelMs}ms, far below the 30s connect timeout",
-                        cancelMs < 3_000,
+                        "cancellation released the caller in ${cancelMs}ms while an attempt was outstanding",
+                        cancelMs < PROMPT_CANCEL_MAX_MS,
                     )
                 }
             } finally {
                 client.close()
+                synchronized(held) { held.forEach { runCatching { it.close() } } }
+                acceptor.join(2_000)
             }
-        } finally {
-            blackHole.close()
         }
     }
 

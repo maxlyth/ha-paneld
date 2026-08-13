@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.logship
 
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
+import io.github.maxlyth.hapaneld.util.LoopbackPortPair
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,6 +20,15 @@ import java.util.concurrent.atomic.AtomicReference
  * nothing ever arrived. The same collector by IPv4 literal worked on every transport.
  */
 class LogShipAddressFamilyTest {
+
+    private companion object {
+        /**
+         * Large enough that the gap between one shared deadline and one per candidate is seconds
+         * wide. These socket tests run inside the composed-wave gate alongside other builds, so a
+         * bound derived from a fast unloaded run reports contention as a shared-deadline defect.
+         */
+        const val DEADLINE_MS = 4_000L
+    }
 
     private val v4: InetAddress = InetAddress.getByName("192.0.2.118")
     private val v6: InetAddress = InetAddress.getByName("2001:db8::1")
@@ -58,13 +68,21 @@ class LogShipAddressFamilyTest {
 
     /**
      * The end-to-end shape of the hardware defect: a name that resolves to an unreachable address
-     * first and a live one second must still ship. Uses loopback for the live half, and a
-     * bound-then-released port on a documentation-range address for the dead half.
+     * first and a live one second must still ship.
+     *
+     * The two halves are different FAMILIES, which is why this one was missed on the first pass: it
+     * reserved the port on `::1` alone and assumed the same number was free on `127.0.0.1`. Family
+     * does not change the hazard — the number was drawn from one address's ephemeral range and
+     * anything holding it on the other could answer the route this test needs dead.
      */
     @Test(timeout = 30_000)
     fun tcpFallsBackPastAnUnreachableFirstAddress() {
-        ServerSocket(0, 4, InetAddress.getByName("::1")).use { listener ->
-            val port = listener.localPort
+        val dead = InetAddress.getByName("127.0.0.1")
+        val live = InetAddress.getByName("::1")
+        val routes = LoopbackPortPair.refusedAndLive(dead, live, liveBacklog = 4)
+        routes.use {
+            val listener = routes.live
+            val port = routes.port
             val received = java.util.concurrent.ArrayBlockingQueue<String>(1)
             Thread {
                 runCatching {
@@ -72,8 +90,6 @@ class LogShipAddressFamilyTest {
                 }.getOrNull()?.let { received.offer(it) }
             }.apply { isDaemon = true }.start()
 
-            val dead = InetAddress.getByName("127.0.0.1")
-            val live = InetAddress.getByName("::1")
             val sink = NetworkLogSinkFactory.create(
                 LogShipTarget("collector.test", port, LogShipEndpoint.SYSLOG_TCP, "panel"),
                 { it },
@@ -88,13 +104,12 @@ class LogShipAddressFamilyTest {
         }
     }
 
-    @Test(timeout = 5_000)
+    @Test(timeout = 15_000)
     fun httpPostFailureFallsBackAndPreservesOriginalHost() {
         val first = InetAddress.getByName("127.0.0.2")
         val second = InetAddress.getByName("127.0.0.1")
-        val firstServer = ServerSocket(0, 4, first)
-        val secondServer = ServerSocket(firstServer.localPort, 4, second)
-        firstServer.use { rejected -> secondServer.use { accepted ->
+        val routes = LoopbackPortPair.bind(first, 4, second, 4)
+        routes.first.use { rejected -> routes.second.use { accepted ->
             val requests = ArrayBlockingQueue<String>(2)
             serveHttp(rejected, 503, requests)
             serveHttp(accepted, 204, requests)
@@ -110,13 +125,12 @@ class LogShipAddressFamilyTest {
         } }
     }
 
-    @Test(timeout = 5_000)
+    @Test(timeout = 15_000)
     fun probeReportsCandidateThatActuallyAcceptedFallback() {
         val first = InetAddress.getByName("127.0.0.2")
         val second = InetAddress.getByName("127.0.0.1")
-        val rejected = ServerSocket(0, 4, first)
-        val accepted = ServerSocket(rejected.localPort, 4, second)
-        rejected.use { a -> accepted.use { b ->
+        val routes = LoopbackPortPair.bind(first, 4, second, 4)
+        routes.first.use { a -> routes.second.use { b ->
             serveHttp(a, 503, ArrayBlockingQueue(1))
             serveHttp(b, 204, ArrayBlockingQueue(1))
             val result = NetworkLogSinkFactory.probe(
@@ -135,13 +149,18 @@ class LogShipAddressFamilyTest {
     fun probeReportsFinalCandidateWhenEveryAttemptFails() {
         val first = InetAddress.getByName("127.0.0.2")
         val second = InetAddress.getByName("127.0.0.3")
-        val port = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { it.localPort }
-        val result = NetworkLogSinkFactory.probe(
-            LogShipTarget("collector.example", port, LogShipEndpoint.HTTP, "panel"),
-            "{}".toByteArray(),
-            LogAddressResolver { _, _ -> listOf(first, second) },
-            1_000,
-        )
+        // BOTH candidates must fail, so both ports are owned and refusing for the whole probe
+        // rather than one of them being assumed free.
+        val routes = LoopbackPortPair.refusedOnBoth(first, second)
+        val port = routes.port
+        val result = routes.use {
+            NetworkLogSinkFactory.probe(
+                LogShipTarget("collector.example", port, LogShipEndpoint.HTTP, "panel"),
+                "{}".toByteArray(),
+                LogAddressResolver { _, _ -> listOf(first, second) },
+                1_000,
+            )
+        }
         assertTrue(result.toString(), !result.ok)
         assertEquals(second, result.candidate)
     }
@@ -189,23 +208,70 @@ class LogShipAddressFamilyTest {
         }
     }
 
-    @Test(timeout = 5_000)
+    @Test(timeout = 30_000)
     fun httpCandidatesShareOneAbsoluteDeadline() {
         val first = InetAddress.getByName("127.0.0.1")
-        ServerSocket(0, 1, first).use { listener ->
-            Thread { runCatching { listener.accept() }.getOrNull()?.use { Thread.sleep(2_000) } }.apply { isDaemon = true }.start()
+        val second = InetAddress.getByName("127.0.0.2")
+        // BOTH candidates must hang. With a listener on only the first, the second was refused
+        // instantly, so one shared deadline and one deadline per candidate both finished in about
+        // one deadline and this assertion could not tell them apart - it stayed green under a
+        // mutation that made the budget per-candidate, at this revision and at every earlier one.
+        // Two hanging candidates make the difference the whole span of a second deadline.
+        val routes = LoopbackPortPair.bind(first, 1, second, 1)
+        val hangs = Hangs()
+        routes.use { hangs.use {
+            hangs.on(routes.first)
+            hangs.on(routes.second)
             val sink = NetworkLogSinkFactory.create(
-                LogShipTarget("collector.test", listener.localPort, LogShipEndpoint.HTTP, "panel"),
+                LogShipTarget("collector.test", routes.port, LogShipEndpoint.HTTP, "panel"),
                 { it },
-                LogAddressResolver { _, _ -> listOf(first, InetAddress.getByName("127.0.0.2")) },
-                300,
+                LogAddressResolver { _, _ -> listOf(first, second) },
+                DEADLINE_MS,
             )
             val started = System.nanoTime()
             sink.connect()
             runCatching { sink.send(listOf("{}")) }
             val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
             sink.close()
-            assertTrue("candidate timeouts multiplied the deadline: ${elapsed}ms", elapsed < 800)
+            // Midway between the two outcomes: one shared deadline spends DEADLINE_MS in total, a
+            // per-candidate deadline spends it twice. Seconds of slack on either side, so host load
+            // moves the measurement without moving the verdict.
+            assertTrue(
+                "candidate timeouts multiplied the ${DEADLINE_MS}ms deadline: ${elapsed}ms",
+                elapsed < DEADLINE_MS * 3 / 2,
+            )
+        } }
+    }
+
+    /**
+     * Accepts and holds connections so a candidate consumes its whole deadline instead of failing
+     * fast, and owns what it accepts. Sleeping in a detached daemon thread would leave sockets alive
+     * for seconds after the test returned, contaminating whatever ran next in the same JVM; these
+     * are parked on a latch instead, then closed and joined on the way out.
+     */
+    private class Hangs : AutoCloseable {
+        private val release = java.util.concurrent.CountDownLatch(1)
+        private val threads = mutableListOf<Thread>()
+        private val accepted = java.util.Collections.synchronizedList(mutableListOf<Socket>())
+        private val listeners = mutableListOf<ServerSocket>()
+
+        fun on(server: ServerSocket) {
+            listeners += server
+            threads += Thread {
+                runCatching { server.accept() }.getOrNull()?.let { socket ->
+                    accepted.add(socket)
+                    runCatching { release.await() }
+                }
+            }.apply { isDaemon = true; start() }
+        }
+
+        override fun close() {
+            release.countDown()
+            // Close the LISTENERS first. A thread still parked in accept() only returns when its
+            // ServerSocket closes, so joining before that just burned the timeout on every one.
+            listeners.forEach { runCatching { it.close() } }
+            synchronized(accepted) { accepted.forEach { runCatching { it.close() } } }
+            threads.forEach { it.join(2_000) }
         }
     }
 
