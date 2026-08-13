@@ -7,10 +7,15 @@
 # varied the TRANSPORT. An adbd that does not advertise the `shell_v2` feature serves `shell:` through
 # a PTY unconditionally, so the line discipline rewrites every device newline as CRLF before the host
 # sees it. The installer classifies panel state by exact token, so on such a panel the panel's honest
-# `NO_STALE_TRANSACTION` arrived as `NO_STALE_TRANSACTION\r` and matched nothing — reported as
-# "could not determine the root-helper recovery state" on a rooted SMT1019 whose adb and root were
-# both working (#106). The same transport breaks the /system capability probe immediately afterwards,
-# which is why that report ALSO said the helper never persisted: one cause, both symptoms.
+# `NO_STALE_TRANSACTION` arrives as `NO_STALE_TRANSACTION\r` and matches nothing.
+#
+# CORRECTION, and it matters because this file used to claim otherwise: that transport is NOT what the
+# SMT1019 reporter of #106 hit. Their `adb features` lists `shell_v2`, so their replies were never
+# CRLF, and the report's helper-persistence symptom turned out to be a genuinely read-only /system
+# with no root manager — a different problem with its own answer. The CRLF handling is still correct
+# and still the right place for it, but it is hardening for a transport nobody has yet been shown to
+# be on, not the explanation of that report. Kept because an exact-token classifier that trusts the
+# transport is wrong regardless of who is currently affected.
 #
 # What this proves and what it does not. It drives the real installer and asserts which branch it
 # takes and what it tells the operator. Device-side file identity, permissions and operation ordering
@@ -134,6 +139,12 @@ for transport in shell_v2 pty; do
   run_installer
   expect_refuses "names the real cause when there is genuinely no boot route" \
     "read-only /system and no verified systemless boot-service runner"
+  # A rooted Android 10+ panel reaches this with dm-verity, not a missing root manager, so the
+  # host-side remount must be offered before the operator goes and installs one. It reboots the panel,
+  # which on a locked panel is not a small thing, so the warning travels with the command.
+  grep -Fq 'disable-verity' "$TMP/out.txt" && grep -Fq 'REBOOTS the panel' "$TMP/out.txt" &&
+    check "offers the one-time remount, and says it reboots" ok ||
+    check "offers the one-time remount, and says it reboots" bad
 
   # 3b. An answer we cannot read says nothing about /system, so the refusal must not claim it did —
   #     telling this operator to go and install Magisk would send them to fix the wrong machine.

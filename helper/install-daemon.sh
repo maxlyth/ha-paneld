@@ -33,7 +33,9 @@ fail() {
 
 # Render what the panel actually answered so an unrecognised state is reportable instead of anonymous.
 # A refusal that cannot say what it saw sends the operator to repair the wrong thing: the SMT1019
-# report (#106) had working adb and working root, and was told to restore both.
+# report (#106) had working adb and working root, and was told to restore both. That report was later
+# shown NOT to be a transport problem — the panel advertises `shell_v2` — which is exactly the point:
+# the refusal could not say what it had seen, so the cause had to be guessed at from outside.
 #
 # Non-printing characters are REPORTED, not silently removed. Deleting them would render an answer
 # that differs from a valid one only by an invisible byte as though it were the valid one — hiding the
@@ -1288,9 +1290,18 @@ else
   # read at all has not told us anything about its /system, and saying it did would send the operator
   # to install a root manager it may not need.
   if printf '%s\n' "$out" | grep -qx SYSTEM_RO && printf '%s\n' "$out" | grep -qx NO_SYSTEMLESS_RUNNER; then
+    # Name the route that actually applies to most rooted panels FIRST. Android 10 and newer keep
+    # /system read-only behind dm-verity even with root, and the fix is a one-time host-side remount,
+    # not a root manager — which is what docs/hardware/nspanel-pro.md and tpa10.md already tell people
+    # to do for this project's own panels. Sending an operator to install Magisk when their userdebug
+    # panel just needs verity disabled is advice that costs them an evening. It reboots, so say so.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The existing helper was left running and no files were replaced." \
-      "Install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path, then re-run."
+      "On a userdebug panel with an unlocked bootloader this is usually dm-verity rather than a missing root manager." \
+      "Try the one-time host-side remount first — it REBOOTS the panel, so do it with the panel in front of you:" \
+      "  adb -s $TARGET root && adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
+      "  # then, once it is back:  adb -s $TARGET root && adb -s $TARGET remount" \
+      "Then re-run this installer. If remount is still refused, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
   fail "could not determine where a boot-persistent helper can be installed" \
     "The existing helper was left running and no files were replaced." \

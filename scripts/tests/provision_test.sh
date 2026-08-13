@@ -1187,6 +1187,13 @@ MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=0 run_provision "$MOCK_TARGET" --a
 assert_failure "read-only system without a verified service.d runner fails closed"
 assert_contains 'read-only /system and no verified systemless boot-service runner' "missing persistence mechanism names the migration blocker"
 assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism gives supported recovery choices"
+# On Android 10+ a rooted panel still has a read-only /system because of dm-verity, so the usual cure
+# is a one-time host-side remount, not a root manager. A real report (#106) reached this exact message
+# on a rooted panel and was pointed only at Magisk. Naming the remount first, and its reboot, is the
+# difference between a five-minute fix and an evening installing something unnecessary.
+assert_contains 'dm-verity rather than a missing root manager' "read-only /system names the usual Android 10+ cause"
+assert_contains 'disable-verity' "read-only /system names the one-time host-side remount route"
+assert_contains 'REBOOTS the panel' "the remount advice warns that it reboots before it is followed"
 assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
 
 # Stock NSPanel Pro firmware can have a writable but full /system. The zero-byte writability probe

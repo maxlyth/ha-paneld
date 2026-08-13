@@ -3347,9 +3347,17 @@ EOF
   else
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     rm -f "$rc_file" "$hybrid_rc_file" "$service_file" "$transaction_file"
+    # Same advice as helper/install-daemon.sh, and for the same reason: on Android 10 and newer,
+    # /system stays read-only behind dm-verity even on a rooted panel, so the usual answer is a
+    # one-time host-side remount rather than a root manager. This is the wording a real report reached
+    # (#106) after everything upstream of it had already been fixed. It reboots, so say so.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The helper was not installed and the previous APK was left in place." \
-      "Install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path, then re-run."
+      "On a userdebug panel with an unlocked bootloader this is usually dm-verity rather than a missing root manager." \
+      "Try the one-time host-side remount first — it REBOOTS the panel, so do it with the panel in front of you:" \
+      "  adb -s $TARGET root && adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
+      "  # then, once it is back:  adb -s $TARGET root && adb -s $TARGET remount" \
+      "Then re-run the installer. If remount is still refused, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
 
   if [ "$install_kind" = hybrid ]; then
