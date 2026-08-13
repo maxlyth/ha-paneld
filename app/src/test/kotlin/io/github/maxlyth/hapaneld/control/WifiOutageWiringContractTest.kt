@@ -129,6 +129,13 @@ class WifiOutageWiringContractTest {
         val contextKeys = Regex("""private val CONTEXT_KEYS = listOf\(([^)]*)\)""")
             .find(server)?.groupValues?.get(1).orEmpty()
         assertTrue("Wi-Fi stability must be a Runtime diagnostics row", contextKeys.contains(""""Wi-Fi stability""""))
+        // `contextRowsHtml` walks CONTEXT_KEYS in order and drops absent keys, so heading the list is
+        // exactly "position 1 whenever the row is shown at all". Pinned because the row's whole value is
+        // being noticed: buried under seven healthy rows it is a footnote to the problem it explains.
+        assertTrue(
+            "Wi-Fi stability must LEAD the Runtime diagnostics card, not sit mid-list",
+            contextKeys.trim().startsWith(""""Wi-Fi stability""""),
+        )
         val behaviourKeys = Regex("""private val BEHAVIOUR_FACT_KEYS = setOf\(([^)]*)\)""")
             .find(server)?.groupValues?.get(1).orEmpty()
         assertFalse(behaviourKeys.contains(""""Wi-Fi stability""""))

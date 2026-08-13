@@ -4110,9 +4110,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val HA_LIFECYCLE_FACT = "HA lifecycle"
 
+    // Order is the render order of the Runtime diagnostics card. "Wi-Fi stability" leads because it is
+    // absent on a healthy panel and only ever appears when the network under everything else on this
+    // card has been dropping out — so when it IS shown it explains the rows below it, and reading it
+    // last is reading it too late.
     private val CONTEXT_KEYS = listOf(
-        "MQTT state", "State convergence", "Local-state sync", "App database", "Security mode", "Audio playback",
-        "Log shipping", "Wi-Fi stability", HA_LIFECYCLE_FACT,
+        "Wi-Fi stability", "MQTT state", "State convergence", "Local-state sync", "App database",
+        "Security mode", "Audio playback", "Log shipping", HA_LIFECYCLE_FACT,
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
         "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
