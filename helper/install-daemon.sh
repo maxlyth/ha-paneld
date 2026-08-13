@@ -43,7 +43,9 @@ fail() {
 describe_observed_state() {
   local observed="$1" flattened rendered
   flattened="$(printf '%s' "$observed" | LC_ALL=C tr '\n\t' '  ')"
-  rendered="$(printf '%s' "$flattened" | LC_ALL=C tr -d '\000-\037\177')"
+  # `[:cntrl:]` rather than an octal range: this line runs on the operator's machine, and the reporter's
+  # is macOS, whose BSD tr is the one that has to agree with GNU tr about what it means.
+  rendered="$(printf '%s' "$flattened" | LC_ALL=C tr -d '[:cntrl:]')"
   if [ -z "$rendered" ]; then
     if [ -n "$flattened" ]; then
       printf 'the panel answered only non-printing characters'
