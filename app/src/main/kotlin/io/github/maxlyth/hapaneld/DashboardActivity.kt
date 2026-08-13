@@ -60,6 +60,7 @@ import io.github.maxlyth.hapaneld.dashboard.HomeDashboardLaunchCache
 import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
@@ -258,7 +259,21 @@ class DashboardActivity : AppCompatActivity() {
     // class that onPageFinished and the crash budget both miss. The watchdog runs ONLY while the screen is
     // awake: a screen-off pauses JS timers, so a paused WebView could never complete the handshake and the
     // watchdog would just reload-loop all night behind a dark panel.
+    /**
+     * Whether the Home Assistant frontend is connected right now.
+     *
+     * The setter publishes to [RendererAdmissionRuntime] so `/api/v1/status`, `/api/v1/diag` and the
+     * info card all learn it. It is a SETTER rather than a call beside each assignment on purpose:
+     * five sites write this field (connect, disconnect, page start, teardown, destroy) and a
+     * hand-maintained list of them would be one edit away from a surface that claims a dashboard is
+     * up after it went down. The property initializer assigns the backing field directly, so the
+     * pre-`onCreate` value never publishes against an unacquired lease.
+     */
     private var frontendConnected = false
+        set(value) {
+            field = value
+            RendererAdmissionRuntime.setFrontendConnected(activityOwner, value)
+        }
     private val retryPolicy = DashboardRetryPolicy()
     private var clearedThisLoad = false
     private val watchdog = Runnable { onWatchdogTimeout() }
@@ -2026,13 +2041,37 @@ class DashboardActivity : AppCompatActivity() {
 
     /** A blocked admission screen. [outcome] is not defaulted: every blocked screen must say what the
      *  panel learned, and [admissionRetryClass] — not this call site — decides whether that recovers on
-     *  its own. Progress screens use [showAdmissionProgressScreen] instead. */
-    private fun showBlockedAdmissionScreen(title: String, detail: String, outcome: AdmissionOutcome) =
+     *  its own. Progress screens use [showAdmissionProgressScreen] instead.
+     *
+     *  This is also the single site that publishes a blocked verdict to [RendererAdmissionRuntime], so
+     *  a screen cannot reach the panel without the diagnostic surfaces learning about it. [evidence] is
+     *  the classified transport failure where one was observed; the raw [detail] stays on the panel and
+     *  never enters the runtime, because it can embed the configured Home Assistant host. */
+    private fun showBlockedAdmissionScreen(
+        title: String,
+        detail: String,
+        outcome: AdmissionOutcome,
+        evidence: HaTransportEvidence = HaTransportEvidence.NONE,
+    ) {
+        RendererAdmissionRuntime.record(
+            owner = activityOwner,
+            state = RendererAdmissionState.BLOCKED,
+            nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+            outcome = outcome,
+            evidence = evidence,
+        )
         showV2CompatibilityScreen(title, detail, "Retry", admissionRetryClass(outcome))
+    }
 
     /** A screen that reports work in flight; it is replaced by that work's outcome, so it never arms. */
-    private fun showAdmissionProgressScreen(title: String, detail: String) =
+    private fun showAdmissionProgressScreen(title: String, detail: String) {
+        RendererAdmissionRuntime.record(
+            owner = activityOwner,
+            state = RendererAdmissionState.CHECKING,
+            nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+        )
         showV2CompatibilityScreen(title, detail, null, AdmissionRetryClass.MANUAL_ONLY)
+    }
 
     private fun showV2CompatibilityScreen(
         title: String,
@@ -2198,6 +2237,18 @@ class DashboardActivity : AppCompatActivity() {
             compatibilityCheckingOwner = null
             when (val admission = DashboardV2Admission.resolve(result, config.cachedHaServerVersion(url))) {
                 is DashboardV2Admission.Compatible -> {
+                    // Admitted on a cached version is recorded DISTINCTLY from a live pass. The panel
+                    // starts, but nothing about the server was confirmed this time — and when the
+                    // page then hits the same wall the check could not cross, the panel is admitted
+                    // and blank while every other health signal it has still reads normal.
+                    RendererAdmissionRuntime.record(
+                        owner = activityOwner,
+                        state = RendererAdmissionState.ADMITTED,
+                        nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+                        admittedOnCachedVersion = !admission.live,
+                        evidence = (result as? DashboardV2ProbeResult.Unavailable)?.evidence
+                            ?: HaTransportEvidence.NONE,
+                    )
                     if (admission.live) {
                         config.setHaServerVersionIfOwned(url, admission.version)
                     } else {
@@ -2250,6 +2301,7 @@ class DashboardActivity : AppCompatActivity() {
                         "The panel could not verify the required Home Assistant 2026.4.2+ version. " +
                             "Check the connection and retry. ${blocked.detail}",
                         AdmissionOutcome.TRANSPORT_FAILED,
+                        blocked.evidence,
                     )
                     is DashboardV2ProbeResult.Compatible -> error("compatible result cannot be blocked")
                 }

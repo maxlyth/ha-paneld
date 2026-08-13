@@ -19,6 +19,9 @@ import io.github.maxlyth.hapaneld.HaAuthSnapshot
 import io.github.maxlyth.hapaneld.HaDiscovery
 import io.github.maxlyth.hapaneld.LiveSettingRequestOutcome
 import io.github.maxlyth.hapaneld.PanelStatus
+import io.github.maxlyth.hapaneld.RendererAdmissionPresentation
+import io.github.maxlyth.hapaneld.RendererAdmissionRuntime
+import io.github.maxlyth.hapaneld.RendererMode
 import io.github.maxlyth.hapaneld.haSignInPending
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
@@ -3786,8 +3789,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val zigbee = radio?.let {
             JSONObject(it.mqttAttributes()).put("state", it.state.wireValue).toString()
         } ?: "null"
+        // `renderer` is emitted UNCONDITIONALLY, including for an external or unconfigured renderer,
+        // because a consumer must never have to infer applicability from an absent field. A fleet
+        // check that reads a missing object as "nothing to worry about" restates the very failure
+        // this object exists to expose: a blank panel that every check still reports as green.
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
+            "\"renderer\":${rendererAdmission().statusJson()}," +
             "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
     }
 
@@ -4013,6 +4021,33 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             ),
             storage = storageHealth(),
             powerSafety = powerSafety(),
+            renderer = rendererAdmission(),
+        )
+    }
+
+    /**
+     * The renderer/Home Assistant admission projection, built LIVE on every read rather than through
+     * [snapCache].
+     *
+     * Two reasons, both learned the hard way. The state changes during an outage, so a
+     * stale-while-revalidate copy would answer a "is the dashboard up?" question with a value from
+     * before it went down — the same defect that made the lifecycle row live. And a deployment check
+     * judges staleness from `observed_age_ms`, so an age measured against a cached capture would be
+     * an age of the cache, not of the observation.
+     */
+    private fun rendererAdmission(): RendererAdmissionPresentation {
+        val pkg = config.dashboardPackage
+        val mode = when {
+            SystemController.isBuiltinSelection(pkg, appContext.packageName) -> RendererMode.BUILTIN
+            pkg.isBlank() -> RendererMode.NONE
+            else -> RendererMode.EXTERNAL
+        }
+        return RendererAdmissionPresentation.of(
+            mode = mode,
+            haUrl = config.haUrl,
+            addressFamilyPolicy = config.mqttAddressFamily,
+            live = RendererAdmissionRuntime.current(),
+            nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
         )
     }
 
@@ -4109,14 +4144,17 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val HA_LIFECYCLE_FACT = "HA lifecycle"
+    private val HA_RENDERER_FACT = "HA renderer"
 
     // Order is the render order of the Runtime diagnostics card. "Wi-Fi stability" leads because it is
     // absent on a healthy panel and only ever appears when the network under everything else on this
     // card has been dropping out — so when it IS shown it explains the rows below it, and reading it
-    // last is reading it too late.
+    // last is reading it too late. "HA renderer" follows it for the same reason one place down: it is
+    // the panel's headline outcome — whether the dashboard is actually up — and every row below it
+    // describes machinery that exists to keep it up.
     private val CONTEXT_KEYS = listOf(
-        "Wi-Fi stability", "MQTT state", "State convergence", "Local-state sync", "App database",
-        "Security mode", "Audio playback", "Log shipping", HA_LIFECYCLE_FACT,
+        "Wi-Fi stability", HA_RENDERER_FACT, "MQTT state", "State convergence", "Local-state sync",
+        "App database", "Security mode", "Audio playback", "Log shipping", HA_LIFECYCLE_FACT,
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
         "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
@@ -4141,7 +4179,15 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             // poll can fill. Omitting it meant a panel that began watching AFTER the page was rendered
             // (the watch waits for the renderer to settle) had no element to populate, so the row could
             // never appear without a reload: a surface that can only ever go from present to absent.
-            val current = if (key == HA_LIFECYCLE_FACT) (HaLifecycleRuntime.statusText() ?: "") else s.facts[key]
+            // The renderer row is live for the same reason as the lifecycle row and one more: its
+            // whole subject is a state that changes while the page is open. Routing it through the
+            // facts cache would let a panel that went blank a minute ago keep saying "rendered" for a
+            // TTL — precisely the reassuring-but-wrong answer this row exists to stop giving.
+            val current = when (key) {
+                HA_LIFECYCLE_FACT -> HaLifecycleRuntime.statusText() ?: ""
+                HA_RENDERER_FACT -> rendererAdmission().statusText()
+                else -> s.facts[key]
+            }
             // Log shipping earns a live row only while it is on; when it is off the Behaviour card's
             // "Ship logs" already says so, and a permanent "off" here is noise.
             current?.takeUnless { key == "Log shipping" && it == LOG_SHIP_STATUS_OFF }?.let { value ->

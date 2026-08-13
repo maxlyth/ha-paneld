@@ -4,6 +4,8 @@ import io.github.maxlyth.hapaneld.sensors.HaAmbientTransport
 import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
+import io.github.maxlyth.hapaneld.util.HaTransportFault
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
@@ -96,7 +98,15 @@ class DashboardV2CompatibilityProbeTest {
             ConfigTransport { error("network\nfailed") },
             Dispatchers.Unconfined,
         ).check()
-        assertEquals(DashboardV2ProbeResult.Unavailable("network failed"), unavailable)
+        // The panel-facing detail is unchanged; the probe now also classifies the throwable it
+        // caught, so a diagnostic surface can name the failure without republishing this text.
+        assertEquals(
+            DashboardV2ProbeResult.Unavailable(
+                "network failed",
+                HaTransportEvidence(HaTransportFault.UNKNOWN, "IllegalStateException"),
+            ),
+            unavailable,
+        )
     }
 
     // A TLS trust failure during the token refresh must render as transport unavailability naming the

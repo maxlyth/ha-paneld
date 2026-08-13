@@ -255,6 +255,7 @@ object DiagReader {
         displaySizing: DisplaySizingEvidence? = null,
         storage: StorageHealthSnapshot = StorageHealthSnapshot.UNCHECKED,
         powerSafety: io.github.maxlyth.hapaneld.control.PowerSafetyAssessment? = null,
+        renderer: io.github.maxlyth.hapaneld.RendererAdmissionPresentation? = null,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
         val routes = privilege
@@ -277,6 +278,11 @@ object DiagReader {
         val evdev = EvdevButtonClient.snapshot()
         appendLine("[env] selinux=${PanelMetrics.shared.selinuxEnforce() ?: "?"} su=$su write_settings=${Settings.System.canWrite(ctx)} a11y=${a11yEnabled(ctx)} daemon=$daemon shizuku=${routes.shizuku.state.name.lowercase()} evdev=${evdev.state.name.lowercase()}/${evdev.mode?.name?.lowercase() ?: "none"} ledjni=${NativeLed.available()}")
         displaySizing?.let { appendLine(displaySizingLine(it, profile)) }
+        // The renderer/Home Assistant line leads the health block deliberately: a pasted report whose
+        // dashboard is down should answer that question before it answers anything about storage or
+        // radios. Its values are all classified or categorical — no URL, host, credential or raw
+        // exception text — so this line is as pasteable as the rest of the dump.
+        renderer?.let { appendLine(it.diagnosticLine()) }
         zigbee?.let {
             appendLine(
                 "[zigbee-health] state=${it.state.wireValue} layout=${it.layout} package=${it.packageVersion ?: "-"} " +

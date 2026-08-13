@@ -6,6 +6,8 @@ import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
+import io.github.maxlyth.hapaneld.util.HaTransportFault
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +83,13 @@ internal sealed interface DashboardV2ProbeResult {
     data class UnsupportedHa(val version: String) : DashboardV2ProbeResult
     data class Unverifiable(val version: String?) : DashboardV2ProbeResult
     data object AuthenticationFailed : DashboardV2ProbeResult
-    data class Unavailable(val detail: String) : DashboardV2ProbeResult
+    /** [detail] is the raw platform/server text shown ON the panel, which can embed the configured
+     *  host; [evidence] is the same failure classified from its exception type and is what leaves the
+     *  panel through diagnostics. */
+    data class Unavailable(
+        val detail: String,
+        val evidence: HaTransportEvidence = HaTransportEvidence.UNKNOWN,
+    ) : DashboardV2ProbeResult
 }
 
 internal sealed interface DashboardV2Admission {
@@ -160,7 +168,7 @@ internal class DashboardV2CompatibilityProbe(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
-            unavailable(error.message)
+            unavailable(error.message, HaTransportFault.evidenceOf(error))
         }
     }
 
@@ -171,14 +179,21 @@ internal class DashboardV2CompatibilityProbe(
     private fun blockedBy(session: HaApiSession): DashboardV2ProbeResult? = when {
         session.rejected -> DashboardV2ProbeResult.AuthenticationFailed
         !session.accessToken.isNullOrBlank() -> null
-        session.transientDetail != null -> unavailable(session.transientDetail)
+        // A session reporting a transient detail HAS failed in transport, so its evidence can never
+        // be `NONE` here however it was constructed — an unclassified failure degrades to UNKNOWN.
+        session.transientDetail != null ->
+            unavailable(session.transientDetail, session.transientEvidence.orUnclassified())
         else -> DashboardV2ProbeResult.AuthenticationFailed
     }
 
-    private fun unavailable(detail: String?): DashboardV2ProbeResult.Unavailable =
+    private fun unavailable(
+        detail: String?,
+        evidence: HaTransportEvidence,
+    ): DashboardV2ProbeResult.Unavailable =
         DashboardV2ProbeResult.Unavailable(
             detail?.replace(Regex("[\\r\\n\\t]+"), " ")?.trim()?.take(240)
                 ?.takeIf(String::isNotBlank) ?: "Home Assistant version is unavailable",
+            evidence,
         )
 
     private companion object {

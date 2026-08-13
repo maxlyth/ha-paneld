@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.util.HaLink
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 
 /**
  * Decides which access token the built-in renderer hands the HA frontend, and when to refresh — the
@@ -35,12 +36,16 @@ object DashboardAuth {
      *  server terminally refused the unchanged refresh request. Home Assistant can reject either the
      *  token or its required OAuth client id; a transient refresh failure never sets [rejected] — it
      *  fails closed with [transientDetail] naming the transport fault, so a caller can distinguish
-     *  "could not reach the server to mint a token" from "the server refused" or "never signed in". */
+     *  "could not reach the server to mint a token" from "the server refused" or "never signed in".
+     *  [transientEvidence] is that same fault classified from the exception type — the only form a
+     *  pasteable diagnostic may carry, because [transientDetail] is raw platform text that can embed
+     *  the configured host or address. */
     data class Result(
         val session: Session?,
         val persist: Pair<String, Long>? = null,
         val rejected: Boolean = false,
         val transientDetail: String? = null,
+        val transientEvidence: HaTransportEvidence = HaTransportEvidence.NONE,
     )
 
     internal fun retainIfOwned(
@@ -103,7 +108,11 @@ object DashboardAuth {
             // near-expiry refresh, reuse the cached token while it has any life left.
             is HaLink.Refresh.Transient ->
                 if (!force && access.isNotBlank() && ttl > 0) Result(Session(access, ttl))
-                else Result(null, transientDetail = fresh.detail ?: "Home Assistant token refresh failed")
+                else Result(
+                    null,
+                    transientDetail = fresh.detail ?: "Home Assistant token refresh failed",
+                    transientEvidence = fresh.evidence.orUnclassified(),
+                )
         }
     }
 

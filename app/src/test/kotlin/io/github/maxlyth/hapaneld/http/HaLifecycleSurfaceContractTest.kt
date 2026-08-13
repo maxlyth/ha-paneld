@@ -197,13 +197,24 @@ class HaLifecycleSurfaceContractTest {
      * no element to populate, so the row could only ever go from present to absent, never the reverse.
      */
     @Test fun theLifecycleRowIsAlwaysPresentSoItCanAppearWithoutAReload() {
-        assertTrue(server.contains("(HaLifecycleRuntime.statusText() ?: \"\")"))
+        // The `?: ""` is the whole claim: an absent status still renders an empty cell the poll can
+        // fill, so the row can never be one that only ever goes from present to absent.
+        assertTrue(server.contains("HA_LIFECYCLE_FACT -> HaLifecycleRuntime.statusText() ?: \"\""))
     }
 
     @Test fun theLifecycleRowIsReadLiveRatherThanFromTheStaleFactsCache() {
+        // The row selection became a `when` once a second live row (HA renderer) joined it; what is
+        // pinned here is unchanged — this row reads the runtime, and only the other keys read the
+        // stale-while-revalidate facts snapshot.
         assertTrue(
             "the row must call the runtime directly",
-            server.contains("if (key == HA_LIFECYCLE_FACT) (HaLifecycleRuntime.statusText() ?: \"\") else s.facts[key]"),
+            server.replace(Regex("\\s+"), " ").contains(
+                "HA_LIFECYCLE_FACT -> HaLifecycleRuntime.statusText() ?: \"\"",
+            ),
+        )
+        assertTrue(
+            "every other key must still come from the cached facts",
+            server.replace(Regex("\\s+"), " ").contains("else -> s.facts[key] }"),
         )
         val service = TestSources.kotlin("PaneldService.kt").readText()
         assertFalse(

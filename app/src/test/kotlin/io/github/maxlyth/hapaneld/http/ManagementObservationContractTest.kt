@@ -109,7 +109,7 @@ class ManagementObservationContractTest {
         assertTrue(service.contains("\"Android dashboard lock\" to if (config.kioskLock) \"on\" else \"off\""))
         assertTrue(service.contains("\"Prevent idle dim\" to preventIdleDimDiagnostic"))
         assertTrue(server.replace(Regex("\\s+"), " ").contains(
-            "\"Wi-Fi stability\", \"MQTT state\", \"State convergence\", \"Local-state sync\", \"App database\", \"Security mode\", \"Audio playback\"",
+            "\"Wi-Fi stability\", HA_RENDERER_FACT, \"MQTT state\", \"State convergence\", \"Local-state sync\", \"App database\", \"Security mode\", \"Audio playback\"",
         ))
         assertTrue(diagnostic.substring(diagnostic.indexOf("private val PUBLIC_PANEL_FACTS")).contains("\"App database\""))
         assertTrue(diagnostic.substring(diagnostic.indexOf("private val PUBLIC_PANEL_FACTS")).contains("\"Prevent idle dim\""))

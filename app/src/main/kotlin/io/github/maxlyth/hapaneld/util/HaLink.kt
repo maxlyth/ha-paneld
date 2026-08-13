@@ -106,8 +106,13 @@ object HaLink {
         data class Success(val tokens: TokenSet) : Refresh()
         object Rejected : Refresh()
         /** [detail] names the transport failure (certificate, DNS, timeout, HTTP 5xx) so an admission
-         *  screen can point at the real fault instead of blaming the credential. */
-        data class Transient(val detail: String? = null) : Refresh()
+         *  screen can point at the real fault instead of blaming the credential. It is the raw server
+         *  or platform text and stays ON the panel; [evidence] is the same failure classified from the
+         *  exception type, and is the only form a pasteable diagnostic surface may carry. */
+        data class Transient(
+            val detail: String? = null,
+            val evidence: HaTransportEvidence = HaTransportEvidence.UNKNOWN,
+        ) : Refresh()
     }
 
     data class OAuthTokens(
@@ -191,17 +196,31 @@ object HaLink {
         )
         val access = json.optString("access_token").takeIf { it.isNotBlank() }
         // A 200 without a token is a server oddity, not a revocation — treat as transient.
-        if (access == null) Refresh.Transient("token refresh returned no access token")
-        else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
+        if (access == null) {
+            Refresh.Transient(
+                "token refresh returned no access token",
+                HaTransportEvidence(HaTransportFault.PROTOCOL, "MissingAccessToken"),
+            )
+        } else Refresh.Success(TokenSet(access, json.optLong("expires_in", 1800L)))
     } catch (e: HttpError) {
         Log.i(TAG, "refresh failed: HTTP ${e.code}")
         // Home Assistant uses 400 for invalid refresh requests, including a wrong required client id,
         // and 403 for an inactive user. These unchanged requests cannot recover by retrying; 5xx from a
         // restart or proxy and 404 from a wrong endpoint remain transient/configuration evidence.
-        if (e.code in intArrayOf(400, 401, 403)) Refresh.Rejected else Refresh.Transient("token refresh failed: HTTP ${e.code}")
+        if (e.code in intArrayOf(400, 401, 403)) {
+            Refresh.Rejected
+        } else {
+            Refresh.Transient(
+                "token refresh failed: HTTP ${e.code}",
+                HaTransportFault.evidenceOfHttpStatus(e.code),
+            )
+        }
     } catch (e: Exception) {
         Log.i(TAG, "refresh failed: ${e.message}")
-        Refresh.Transient(e.message)
+        // Classified HERE, where the exception itself is in scope. A caller downstream sees only
+        // `detail`, which is the platform's text — the classification cannot be recovered from it
+        // without guessing, and guessing from a message is exactly what this avoids.
+        Refresh.Transient(e.message, HaTransportFault.evidenceOf(e))
     }
 
     /** HA frontend login flow with username/password → short-lived access token, or null. */

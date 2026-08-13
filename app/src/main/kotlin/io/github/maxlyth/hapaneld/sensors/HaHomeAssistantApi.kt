@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.DashboardAuth
 import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.stableOwner
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -22,6 +23,9 @@ internal data class HaApiSession(
     /** Set when the token is absent because minting it failed in TRANSPORT (certificate, DNS, timeout,
      *  5xx) — never when the server rejected the credential or none is configured. */
     val transientDetail: String? = null,
+    /** The same failure classified from its exception type. [transientDetail] is raw platform text
+     *  and may embed the configured host; this is what a pasteable diagnostic surface carries. */
+    val transientEvidence: HaTransportEvidence = HaTransportEvidence.NONE,
 )
 
 internal fun interface HaApiSessionProvider {
@@ -49,6 +53,7 @@ internal class DashboardHaApiSessionProvider(
             result.rejected,
             current.takeIf { ownsSession }?.stableOwner(),
             result.transientDetail,
+            result.transientEvidence,
         )
     }
 }
