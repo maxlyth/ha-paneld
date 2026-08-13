@@ -61,6 +61,11 @@ show_usage() {
   echo "Use --mqtt-pass-file, --ha-token-file, or --ha-pass-file for credentials. The older literal"
   echo "flags remain compatible but expose their value in the original shell command and process list."
   echo
+  echo "--home-dashboard PATH and --entity-filter on|off preseed ha-paneld's built-in renderer, so an"
+  echo "unattended install shows the dashboard you name instead of the Home Assistant account default."
+  echo "Both need --builtin (or a panel already on the built-in renderer), and both answer the matching"
+  echo "guided-setup question so it is not asked again on the panel."
+  echo
   echo "--reset-config erases the panel's existing ha-paneld configuration and starts guided setup"
   echo "from scratch. Reset is irreversible and makes no backup; use a separate backup or export"
   echo "operation first if you need one. It asks for confirmation before erasing."
@@ -95,7 +100,7 @@ while [ "$#" -gt 0 ]; do case "$1" in
           PROVISION_ARGS+=("$1" "$2")
           shift 2
           ;;
-        --id|--mqtt|--mqtt-user|--log-host|--log-port|--log-proto|--ha-url|--ha-user|--export|--restore|--restore-fleet)
+        --id|--mqtt|--mqtt-user|--log-host|--log-port|--log-proto|--ha-url|--ha-user|--export|--restore|--restore-fleet|--home-dashboard|--entity-filter)
           [ "$#" -ge 2 ] && [ -n "${2:-}" ] && [ "${2#--}" = "$2" ] ||
             { echo "$1 needs a value" >&2; exit 2; }
           PROVISION_ARGS+=("$1" "$2")
@@ -145,7 +150,7 @@ if [ "$ADVANCED_PROVISION" = 1 ]; then
     case "$option" in
       --export) HAS_EXPORT=1; i=$((i + 2)) ;;
       --verify) HAS_VERIFY=1; i=$((i + 1)) ;;
-      --id|--mqtt|--mqtt-user|--mqtt-pass-file|--log-host|--log-port|--log-proto|--ha-url|--ha-token-file|--ha-user|--ha-pass-file|--restore|--restore-fleet)
+      --id|--mqtt|--mqtt-user|--mqtt-pass-file|--log-host|--log-port|--log-proto|--ha-url|--ha-token-file|--ha-user|--ha-pass-file|--restore|--restore-fleet|--home-dashboard|--entity-filter)
         HAS_OTHER=1; i=$((i + 2)) ;;
       *) HAS_OTHER=1; i=$((i + 1)) ;;
     esac

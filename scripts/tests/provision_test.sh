@@ -1927,6 +1927,146 @@ assert_status 2 "invalid internal release tag is rejected as a usage error"
 assert_contains 'invalid release tag' "invalid internal release tag gives a direct correction"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
+# ---- built-in renderer seeds (--home-dashboard / --entity-filter) --------------------------------
+# A scripted install deliberately never asks guided setup's dashboard and entity-filter questions, so
+# without these options an unattended panel renders whatever Home Assistant calls the account default.
+# The contract under test: a seeded value is applied before the first render, is also recorded as the
+# matching wizard ANSWER, wins over anything less specific, and never records an answer for a value
+# that did not persist.
+SEED_BUILTIN=(--builtin --ha-url https://ha.test --ha-user owner --ha-pass seed-secret)
+
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --no-tame
+assert_success "a built-in provision without seeds still succeeds"
+assert_not_contains 'home_dashboard=|dashboard_entity_learning=' "$MOCK_CALL_LOG" \
+  "omitting both options writes neither dashboard setting"
+assert_not_contains 'api/v1/setup/(home-dashboard|entity-filter)' "$MOCK_CALL_LOG" \
+  "omitting both options records neither wizard answer"
+assert_not_contains 'seeding dashboard' "$LAST_OUTPUT" "omitting both options performs no seed step"
+
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --entity-filter on --no-tame
+assert_success "seeding both a dashboard path and the entity filter succeeds"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "the seeded dashboard path is written"
+assert_log_contains 'curl .*-X POST .*dashboard_entity_learning=true.*api/v1/config' "--entity-filter on enables entity filtering"
+assert_log_contains 'curl .*-X POST .*api/v1/setup/home-dashboard' "seeding the dashboard records the wizard answer"
+assert_log_contains 'curl .*-X POST .*api/v1/setup/entity-filter' "seeding the filter records the wizard answer"
+assert_contains 'home dashboard: /office' "the applied dashboard path is reported"
+assert_contains 'entity filtering: on' "the applied filter policy is reported"
+
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --entity-filter off --no-tame
+assert_success "seeding the filter off succeeds"
+assert_log_contains 'curl .*-X POST .*dashboard_entity_learning=false.*api/v1/config' "--entity-filter off disables entity filtering"
+assert_log_contains 'curl .*-X POST .*api/v1/setup/entity-filter' "an explicit off is still a recorded answer"
+assert_not_contains 'api/v1/setup/home-dashboard' "$MOCK_CALL_LOG" \
+  "seeding only the filter leaves the dashboard question unanswered"
+
+# `auto` is the Home dashboard picker's Auto choice. It is sent as the bare root because the app
+# canonicalises every "follow the account default" spelling to the same stored blank sentinel.
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard auto --no-tame
+assert_success "seeding auto succeeds"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/[^a-z].*api/v1/config' "auto is sent as the account-default sentinel"
+assert_not_contains 'api/v1/config/home-dashboards' "$MOCK_CALL_LOG" \
+  "auto names no dashboard, so no catalogue lookup is made"
+
+# Repeated options follow the same last-wins rule as every other provisioner value option.
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /lovelace --home-dashboard /office --no-tame
+assert_success "a repeated --home-dashboard succeeds"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "the last --home-dashboard wins"
+assert_not_contains 'home_dashboard=/lovelace' "$MOCK_CALL_LOG" "an earlier --home-dashboard is not also written"
+
+# Specificity: an explicitly named value must beat a bulk import, which means the seed has to be
+# applied AFTER it. Seeded earlier, the bundle would silently overwrite the operator's own choice.
+SEED_RESTORE="$TMP/seed-restore.json"
+printf '{"kind":"ha-paneld-config","schema":1,"values":{}}\n' > "$SEED_RESTORE"
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --restore "$SEED_RESTORE" --home-dashboard /office --no-tame
+assert_success "seeding alongside a config import succeeds"
+if [ "$(grep -n 'api/v1/config/import' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)" -lt \
+     "$(grep -n 'home_dashboard=/office' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)" ]; then
+  pass "an explicit seed is applied after a restored bundle, so the named value wins"
+else
+  fail_test "an explicit seed is applied after a restored bundle, so the named value wins"
+fi
+
+# An unknown dashboard warns and still saves: the catalogue is a live Home Assistant fact, and a
+# dashboard may legitimately be created after the panel is provisioned.
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /not-a-dashboard --no-tame
+assert_success "an unknown dashboard path does not fail provisioning"
+assert_contains 'does not currently list a dashboard at /not-a-dashboard' "an unknown dashboard is named"
+assert_contains 'value is saved' "an unknown dashboard is retained rather than rejected"
+assert_log_contains 'curl .*-X POST .*api/v1/setup/home-dashboard' "an unknown-but-valid dashboard is still a recorded answer"
+
+# A view BELOW a known dashboard root is exactly what Issue #90 added, and must not warn.
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office/kitchen --no-tame
+assert_success "a view below a known dashboard succeeds"
+assert_not_contains 'does not currently list a dashboard' "$LAST_OUTPUT" "a view below a known dashboard root does not warn"
+
+MOCK_HOME_DASHBOARDS=unreachable run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --no-tame
+assert_success "an unqueryable dashboard catalogue does not fail provisioning"
+assert_contains 'Could not verify the dashboard' "an unqueryable catalogue is reported as unverified, not as absent"
+assert_not_contains 'does not currently list a dashboard' "$LAST_OUTPUT" "an unqueryable catalogue never claims the dashboard is missing"
+unset MOCK_HOME_DASHBOARDS
+
+MOCK_HOME_DASHBOARDS=transport-fail run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --no-tame
+assert_success "a failed catalogue request does not fail provisioning"
+assert_contains 'Could not verify the dashboard' "a failed catalogue request is reported as unverified"
+unset MOCK_HOME_DASHBOARDS
+
+# The app's home_dashboard validator is the single authority for the path grammar. A refusal must
+# fail the run and, critically, must leave the question unanswered so guided setup still asks.
+run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard not-a-path --no-tame
+assert_failure "a dashboard path the panel refuses fails the run"
+assert_contains 'dashboard seed not applied' "a refused dashboard path is reported"
+assert_contains 'guided setup still asks' "a refused dashboard path leaves the question open"
+assert_not_contains 'api/v1/setup/home-dashboard' "$MOCK_CALL_LOG" \
+  "a refused dashboard path records no wizard answer"
+
+MOCK_SEED_CONFIG=fail run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --entity-filter on --no-tame
+assert_failure "a failed seed write fails the run"
+assert_not_contains 'api/v1/setup/(home-dashboard|entity-filter)' "$MOCK_CALL_LOG" \
+  "no answer is recorded for a seed that did not persist"
+unset MOCK_SEED_CONFIG
+
+MOCK_SETUP_ANSWER=fail run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --no-tame
+assert_failure "a seed whose answer could not be recorded fails the run"
+assert_contains 'applied but not recorded as answered' "an unrecorded answer is distinguished from an unapplied value"
+assert_contains 'Re-run the same command' "an unrecorded answer names the idempotent recovery"
+unset MOCK_SETUP_ANSWER
+
+# Both options configure ha-paneld's OWN renderer, so they are refused against a foreign dashboard app.
+run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_failure "seeding a panel that is not on the built-in renderer fails"
+assert_contains 'built-in renderer, which this panel is not set to use' "the refusal names the renderer requirement"
+assert_contains 'Add --builtin' "the refusal names the fix"
+assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "a refused seed writes nothing"
+
+MOCK_DASHBOARD_PACKAGE=builtin run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_success "a panel already on the built-in renderer accepts a seed without --builtin"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "an already-built-in panel is seeded"
+unset MOCK_DASHBOARD_PACKAGE
+
+# Usage refusals happen before the panel is contacted at all.
+run_provision "$MOCK_TARGET" --entity-filter maybe
+assert_status 2 "an unrecognised --entity-filter value is rejected"
+assert_contains 'must be on or off' "the invalid filter value names the accepted spellings"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "an invalid filter value contacts no panel"
+
+run_provision "$MOCK_TARGET" --verify --home-dashboard /office
+assert_status 2 "--home-dashboard is rejected with --verify"
+assert_contains 'cannot be combined with --verify' "the verify refusal explains that verification never writes"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "a seed with --verify contacts no panel"
+
+run_provision "$MOCK_TARGET" --reset-config --entity-filter on
+assert_status 2 "--entity-filter is rejected with --reset-config"
+assert_contains 'cannot be combined with --reset-config' "the reset refusal explains the conflicting intent"
+assert_not_contains '^adb |^curl ' "$MOCK_CALL_LOG" "a seed with --reset-config contacts no panel"
+
+# A seed configures the renderer's Home Assistant connection, so it cannot be trusted after a failed
+# login: the panel would be pointed at a dashboard it has no credential to open.
+MOCK_HA_LOGIN=rejected run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --no-tame
+assert_failure "a seed after a failed Home Assistant login fails the run"
+assert_contains 'skipped --home-dashboard/--entity-filter' "the skipped seed is reported, not silently dropped"
+assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "a failed login writes no dashboard seed"
+unset MOCK_HA_LOGIN
+
 if [ "$PROVISION_TEST_SCOPE" = all ]; then
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
 # start the authenticated installed native starter. The fake checksum tool makes this deterministic without network
@@ -4237,6 +4377,22 @@ assert_log_contains '^adb -s panel\.test:5555 install ' \
   "generated installer hands the authenticated APK to the real provisioner"
 assert_contains 'Detected panel: Test Panel' \
   "real provisioner preserves panel-aware installation through the generated hand-off"
+
+# The dashboard seeds are documented and changelogged through the checkout-free one-liner, so the
+# installer's own forwarding is part of the claim, not an implementation detail. An option missing from
+# install.sh's value-option allowlist is rejected as an unknown argument before the provisioner is ever
+# reached, which no provision.sh-level test can see.
+run_advanced_installer --provision panel.test --builtin --ha-url https://ha.test --ha-user owner \
+  --home-dashboard /panel-dashboard/kitchen --entity-filter on
+assert_success "the checkout-free installer accepts the dashboard seeds"
+assert_log_contains '^provision-argv .*<--home-dashboard> </panel-dashboard/kitchen>' \
+  "the checkout-free installer forwards --home-dashboard with its exact value"
+assert_log_contains '^provision-argv .*<--entity-filter> <on>' \
+  "the checkout-free installer forwards --entity-filter with its exact value"
+
+run_advanced_installer --provision panel.test --home-dashboard
+assert_status 2 "the checkout-free installer rejects --home-dashboard with no value"
+assert_contains 'needs a value' "the missing seed value is named as a usage error"
 
 ADVANCED_SECRET_SENTINEL='advanced-ha-token-secret-9b173e'
 run_advanced_installer --provision panel.test --ha-url https://ha.test --ha-token "$ADVANCED_SECRET_SENTINEL"

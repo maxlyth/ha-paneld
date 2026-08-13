@@ -156,6 +156,100 @@ class SetupRestartStormTest {
         assertFalse(journey.needsUser)
     }
 
+    @Test fun anUnseededScriptedInstallRendersTheAccountDefault() {
+        // The behaviour the installer's seeds exist to change, pinned so it cannot be mistaken for a
+        // defect later: with nothing seeded, a script-provisioned panel is excused both questions (test
+        // above) and its home dashboard is blank — "whatever Home Assistant calls this account's
+        // default". On a large account that is exactly the dashboard a slow panel struggles to draw.
+        val panel = mutableMapOf<String, Any?>()
+        var config = boot(panel)
+        provisionerConfigPost(panel)
+        repeat(3) { config = boot(panel) }
+
+        assertEquals("an unseeded scripted install names no dashboard", "", config.homeDashboard)
+        assertFalse("and leaves entity filtering off", config.dashboardEntityLearningEnabled)
+    }
+
+    @Test fun aSeededScriptedInstallKeepsItsDashboardAndAnswersAcrossRestarts() {
+        // `provision.sh --home-dashboard /office --entity-filter on`: the two values, then the two
+        // answers the installer records because an operator who supplied them should not be asked
+        // again on the panel. The failure this guards is the one that produced the whole class of
+        // first-run defects this suite exists for — a restart landing mid-setup and changing what the
+        // panel believes it was told.
+        // Ordered as the real install is, which matters: the APK is installed and the service starts
+        // over a BLANK panel, and only then does the provisioner write. Seeding a map that already
+        // looks configured lets the startup migration stamp itself before the seed exists, after
+        // which it early-returns forever — an earlier revision of this test did exactly that, and the
+        // mutation battery caught it by surviving three mutations of the code it claimed to cover.
+        val panel = mutableMapOf<String, Any?>()
+        var config = boot(panel)
+        provisionerConfigPost(panel)
+        panel["home_dashboard"] = "/office"
+        panel["dashboard_entity_learning"] = true
+        config.setupHomeDashboardChosen = true
+        config.setupEntityFilterAnswered = true
+
+        repeat(3) { config = boot(panel) }
+
+        assertEquals("the seeded dashboard survives every restart", "/office", config.homeDashboard)
+        assertTrue("the seeded filter policy survives every restart", config.dashboardEntityLearningEnabled)
+        assertTrue("the recorded dashboard answer survives", config.setupHomeDashboardChosen)
+        assertTrue("the recorded filter answer survives", config.setupEntityFilterAnswered)
+        // Nothing may hold the first render to re-ask a question the installer already answered.
+        assertFalse(
+            "a seeded panel is never held on the entity-filter question",
+            entityFilterQuestionPending(
+                builtinRenderer = true,
+                haUrl = config.haUrl,
+                haToken = config.haToken,
+                haRefreshToken = config.haRefreshToken,
+                entityFilterAnswered = config.setupEntityFilterAnswered,
+                setupEverCompleted = config.setupEverCompleted,
+                entityFilterEnabled = config.dashboardEntityLearningEnabled,
+            ),
+        )
+        val journey = SetupJourney.evaluate(journeyInputs(config))
+        assertFalse("and guided setup does not relitigate it", journey.needsUser)
+        // Bounded deliberately: this proves the durable decision the renderer reads, not the WebView
+        // load itself. That the panel reaches only this path is attended hardware acceptance.
+    }
+
+    @Test fun aSeedThatFailedToRecordItsAnswerLeavesTheQuestionAskable() {
+        // The provisioner's worst reachable failure: the value persisted but the answer POST did not.
+        // That must degrade to "guided setup asks again", never to a panel that silently keeps a
+        // half-applied decision — which is why the installer records answers only after the values.
+        val seeded = mutableMapOf<String, Any?>(
+            "ha_url" to "http://ha.local:8123",
+            "ha_token" to "test-token",
+            "dashboard_package" to "builtin",
+            "home_dashboard" to "/office",
+        )
+        val config = Config(fakePreferences(seeded))
+
+        assertEquals("the seeded value is still durable", "/office", config.homeDashboard)
+        assertFalse("but the question is not recorded as answered", config.setupHomeDashboardChosen)
+        assertTrue(
+            "so the renderer still holds rather than rendering behind an unanswered question",
+            entityFilterQuestionPending(
+                builtinRenderer = true,
+                haUrl = config.haUrl,
+                haToken = config.haToken,
+                haRefreshToken = config.haRefreshToken,
+                entityFilterAnswered = config.setupEntityFilterAnswered,
+                setupEverCompleted = config.setupEverCompleted,
+                entityFilterEnabled = config.dashboardEntityLearningEnabled,
+            ),
+        )
+    }
+
+    /** What `provision.sh` commits in its one `POST /api/v1/config` for `--builtin`. */
+    private fun provisionerConfigPost(values: MutableMap<String, Any?>) {
+        values["panel_id"] = "office_panel"
+        values["ha_url"] = "http://ha.local:8123"
+        values["ha_token"] = "test-token"
+        values["dashboard_package"] = "builtin"
+    }
+
     // ---- layer 2: the journey's promise, under restarts AND adversarial runtime state ----------------
 
     @Test fun thePureJourneyStateSweepNeverCompletesBehindTheUsersBackOrDeadEnds() {

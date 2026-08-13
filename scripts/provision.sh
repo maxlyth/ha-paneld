@@ -13,6 +13,8 @@
 #   Built-in WebView renderer (experimental — no HA Companion / kiosk app needed). For a normal
 #   install, follow the Browser sign-in URL printed after verification. Advanced non-interactive use:
 #       [--ha-url https://homeassistant.local:8123] [--builtin] \
+#       [--home-dashboard /dashboard-name/tab-name]  # show this dashboard instead of the account default
+#       [--entity-filter on]             # limit HA's state stream to the entities the dashboard uses
 #       [--ha-token <LLAT>]              # simple: a long-lived access token (a standing credential), OR
 #       [--ha-token-file FILE]            # preferred token input: one private text file, OR
 #       [--ha-user U --ha-pass P]        # preferred: log in HERE to mint a REFRESH token; the password
@@ -60,6 +62,10 @@ Common operations:
   --allow-unsigned-helper  Developer-only: allow a privileged helper from an unsigned local APK
   --require-release-signer Reject a local APK unless it uses the official ha-paneld release certificate
   --allow-missing-db-snapshot  Deprecated parser-only compatibility no-op
+  --home-dashboard PATH    Built-in renderer: the dashboard to show, e.g. /lovelace or
+                           /dashboard-name/tab-name. `auto` follows the account's default.
+  --entity-filter on|off   Built-in renderer: limit Home Assistant's state stream to the entities
+                           the dashboard uses. Recommended on for older or slower panels.
   --mqtt-pass-file FILE    Read the MQTT password from a private text file
   --ha-token-file FILE     Read the Home Assistant token from a private text file
   --ha-pass-file FILE      Read the Home Assistant login password from a private text file
@@ -143,6 +149,11 @@ LOG_HOST=""; LOG_PORT=""; LOG_PROTO=""; LOG_ENABLE=""
 EXPORT_FILE=""; RESTORE_FILE=""; RESTORE_MODE=""; AUTO_EXPORT_FILE=""
 CONFIG_BACKUP_DIR="${HAPANELD_CONFIG_BACKUP_DIR:-${XDG_STATE_HOME:-${HOME:-.}/.local/state}/ha-paneld/config-backups}"
 HA_URL=""; HA_TOKEN=""; HA_USER=""; HA_PASS=""; HA_REFRESH=""; HA_EXPIRY=""; BUILTIN=0
+# Built-in renderer seeds. A seeded value is also an ANSWER to the guided wizard's matching question:
+# an operator who took the trouble to pass it should not be asked again on the panel. Tracked with a
+# separate *_SET flag rather than emptiness, because "" is a meaningful home_dashboard (follow the
+# account's default) and would otherwise be indistinguishable from "not supplied".
+HOME_DASHBOARD=""; HOME_DASHBOARD_SET=0; ENTITY_FILTER=""; ENTITY_FILTER_SET=0
 MQTT_PASS_INPUT_FILE="${HAPANELD_MQTT_PASS_FILE:-}"
 HA_TOKEN_INPUT_FILE="${HAPANELD_HA_TOKEN_FILE:-}"
 HA_PASS_INPUT_FILE="${HAPANELD_HA_PASS_FILE:-}"
@@ -212,6 +223,8 @@ while [ "${1:-}" ]; do
     --ha-pass) HA_PASS="$2"; HA_PASS_SOURCE_COUNT=$((HA_PASS_SOURCE_COUNT + 1)); shift 2 ;;       # compatibility: visible in the invoking process argv
     --ha-pass-file) HA_PASS_INPUT_FILE="$2"; HA_PASS_SOURCE_COUNT=$((HA_PASS_SOURCE_COUNT + 1)); shift 2 ;;
     --builtin) BUILTIN=1; shift ;;            # select ha-paneld's built-in renderer as the dashboard
+    --home-dashboard) HOME_DASHBOARD="$2"; HOME_DASHBOARD_SET=1; shift 2 ;;  # built-in renderer: dashboard path, or `auto`
+    --entity-filter) ENTITY_FILTER="$2"; ENTITY_FILTER_SET=1; shift 2 ;;     # built-in renderer: on|off
     --export) EXPORT_FILE="$2"; shift 2 ;;    # save the panel's config bundle (incl. secrets) to FILE
     --restore) RESTORE_FILE="$2"; RESTORE_MODE="restore"; shift 2 ;;      # import config JSON, including device-scoped keys
     --restore-fleet) RESTORE_FILE="$2"; RESTORE_MODE="fleet"; shift 2 ;;  # apply only PORTABLE keys (cross-panel deploy)
@@ -341,6 +354,34 @@ fi
 if [ "$BUILTIN" = 1 ] && [ -z "$HA_TOKEN" ] && [ -z "$HA_USER" ]; then
   echo "${RED}✗ --builtin needs Home Assistant credentials during non-interactive provisioning.${X}" >&2
   echo "   Run without --builtin, then open the printed guided-setup URL and select the Built-in renderer." >&2
+  exit 2
+fi
+# Both seeds configure ha-paneld's OWN renderer, so they are meaningless against a foreign dashboard
+# app and are refused before the panel is contacted. `--builtin` states that intent here; a panel
+# already running the built-in renderer is accepted at seed time from its reported configuration.
+if [ "$VERIFY_ONLY" = 1 ] && { [ "$HOME_DASHBOARD_SET" = 1 ] || [ "$ENTITY_FILTER_SET" = 1 ]; }; then
+  echo "${RED}✗ --home-dashboard/--entity-filter cannot be combined with --verify.${X} --verify never changes the panel." >&2
+  exit 2
+fi
+if [ "$RESET_CONFIG" = 1 ] && { [ "$HOME_DASHBOARD_SET" = 1 ] || [ "$ENTITY_FILTER_SET" = 1 ]; }; then
+  echo "${RED}✗ --home-dashboard/--entity-filter cannot be combined with --reset-config.${X}" >&2
+  echo "   Reset erases the configuration and restarts guided setup, which would discard the seeded values. Reset first, then re-run with the seeds." >&2
+  exit 2
+fi
+# `on`/`off` only: an unrecognised spelling must not quietly become "off" and leave a slow panel
+# rendering unfiltered. The dashboard PATH is deliberately not shape-checked here — the app's
+# `home_dashboard` validator is the single authority for that grammar, and a second expression in
+# bash would be a copy that can disagree with it.
+case "$ENTITY_FILTER" in
+  ""|on|off) ;;
+  *)
+    echo "${RED}✗ --entity-filter must be on or off (got: $ENTITY_FILTER).${X}" >&2
+    echo "   on limits Home Assistant's state stream to the entities the dashboard uses; off leaves the panel on the full stream." >&2
+    exit 2
+    ;;
+esac
+if [ "$ENTITY_FILTER_SET" = 1 ] && [ -z "$ENTITY_FILTER" ]; then
+  echo "${RED}✗ --entity-filter needs a value: on or off.${X}" >&2
   exit 2
 fi
 # Reject an unknown transport here rather than after the panel has been contacted. `syslog` is the
@@ -5012,6 +5053,114 @@ if [ -n "$RESTORE_FILE" ]; then
     PROVISION_FAILED=1
   fi
 fi
+
+# Built-in renderer seeds, applied LAST so specificity wins. An explicit option beats both whatever
+# the panel already held and anything a --restore bundle just imported: the operator naming a value on
+# the command line is the most specific statement of intent in the run, and the import above is a bulk
+# apply. Placed after that import for exactly that reason — seeded earlier, the bundle would silently
+# overwrite it.
+#
+# Why this exists at all: a scripted install deliberately never asks the wizard's questions. A panel
+# provisioned headlessly is excused them (nobody is standing at it to answer), so without a seed it
+# renders whatever Home Assistant calls the account default — which on a large account is precisely
+# the dashboard a slow panel cannot draw. These options are the headless equivalent of the two
+# questions the wizard asks a human BEFORE the first load.
+seed_builtin_renderer_preferences() {
+  if [ "$HOME_DASHBOARD_SET" = 0 ] && [ "$ENTITY_FILTER_SET" = 0 ]; then return 0; fi
+  # A seed configures the renderer's connection to Home Assistant. With no working login there is
+  # nothing for it to select a dashboard on, and the failure above already reported the cause.
+  if [ "$HA_LOGIN_FAILED" != 0 ]; then
+    warn "skipped --home-dashboard/--entity-filter: the Home Assistant login above did not succeed"
+    return 0
+  fi
+  require_healthy_agent "seed the built-in renderer's dashboard preferences"
+
+  if [ "$BUILTIN" != 1 ]; then
+    local current_cfg
+    # Fail CLOSED on an unreadable answer: the grep below refuses unless the panel positively reports
+    # the built-in renderer, so a swallowed transport error becomes a refusal, never an assumed yes.
+    current_cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
+    if ! printf '%s' "$current_cfg" | grep -Eq '"dashboard_package"[[:space:]]*:[[:space:]]*"builtin"'; then
+      echo "   ${RED}✗ --home-dashboard/--entity-filter apply to ha-paneld's built-in renderer, which this panel is not set to use.${X}"
+      echo "   ${D}Add --builtin to select it in the same command, or run guided setup and choose the Built-in renderer first.${X}"
+      PROVISION_FAILED=1
+      return 0
+    fi
+  fi
+
+  local seed_args=() seed_err seeded_path=""
+  if [ "$HOME_DASHBOARD_SET" = 1 ]; then
+    # `auto` is the friendly spelling of the Home dashboard picker's Auto choice. It is sent as the
+    # bare root rather than as an empty parameter because the app's validator canonicalises every
+    # "follow the account default" spelling — blank, `/`, `//` — to the same stored blank sentinel,
+    # so this needs no second opinion about what empty means.
+    case "$HOME_DASHBOARD" in
+      auto|AUTO|Auto) seeded_path="/" ;;
+      *) seeded_path="$HOME_DASHBOARD" ;;
+    esac
+    seed_args+=(--data-urlencode "home_dashboard=$seeded_path")
+  fi
+  if [ "$ENTITY_FILTER_SET" = 1 ]; then
+    case "$ENTITY_FILTER" in
+      on) seed_args+=(--data-urlencode "dashboard_entity_learning=true") ;;
+      *) seed_args+=(--data-urlencode "dashboard_entity_learning=false") ;;
+    esac
+  fi
+
+  PLAN_REFRESH_NEEDED=1
+  step "🏠 seeding dashboard" "${D}home dashboard / entity filtering, before the first render${X}"
+  if seed_err="$(curl -fsS --connect-timeout "$PANEL_POST_CONNECT_TIMEOUT_SECONDS" \
+      --max-time "$PANEL_POST_TIMEOUT_SECONDS" -H 'Accept: application/json' -X POST \
+      "${seed_args[@]}" "$URL/api/v1/config" 2>&1 >/dev/null)"; then
+    [ "$HOME_DASHBOARD_SET" = 0 ] || echo "   ${GRN}✓${X} home dashboard: ${seeded_path}"
+    [ "$ENTITY_FILTER_SET" = 0 ] || echo "   ${GRN}✓${X} entity filtering: $ENTITY_FILTER"
+  else
+    seed_err="$(printf '%s' "${seed_err:-no response}" | sanitize_terminal)"
+    warn "dashboard seed not applied: $seed_err"
+    echo "   ${D}A rejected path must name a dashboard on this Home Assistant, e.g. /lovelace or /dashboard-name/tab-name. Nothing was recorded as answered, so guided setup still asks.${X}"
+    PROVISION_FAILED=1
+    return 0
+  fi
+
+  # Record the matching wizard answers. Ordered strictly after the values above so an answer can never
+  # be recorded for a value that failed to persist: the worst reachable failure is a correct value with
+  # the question still open, which guided setup simply asks again.
+  seed_answer() {
+    local endpoint="$1" description="$2" answer_err
+    if answer_err="$(curl -fsS --connect-timeout "$PANEL_POST_CONNECT_TIMEOUT_SECONDS" \
+        --max-time "$PANEL_POST_TIMEOUT_SECONDS" -H 'Accept: application/json' \
+        -X POST "$URL/api/v1/setup/$endpoint" 2>&1 >/dev/null)"; then
+      return 0
+    fi
+    answer_err="$(printf '%s' "${answer_err:-no response}" | sanitize_terminal)"
+    warn "$description was applied but not recorded as answered: $answer_err"
+    echo "   ${D}The value is set; guided setup will still ask the question. Re-run the same command to record it.${X}"
+    PROVISION_FAILED=1
+  }
+  [ "$HOME_DASHBOARD_SET" = 0 ] || seed_answer home-dashboard "the home dashboard"
+  [ "$ENTITY_FILTER_SET" = 0 ] || seed_answer entity-filter "entity filtering"
+
+  # An unknown dashboard is a WARNING, never a refusal: the catalogue is a live Home Assistant fact,
+  # it may be unreachable, and a dashboard can legitimately be created after the panel is set up. Same
+  # rule the two on-panel pickers already use.
+  if [ "$HOME_DASHBOARD_SET" = 1 ] && [ "$seeded_path" != "/" ]; then
+    local catalog root
+    # An unreadable catalogue is reported as unverified rather than as an absence — the `queried`
+    # check below distinguishes the two, so a swallowed error cannot become "no such dashboard".
+    # This runs after the value is already durable and deliberately changes no outcome.
+    catalog="$(curl -fsS --max-time 5 "$URL/api/v1/config/home-dashboards" 2>/dev/null || true)"
+    # Compare on the dashboard ROOT: the catalogue lists dashboards, while a seed may name a view
+    # BELOW one (/office/kitchen), which is exactly the case Issue #90 added and must not warn.
+    root="/$(printf '%s' "${seeded_path#/}" | cut -d/ -f1 | cut -d'?' -f1 | cut -d'#' -f1)"
+    if ! printf '%s' "$catalog" | grep -Eq '"queried"[[:space:]]*:[[:space:]]*true'; then
+      echo "   ${D}Could not verify the dashboard against Home Assistant just now; the value is saved either way.${X}"
+    elif ! printf '%s' "$catalog" | grep -Fq "\"path\":\"$root\""; then
+      warn "Home Assistant does not currently list a dashboard at $root"
+      echo "   ${D}The value is saved. Home Assistant silently falls back to the account default for an unknown dashboard, so check the path if the panel shows the wrong one.${X}"
+    fi
+  fi
+}
+seed_builtin_renderer_preferences
 
 # Configuration can change live observations used by the planner. Re-render the app-owned plan after
 # all config/import work; it remains guidance only and never authorises Bash to mutate panel state.

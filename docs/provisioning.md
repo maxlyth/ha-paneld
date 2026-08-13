@@ -19,7 +19,7 @@ Add the required options after the address. For example, this assigns a panel na
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --id kitchen --mqtt tcp://192.168.1.10:1883
 ```
 
-Use `--prerelease` before `--provision` to install the newest release candidate instead of the latest stable release. Other routine provisioning options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user` and `--ha-pass-file`.
+Use `--prerelease` before `--provision` to install the newest release candidate instead of the latest stable release. Other routine provisioning options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user`, `--ha-pass-file`, `--home-dashboard` and `--entity-filter`.
 
 Pass credentials through owner-only files so they do not appear in shell history or get copied into child-process command lines. The file must contain one credential line; a conventional trailing line ending is accepted, but embedded line breaks are rejected. For example, create a Home Assistant password file without echoing the password:
 
@@ -126,6 +126,21 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
   bash -s -- --provision 192.168.1.50:5555 --builtin \
   --ha-url https://homeassistant.example.com --ha-token-file ha-token.txt
 ```
+
+### Choosing the dashboard and entity filtering at install time
+
+A scripted install deliberately does not ask guided setup's questions — nobody is standing at the panel to answer them — so by default the panel opens whatever Home Assistant treats as that account's default dashboard. On a large account that is often the slowest page you own, and an older panel can take a long time to draw it. `--home-dashboard` and `--entity-filter` answer both questions up front, before the panel's first render:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
+  bash -s -- --provision 192.168.1.50:5555 --builtin \
+  --ha-url https://homeassistant.example.com --ha-user your-user --ha-pass-file ha-password.txt \
+  --home-dashboard /panel-dashboard/kitchen --entity-filter on
+```
+
+`--home-dashboard` takes a dashboard or a specific view below one, exactly as the Configure page's Custom field does — `/lovelace`, `/panel-dashboard/kitchen` — or `auto` to follow the account's default. `--entity-filter` takes `on` or `off`; `on` limits Home Assistant's state stream to the entities the dashboard actually uses, which is the single biggest difference on an older panel. Both apply to ha-paneld's built-in renderer, so they need `--builtin` in the same command (or a panel already using it).
+
+Supplying either option also answers the matching guided-setup question, so the panel does not ask it again. Anything you change later on the panel wins, as does an explicitly named option over a `--restore` bundle in the same command. If Home Assistant does not currently list the dashboard you named, the value is still saved and the installer says so — a panel can be provisioned before the dashboard it is meant to show exists. A path Home Assistant could never resolve is rejected outright and nothing is recorded as answered, so guided setup still asks.
 
 For an interactive installation, omit the Home Assistant credential arguments. After verification the installer prints the one thing the panel is actually waiting for, and the address to do it at — usually guided setup at `http://<panel>:8888/setup`, which walks the Home Assistant sign-in in the administrator's browser without typing credentials on the panel. You can equally tap **Set up** on the panel's own screen; both surfaces follow the same journey, so it does not matter which you use or whether you switch between them. Existing panels that previously imported a Companion session retain that login as a compatibility path.
 
