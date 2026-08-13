@@ -794,7 +794,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             "active" -> where += "m.excluded=0 AND (m.pinned=1 OR m.referenced_by_config=1 OR m.referenced_at_runtime=1)"
             "excluded" -> where += "m.excluded=1"
             "missing" -> where += "e.missing_streak>0"
-            "review" -> where += "(e.missing_streak>0 OR (coalesce(m.update_count,0)>0 AND coalesce(m.last_access_at,0)=0 AND coalesce(m.referenced_by_config,0)=0 AND coalesce(m.pinned,0)=0))"
+            // A pin is never removed automatically, so the only way an operator learns that one no
+            // longer earns its place is to be shown it. Third branch: pinned, present in Home
+            // Assistant, but neither referenced by this dashboard's configuration nor accessed at
+            // runtime — a subscription being paid for with nothing asking for it. It is reported for
+            // manual unpinning, never acted on.
+            "review" -> where += "(e.missing_streak>0 OR (coalesce(m.update_count,0)>0 AND coalesce(m.last_access_at,0)=0 AND coalesce(m.referenced_by_config,0)=0 AND coalesce(m.pinned,0)=0) OR (coalesce(m.pinned,0)=1 AND coalesce(m.referenced_by_config,0)=0 AND coalesce(m.referenced_at_runtime,0)=0))"
             "candidate" -> where += "coalesce(m.pinned,0)=0 AND (m.referenced_by_config=1 OR m.referenced_at_runtime=1)"
             "unpinned" -> where += "coalesce(m.pinned,0)=0"
             else -> Unit

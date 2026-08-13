@@ -3109,7 +3109,7 @@ class PaneldServer internal constructor(
           </div>
           ${entityTableHtml("current", "Current subscribed entities", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
           ${entityTableHtml("suggested", "Suggested dashboard entities", "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue.", "candidate")}
-          ${entityTableHtml("review", "Stale or noisy entities", "Current-stream entities missing from Home Assistant, or receiving updates without being observed as dashboard dependencies. Review only; nothing is removed automatically.", "review")}
+          ${entityTableHtml("review", "Stale or noisy entities", "Current-stream entities missing from Home Assistant, receiving updates without being observed as dashboard dependencies, or pinned by hand without this dashboard using them. Review only; a manual pin or exclusion is never removed automatically \u2014 unpin it here when you want it gone.", "review")}
         </div>
         <script src="/assets/entities.js"></script>
     """.trimIndent()

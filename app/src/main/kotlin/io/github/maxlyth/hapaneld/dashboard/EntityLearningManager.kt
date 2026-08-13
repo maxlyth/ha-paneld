@@ -1235,11 +1235,14 @@ class EntityLearningManager(
             instance(), dashboardPath(), query, effectiveFilter, limit, offset,
             sortKey = sort,
             sortDirection = direction,
-            includeIds = when {
-                (subscribed || review) && held -> emptySet()
-                (subscribed || review) && filtered -> config.dashboardEntityFilterIds.toSet()
-                else -> null
-            },
+            includeIds = entityQueryIncludeIds(
+                subscribed = subscribed,
+                review = review,
+                held = held,
+                filtered = filtered,
+                activeIds = config.dashboardEntityFilterIds.toSet(),
+                pinnedIds = config.dashboardEntityOverrides.filterValues { it == "pinned" }.keys,
+            ),
             excludeIds = if (filter == "candidate") currentIds else emptySet(),
         ))
         if (subscribed) {
@@ -2868,4 +2871,31 @@ internal fun classifyEntityBootstrapProblem(state: String, error: String): Entit
         "http 401" in normalized || "http 403" in normalized ||
         "credential rejected" in normalized || "token unavailable" in normalized
     ) EntityBootstrapProblem.AUTHENTICATION else EntityBootstrapProblem.SYNCHRONIZATION
+}
+
+/**
+ * Which entity ids an Entities-tab query may return, or null for "no id restriction".
+ *
+ * Extracted as a pure function because the restriction is composed here, upstream of the store's SQL
+ * predicate, and a row the query never selects cannot be rescued by any predicate. Reviewing that
+ * predicate's text proves nothing about it.
+ *
+ * `review` deliberately reaches beyond the active ids. A pinned entity dropped from the applied set
+ * after repeated misses is exactly the row Review exists to show, and restricting to the active ids
+ * made it unreachable — invisible to the operator and impossible to unpin. `subscribed` keeps the
+ * active ids exactly, because it reports the LIVE subscription and folding pins in would overstate
+ * what the panel is watching.
+ */
+internal fun entityQueryIncludeIds(
+    subscribed: Boolean,
+    review: Boolean,
+    held: Boolean,
+    filtered: Boolean,
+    activeIds: Set<String>,
+    pinnedIds: Set<String>,
+): Set<String>? = when {
+    (subscribed || review) && held -> emptySet()
+    review && filtered -> activeIds + pinnedIds
+    subscribed && filtered -> activeIds
+    else -> null
 }

@@ -574,8 +574,8 @@ class Config private constructor(
             if (next != dashboardPackage) editor.putBoolean("renderer_launch_pending", true)
         }
         accepted["home_dashboard"]?.let { next ->
-            val nextPath = normalizeDashboardEntityPath(next)
-            if (nextPath != normalizeDashboardEntityPath(homeDashboard)) {
+            val nextPath = dashboardEntityScopePath(next)
+            if (nextPath != dashboardEntityScopePath(homeDashboard)) {
                 editor.putString("dashboard_entity_dashboard_path", nextPath)
             }
         }
@@ -1255,8 +1255,8 @@ class Config private constructor(
 
     private fun stageHomeDashboard(editor: SharedPreferences.Editor, normalized: String, previous: String) {
         editor.putString("home_dashboard", normalized)
-        val nextPath = normalizeDashboardEntityPath(normalized)
-        if (nextPath != normalizeDashboardEntityPath(previous)) {
+        val nextPath = dashboardEntityScopePath(normalized)
+        if (nextPath != dashboardEntityScopePath(previous)) {
             editor.putString("dashboard_entity_dashboard_path", nextPath)
         }
     }
@@ -1354,6 +1354,28 @@ class Config private constructor(
             dashboardEntityTargetKey(it, dashboardEntityDashboardPath)
         }.orEmpty()
 
+    /**
+     * Ownership for USER-AUTHORED state (pins and forced exclusions), which follows the Home Assistant
+     * instance and deliberately NOT the dashboard.
+     *
+     * A learned list is derived data: re-scoping it costs a rescan and it comes back identical. A pin or
+     * an exclusion is the operator's own work, cannot be regenerated, and is equally valid on every
+     * dashboard of the same instance — so a dashboard change must never silently withdraw it. The
+     * instance still bounds it, because an entity id is only meaningful inside one Home Assistant:
+     * `light.office` on another instance is an unrelated entity that merely shares a string.
+     *
+     * Losing an exclusion is the quieter failure of the two. A dropped pin shows up as a card that
+     * stops updating; a dropped exclusion silently re-subscribes to something removed on purpose, and
+     * the only symptom is the panel slowly getting heavier again.
+     */
+    private fun entityStateOwnedByInstance(ownerPreference: String): Boolean {
+        val ownerKey = dashboardEntityInstanceOf(prefs.getString(ownerPreference, "").orEmpty())
+        val currentKey = dashboardEntityInstanceKey
+        if (ownerKey.isBlank() && currentKey.isBlank() && dashboardEntityInstanceOrigin.isBlank()) return true
+        if (currentKey.isBlank() || ownerKey != currentKey) return false
+        return dashboardEntityInstanceOrigin == canonicalHaOrigin(haUrl)
+    }
+
     private fun entityStateOwnedByCurrent(ownerPreference: String): Boolean {
         val current = dashboardEntityTargetKey
         val owner = prefs.getString(ownerPreference, "").orEmpty()
@@ -1363,7 +1385,7 @@ class Config private constructor(
             dashboardEntityDashboardPath.isBlank()) return true
         if (current.isBlank()) return false
         val configuredOrigin = canonicalHaOrigin(haUrl) ?: return false
-        val configuredPath = normalizeDashboardEntityPath(homeDashboard)
+        val configuredPath = dashboardEntityScopePath(homeDashboard)
         return current == owner && dashboardEntityInstanceOrigin == configuredOrigin &&
             dashboardEntityDashboardPath == configuredPath
     }
@@ -1378,7 +1400,7 @@ class Config private constructor(
     ): String? = synchronized(CONFIG_LOCK) {
         if (legacyKey.isBlank()) return null
         val canonicalOrigin = canonicalHaOrigin(origin) ?: return null
-        val normalizedPath = normalizeDashboardEntityPath(dashboardPath)
+        val normalizedPath = dashboardEntityScopePath(dashboardPath)
         val currentOrigin = dashboardEntityInstanceOrigin
         val currentKey = dashboardEntityInstanceKey
         val currentPath = dashboardEntityDashboardPath
@@ -1397,11 +1419,26 @@ class Config private constructor(
                 putString("dashboard_entity_instance", selectedKey)
                 putString("dashboard_entity_instance_uuid", selectedUuid)
                 putString("dashboard_entity_dashboard_path", normalizedPath)
-                if (firstBinding && prefs.getString("dashboard_entity_filter_instance", "").isNullOrBlank()) {
-                    putString("dashboard_entity_filter_instance", selectedTarget)
-                }
-                if (firstBinding && prefs.getString("dashboard_entity_applied_instance", "").isNullOrBlank()) {
-                    putString("dashboard_entity_applied_instance", selectedTarget)
+                // Derived owners are re-rooted in the same transaction that roots the path, because
+                // nothing else ever would. An install upgrading from route-qualified ownership holds
+                // `…:key/lovelace/kiosk` while the new target key is `…:key/lovelace`; doing this only at
+                // first binding left every existing install owned by a key that can no longer be
+                // constructed, so the filter read as unowned and the renderer closed — and a startup that
+                // found the catalogue already synced skipped the rescan meant to repair it, making the
+                // hold permanent rather than a single re-learn.
+                //
+                // Re-rooting is lossless, not a re-learn: learning fetches per dashboard ROOT and
+                // extracts from the whole document, so a view and its dashboard yield the same set. The
+                // list behind the owner is already correct. A DIFFERENT root is not migrated — that is a
+                // genuine dashboard change, and failing closed so it re-learns is the intended behaviour.
+                for (preference in listOf("dashboard_entity_filter_instance", "dashboard_entity_applied_instance")) {
+                    val owner = prefs.getString(preference, "").orEmpty()
+                    val reRoot = when {
+                        owner.isBlank() -> firstBinding
+                        dashboardEntityInstanceOf(owner) != selectedKey -> false
+                        else -> dashboardEntityScopePath(dashboardEntityPathOf(owner)) == normalizedPath
+                    }
+                    if (reRoot) putString(preference, selectedTarget)
                 }
                 if (firstBinding && prefs.getString("dashboard_entity_override_instance", "").isNullOrBlank()) {
                     putString("dashboard_entity_override_instance", selectedTarget)
@@ -1423,7 +1460,7 @@ class Config private constructor(
     ): Boolean = synchronized(CONFIG_LOCK) {
         if (uuid.isBlank() || legacyKey.isBlank() || stableKey.isBlank()) return false
         val canonicalOrigin = canonicalHaOrigin(expectedOrigin) ?: return false
-        val normalizedPath = normalizeDashboardEntityPath(expectedDashboardPath)
+        val normalizedPath = dashboardEntityScopePath(expectedDashboardPath)
         if (dashboardEntityInstanceOrigin != canonicalOrigin || dashboardEntityDashboardPath != normalizedPath) return false
         val current = dashboardEntityInstanceKey
         if (current != legacyKey && current != stableKey) return false
@@ -1443,9 +1480,21 @@ class Config private constructor(
                 if (appliedOwner.isBlank() || appliedOwner == legacyKey || appliedOwner == legacyTarget) {
                     putString("dashboard_entity_applied_instance", stableTarget)
                 }
+                // The filter and applied owners above are DERIVED state, scoped to the dashboard root, so
+                // whole-key equality is the right test for them. Operator intent is not: a pin or
+                // exclusion is owned by the Home Assistant instance alone. Comparing its whole
+                // dashboard-qualified key stranded any intent recorded before a dashboard change — the
+                // paths differ, adoption skipped it, and the entries then read as owned by the legacy
+                // instance under the stable key: invisible to the operator and overwritten by the next
+                // edit. Match on the instance component alone, and keep the owner's own path so the
+                // record still says where the intent was captured.
                 val overrideOwner = prefs.getString("dashboard_entity_override_instance", "").orEmpty()
-                if (overrideOwner.isBlank() || overrideOwner == legacyKey || overrideOwner == legacyTarget) {
-                    putString("dashboard_entity_override_instance", stableTarget)
+                if (overrideOwner.isBlank() || overrideOwner == legacyKey ||
+                    dashboardEntityInstanceOf(overrideOwner) == legacyKey
+                ) {
+                    val capturedPath = dashboardEntityPathOf(overrideOwner).ifBlank { normalizedPath }
+                    putString("dashboard_entity_override_instance",
+                        dashboardEntityTargetKey(stableKey, capturedPath))
                 }
             }
         }
@@ -1567,7 +1616,7 @@ class Config private constructor(
 
     /** Backup-safe expert overrides; the derived catalog and metrics remain rebuildable SQLite state. */
     val dashboardEntityOverrides: Map<String, String>
-        get() = if (!entityStateOwnedByCurrent("dashboard_entity_override_instance")) emptyMap() else
+        get() = if (!entityStateOwnedByInstance("dashboard_entity_override_instance")) emptyMap() else
             stringPref("dashboard_entity_overrides").lineSequence().mapNotNull { line ->
             val marker = line.firstOrNull() ?: return@mapNotNull null
             val id = line.drop(1).trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
@@ -1681,7 +1730,7 @@ class Config private constructor(
         val target = dashboardEntityTargetKey
         if (enabled && normalized.isEmpty()) return false
         if (target.isBlank() || canonicalHaOrigin(haUrl) != dashboardEntityInstanceOrigin ||
-            normalizeDashboardEntityPath(homeDashboard) != dashboardEntityDashboardPath) return false
+            dashboardEntityScopePath(homeDashboard) != dashboardEntityDashboardPath) return false
         return applyBatch { edit {
             putBoolean("dashboard_entity_learning", false)
             putBoolean("dashboard_entity_learning_applied", false)
@@ -2286,9 +2335,48 @@ internal fun normalizeDashboardEntityPath(raw: String): String {
 }
 
 /** Length-prefixing avoids collisions if a future instance-key encoding contains the separator. */
+/**
+ * The dashboard an entity-learning scope belongs to, reduced to its ROOT.
+ *
+ * Learning fetches `lovelace/config` for the dashboard root and extracts entities from the whole
+ * document, so every view of one dashboard yields the same learned set. Scoping ownership by the full
+ * route would therefore discard a filter that a rescan reproduces byte for byte — the panel would drop
+ * its filter and re-learn every time the home view changed, which is precisely what choosing a specific
+ * view is for. This is deliberately NOT [normalizeDashboardEntityPath]: that one keeps the full route,
+ * because navigation, idle return and no-op save detection must still see a view change as a change.
+ */
+internal fun dashboardEntityScopePath(raw: String): String {
+    val normalized = normalizeDashboardEntityPath(raw)
+    val root = normalized.trim('/').substringBefore('/')
+    return if (root.isBlank()) "/" else "/$root"
+}
+
+/** The dashboard-scope portion of a target key produced by [dashboardEntityTargetKey], or "" if
+ *  unparseable. Operator intent is owned by instance, so this component is inert for ownership and
+ *  records only where the intent was first captured — which is why adoption preserves it rather than
+ *  restamping it with whatever dashboard happens to be configured at adoption time. */
+internal fun dashboardEntityPathOf(targetKey: String): String {
+    val separator = targetKey.indexOf(':')
+    if (separator <= 0) return ""
+    val length = targetKey.substring(0, separator).toIntOrNull() ?: return ""
+    val start = separator + 1
+    if (length <= 0 || start + length > targetKey.length) return ""
+    return targetKey.substring(start + length)
+}
+
+/** The instance portion of a target key produced by [dashboardEntityTargetKey], or "" if unparseable. */
+internal fun dashboardEntityInstanceOf(targetKey: String): String {
+    val separator = targetKey.indexOf(':')
+    if (separator <= 0) return ""
+    val length = targetKey.substring(0, separator).toIntOrNull() ?: return ""
+    val start = separator + 1
+    if (length <= 0 || start + length > targetKey.length) return ""
+    return targetKey.substring(start, start + length)
+}
+
 internal fun dashboardEntityTargetKey(instanceKey: String, dashboardPath: String): String {
     val key = instanceKey.trim()
     if (key.isEmpty()) return ""
-    val path = normalizeDashboardEntityPath(dashboardPath)
+    val path = dashboardEntityScopePath(dashboardPath)
     return "${key.length}:$key$path"
 }

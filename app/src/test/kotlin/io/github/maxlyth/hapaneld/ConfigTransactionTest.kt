@@ -351,7 +351,7 @@ class ConfigTransactionTest {
             "home_dashboard" to "/lovelace/kiosk",
             "dashboard_entity_instance" to "url-key",
             "dashboard_entity_instance_origin" to "http://ha.local:8123",
-            "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+            "dashboard_entity_dashboard_path" to "/lovelace",
             "dashboard_entity_filter_instance" to target,
             "dashboard_entity_applied_instance" to target,
             "dashboard_entity_learning" to true,
@@ -975,6 +975,101 @@ class ConfigTransactionTest {
         assertTrue(config.dashboardEntityFilterIds.isEmpty())
     }
 
+    @Test fun anUpgradeReRootsARouteQualifiedOwnerInsteadOfStrandingItsFilter() {
+        // An install from before scope-rooting owns its filter with the full route. The rewrite used to
+        // run only at first binding — never true here — so nothing repaired it, the filter read as owned
+        // by a key that can no longer be constructed, and a startup finding the catalogue already synced
+        // skipped the rescan meant to fix it.
+        val legacyOwner = "7:url-key/lovelace/kiosk"
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace/kiosk",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.office",
+                "dashboard_entity_filter_instance" to legacyOwner,
+                "dashboard_entity_applied_instance" to legacyOwner,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(
+            "url-key",
+            config.prepareDashboardEntityInstance("http://ha.local:8123", "/lovelace/kiosk", "url-key"),
+        )
+
+        val rooted = dashboardEntityTargetKey("url-key", "/lovelace")
+        assertEquals(rooted, prefs.values["dashboard_entity_filter_instance"])
+        assertEquals(rooted, prefs.values["dashboard_entity_applied_instance"])
+        // Lossless: the list behind the owner is still the right one, so it survives the re-rooting.
+        assertTrue(config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.office"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun anOwnerFromADifferentDashboardIsNeverReRootedIntoTheConfiguredOne() {
+        // The other half of the boundary. Migrating this would let a real dashboard change silently
+        // inherit another dashboard's learned list, trading the reported bug for a silent one.
+        val foreignOwner = "7:url-key/kitchen"
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/kitchen",
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.kitchen",
+                "dashboard_entity_filter_instance" to foreignOwner,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertEquals(
+            "url-key",
+            config.prepareDashboardEntityInstance("http://ha.local:8123", "/lovelace", "url-key"),
+        )
+
+        assertEquals(foreignOwner, prefs.values["dashboard_entity_filter_instance"])
+    }
+
+    @Test fun adoptionCarriesOperatorIntentRecordedBeforeADashboardChange() {
+        // Pins and exclusions are owned by the INSTANCE. Comparing the whole dashboard-qualified key
+        // stranded any intent captured before a dashboard change: adoption skipped it, and it then read
+        // as owned by the legacy instance under the stable key — invisible, and overwritten by the next
+        // edit.
+        val capturedElsewhere = dashboardEntityTargetKey("url-key", "/kitchen")
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/lovelace",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/lovelace",
+                "dashboard_entity_overrides" to "+person.lise\n-sensor.noisy",
+                "dashboard_entity_override_instance" to capturedElsewhere,
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertTrue(
+            config.adoptDashboardEntityInstance(
+                "http://ha.local:8123", "/lovelace", "uuid-1", "url-key", "stable-key",
+            ),
+        )
+
+        val owner = prefs.values["dashboard_entity_override_instance"] as String
+        assertEquals("stable-key", dashboardEntityInstanceOf(owner))
+        // The captured scope is preserved rather than restamped: it records where intent was taken.
+        assertEquals("/kitchen", dashboardEntityPathOf(owner))
+        assertEquals(
+            mapOf("person.lise" to "pinned", "sensor.noisy" to "forced_exclude"),
+            config.dashboardEntityOverrides,
+        )
+    }
+
     @Test fun firstIdentityBindingPreservesLegacyStateForTheConfiguredDashboard() {
         val prefs = fakePreferences(
             initial = mapOf(
@@ -1038,6 +1133,8 @@ class ConfigTransactionTest {
         assertFalse(config.dashboardEntityFilterEnabled)
         assertTrue(config.dashboardEntityFilterIds.isEmpty())
         assertFalse(config.dashboardEntityLearningApplied)
+        // A different Home Assistant is a real boundary: the same entity id there is an unrelated
+        // entity, so the operator's overrides do not follow.
         assertTrue(config.dashboardEntityOverrides.isEmpty())
         assertEquals("url-new", config.prepareDashboardEntityInstance(
             "http://new-ha.local:8123", "/lovelace/kiosk", "url-new",
@@ -1100,14 +1197,16 @@ class ConfigTransactionTest {
             "http://ha.local:8123", "/lovelace/office", "00112233445566778899aabbccddeeff", "url-key", "uuid-key",
         ))
 
-        config.setHomeDashboard("/lovelace/bedroom")
+        config.setHomeDashboard("/second-dash")
 
         assertFalse(config.dashboardEntityFilterEnabled)
         assertTrue(config.dashboardEntityFilterIds.isEmpty())
         assertFalse(config.dashboardEntityLearningApplied)
-        assertTrue(config.dashboardEntityOverrides.isEmpty())
+        // Derived state re-scopes; the operator's pin does not. It cannot be regenerated by a rescan and
+        // means the same thing on every dashboard of this same verified Home Assistant.
+        assertEquals(mapOf("person.lise" to "pinned"), config.dashboardEntityOverrides)
         assertEquals("uuid-key", config.prepareDashboardEntityInstance(
-            "http://ha.local:8123", "/lovelace/bedroom", "url-key",
+            "http://ha.local:8123", "/second-dash", "url-key",
         ))
         assertFalse(config.dashboardEntityFilterEnabled)
     }
@@ -1170,7 +1269,7 @@ class ConfigTransactionTest {
             "http://ha.local:8123", "/lovelace/office", "url-key",
         ))
 
-        config.setHomeDashboard("/lovelace/bedroom")
+        config.setHomeDashboard("/second-dash")
 
         assertFalse(config.adoptDashboardEntityInstance(
             "http://ha.local:8123", "/lovelace/office", "00112233445566778899aabbccddeeff", "url-key", "uuid-key",
@@ -1236,9 +1335,9 @@ class ConfigTransactionTest {
         ))
         assertTrue(config.setDashboardEntityFilter(true, listOf("light.office")))
 
-        config.setHomeDashboard("/lovelace/bedroom")
+        config.setHomeDashboard("/second-dash")
         assertEquals("url-key", config.prepareDashboardEntityInstance(
-            "http://ha.local:8123", "/lovelace/bedroom", "url-key",
+            "http://ha.local:8123", "/second-dash", "url-key",
         ))
         assertFalse(config.dashboardEntityFilterEnabled)
         assertTrue(config.dashboardEntityFilterIds.isEmpty())
@@ -1265,7 +1364,7 @@ class ConfigTransactionTest {
                 "home_dashboard" to "/lovelace/kiosk",
                 "dashboard_entity_instance" to "url-key",
                 "dashboard_entity_instance_origin" to "http://ha.local:8123",
-                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_dashboard_path" to "/lovelace",
                 "dashboard_entity_filter_instance" to target,
                 "dashboard_entity_applied_instance" to target,
                 "dashboard_entity_learning" to true,
@@ -1309,7 +1408,7 @@ class ConfigTransactionTest {
                 "home_dashboard" to "/lovelace/kiosk",
                 "dashboard_entity_instance" to "url-key",
                 "dashboard_entity_instance_origin" to "http://ha.local:8123",
-                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_dashboard_path" to "/lovelace",
                 "dashboard_entity_filter_instance" to target,
                 "dashboard_entity_applied_instance" to target,
                 "dashboard_entity_filter_ids" to "light.old",
@@ -1410,7 +1509,7 @@ class ConfigTransactionTest {
                 "home_dashboard" to "/lovelace/kiosk",
                 "dashboard_entity_instance" to "url-key",
                 "dashboard_entity_instance_origin" to "http://ha.local:8123",
-                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_dashboard_path" to "/lovelace",
                 "dashboard_entity_filter_instance" to target,
                 "dashboard_entity_applied_instance" to target,
                 "dashboard_entity_override_instance" to target,
@@ -1441,7 +1540,7 @@ class ConfigTransactionTest {
                 "home_dashboard" to "/lovelace/kiosk",
                 "dashboard_entity_instance" to "url-key",
                 "dashboard_entity_instance_origin" to "http://ha.local:8123",
-                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_dashboard_path" to "/lovelace",
                 "dashboard_entity_filter_instance" to target,
                 "dashboard_entity_applied_instance" to target,
                 "dashboard_entity_override_instance" to target,
@@ -1522,7 +1621,7 @@ class ConfigTransactionTest {
                 "home_dashboard" to "/lovelace/kiosk",
                 "dashboard_entity_instance" to "url-key",
                 "dashboard_entity_instance_origin" to "http://ha.local:8123",
-                "dashboard_entity_dashboard_path" to "/lovelace/kiosk",
+                "dashboard_entity_dashboard_path" to "/lovelace",
                 "dashboard_entity_filter_instance" to target,
                 "dashboard_entity_applied_instance" to target,
                 "dashboard_entity_auto_static" to true,
@@ -1680,16 +1779,148 @@ class ConfigTransactionTest {
         val prefs = fakePreferences(
             mutableMapOf(
                 "home_dashboard" to "/lovelace/old",
-                "dashboard_entity_dashboard_path" to "/lovelace/old",
+                "dashboard_entity_dashboard_path" to "/lovelace",
             ),
         )
         val config = Config(prefs.instance)
         val home = requireNotNull(SettingsRegistry.spec("home_dashboard"))
 
+        // Another view of the same dashboard: the route moves, the learning scope does not.
         assertTrue(config.commitRaw(home, "/lovelace/new"))
 
         assertEquals("/lovelace/new", prefs.values["home_dashboard"])
-        assertEquals("/lovelace/new", prefs.values["dashboard_entity_dashboard_path"])
+        assertEquals("/lovelace", prefs.values["dashboard_entity_dashboard_path"])
+
+        // A different dashboard still re-points the scope, which is the dependency this pins.
+        assertTrue(config.commitRaw(home, "/other-dash/desk"))
+
+        assertEquals("/other-dash/desk", prefs.values["home_dashboard"])
+        assertEquals("/other-dash", prefs.values["dashboard_entity_dashboard_path"])
+    }
+
+    /** An owned, enabled, learned filter scoped to [path] — the state a re-scope has to invalidate. */
+    private fun learnedFilterAt(path: String) = fakePreferences(
+        initial = mapOf(
+            "ha_url" to "http://ha.local:8123",
+            "home_dashboard" to path,
+            "dashboard_entity_instance" to "url-key",
+            "dashboard_entity_instance_origin" to "http://ha.local:8123",
+            "dashboard_entity_dashboard_path" to dashboardEntityScopePath(path),
+            "dashboard_entity_filter_instance" to dashboardEntityTargetKey("url-key", path),
+            "dashboard_entity_learning" to true,
+            "dashboard_entity_learning_applied" to true,
+            "dashboard_entity_filter_enabled" to true,
+            "dashboard_entity_filter_ids" to "light.hall\nlight.porch",
+        ),
+    )
+
+    @Test fun aDashboardChangeKeepsPinsAndExclusionsButAnInstanceChangeWithdrawsThem() {
+        // Pins and forced exclusions share one preference and one gate. Both are the operator's work, so
+        // neither may be withdrawn by moving between dashboards of the same Home Assistant. An exclusion
+        // is the quieter of the two to lose: a dropped pin shows up as a card that stops updating, while
+        // a dropped exclusion silently re-subscribes to something removed on purpose.
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "/office/music",
+                "dashboard_entity_overrides" to "+person.lise\n-sensor.chatty",
+            ),
+        )
+        val config = Config(prefs.instance)
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/office/music", "url-key",
+        ))
+        assertTrue(config.setDashboardEntityOverrides(
+            mapOf("person.lise" to "pinned", "sensor.chatty" to "forced_exclude"),
+        ))
+
+        // Another dashboard entirely, on the same Home Assistant.
+        config.setHomeDashboard("/kitchen-dash")
+        assertEquals(
+            mapOf("person.lise" to "pinned", "sensor.chatty" to "forced_exclude"),
+            config.dashboardEntityOverrides,
+        )
+
+        // Following the account default is not a dashboard the operator named at all, and must not
+        // withdraw their work either — this is the case that lost real pins on hardware.
+        config.setHomeDashboard("")
+        assertEquals(
+            mapOf("person.lise" to "pinned", "sensor.chatty" to "forced_exclude"),
+            config.dashboardEntityOverrides,
+        )
+
+        // A different Home Assistant IS a boundary: an entity id only means something inside one
+        // instance, so the same string there is an unrelated entity.
+        config.setHaConnection("http://other-ha.local:8123", null)
+        assertTrue(config.dashboardEntityOverrides.isEmpty())
+    }
+
+    @Test fun operatorOverridesAreWithdrawnWhenTheOriginMovesUnderAMatchingInstanceKey() {
+        // The instance KEY alone is not proof of the same Home Assistant: an origin change falls back to
+        // a URL-derived key, and adoption can carry one key across origins while mDNS decides whether they
+        // are aliases. So the origin is checked independently — otherwise a pin could survive onto a
+        // different instance where the same entity id means something else entirely.
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://new-ha.local:8123",
+                "home_dashboard" to "/office",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://old-ha.local:8123",
+                "dashboard_entity_override_instance" to dashboardEntityTargetKey("url-key", "/office"),
+                "dashboard_entity_overrides" to "+person.lise\n-sensor.chatty",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertTrue(
+            "a matching instance key must not admit overrides recorded against another origin",
+            config.dashboardEntityOverrides.isEmpty(),
+        )
+    }
+
+    @Test fun choosingAViewOfTheSameDashboardKeepsItsLearnedFilter() {
+        // Learning fetches `lovelace/config` for the dashboard ROOT and extracts entities from the whole
+        // document, so every view of one dashboard yields the same learned set. Re-scoping on a view
+        // change would throw away a filter a rescan reproduces byte for byte, and leave the panel
+        // unfiltered while it re-learns — the exact cost that choosing a specific view exists to avoid.
+        val prefs = learnedFilterAt("/dashboard-test")
+        val config = Config(prefs.instance)
+        assertTrue("the filter must start owned or this proves nothing", config.dashboardEntityFilterEnabled)
+
+        config.setHomeDashboard("/dashboard-test/office")
+
+        assertEquals("/dashboard-test/office", prefs.values["home_dashboard"])
+        assertEquals("/dashboard-test", prefs.values["dashboard_entity_dashboard_path"])
+        assertTrue("a view change must not re-scope learning", config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.hall", "light.porch"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun choosingADifferentDashboardStillRescopesEntityLearning() {
+        // The other half of the same rule: a different dashboard really is a different document, so its
+        // predecessor's learned list must not be inherited.
+        val prefs = learnedFilterAt("/dashboard-test")
+        val config = Config(prefs.instance)
+        assertTrue(config.dashboardEntityFilterEnabled)
+
+        config.setHomeDashboard("/other-dash/office")
+
+        assertEquals("/other-dash", prefs.values["dashboard_entity_dashboard_path"])
+        assertFalse("a different dashboard must not inherit the filter", config.dashboardEntityFilterEnabled)
+        assertEquals(emptyList<String>(), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun retargetingWithinOneViewKeepsTheLearnedFilterItAlreadyOwns() {
+        // Query and fragment do not change WHICH cards render, so adding them must not discard a
+        // learned list and force a rescan — the entity-path owner deliberately ignores both.
+        val prefs = learnedFilterAt("/dashboard-test")
+        val config = Config(prefs.instance)
+
+        config.setHomeDashboard("/dashboard-test/office?kiosk=1#main")
+
+        assertEquals("/dashboard-test/office?kiosk=1#main", prefs.values["home_dashboard"])
+        assertEquals("/dashboard-test", prefs.values["dashboard_entity_dashboard_path"])
+        assertTrue("a query-only change must not re-scope learning", config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.hall", "light.porch"), config.dashboardEntityFilterIds)
     }
 
     @Test fun mqttFamilyPreferenceIsOneBrokerScopedAtomicTuple() {
