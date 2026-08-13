@@ -143,8 +143,9 @@ for transport in shell_v2 pty; do
   # host-side remount must be offered before the operator goes and installs one. It reboots the panel,
   # which on a locked panel is not a small thing, so the warning travels with the command.
   grep -Fq 'disable-verity' "$TMP/out.txt" && grep -Fq 'REBOOTS the panel' "$TMP/out.txt" &&
-    check "offers the one-time remount, and says it reboots" ok ||
-    check "offers the one-time remount, and says it reboots" bad
+    grep -Fq 'unlock any PIN-protected panel' "$TMP/out.txt" &&
+    check "offers the one-time remount, warns that it reboots, and names the unlock step" ok ||
+    check "offers the one-time remount, warns that it reboots, and names the unlock step" bad
 
   # 3b. An answer we cannot read says nothing about /system, so the refusal must not claim it did —
   #     telling this operator to go and install Magisk would send them to fix the wrong machine.

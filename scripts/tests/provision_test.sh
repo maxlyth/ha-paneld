@@ -1194,6 +1194,7 @@ assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism giv
 assert_contains 'dm-verity rather than a missing root manager' "read-only /system names the usual Android 10+ cause"
 assert_contains 'disable-verity' "read-only /system names the one-time host-side remount route"
 assert_contains 'REBOOTS the panel' "the remount advice warns that it reboots before it is followed"
+assert_contains 'unlock any PIN-protected panel' "the remount advice names the Direct Boot unlock step"
 assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
 
 # Stock NSPanel Pro firmware can have a writable but full /system. The zero-byte writability probe

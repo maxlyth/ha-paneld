@@ -3356,7 +3356,7 @@ EOF
       "On a userdebug panel with an unlocked bootloader this is usually dm-verity rather than a missing root manager." \
       "Try the one-time host-side remount first — it REBOOTS the panel, so do it with the panel in front of you:" \
       "  adb -s $TARGET root && adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
-      "  # then, once it is back:  adb -s $TARGET root && adb -s $TARGET remount" \
+      "  # once it is back, unlock any PIN-protected panel; then:  adb -s $TARGET root && adb -s $TARGET remount" \
       "Then re-run the installer. If remount is still refused, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
 
