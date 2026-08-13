@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -u
 
+# Transport axis, independent of everything the device says. An adbd that does not advertise the
+# `shell_v2` feature serves `shell:` through a PTY unconditionally, so the kernel line discipline
+# turns every device newline into CRLF before the host ever sees it. MOCK_SHELL_CRLF=1 models that
+# transport: the panel's answers are unchanged, only their line endings differ. Re-running the fixture
+# through a filter keeps this one concern in one place rather than threading it through ~40 replies.
+if [ "${MOCK_SHELL_CRLF:-0}" = 1 ] && [ -z "${MOCK_SHELL_CRLF_ACTIVE:-}" ]; then
+  # The verb sits after any `-s <target>`, exactly as the dispatch below consumes it. Reading $1
+  # directly would silently never match, leaving this axis switched off while still reporting green.
+  if [ "${1:-}" = "-s" ]; then crlf_verb="${3:-}"; else crlf_verb="${1:-}"; fi
+  if [ "$crlf_verb" = shell ]; then
+    MOCK_SHELL_CRLF_ACTIVE=1 "$0" "$@" | sed -e $'s/$/\r/'
+    exit "${PIPESTATUS[0]}"
+  fi
+fi
+
 printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
 # A clean panel has no package at all. Without this the fixture would silently re-create one and a
@@ -17,6 +32,76 @@ fi
 adb_root_active() {
   [ "${MOCK_ADB_ROOT:-0}" = 1 ] && return 0
   [ "${MOCK_ADB_ROOT:-0}" = escalates ] && [ -f "$STATE_DIR/adb-root-escalated" ]
+}
+
+# Standalone-installer traffic (helper/install-daemon.sh). The SAME block reaches this fixture
+# su-wrapped on a `su` panel and BARE on an adbd-root panel, so both dispatch arms delegate here
+# instead of keeping two copies. Before this existed only the su-wrapped arm answered it, so the
+# direct-root path of the standalone installer had no coverage at all — which is how a
+# direct-root-only defect reached a reporter (#106). Returns 1 when the command is not standalone
+# traffic; when it is, it answers and exits with the status the panel would have returned.
+standalone_manual_reply() {
+  local text="$1"
+  # The standalone journal lives at a DIFFERENT path per install kind: /system/bin/.hapaneld-helper-
+  # manual-upgrade on the vendor-init route, /data/adb/hapaneld/.helper-manual-upgrade.marker on the
+  # systemless one. Matching only the first meant the systemless route's lease, commit and rollback
+  # were never answered, so that whole route went uncovered. Neither pattern can match the APK-coupled
+  # provisioner journal (`.helper-upgrade.marker`), which must keep falling through to its own branch.
+  manual_journal_referenced() {
+    printf '%s' "$1" | grep -Eq '\.hapaneld-helper-manual-upgrade|\.helper-manual-upgrade\.marker'
+  }
+  if printf '%s' "$text" | grep -Fq 'echo LEASE_OK' && manual_journal_referenced "$text"; then
+    [ "${MOCK_MANUAL_LEASE_RENEW:-ok}" = ok ] && printf 'LEASE_OK\n'
+    exit $?
+  elif printf '%s' "$text" | grep -Fq 'inspect_manual_journal'; then
+    if [ -f "$STATE_DIR/manual-helper-transaction" ]; then
+      printf 'ACTIVE_SYSTEM_TRANSACTION\n'
+    else
+      printf 'NO_STALE_TRANSACTION\n'
+    fi
+    exit 0
+  elif manual_journal_referenced "$text" &&
+       printf '%s' "$text" | grep -Fq '[ ! -f'; then
+    [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+    exit $?
+  elif printf '%s' "$text" | grep -Fq 'echo INSTALL_OK' && manual_journal_referenced "$text"; then
+    : > "$STATE_DIR/manual-helper-transaction"
+    [ "${MOCK_MANUAL_INSTALL_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_MANUAL_INSTALL_DELAY"
+    printf 'INSTALL_OK\n'
+    exit 0
+  elif printf '%s' "$text" | grep -Fq 'echo COMMIT_OK' && manual_journal_referenced "$text"; then
+    rm -f "$STATE_DIR/manual-helper-transaction"
+    printf 'COMMIT_OK\n'
+    exit 0
+  elif printf '%s' "$text" | grep -Fq 'ROLLBACK_RESTARTED' && manual_journal_referenced "$text"; then
+    printf 'ROLLBACK_RESTARTED\n'
+    exit 0
+  elif printf '%s' "$text" | grep -Fq 'ROLLBACK_FINALIZED' && manual_journal_referenced "$text"; then
+    rm -f "$STATE_DIR/manual-helper-transaction"
+    printf 'ROLLBACK_FINALIZED\n'
+    exit 0
+  fi
+  return 1
+}
+
+# The authenticated helper's request protocol, reached both su-wrapped and bare for the same reason.
+helper_request_reply() {
+  local text="$1"
+  printf '%s' "$text" | grep -Fq ' --request ' || return 1
+  case "$text" in
+    *' --request PING'*) [ "${MOCK_ROLLBACK_PING:-ok}" = ok ] && printf 'OK\n' ;;
+    *' --request COMPANIONCAPS'*)
+      [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
+      [ "${MOCK_HELPER_START:-ok}" = ok ] && [ "${MOCK_HELPER_CAPABILITY:-ok}" = ok ] &&
+        printf 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL\n'
+      ;;
+    *' --request BUILDID'*)
+      [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
+      [ "${MOCK_HELPER_BUILD_ID_MATCH:-ok}" = ok ] && printf 'BUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?}"
+      ;;
+  esac
+  # A refused request answers nothing and exits non-zero, exactly as the inline branch did.
+  exit $?
 }
 
 # Package presence and package-manager responsiveness are INDEPENDENT axes, because Android reports
@@ -747,18 +832,8 @@ case "${1:-}" in
           # the probe's joined "id; id"); MOCK_ROOT_LIVE=dead models a route that answered the
           # resolution probe and has since stopped answering as root.
           [ "${MOCK_ROOT_LIVE:-ok}" = ok ] && [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
-        elif printf '%s' "$command_text" | grep -Fq 'echo LEASE_OK' &&
-             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
-          [ "${MOCK_MANUAL_LEASE_RENEW:-ok}" = ok ] && printf 'LEASE_OK\n'
-        elif printf '%s' "$command_text" | grep -Fq 'inspect_manual_journal'; then
-          if [ -f "$STATE_DIR/manual-helper-transaction" ]; then
-            printf 'ACTIVE_SYSTEM_TRANSACTION\n'
-          else
-            printf 'NO_STALE_TRANSACTION\n'
-          fi
-        elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
-             printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
-          [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif standalone_manual_reply "$command_text"; then
+          :
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -767,22 +842,6 @@ case "${1:-}" in
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'TRANSACTION_READY\n'
         elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
-        elif printf '%s' "$command_text" | grep -Fq 'echo INSTALL_OK' &&
-             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
-          : > "$STATE_DIR/manual-helper-transaction"
-          [ "${MOCK_MANUAL_INSTALL_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_MANUAL_INSTALL_DELAY"
-          printf 'INSTALL_OK\n'
-        elif printf '%s' "$command_text" | grep -Fq 'echo COMMIT_OK' &&
-             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
-          rm -f "$STATE_DIR/manual-helper-transaction"
-          printf 'COMMIT_OK\n'
-        elif printf '%s' "$command_text" | grep -Fq 'ROLLBACK_RESTARTED' &&
-             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
-          printf 'ROLLBACK_RESTARTED\n'
-        elif printf '%s' "$command_text" | grep -Fq 'ROLLBACK_FINALIZED' &&
-             printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
-          rm -f "$STATE_DIR/manual-helper-transaction"
-          printf 'ROLLBACK_FINALIZED\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
           if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
@@ -824,19 +883,8 @@ case "${1:-}" in
             "${MOCK_STALE_LIVE_STATE:-TARGET}"
         elif printf '%s' "$command_text" | grep -Fq 'pidof hapaneld-helper'; then
           [ "${MOCK_HELPER_START:-ok}" = ok ] && printf '4242\n'
-        elif printf '%s' "$command_text" | grep -Fq ' --request '; then
-          case "$command_text" in
-            *' --request PING'*) [ "${MOCK_ROLLBACK_PING:-ok}" = ok ] && printf 'OK\n' ;;
-            *' --request COMPANIONCAPS'*)
-              [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
-              [ "${MOCK_HELPER_START:-ok}" = ok ] && [ "${MOCK_HELPER_CAPABILITY:-ok}" = ok ] &&
-                printf 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL\n'
-              ;;
-            *' --request BUILDID'*)
-              [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
-              [ "${MOCK_HELPER_BUILD_ID_MATCH:-ok}" = ok ] && printf 'BUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?}"
-              ;;
-          esac
+        elif helper_request_reply "$command_text"; then
+          :
         fi
         ;;
       'su root "'*'"')
@@ -920,6 +968,10 @@ case "${1:-}" in
             dead_after_escalation)
               [ -f "$STATE_DIR/adb-root-escalated" ] || printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
           esac
+        elif adb_root_active && standalone_manual_reply "$command_text"; then
+          :
+        elif adb_root_active && helper_request_reply "$command_text"; then
+          :
         elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif adb_root_active && printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then

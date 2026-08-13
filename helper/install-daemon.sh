@@ -31,6 +31,35 @@ fail() {
   exit 1
 }
 
+# Render what the panel actually answered so an unrecognised state is reportable instead of anonymous.
+# A refusal that cannot say what it saw sends the operator to repair the wrong thing: the SMT1019
+# report (#106) had working adb and working root, and was told to restore both.
+#
+# Non-printing characters are REPORTED, not silently removed. Deleting them would render an answer
+# that differs from a valid one only by an invisible byte as though it were the valid one — hiding the
+# single most useful clue in the line whose whole purpose is to carry clues. They are still not
+# printed raw: this is text from an untrusted device shell, so the line is sanitised and truncated and
+# their presence is stated instead. Line breaks and tabs are ordinary answer shape and are not flagged.
+describe_observed_state() {
+  local observed="$1" flattened rendered
+  flattened="$(printf '%s' "$observed" | LC_ALL=C tr '\n\t' '  ')"
+  rendered="$(printf '%s' "$flattened" | LC_ALL=C tr -d '\000-\037\177')"
+  if [ -z "$rendered" ]; then
+    if [ -n "$flattened" ]; then
+      printf 'the panel answered only non-printing characters'
+    else
+      printf 'the panel answered nothing'
+    fi
+    return
+  fi
+  [ "${#rendered}" -le 200 ] || rendered="${rendered:0:200}…"
+  if [ "$flattened" = "$rendered" ]; then
+    printf 'the panel answered: %s' "$rendered"
+  else
+    printf 'the panel answered: %s (plus non-printing characters, so this is how it was sent, not what it said)' "$rendered"
+  fi
+}
+
 # Run one host command behind a hard deadline. The command owns a local process group so timeout and
 # caller cancellation terminate and reap shell wrappers as well as their non-detached descendants.
 # Status 124 is reserved for the deadline; ordinary command failures retain their original status.
@@ -206,7 +235,20 @@ quote_root_command() {
 
 run_root() {
   local command="$1" quoted
+  case "$SU_FORM" in
+    shell|su0join|su0shc|surootjoin|surootshc|suc) ;;
+    # A form this dispatch does not know is a failure, never a silent success with empty output —
+    # callers read run_root's status as "the panel was asked".
+    *) return 1 ;;
+  esac
   quoted="$(quote_root_command "$command")"
+  # Every classifier below reads device state as an exact token, so the transport must not be able to
+  # alter one. An adbd without the `shell_v2` feature serves `shell:` through a PTY unconditionally,
+  # which turns each device newline into CRLF; the panel then answers NO_STALE_TRANSACTION\r and every
+  # exact comparison in this script misses. Normalise once, here, at the single seam they all read
+  # through, rather than at each call site where the next added site would forget it. Only the carriage
+  # return is removed: unexpected tokens, extra lines and empty output stay unexpected, so an unknown
+  # state still refuses.
   case "$SU_FORM" in
     shell)      adb -s "$TARGET" shell "$command" ;;
     su0join)    adb -s "$TARGET" shell "su 0 \"$quoted\"" ;;
@@ -214,7 +256,7 @@ run_root() {
     surootjoin) adb -s "$TARGET" shell "su root \"$quoted\"" ;;
     surootshc)  adb -s "$TARGET" shell "su root sh -c \"$quoted\"" ;;
     suc)        adb -s "$TARGET" shell "su -c \"$quoted\"" ;;
-  esac
+  esac | tr -d '\r'
 }
 
 run_root_locked() {
@@ -937,7 +979,10 @@ case "$manual_journal_state" in
   INVALID_MANUAL_TRANSACTION) fail "the retained standalone root-helper journal is invalid or not root-owned" \
     "No rollback was attempted. Inspect the journal and recovery snapshots before retrying." ;;
   *) fail "could not determine the root-helper recovery state" \
-    "No live helper files were changed. Restore adb/root access and re-run." ;;
+    "No live helper files were changed." \
+    "$(describe_observed_state "$manual_journal_state")" \
+    "Re-run, and if it repeats include that line and 'adb features $TARGET' in a report:" \
+    "https://github.com/maxlyth/ha-paneld/issues" ;;
 esac
 
 # Select a verified persistence runner before stopping the old daemon. A read-only /system alone does
@@ -1236,9 +1281,20 @@ SVCEOF
   ' >/dev/null 2>&1 || true
 else
   run_root 'rm -f '"$PROBE_STAGING_PATH $RC_STAGING_PATH $SVC_STAGING_PATH" >/dev/null 2>&1 || true
-  fail "the panel has read-only /system and no verified systemless boot-service runner" \
+  # Both branches refuse, but they must not claim the same cause. A panel that genuinely answered
+  # "read-only /system, no runner" needs a different environment; a panel whose answer we could not
+  # read at all has not told us anything about its /system, and saying it did would send the operator
+  # to install a root manager it may not need.
+  if printf '%s\n' "$out" | grep -qx SYSTEM_RO && printf '%s\n' "$out" | grep -qx NO_SYSTEMLESS_RUNNER; then
+    fail "the panel has read-only /system and no verified systemless boot-service runner" \
+      "The existing helper was left running and no files were replaced." \
+      "Install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path, then re-run."
+  fi
+  fail "could not determine where a boot-persistent helper can be installed" \
     "The existing helper was left running and no files were replaced." \
-    "Install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path, then re-run."
+    "$(describe_observed_state "$out")" \
+    "Re-run, and if it repeats include that line and 'adb features $TARGET' in a report:" \
+    "https://github.com/maxlyth/ha-paneld/issues"
 fi
 
 if ! wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" "$INSTALL_KIND"; then

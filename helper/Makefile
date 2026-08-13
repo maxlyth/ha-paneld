@@ -47,6 +47,7 @@ test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD
 	bash ./test/root_command_quote_test.sh
 	bash ./test/standalone_installer_transaction_test.sh
 	bash ./test/install_daemon_security_test.sh
+	bash ./test/direct_root_transport_test.sh
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
 # preserving the existing ledjni ioctl assertions; --wrap=write forces deterministic stream edge cases.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
