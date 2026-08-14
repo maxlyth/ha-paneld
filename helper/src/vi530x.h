@@ -41,9 +41,9 @@ struct vi530x_measurement {
 
 // VI530X — reply "D=<range> S=<status> C=<confidence>\n" or "ERR\n" when the sensor is absent, cannot
 // be started, or returns no measurement. Values are reported exactly as the driver gives them: the
-// range is the vendor's signed RangeTof, and no near/far threshold is applied here, because the units
-// and the usable band have not yet been established on hardware. Deciding what counts as "near" is the
-// caller's job once that evidence exists.
+// range is the vendor's signed RangeTof in millimetres, and no near/far threshold is applied here.
+// Status/confidence interpretation and the usable band have not yet been established on hardware;
+// deciding what counts as "near" remains the caller's job.
 void cmd_vi530x(conn_ctx *ctx, const char *args);
 
 #ifdef HAPANELD_TEST
