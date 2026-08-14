@@ -575,7 +575,7 @@ class Config private constructor(
         }
         accepted["home_dashboard"]?.let { next ->
             val nextPath = dashboardEntityScopePath(next)
-            if (nextPath != dashboardEntityScopePath(homeDashboard)) {
+            if (nextPath != "/" && nextPath != dashboardEntityScopePath(homeDashboard)) {
                 editor.putString("dashboard_entity_dashboard_path", nextPath)
             }
         }
@@ -1256,7 +1256,7 @@ class Config private constructor(
     private fun stageHomeDashboard(editor: SharedPreferences.Editor, normalized: String, previous: String) {
         editor.putString("home_dashboard", normalized)
         val nextPath = dashboardEntityScopePath(normalized)
-        if (nextPath != dashboardEntityScopePath(previous)) {
+        if (nextPath != "/" && nextPath != dashboardEntityScopePath(previous)) {
             editor.putString("dashboard_entity_dashboard_path", nextPath)
         }
     }
@@ -1386,8 +1386,8 @@ class Config private constructor(
         if (current.isBlank()) return false
         val configuredOrigin = canonicalHaOrigin(haUrl) ?: return false
         val configuredPath = dashboardEntityScopePath(homeDashboard)
-        return current == owner && dashboardEntityInstanceOrigin == configuredOrigin &&
-            dashboardEntityDashboardPath == configuredPath
+        val scopeAgrees = configuredPath == "/" || dashboardEntityDashboardPath == configuredPath
+        return current == owner && dashboardEntityInstanceOrigin == configuredOrigin && scopeAgrees
     }
 
     /** Select the URL-keyed namespace and dashboard after a target change. Existing ownership is left
@@ -1548,11 +1548,35 @@ class Config private constructor(
         }
     }
 
+    /**
+     * One-time latch for collapsing route-keyed catalogue rows onto their dashboard root.
+     *
+     * Deliberately a preference latch rather than a schema step: this is a DATA reconciliation, the
+     * schema contract forbids ad-hoc conditionals in `onUpgrade`, and a version bump here would collide
+     * with the schema work already reserved by another lane. The store migration is idempotent, so a
+     * failed commit costs a repeat rather than corruption.
+     */
+    val dashboardEntityScopeNamespaceMigrationRequired: Boolean
+        get() = prefs.getInt("dashboard_entity_scope_namespace_version", 0) < 1
+
+    fun markDashboardEntityScopeNamespaceMigrated(): Boolean =
+        applyBatch { edit { putInt("dashboard_entity_scope_namespace_version", 1) } }
+
     private val dashboardEntityDefaultResolverMigrationRequired: Boolean
         get() {
             val target = dashboardEntityTargetKey
             if (target.isBlank() || !dashboardEntityLearningEnabled ||
                 normalizeDashboardEntityPath(homeDashboard) != "/") return false
+            // Narrowed, not removed. What this invalidates is an allow-list that may have been derived
+            // while a blank dashboard resolved AMBIGUOUSLY — as ordinary Lovelace rather than through
+            // the user -> system -> built-in Home chain — and so could describe a different panel than
+            // the frontend rendered. A panel whose learning scope is a NAMED dashboard did not derive
+            // its list that way, and Auto now retains and reconciles that binding instead of collapsing
+            // it, so there is no ambiguity left to discard. Without this, every switch to "Account
+            // default" threw away learned entities AND the operator's pins for a dashboard the panel
+            // was already using. The protection still stands for the case it was written for: a panel
+            // with no established dashboard, where a blank value really could resolve to anything.
+            if (dashboardEntityDashboardPath.let { it.isNotBlank() && it != "/" }) return false
             return prefs.getInt(DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION_KEY, 0) <
                 DASHBOARD_ENTITY_DEFAULT_RESOLVER_VERSION ||
                 prefs.getString(DASHBOARD_ENTITY_DEFAULT_RESOLVER_TARGET_KEY, "").orEmpty() != target
@@ -1730,7 +1754,8 @@ class Config private constructor(
         val target = dashboardEntityTargetKey
         if (enabled && normalized.isEmpty()) return false
         if (target.isBlank() || canonicalHaOrigin(haUrl) != dashboardEntityInstanceOrigin ||
-            dashboardEntityScopePath(homeDashboard) != dashboardEntityDashboardPath) return false
+            dashboardEntityScopePath(homeDashboard).let { it != "/" && it != dashboardEntityDashboardPath }
+        ) return false
         return applyBatch { edit {
             putBoolean("dashboard_entity_learning", false)
             putBoolean("dashboard_entity_learning_applied", false)

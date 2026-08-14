@@ -627,6 +627,65 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         recentCache.invalidate(instance to path)
     }
 
+    /**
+     * Collapse route-keyed catalogue rows onto their dashboard root, once.
+     *
+     * An explicit `/lovelace/kiosk` and an `Auto` that resolves to the same dashboard used to occupy two
+     * different namespaces here, so switching modes orphaned rows and a later switch back revived them.
+     * A rescan cannot recreate what is lost: runtime observations record what the panel actually saw,
+     * and ignored issues record what a person decided.
+     *
+     * Foreign keys are enforced and cannot be turned off inside a transaction, so the parent is created
+     * before children move and removed only once nothing references it. Where both namespaces already
+     * exist the root wins and the route rows are dropped after contributing anything the root lacks —
+     * `INSERT OR IGNORE` keeps the root's own decision rather than letting the older namespace overwrite
+     * it. Returns the number of route paths collapsed.
+     */
+    internal fun migrateRouteKeyedRowsToRoot(rootOf: (String) -> String): Int =
+        observedWrite("catalog-scope-migration") {
+        val db = writableDatabase
+        val children = listOf(
+            "dashboard_entity", "dashboard_entity_traffic_minute",
+            "dashboard_ignored_issue", "dashboard_metric_minute",
+        )
+        var collapsed = 0
+        db.beginTransaction()
+        try {
+            val rows = mutableListOf<Pair<String, String>>()
+            db.rawQuery("SELECT instance,path FROM dashboard", null).use { cursor ->
+                while (cursor.moveToNext()) rows += cursor.getString(0) to cursor.getString(1)
+            }
+            for (step in planRouteKeyCollapse(rows, rootOf)) {
+                if (!step.mergesIntoExisting) copyRow(db, "dashboard", step.instance, step.from, step.to)
+                for (table in children) copyRow(db, table, step.instance, step.from, step.to)
+                for (table in children) {
+                    db.delete(table, "instance=? AND path=?", arrayOf(step.instance, step.from))
+                }
+                db.delete("dashboard", "instance=? AND path=?", arrayOf(step.instance, step.from))
+                recentCache.invalidate(step.instance to step.from)
+                recentCache.invalidate(step.instance to step.to)
+                collapsed++
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        collapsed
+    }
+
+    /** Re-insert every row of [table] for one target under [toPath], keeping any row already there. */
+    private fun copyRow(db: SQLiteDatabase, table: String, instance: String, fromPath: String, toPath: String) {
+        val columns = mutableListOf<String>()
+        db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            while (cursor.moveToNext()) columns += cursor.getString(1)
+        }
+        if (columns.isEmpty()) return
+        val selected = columns.joinToString(",") { if (it == "path") "?" else it }
+        db.execSQL(
+            "INSERT OR IGNORE INTO $table(${columns.joinToString(",")}) " +
+                "SELECT $selected FROM $table WHERE instance=? AND path=?",
+            arrayOf(toPath, instance, fromPath),
+        )
+    }
+
     fun activeIds(
         instance: String,
         path: String,
@@ -2954,4 +3013,40 @@ internal object EntityCatalogIssuePersistence {
         }
         else -> value.toString().take(MAX_STRING_CHARS)
     }
+}
+
+/** One route-keyed catalogue target and the root it collapses onto. */
+internal data class ScopeCollapse(
+    val instance: String,
+    val from: String,
+    val to: String,
+    /** True when the root namespace already holds rows, so the root's own values win on conflict. */
+    val mergesIntoExisting: Boolean,
+)
+
+/**
+ * Which catalogue targets are keyed by a route rather than by their dashboard root, and where each
+ * one lands.
+ *
+ * Separated from the SQL so the policy is executable. The defect it answers was invisible to evidence
+ * that only read source text, and the interesting cases are all decisions rather than statements: a
+ * root-keyed target is already correct and must not be touched; two routes under one dashboard both
+ * collapse onto it, and the second must see the first's arrival so it merges rather than trying to
+ * create the parent twice.
+ */
+internal fun planRouteKeyCollapse(
+    rows: List<Pair<String, String>>,
+    rootOf: (String) -> String,
+): List<ScopeCollapse> {
+    val present = rows.toMutableSet()
+    val plan = mutableListOf<ScopeCollapse>()
+    for ((instance, path) in rows) {
+        val root = rootOf(path)
+        if (root == path) continue
+        val merges = instance to root in present
+        plan += ScopeCollapse(instance, path, root, merges)
+        present += instance to root
+        present -= instance to path
+    }
+    return plan
 }

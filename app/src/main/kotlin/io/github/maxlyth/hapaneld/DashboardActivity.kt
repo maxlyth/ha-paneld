@@ -53,6 +53,7 @@ import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterTelemetry
 import io.github.maxlyth.hapaneld.dashboard.InjectionScript
 import io.github.maxlyth.hapaneld.dashboard.shouldInstallDashboardTrafficObserver
+import io.github.maxlyth.hapaneld.dashboard.AutoScopeVerification
 import io.github.maxlyth.hapaneld.dashboard.shouldHoldRendererForEntityBootstrap
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningProtocol
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
@@ -879,6 +880,7 @@ class DashboardActivity : AppCompatActivity() {
         shouldHoldRendererForEntityBootstrap(
             learningEnabled = config.dashboardEntityLearningEnabled,
             filterEnabled = config.dashboardEntityFilterEnabled,
+            autoScopeUnverified = AutoScopeVerification.unverified(config.homeDashboard),
         )
 
     /** Prepare the exact allow-list for document-start interception. Automatic filtering fails closed:

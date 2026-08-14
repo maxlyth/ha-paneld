@@ -1878,6 +1878,88 @@ class ConfigTransactionTest {
         )
     }
 
+    @Test fun followingTheAccountDefaultKeepsTheLearnedFilterItAlreadyOwns() {
+        // Reported from a panel: the home dashboard moved from a view of /office to "Account default",
+        // which resolves to /office, and the learned filter was discarded. Auto names no dashboard of
+        // its own, so it must not act as a scope change on the way in.
+        val prefs = learnedFilterAt("/office")
+        val config = Config(prefs.instance)
+        config.setHomeDashboard("/office/music")
+        assertTrue("the filter must start owned or this proves nothing", config.dashboardEntityFilterEnabled)
+
+        config.setHomeDashboard("")
+
+        assertEquals("", prefs.values["home_dashboard"])
+        assertEquals("/office", prefs.values["dashboard_entity_dashboard_path"])
+        assertTrue("following the account default must not re-scope learning", config.dashboardEntityFilterEnabled)
+        assertEquals(listOf("light.hall", "light.porch"), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun theAccountDefaultDoesNotInheritAnotherDashboardsLearnedFilter() {
+        // The risk that ruled out simply retaining the scope: if the account default resolves to a
+        // DIFFERENT dashboard, keeping the old learned list would filter out entities the new dashboard
+        // renders and its cards would quietly stop updating. Rebinding to the resolved dashboard — which
+        // is what the scan does once an authenticated read answers — must withdraw the old list.
+        val prefs = learnedFilterAt("/office")
+        val config = Config(prefs.instance)
+        config.setHomeDashboard("")
+        assertTrue(config.dashboardEntityFilterEnabled)
+
+        // Standing in for the scan's reconciliation: the resolution named a different dashboard.
+        assertEquals("url-key", config.prepareDashboardEntityInstance(
+            "http://ha.local:8123", "/kitchen-dash", "url-key",
+        ))
+
+        assertEquals("/kitchen-dash", prefs.values["dashboard_entity_dashboard_path"])
+        assertFalse("a different resolved dashboard must not inherit the filter", config.dashboardEntityFilterEnabled)
+        assertEquals(emptyList<String>(), config.dashboardEntityFilterIds)
+    }
+
+    @Test fun anAmbiguouslyScopedBlankDashboardStillRebootstraps() {
+        // The case the default-resolver invalidation was written for, and which must keep working: the
+        // panel is following the account default with NO established dashboard, so its allow-list may
+        // have been derived while a blank value resolved as ordinary Lovelace and could describe a
+        // different panel than the frontend renders. That state is still discarded and rescanned.
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "http://ha.local:8123",
+                "home_dashboard" to "",
+                "dashboard_entity_instance" to "url-key",
+                "dashboard_entity_instance_origin" to "http://ha.local:8123",
+                "dashboard_entity_dashboard_path" to "/",
+                "dashboard_entity_filter_instance" to dashboardEntityTargetKey("url-key", "/"),
+                "dashboard_entity_learning" to true,
+                "dashboard_entity_learning_applied" to true,
+                "dashboard_entity_filter_enabled" to true,
+                "dashboard_entity_filter_ids" to "light.suspect",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        assertFalse(
+            "an allow-list from an ambiguous blank resolution must not stay active",
+            config.dashboardEntityFilterEnabled,
+        )
+        assertEquals(
+            DashboardEntityDefaultResolverMigration.REBOOTSTRAP,
+            config.migrateDashboardEntityDefaultResolver(),
+        )
+    }
+
+    @Test fun anEstablishedDashboardIsNotRebootstrappedJustForFollowingTheDefault() {
+        // The other side of the same boundary: this panel's list was learned for a named dashboard, so
+        // it was never derived under the ambiguous blank resolution and there is nothing to invalidate.
+        val prefs = learnedFilterAt("/office")
+        val config = Config(prefs.instance)
+        config.setHomeDashboard("")
+
+        assertTrue("an established scope must not be rebootstrapped", config.dashboardEntityFilterEnabled)
+        assertEquals(
+            DashboardEntityDefaultResolverMigration.NOT_NEEDED,
+            config.migrateDashboardEntityDefaultResolver(),
+        )
+    }
+
     @Test fun choosingAViewOfTheSameDashboardKeepsItsLearnedFilter() {
         // Learning fetches `lovelace/config` for the dashboard ROOT and extracts entities from the whole
         // document, so every view of one dashboard yields the same learned set. Re-scoping on a view

@@ -7,10 +7,19 @@ package io.github.maxlyth.hapaneld.dashboard
  * watchdog and HOME relaunches can happen at any point during a catalog synchronization; none may turn
  * an empty automatic learner into an ordinary unfiltered Home Assistant WebSocket connection.
  */
+/**
+ * [autoScopeUnverified] extends the same invariant to a filter that exists but may describe the wrong
+ * dashboard. Under `Auto` a retained allow-list was learned for whatever the account default used to
+ * resolve to, and that can change while the panel is stopped. Installing it at document start would
+ * filter the newly-opened dashboard through the previous dashboard's ids — cards that silently stop
+ * updating — so an unverified `Auto` scope holds exactly as an absent list does, and for the same
+ * reason: the renderer must never install an allow-list nobody can vouch for.
+ */
 internal fun shouldHoldRendererForEntityBootstrap(
     learningEnabled: Boolean,
     filterEnabled: Boolean,
-): Boolean = learningEnabled && !filterEnabled
+    autoScopeUnverified: Boolean = false,
+): Boolean = learningEnabled && (!filterEnabled || autoScopeUnverified)
 
 /** A learner may continue synchronizing while another renderer is selected, but its completion must not
  * launch the built-in activity unless that activity is still the effective renderer. The caller resolves

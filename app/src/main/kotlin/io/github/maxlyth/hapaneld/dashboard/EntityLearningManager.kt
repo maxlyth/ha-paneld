@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.CancellationSignal
 import android.util.Log
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.dashboardEntityScopePath
 import io.github.maxlyth.hapaneld.DashboardEntityDefaultResolverMigration
 import io.github.maxlyth.hapaneld.DashboardAuth
 import io.github.maxlyth.hapaneld.HaAuthOwner
@@ -75,6 +76,16 @@ internal class HomeDashboardResolutionAuthority {
     private val mutex = Mutex()
     private var cached: Cached? = null
 
+    /**
+     * [forceLive] bypasses the memo for this call and replaces it with what the account answers now.
+     *
+     * The key is endpoint, credential owner and CONFIGURED path — and under `Auto` none of those change
+     * when the Home Assistant account's default dashboard changes. A process that had already resolved
+     * once would therefore return the superseded answer for its whole lifetime, so the scan that
+     * promises to reconcile the scope could never observe the disagreement it exists to correct. Any
+     * caller that promises a live answer, rather than a consistent one within a single pass, must ask
+     * for one.
+     */
     suspend fun resolve(
         key: Key,
         stillCurrent: () -> Boolean,
@@ -290,6 +301,10 @@ class EntityLearningManager(
             ensurePeriodicSyncLocked()
             return@synchronized false
         }
+        // Before anything reads the catalogue under the rooted key, collapse rows an older build wrote
+        // under the configured ROUTE. Skipping this would silently abandon that install's runtime
+        // observations and ignored issues, which no rescan can reproduce.
+        applyScopeNamespaceMigration()
         prepareCurrentTarget()
         val resolverMigration = applyDefaultResolverMigration()
         refreshTargetDiagnostics()
@@ -302,15 +317,32 @@ class EntityLearningManager(
                 resolverMigration,
                 resetBootstrapPending,
                 snapshot.analyzerPolicyVersion < DashboardConfigurationLint.ANALYZER_POLICY_VERSION,
+                autoScopeUnverifiedThisProcess =
+                    homeDashboardResolutionMustBeLive(config.homeDashboard.trim()),
             )) {
             val reason = when {
                 resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP -> "default-resolver-upgrade"
                 snapshot.analyzerPolicyVersion < DashboardConfigurationLint.ANALYZER_POLICY_VERSION -> "analyzer-policy-upgrade"
+                homeDashboardResolutionMustBeLive(config.homeDashboard.trim()) &&
+                    snapshot.lastSyncAt != 0L -> "auto-scope-verification"
                 else -> "startup"
             }
             syncNow(reason)
         }
         true
+    }
+
+    /** Idempotent, so a failed latch commit costs a repeat rather than a half-migrated catalogue. */
+    private fun applyScopeNamespaceMigration() {
+        if (!config.dashboardEntityScopeNamespaceMigrationRequired) return
+        val collapsed = runCatching { store.migrateRouteKeyedRowsToRoot(::dashboardEntityScopePath) }
+            .onFailure { Log.e(TAG, "catalogue scope-namespace migration failed; it will be retried", it) }
+            .getOrNull() ?: return
+        if (!config.markDashboardEntityScopeNamespaceMigrated()) {
+            Log.e(TAG, "catalogue scope-namespace migration ran but its latch did not commit")
+            return
+        }
+        if (collapsed > 0) Log.i(TAG, "collapsed $collapsed route-keyed catalogue target(s) onto their root")
     }
 
     private fun applyDefaultResolverMigration(): DashboardEntityDefaultResolverMigration {
@@ -1314,7 +1346,63 @@ class EntityLearningManager(
         val base = config.haUrl.takeIf(String::isNotBlank) ?: return UNCONFIGURED_INSTANCE
         return config.dashboardEntityInstanceKey.ifBlank { EntityLearningProtocol.hash(normalizedOrigin(base)) }
     }
-    private fun dashboardPath(): String = config.homeDashboard.ifBlank { "/" }
+    /**
+     * The dashboard this panel's learned state belongs to.
+     *
+     * `Auto` names no dashboard: it means "whatever this Home Assistant account's default resolves to",
+     * a value only an authenticated read can supply. Treating it as its own scope discarded the learned
+     * filter every time the setting moved between an explicit dashboard and Auto, including when the
+     * default resolved to the dashboard already in use. So Auto keeps the scope a previous resolution
+     * bound, and [reconcileResolvedScope] corrects it the moment a resolution disagrees.
+     */
+    private fun dashboardPath(): String {
+        val configured = config.homeDashboard
+        // ONE namespace per dashboard, in both modes. Ownership already roots the path, but this value
+        // is also the raw catalogue key, and returning the configured ROUTE here gave `/lovelace/kiosk`
+        // and an `Auto` that resolves to the same dashboard two different namespaces. Switching between
+        // them orphaned catalogue rows and later revived them — including runtime observations and
+        // ignored-issue decisions, which a rescan cannot exactly recreate because they record what the
+        // panel saw and what a person decided, not what the document says.
+        if (!EntityLearningProtocol.usesFrontendDefaultPanel(configured)) return dashboardEntityScopePath(configured)
+        return config.dashboardEntityDashboardPath.takeIf { it.isNotBlank() } ?: "/"
+    }
+
+    /**
+     * Bind the learned scope to the dashboard an authenticated read actually resolved to, and abandon
+     * the current scan when that is not the dashboard it was scoped for.
+     *
+     * The scope has to be decided before the scan can run, but under Auto the answer only arrives part
+     * way through it. Rebinding here rather than mid-commit keeps the existing guards honest: the scan's
+     * own `stillCurrent` check reads the target key, so once this rebinds nothing from this pass can be
+     * committed against the wrong dashboard. [syncNow] latches a rerun rather than starting a nested
+     * one, so the corrected scope is scanned as soon as this pass unwinds.
+     *
+     * Catalogue rows recorded under the superseded scope are left behind deliberately. A rescan
+     * reproduces them exactly, so migrating them would be code carrying risk for no gain.
+     */
+    private fun reconcileResolvedScope(snapshot: EntityLearningSyncSnapshot, resolved: String): Boolean {
+        if (!resolvedScopeRequiresRebind(snapshot.dashboardPath, resolved)) return false
+        val origin = normalizedOrigin(snapshot.baseUrl)
+        // The currency checks inside the resolve above guard the READ. This is a durable write, and it
+        // happens later: between the two, the endpoint or the configured dashboard can change under a
+        // cooperatively cancelled pass, and rebinding on a stale snapshot would overwrite the newer
+        // selection with an older one. Re-verify the exact snapshot this decision was made from, and
+        // abandon rather than retarget when it no longer describes the panel.
+        if (!resolvedScopeRebindIsStillCurrent(
+                snapshotConfigured = snapshot.configuredHomeDashboard,
+                currentConfigured = config.homeDashboard.trim(),
+                snapshotOrigin = origin,
+                currentOrigin = normalizedOrigin(config.haUrl.trim().trimEnd('/')),
+                generationMatches = snapshot.matchesCurrent(effectGeneration.get(), currentEffectState()),
+            )
+        ) {
+            return false
+        }
+        config.prepareDashboardEntityInstance(origin, resolved, EntityLearningProtocol.hash(origin))
+            ?: error("failed to rebind entity-learning scope to the resolved dashboard")
+        syncNow("auto-resolved-scope")
+        return true
+    }
 
     private fun prepareCurrentTarget(): String? {
         val base = config.haUrl.trim().trimEnd('/')
@@ -1328,6 +1416,10 @@ class EntityLearningManager(
 
     private fun invalidateEffects(cancelSync: Boolean = true) {
         synchronized(this) {
+            // Whatever invalidated the effects — endpoint, credentials, the dashboard setting — re-opens
+            // the question this verification answered, so it stops vouching for the retained list and the
+            // renderer holds again until a fresh read lands.
+            AutoScopeVerification.invalidate()
             effectGeneration.incrementAndGet()
             promotionJob?.cancel()
             promotionJob = null
@@ -1718,9 +1810,26 @@ class EntityLearningManager(
                     config.homeDashboard.trim() == snapshot.configuredHomeDashboard &&
                         snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())
                 },
+                // A scan is the thing that promises to notice the account default moving. Reusing a
+                // memo whose key cannot express that move would make the promise unkeepable, and a
+                // restart would resume filtering the newly-opened dashboard through the previous
+                // dashboard's allow-list until something else happened to invalidate the process.
+                forceLive = homeDashboardResolutionMustBeLive(snapshot.configuredHomeDashboard),
             ) {
                 readHomeDashboardResolution(request, homeDashboard)
             }?.path ?: error("Home Assistant reported no legal dashboard")
+            // A live answer exists now, so the retained allow-list is no longer attributable to an
+            // unknown dashboard and document-start interception may stop holding. Recorded BEFORE the
+            // rebind below, because a rebind abandons this pass and the fact being recorded — that the
+            // account default has been read this process — is true either way. A failed or still-running
+            // resolution never reaches here, which is what keeps the renderer held.
+            AutoScopeVerification.markVerified(snapshot.configuredHomeDashboard)
+            // Under Auto the scope was a standing guess until this moment. If the account default
+            // resolved to a different dashboard, this pass is scoped to the wrong document: rebind and
+            // let the latched rerun scan the right one rather than mixing two dashboards' evidence.
+            if (reconcileResolvedScope(snapshot, resolved)) {
+                error("entity-learning scope retargeted to the resolved dashboard")
+            }
             val urlPath = EntityLearningProtocol.dashboardUrlPath(resolved)
             val command = JSONObject().put("type", "lovelace/config")
             if (urlPath.isNotBlank()) command.put("url_path", urlPath)
@@ -2422,6 +2531,16 @@ internal data class EntityLearningEffectState(
     val initialActivationPending: Boolean = false,
 )
 
+/**
+ * Whether an authenticated resolution names a different dashboard than a scan is scoped for.
+ *
+ * Under Auto the scope is a standing binding until a resolution answers; comparing by DASHBOARD rather
+ * than by route is what lets a view of the same dashboard keep its learned list while a genuinely
+ * different dashboard gives it up.
+ */
+internal fun resolvedScopeRequiresRebind(currentScope: String, resolved: String): Boolean =
+    dashboardEntityScopePath(currentScope) != dashboardEntityScopePath(resolved)
+
 internal data class EntityLearningSyncSnapshot(
     val generation: Long,
     val baseUrl: String,
@@ -2691,14 +2810,28 @@ internal class EntityTelemetryAccumulator(private val maxIds: Int) {
 }
 
 /** A resolver-policy upgrade must rescan even when the old, potentially wrong catalog has synced. */
+/**
+ * [autoScopeUnverifiedThisProcess] is what makes `Auto` safe across a restart.
+ *
+ * Every other reason here is a property of stored state, and under `Auto` stored state cannot answer
+ * the only question that matters: the account default can move while the panel is stopped, and nothing
+ * on disk records that. A nonzero `lastSyncAt` therefore certified a filter for the dashboard the panel
+ * used to show — so the renderer opened the new dashboard while the previous dashboard's allow-list
+ * stayed active until a manual or daily sync happened to run. Forcing a live resolution inside the scan
+ * cannot fix that on its own, because this decision is what determines whether a scan runs at all.
+ *
+ * The cost is one resolution per process under `Auto`, which is the price of the scope being a fact
+ * about the account rather than about this panel.
+ */
 internal fun shouldSyncEntityLearningOnStartup(
     learningEnabled: Boolean,
     lastSyncAt: Long,
     resolverMigration: DashboardEntityDefaultResolverMigration,
     forceBootstrap: Boolean = false,
     analyzerPolicyStale: Boolean = false,
+    autoScopeUnverifiedThisProcess: Boolean = false,
 ): Boolean = learningEnabled && resolverMigration != DashboardEntityDefaultResolverMigration.PERSIST_FAILED &&
-    (forceBootstrap || analyzerPolicyStale ||
+    (forceBootstrap || analyzerPolicyStale || autoScopeUnverifiedThisProcess ||
         resolverMigration == DashboardEntityDefaultResolverMigration.REBOOTSTRAP || lastSyncAt == 0L)
 
 /** An empty installation starts narrow; any stored manual list is preserved for explicit review. */
@@ -2899,3 +3032,32 @@ internal fun entityQueryIncludeIds(
     subscribed && filtered -> activeIds
     else -> null
 }
+
+/**
+ * Whether a scan must obtain a live home-dashboard resolution rather than reuse the process memo.
+ *
+ * The memo is keyed by endpoint, credential owner and CONFIGURED path. Under `Auto` the configured
+ * path is a constant, so the account's default dashboard can move without changing the key — and a
+ * process that resolved once would answer with the superseded dashboard for its whole lifetime. The
+ * scan is the thing that promises to notice that move, so under `Auto` it must ask for a live answer.
+ */
+internal fun homeDashboardResolutionMustBeLive(configuredHomeDashboard: String): Boolean =
+    EntityLearningProtocol.usesFrontendDefaultPanel(configuredHomeDashboard)
+
+/**
+ * Whether a resolved-scope rebind may still be written durably.
+ *
+ * The currency checks around the read guard the READ. This decision happens later and mutates durable
+ * target state, and between the two a cooperatively cancelled pass can be overtaken: the endpoint or
+ * the configured dashboard changes, and rebinding on the older snapshot overwrites the newer selection.
+ * Every component of the snapshot the decision was made from has to still describe the panel.
+ */
+internal fun resolvedScopeRebindIsStillCurrent(
+    snapshotConfigured: String,
+    currentConfigured: String,
+    snapshotOrigin: String,
+    currentOrigin: String,
+    generationMatches: Boolean,
+): Boolean = snapshotConfigured == currentConfigured &&
+    snapshotOrigin == currentOrigin &&
+    generationMatches
