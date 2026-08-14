@@ -33,12 +33,22 @@ internal object Vi530xRangeSession {
     }
 
     /** Issue one request and deliver its result. Returns false when the connection is unusable. */
-    fun poll(input: InputStream, output: OutputStream, onValue: (Float) -> Unit): Boolean {
+    fun poll(
+        input: InputStream,
+        output: OutputStream,
+        onValue: (Float) -> Unit,
+        onUnavailable: () -> Unit = {},
+    ): Boolean {
         val reader = BufferedReader(InputStreamReader(input))
         output.write("VI530X\n".toByteArray(Charsets.US_ASCII))
         output.flush()
         val line = reader.readLine() ?: return false
-        parse(line)?.let(onValue)
+        if (line.trim() == "ERR") {
+            onUnavailable()
+            return true
+        }
+        val value = parse(line) ?: return false
+        onValue(value)
         return true
     }
 }
@@ -112,13 +122,17 @@ internal class Vi530xProximityClient(
                             val alive = Vi530xRangeSession.poll(
                                 socket.inputStream,
                                 socket.outputStream,
-                            ) { value ->
-                                if (!run.cancelled && active === run) {
-                                    delivered = true
-                                    retryDelayMs = 0L
-                                    onValue(value)
-                                }
-                            }
+                                onValue = { value ->
+                                    if (!run.cancelled && active === run) {
+                                        delivered = true
+                                        retryDelayMs = 0L
+                                        onValue(value)
+                                    }
+                                },
+                                onUnavailable = {
+                                    if (!run.cancelled && active === run) onUnavailable()
+                                },
+                            )
                             if (!alive) break
                             try {
                                 Thread.sleep(pollIntervalMs)

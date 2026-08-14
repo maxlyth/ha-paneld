@@ -102,6 +102,7 @@ object ProfileMetadata {
             field("hardware.button_led_gpio_base", "integer", false, "First GPIO in a button LED block."),
             field("sensors.proximity_technology", "string", false, "Author-declared proximity technology."),
             field("sensors.proximity_gpio", "integer", false, "Supported raw binary proximity GPIO."),
+            field("sensors.vi530x", "boolean", false, "Expose a helper-started VI530x time-of-flight range source."),
             field("sensors.light_technology", "string", false, "Author-declared ambient light technology."),
             field("sensors.cht8305", "boolean", false, "Expose a supported authenticated room-climate input layout."),
             field("sensors.room_temp_offset_c", "number", false, "Profile baseline temperature correction."),

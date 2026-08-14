@@ -108,6 +108,18 @@ class AdaptiveProximitySurfaceContractTest {
         assertFalse(copy.contains("snapshot()"))
     }
 
+    @Test fun vi530xCallbacksJoinTheSensorHandlerBeforeMutatingLearningState() {
+        val reporter = source("sensors/SensorReporter.kt")
+        val vi530xBranch = reporter.substring(
+            reporter.indexOf("proximityAcquisition == ProximityAcquisition.VI530X"),
+            reporter.indexOf("proximityAcquisition == ProximityAcquisition.ANDROID_HAL"),
+        )
+
+        assertTrue(vi530xBranch.contains("onValue = { raw ->\n                            handler.post {"))
+        assertTrue(vi530xBranch.contains("onUnavailable = {\n                            handler.post {"))
+        assertTrue(reporter.contains("ProximityAcquisition.VI530X -> \"helper-vi530x\""))
+    }
+
     @Test fun persistenceAndWakeBoundariesFailClosed() {
         val runtime = source("sensors/ProximityLearningRuntime.kt")
         val service = source("PaneldService.kt")

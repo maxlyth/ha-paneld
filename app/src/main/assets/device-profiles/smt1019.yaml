@@ -1,6 +1,6 @@
 schema: 2
 id: smt1019
-version: 2.2.0
+version: 2.3.0
 display_name: ZHICAI SMT1019
 soc_class: rk3576
 soc:

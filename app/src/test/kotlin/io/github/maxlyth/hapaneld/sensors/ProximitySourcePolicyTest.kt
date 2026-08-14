@@ -9,11 +9,11 @@ import org.junit.Test
 class ProximitySourcePolicyTest {
     @Test fun onlyDeclaredContinuousHalMayWarmAnUnfingerprintedLegacySeed() {
         val continuousHal = proximitySourcePolicy(
-            proximityGpio = null,
+            acquisition = ProximityAcquisition.ANDROID_HAL,
             halReportingMode = Sensor.REPORTING_MODE_CONTINUOUS,
         )
         val claimedOnChangeHal = proximitySourcePolicy(
-            proximityGpio = null,
+            acquisition = ProximityAcquisition.ANDROID_HAL,
             halReportingMode = Sensor.REPORTING_MODE_ON_CHANGE,
         )
 
@@ -29,7 +29,7 @@ class ProximitySourcePolicyTest {
             Sensor.REPORTING_MODE_SPECIAL_TRIGGER,
             null,
         ).forEach { reportingMode ->
-            val policy = proximitySourcePolicy(proximityGpio = null, halReportingMode = reportingMode)
+            val policy = proximitySourcePolicy(ProximityAcquisition.ANDROID_HAL, reportingMode)
             assertEquals(false, policy.sparseLearning)
             assertEquals(false, policy.onChangeHalLiveness)
             assertEquals(false, policy.legacySeedEligible)
@@ -44,11 +44,33 @@ class ProximitySourcePolicyTest {
             Sensor.REPORTING_MODE_SPECIAL_TRIGGER,
             null,
         ).forEach { reportingMode ->
-            val gpio = proximitySourcePolicy(proximityGpio = 17, halReportingMode = reportingMode)
+            val gpio = proximitySourcePolicy(ProximityAcquisition.GPIO, reportingMode)
             assertTrue(gpio.sparseLearning)
             assertFalse(gpio.onChangeHalLiveness)
             assertFalse(gpio.legacySeedEligible)
         }
+    }
+
+    @Test fun vi530xSelectionOwnsPolicyAndNeverRunsHalRecovery() {
+        val acquisition = proximityAcquisition(
+            hasVi530x = true,
+            proximityGpio = 17,
+            hasHal = true,
+        )
+        val policy = proximitySourcePolicy(acquisition, Sensor.REPORTING_MODE_ON_CHANGE)
+
+        assertEquals(ProximityAcquisition.VI530X, acquisition)
+        assertFalse(policy.sparseLearning)
+        assertFalse(policy.onChangeHalLiveness)
+        assertFalse(policy.legacySeedEligible)
+        assertFalse(
+            proximityNeedsHalLivenessProbe(
+                acquisition = acquisition,
+                onChangeHalLiveness = policy.onChangeHalLiveness,
+                cadenceClassified = true,
+                continuousCadenceConfirmed = false,
+            ),
+        )
     }
 
     @Test fun reportingSparsityRequiresGpioOrObservedNonContinuousCadence() {
@@ -158,7 +180,7 @@ class ProximitySourcePolicyTest {
     @Test fun empiricallyContinuousHalDoesNotKeepUsingOnChangeLivenessProbes() {
         assertFalse(
             proximityNeedsHalLivenessProbe(
-                proximityGpio = null,
+                acquisition = ProximityAcquisition.ANDROID_HAL,
                 onChangeHalLiveness = true,
                 cadenceClassified = true,
                 continuousCadenceConfirmed = true,
@@ -174,7 +196,7 @@ class ProximitySourcePolicyTest {
         assertEquals(0, recovery.sampleCount)
         assertTrue(
             proximityNeedsHalLivenessProbe(
-                proximityGpio = null,
+                acquisition = ProximityAcquisition.ANDROID_HAL,
                 onChangeHalLiveness = true,
                 cadenceClassified = recovery.cadenceClassified,
                 continuousCadenceConfirmed = recovery.continuousCadenceConfirmed,
@@ -185,7 +207,7 @@ class ProximitySourcePolicyTest {
     @Test fun quietHalStillUsesLivenessProbes() {
         assertTrue(
             proximityNeedsHalLivenessProbe(
-                proximityGpio = null,
+                acquisition = ProximityAcquisition.ANDROID_HAL,
                 onChangeHalLiveness = true,
                 cadenceClassified = false,
                 continuousCadenceConfirmed = false,
@@ -193,7 +215,7 @@ class ProximitySourcePolicyTest {
         )
         assertTrue(
             proximityNeedsHalLivenessProbe(
-                proximityGpio = null,
+                acquisition = ProximityAcquisition.ANDROID_HAL,
                 onChangeHalLiveness = false,
                 cadenceClassified = true,
                 continuousCadenceConfirmed = false,
@@ -204,7 +226,7 @@ class ProximitySourcePolicyTest {
     @Test fun gpioSourceNeverUsesHalLivenessProbes() {
         assertFalse(
             proximityNeedsHalLivenessProbe(
-                proximityGpio = 17,
+                acquisition = ProximityAcquisition.GPIO,
                 onChangeHalLiveness = true,
                 cadenceClassified = true,
                 continuousCadenceConfirmed = false,

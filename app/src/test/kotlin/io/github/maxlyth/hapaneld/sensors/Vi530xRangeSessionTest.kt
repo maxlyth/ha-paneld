@@ -37,13 +37,27 @@ class Vi530xRangeSessionTest {
         // ERR is the helper saying "no measurement", which is different from the socket dying. The
         // connection stays usable so the next poll can succeed once the sensor answers again.
         val values = mutableListOf<Float>()
+        var unavailable = 0
         val alive = Vi530xRangeSession.poll(
             ByteArrayInputStream("ERR\n".toByteArray()),
             ByteArrayOutputStream(),
             values::add,
-        )
+        ) { unavailable++ }
         assertEquals(emptyList<Float>(), values)
+        assertEquals(1, unavailable)
         assertEquals(true, alive)
+    }
+
+    @Test fun aMalformedReplyIsNotTreatedAsAHealthySensor() {
+        var unavailable = 0
+        val alive = Vi530xRangeSession.poll(
+            ByteArrayInputStream("unexpected\n".toByteArray()),
+            ByteArrayOutputStream(),
+            {},
+        ) { unavailable++ }
+
+        assertEquals(false, alive)
+        assertEquals(0, unavailable)
     }
 
     @Test fun negativeRangesSurviveBecauseTheDriverSignsThem() {

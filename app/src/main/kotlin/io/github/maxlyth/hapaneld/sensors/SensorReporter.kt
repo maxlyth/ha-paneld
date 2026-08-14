@@ -30,15 +30,35 @@ internal data class ProximitySourcePolicy(
     val legacySeedEligible: Boolean,
 )
 
+internal enum class ProximityAcquisition {
+    VI530X,
+    GPIO,
+    ANDROID_HAL,
+    ABSENT,
+}
+
+internal fun proximityAcquisition(
+    hasVi530x: Boolean,
+    proximityGpio: Int?,
+    hasHal: Boolean,
+): ProximityAcquisition = when {
+    hasVi530x -> ProximityAcquisition.VI530X
+    proximityGpio != null -> ProximityAcquisition.GPIO
+    hasHal -> ProximityAcquisition.ANDROID_HAL
+    else -> ProximityAcquisition.ABSENT
+}
+
 /** HAL delivery metadata selects liveness and legacy-seed safety, never sparse learning: vendor HALs
  * commonly claim on-change while emitting densely. Reporting sparsity is classified from live cadence. */
 internal fun proximitySourcePolicy(
-    proximityGpio: Int?,
+    acquisition: ProximityAcquisition,
     halReportingMode: Int?,
 ): ProximitySourcePolicy = ProximitySourcePolicy(
-    sparseLearning = proximityGpio != null,
-    onChangeHalLiveness = proximityGpio == null && halReportingMode == Sensor.REPORTING_MODE_ON_CHANGE,
-    legacySeedEligible = proximityGpio == null && halReportingMode == Sensor.REPORTING_MODE_CONTINUOUS,
+    sparseLearning = acquisition == ProximityAcquisition.GPIO,
+    onChangeHalLiveness = acquisition == ProximityAcquisition.ANDROID_HAL &&
+        halReportingMode == Sensor.REPORTING_MODE_ON_CHANGE,
+    legacySeedEligible = acquisition == ProximityAcquisition.ANDROID_HAL &&
+        halReportingMode == Sensor.REPORTING_MODE_CONTINUOUS,
 )
 
 internal fun proximityReportingSparse(
@@ -65,11 +85,11 @@ internal fun proximityCadenceAfterStale(): ProximityCadenceRecovery = ProximityC
 )
 
 internal fun proximityNeedsHalLivenessProbe(
-    proximityGpio: Int?,
+    acquisition: ProximityAcquisition,
     onChangeHalLiveness: Boolean,
     cadenceClassified: Boolean,
     continuousCadenceConfirmed: Boolean,
-): Boolean = proximityGpio == null && !continuousCadenceConfirmed &&
+): Boolean = acquisition == ProximityAcquisition.ANDROID_HAL && !continuousCadenceConfirmed &&
     (onChangeHalLiveness || cadenceClassified)
 
 internal enum class EnvironmentalSensorUse {
@@ -130,11 +150,13 @@ class SensorReporter(
     private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
     private val roomClimateMetrics: PanelMetrics? = if (hasCht8305) PanelMetrics() else null
     private val proximityGpio: Int? = profile.proximityGpio
-    // A daemon-read time-of-flight source. Distinct from the GPIO source: that one is a binary level,
-    // this reports a distance, so it feeds the same learning engine with a continuous value.
-    private val proximityVi530x: Boolean = profile.hasVi530x
+    private val proximityAcquisition = proximityAcquisition(
+        hasVi530x = profile.hasVi530x,
+        proximityGpio = proximityGpio,
+        hasHal = proximitySensor != null,
+    )
     private val proximityPolicy = proximitySourcePolicy(
-        proximityGpio,
+        proximityAcquisition,
         proximitySensor?.reportingMode,
     )
     @Volatile private var proximityRuntime: ProximityLearningRuntime? = null
@@ -263,7 +285,7 @@ class SensorReporter(
     }
 
     fun hasLight() = lightSensor != null
-    fun hasProximity() = proximitySensor != null || proximityGpio != null || proximityVi530x
+    fun hasProximity() = proximityAcquisition != ProximityAcquisition.ABSENT
     fun hasLearnedProximity() = proximityRuntime?.isLearnedSignal() == true
     fun hasTemperature() = environmentalSensorPublishes(tempUse)
     fun hasHumidity() = environmentalSensorPublishes(humidityUse)
@@ -399,16 +421,22 @@ class SensorReporter(
         }
         lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         if (hasProximity() && !initializeProximitySource(run, { activeRun === run }) {
-                if (proximityVi530x) {
+                if (proximityAcquisition == ProximityAcquisition.VI530X) {
                     val client = Vi530xProximityClient(
-                        onValue = { raw -> if (run.isOpen() && activeRun === run) handleProximity(raw, run) },
+                        onValue = { raw ->
+                            handler.post {
+                                if (run.isOpen() && activeRun === run) handleProximity(raw, run)
+                            }
+                        },
                         onUnavailable = {
-                            if (run.isOpen() && activeRun === run) deliverUnavailable(run)
+                            handler.post {
+                                if (run.isOpen() && activeRun === run) deliverUnavailable(run)
+                            }
                         },
                     )
                     vi530xClient = client
                     client.start()
-                } else if (proximityGpio == null) {
+                } else if (proximityAcquisition == ProximityAcquisition.ANDROID_HAL) {
                     proximitySensor?.let {
                         if (proximityPolicy.onChangeHalLiveness) onChangeProbeAwaiting = true
                         val registered = sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler)
@@ -428,9 +456,9 @@ class SensorReporter(
                             }
                         }
                     }
-                } else {
+                } else if (proximityAcquisition == ProximityAcquisition.GPIO) {
                     val client = GpioProximityClient(
-                        gpio = proximityGpio,
+                        gpio = checkNotNull(proximityGpio),
                         onValue = { raw -> if (run.isOpen() && activeRun === run) handleProximity(raw, run) },
                         onUnavailable = {
                             if (run.isOpen() && activeRun === run) {
@@ -548,7 +576,7 @@ class SensorReporter(
     }
 
     private fun needsHalLivenessProbe(): Boolean = proximityNeedsHalLivenessProbe(
-        proximityGpio = proximityGpio,
+        acquisition = proximityAcquisition,
         onChangeHalLiveness = proximityPolicy.onChangeHalLiveness,
         cadenceClassified = cadenceClassified,
         continuousCadenceConfirmed = continuousCadenceConfirmed,
@@ -579,20 +607,23 @@ class SensorReporter(
     }
 
     private fun proximitySourceIdentity(): String {
-        val acquisition = proximityGpio?.let { "helper-gpio:$it" }
-            ?: proximitySensor?.let { sensor ->
-            listOf(
-                "android-hal",
-                sensor.vendor,
-                sensor.name,
-                sensor.stringType,
-                sensor.version.toString(),
-                sensor.type.toString(),
-                sensor.resolution.toString(),
-                sensor.maximumRange.toString(),
-            ).joinToString("|")
+        val acquisition = when (proximityAcquisition) {
+            ProximityAcquisition.VI530X -> "helper-vi530x"
+            ProximityAcquisition.GPIO -> "helper-gpio:${checkNotNull(proximityGpio)}"
+            ProximityAcquisition.ANDROID_HAL -> proximitySensor?.let { sensor ->
+                listOf(
+                    "android-hal",
+                    sensor.vendor,
+                    sensor.name,
+                    sensor.stringType,
+                    sensor.version.toString(),
+                    sensor.type.toString(),
+                    sensor.resolution.toString(),
+                    sensor.maximumRange.toString(),
+                ).joinToString("|")
+            } ?: "absent"
+            ProximityAcquisition.ABSENT -> "absent"
         }
-            ?: "absent"
         // Firmware is part of the epoch, not a behavior rule. A vendor can invert or quantize the same
         // named HAL sensor in an OTA; selecting a new empty model is safer than validating old anchors
         // against an on-change stream whose new far value may look exactly like the old near value.
