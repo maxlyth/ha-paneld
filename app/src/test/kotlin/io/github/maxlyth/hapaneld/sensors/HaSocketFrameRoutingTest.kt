@@ -31,17 +31,18 @@ class HaSocketFrameRoutingTest {
     // ---- the contract that protects the shared stream --------------------------------------------
 
     @Test fun aRefusedLifecycleSubscriptionIsNotFatal() {
-        lifecycleIds.keys.forEach { id ->
+        lifecycleIds.forEach { (id, event) ->
             assertEquals(
                 "id $id is a lifecycle subscription; refusing it must not tear down the stream",
-                HaResultOutcome.LifecycleRejected,
-                haResultOutcome(result(id, success = false, message = "unauthorized"), lifecycleIds.keys, 240),
+                if (event == HaLifecycleEvent.STARTED) HaResultOutcome.LifecycleStartedRejected
+                else HaResultOutcome.LifecycleRejected,
+                haResultOutcome(result(id, success = false, message = "unauthorized"), lifecycleIds, 240),
             )
         }
     }
 
     @Test fun aRefusedEntitySubscriptionRemainsFatal() {
-        val outcome = haResultOutcome(result(1, success = false, message = "boom"), lifecycleIds.keys, 240)
+        val outcome = haResultOutcome(result(1, success = false, message = "boom"), lifecycleIds, 240)
         assertTrue(outcome is HaResultOutcome.Fatal)
         assertEquals("boom", (outcome as HaResultOutcome.Fatal).message)
     }
@@ -50,7 +51,7 @@ class HaSocketFrameRoutingTest {
         registryIds.forEach { id ->
             assertTrue(
                 "id $id is not a lifecycle subscription and must stay fatal",
-                haResultOutcome(result(id, success = false, message = "nope"), lifecycleIds.keys, 240)
+                haResultOutcome(result(id, success = false, message = "nope"), lifecycleIds, 240)
                     is HaResultOutcome.Fatal,
             )
         }
@@ -59,14 +60,14 @@ class HaSocketFrameRoutingTest {
     @Test fun withNoLifecycleSubscriptionEveryFailureIsFatal() {
         // A panel that never demanded lifecycle events must not gain a new way to swallow a real error.
         assertTrue(
-            haResultOutcome(result(11, success = false, message = "x"), emptySet(), 240) is HaResultOutcome.Fatal,
+            haResultOutcome(result(11, success = false, message = "x"), emptyMap(), 240) is HaResultOutcome.Fatal,
         )
     }
 
     @Test fun aSuccessfulResultForAnEntitySubscriptionCarriesNothing() {
         // Unchanged: entity coverage is still not tracked. The panel reports what it OBSERVES rather
         // than which entity routes it believes are covered.
-        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(1, true), lifecycleIds.keys, 240))
+        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(1, true), lifecycleIds, 240))
     }
 
     @Test fun anAcceptedLifecycleSubscriptionIsReportedBecauseItPromisesTheStartupEvent() {
@@ -78,18 +79,22 @@ class HaSocketFrameRoutingTest {
         // startup will announce itself" from "nothing ever will", and recovery now waits on it.
         assertEquals(
             HaResultOutcome.LifecycleEstablished,
-            haResultOutcome(result(11, true), lifecycleIds.keys, 240),
+            haResultOutcome(result(15, true), lifecycleIds, 240),
         )
+    }
+
+    @Test fun acceptingAnotherLifecycleEventDoesNotPromiseStarted() {
+        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(11, true), lifecycleIds, 240))
     }
 
     @Test fun acceptanceIsNotClaimedWhenLifecycleWasNeverSubscribed() {
         // A panel that never demanded lifecycle events must not appear to hold a subscription: it would
         // then wait forever for a `homeassistant_started` nobody promised.
-        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(11, true), emptySet(), 240))
+        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(11, true), emptyMap(), 240))
     }
 
     @Test fun aFatalResultWithoutAnErrorMessageStillCarriesAReason() {
-        val outcome = haResultOutcome(result(1, success = false), lifecycleIds.keys, 240)
+        val outcome = haResultOutcome(result(1, success = false), lifecycleIds, 240)
         assertEquals(
             HaResultOutcome.Fatal("Home Assistant rejected the entity subscription"),
             outcome,
@@ -97,12 +102,12 @@ class HaSocketFrameRoutingTest {
     }
 
     @Test fun aBlankErrorMessageFallsBackRatherThanReportingNothing() {
-        val outcome = haResultOutcome(result(1, success = false, message = "   "), lifecycleIds.keys, 240)
+        val outcome = haResultOutcome(result(1, success = false, message = "   "), lifecycleIds, 240)
         assertEquals(HaResultOutcome.Fatal("Home Assistant rejected the entity subscription"), outcome)
     }
 
     @Test fun anOversizedErrorMessageIsTruncated() {
-        val outcome = haResultOutcome(result(1, success = false, message = "x".repeat(500)), lifecycleIds.keys, 240)
+        val outcome = haResultOutcome(result(1, success = false, message = "x".repeat(500)), lifecycleIds, 240)
         assertEquals(240, (outcome as HaResultOutcome.Fatal).message.length)
     }
 

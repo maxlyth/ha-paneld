@@ -67,14 +67,17 @@ internal enum class HaLifecycleState(val wireValue: String) {
  */
 internal class HaLifecycle(
     private val backOnlineWindowMs: Long = DEFAULT_BACK_ONLINE_WINDOW_MS,
+    private val inferredStartingWindowMs: Long = DEFAULT_INFERRED_STARTING_WINDOW_MS,
 ) {
     init {
         require(backOnlineWindowMs > 0L) { "back-online window must be positive" }
+        require(inferredStartingWindowMs > 0L) { "inferred-starting window must be positive" }
     }
 
     private val lock = Any()
     private var current = HaLifecycleState.NORMAL
     private var backOnlineSinceMs = 0L
+    private var inferredStartingSinceMs: Long? = null
 
     /**
      * Which source OBSERVED the current state, or null when no source did: the initial NORMAL, a
@@ -152,6 +155,20 @@ internal class HaLifecycle(
     fun state(nowMs: Long): HaLifecycleState = synchronized(lock) { stateLocked(nowMs) }
 
     private fun stateLocked(nowMs: Long): HaLifecycleState {
+        if (current == HaLifecycleState.STARTING) {
+            inferredStartingSinceMs?.let { since ->
+                val elapsed = nowMs - since
+                if (elapsed >= inferredStartingWindowMs || elapsed < 0L) {
+                    // The subscription may have been established after STARTED already fired. Retire
+                    // only this inferred state silently; a server-reported START remains authoritative.
+                    current = HaLifecycleState.NORMAL
+                    source = null
+                    inferredStartingSinceMs = null
+                    revision++
+                }
+            }
+            return current
+        }
         if (current != HaLifecycleState.BACK_ONLINE) return current
         // An injected or monotonic clock can move backwards; expire rather than extend the window.
         val elapsed = nowMs - backOnlineSinceMs
@@ -181,17 +198,20 @@ internal class HaLifecycle(
                 // a later stage cannot re-announce. This deliberately fires during BACK_ONLINE too —
                 // that is how a rapid restart opens its second outage instead of being swallowed.
                 event.shutdown -> {
+                    inferredStartingSinceMs = null
                     if (current != HaLifecycleState.SHUTTING_DOWN) revision++
                     current = HaLifecycleState.SHUTTING_DOWN
                 }
 
-                event == HaLifecycleEvent.START ->
+                event == HaLifecycleEvent.START -> {
                     // "starting" is not "back". It may never arrive, and it must not overwrite a
                     // recovery we have already proven.
+                    inferredStartingSinceMs = null
                     if (observed != HaLifecycleState.STARTING && observed != HaLifecycleState.BACK_ONLINE) {
                         current = HaLifecycleState.STARTING
                         revision++
                     }
+                }
 
                 else ->
                     // STARTED is the authoritative "usable again". Absorb a duplicate so the recovery
@@ -291,6 +311,7 @@ internal class HaLifecycle(
                         // is absorbed: a flapping socket must not re-announce a startup already shown.
                         if (observed != HaLifecycleState.STARTING) {
                             current = HaLifecycleState.STARTING
+                            inferredStartingSinceMs = nowMs
                             revision++
                         }
                     } else {
@@ -356,12 +377,14 @@ internal class HaLifecycle(
 
     private fun enterBackOnlineLocked(nowMs: Long) {
         current = HaLifecycleState.BACK_ONLINE
+        inferredStartingSinceMs = null
         backOnlineSinceMs = nowMs
         revision++
     }
 
     companion object {
         const val DEFAULT_BACK_ONLINE_WINDOW_MS = 8_000L
+        const val DEFAULT_INFERRED_STARTING_WINDOW_MS = 120_000L
     }
 }
 

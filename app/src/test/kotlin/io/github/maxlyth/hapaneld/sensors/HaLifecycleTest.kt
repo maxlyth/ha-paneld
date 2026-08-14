@@ -308,8 +308,10 @@ class HaLifecycleTest {
             HaLifecycleState.STARTING,
             ha.state(60_000),
         )
-        // And it must NOT decay into a recovery the server never confirmed.
-        assertEquals(HaLifecycleState.STARTING, ha.state(9_999_000))
+        // If STARTED happened before this new subscription existed, no event can arrive. Retire the
+        // inferred notice silently rather than claiming recovery or stranding the panel forever.
+        assertEquals(HaLifecycleState.STARTING, ha.state(179_999))
+        assertEquals(HaLifecycleState.NORMAL, ha.state(180_000))
     }
 
     @Test fun onlyTheServersOwnStartedEventAnnouncesRecoveryToASubscribedSession() {

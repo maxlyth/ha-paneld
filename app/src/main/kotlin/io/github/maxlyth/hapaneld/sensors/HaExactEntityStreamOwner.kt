@@ -128,6 +128,9 @@ internal sealed interface HaExactSocketMessage {
      */
     data object LifecycleRejected : HaExactSocketMessage
 
+    /** Home Assistant rejected the one lifecycle route whose outcome gates LIVE recovery. */
+    data object LifecycleStartedRejected : HaExactSocketMessage
+
     /** Home Assistant accepted a lifecycle subscription; this session will hear the startup events. */
     data object LifecycleEstablished : HaExactSocketMessage
 
@@ -217,6 +220,7 @@ internal sealed interface HaResultOutcome {
      * will ever tell us", and the recovery announcement depends on knowing which.
      */
     data object LifecycleEstablished : HaResultOutcome
+    data object LifecycleStartedRejected : HaResultOutcome
     data object LifecycleRejected : HaResultOutcome
     data class Fatal(val message: String) : HaResultOutcome
 }
@@ -233,20 +237,24 @@ internal sealed interface HaResultOutcome {
  */
 internal fun haResultOutcome(
     json: JSONObject,
-    lifecycleIds: Set<Int>,
+    lifecycleIds: Map<Int, HaLifecycleEvent>,
     maxErrorChars: Int,
-): HaResultOutcome = when {
-    // A lifecycle id is checked on BOTH branches: acceptance is as load-bearing as refusal, because
-    // only an established subscription promises a `homeassistant_started` worth waiting for.
-    json.optBoolean("success") ->
-        if (json.optInt("id") in lifecycleIds) HaResultOutcome.LifecycleEstablished
-        else HaResultOutcome.Ignored
-    json.optInt("id") in lifecycleIds -> HaResultOutcome.LifecycleRejected
-    else -> HaResultOutcome.Fatal(
-        json.optJSONObject("error")?.optString("message")?.take(maxErrorChars)
-            ?.takeIf(String::isNotBlank)
-            ?: "Home Assistant rejected the entity subscription",
-    )
+): HaResultOutcome {
+    val lifecycleEvent = lifecycleIds[json.optInt("id")]
+    return when {
+        // Only acceptance of STARTED promises the exact event recovery waits for. The other four
+        // subscriptions are independently authorized and cannot stand in for it.
+        json.optBoolean("success") && lifecycleEvent == HaLifecycleEvent.STARTED ->
+            HaResultOutcome.LifecycleEstablished
+        json.optBoolean("success") -> HaResultOutcome.Ignored
+        lifecycleEvent == HaLifecycleEvent.STARTED -> HaResultOutcome.LifecycleStartedRejected
+        lifecycleEvent != null -> HaResultOutcome.LifecycleRejected
+        else -> HaResultOutcome.Fatal(
+            json.optJSONObject("error")?.optString("message")?.take(maxErrorChars)
+                ?.takeIf(String::isNotBlank)
+                ?: "Home Assistant rejected the entity subscription",
+        )
+    }
 }
 
 internal interface HaExactEntityConnection {
@@ -661,6 +669,7 @@ internal class HaExactEntityStreamOwner(
             HaPresenceValue.UNAVAILABLE
         }
         val bufferedActivities = linkedMapOf<String, BufferedActivity>()
+        var startupSubscriptionResolved = !expected.watchLifecycle
         val messages = Channel<HaExactSocketMessage>(STREAM_BUFFER_CAPACITY)
         val reader = launch(workerDispatcher) {
             while (isActive) messages.send(connection.receive())
@@ -696,9 +705,15 @@ internal class HaExactEntityStreamOwner(
                             publishLifecycle(run, HaLifecycleSignal.Rejected)
                             return@onReceive
                         }
+                        if (message == HaExactSocketMessage.LifecycleStartedRejected) {
+                            startupSubscriptionResolved = true
+                            publishLifecycle(run, HaLifecycleSignal.Rejected)
+                            return@onReceive
+                        }
                         // Acceptance rides the same non-hydration path as refusal: both are answers to
                         // the subscribe we just issued, and both must land before LIVE is reported.
                         if (message == HaExactSocketMessage.LifecycleEstablished) {
+                            startupSubscriptionResolved = true
                             publishLifecycle(run, HaLifecycleSignal.Established)
                             return@onReceive
                         }
@@ -771,6 +786,22 @@ internal class HaExactEntityStreamOwner(
                 )
             }
             if (bufferedPresence.isNotEmpty()) publishBufferedPresence(run, expected)
+            // REST hydration and WebSocket subscription replies race. Do not call the session LIVE
+            // until the exact STARTED subscription has answered, or an empty lifecycle-only request can
+            // recreate the premature recovery before its acceptance frame is read.
+            if (!startupSubscriptionResolved) {
+                withTimeout(subscribeTimeoutMs) {
+                    while (!startupSubscriptionResolved) {
+                        val message = messages.receive()
+                        if (message == HaExactSocketMessage.LifecycleEstablished ||
+                            message == HaExactSocketMessage.LifecycleStartedRejected
+                        ) {
+                            startupSubscriptionResolved = true
+                        }
+                        applyMessage(run, expected, message, initial = false)
+                    }
+                }
+            }
             onLive()
             publishTransportStatus(run, expected, HaExactEntityStreamPhase.LIVE)
 
@@ -830,6 +861,7 @@ internal class HaExactEntityStreamOwner(
             HaExactSocketMessage.RegistryChanged -> publishRegistryChanged(run)
             is HaExactSocketMessage.Lifecycle -> publishLifecycle(run, HaLifecycleSignal.Event(message.event))
             HaExactSocketMessage.LifecycleRejected -> publishLifecycle(run, HaLifecycleSignal.Rejected)
+            HaExactSocketMessage.LifecycleStartedRejected -> publishLifecycle(run, HaLifecycleSignal.Rejected)
             HaExactSocketMessage.LifecycleEstablished -> publishLifecycle(run, HaLifecycleSignal.Established)
             else -> Unit
         }
@@ -1296,10 +1328,12 @@ internal class KtorHaExactEntityStreamTransport(
                         }
                     }
                     "result" -> when (
-                        val outcome = haResultOutcome(json, lifecycleSubscriptionIds.keys, MAX_ERROR_CHARS)
+                        val outcome = haResultOutcome(json, lifecycleSubscriptionIds, MAX_ERROR_CHARS)
                     ) {
                         HaResultOutcome.Ignored -> HaExactSocketMessage.Other
                         HaResultOutcome.LifecycleEstablished -> HaExactSocketMessage.LifecycleEstablished
+                        HaResultOutcome.LifecycleStartedRejected ->
+                            HaExactSocketMessage.LifecycleStartedRejected
                         HaResultOutcome.LifecycleRejected -> HaExactSocketMessage.LifecycleRejected
                         is HaResultOutcome.Fatal -> throw HaProtocolException(outcome.message)
                     }

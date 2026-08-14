@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -128,6 +129,7 @@ class HaExactEntityStreamOwnerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val connection = FakeConnection()
         val transport = FakeTransport(connection)
+        transport.lifecycleOutcome = HaExactSocketMessage.LifecycleStartedRejected
         val observer = RecordingObserver()
         val signals = mutableListOf<HaLifecycleSignal>()
         val owner = owner(dispatcher, transport, observer)
@@ -140,7 +142,7 @@ class HaExactEntityStreamOwnerTest {
         // Home Assistant refuses each lifecycle subscription, as it does for a non-admin user. Were this
         // still an HaProtocolException the stream would resubscribe three times and then park for good,
         // taking ambient light and automatic sleep down with it.
-        repeat(5) { connection.messages.trySend(HaExactSocketMessage.LifecycleRejected) }
+        repeat(4) { connection.messages.trySend(HaExactSocketMessage.LifecycleRejected) }
         runCurrent()
         advanceTimeBy(10L * 60_000L)
         runCurrent()
@@ -155,6 +157,7 @@ class HaExactEntityStreamOwnerTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val connection = FakeConnection()
         val transport = FakeTransport(connection)
+        transport.lifecycleOutcome = null
         // Hydration will BLOCK: the REST state is a deferred we deliberately leave incomplete.
         val pendingHydration = CompletableDeferred<JSONObject?>()
         transport.states[ENTITY_A] = pendingHydration
@@ -170,7 +173,7 @@ class HaExactEntityStreamOwnerTest {
         // A non-admin refusal arrives IMMEDIATELY after subscribing, and a restart can land at any
         // moment. Both used to be consumed and discarded by the hydration loop, a deaf window of up
         // to the 20-second hydration timeout.
-        connection.messages.trySend(HaExactSocketMessage.LifecycleRejected)
+        connection.messages.trySend(HaExactSocketMessage.LifecycleStartedRejected)
         connection.messages.trySend(HaExactSocketMessage.Lifecycle(HaLifecycleEvent.STOP))
         runCurrent()
 
@@ -220,6 +223,27 @@ class HaExactEntityStreamOwnerTest {
             ),
             events,
         )
+        owner.close()
+    }
+
+    @Test fun `LIVE waits for the started subscription outcome even when hydration is empty`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val connection = FakeConnection()
+        val transport = FakeTransport(connection).apply { lifecycleOutcome = null }
+        val observer = RecordingObserver()
+        val phases = mutableListOf<HaExactEntityStreamPhase>()
+        val owner = owner(dispatcher, transport, observer)
+        owner.bindLifecycle { signal ->
+            if (signal is HaLifecycleSignal.Transport) phases += signal.phase
+        }
+
+        owner.replaceLifecycleWatch(true)
+        runCurrent()
+        assertFalse("an unanswered subscription is not LIVE", phases.contains(HaExactEntityStreamPhase.LIVE))
+
+        connection.messages.trySend(HaExactSocketMessage.LifecycleEstablished)
+        runCurrent()
+        assertTrue("the exact STARTED acceptance releases LIVE", phases.contains(HaExactEntityStreamPhase.LIVE))
         owner.close()
     }
 
@@ -858,6 +882,7 @@ class HaExactEntityStreamOwnerTest {
         var protocolSubscriptionFailures = 0
         var stateTimeouts = 0
         var subscribeCount = 0
+        var lifecycleOutcome: HaExactSocketMessage? = HaExactSocketMessage.LifecycleEstablished
         val subscriptions = mutableListOf<Set<String>>()
         val registryWatches = mutableListOf<Boolean>()
         val lifecycleWatches = mutableListOf<Boolean>()
@@ -892,7 +917,9 @@ class HaExactEntityStreamOwnerTest {
             if (rejectSubscriptions-- > 0) throw HaAuthenticationException("rejected")
             if (subscribeTimeouts-- > 0) awaitCancellation()
             if (protocolSubscriptionFailures-- > 0) throw HaProtocolException("invalid handshake")
-            return connections.removeFirst()
+            return connections.removeFirst().also { connection ->
+                if (watchLifecycle) lifecycleOutcome?.let(connection.messages::trySend)
+            }
         }
 
         override suspend fun state(baseUrl: String, accessToken: String, entityId: String): JSONObject? {
