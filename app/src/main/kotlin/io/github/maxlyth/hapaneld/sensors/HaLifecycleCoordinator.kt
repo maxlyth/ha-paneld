@@ -21,9 +21,11 @@ internal class HaLifecycleCoordinator(
         when (signal) {
             is HaLifecycleSignal.Event -> lifecycle.onEvent(signal.event, HaLifecycleSource.SOCKET, now)
             HaLifecycleSignal.Rejected -> lifecycle.onSubscriptionRejected()
+            HaLifecycleSignal.Established -> lifecycle.onSubscriptionEstablished()
             is HaLifecycleSignal.Transport -> when (signal.phase) {
-                // Reaching LIVE means a fresh authenticated socket completed its subscriptions, which is
-                // the funnel's "authenticated recovery" proof.
+                // Reaching LIVE means a fresh authenticated socket completed its subscriptions — so by
+                // now this session's lifecycle subscription has already been accepted or refused, and
+                // the machine can tell "a startup will announce itself" from "nothing ever will".
                 HaExactEntityStreamPhase.LIVE -> lifecycle.onAuthenticatedRunning(now)
                 // The socket is gone. Whether that is an outage or a LAN blip is the machine's call, not
                 // ours — we only report that the connection ended.

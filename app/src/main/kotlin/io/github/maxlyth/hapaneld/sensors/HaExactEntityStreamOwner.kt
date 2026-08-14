@@ -128,6 +128,9 @@ internal sealed interface HaExactSocketMessage {
      */
     data object LifecycleRejected : HaExactSocketMessage
 
+    /** Home Assistant accepted a lifecycle subscription; this session will hear the startup events. */
+    data object LifecycleEstablished : HaExactSocketMessage
+
     data object Other : HaExactSocketMessage
 }
 
@@ -136,6 +139,9 @@ internal sealed interface HaLifecycleSignal {
     data class Event(val event: HaLifecycleEvent) : HaLifecycleSignal
 
     data object Rejected : HaLifecycleSignal
+
+    /** This session holds a live lifecycle subscription, so a startup will announce itself. */
+    data object Established : HaLifecycleSignal
     data class Transport(val phase: HaExactEntityStreamPhase) : HaLifecycleSignal
 }
 
@@ -205,6 +211,12 @@ internal fun haEventRoute(
 internal sealed interface HaResultOutcome {
     data object Ignored : HaResultOutcome
 
+    /**
+     * Home Assistant ACCEPTED a lifecycle subscription, so this session will be told when the server
+     * starts. That is the only thing separating "we will hear `homeassistant_started`" from "nothing
+     * will ever tell us", and the recovery announcement depends on knowing which.
+     */
+    data object LifecycleEstablished : HaResultOutcome
     data object LifecycleRejected : HaResultOutcome
     data class Fatal(val message: String) : HaResultOutcome
 }
@@ -224,7 +236,11 @@ internal fun haResultOutcome(
     lifecycleIds: Set<Int>,
     maxErrorChars: Int,
 ): HaResultOutcome = when {
-    json.optBoolean("success") -> HaResultOutcome.Ignored
+    // A lifecycle id is checked on BOTH branches: acceptance is as load-bearing as refusal, because
+    // only an established subscription promises a `homeassistant_started` worth waiting for.
+    json.optBoolean("success") ->
+        if (json.optInt("id") in lifecycleIds) HaResultOutcome.LifecycleEstablished
+        else HaResultOutcome.Ignored
     json.optInt("id") in lifecycleIds -> HaResultOutcome.LifecycleRejected
     else -> HaResultOutcome.Fatal(
         json.optJSONObject("error")?.optString("message")?.take(maxErrorChars)
@@ -680,6 +696,12 @@ internal class HaExactEntityStreamOwner(
                             publishLifecycle(run, HaLifecycleSignal.Rejected)
                             return@onReceive
                         }
+                        // Acceptance rides the same non-hydration path as refusal: both are answers to
+                        // the subscribe we just issued, and both must land before LIVE is reported.
+                        if (message == HaExactSocketMessage.LifecycleEstablished) {
+                            publishLifecycle(run, HaLifecycleSignal.Established)
+                            return@onReceive
+                        }
                         if (message is HaExactSocketMessage.State || message is HaExactSocketMessage.Missing) {
                             val entityId = when (message) {
                                 is HaExactSocketMessage.State -> message.entityId
@@ -808,6 +830,7 @@ internal class HaExactEntityStreamOwner(
             HaExactSocketMessage.RegistryChanged -> publishRegistryChanged(run)
             is HaExactSocketMessage.Lifecycle -> publishLifecycle(run, HaLifecycleSignal.Event(message.event))
             HaExactSocketMessage.LifecycleRejected -> publishLifecycle(run, HaLifecycleSignal.Rejected)
+            HaExactSocketMessage.LifecycleEstablished -> publishLifecycle(run, HaLifecycleSignal.Established)
             else -> Unit
         }
     }
@@ -1276,6 +1299,7 @@ internal class KtorHaExactEntityStreamTransport(
                         val outcome = haResultOutcome(json, lifecycleSubscriptionIds.keys, MAX_ERROR_CHARS)
                     ) {
                         HaResultOutcome.Ignored -> HaExactSocketMessage.Other
+                        HaResultOutcome.LifecycleEstablished -> HaExactSocketMessage.LifecycleEstablished
                         HaResultOutcome.LifecycleRejected -> HaExactSocketMessage.LifecycleRejected
                         is HaResultOutcome.Fatal -> throw HaProtocolException(outcome.message)
                     }

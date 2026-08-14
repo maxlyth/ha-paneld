@@ -92,6 +92,17 @@ internal class HaLifecycle(
     // session's answer: it ends when that session dies or a new session starts answering for itself.
     private var refused = false
 
+    /**
+     * Does THIS session hold an accepted lifecycle subscription?
+     *
+     * The counterpart to [refused], and the only thing that separates "Home Assistant will tell us when
+     * it has started" from "nothing ever will". It scopes to one session exactly as the refusal does:
+     * set by an accepted subscribe, cleared when the session dies or a replacement starts subscribing.
+     * Never persisted, never inferred from `!refused` — a stream that watches entities without watching
+     * lifecycle is neither subscribed nor refused, and guessing would strand that panel's recovery.
+     */
+    private var subscribed = false
+
     /** Bumped under [lock] on every visible change, so a publisher can refuse to go backwards. */
     private var revision = 0L
 
@@ -208,7 +219,9 @@ internal class HaLifecycle(
                 }
             }
             // A dead socket cannot still be a refused one; the next connection answers for itself.
+            // The same is true of an accepted subscription: it died with the session that held it.
             clearRefusalLocked()
+            subscribed = false
         }
     }
 
@@ -251,6 +264,9 @@ internal class HaLifecycle(
     private fun clearRefusalLocked() {
         if (refused) revision++
         refused = false
+        // A replacement session has not yet been answered, so it holds no subscription either. Clearing
+        // both together is what stops one session's privileges describing the next one's.
+        subscribed = false
     }
 
     /**
@@ -260,13 +276,29 @@ internal class HaLifecycle(
      */
     fun onAuthenticatedRunning(nowMs: Long) {
         synchronized(lock) {
-            when (stateLocked(nowMs)) {
-                // We claimed Home Assistant was down; recovery is news worth reporting. The proof is a
-                // fresh authenticated SOCKET reaching LIVE, so the notice is attributed to that source
-                // even when the outage itself was worded from a broker will.
+            val observed = stateLocked(nowMs)
+            when (observed) {
+                // We claimed Home Assistant was down, and the socket is back. What that PROVES depends
+                // entirely on whether this session will be told when the server has actually started.
                 HaLifecycleState.SHUTTING_DOWN, HaLifecycleState.STARTING -> {
+                    if (source != HaLifecycleSource.SOCKET) revision++
                     source = HaLifecycleSource.SOCKET
-                    enterBackOnlineLocked(nowMs)
+                    if (subscribed) {
+                        // Measured on hardware 2026-08-14: Home Assistant accepted an authenticated
+                        // connection 28 s BEFORE `homeassistant_start`, so announcing recovery here
+                        // told the user controls had returned while every control was still dead.
+                        // An accepted subscription promises the real event, so wait for it. Re-entry
+                        // is absorbed: a flapping socket must not re-announce a startup already shown.
+                        if (observed != HaLifecycleState.STARTING) {
+                            current = HaLifecycleState.STARTING
+                            revision++
+                        }
+                    } else {
+                        // Refused, or never subscribed at all. Nothing will ever say "started", so the
+                        // authenticated socket is the best proof this panel can obtain and withholding
+                        // recovery would strand the notice for good.
+                        enterBackOnlineLocked(nowMs)
+                    }
                 }
                 // We never blamed Home Assistant, so do not announce it "back" — that would retroactively
                 // relabel an ordinary LAN blip as a server outage.
@@ -284,6 +316,15 @@ internal class HaLifecycle(
      * Home Assistant refused one lifecycle subscription — normal for a non-admin user, since these types
      * are not in the non-admin allowlist. Non-fatal by contract: the panel simply learns nothing.
      */
+    /**
+     * Home Assistant ACCEPTED a lifecycle subscription for this session, so a startup will announce
+     * itself. Not a rendered fact — it changes no state and bumps no revision — it only decides whether
+     * a later authenticated socket may be treated as proof of readiness.
+     */
+    fun onSubscriptionEstablished() {
+        synchronized(lock) { subscribed = true }
+    }
+
     fun onSubscriptionRejected() {
         synchronized(lock) {
             if (!refused) revision++

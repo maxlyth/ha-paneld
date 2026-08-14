@@ -292,6 +292,94 @@ class HaLifecycleTest {
         assertEquals(HaLifecycleState.NORMAL, ha.state(38_000))
     }
 
+    // ---- readiness is proven by the server, not by the handshake -------------------------------
+
+    @Test fun aSubscribedSessionDoesNotCallAReconnectedSocketRecovery() {
+        // The defect this lane exists to fix, reproduced from the hardware sequence of 2026-08-14:
+        // Home Assistant accepted an authenticated connection 28 s before it said it had started.
+        val ha = lifecycle()
+        ha.onSubscriptionEstablished()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onDisconnected(1_010)
+        ha.onSubscriptionEstablished()
+        ha.onAuthenticatedRunning(60_000)
+        assertEquals(
+            "an authenticated socket proves Home Assistant is coming up, never that it can serve",
+            HaLifecycleState.STARTING,
+            ha.state(60_000),
+        )
+        // And it must NOT decay into a recovery the server never confirmed.
+        assertEquals(HaLifecycleState.STARTING, ha.state(9_999_000))
+    }
+
+    @Test fun onlyTheServersOwnStartedEventAnnouncesRecoveryToASubscribedSession() {
+        val ha = lifecycle()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onDisconnected(1_010)
+        ha.onSubscriptionEstablished()
+        ha.onAuthenticatedRunning(60_000)
+        ha.event(HaLifecycleEvent.STARTED, 88_000)
+        assertEquals(HaLifecycleState.BACK_ONLINE, ha.state(88_000))
+        assertEquals(HaLifecycleState.NORMAL, ha.state(96_000))
+    }
+
+    @Test fun aRefusedSessionStillTreatsAnAuthenticatedSocketAsProof() {
+        // A non-admin panel is never told the server started, so withholding recovery would strand the
+        // notice for good. Its handshake remains the best proof it can obtain.
+        val ha = lifecycle()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onDisconnected(1_010)
+        ha.onSubscriptionRejected()
+        ha.onAuthenticatedRunning(60_000)
+        assertEquals(HaLifecycleState.BACK_ONLINE, ha.state(60_000))
+    }
+
+    @Test fun aSubscriptionDiesWithItsOwnSessionRatherThanCoveringTheNext() {
+        // The privileges of a session that has ended must not make the NEXT session wait for an event
+        // nobody promised it — the same session-scoping the refusal already has.
+        val ha = lifecycle()
+        ha.onSubscriptionEstablished()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onDisconnected(1_010)
+        ha.onAuthenticatedRunning(60_000)
+        assertEquals(
+            "the accepted subscription died with the socket that held it",
+            HaLifecycleState.BACK_ONLINE,
+            ha.state(60_000),
+        )
+    }
+
+    @Test fun aReplacementSessionStartingToSubscribeDropsThePredecessorsSubscription() {
+        val ha = lifecycle()
+        ha.onSubscriptionEstablished()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onRefusalBasisEnded()
+        ha.onAuthenticatedRunning(60_000)
+        assertEquals(HaLifecycleState.BACK_ONLINE, ha.state(60_000))
+    }
+
+    @Test fun aFlappingSocketDoesNotReannounceAStartupAlreadyShowing() {
+        val ha = lifecycle()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.onDisconnected(1_010)
+        ha.onSubscriptionEstablished()
+        ha.onAuthenticatedRunning(60_000)
+        val first = ha.snapshot(60_000).revision
+        ha.onAuthenticatedRunning(61_000)
+        assertEquals(HaLifecycleState.STARTING, ha.state(61_000))
+        assertEquals("re-entry is absorbed", first, ha.snapshot(61_000).revision)
+    }
+
+    @Test fun aSubscribedSessionStillNamesTheSocketWhenABrokerWordedTheOutage() {
+        val ha = lifecycle()
+        ha.onEvent(HaLifecycleEvent.STOP, HaLifecycleSource.MQTT, 1_000)
+        ha.onSubscriptionEstablished()
+        ha.onAuthenticatedRunning(60_000)
+        val snap = ha.snapshot(60_000)
+        assertEquals(HaLifecycleState.STARTING, snap.state)
+        assertEquals(HaLifecycleSource.SOCKET, snap.source)
+    }
+
     @Test fun aStaleShutdownNeverSurvivesAuthenticatedRecovery() {
         val ha = lifecycle()
         ha.event(HaLifecycleEvent.CLOSE, 1_000)

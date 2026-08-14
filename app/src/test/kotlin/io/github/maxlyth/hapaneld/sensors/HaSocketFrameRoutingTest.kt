@@ -63,11 +63,29 @@ class HaSocketFrameRoutingTest {
         )
     }
 
-    @Test fun anySuccessfulResultIsIgnoredWhicheverSubscriptionItAnswers() {
-        // Acceptance is not tracked: the panel reports what it OBSERVES rather than which route it
-        // believes is covered, so a success frame carries no information it needs.
+    @Test fun aSuccessfulResultForAnEntitySubscriptionCarriesNothing() {
+        // Unchanged: entity coverage is still not tracked. The panel reports what it OBSERVES rather
+        // than which entity routes it believes are covered.
         assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(1, true), lifecycleIds.keys, 240))
-        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(11, true), lifecycleIds.keys, 240))
+    }
+
+    @Test fun anAcceptedLifecycleSubscriptionIsReportedBecauseItPromisesTheStartupEvent() {
+        // DELIBERATE REVERSAL. This previously asserted that acceptance carries no information, on the
+        // reasoning that the panel reports observations rather than coverage. Hardware disproved it on
+        // 2026-08-14: Home Assistant accepted an authenticated connection 28 s before
+        // `homeassistant_start`, so treating the handshake as proof of readiness announced "controls
+        // have returned" while every control was dead. Acceptance is the ONLY signal separating "the
+        // startup will announce itself" from "nothing ever will", and recovery now waits on it.
+        assertEquals(
+            HaResultOutcome.LifecycleEstablished,
+            haResultOutcome(result(11, true), lifecycleIds.keys, 240),
+        )
+    }
+
+    @Test fun acceptanceIsNotClaimedWhenLifecycleWasNeverSubscribed() {
+        // A panel that never demanded lifecycle events must not appear to hold a subscription: it would
+        // then wait forever for a `homeassistant_started` nobody promised.
+        assertEquals(HaResultOutcome.Ignored, haResultOutcome(result(11, true), emptySet(), 240))
     }
 
     @Test fun aFatalResultWithoutAnErrorMessageStillCarriesAReason() {
