@@ -29,6 +29,7 @@ requires:
   drivers:
     - led.rk3576-ioctl-daemon
     - screen.brightness-zero
+    - sensor.cht8305-daemon
     - update.webview
 match:
   # Match values come from observed SMT1019/RK3576 build properties.
@@ -53,7 +54,13 @@ hardware:
   screen_off: brightness-zero
   has_button_backlight: false
 sensors:
-  cht8305: false
+  # Same GXHT30 part and the same vendor evdev layout as the ZX-SMT156, which already ships this route:
+  # `sun-ths` / `sun-hum` are in the helper's exact climate allowlist and are point-read via EVIOCGABS.
+  # It was false only because this profile was written from a no-root unit where the helper cannot run;
+  # that is the reading route's precondition, not a statement about the hardware. Where the helper is
+  # absent the read simply returns nothing and the opt-in Room sensors publish nothing, exactly as on
+  # the ZX-SMT156, which declares the same `su_form: none` / `app_can_su: false` posture.
+  cht8305: true
   room_temp_offset_c: 0.0
 identity:
   manufacturer: ZHICAI
