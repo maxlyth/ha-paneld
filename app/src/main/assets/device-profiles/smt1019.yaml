@@ -28,7 +28,7 @@ requires:
   min_core_version: 0.9.5-rc1
   drivers:
     - led.rk3576-ioctl-daemon
-    - screen.brightness-zero
+    - screen.daemon-blpower
     - sensor.cht8305-daemon
     - sensor.vi530x-daemon
     - update.webview
@@ -52,7 +52,11 @@ hardware:
   led:
     mechanism: rk3576-ioctl-daemon
     transfer: identity
-  screen_off: brightness-zero
+  # The helper drives the backlight's bl_power for atruly dark screen. ScreenController falls through
+  # daemon -> su -> brightness-zero at runtime, so the stock no-root firmware still gets exactly the
+  # behaviour it had; declaring the most capable route costs it one refused socket connect per
+  # screen-off, because a missing su binary is cached for the process lifetime after the first try.
+  screen_off: daemon-blpower
   has_button_backlight: false
 sensors:
   # Same GXHT30 part and the same vendor evdev layout as the ZX-SMT156, which already ships this route:
