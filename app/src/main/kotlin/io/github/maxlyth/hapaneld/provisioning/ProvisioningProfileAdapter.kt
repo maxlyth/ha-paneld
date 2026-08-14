@@ -85,6 +85,7 @@ private fun DeviceProfile.provisioningDriverIds(): Set<String> =
         if (proximityTech != null || lightTech != null) add("sensor.android")
         if (proximityGpio != null) add("sensor.gpio-proximity")
         if (hasCht8305) add("sensor.cht8305-daemon")
+        if (hasVi530x) add("sensor.vi530x-daemon")
         if (evdevButtons.isNotEmpty()) add("input.evdev")
         if (recommendedWebView != null) add("update.webview")
     }

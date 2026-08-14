@@ -40,6 +40,7 @@ object ProfileMetadata {
         ProfileDriverDescriptor("screen.su-blpower", ProfileDriverKind.SCREEN, "su-backed kernel bl_power screen off", true, ProfileHelperAuthorityDemand.SANDBOX_FALLBACK),
         ProfileDriverDescriptor("sensor.android", ProfileDriverKind.SENSOR, "Android SensorManager light/proximity inputs", false, ProfileHelperAuthorityDemand.NONE),
         ProfileDriverDescriptor("sensor.cht8305-daemon", ProfileDriverKind.SENSOR, "Authenticated helper/Shizuku allowlisted room-climate input", true, ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE),
+        ProfileDriverDescriptor("sensor.vi530x-daemon", ProfileDriverKind.SENSOR, "Authenticated helper time-of-flight range (started over ioctl, then polled)", true, ProfileHelperAuthorityDemand.REQUIRED),
         ProfileDriverDescriptor("sensor.gpio-proximity", ProfileDriverKind.SENSOR, "Root-backed binary proximity GPIO", true, ProfileHelperAuthorityDemand.REQUIRED),
         ProfileDriverDescriptor("update.webview", ProfileDriverKind.UPDATE, "Core-owned System WebView artifacts: ${ProfileArtifacts.webViews.keys.sorted().joinToString()}", true, ProfileHelperAuthorityDemand.NONE),
     )

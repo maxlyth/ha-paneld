@@ -23,6 +23,10 @@
 
 #include "cmd.h"
 #include "cht8305.h"
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/ioctl.h>
+#include "vi530x.h"
 #include "dispatch.h"
 #include "server.h"
 #include "sysctl.h"
@@ -1477,6 +1481,52 @@ static void test_conn_cap(void) {
     CHECK(conn_active() == 0, "no slot leaked after the connection storm (got %d)\n", conn_active());
 }
 
+static void test_vi530x_start_contract(void) {
+    // The driver rejects these out of order — CHIP_INIT before POWER_ON returns an error rather than
+    // initialising anything — so the sequence is pinned, not merely present.
+    CHECK(vi530x_test_start_request_count() == 4,
+          "vi530x start sequence has exactly the four vendor steps\n");
+    CHECK(vi530x_test_start_request(0) == _IO('p', 0x06), "vi530x starts with POWER_ON\n");
+    CHECK(vi530x_test_start_request(1) == _IO('p', 0x07), "vi530x runs CHIP_INIT second\n");
+    CHECK(vi530x_test_start_request(2) == _IOW('p', 0x01, uint32_t),
+          "vi530x sets PERIOD third, before the sensor is running\n");
+    CHECK(vi530x_test_start_request(3) == _IO('p', 0x08), "vi530x issues START last\n");
+    CHECK(vi530x_test_default_period() == 30,
+          "vi530x keeps the vendor's own period rather than an invented one\n");
+
+    // Pin the REAL driver ABI, not a copy of it. sizeof alone is not enough: swapping two fields can
+    // preserve the size while reading every value into the wrong place, and the ioctl number — which
+    // encodes only the size — would not change either. Offsets are what actually catch that.
+    CHECK(sizeof(struct vi530x_measurement) == 32,
+          "vi530x measurement is still the vendor's 32-byte record\n");
+    CHECK(offsetof(struct vi530x_measurement, range_tof) == 0, "range_tof stays first\n");
+    CHECK(offsetof(struct vi530x_measurement, time_usec) == 4, "time_usec stays at 4\n");
+    CHECK(offsetof(struct vi530x_measurement, range_noise) == 8, "range_noise stays at 8\n");
+    CHECK(offsetof(struct vi530x_measurement, range_peak) == 12, "range_peak stays at 12\n");
+    CHECK(offsetof(struct vi530x_measurement, range_confidence) == 16,
+          "range_confidence stays at 16\n");
+    CHECK(offsetof(struct vi530x_measurement, range_status) == 20, "range_status stays at 20\n");
+    CHECK(offsetof(struct vi530x_measurement, range_integral) == 24, "range_integral stays at 24\n");
+    CHECK(offsetof(struct vi530x_measurement, range_cg_count) == 28, "range_cg_count stays at 28\n");
+    CHECK(VI530X_IOCTL_MZ_DATA == _IOR('p', 0x0a, struct vi530x_measurement),
+          "vi530x read request is the vendor's MZ_DATA\n");
+
+    char out[64];
+    CHECK(vi530x_test_format(-1, 0, 0, out, sizeof out) && strcmp(out, "D=-1 S=0 C=0\n") == 0,
+          "vi530x reports a negative range verbatim rather than clamping it\n");
+    CHECK(vi530x_test_format(1234, 7, 900, out, sizeof out) &&
+          strcmp(out, "D=1234 S=7 C=900\n") == 0, "vi530x wire format is D/S/C\n");
+    CHECK(!vi530x_test_format(1234, 7, 900, out, 8),
+          "vi530x refuses to emit a truncated reading\n");
+
+    // Every panel that is not this board has no /dev/vi530x, and that must be an ordinary refusal.
+    vi530x_test_reset();
+    char reply[128];
+    dispatch_reply("VI530X", reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR\n") == 0,
+          "vi530x refuses cleanly where the sensor node is absent (got %s)\n", reply);
+}
+
 static void test_room_climate_input_allowlist(void) {
     const char *temp_name = NULL, *humidity_name = NULL;
     unsigned int temp_axis = 0, humidity_axis = 0;
@@ -1618,6 +1668,7 @@ int main(void) {
     test_ledjni_ioctl();
     test_conn_cap();
     test_room_climate_input_allowlist();
+    test_vi530x_start_contract();
     test_room_climate_event_node_names();
     test_room_climate_input_discovery();
 

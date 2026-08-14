@@ -124,6 +124,10 @@ data class ProfileSensors(
     val proximityGpio: Int? = null,
     val lightTechnology: String? = null,
     val cht8305: Boolean = false,
+    /** Board carries an Evisionics VI530x time-of-flight sensor the helper can start and read. It is a
+     *  distinct fact from [proximityTechnology], which only names the technology for display: this one
+     *  says the daemon route exists, because the driver reports nothing until it is started. */
+    val vi530x: Boolean = false,
     val roomTempOffsetC: Float = 0f,
 )
 

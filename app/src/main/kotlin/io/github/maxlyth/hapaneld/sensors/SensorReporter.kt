@@ -130,6 +130,9 @@ class SensorReporter(
     private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
     private val roomClimateMetrics: PanelMetrics? = if (hasCht8305) PanelMetrics() else null
     private val proximityGpio: Int? = profile.proximityGpio
+    // A daemon-read time-of-flight source. Distinct from the GPIO source: that one is a binary level,
+    // this reports a distance, so it feeds the same learning engine with a continuous value.
+    private val proximityVi530x: Boolean = profile.hasVi530x
     private val proximityPolicy = proximitySourcePolicy(
         proximityGpio,
         proximitySensor?.reportingMode,
@@ -156,6 +159,7 @@ class SensorReporter(
     private var roomClimateRefresh: AsyncRoomClimateSnapshot? = null
     private var roomClimateExecutor: ScheduledExecutorService? = null
     private var gpioClient: GpioProximityClient? = null
+    private var vi530xClient: Vi530xProximityClient? = null
     private var proximitySampleCount = 0
     private var cadenceClassified = false
     private var continuousCadenceConfirmed = false
@@ -259,7 +263,7 @@ class SensorReporter(
     }
 
     fun hasLight() = lightSensor != null
-    fun hasProximity() = proximitySensor != null || proximityGpio != null
+    fun hasProximity() = proximitySensor != null || proximityGpio != null || proximityVi530x
     fun hasLearnedProximity() = proximityRuntime?.isLearnedSignal() == true
     fun hasTemperature() = environmentalSensorPublishes(tempUse)
     fun hasHumidity() = environmentalSensorPublishes(humidityUse)
@@ -395,7 +399,16 @@ class SensorReporter(
         }
         lightSensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         if (hasProximity() && !initializeProximitySource(run, { activeRun === run }) {
-                if (proximityGpio == null) {
+                if (proximityVi530x) {
+                    val client = Vi530xProximityClient(
+                        onValue = { raw -> if (run.isOpen() && activeRun === run) handleProximity(raw, run) },
+                        onUnavailable = {
+                            if (run.isOpen() && activeRun === run) deliverUnavailable(run)
+                        },
+                    )
+                    vi530xClient = client
+                    client.start()
+                } else if (proximityGpio == null) {
                     proximitySensor?.let {
                         if (proximityPolicy.onChangeHalLiveness) onChangeProbeAwaiting = true
                         val registered = sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler)
@@ -602,6 +615,8 @@ class SensorReporter(
         humidityActivation = null
         gpioClient?.stop()
         gpioClient = null
+        vi530xClient?.stop()
+        vi530xClient = null
         listener?.let { sm.unregisterListener(it) }
         listener = null
         sensorHandler?.removeCallbacks(cadenceCheck)

@@ -9,6 +9,7 @@
 #include "sysctl.h"
 #include "perf.h"
 #include "cht8305.h"
+#include "vi530x.h"
 #include "companion.h"
 #include "util.h"
 #include "version.h"

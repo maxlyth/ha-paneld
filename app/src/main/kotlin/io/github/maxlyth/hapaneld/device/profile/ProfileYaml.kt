@@ -187,7 +187,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             root["sensors"],
             "sensors",
             setOf(
-                "proximity_technology", "proximity_gpio", "light_technology", "cht8305", "room_temp_offset_c",
+                "proximity_technology", "proximity_gpio", "light_technology", "cht8305", "vi530x", "room_temp_offset_c",
             ) + LEGACY_PROXIMITY_CLASSIFIER_KEYS,
         ).orEmpty()
         val identity = map(root["identity"], "identity", setOf("manufacturer", "model", "model_label_strategy")).orEmpty()
@@ -285,6 +285,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 proximityGpio = integer(sensors, "proximity_gpio", "sensors"),
                 lightTechnology = string(sensors, "light_technology", "sensors"),
                 cht8305 = boolean(sensors, "cht8305", "sensors") ?: false,
+                vi530x = boolean(sensors, "vi530x", "sensors") ?: false,
                 roomTempOffsetC = float(sensors, "room_temp_offset_c", "sensors") ?: 0f,
             ),
             identity = ProfileIdentity(
@@ -625,6 +626,7 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "proximity_gpio" to sensors.proximityGpio,
         "light_technology" to sensors.lightTechnology,
         "cht8305" to sensors.cht8305,
+        "vi530x" to sensors.vi530x,
         "room_temp_offset_c" to sensors.roomTempOffsetC,
     ).withoutNullValues(),
     "identity" to linkedMapOf(

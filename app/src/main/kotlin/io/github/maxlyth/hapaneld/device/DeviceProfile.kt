@@ -148,6 +148,9 @@ interface DeviceProfile {
      *  where the vendor makes those exact nodes shell-readable. Gates the opt-in Room sensors and offset. */
     val hasCht8305: Boolean get() = false
 
+    /** Board carries a VI530x time-of-flight sensor reachable through the helper daemon. */
+    val hasVi530x: Boolean get() = false
+
     /** Baseline calibration offset (°C) added to the CHT8305 room-temperature reading to correct for panel
      *  self-heating. The maintainer sets a characterised value per profile once measured; the user can add a
      *  further trim via the `room_temp_offset` config key (the two are additive). 0 = no baseline correction. */

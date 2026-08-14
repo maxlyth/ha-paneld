@@ -60,6 +60,7 @@ class DataDeviceProfile internal constructor(
     override val proximityGpio = document.sensors.proximityGpio
     override val lightTech = document.sensors.lightTechnology
     override val hasCht8305 = document.sensors.cht8305
+    override val hasVi530x = document.sensors.vi530x
     override val roomTempOffsetC = document.sensors.roomTempOffsetC
     override val manufacturer = document.identity.manufacturer
     override val model = document.identity.model

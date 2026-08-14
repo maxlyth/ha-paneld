@@ -30,6 +30,7 @@ requires:
     - led.rk3576-ioctl-daemon
     - screen.brightness-zero
     - sensor.cht8305-daemon
+    - sensor.vi530x-daemon
     - update.webview
 match:
   # Match values come from observed SMT1019/RK3576 build properties.
@@ -61,6 +62,9 @@ sensors:
   # Without either authority the read returns nothing and the default-enabled Room entities publish no
   # value, exactly as on ZX-SMT156 with the same `su_form: none` / `app_can_su: false` posture.
   cht8305: true
+  # Evisionics VI530x time-of-flight sensor on i2c 4-006c. The helper starts it and reads the range;
+  # nothing reports until it is started, which is why this is a declared route rather than a probe.
+  vi530x: true
   room_temp_offset_c: 0.0
 identity:
   manufacturer: ZHICAI

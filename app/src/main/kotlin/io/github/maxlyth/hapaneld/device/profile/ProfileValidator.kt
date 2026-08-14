@@ -232,6 +232,7 @@ internal object ProfileValidator {
         if (document.sensors.proximityTechnology != null || document.sensors.lightTechnology != null) add("sensor.android")
         if (document.sensors.proximityGpio != null) add("sensor.gpio-proximity")
         if (document.sensors.cht8305) add("sensor.cht8305-daemon")
+        if (document.sensors.vi530x) add("sensor.vi530x-daemon")
         if (document.input.evdevButtons.isNotEmpty()) add("input.evdev")
         if (document.provisioning.software.webView != null) add("update.webview")
     }
