@@ -7,6 +7,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BundledHelperInstallerTest {
+    @Test fun `an already-current helper is admitted without probing root at all`() {
+        var probes = 0
+        val result = bundledHelperAdmission(alreadyCurrent = true, rootObserved = { probes++; true })
+        assertEquals(BundledHelperInstaller.Result.ALREADY_CURRENT, result)
+        assertEquals(0, probes)
+    }
+
+    @Test fun `a panel with no observed root is skipped, which is the helper-only protection`() {
+        // A helper-only panel is exactly one where the app has no su of its own, so observing root is
+        // what keeps this migration away from the daemon such a panel depends on.
+        assertEquals(
+            BundledHelperInstaller.Result.SKIPPED,
+            bundledHelperAdmission(alreadyCurrent = false, rootObserved = { false }),
+        )
+    }
+
+    @Test fun `observed root admits the migration, whatever a device profile happens to declare`() {
+        // The regression this pins: `app_can_su` is an attempt-order hint written against the firmware
+        // the profile author saw. An owner who flashes a rooted build keeps that stock-derived profile,
+        // and vetoing on it denied the helper to a panel that plainly had root. Admission takes no
+        // profile argument at all, so the hint cannot re-enter as a veto by being passed in.
+        assertNull(bundledHelperAdmission(alreadyCurrent = false, rootObserved = { true }))
+    }
+
     @Test fun `ABI selection follows supported runtime preference`() {
         assertEquals("hapaneld-helper-arm64", helperAssetName(listOf("arm64-v8a", "armeabi-v7a")))
         assertEquals("hapaneld-helper-arm", helperAssetName(listOf("armeabi-v7a")))

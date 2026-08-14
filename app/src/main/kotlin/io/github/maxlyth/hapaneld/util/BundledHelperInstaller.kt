@@ -14,14 +14,24 @@ import java.io.File
  * its exact helper and launches a root-owned `/data/local` copy when the installed daemon lacks the
  * Companion protocol. Helper-only panels cannot safely replace their own old daemon and remain
  * explicitly reprovision-gated instead of accepting a generic privileged upgrade verb.
+ *
+ * That protection comes from OBSERVING root, not from the profile declaring it. A panel is helper-only
+ * precisely when the app has no su of its own, which is exactly when [Su.available] is false, so the
+ * observation already excludes the unsafe case on its own. The profile's `app_can_su` is an
+ * attempt-order hint — the same thing Issue #21 established for metric routes — and it used to veto
+ * this path before the probe could speak. That cost real capability rather than buying safety: a panel
+ * whose owner has flashed a firmware with root still carries a profile written against the stock image,
+ * so it reported `app_can_su: false` and never installed the helper it could plainly have installed.
  */
 internal object BundledHelperInstaller {
     enum class Result { ALREADY_CURRENT, INSTALLED, SKIPPED, FAILED }
 
     @Synchronized
-    fun ensureCurrent(context: Context, directSuExpected: Boolean): Result {
-        if (HelperClient.supportsCompanionData() && HelperClient.matchesBundledHelper()) return Result.ALREADY_CURRENT
-        if (!directSuExpected || !Su.available()) return Result.SKIPPED
+    fun ensureCurrent(context: Context): Result {
+        bundledHelperAdmission(
+            alreadyCurrent = HelperClient.supportsCompanionData() && HelperClient.matchesBundledHelper(),
+            rootObserved = { Su.available() },
+        )?.let { return it }
         val asset = helperAssetName(Build.SUPPORTED_ABIS.asIterable()) ?: return Result.SKIPPED
         val staged = runCatching { File.createTempFile("hapaneld-helper-", ".bin", context.cacheDir) }
             .getOrElse { return Result.FAILED }
@@ -76,6 +86,27 @@ internal object BundledHelperInstaller {
         }
         Log.e(TAG, "could not restore a responsive root helper after migration failure")
     }
+}
+
+/**
+ * Whether this migration may proceed, and why not when it may not.
+ *
+ * Deliberately takes no device-profile argument. The profile's `app_can_su` is an attempt-order hint,
+ * and a hint standing in for an observation is what Issue #21 corrected elsewhere; here it used to veto
+ * the migration outright, which denied the helper to any panel whose owner had flashed a rooted
+ * firmware while its profile still described the stock image. Root readiness is the only admission
+ * fact, and it is read live — `rootObserved` is a lambda so it is not evaluated when the helper is
+ * already current and no probe is warranted.
+ *
+ * Returns the terminal result, or null when the caller should continue with the install.
+ */
+internal fun bundledHelperAdmission(
+    alreadyCurrent: Boolean,
+    rootObserved: () -> Boolean,
+): BundledHelperInstaller.Result? = when {
+    alreadyCurrent -> BundledHelperInstaller.Result.ALREADY_CURRENT
+    !rootObserved() -> BundledHelperInstaller.Result.SKIPPED
+    else -> null
 }
 
 internal fun helperAssetName(abis: Iterable<String>): String? = when {

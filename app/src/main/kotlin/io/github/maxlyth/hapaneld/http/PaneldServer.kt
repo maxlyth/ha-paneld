@@ -3899,7 +3899,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val companionHelperCache = Cached(SU_TTL_MS) { HelperClient.supportsCompanionData() }
     private fun ensureCompanionHelper(): Boolean {
         if (HelperClient.supportsCompanionData()) return true
-        val ready = BundledHelperInstaller.ensureCurrent(appContext, profile.appCanSu) in setOf(
+        val ready = BundledHelperInstaller.ensureCurrent(appContext) in setOf(
             BundledHelperInstaller.Result.ALREADY_CURRENT,
             BundledHelperInstaller.Result.INSTALLED,
         )

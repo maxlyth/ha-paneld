@@ -2593,7 +2593,7 @@ class PaneldService : Service() {
             if (touchSound.isEnabled()) touchSound.set(true)
             bootChime.applyPersisted()
             sensors.prepare()
-            when (BundledHelperInstaller.ensureCurrent(this@PaneldService, profile.appCanSu)) {
+            when (BundledHelperInstaller.ensureCurrent(this@PaneldService)) {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")
                 BundledHelperInstaller.Result.FAILED ->
                     Log.w(TAG, "root helper migration failed; versioned helper features remain unavailable")
