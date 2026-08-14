@@ -88,20 +88,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # A previous run's PR may still be open and unmerged. Discover against ITS
-      # index, not main's stale copy, so an already-found-but-unmerged release is
-      # not rediscovered and duplicated onto the branch.
-      - name: Use pending PR branch's index if present
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git ls-remote --exit-code --heads "$repo_url" automation/sonoff-firmware-index >/dev/null 2>&1; then
-            git fetch -q "$repo_url" automation/sonoff-firmware-index
-            git show FETCH_HEAD:tools/firmware-index/fw-120p.dat > tools/firmware-index/fw-120p.dat
-            git show FETCH_HEAD:tools/firmware-index/fw-86p.dat > tools/firmware-index/fw-86p.dat
-          fi
-
       # Aborts non-zero if the prober cannot see known-good objects, so a broken
       # prober fails the run instead of reporting a clean negative forever.
       - name: Search the CDN for unindexed releases
@@ -113,7 +99,9 @@ jobs:
       # byte size. A discovery that cannot survive this does not become a PR.
       - name: Validate the updated index against the CDN
         if: steps.discover.outputs.found == 'true'
-        run: python tools/firmware-index/firmware_index.py probe --history /tmp/discovery-history.json
+        run: |
+          python tools/firmware-index/firmware_index.py probe --history /tmp/discovery-history.json
+          python tools/firmware-index/firmware_index.py render --out /tmp/discovery-discussion.md
 
       - name: Open/update pull request with the firmware index
         if: steps.discover.outputs.found == 'true'
@@ -133,18 +121,33 @@ jobs:
 
           p120="$(cat tools/firmware-index/fw-120p.dat)"
           p86="$(cat tools/firmware-index/fw-86p.dat)"
-          if git ls-remote --exit-code --heads "$repo_url" "$branch" >/dev/null 2>&1; then
+          remote_head="$(git ls-remote --heads "$repo_url" "refs/heads/$branch" | awk 'NR == 1 { print $1 }')"
+          if [ -n "$remote_head" ]; then
             git fetch -q "$repo_url" "$branch"
-            git checkout -q -B "$branch" FETCH_HEAD
-          else
-            git checkout -q -b "$branch"
           fi
+          # The automation branch is derived from the current main checkout on every
+          # run. Rediscovery preserves pending CDN findings without allowing a stale
+          # branch snapshot to overwrite releases that main has since indexed.
+          git checkout -q -B "$branch"
           printf '%s\n' "$p120" > tools/firmware-index/fw-120p.dat
           printf '%s\n' "$p86" > tools/firmware-index/fw-86p.dat
 
           git add tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat
-          git commit -q -m "${msg} [skip ci]" || echo "nothing new to commit onto $branch"
-          git push -q "$repo_url" "HEAD:$branch"
+          if [ -n "$remote_head" ] && git diff --quiet FETCH_HEAD -- \
+              tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat; then
+            echo "pending automation branch already contains this exact index"
+            exit 0
+          fi
+          if git diff --cached --quiet; then
+            echo "nothing new to commit onto $branch"
+            exit 0
+          fi
+          git commit -q -m "$msg"
+          if [ -n "$remote_head" ]; then
+            git push -q --force-with-lease="refs/heads/$branch:$remote_head" "$repo_url" "HEAD:$branch"
+          else
+            git push -q "$repo_url" "HEAD:$branch"
+          fi
 
           if [ -z "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main --state open --json number --jq '.[0].number')" ]; then
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \

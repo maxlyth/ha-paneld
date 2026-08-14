@@ -4,6 +4,7 @@ import io
 import pathlib
 import re
 import unittest
+import urllib.error
 from types import SimpleNamespace
 from unittest import mock
 
@@ -274,6 +275,16 @@ class DiscoveryTest(unittest.TestCase):
         newest = firmware_index.newest_version(self.devices[0]["apks"])
         self.assertNotIn(newest, firmware_index.candidate_versions(newest))
 
+    def test_default_windows_cover_observed_index_and_patch_gaps(self):
+        index_gaps = []
+        for d in self.devices:
+            for entries, position in ((d["apks"], 1), (d["diffs"], 2)):
+                indices = sorted({int(entry[position]) for entry in entries})
+                index_gaps.extend(later - earlier for earlier, later in zip(indices, indices[1:]))
+        self.assertGreaterEqual(firmware_index.DISCOVER_INDEX_WINDOW, max(index_gaps))
+        self.assertIn("3.8.7", firmware_index.candidate_versions("3.8.0"))
+        self.assertIn("3.9.3", firmware_index.candidate_versions("3.8.0"))
+
     def test_discover_one_requires_zip_magic(self):
         # A 206 alone is not proof: the CDN could serve an error body that
         # still satisfies a range request.
@@ -297,6 +308,26 @@ class DiscoveryTest(unittest.TestCase):
             self.assertEqual(
                 firmware_index.discover_one("https://example.invalid/x.apk"), 137890388
             )
+
+    def test_only_the_cdns_explicit_missing_response_means_absent(self):
+        missing = urllib.error.HTTPError("https://example.invalid/x", 403, "missing", {}, None)
+        throttled = urllib.error.HTTPError("https://example.invalid/x", 429, "slow down", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=missing):
+            self.assertIsNone(firmware_index.discover_one("https://example.invalid/x"))
+        with mock.patch("urllib.request.urlopen", side_effect=throttled):
+            with self.assertRaises(urllib.error.HTTPError):
+                firmware_index.discover_one("https://example.invalid/x")
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            with self.assertRaises(TimeoutError):
+                firmware_index.discover_one("https://example.invalid/x")
+
+    def test_rom_diffs_are_probed_without_an_apk_hit(self):
+        d = self.devices[0]
+        with mock.patch.object(firmware_index, "discover_one", return_value=None):
+            findings, searched = firmware_index.discover_device(d, index_window=1, minor_window=1)
+        self.assertEqual(findings, [])
+        next_diff = max(int(index) for _to, _frm, index, _size in d["diffs"]) + 1
+        self.assertEqual(searched["diff_indices"], [next_diff, next_diff])
 
     def test_a_blind_prober_aborts_instead_of_reporting_nothing_new(self):
         # The whole point of the daily job is that "nothing found" is
@@ -336,6 +367,15 @@ class DiscoveryTest(unittest.TestCase):
         self.assertIn("no unindexed firmware found", text)
         for d in devices:
             self.assertIn(f"searched {d['channel']}: apk indices", text)
+
+    def test_workflow_preserves_main_data_and_does_not_suppress_validation(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/sonoff-firmware-discovery.yml").read_text()
+        self.assertNotIn("git show FETCH_HEAD:tools/firmware-index", workflow)
+        self.assertNotIn("[skip ci]", workflow)
+        self.assertIn("firmware_index.py render --out", workflow)
+        self.assertIn("git diff --cached --quiet", workflow)
+        self.assertIn("--force-with-lease", workflow)
 
 
 if __name__ == "__main__":

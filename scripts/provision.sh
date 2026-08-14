@@ -1428,32 +1428,38 @@ android_build_tool_runs() {
   "$1" version >/dev/null 2>&1 || "$1" --version >/dev/null 2>&1
 }
 
-find_android_build_tool() {
-  local name="$1" found="" root candidate
-  found="$(command -v "$name" 2>/dev/null || true)"
-  if [ -n "$found" ] && android_build_tool_runs "$found"; then printf '%s\n' "$found"; return 0; fi
-  found=""
+android_build_tool_candidates() {
+  local name="$1" path root candidate
+  path="$(command -v "$name" 2>/dev/null || true)"
+  [ -z "$path" ] || printf '%s\n' "$path"
   for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
     [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
     for candidate in "$root"/build-tools/*/"$name"; do
-      if [ -x "$candidate" ] && android_build_tool_runs "$candidate"; then found="$candidate"; fi
+      [ -x "$candidate" ] || continue
+      [ "$candidate" = "$path" ] || printf '%s\n' "$candidate"
     done
   done
-  [ -n "$found" ] && printf '%s\n' "$found"
+  return 0
+}
+
+find_android_build_tool() {
+  local name="$1" candidate
+  while IFS= read -r candidate; do
+    if android_build_tool_runs "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+  done < <(android_build_tool_candidates "$name")
   return 0
 }
 
 # Why a tool could not be used, so a refusal can name the real problem. Empty when it ran, or when the
 # tool is simply not installed — "absent" already has its own wording and is not a malfunction.
 android_build_tool_failure() {
-  local name="$1" path detail
-  path="$(command -v "$name" 2>/dev/null || true)"
-  [ -n "$path" ] || return 0
-  # `cmd && return 0` here would abort the whole run under `set -e` in precisely the case this
-  # function exists to describe. An `if` keeps a non-zero status non-fatal.
-  if android_build_tool_runs "$path"; then return 0; fi
-  detail="$("$path" version 2>&1 | head -1 | LC_ALL=C tr -d '\000-\037\177' || true)"
-  printf '%s is installed at %s but could not run: %s' "$name" "$path" "${detail:-no output}"
+  local name="$1" path detail failures=""
+  while IFS= read -r path; do
+    if android_build_tool_runs "$path"; then continue; fi
+    detail="$("$path" version 2>&1 | head -1 | LC_ALL=C tr -d '\000-\037\177' || true)"
+    failures="${failures}${failures:+; }$name is installed at $path but could not run: ${detail:-no output}"
+  done < <(android_build_tool_candidates "$name")
+  [ -z "$failures" ] || printf '%s' "$failures"
   return 0
 }
 
@@ -1550,10 +1556,12 @@ verify_release_apk() {
         "Self-built APKs may use their developer signer; official-release deployments add --require-release-signer."
     fi
   else
-    signer_error="$("$signer_tool" verify --print-certs "$APK" 2>&1 >/dev/null | head -2 | LC_ALL=C tr -d '\000-\037\177' || true)"
-    signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
-      "The APK was not installed. Check that it is a valid signed APK and retry." \
-      "${signer_error:-apksigner reported no reason}"
+    if signer_output="$("$signer_tool" verify --print-certs "$APK" 2>&1)"; then :; else
+      signer_error="$(printf '%s\n' "$signer_output" | head -2 | LC_ALL=C tr -d '\000-\037\177' || true)"
+      fail "release APK signature verification failed" \
+        "The APK was not installed. Check that it is a valid signed APK and retry." \
+        "${signer_error:-apksigner reported no reason}"
+    fi
     signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p')"
     signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
     [ "$signer_count" = 1 ] || fail "release APK signer count mismatch" \

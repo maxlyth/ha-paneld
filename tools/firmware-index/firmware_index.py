@@ -230,8 +230,9 @@ def probe_one(url, expected_size):
 # --------------------------------------------------------------------------- #
 
 ZIP_MAGIC = b"PK\x03\x04"
-DISCOVER_INDEX_WINDOW = 12
+DISCOVER_INDEX_WINDOW = 32
 DISCOVER_MINOR_WINDOW = 4
+DISCOVER_PATCH_WINDOW = 8
 
 
 def discover_one(url):
@@ -250,13 +251,17 @@ def discover_one(url):
             if total is None or r.read(4) != ZIP_MAGIC:
                 return None
             return total
-    except urllib.error.HTTPError:
-        return None             # 403 → does not exist
-    except Exception:
-        return None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            return None         # This CDN's explicit missing-object response.
+        raise
 
 
-def candidate_versions(known, minor_window=DISCOVER_MINOR_WINDOW):
+def candidate_versions(
+    known,
+    minor_window=DISCOVER_MINOR_WINDOW,
+    patch_window=DISCOVER_PATCH_WINDOW,
+):
     """Plausible successors to the highest known version.
 
     Sonoff skips freely: 4.0.x jumped straight to 4.4.0, so a patch+1 guess
@@ -265,11 +270,11 @@ def candidate_versions(known, minor_window=DISCOVER_MINOR_WINDOW):
     """
     major, minor, patch = vkey(known)
     out = []
-    for p in range(patch + 1, patch + 4):
+    for p in range(patch + 1, patch + 1 + patch_window):
         out.append(f"{major}.{minor}.{p}")
     for m in range(minor + 1, minor + 1 + minor_window):
-        out.append(f"{major}.{m}.0")
-        out.append(f"{major}.{m}.1")
+        for p in range(patch_window):
+            out.append(f"{major}.{m}.{p}")
     out.append(f"{major + 1}.0.0")
     return out
 
@@ -302,7 +307,7 @@ def discover_device(d, index_window, minor_window):
     """
     known_apk = {v for v, _idx, _sz in d["apks"]}
     known_versions = known_apk | {to for to, _f, _i, _s in d["diffs"]}
-    newest = newest_version(d["apks"])
+    newest = max(known_versions, key=vkey)
     versions = [v for v in candidate_versions(newest, minor_window) if v not in known_versions]
 
     max_apk_idx = max(int(idx) for _v, idx, _s in d["apks"])
@@ -328,27 +333,24 @@ def discover_device(d, index_window, minor_window):
         "diff_indices": None,
     }
 
-    found_versions = sorted({f["version"] for f in findings}, key=vkey)
-    if found_versions:
-        # Inbound diffs only exist for versions that are ROM targets. Probe the
-        # same from-set the .dat already uses; an APK-only release legitimately
-        # yields none, so an empty result here is not a failure.
-        max_diff_idx = max(int(idx) for _t, _f, idx, _s in d["diffs"])
-        diff_indices = list(range(max_diff_idx + 1, max_diff_idx + 1 + index_window))
-        froms = sorted(rom_states(d), key=vkey)
-        diff_urls = {}
-        for idx in diff_indices:
-            for ver in found_versions:
-                for frm in froms:
-                    diff_urls[diff_url(d, idx, frm, ver)] = (idx, ver, frm)
-        with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as ex:
-            dsizes = list(ex.map(discover_one, diff_urls))
-        for (url, (idx, ver, frm)), size in zip(diff_urls.items(), dsizes):
-            if size is not None:
-                findings.append({"kind": "diff", "version": ver, "index": idx,
-                                 "from": frm, "bytes": size, "url": url})
-        searched["diff_indices"] = [diff_indices[0], diff_indices[-1]]
-        searched["diff_froms"] = froms
+    # A release can be ROM-diff-only, so its diff must not depend on finding an
+    # APK for the same version first. Probe every candidate target directly.
+    max_diff_idx = max(int(idx) for _t, _f, idx, _s in d["diffs"])
+    diff_indices = list(range(max_diff_idx + 1, max_diff_idx + 1 + index_window))
+    froms = sorted(rom_states(d), key=vkey)
+    diff_urls = {}
+    for idx in diff_indices:
+        for ver in versions:
+            for frm in froms:
+                diff_urls[diff_url(d, idx, frm, ver)] = (idx, ver, frm)
+    with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as ex:
+        dsizes = list(ex.map(discover_one, diff_urls))
+    for (url, (idx, ver, frm)), size in zip(diff_urls.items(), dsizes):
+        if size is not None:
+            findings.append({"kind": "diff", "version": ver, "index": idx,
+                             "from": frm, "bytes": size, "url": url})
+    searched["diff_indices"] = [diff_indices[0], diff_indices[-1]]
+    searched["diff_froms"] = froms
 
     return findings, searched
 
@@ -541,6 +543,7 @@ Vendor release notes are written for eWeLink / Zigbee-hub users, not for people 
 | [**4.6.0**](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) | **Local Web Portal** — the panel is now reachable on the LAN at `http://nspanelpro.local` (or its IP) for setup + management: add Zigbee / eWeLink sub-devices, arm/disarm Smart Security, configure the **MQTT broker to sync Zigbee into Home Assistant**, authorize HA + Matter Bridge pairing, upload custom ringtones/screensavers. | Released **2026-06-30** — not yet live-flash verified here. Distributed as diffs off 4.0.12 / 4.4.0 / 4.5.1, with no new full ROM. |
 | **4.6.2** | No release notes found; indexed as an APK-only update with no ROM diff on either channel. | Located by probing the CDN — treat the absence of notes as unknown-content, not as a minor release. |
 | **4.7.0** | Covers Gen1 and the Gen2 panels; users report added Basic gen-5 relay (BASIC-1GS) support. **No official release notes were found** — this is drawn from the [eWeLink user feedback thread](https://forum.ewelink.cc/t/nspanel-pro-v4-7-0-feeback/208789), which is a discussion thread rather than a release announcement or a vendor changelog. | Released ~**2026-07-16**; not live-flash verified here. **[c]** The thread carries reports of sub-device connectivity trouble after updating, some resolved by a reboot and others described as continuing. This project has not reproduced or quantified them; treat them as unverified user reports rather than a known regression. |
+| [**4.8.0**](https://forum.ewelink.cc/t/nspanel-pro-roadmap-and-co-created-future/206240) | **No release announcement or changelog found** — located by probing the CDN. An eWeLink staff post scheduled it for August 2026 and confirmed an option to auto-update the panel through the eWeLink app. | Contents and stability are otherwise unassessed; no feedback thread was found. The auto-update option's default is unknown, so check it before relying on a pinned version. Not live-flash verified here. |
 
 **Cross-cutting gotchas (firmware-independent) [f]:**
 
@@ -567,6 +570,7 @@ Notes are published per "NSPanel Pro" — not split by 86P vs 120P.
 | 4.6.0 | [SONOFF "NSPanel Pro Version Update Information and FAQ"](https://sonoff.tech/en-us/blogs/news/sonoff-nspanel-pro-version-update-information-and-faq) (Local Web Portal) |
 | 4.6.2 | **No release notes found** — this project found neither a vendor changelog entry nor a community thread for it. It was located by probing the CDN, so this index records the files only. |
 | 4.7.0 | **No vendor changelog entry found.** Community discussion only: [eWeLink 4.7.0 user feedback thread](https://forum.ewelink.cc/t/nspanel-pro-v4-7-0-feeback/208789) — a discussion thread of user reports, not a release announcement and not official release notes. |
+| 4.8.0 | **No release announcement or changelog found.** The only vendor statement found was an [eWeLink staff roadmap post](https://forum.ewelink.cc/t/nspanel-pro-roadmap-and-co-created-future/206240) scheduling it for August 2026 and naming an eWeLink-app auto-update option. The files were located by probing the CDN; contents and stability remain unassessed. |
 | 3.9.4 / 4.0.10 / 4.0.12 | No official notes published (bug threads only) |
 | All 4.x (rolling) | [eWeLink "[Rolling] NSPanel Pro Firmware Updates"](https://forum.ewelink.cc/t/rolling-with-new-releases-nspanel-pro-firmware-updates/207466) |
 """

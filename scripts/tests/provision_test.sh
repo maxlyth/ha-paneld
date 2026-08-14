@@ -1843,6 +1843,8 @@ assert_log_contains '^curl .*https://github\.com/maxlyth/ha-paneld/releases/down
 assert_log_contains '^openssl dgst -sha256 -verify .* -signature .*/release\.sha256\.sig .*/release\.sha256$' "release verification authenticates the checksum record"
 assert_log_contains '^openssl dgst -sha256 -r .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification hashes the downloaded APK"
 assert_log_contains '^apksigner verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification invokes apksigner"
+signer_verify_count="$(grep -Ec '^apksigner verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "$MOCK_CALL_LOG" || true)"
+if [ "$signer_verify_count" = 1 ]; then pass "release signer verification runs exactly once"; else fail_test "release signer verification runs exactly once"; fi
 assert_log_contains '^aapt dump badging .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "release verification inspects the package name"
 signer_line="$(grep -nE '^apksigner verify --print-certs ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 package_line="$(grep -nE '^aapt dump badging ' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
@@ -1879,6 +1881,21 @@ assert_contains 'could not run' "the skip names the tool as the problem, not the
 assert_contains 'Unable to locate a Java Runtime' "the tool's own reason reaches the operator"
 assert_not_contains 'release APK signature verification failed' "$LAST_OUTPUT" "the APK is not blamed for the host's missing runtime"
 assert_log_contains '^adb .* install( |$)' "the authenticated APK still installs"
+
+UNRUNNABLE_SDK="$TMP/unrunnable-android-sdk"
+mkdir -p "$UNRUNNABLE_SDK/build-tools/99.0.0"
+ln -s "$FIXTURES/apksigner" "$UNRUNNABLE_SDK/build-tools/99.0.0/apksigner"
+PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" MOCK_APKSIGNER_RUNS=0 ANDROID_HOME= ANDROID_SDK_ROOT="$UNRUNNABLE_SDK" \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "an SDK-root-only unrunnable apksigner does not fail an authenticated release"
+assert_contains "$UNRUNNABLE_SDK/build-tools/99.0.0/apksigner" "SDK-root-only failure names the discovered tool path"
+assert_contains 'Unable to locate a Java Runtime' "SDK-root-only failure retains the tool reason"
+
+MOCK_RELEASE_VERIFY_FAIL=1 run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "a real apksigner verification failure still fails closed"
+assert_contains 'mock release verification failed' "the failing verification invocation supplies its own diagnostic"
+signer_verify_count="$(grep -Ec '^apksigner verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' "$MOCK_CALL_LOG" || true)"
+if [ "$signer_verify_count" = 1 ]; then pass "failed release signer verification runs exactly once"; else fail_test "failed release signer verification runs exactly once"; fi
 
 # The protection that must NOT be relaxed: a local APK has no signed checksum behind it, so an
 # unusable signer stays fatal there.
