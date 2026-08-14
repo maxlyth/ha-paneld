@@ -5,9 +5,19 @@ The firmware download links published in GitHub Discussion #7 are point-in-time
 hits against the CoolKit OTA CDN (the bucket cannot be listed, so each URL is an
 exact-filename probe). This script keeps that page honest in two ways:
 
-  probe   range-GET every URL, record up/down into a rolling 7-day history file
-  render  emit the Discussion markdown body, with a 7-day availability sparkline
-          (green/red/grey squares) on every download row
+  probe     range-GET every URL, record up/down into a rolling 7-day history file
+  render    emit the Discussion markdown body, with a 7-day availability sparkline
+            (green/red/grey squares) on every download row
+  discover  search the CDN for releases newer than the index
+
+`probe` only re-checks URLs that are already indexed, so a clean probe run says
+nothing about whether new firmware shipped. `discover` answers that separate
+question: the bucket has no manifest, so it guesses forward from the index —
+the next few per-build serials crossed with plausible next version numbers —
+and confirms each hit by ZIP magic. It validates itself against known-good
+objects first and aborts rather than reporting a negative it cannot stand
+behind. Full ROMs are deliberately out of scope: their filenames embed a build
+date that cannot be guessed.
 
 Both subcommands derive their URLs from the same builders, so the squares line
 up exactly with the table rows. The CI workflow runs `probe` then `render` on a
@@ -213,6 +223,259 @@ def probe_one(url, expected_size):
         return False, None      # 403 (missing) → down
     except Exception:
         return False, None
+
+
+# --------------------------------------------------------------------------- #
+# discover — find versions that are on the CDN but not yet in the .dat
+# --------------------------------------------------------------------------- #
+
+ZIP_MAGIC = b"PK\x03\x04"
+DISCOVER_INDEX_WINDOW = 12
+DISCOVER_MINOR_WINDOW = 4
+
+
+def discover_one(url):
+    """Return the object's total size if `url` is a real ZIP, else None.
+
+    The CDN answers 403 for anything that does not exist, so a 206 with ZIP
+    magic is the only positive signal. Reading the first four bytes rather
+    than one costs nothing and rejects a non-ZIP body that still ranges.
+    """
+    req = urllib.request.Request(url, method="GET")
+    req.add_header("Range", "bytes=0-3")
+    req.add_header("User-Agent", "ha-paneld-firmware-monitor")
+    try:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT) as r:
+            total = response_total_size(r)
+            if total is None or r.read(4) != ZIP_MAGIC:
+                return None
+            return total
+    except urllib.error.HTTPError:
+        return None             # 403 → does not exist
+    except Exception:
+        return None
+
+
+def candidate_versions(known, minor_window=DISCOVER_MINOR_WINDOW):
+    """Plausible successors to the highest known version.
+
+    Sonoff skips freely: 4.0.x jumped straight to 4.4.0, so a patch+1 guess
+    alone would miss a release permanently. Cover the next few patches, the
+    next few minors at .0/.1, and the next major.
+    """
+    major, minor, patch = vkey(known)
+    out = []
+    for p in range(patch + 1, patch + 4):
+        out.append(f"{major}.{minor}.{p}")
+    for m in range(minor + 1, minor + 1 + minor_window):
+        out.append(f"{major}.{m}.0")
+        out.append(f"{major}.{m}.1")
+    out.append(f"{major + 1}.0.0")
+    return out
+
+
+def newest_version(entries):
+    """Highest version across (ver, ...) tuples, by numeric key."""
+    return max((e[0] for e in entries), key=vkey)
+
+
+def rom_states(d):
+    """Every version a panel's ROM can actually be sitting on.
+
+    These are the plausible sources of an inbound diff: full ROMs, previous
+    diff targets, and versions already used as a diff source. The newest
+    release must be included even though it has never been a source yet —
+    it is the single most likely upgrade origin, and deriving the set from
+    observed sources alone would silently exclude it.
+    """
+    states = {frm for _t, frm, _i, _s in d["diffs"]}
+    states |= {to for to, _f, _i, _s in d["diffs"]}
+    states |= {ver for ver, _idx, _fn, _sz in d["fulls"]}
+    return states
+
+
+def discover_device(d, index_window, minor_window):
+    """Probe one channel for unindexed APKs and their inbound ROM diffs.
+
+    Returns (findings, searched) where `searched` records the exact window
+    that was covered, so a miss is diagnosable rather than silent.
+    """
+    known_apk = {v for v, _idx, _sz in d["apks"]}
+    known_versions = known_apk | {to for to, _f, _i, _s in d["diffs"]}
+    newest = newest_version(d["apks"])
+    versions = [v for v in candidate_versions(newest, minor_window) if v not in known_versions]
+
+    max_apk_idx = max(int(idx) for _v, idx, _s in d["apks"])
+    apk_indices = list(range(max_apk_idx + 1, max_apk_idx + 1 + index_window))
+
+    apk_urls = {}
+    for idx in apk_indices:
+        for ver in versions:
+            apk_urls[apk_url(d, idx, ver)] = (idx, ver)
+
+    with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as ex:
+        sizes = list(ex.map(discover_one, apk_urls))
+
+    findings = []
+    for (url, (idx, ver)), size in zip(apk_urls.items(), sizes):
+        if size is not None:
+            findings.append({"kind": "apk", "version": ver, "index": idx, "bytes": size, "url": url})
+
+    searched = {
+        "channel": d["channel"],
+        "apk_indices": [apk_indices[0], apk_indices[-1]],
+        "versions": versions,
+        "diff_indices": None,
+    }
+
+    found_versions = sorted({f["version"] for f in findings}, key=vkey)
+    if found_versions:
+        # Inbound diffs only exist for versions that are ROM targets. Probe the
+        # same from-set the .dat already uses; an APK-only release legitimately
+        # yields none, so an empty result here is not a failure.
+        max_diff_idx = max(int(idx) for _t, _f, idx, _s in d["diffs"])
+        diff_indices = list(range(max_diff_idx + 1, max_diff_idx + 1 + index_window))
+        froms = sorted(rom_states(d), key=vkey)
+        diff_urls = {}
+        for idx in diff_indices:
+            for ver in found_versions:
+                for frm in froms:
+                    diff_urls[diff_url(d, idx, frm, ver)] = (idx, ver, frm)
+        with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as ex:
+            dsizes = list(ex.map(discover_one, diff_urls))
+        for (url, (idx, ver, frm)), size in zip(diff_urls.items(), dsizes):
+            if size is not None:
+                findings.append({"kind": "diff", "version": ver, "index": idx,
+                                 "from": frm, "bytes": size, "url": url})
+        searched["diff_indices"] = [diff_indices[0], diff_indices[-1]]
+        searched["diff_froms"] = froms
+
+    return findings, searched
+
+
+def validate_harness(devices):
+    """Prove the prober can see objects that are known to exist.
+
+    Without this a broken prober, a DNS failure or a CDN change would report
+    'nothing new' forever. Every device must confirm, and the check uses the
+    newest indexed APK because that is the object most like what discovery is
+    looking for.
+    """
+    ok = True
+    for d in devices:
+        ver, idx, expected = max(d["apks"], key=lambda a: vkey(a[0]))
+        url = apk_url(d, idx, ver)
+        size = discover_one(url)
+        if size == expected:
+            print(f"harness ok: {d['channel']} {ver} ({expected} bytes)")
+        else:
+            print(f"harness FAILED: {d['channel']} {ver} expected {expected}, got {size} — {url}")
+            ok = False
+    return ok
+
+
+def format_findings(findings):
+    """Render findings as `.dat` lines, one per version and kind.
+
+    Diffs are grouped onto a single line per target, matching the existing
+    format, with sources in ascending version order.
+    """
+    lines = []
+    apks = sorted((f for f in findings if f["kind"] == "apk"), key=lambda f: vkey(f["version"]))
+    for f in apks:
+        lines.append(("apk", f"apk|{f['version']}|{f['index']}|{f['bytes']}"))
+
+    diffs = [f for f in findings if f["kind"] == "diff"]
+    by_target = {}
+    for f in diffs:
+        by_target.setdefault((f["version"], f["index"]), []).append(f)
+    for (ver, idx) in sorted(by_target, key=lambda k: vkey(k[0])):
+        group = sorted(by_target[(ver, idx)], key=lambda f: vkey(f["from"]))
+        joined = "|".join(f"{f['from']}:{f['bytes']}" for f in group)
+        lines.append(("diff", f"diff|{ver}|{idx}|{joined}"))
+    return lines
+
+
+def apply_findings(path, findings):
+    """Append `.dat` lines after the last existing entry of the same kind.
+
+    Appending inside the existing group keeps the file readable; the rendered
+    tables sort by version regardless, so placement never changes output.
+    """
+    new_lines = format_findings(findings)
+    if not new_lines:
+        return 0
+    lines = open(path).read().rstrip("\n").split("\n")
+    for kind, text in new_lines:
+        if text in lines:
+            continue
+        last = max((i for i, l in enumerate(lines) if l.startswith(f"{kind}|")), default=len(lines) - 1)
+        lines.insert(last + 1, text)
+    open(path, "w").write("\n".join(lines) + "\n")
+    return len(new_lines)
+
+
+def set_github_output(**kv):
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a") as fh:
+        for k, v in kv.items():
+            fh.write(f"{k}={v}\n")
+
+
+def cmd_discover(args):
+    devices = load_devices()
+
+    if not validate_harness(devices):
+        print("discovery aborted: the prober could not see known-good objects, "
+              "so a negative result would be meaningless.")
+        set_github_output(harness_ok="false", found="false")
+        return 2
+
+    all_findings = []
+    per_device = []
+    for d in devices:
+        findings, searched = discover_device(d, args.index_window, args.minor_window)
+        per_device.append((d, findings))
+        lo, hi = searched["apk_indices"]
+        print(f"searched {searched['channel']}: apk indices {lo}-{hi} × "
+              f"{len(searched['versions'])} candidate versions "
+              f"({', '.join(searched['versions'])})")
+        if searched["diff_indices"]:
+            dlo, dhi = searched["diff_indices"]
+            print(f"searched {searched['channel']}: rom-diff indices {dlo}-{dhi} × "
+                  f"from {', '.join(searched['diff_froms'])}")
+        all_findings.extend(findings)
+
+    if not all_findings:
+        print("no unindexed firmware found in the searched window")
+        set_github_output(harness_ok="true", found="false")
+        return 0
+
+    print(f"\nFOUND {len(all_findings)} unindexed object(s):")
+    for f in sorted(all_findings, key=lambda x: (vkey(x["version"]), x["kind"], x["url"])):
+        label = f"{f['kind']} {f['version']}"
+        if f["kind"] == "diff":
+            label += f" ← {f['from']}"
+        print(f"  {label}  idx={f['index']}  {human(f['bytes'])}  {f['url']}")
+
+    versions = sorted({f["version"] for f in all_findings}, key=vkey)
+    set_github_output(harness_ok="true", found="true", versions=",".join(versions))
+
+    if args.apply:
+        written = 0
+        for (d, findings), (_name, _sub, fn) in zip(per_device, DEVICES):
+            if findings:
+                written += apply_findings(os.path.join(HERE, fn), findings)
+        print(f"\nappended {written} line(s) to the index — re-run `probe` to validate "
+              f"every new URL and byte size against the CDN")
+
+    if args.json:
+        with open(args.json, "w") as fh:
+            json.dump(all_findings, fh, indent=2, sort_keys=True)
+        print(f"\nwrote {args.json}")
+    return 0
 
 
 def cmd_probe(args):
@@ -436,6 +699,16 @@ def main():
     p = sub.add_parser("probe", help="check every URL and append up/down to the history file")
     p.add_argument("--history", required=True)
     p.set_defaults(func=cmd_probe)
+
+    dsc = sub.add_parser("discover", help="search the CDN for versions newer than the index")
+    dsc.add_argument("--index-window", type=int, default=DISCOVER_INDEX_WINDOW,
+                     help=f"how many indices past the current maximum to probe (default {DISCOVER_INDEX_WINDOW})")
+    dsc.add_argument("--minor-window", type=int, default=DISCOVER_MINOR_WINDOW,
+                     help=f"how many minor versions ahead to consider (default {DISCOVER_MINOR_WINDOW})")
+    dsc.add_argument("--json", help="also write findings to this JSON file")
+    dsc.add_argument("--apply", action="store_true",
+                     help="append discovered entries to the .dat files")
+    dsc.set_defaults(func=cmd_discover)
 
     r = sub.add_parser("render", help="emit the Discussion markdown body")
     r.add_argument("--history", help="history JSON (omit for an empty sparkline)")

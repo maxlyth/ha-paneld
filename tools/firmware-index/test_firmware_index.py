@@ -223,5 +223,120 @@ class PublishedDataContractTest(unittest.TestCase):
         return output.getvalue()
 
 
+class DiscoveryTest(unittest.TestCase):
+    """Contracts for `discover`, checked against the real index data.
+
+    Discovery guesses forward into a bucket that cannot be listed, so its
+    failure mode is a silent false negative. Each contract below pins a way
+    that has already been observed to happen or would hide a real release.
+    """
+
+    def setUp(self):
+        self.devices = firmware_index.load_devices()
+
+    def test_every_rom_target_can_be_an_upgrade_source(self):
+        # Regression: the from-set was built only from versions already used
+        # as a diff SOURCE, so the newest release — which has only ever been
+        # a TARGET — was excluded, and the likeliest upgrade path of all
+        # (latest → next) could never be discovered.
+        for d in self.devices:
+            targets = {to for to, _f, _i, _s in d["diffs"]}
+            states = firmware_index.rom_states(d)
+            missing = sorted(targets - states, key=firmware_index.vkey)
+            self.assertEqual(
+                missing, [], f"{d['channel']}: ROM targets absent from the upgrade-source set"
+            )
+
+    def test_candidate_versions_span_the_largest_historical_minor_jump(self):
+        # Sonoff shipped 4.0.12 and then 4.4.0 with nothing between, so the
+        # candidate window must reach at least that far or a real release
+        # would sit undiscovered forever.
+        jumps = []
+        for d in self.devices:
+            versions = sorted({v for v, _i, _s in d["apks"]}, key=firmware_index.vkey)
+            for earlier, later in zip(versions, versions[1:]):
+                a, b = firmware_index.vkey(earlier), firmware_index.vkey(later)
+                if b[0] == a[0]:
+                    jumps.append(b[1] - a[1])
+        widest = max(jumps)
+        self.assertGreater(widest, 0, "index data has no minor-version jump to calibrate against")
+
+        newest = firmware_index.newest_version(self.devices[0]["apks"])
+        major, minor, _patch = firmware_index.vkey(newest)
+        candidates = firmware_index.candidate_versions(newest)
+        self.assertIn(
+            f"{major}.{minor + widest}.0",
+            candidates,
+            f"candidate versions do not reach a {widest}-minor jump, which has happened before",
+        )
+
+    def test_candidate_versions_exclude_the_known_release(self):
+        newest = firmware_index.newest_version(self.devices[0]["apks"])
+        self.assertNotIn(newest, firmware_index.candidate_versions(newest))
+
+    def test_discover_one_requires_zip_magic(self):
+        # A 206 alone is not proof: the CDN could serve an error body that
+        # still satisfies a range request.
+        response = mock.MagicMock()
+        response.status = 206
+        response.headers = {"Content-Range": "bytes 0-3/137890388"}
+        response.read.return_value = b"<htm"
+        response.__enter__.return_value = response
+
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            self.assertIsNone(firmware_index.discover_one("https://example.invalid/x.apk"))
+
+    def test_discover_one_accepts_a_real_zip(self):
+        response = mock.MagicMock()
+        response.status = 206
+        response.headers = {"Content-Range": "bytes 0-3/137890388"}
+        response.read.return_value = b"PK\x03\x04"
+        response.__enter__.return_value = response
+
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            self.assertEqual(
+                firmware_index.discover_one("https://example.invalid/x.apk"), 137890388
+            )
+
+    def test_a_blind_prober_aborts_instead_of_reporting_nothing_new(self):
+        # The whole point of the daily job is that "nothing found" is
+        # trustworthy. If the prober cannot see objects that are known to
+        # exist, it must fail loudly rather than emit a clean negative.
+        output = io.StringIO()
+        with mock.patch.object(firmware_index, "discover_one", return_value=None), \
+                mock.patch("sys.stdout", output):
+            code = firmware_index.cmd_discover(
+                SimpleNamespace(index_window=2, minor_window=1, json=None, apply=False)
+            )
+
+        self.assertEqual(code, 2)
+        self.assertIn("harness FAILED", output.getvalue())
+        self.assertNotIn("no unindexed firmware found", output.getvalue())
+
+    def test_searched_window_is_reported_even_when_nothing_is_found(self):
+        # A fixed window can miss a release when the CDN skips indices, so a
+        # negative result must say what it actually covered.
+        real = firmware_index.discover_one
+        devices = self.devices
+
+        def only_known_objects(url):
+            known = firmware_index.all_url_sizes(devices)
+            return known.get(url)
+
+        output = io.StringIO()
+        with mock.patch.object(firmware_index, "discover_one", side_effect=only_known_objects), \
+                mock.patch("sys.stdout", output):
+            code = firmware_index.cmd_discover(
+                SimpleNamespace(index_window=2, minor_window=1, json=None, apply=False)
+            )
+
+        self.assertIsNot(real, None)
+        self.assertEqual(code, 0)
+        text = output.getvalue()
+        self.assertIn("no unindexed firmware found", text)
+        for d in devices:
+            self.assertIn(f"searched {d['channel']}: apk indices", text)
+
+
 if __name__ == "__main__":
     unittest.main()
