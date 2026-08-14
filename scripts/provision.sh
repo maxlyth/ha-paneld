@@ -1419,15 +1419,42 @@ resolve_apk() {
   return 0  # never let the (possibly non-zero) probe above abort the script under set -e
 }
 
+# Discovery means USABLE, not merely present. `apksigner` is a wrapper script that needs a Java
+# runtime, so on a host without one it exists, is executable, and fails the moment it is invoked —
+# which read as "this APK is not properly signed" rather than "this tool cannot run" (#106). The
+# openssl probe below has always required `openssl version` to succeed for exactly this reason; this
+# holds the build tools to the same standard instead of trusting the file to be there.
+android_build_tool_runs() {
+  "$1" version >/dev/null 2>&1 || "$1" --version >/dev/null 2>&1
+}
+
 find_android_build_tool() {
   local name="$1" found="" root candidate
   found="$(command -v "$name" 2>/dev/null || true)"
-  if [ -n "$found" ]; then printf '%s\n' "$found"; return 0; fi
+  if [ -n "$found" ] && android_build_tool_runs "$found"; then printf '%s\n' "$found"; return 0; fi
+  found=""
   for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
     [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
-    for candidate in "$root"/build-tools/*/"$name"; do [ -x "$candidate" ] && found="$candidate"; done
+    for candidate in "$root"/build-tools/*/"$name"; do
+      if [ -x "$candidate" ] && android_build_tool_runs "$candidate"; then found="$candidate"; fi
+    done
   done
   [ -n "$found" ] && printf '%s\n' "$found"
+  return 0
+}
+
+# Why a tool could not be used, so a refusal can name the real problem. Empty when it ran, or when the
+# tool is simply not installed — "absent" already has its own wording and is not a malfunction.
+android_build_tool_failure() {
+  local name="$1" path detail
+  path="$(command -v "$name" 2>/dev/null || true)"
+  [ -n "$path" ] || return 0
+  # `cmd && return 0` here would abort the whole run under `set -e` in precisely the case this
+  # function exists to describe. An `if` keeps a non-zero status non-fatal.
+  if android_build_tool_runs "$path"; then return 0; fi
+  detail="$("$path" version 2>&1 | head -1 | LC_ALL=C tr -d '\000-\037\177' || true)"
+  printf '%s is installed at %s but could not run: %s' "$name" "$path" "${detail:-no output}"
+  return 0
 }
 
 verify_release_checksum() {
@@ -1495,6 +1522,7 @@ verify_release_checksum() {
 
 verify_release_apk() {
   local expected_name signer_tool signer_output signer signer_lines signer_count package_tool package_name="" artifact_label
+  local signer_tool_problem signer_error package_tool_problem
   if [ -n "$APK_RELEASE_TAG" ]; then
     expected_name="$(release_apk_name "$APK_RELEASE_TAG")"
     [ "$(basename "$APK")" = "$expected_name" ] || fail "release APK filename does not match its tag" \
@@ -1505,17 +1533,27 @@ verify_release_apk() {
     artifact_label="local signed APK"
   fi
   signer_tool="$(find_android_build_tool apksigner || true)"
+  signer_tool_problem="$(android_build_tool_failure apksigner || true)"
   if [ -z "$signer_tool" ]; then
     if [ -n "$APK_RELEASE_TAG" ] && [ "$REQUIRE_RELEASE_SIGNER" != 1 ]; then
-      warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+      # A tool that cannot run carries exactly as much evidence as one that is absent — none — so it
+      # takes the same path. Refusing here would reject an APK this run has already authenticated
+      # against the pinned release key, and blame the artifact for the host's missing Java runtime.
+      if [ -n "$signer_tool_problem" ]; then
+        warn "The optional APK structure inspection was skipped: $signer_tool_problem. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+      else
+        warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+      fi
     else
       fail "Android Build-Tools are required to verify a local APK signer" \
-        "Install apksigner and retry. Nothing was backed up, installed, started, or privileged." \
+        "${signer_tool_problem:-Install apksigner and retry.} Nothing was backed up, installed, started, or privileged." \
         "Self-built APKs may use their developer signer; official-release deployments add --require-release-signer."
     fi
   else
+    signer_error="$("$signer_tool" verify --print-certs "$APK" 2>&1 >/dev/null | head -2 | LC_ALL=C tr -d '\000-\037\177' || true)"
     signer_output="$("$signer_tool" verify --print-certs "$APK" 2>/dev/null)" || fail "release APK signature verification failed" \
-      "The APK was not installed. Check that it is a valid signed APK and retry."
+      "The APK was not installed. Check that it is a valid signed APK and retry." \
+      "${signer_error:-apksigner reported no reason}"
     signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p')"
     signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
     [ "$signer_count" = 1 ] || fail "release APK signer count mismatch" \
@@ -1530,13 +1568,15 @@ verify_release_apk() {
   fi
   package_tool="$(find_android_build_tool aapt || true)"
   [ -n "$package_tool" ] || package_tool="$(find_android_build_tool aapt2 || true)"
+  package_tool_problem="$(android_build_tool_failure aapt || true)"
+  [ -n "$package_tool_problem" ] || package_tool_problem="$(android_build_tool_failure aapt2 || true)"
   if [ -n "$package_tool" ]; then
     package_name="$("$package_tool" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
     [ "$package_name" = "$PKG" ] || fail "release APK package mismatch" \
       "Expected $PKG" "Got      ${package_name:-unavailable}" "Nothing was installed, started, or privileged."
   elif [ -z "$APK_RELEASE_TAG" ] || [ "$REQUIRE_RELEASE_SIGNER" = 1 ]; then
     fail "Android Build-Tools are required to verify a local APK package" \
-      "Install aapt or aapt2 and retry. Nothing was backed up, installed, started, or privileged."
+      "${package_tool_problem:-Install aapt or aapt2 and retry.} Nothing was backed up, installed, started, or privileged."
   fi
   step "🛡️  verified" "${D}$artifact_label · package ${package_name:-authenticated release asset} · signer ${signer:-$RELEASE_CERT_SHA256}${X}"
 }

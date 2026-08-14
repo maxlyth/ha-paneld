@@ -199,6 +199,7 @@ run_provision() {
     fi
   fi
   LAST_OUTPUT="$TMP/output.txt"
+  MOCK_APKSIGNER_RUNS="${MOCK_APKSIGNER_RUNS:-1}" \
   MOCK_HEALTH="${MOCK_HEALTH:-ok}" \
   MOCK_HEALTH_READY_AFTER="${MOCK_HEALTH_READY_AFTER:-3}" \
   MOCK_HEALTH_HANG_SECONDS="${MOCK_HEALTH_HANG_SECONDS:-3}" \
@@ -1865,6 +1866,25 @@ assert_contains 'optional APK structure inspection was skipped' "missing apksign
 assert_contains 'authenticated by the signed checksum' "missing apksigner still reports the authenticated release path"
 assert_log_contains '^openssl dgst -sha256 -verify ' "no-apksigner path still authenticates the checksum signature"
 assert_log_contains '^adb .* install( |$)' "authenticated no-apksigner path still installs"
+
+# #106: an apksigner that is PRESENT but cannot run — a host with no Java runtime — carries exactly as
+# much evidence as an absent one: none. It used to abort the install of an APK the same run had just
+# authenticated against the pinned release key, and told the operator to doubt the artifact.
+# ANDROID_HOME/ANDROID_SDK_ROOT are cleared because this container HAS a working apksigner in a real
+# SDK; without that, discovery legitimately falls through to it and the scenario never occurs.
+MOCK_APKSIGNER_RUNS=0 ANDROID_HOME= ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "an unrunnable apksigner no longer fails an already-authenticated release install"
+assert_contains 'could not run' "the skip names the tool as the problem, not the APK"
+assert_contains 'Unable to locate a Java Runtime' "the tool's own reason reaches the operator"
+assert_not_contains 'release APK signature verification failed' "$LAST_OUTPUT" "the APK is not blamed for the host's missing runtime"
+assert_log_contains '^adb .* install( |$)' "the authenticated APK still installs"
+
+# The protection that must NOT be relaxed: a local APK has no signed checksum behind it, so an
+# unusable signer stays fatal there.
+MOCK_APKSIGNER_RUNS=0 ANDROID_HOME= ANDROID_SDK_ROOT= run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unrunnable apksigner still fails closed for a local APK"
+assert_contains 'could not run' "the local-APK refusal also names the tool"
 
 MOCK_OPENSSL_MISSING=1 \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame

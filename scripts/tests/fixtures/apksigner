@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -u
 
+# Runnability probe, answered before the call log so discovery does not appear as traffic.
+# MOCK_APKSIGNER_RUNS=0 models a host with no Java runtime — the #106 shape, where the tool existed,
+# could not execute, and the APK got the blame.
+if [ "$*" = "version" ] || [ "$*" = "--version" ]; then
+  if [ "${MOCK_APKSIGNER_RUNS:-1}" = 1 ]; then printf '35.0.0\n'; exit 0; fi
+  printf "The operation couldn't be completed. Unable to locate a Java Runtime.\n" >&2
+  exit 1
+fi
+if [ "${MOCK_APKSIGNER_RUNS:-1}" != 1 ]; then
+  printf "The operation couldn't be completed. Unable to locate a Java Runtime.\n" >&2
+  exit 1
+fi
 printf 'apksigner %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 case "$*" in
   *ha-paneld-v*-manual-setup-required.apk*)
