@@ -7,8 +7,8 @@ import org.junit.Test
 /**
  * The notice's geometry, asserted without inflating a view.
  *
- * The rule under test is that legibility is PHYSICAL: a wall panel is read from across a room, so the
- * text must not keep growing just because the display has more pixels.
+ * The rule under test is that the notice has a logical dp cap: its text must not keep growing just
+ * because the display has more pixels, while runtime logical-density overrides remain respected.
  */
 class HaLifecycleBarSizingTest {
 
@@ -38,9 +38,9 @@ class HaLifecycleBarSizingTest {
         assertEquals(20.16f * largeDensity, sizes.detailPx, 0.01f)
     }
 
-    @Test fun theCapIsPhysicalSoADenserPanelGetsMorePixelsNotSmallerText() {
-        // The whole point of expressing the cap in dp: at twice the density the SAME physical size needs
-        // twice the pixels. A pixel-valued cap would shrink the text on a denser panel.
+    @Test fun theCapUsesLogicalDensityRatherThanADeviceIndependentPixelConstant() {
+        // The whole point of expressing the cap in dp: at twice the logical density the same dp size
+        // needs twice the pixels. A pixel-valued cap would shrink the text in logical units.
         val single = haLifecycleTextSizes(4000f, 1f)
         val double = haLifecycleTextSizes(4000f, 2f)
         assertEquals(2f * single.headlinePx, double.headlinePx, 0.01f)

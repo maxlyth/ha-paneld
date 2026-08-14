@@ -14,21 +14,6 @@ import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
 
-/**
- * The native, dashboard-independent Home Assistant outage bar.
- *
- * It is a second child of the renderer's root frame, so the dashboard keeps rendering underneath and
- * nothing is destroyed to show it — unlike the reconnect/auth interstitials, which replace the document.
- * It is NOT a system overlay: no `SYSTEM_ALERT_WINDOW` owner is added for this.
- *
- * Why a bar and not a toast: this explains unresponsiveness imposed from OUTSIDE the panel, so it has to
- * stay visible for as long as that lasts. A transient notice would clear while the dashboard was still
- * frozen, which is the confusion the feature exists to remove. The compact card is deliberate — a
- * full-bleed overlay was tried for the restart announcement and rejected on hardware.
- *
- * The caller owns removal. Every path that swaps or tears down the content view must call [detach], or
- * the bar outlives its container — exactly how the earlier attempt failed.
- */
 /** The two text sizes the notice renders at, in pixels. */
 internal data class HaLifecycleTextSizes(val headlinePx: Float, val detailPx: Float)
 
@@ -40,12 +25,12 @@ internal data class HaLifecycleTextSizes(val headlinePx: Float, val detailPx: Fl
  *
  * A fraction of the shortest edge suits a small panel and is what the accepted 480x480 rendering uses.
  * Past that the fraction keeps growing with the display while the reader does not move closer, so it is
- * capped at the physical size already proven readable. The cap is expressed in dp and multiplied by
- * [density] rather than being a pixel constant, so a denser panel still gets the same PHYSICAL text
- * rather than smaller text.
+ * capped at the density-independent logical size already proven readable. The cap is expressed in dp
+ * and multiplied by [density] rather than being a pixel constant, so logical-density overrides are
+ * respected instead of making the cap smaller in dp.
  *
  * @param shortestEdgePx the shorter of the display's two pixel dimensions
- * @param density `DisplayMetrics.density` — pixels per dp
+ * @param density `DisplayMetrics.density` — logical pixels per dp, not measured physical DPI
  */
 internal fun haLifecycleTextSizes(shortestEdgePx: Float, density: Float): HaLifecycleTextSizes {
     // A non-positive density would silently collapse the cap to zero and hide the text entirely, which
@@ -62,14 +47,29 @@ private const val HA_LIFECYCLE_DETAIL_FRACTION = 0.042f
 
 /**
  * The caps, in dp: exactly what the fraction yields on the smallest supported panel (480px shortest
- * edge at density 1.0), which is the rendering already accepted on hardware. Deriving them from
- * the baseline panel rather than picking a number is what makes the 480x480 layout byte-identical
- * while bounding every larger one.
+ * edge at logical density 1.0), which is the rendering already accepted on hardware. Deriving them
+ * from the baseline panel rather than picking a number preserves that 480x480 text size while
+ * bounding growth on larger logical viewports.
  */
 private const val HA_LIFECYCLE_BASELINE_EDGE_PX = 480f
 private const val HA_LIFECYCLE_MAX_HEADLINE_DP = HA_LIFECYCLE_BASELINE_EDGE_PX * HA_LIFECYCLE_HEADLINE_FRACTION
 private const val HA_LIFECYCLE_MAX_DETAIL_DP = HA_LIFECYCLE_BASELINE_EDGE_PX * HA_LIFECYCLE_DETAIL_FRACTION
 
+/**
+ * The native, dashboard-independent Home Assistant outage bar.
+ *
+ * It is a second child of the renderer's root frame, so the dashboard keeps rendering underneath and
+ * nothing is destroyed to show it — unlike the reconnect/auth interstitials, which replace the document.
+ * It is NOT a system overlay: no `SYSTEM_ALERT_WINDOW` owner is added for this.
+ *
+ * Why a bar and not a toast: this explains unresponsiveness imposed from OUTSIDE the panel, so it has to
+ * stay visible for as long as that lasts. A transient notice would clear while the dashboard was still
+ * frozen, which is the confusion the feature exists to remove. The compact card is deliberate — a
+ * full-bleed overlay was tried for the restart announcement and rejected on hardware.
+ *
+ * The caller owns removal. Every path that swaps or tears down the content view must call [detach], or
+ * the bar outlives its container — exactly how the earlier attempt failed.
+ */
 internal class HaLifecycleBar private constructor(
     private val view: LinearLayout,
     private val card: android.graphics.drawable.GradientDrawable,
@@ -193,11 +193,11 @@ internal class HaLifecycleBar private constructor(
          *
          * A fraction of the shortest screen edge is deterministic and adapts to small panels, but it
          * grows LINEARLY with the display and that is wrong past a point: a wall panel is read from
-         * across a room, so legibility depends on physical size, not on what share of the pixels the
-         * text consumes. Measured on hardware — 52.8px (52.8dp) on a 480x480 panel, but 132px (93dp)
+         * across a room, so it should not keep consuming a larger share of the logical viewport. Measured
+         * on hardware — 52.8px (52.8dp) on a 480x480 panel, but 132px (93dp)
          * on a 1920x1200 one, where the card took ~40% of the screen height and dominated the
-         * dashboard it annotates. So the fraction is capped at the physical size already proven
-         * readable on the baseline panel; see [haLifecycleTextSizes].
+         * dashboard it annotates. So the fraction is capped at the baseline panel's proven logical dp
+         * size; see [haLifecycleTextSizes].
          */
         private const val DETAIL_MAX_LINES = 3
 
