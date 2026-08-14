@@ -29,6 +29,47 @@ import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
  * The caller owns removal. Every path that swaps or tears down the content view must call [detach], or
  * the bar outlives its container — exactly how the earlier attempt failed.
  */
+/** The two text sizes the notice renders at, in pixels. */
+internal data class HaLifecycleTextSizes(val headlinePx: Float, val detailPx: Float)
+
+/**
+ * Decide the notice's text sizes for a display.
+ *
+ * Pure and Android-free so the geometry is assertable without inflating a view — unit-tested in
+ * `HaLifecycleBarSizingTest`.
+ *
+ * A fraction of the shortest edge suits a small panel and is what the accepted 480x480 rendering uses.
+ * Past that the fraction keeps growing with the display while the reader does not move closer, so it is
+ * capped at the physical size already proven readable. The cap is expressed in dp and multiplied by
+ * [density] rather than being a pixel constant, so a denser panel still gets the same PHYSICAL text
+ * rather than smaller text.
+ *
+ * @param shortestEdgePx the shorter of the display's two pixel dimensions
+ * @param density `DisplayMetrics.density` — pixels per dp
+ */
+internal fun haLifecycleTextSizes(shortestEdgePx: Float, density: Float): HaLifecycleTextSizes {
+    // A non-positive density would silently collapse the cap to zero and hide the text entirely, which
+    // is worse than an oversized notice. Fall back to 1:1 rather than trusting it.
+    val scale = if (density > 0f) density else 1f
+    return HaLifecycleTextSizes(
+        headlinePx = minOf(shortestEdgePx * HA_LIFECYCLE_HEADLINE_FRACTION, HA_LIFECYCLE_MAX_HEADLINE_DP * scale),
+        detailPx = minOf(shortestEdgePx * HA_LIFECYCLE_DETAIL_FRACTION, HA_LIFECYCLE_MAX_DETAIL_DP * scale),
+    )
+}
+
+private const val HA_LIFECYCLE_HEADLINE_FRACTION = 0.11f
+private const val HA_LIFECYCLE_DETAIL_FRACTION = 0.042f
+
+/**
+ * The caps, in dp: exactly what the fraction yields on the smallest supported panel (480px shortest
+ * edge at density 1.0), which is the rendering already accepted on hardware. Deriving them from
+ * the baseline panel rather than picking a number is what makes the 480x480 layout byte-identical
+ * while bounding every larger one.
+ */
+private const val HA_LIFECYCLE_BASELINE_EDGE_PX = 480f
+private const val HA_LIFECYCLE_MAX_HEADLINE_DP = HA_LIFECYCLE_BASELINE_EDGE_PX * HA_LIFECYCLE_HEADLINE_FRACTION
+private const val HA_LIFECYCLE_MAX_DETAIL_DP = HA_LIFECYCLE_BASELINE_EDGE_PX * HA_LIFECYCLE_DETAIL_FRACTION
+
 internal class HaLifecycleBar private constructor(
     private val view: LinearLayout,
     private val card: android.graphics.drawable.GradientDrawable,
@@ -150,11 +191,14 @@ internal class HaLifecycleBar private constructor(
          * enough to survive the circularity — rendered correctly, which is exactly the asymmetry that
          * gave the cause away.
          *
-         * A fraction of the shortest screen edge is deterministic and still adapts: 52px headline on a
-         * 480x480 panel, proportionally larger on the 1920x1200 one.
+         * A fraction of the shortest screen edge is deterministic and adapts to small panels, but it
+         * grows LINEARLY with the display and that is wrong past a point: a wall panel is read from
+         * across a room, so legibility depends on physical size, not on what share of the pixels the
+         * text consumes. Measured on hardware — 52.8px (52.8dp) on a 480x480 panel, but 132px (93dp)
+         * on a 1920x1200 one, where the card took ~40% of the screen height and dominated the
+         * dashboard it annotates. So the fraction is capped at the physical size already proven
+         * readable on the baseline panel; see [haLifecycleTextSizes].
          */
-        private const val HEADLINE_FRACTION = 0.11f
-        private const val DETAIL_FRACTION = 0.042f
         private const val DETAIL_MAX_LINES = 3
 
         /** Lifts the card off the dashboard so it reads as laid OVER the page, not part of it. */
@@ -173,8 +217,9 @@ internal class HaLifecycleBar private constructor(
             val pad = (PAD_DP * density).toInt()
             val iconSize = (ICON_DP * density).toInt()
             val shortestEdge = minOf(metrics.widthPixels, metrics.heightPixels).toFloat()
-            val headlinePx = shortestEdge * HEADLINE_FRACTION
-            val detailPx = shortestEdge * DETAIL_FRACTION
+            val sizes = haLifecycleTextSizes(shortestEdge, density)
+            val headlinePx = sizes.headlinePx
+            val detailPx = sizes.detailPx
             // VERTICAL and centred: the mark sits on its own line with the wording centred beneath it.
             // A horizontal row spent a fifth of a 480px panel on the mark and left the text a narrow
             // column beside it; stacking gives the wording the full width and reads as a notice.
