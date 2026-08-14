@@ -1,6 +1,6 @@
 schema: 2
 id: smt1019
-version: 2.3.0
+version: 3.0.0
 display_name: ZHICAI SMT1019
 soc_class: rk3576
 soc:
@@ -52,10 +52,10 @@ hardware:
   led:
     mechanism: rk3576-ioctl-daemon
     transfer: identity
-  # The helper drives the backlight's bl_power for atruly dark screen. ScreenController falls through
-  # daemon -> su -> brightness-zero at runtime, so the stock no-root firmware still gets exactly the
-  # behaviour it had; declaring the most capable route costs it one refused socket connect per
-  # screen-off, because a missing su binary is cached for the process lifetime after the first try.
+  # The helper drives the backlight's bl_power for a truly dark screen. ScreenController falls through
+  # daemon -> su -> brightness-zero at runtime. Stock firmware with neither helper nor direct root gets
+  # the previous brightness-zero behaviour. Declaring the capable route costs that stock configuration
+  # one refused socket connect per screen-off; helper-less rooted builds can still use direct root.
   screen_off: daemon-blpower
   has_button_backlight: false
 sensors:
