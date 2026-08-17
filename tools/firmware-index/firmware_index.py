@@ -502,7 +502,7 @@ Direct, clickable, **live-verified** download links for Sonoff NSPanel Pro OTA f
 Flashing how-to (fully remote, no recovery-mode ADB): see [the repo's firmware guide](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware.md). `/data` (apps + settings) is preserved across an OTA.
 
 > [!TIP]
-> **How to read this index:** the per-model tables below are generated from the index data and are the authority on what exists — this page deliberately does not name a “latest” version in prose, because prose goes stale the moment a release lands. `4.0.12` is the full-ROM checkpoint, and it is itself a full ROM. A release indexed after it arrives either as one or more diffs — each patching from a specific earlier version, and a release commonly has several inbound diffs to choose from — or as an APK-only update carrying no ROM at all, and a release can be a ROM on one model and APK-only on the other — so an upgrade is not always a single hop, and the per-model tables show which form each release takes. The project has hardware-verified the flashing procedure only through **4.4.0**; anything newer is CDN-verified only, so try it on one recoverable panel first.
+> **How to read this index:** the per-model tables below are generated from the index data and cover the recent upgrade targets — GitHub caps the size of this post, so the authority on everything indexed is the [complete index](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware-archive.md), which lists every object including the older releases omitted here. This page deliberately does not name a “latest” version in prose, because prose goes stale the moment a release lands. `4.0.12` is the full-ROM checkpoint, and it is itself a full ROM. A release indexed after it arrives either as one or more diffs — each patching from a specific earlier version, and a release commonly has several inbound diffs to choose from — or as an APK-only update carrying no ROM at all, and a release can be a ROM on one model and APK-only on the other — so an upgrade is not always a single hop, and the per-model tables show which form each release takes. The project has hardware-verified the flashing procedure only through **4.4.0**; anything newer is CDN-verified only, so try it on one recoverable panel first.
 
 > [!NOTE]
 > **Help wanted:** this index lists what has been *found*, not everything that exists. The bucket cannot be listed and the per-build index cannot be derived from a version number, so a failed probe rules out one filename at one index and never a build — absence here is not proof of non-existence. Spot a build or a link that is missing? Reply with the URL plus a range probe (`curl -s -r 0-0 -D - -o /dev/null "<url>"`) showing `206` and the total size, and it gets added. This thread is the living list.
@@ -584,12 +584,12 @@ Channels and conventions differ by model:
 `<idx>` is a per-build serial (the `rom-diff` index is per **target** version). Probing: a missing file returns `403`; a real file answers a range request with `206` + a `Content-Range` total. Check one with `curl -s -r 0-0 -D - -o /dev/null "<url>"`.
 
 > [!CAUTION]
-> The per-model tables above are the authority on which full ROMs, diffs and APKs are indexed. Past the `4.0.12` full-ROM checkpoint a release arrives either as one or more diffs — each patching from a specific earlier version, so there is usually more than one way in — or as an APK-only update carrying no ROM diff at all, and a release can be a ROM on one model and APK-only on the other. Read the route off the tables rather than assuming a direct hop.
+> The per-model tables above show the recent upgrade targets; the [complete index](https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware-archive.md) is the authority on every full ROM, diff and APK indexed. Past the `4.0.12` full-ROM checkpoint a release arrives either as one or more diffs — each patching from a specific earlier version, so there is usually more than one way in — or as an APK-only update carrying no ROM diff at all, and a release can be a ROM on one model and APK-only on the other. Read the route off the tables rather than assuming a direct hop.
 """
 
 FOOTER = """---
 
-*This page is generated and refreshed automatically — do not hand-edit the body. The link list lives in [`tools/firmware-index/`](https://github.com/maxlyth/ha-paneld/tree/main/tools/firmware-index) and the 7-day availability squares are updated daily by [a GitHub Action](https://github.com/maxlyth/ha-paneld/blob/main/.github/workflows/firmware-url-monitor.yml). To add or correct a link, edit the data files (or reply below) — don't edit this post.*
+*This page is generated and refreshed automatically — do not hand-edit the body. The link list lives in [`tools/firmware-index/`](https://github.com/maxlyth/ha-paneld/tree/main/tools/firmware-index), every URL is re-verified daily by [a GitHub Action](https://github.com/maxlyth/ha-paneld/blob/main/.github/workflows/firmware-url-monitor.yml), and the Archived dates come from the weekly [Wayback archiver](https://github.com/maxlyth/ha-paneld/blob/main/.github/workflows/firmware-wayback.yml). To add or correct a link, edit the data files (or reply below) — don't edit this post.*
 """
 
 
@@ -820,7 +820,7 @@ def cmd_archive(args):
 | With a Wayback capture | {covered} |
 | Without a capture | {len(urls) - covered} |
 
-Regenerate with `python3 tools/firmware-index/firmware_index.py archive --out {ARCHIVE_DOC}`.
+Regenerate with `python3 tools/firmware-index/firmware_index.py archive --wayback wayback.json --out {ARCHIVE_DOC}`, where `wayback.json` comes from the `wayback-state` branch. Without it the generator refuses to run rather than blank the Archived column.
 """)
     body = "\n".join(blocks)
 

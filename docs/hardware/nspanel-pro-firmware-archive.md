@@ -285,4 +285,4 @@ The **Archived** column is the Wayback Machine capture date; reach a capture at 
 | With a Wayback capture | 221 |
 | Without a capture | 14 |
 
-Regenerate with `python3 tools/firmware-index/firmware_index.py archive --out docs/hardware/nspanel-pro-firmware-archive.md`.
+Regenerate with `python3 tools/firmware-index/firmware_index.py archive --wayback wayback.json --out docs/hardware/nspanel-pro-firmware-archive.md`, where `wayback.json` comes from the `wayback-state` branch. Without it the generator refuses to run rather than blank the Archived column.
