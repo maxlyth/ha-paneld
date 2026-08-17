@@ -1,8 +1,10 @@
 package io.github.maxlyth.hapaneld
 
 import android.app.Activity
+import android.util.DisplayMetrics
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.ScrollView
 import androidx.test.core.app.ActivityScenario
@@ -11,6 +13,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -23,20 +26,104 @@ import org.junit.runner.RunWith
  * content pushed above the scroll origin, actions with no state. Every assertion here executes the
  * real views on a real Android runtime and measures what they actually do.
  *
- * Run against a 480x480 device or emulator — the smallest supported panel geometry, and the size
- * every one of those defects was reachable on.
+ * The 480x480 geometry is ENFORCED, not requested: see the precondition below. On a larger device
+ * every measurement here has room to spare and would pass without meaning anything.
  */
 @RunWith(AndroidJUnit4::class)
 class StatusSurfaceInstrumentedTest {
 
-    private fun onFrame(dark: Boolean = true, block: (Activity, StatusSurface) -> Unit) {
-        ActivityScenario.launch(StatusSurfaceTestHost::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                val surface = StatusSurface(activity, dark)
-                activity.setContentView(surface.root)
-                block(activity, surface)
+    /**
+     * Every measurement below is only meaningful on the smallest supported panel, so the geometry is a
+     * precondition rather than a comment.
+     *
+     * Without it this whole file passes on any device: a 1920x1200 tablet has room for anything, so
+     * "the actions are on screen" and "the content is reachable" become statements about the emulator
+     * that happened to be attached. The density check matters as much as the pixel one — the frame
+     * chooses its compact tier from logical dp, so 480px at density 2.0 is a 240dp panel and a
+     * different layout entirely.
+     */
+    @Before
+    fun theDeviceIsTheSmallestSupportedPanel() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val display = context.getSystemService(WindowManager::class.java).defaultDisplay
+        val real = DisplayMetrics().also { @Suppress("DEPRECATION") display.getRealMetrics(it) }
+        val usable = context.resources.displayMetrics
+        panelHeightPx = real.heightPixels
+
+        // The PHYSICAL panel, which is what identifies the device.
+        assertEquals(
+            "this suite measures a 480x480 panel; the display is ${real.widthPixels}x${real.heightPixels}px",
+            480 to 480,
+            real.widthPixels to real.heightPixels,
+        )
+        // Density 1.0, so px and dp coincide and every measurement below reads as both. The frame
+        // picks its compact tier from logical dp, so 480px at density 2.0 would be a 240dp panel and
+        // a different layout entirely — the pixel check alone would not catch that.
+        assertEquals("px and dp must coincide on this panel", 1.0f, usable.density, 0.01f)
+        // `resources.displayMetrics` reports 480x432 here, deducting the 48px navigation bar, but the
+        // status frame is drawn by a fullscreen activity that receives the whole 480. Measurements are
+        // taken against the window each test actually gets, asserted per test, rather than against
+        // either figure assumed in advance.
+        assertTrue(
+            "logical ${real.widthPixels}x${real.heightPixels}dp must select the compact tier",
+            (real.heightPixels / usable.density).toInt() < STATUS_COMPACT_HEIGHT_DP,
+        )
+    }
+
+    /** Physical panel height, read once in the precondition so no measurement hard-codes it. */
+    private var panelHeightPx = 0
+
+    private fun onFrame(
+        dark: Boolean = true,
+        fontScale: Float = 0f,
+        block: (Activity, StatusSurface) -> Unit,
+    ) {
+        StatusSurfaceTestHost.fontScaleOverride = fontScale
+        try {
+            ActivityScenario.launch(StatusSurfaceTestHost::class.java).use { scenario ->
+                scenario.onActivity { activity ->
+                    if (fontScale > 0f) {
+                        assertEquals(
+                            "the font-scale override did not reach the activity",
+                            fontScale,
+                            activity.resources.configuration.fontScale,
+                            0.001f,
+                        )
+                    }
+                    val surface = StatusSurface(activity, dark)
+                    activity.setContentView(surface.root)
+                    block(activity, surface)
+                }
             }
+        } finally {
+            StatusSurfaceTestHost.fontScaleOverride = 0f
         }
+    }
+
+    /** The phase used for the overflow measurements: the tallest real screen the frame has to draw. */
+    private fun StatusSurface.tallestPhase(): List<View> = listOf(
+        heading("Entity filter needs attention"),
+        detail(
+            "The Home Assistant dashboard is not broken. Its entity-discovery checks exceed what can " +
+                "be safely reviewed at once. Open entity-discovery settings and simplify the " +
+                "dashboard, or disable the entity filter.",
+        ),
+        action("Ignore flagged entities and continue", fullWidth = true) {},
+        action("Disable entity filter", fullWidth = true) {},
+        action("Open entity-discovery settings", fullWidth = true) {},
+    )
+
+    /**
+     * How far down the rows themselves actually reach.
+     *
+     * NOT the body container's height: the scroller sets `isFillViewport`, so a body shorter than the
+     * viewport is stretched to it and its height measures the window instead of the content. Reading
+     * it that way made this test report the frame SHRINKING at a larger font scale — the band grew, so
+     * the viewport it was being pinned to got smaller.
+     */
+    private fun StatusSurface.bodyExtent(): Int {
+        val content = scroller().getChildAt(0) as ViewGroup
+        return (0 until content.childCount).maxOf { content.getChildAt(it).bottom }
     }
 
     private fun View.topInWindow(): Int {
@@ -102,23 +189,13 @@ class StatusSurfaceInstrumentedTest {
     @Test
     fun theTallestPhaseKeepsItsActionsOnScreen() {
         onFrame { activity, surface ->
-            val actions = listOf(
-                surface.action("Ignore flagged entities and continue", fullWidth = true) {},
-                surface.action("Disable entity filter", fullWidth = true) {},
-                surface.action("Open entity-discovery settings", fullWidth = true) {},
-            )
-            surface.setBody(
-                surface.heading("Entity filter needs attention"),
-                surface.detail(
-                    "The Home Assistant dashboard is not broken. Its entity-discovery checks exceed " +
-                        "what can be safely reviewed at once. Open entity-discovery settings and " +
-                        "simplify the dashboard, or disable the entity filter.",
-                ),
-                *actions.toTypedArray(),
-            )
+            val rows = surface.tallestPhase()
+            surface.setBody(*rows.toTypedArray())
             activity.settle()
             val panelBottom = activity.findViewById<View>(android.R.id.content).height
-            actions.forEach { action ->
+            assertEquals("the frame must fill the panel", panelHeightPx, panelBottom)
+            rows.filterIsInstance<Button>().forEach { action ->
+                assertTrue("fixture sanity: an action must be laid out", action.height > 0)
                 assertTrue(
                     "an action ends at ${action.bottomInWindow()} on a ${panelBottom}px panel",
                     action.bottomInWindow() <= panelBottom,
@@ -174,32 +251,73 @@ class StatusSurfaceInstrumentedTest {
         }
     }
 
-    /** At a large font scale the frame grows and scrolls rather than clipping its own content. */
+    /**
+     * At an enlarged font scale the frame grows, and every row stays reachable by scrolling.
+     *
+     * The version of this test submitted at `d78c3be3` proved nothing and review was right to say so:
+     * it never set a font scale, and its reachability expression compared a subtraction to the same
+     * subtraction, so it was true whatever the frame did. This one enlarges the scale for real through
+     * the host's base context, measures the same phase at both scales, and requires the enlarged one
+     * to actually overflow — otherwise the scrolling half would be vacuous in turn.
+     */
     @Test
     fun aLargeFontScaleGrowsTheFrameRatherThanClippingIt() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val base = instrumentation.targetContext.resources.configuration.fontScale
-        assertTrue("fixture sanity: a base font scale is reported", base > 0f)
+        var atDeviceScale = 0
         onFrame { activity, surface ->
-            surface.setBody(
-                surface.heading("Home Assistant version check rejected"),
-                surface.detail(
-                    "The panel could not authenticate with Home Assistant to check its version. " +
-                        "Check this panel's Home Assistant login in Configure, then retry.",
-                ),
-                surface.action("Retry") {},
-            )
+            surface.setBody(*surface.tallestPhase().toTypedArray())
             activity.settle()
-            val scroller = surface.scroller()
-            val content = scroller.getChildAt(0)
-            // Either the content fits, or it overflows and the scroller can reach the end of it.
-            // What must never happen is content taller than the viewport with no way to reach it.
-            val reachable = content.height <= scroller.height ||
-                scroller.getChildAt(0).height - scroller.height == scroller.let {
-                    it.getChildAt(0).height - it.height
-                }
-            assertTrue("the body must be reachable, not clipped", reachable)
-            assertTrue("the mark must remain on screen", surface.mark().topInWindow() >= 0)
+            atDeviceScale = surface.bodyExtent()
+            assertTrue("fixture sanity: the phase must lay out at all", atDeviceScale > 0)
         }
+
+        onFrame(fontScale = LARGE_FONT_SCALE) { activity, surface ->
+            val rows = surface.tallestPhase()
+            surface.setBody(*rows.toTypedArray())
+            activity.settle()
+
+            val scroller = surface.scroller()
+            val content = scroller.getChildAt(0) as ViewGroup
+            assertTrue(
+                "the frame must GROW with the font scale: ${atDeviceScale}px then ${surface.bodyExtent()}px",
+                surface.bodyExtent() > atDeviceScale,
+            )
+            val overflow = surface.bodyExtent() - scroller.height
+            assertTrue(
+                "the fixture must actually overflow at ${LARGE_FONT_SCALE}x, or the scrolling below " +
+                    "proves nothing (rows reach ${surface.bodyExtent()}px, viewport ${scroller.height}px)",
+                overflow > 0,
+            )
+
+            // Reaching the end must be possible, and the scroller must actually go there — a clamp
+            // short of the overflow is exactly the "content with no way to reach it" failure.
+            scroller.scrollTo(0, overflow)
+            activity.settle()
+            assertEquals("the body cannot be scrolled to its end", overflow, scroller.scrollY)
+
+            val lastRow = rows.last()
+            assertEquals(
+                "fixture sanity: the last row is the final action",
+                content.getChildAt(content.childCount - 1),
+                lastRow,
+            )
+            assertTrue("the final action must be laid out, not collapsed", lastRow.height > 0)
+            assertTrue(
+                "the final action ends at ${lastRow.bottomInWindow()} below a viewport ending at " +
+                    "${scroller.bottomInWindow()}",
+                lastRow.bottomInWindow() <= scroller.bottomInWindow(),
+            )
+
+            // The mark is outside the scroller, so scrolling to the end must not have moved it.
+            assertTrue("the mark left the screen", surface.mark().topInWindow() >= 0)
+            assertTrue(
+                "the mark must stay above the body it heads",
+                surface.mark().bottomInWindow() <= scroller.topInWindow(),
+            )
+        }
+    }
+
+    private companion object {
+        /** Android 14's largest accessibility font size, so this is a real user setting, not a stress value. */
+        const val LARGE_FONT_SCALE = 2.0f
     }
 }
