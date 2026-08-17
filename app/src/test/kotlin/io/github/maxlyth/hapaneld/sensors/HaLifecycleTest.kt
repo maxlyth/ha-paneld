@@ -382,6 +382,97 @@ class HaLifecycleTest {
         assertEquals(HaLifecycleSource.SOCKET, snap.source)
     }
 
+    // ---- an episode outlives its state ---------------------------------------------------------
+
+    @Test fun aLocallyNoticedLossIsRetiredWhenTheSocketRouteGoesAway() {
+        // The measured defect: `onDisconnected` gives CONNECTION_LOST no source by design, so retirement
+        // keyed on the claiming source could never match it. With MQTT keeping the snapshot alive the
+        // stale outage rendered indefinitely.
+        val ha = lifecycle()
+        ha.onDisconnected(1_000)
+        assertEquals(HaLifecycleState.CONNECTION_LOST, ha.state(1_000))
+        ha.onSourceRetired(HaLifecycleSource.SOCKET, 2_000)
+        assertEquals(
+            "the socket produced the inference, so the socket route retires it",
+            HaLifecycleState.NORMAL,
+            ha.state(2_000),
+        )
+    }
+
+    @Test fun anMqttChannelLossStillLeavesALocallyNoticedLossAlone() {
+        // Basis must SCOPE retirement, not merely widen it: the inference belongs to the socket, so the
+        // broker going away must not clear it.
+        val ha = lifecycle()
+        ha.onDisconnected(1_000)
+        ha.onSourceRetired(HaLifecycleSource.MQTT, 2_000)
+        assertEquals(HaLifecycleState.CONNECTION_LOST, ha.state(2_000))
+    }
+
+    @Test fun aRefusedPanelAnnouncesOneRecoveryAcrossHandshakeThenBirth() {
+        // The hardware sequence of 2026-08-17, non-admin panels: shutting_down -> back_online(socket)
+        // -> normal -> back_online(mqtt) 39 s later. Two banners for one outage, with a gap between.
+        val ha = lifecycle()
+        ha.onEvent(HaLifecycleEvent.STOP, HaLifecycleSource.MQTT, 1_000)
+        ha.onDisconnected(1_100)
+        ha.onSubscriptionRejected()
+        ha.onAuthenticatedRunning(22_000)
+        assertEquals("its handshake is the only proof it will ever get", HaLifecycleState.BACK_ONLINE, ha.state(22_000))
+        assertEquals(HaLifecycleState.NORMAL, ha.state(30_100))
+        // The broker birth for the SAME outage lands after the notice has decayed.
+        ha.onEvent(HaLifecycleEvent.STARTED, HaLifecycleSource.MQTT, 61_000)
+        assertEquals(
+            "one outage announces one recovery, even after the notice decayed",
+            HaLifecycleState.NORMAL,
+            ha.state(61_000),
+        )
+    }
+
+    @Test fun aGenuinelyNewOutageStillAnnouncesItsOwnRecovery() {
+        // The suppression must be per-episode, not once per process, or the second real restart of the
+        // day would go unannounced.
+        val ha = lifecycle()
+        ha.onEvent(HaLifecycleEvent.STOP, HaLifecycleSource.MQTT, 1_000)
+        ha.onEvent(HaLifecycleEvent.STARTED, HaLifecycleSource.MQTT, 5_000)
+        assertEquals(HaLifecycleState.BACK_ONLINE, ha.state(5_000))
+        assertEquals(HaLifecycleState.NORMAL, ha.state(13_000))
+        ha.onEvent(HaLifecycleEvent.STOP, HaLifecycleSource.MQTT, 100_000)
+        ha.onEvent(HaLifecycleEvent.STARTED, HaLifecycleSource.MQTT, 140_000)
+        assertEquals(
+            "a second outage is a second episode and earns its own notice",
+            HaLifecycleState.BACK_ONLINE,
+            ha.state(140_000),
+        )
+    }
+
+    @Test fun aRepeatedShutdownStageDoesNotEarnASecondRecoveryNotice() {
+        // Every subscribed panel receives more than one shutdown stage, so the multi-stage path must
+        // still announce exactly one recovery.
+        val ha = lifecycle()
+        ha.event(HaLifecycleEvent.STOP, 1_000)
+        ha.event(HaLifecycleEvent.FINAL_WRITE, 1_100)
+        ha.event(HaLifecycleEvent.CLOSE, 1_200)
+        ha.event(HaLifecycleEvent.STARTED, 20_000)
+        assertEquals(HaLifecycleState.BACK_ONLINE, ha.state(20_000))
+        assertEquals(HaLifecycleState.NORMAL, ha.state(28_000))
+        ha.event(HaLifecycleEvent.STARTED, 40_000)
+        assertEquals("the same outage cannot announce twice", HaLifecycleState.NORMAL, ha.state(40_000))
+    }
+
+    @Test fun anOutageIsOnlyRetiredByTheChannelItDependsOn() {
+        // Retirement must be scoped by basis, not merely enabled by it: a channel that does not own the
+        // current outage must leave it alone.
+        val ha = lifecycle()
+        ha.onDisconnected(1_000)
+        ha.onSourceRetired(HaLifecycleSource.SOCKET, 2_000)
+        ha.onEvent(HaLifecycleEvent.STOP, HaLifecycleSource.MQTT, 10_000)
+        ha.onSourceRetired(HaLifecycleSource.SOCKET, 11_000)
+        assertEquals(
+            "an MQTT-basis outage is not the socket's to retire",
+            HaLifecycleState.SHUTTING_DOWN,
+            ha.state(11_000),
+        )
+    }
+
     @Test fun aStaleShutdownNeverSurvivesAuthenticatedRecovery() {
         val ha = lifecycle()
         ha.event(HaLifecycleEvent.CLOSE, 1_000)

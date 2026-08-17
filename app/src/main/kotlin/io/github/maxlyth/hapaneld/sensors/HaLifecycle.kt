@@ -107,6 +107,27 @@ internal class HaLifecycle(
     private var subscribed = false
 
     /** Bumped under [lock] on every visible change, so a publisher can refuse to go backwards. */
+    /**
+     * Which OUTAGE this is, incremented when one opens. The machine's only other memory of "which
+     * outage am I in" is the live state, and that is erased the moment a recovery notice decays to
+     * NORMAL — which is what let a second, independent clearer announce the same recovery again.
+     * An episode number outlives the state, so a recovery can be announced once per outage.
+     */
+    private var episode = 0L
+
+    /** The episode whose recovery has already been announced, so a later clearer cannot repeat it. */
+    private var recoveryAnnouncedEpisode = -1L
+
+    /**
+     * The channel the CURRENT outage depends on, as distinct from [source], the channel that claimed it.
+     *
+     * They differ for exactly one state and that difference was a defect: a locally-noticed
+     * CONNECTION_LOST deliberately has no source, so retirement keyed on [source] could never match it
+     * and the socket route going away left a stale outage rendering forever. The socket's disconnect is
+     * what produced that inference, so the socket is its basis even though nothing claimed it.
+     */
+    private var basis: HaLifecycleSource? = null
+
     private var revision = 0L
 
     /**
@@ -200,7 +221,9 @@ internal class HaLifecycle(
                 event.shutdown -> {
                     inferredStartingSinceMs = null
                     if (current != HaLifecycleState.SHUTTING_DOWN) revision++
+                    bumpEpisodeLocked()
                     current = HaLifecycleState.SHUTTING_DOWN
+                    basis = from
                 }
 
                 event == HaLifecycleEvent.START -> {
@@ -208,7 +231,9 @@ internal class HaLifecycle(
                     // recovery we have already proven.
                     inferredStartingSinceMs = null
                     if (observed != HaLifecycleState.STARTING && observed != HaLifecycleState.BACK_ONLINE) {
+                        bumpEpisodeLocked()
                         current = HaLifecycleState.STARTING
+                        basis = from
                         revision++
                     }
                 }
@@ -231,10 +256,13 @@ internal class HaLifecycle(
             when (stateLocked(nowMs)) {
                 HaLifecycleState.SHUTTING_DOWN, HaLifecycleState.STARTING, HaLifecycleState.CONNECTION_LOST -> Unit
                 else -> {
+                    bumpEpisodeLocked()
                     current = HaLifecycleState.CONNECTION_LOST
                     // The loss was noticed locally; no source observed it, and claiming one would
-                    // lend the guess a confidence it has not earned.
+                    // lend the guess a confidence it has not earned. It still has a BASIS: the socket
+                    // whose disconnect produced the inference, which is what makes it retirable.
                     source = null
+                    basis = HaLifecycleSource.SOCKET
                     revision++
                 }
             }
@@ -267,16 +295,24 @@ internal class HaLifecycle(
      */
     fun onSourceRetired(from: HaLifecycleSource, nowMs: Long) {
         synchronized(lock) {
-            if (source != from) return
+            // Keyed on BASIS, not on the claiming source. A locally-noticed CONNECTION_LOST has no
+            // source by design, so a source-keyed test could never match it and the socket route going
+            // away left the stale outage rendering for as long as the OTHER leg kept the snapshot alive.
+            // Basis still scopes correctly: that inference belongs to the socket, so an MQTT channel
+            // loss leaves it untouched.
+            if (basis != from) return
             val observed = stateLocked(nowMs)
             if (observed == HaLifecycleState.NORMAL) {
                 // Nothing claimed; only the attribution needs clearing.
                 if (source != null) revision++
                 source = null
+                basis = null
                 return
             }
             current = HaLifecycleState.NORMAL
             source = null
+            // `basis` is deliberately NOT cleared here. Every outage entry assigns it, so a stale value
+            // can never be read; a clear was written first, proved unkillable by mutation, and removed.
             revision++
         }
     }
@@ -375,7 +411,42 @@ internal class HaLifecycle(
         }
     }
 
+    /**
+     * Mark this as a distinct outage, so a recovery announced for an earlier one cannot suppress it.
+     *
+     * Unconditional by proof, not by accident. A guard skipping re-entry into an outage already showing
+     * was written first and then DELETED: mutating it away killed nothing, because the number is only
+     * ever compared against itself, so bumping it inside one outage is unobservable. An unprovable
+     * guard is worse than no guard, since it reads as protection nobody has tested.
+     */
+    private fun bumpEpisodeLocked() {
+        episode++
+    }
+
+    /**
+     * Announce recovery, or clear silently when THIS episode's recovery has already been announced.
+     *
+     * Measured on hardware 2026-08-17: a panel whose lifecycle subscription was refused announced
+     * recovery on its socket handshake, decayed to NORMAL, and then announced again 39 s later when Home
+     * Assistant's broker birth arrived — one outage, two banners with a gap between them. Both clearers
+     * are legitimate and neither can be removed, so the episode is what de-duplicates them.
+     *
+     * Deliberately NOT keyed on the live state: by the time the second clearer lands the notice has
+     * decayed to NORMAL, which is exactly why a state-keyed check could not see it was the same outage.
+     */
     private fun enterBackOnlineLocked(nowMs: Long) {
+        if (episode == recoveryAnnouncedEpisode) {
+            // Already told the user this outage ended. Land on NORMAL without re-announcing.
+            inferredStartingSinceMs = null
+            if (current != HaLifecycleState.NORMAL) {
+                current = HaLifecycleState.NORMAL
+                source = null
+                basis = null
+                revision++
+            }
+            return
+        }
+        recoveryAnnouncedEpisode = episode
         current = HaLifecycleState.BACK_ONLINE
         inferredStartingSinceMs = null
         backOnlineSinceMs = nowMs
