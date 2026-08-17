@@ -72,6 +72,9 @@ class MainActivity : AppCompatActivity() {
     private var hintView: TextView? = null
     private var signInButton: Button? = null
     private var lastStageKey: String? = null
+    // The journey most recently applied, kept so a rebuild can restore the presentation immediately
+    // rather than waiting for a future poll to report a value that has not changed.
+    private var lastJourney: org.json.JSONObject? = null
     private val setupPollExecutor by lazy { java.util.concurrent.Executors.newSingleThreadExecutor() }
     private val setupPoll = object : Runnable {
         override fun run() {
@@ -119,6 +122,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         val key = "$complete|$next|$connectionDetail|$rendererDetail"
+        lastJourney = journey
         if (key == lastStageKey) return
         lastStageKey = key
         val stage: Pair<String, String>? = when {
@@ -174,18 +178,16 @@ class MainActivity : AppCompatActivity() {
     private var introAcknowledgement: IntroAcknowledgement? = null
     private var preparedAutoReturn: PreparedVisibleAutoReturn? = null
 
-    /** Colours for the standing screen, chosen to read on the panel's current light/dark setting. The
-     *  wordmark itself switches via res/drawable(-night)-nodpi/wordmark.png; this covers everything else. */
-    private data class Palette(
-        val bg: String, val body: String, val subtle: String, val accent: String,
-        val btnBg: String, val btnText: Int,
-    )
-    private val pal: Palette by lazy {
-        val dark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
-        if (dark) Palette("#111111", "#c8ccd2", "#8a8f99", "#4a9eff", "#2557a7", Color.WHITE)
-        else Palette("#ffffff", "#2a2e34", "#5a6068", "#1669d6", "#2557a7", Color.WHITE)
-    }
+    /** Colours for the standing screen, shared with every other ha-paneld status surface. The wordmark
+     *  itself switches via res/drawable(-night)-nodpi/wordmark.png; [statusPalette] covers the rest.
+     *
+     *  The theme decision is [statusSurfaceDark] rather than this screen's former system-only reading:
+     *  a panel with a configured dashboard theme used to get a light standing screen and a dark
+     *  startup screen minutes apart, which is one panel appearing to be two applications. */
+    // Recomputed on every read, never cached. Held in a `by lazy` this outlived a configuration
+    // change: the shared frame rebuilt itself with the new theme while the body kept the colours of
+    // the old one, so one screen was drawn from two themes at once.
+    private val pal: StatusPalette get() = statusPalette(StatusSurface.darkFor(this, config))
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -474,6 +476,25 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Returning from the dashboard or the config page can arrive after the panel's theme changed,
+        // and recomputing the palette only helps views built AFTER that point — the installed screen
+        // kept the colours it was born with. Rebuild only when the theme actually moved, so an
+        // unchanged return does not reattach the hierarchy for nothing.
+        presentedIntro?.let {
+            val dark = StatusSurface.darkFor(this, config)
+            if (statusSurface?.dark != dark) {
+                statusSurface = null
+                val refreshed = buildUi()
+                setContentView(refreshed)
+                presentedIntro = refreshed
+                // The rebuilt views are blank until the next poll, and the poll returns early while the
+                // journey key is unchanged — so at `ha_credentials` the stage stayed hidden, the generic
+                // hint stayed, and the sign-in button could disappear until the journey happened to move.
+                // A rebuild forgets what it last applied and reapplies the state it already has.
+                lastStageKey = null
+                lastJourney?.let { journey -> runCatching { applySetupStage(journey) } }
+            }
+        }
         updateKioskAdminVisibility()
     }
 
@@ -501,21 +522,15 @@ class MainActivity : AppCompatActivity() {
             // stretched to the viewport height, so this vertically centres the content in any spare
             // space; when content exceeds the screen it keeps its natural height and the ScrollView scrolls.
             gravity = Gravity.CENTER
-            setPadding(dp(24), pad, dp(24), pad)
+            // No vertical padding of its own: the shared frame already insets the body, and this
+            // screen has to keep fitting a 480x480 panel without scrolling, so the two must not stack.
+            setPadding(dp(24), 0, dp(24), 0)
         }
-        // Horizontal wordmark (glyph + "ha-paneld") carries the name, so there's no separate title text.
-        // Size it by HEIGHT (width follows its aspect via adjustViewBounds), so it scales up on roomy
-        // panels but can never overflow the screen width.
-        val logoH = when { hDp < 560 -> 52; hDp < 900 -> 72; else -> 96 }
-        root.addView(ImageView(this).apply {
-            setImageResource(R.drawable.wordmark)
-            contentDescription = getString(R.string.wordmark_description)
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(logoH))
-                .apply { bottomMargin = dp(if (compact) 8 else 18) }
-        })
-        root.addView(text("v${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}", 12f, pal.subtle, padBottom = if (compact) 8 else 18))
+        // The mark is NOT in this column. It used to be its first child, which meant every live update
+        // to the status line below re-centred the column and moved the mark with it. It now sits in the
+        // shared fixed band above, built from the one theme value this screen also picks its colours
+        // from — the two used to disagree, so a panel configured opposite to the system drew the mark's
+        // dark ink onto a dark background.
         // Live setup stage — the answer to someone walking up to the panel mid-commissioning: what is it
         // doing, and do I need to act? Filled by the loopback journey poll; hidden until data arrives so
         // an unpolled screen is exactly the pre-wizard layout.
@@ -584,19 +599,29 @@ class MainActivity : AppCompatActivity() {
             }
         }.also { it.visibility = View.GONE; root.addView(it) }
 
-        // Cap the content column so the paragraph wraps instead of stretching across a wide panel,
-        // and centre it. A ScrollView remains as a safety net if a panel is unexpectedly short.
-        val colW = minOf(dm.widthPixels - dp(48), dp(512))
-        return ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor(pal.bg))
-            isFillViewport = true
-            addView(
-                root,
-                android.widget.FrameLayout.LayoutParams(
-                    colW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL,
-                ),
-            )
-        }
+        // The shared frame supplies the fixed brand band, the background, the capped and centred
+        // reading column and the scroll safety net. This column goes in as ONE row so the frame adds
+        // no inter-row spacing of its own — the spacing here is the tuned first-run layout, not a
+        // status phase, and it has to keep fitting a 480x480 panel without scrolling.
+        val surface = statusSurface()
+        // The build number belongs on this screen — it is the one a bug report quotes.
+        surface.setBrandCaption("build ${BuildConfig.VERSION_CODE}")
+        surface.setBody(root)
+        return surface.root
+    }
+
+    /**
+     * The branded frame, kept across rebuilds and rebuilt only when the theme or the panel geometry
+     * changes. Shared with the dashboard's status screens so the standing screen cannot drift into a
+     * second mark, a second palette or a second theme rule.
+     */
+    private var statusSurface: StatusSurface? = null
+
+    private fun statusSurface(): StatusSurface {
+        val dark = StatusSurface.darkFor(this, config)
+        val spec = StatusSurface.specFor(this)
+        statusSurface?.let { if (statusSurfaceReusable(it.spec, it.dark, spec, dark)) return it }
+        return StatusSurface(this, dark).also { statusSurface = it }
     }
 
     private fun text(
@@ -628,10 +653,10 @@ class MainActivity : AppCompatActivity() {
         text = label
         isAllCaps = false
         textSize = 16f
-        setTextColor(pal.btnText)
+        setTextColor(Color.parseColor(pal.actionText))
         background = GradientDrawable().apply {
             cornerRadius = dp(10).toFloat()
-            setColor(Color.parseColor(pal.btnBg))
+            setColor(Color.parseColor(pal.actionBackground))
         }
         setPadding(dp(24), dp(14), dp(24), dp(14))
         layoutParams = LinearLayout.LayoutParams(dp(260), ViewGroup.LayoutParams.WRAP_CONTENT)

@@ -497,6 +497,11 @@ internal class AdmissionCountdownOwner(private val nowMs: () -> Long) {
         deadlineMs = 0L
     }
 
+    /** Time left on the pending retry, or null when nothing is armed. A caller that must disarm in
+     *  order to replace the screen re-arms THIS figure, so redrawing a blocked screen cannot push its
+     *  own recovery further away. */
+    fun remainingMs(): Long? = if (armed) (deadlineMs - nowMs()).coerceAtLeast(0L) else null
+
     /** Top-visibility changed. Returning to visible reconciles immediately, so the first thing seen is
      *  the true remaining time rather than a stale figure or a blank. */
     fun onVisibilityChanged(nowVisible: Boolean): Paint {

@@ -37,15 +37,27 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    // Day/night palette, mirroring MainActivity so the two ha-paneld screens read consistently.
-    private val dark: Boolean
-        get() = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-            android.content.res.Configuration.UI_MODE_NIGHT_YES
-    private val bg get() = if (dark) "#111111" else "#f3f4f6"
-    private val cardBg get() = if (dark) "#1d1f24" else "#ffffff"
-    private val body get() = if (dark) "#c8ccd2" else "#2a2e34"
-    private val subtle get() = if (dark) "#8a8f99" else "#5a6068"
-    private val accent get() = if (dark) "#2557a7" else "#1669d6"
+    /**
+     * The same light/dark decision every other ha-paneld screen makes — the panel's configured
+     * dashboard theme first, then the system on the Android versions that reliably have one. Reading
+     * only the system setting, as this screen used to, meant a panel pinned to one theme could show
+     * this screen in the other.
+     */
+    private val dark: Boolean get() = StatusSurface.darkFor(this, Config(this))
+
+    /**
+     * Card colours, deliberately NOT the shared status palette.
+     *
+     * This screen is a tile grid, not a status surface: its tiles are drawn in the status palette's
+     * background colour, so the page behind them has to be a shade off it or the cards vanish. The
+     * shared palette is used for everything that is not that relationship.
+     */
+    private val paletteFor get() = statusPalette(dark)
+    private val bg get() = if (dark) paletteFor.background else "#f3f4f6"
+    private val cardBg get() = if (dark) "#1d1f24" else paletteFor.background
+    private val body get() = paletteFor.body
+    private val subtle get() = paletteFor.subtle
+    private val accent get() = if (dark) paletteFor.actionBackground else paletteFor.accent
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,6 +95,18 @@ class AdminLauncherActivity : AppCompatActivity() {
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
 
+        // Named, not just titled. This screen is also where the dashboard lands when the panel has no
+        // usable System WebView — a terminal failure whose replacement screen must still say whose it is.
+        root.addView(
+            statusBrandMark(this, dark),
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(StatusSurface.specFor(this).brandHeightDp),
+            ).apply {
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(10)
+            },
+        )
         root.addView(text("Panel admin", 20f, body, bold = true, padBottom = 2))
         root.addView(text(
             "Quick access for administering this panel. The dashboard is the panel's home screen.",

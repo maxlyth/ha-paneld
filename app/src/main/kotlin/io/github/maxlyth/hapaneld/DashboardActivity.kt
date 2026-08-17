@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
 import android.net.ConnectivityManager
@@ -16,7 +15,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import android.view.Gravity
 import android.view.MotionEvent
 import io.github.maxlyth.hapaneld.control.PanelTouchObserver
 import android.view.View
@@ -31,12 +29,8 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ProgressBar
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -250,6 +244,28 @@ class DashboardActivity : AppCompatActivity() {
                 if (!destroyed && ::activityConfig.isInitialized) applyRendererScreenPolicy()
             }
         }
+        // A persisted theme change has to reach whatever is on the display NOW. Without this only a
+        // SYSTEM uiMode change redrew anything, so a panel switched between light and dark from its own
+        // settings left an installed compatibility or recovery screen on the old palette and artwork —
+        // and the two WebView-drawn pages bake their colours into static HTML, so they stayed stale
+        // even where the system change did redraw the native ones.
+        if (key == "dashboard_theme_dark" || key == "dark_mode") {
+            runOnUiThread { if (!destroyed) convergeStatusTheme() }
+        }
+    }
+
+    /** Redraw every ha-paneld status surface that is currently rendered, native or WebView-drawn. */
+    private fun convergeStatusTheme() {
+        statusSurface = null
+        val redraw = statusRerender
+        if (redraw != null) {
+            root = null
+            redraw()
+            return
+        }
+        // No native status screen is installed, so the only ha-paneld-owned surfaces that can be on
+        // screen are the two pages drawn into the dashboard WebView. Re-issue whichever is showing.
+        if (authLatched) renderAuthLatchPage() else if (interstitialShown) reissueReconnecting()
     }
     // Stored so onDestroy can clear it by identity — an old instance destroyed after a new one's onCreate
     // must not wipe the new instance's registration (see BuiltinDashboard.clearScreenListener).
@@ -1450,18 +1466,38 @@ class DashboardActivity : AppCompatActivity() {
     private fun latchAuthFailure(why: String) {
         if (authLatched) return
         authLatched = true
+        renderAuthLatchPage()
+        Log.e(TAG, "auth latched ($why) — showing fix instructions, no further retries until reload/reconfig")
+    }
+
+    /**
+     * Draw the terminal sign-in page, separately from latching.
+     *
+     * Latching is one-way and guards its own re-entry, so a theme change could not redraw this page
+     * through it — the guard returned before any drawing happened and the page kept the palette and
+     * artwork it was first built with.
+     */
+    private fun renderAuthLatchPage() {
+        val stillLatched = authLatched
+        if (!stillLatched) return
         BuiltinDashboard.setActivityAuthLatched(activityOwner, true)
         main.removeCallbacks(watchdog)
-        Log.e(TAG, "auth latched ($why) — showing fix instructions, no further retries until reload/reconfig")
         val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
         val cfg = if (ip != null) "http://$ip:8888/configure" else "port 8888 of this panel's IP address"
         web?.let(::suspendBusDocument)
+        // Branded like the native screens, and for the sharpest reason on any of them: the heading
+        // names Home Assistant, the page is drawn by the browser that normally shows Home Assistant,
+        // and the decision being reported — stop retrying — is entirely ha-paneld's.
+        val dark = StatusSurface.darkFor(this, Config(this))
+        val palette = statusPalette(dark)
         web?.loadDataWithBaseURL(
             null,
-            """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
-               display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+            """<!doctype html><html><body style="background:${palette.background};color:${palette.body};
+               font-family:sans-serif;display:flex;align-items:flex-start;justify-content:center;
+               min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
-               <h1 style="color:#f66">Home Assistant sign-in rejected</h1>
+               ${statusBrandHtmlHeader(this, dark, palette)}
+               <h1 style="color:${palette.error}">Home Assistant sign-in rejected</h1>
                <p style="font-size:1.3em">This panel's saved Home Assistant login settings were rejected,
                so the dashboard has stopped retrying.</p>
                <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Home Assistant connection,
@@ -1494,6 +1530,7 @@ class DashboardActivity : AppCompatActivity() {
         if (web == null) {
             val waitMs = (SystemClock.elapsedRealtime() - waitingStartedAt).coerceAtLeast(0L)
             if (waitingStartedAt > 0L) Config(this).setLastNetworkWaitMs(waitMs)
+            waitingStartedAt = 0L
             Log.i(TAG, "network became available during startup after ${waitMs}ms — creating dashboard WebView")
             waitingStatus = null
             waitingStage = null
@@ -1701,118 +1738,32 @@ class DashboardActivity : AppCompatActivity() {
     /** One quiet startup state while Android brings networking up. This is native rather than cached
      *  WebView content, so neither Chromium's error UI nor HA's 60-second reconnect page can appear. */
     private fun showWaitingForNetwork() {
-        cancelAdmissionAutoRetry()
         detachLifecycleBar()
-        val dm = resources.displayMetrics
-        val density = dm.density
-        val hDp = (dm.heightPixels / density).toInt()
-        val compact = hDp < 560
         val config = Config(this)
         waitingEstimateLearned = config.lastNetworkWaitMs > 0L
         waitingEstimateMs = config.lastNetworkWaitMs.takeIf { it > 0L } ?: DEFAULT_NETWORK_WAIT_MS
-        val systemDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
-        val fallbackDark = if (android.os.Build.VERSION.SDK_INT >= 29) systemDark else config.darkMode
-        val dark = config.dashboardThemeDark ?: fallbackDark
-        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
-        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
-        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
-        val accent = Color.parseColor(if (dark) "#4a9eff" else "#1669d6")
-        val track = Color.parseColor(if (dark) "#30343a" else "#dce1e7")
-        val wordmark = ImageView(this).apply {
-            val themed = Configuration(resources.configuration).apply {
-                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
-                    (if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO)
-            }
-            setImageDrawable(createConfigurationContext(themed).getDrawable(R.drawable.wordmark))
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "ha-paneld"
-        }
-        val running = TextView(this).apply {
-            text = "v${BuildConfig.VERSION_NAME} · running"
-            setTextColor(subtle)
-            textSize = 12f
-            gravity = Gravity.CENTER
-        }
-        val explanation = TextView(this).apply {
-            text = "The panel service is running."
-            setTextColor(body)
-            textSize = if (compact) 12.5f else 14f
-            gravity = Gravity.CENTER
-        }
-        val stage = TextView(this).apply {
-            text = startupNetworkStage(startupNetworkSnapshot())
-            setTextColor(body)
-            textSize = if (compact) 14f else 16f
-            gravity = Gravity.CENTER
-        }
-        val destination = TextView(this).apply {
-            text = "Home Assistant will open automatically"
-            setTextColor(accent)
-            textSize = if (compact) 14f else 16f
-            gravity = Gravity.CENTER
-        }
-        val status = TextView(this).apply {
-            setTextColor(subtle)
-            textSize = if (compact) 11.5f else 13f
-            gravity = Gravity.CENTER
-        }
-        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 1_000
-            progress = 0
-            progressTintList = ColorStateList.valueOf(accent)
-            progressBackgroundTintList = ColorStateList.valueOf(track)
-            isIndeterminate = false
-        }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            val verticalPad = (if (compact) 16 else 36) * density
-            setPadding((24 * density).toInt(), verticalPad.toInt(), (24 * density).toInt(), verticalPad.toInt())
-            addView(wordmark, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, ((if (compact) 52 else 72) * density).toInt(),
-            ).apply {
-                bottomMargin = ((if (compact) 8 else 14) * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            addView(running)
-            addView(explanation, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = ((if (compact) 16 else 24) * density).toInt() })
-            addView(stage, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = ((if (compact) 18 else 26) * density).toInt() })
-            addView(progress, LinearLayout.LayoutParams(
-                ((if (compact) 220 else 280) * density).toInt(), (5 * density).toInt().coerceAtLeast(3),
-            ).apply {
-                topMargin = ((if (compact) 24 else 32) * density).toInt()
-                bottomMargin = ((if (compact) 14 else 18) * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            addView(destination)
-            addView(status, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = ((if (compact) 7 else 10) * density).toInt() })
-        }
-        val container = FrameLayout(this).apply {
-            setBackgroundColor(bg)
-            val colW = minOf(dm.widthPixels - (48 * density).toInt(), (512 * density).toInt())
-            addView(ScrollView(this@DashboardActivity).apply {
-                isFillViewport = true
-                setBackgroundColor(bg)
-                addView(content, FrameLayout.LayoutParams(
-                    colW, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL,
-                ))
-            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        }
-        root = container
-        setContentView(container)
+        val surface = statusSurface(config)
+        surface.setBrandCaption("running")
+        val stage = surface.heading(startupNetworkStage(startupNetworkSnapshot()))
+        val progress = surface.progress()
+        val status = surface.caption("")
+        surface.setBody(
+            surface.caption("The panel service is running."),
+            stage,
+            progress,
+            surface.detail("Home Assistant will open automatically", accent = true),
+            status,
+        )
+        showStatusSurface(surface) { showWaitingForNetwork() }
         waitingStatus = status
         waitingStage = stage
         waitingProgress = progress
-        waitingStartedAt = SystemClock.elapsedRealtime()
+        // Redrawing after a rotation must not restart the clock — the panel has been waiting exactly
+        // as long as it was a moment ago, and the learned estimate is measured from this.
+        if (waitingStartedAt == 0L) waitingStartedAt = SystemClock.elapsedRealtime()
+        // Cancel before starting: a redraw used to leave the previous once-per-second chain running,
+        // so every configuration change added a permanent timer until the network recovered.
+        main.removeCallbacks(waitingTick)
         waitingTick.run()
         Log.i(TAG, "no default network at startup — waiting before creating WebView")
     }
@@ -1883,20 +1834,31 @@ class DashboardActivity : AppCompatActivity() {
      *  with a branded dark "reconnecting" screen while the handshake watchdog keeps retrying behind it.
      *  The native error page can't be styled or suppressed any other way, and a wall panel showing
      *  `net::ERR_CONNECTION_REFUSED` between retries reads as broken rather than waiting. */
+    /** Draw the reconnect page again, e.g. after a theme change while it is the visible surface. */
+    private fun reissueReconnecting() {
+        interstitialShown = false
+        showReconnecting(lastInterstitialDetail)
+    }
+
     private fun showReconnecting(detail: String) {
         if (destroyed || authLatched || interstitialShown) return
         interstitialShown = true
+        lastInterstitialDetail = detail
         Log.w(TAG, "main-frame load error ($detail) — showing reconnecting page; watchdog retries continue")
+        val dark = StatusSurface.darkFor(this, Config(this))
+        val palette = statusPalette(dark)
         web?.let(::suspendBusDocument)
         web?.loadDataWithBaseURL(
             null,
-            """<!doctype html><html><body style="background:#121212;color:#eee;font-family:sans-serif;
-               display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+            """<!doctype html><html><body style="background:${palette.background};color:${palette.body};
+               font-family:sans-serif;display:flex;align-items:flex-start;justify-content:center;
+               min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
+               ${statusBrandHtmlHeader(this, dark, palette)}
                <h1>Reconnecting to Home Assistant&hellip;</h1>
-               <p style="font-size:1.2em;color:#aaa">The dashboard couldn't be reached and will keep
+               <p style="font-size:1.2em;color:${palette.subtle}">The dashboard couldn't be reached and will keep
                retrying automatically.</p>
-               <p style="color:#666"><small>$detail</small></p>
+               <p style="color:${palette.subtle}"><small>$detail</small></p>
                </div></body></html>""",
             "text/html", "utf-8", null,
         )
@@ -2039,6 +2001,65 @@ class DashboardActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         if (android.os.Build.VERSION.SDK_INT in 29..32) web?.let { applyForceDark(it) }
+        // This activity handles orientation, screen size and night mode itself rather than being
+        // recreated, so a status screen that is up stays as drawn unless it is redrawn here — but only
+        // when something it depends on actually moved. It also receives locale, keyboard and font-scale
+        // events, and rebuilding a live surface for those is churn a user can see.
+        val spec = StatusSurface.specFor(this)
+        val dark = StatusSurface.darkFor(this, Config(this))
+        val current = statusSurface
+        if (current == null || !statusSurfaceReusable(current.spec, current.dark, spec, dark)) {
+            convergeStatusTheme()
+        }
+    }
+
+    /**
+     * The one branded frame every status screen in this activity is drawn on, kept across phases.
+     *
+     * Reusing the instance is what makes the mark stationary: a phase change replaces the body and
+     * leaves the header view untouched, so it cannot move, reflow or blink between, say, "Checking
+     * Home Assistant compatibility" and the verdict that follows it a second later.
+     */
+    private var statusSurface: StatusSurface? = null
+
+    /**
+     * How to draw the status screen that is currently up, so a configuration change can redraw it.
+     *
+     * Rebuilding on next use is enough for a screen that is about to change anyway, and wrong for one
+     * that is not: the compatibility verdicts and the entity holds are static, so a rotation or a
+     * day/night switch left them showing the previous shape's geometry, palette and artwork until
+     * something else happened to move them on — which, on a hold, may be never.
+     */
+    private var statusRerender: (() -> Unit)? = null
+    /** The detail last shown on the reconnect page, so a theme change can redraw it unchanged. */
+    private var lastInterstitialDetail: String = ""
+
+
+    private fun statusSurface(config: Config = Config(this)): StatusSurface {
+        val dark = StatusSurface.darkFor(this, config)
+        val spec = StatusSurface.specFor(this)
+        statusSurface?.let { if (statusSurfaceReusable(it.spec, it.dark, spec, dark)) return it }
+        return StatusSurface(this, dark).also { statusSurface = it }
+    }
+
+    /**
+     * Install the frame only when it is not already installed.
+     *
+     * Caching the instance is not enough on its own: `setContentView` clears the content parent
+     * before adding, so handing it the same root again detaches and reattaches the header the frame
+     * exists to hold still. This activity declares `orientation|screenSize|uiMode` in its
+     * `configChanges`, so it also survives rotations that would otherwise have recreated it.
+     */
+    private fun showStatusSurface(surface: StatusSurface, rerender: () -> Unit) {
+        // Every native status screen is installed here, so this is also the one place that has to
+        // disarm the admission auto-retry: a screen that has been replaced must not keep a timer
+        // running against the view tree it left behind. A caller that means to keep its pending retry
+        // reads the remaining time first and re-arms it afterwards.
+        cancelAdmissionAutoRetry()
+        statusRerender = rerender
+        if (statusSurfaceAlreadyInstalled(root, surface.root)) return
+        root = surface.root
+        setContentView(surface.root)
     }
 
     /** A blocked admission screen. [outcome] is not defaulted: every blocked screen must say what the
@@ -2080,86 +2101,53 @@ class DashboardActivity : AppCompatActivity() {
         detail: String,
         retryLabel: String?,
         autoRetry: AdmissionRetryClass,
+    ) = paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = true)
+
+    /**
+     * [rearm] is false only when the screen already on display is being redrawn for a panel-theme or
+     * system configuration change. The retry deadline and the back-off ladder belong to the admission
+     * failure, not to the drawing of it: re-arming on every repaint would advance the ladder and push
+     * the deadline further out each time, so a panel being rotated could postpone its own recovery
+     * indefinitely. The pending deadline is therefore carried across the redraw unchanged, while the
+     * countdown row itself is rebuilt because the previous one belongs to a discarded view tree.
+     */
+    private fun paintV2CompatibilityScreen(
+        title: String,
+        detail: String,
+        retryLabel: String?,
+        autoRetry: AdmissionRetryClass,
+        rearm: Boolean,
     ) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
-        cancelAdmissionAutoRetry()
+        // Read before the shared installer disarms: a redraw re-arms this same remaining time.
+        val carriedMs = if (rearm) null else admissionCountdown.remainingMs()
         if (web != null) teardownWeb()
-        val density = resources.displayMetrics.density
-        val dark = Config(this).dashboardThemeDark ?: true
-        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
-        val body = Color.parseColor(if (dark) "#d7dbe1" else "#20242a")
-        val subtle = Color.parseColor(if (dark) "#9ba1aa" else "#5a6068")
-        val heading = TextView(this).apply {
-            text = title
-            setTextColor(body)
-            textSize = 23f
-            gravity = Gravity.CENTER
-        }
-        val explanation = TextView(this).apply {
-            text = detail
-            setTextColor(subtle)
-            textSize = 15f
-            gravity = Gravity.CENTER
-        }
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        val surface = statusSurface()
+        val buttons = buildList {
             retryLabel?.let { label ->
-                addView(Button(this@DashboardActivity).apply {
-                    text = label
-                    setOnClickListener { retryAdmission(resetBackoff = true) }
+                add(surface.action(label) {
+                    retryAdmission(resetBackoff = true)
                 })
             }
-            addView(Button(this@DashboardActivity).apply {
-                text = "Configure"
-                setOnClickListener {
-                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
-                }
+            add(surface.action("Configure") {
+                startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
             })
         }
         // The retry countdown is deliberately a real number under the actions, not a spinner. The
-        // jittered delay is computed once, below, and this row counts down to that exact figure.
-        val autoRetryDelayMs = if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)
-        val countdown = autoRetryDelayMs?.let {
-            TextView(this).apply {
-                setTextColor(subtle)
-                textSize = 13f
-                gravity = Gravity.CENTER
-            }
+        // jittered delay is computed once, here, and this row counts down to that exact figure.
+        val autoRetryDelayMs = carriedMs ?: if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)
+        val countdown = autoRetryDelayMs?.let { surface.caption("") }
+        surface.setBody(
+            *listOfNotNull(
+                surface.heading(title),
+                surface.detail(detail),
+                surface.actionRow(*buttons.toTypedArray()),
+                countdown,
+            ).toTypedArray(),
+        )
+        showStatusSurface(surface) {
+            paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = false)
         }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding((32 * density).toInt(), (28 * density).toInt(), (32 * density).toInt(), (28 * density).toInt())
-            addView(heading, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ))
-            addView(explanation, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (18 * density).toInt() })
-            addView(actions, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (22 * density).toInt(); gravity = Gravity.CENTER_HORIZONTAL })
-            countdown?.let {
-                addView(it, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = (14 * density).toInt() })
-            }
-        }
-        val container = FrameLayout(this).apply {
-            setBackgroundColor(bg)
-            addView(content, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER,
-            ))
-        }
-        root = container
-        setContentView(container)
         if (autoRetryDelayMs != null) {
             admissionCountdownView = countdown
             armAdmissionAutoRetry(autoRetryDelayMs, title)
@@ -2415,6 +2403,10 @@ class DashboardActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ))
         }
+        // The status frame's redraw belongs to the status frame. Left armed here, a later
+        // configuration change replaced this live sign-in WebView with an obsolete status screen and
+        // could strand the panel, because the transition that produced that screen will not repeat.
+        statusRerender = null
         root = content
         setContentView(content)
         view.loadUrl(panelHaOAuthStartUrl(haUrl))
@@ -2794,6 +2786,7 @@ class DashboardActivity : AppCompatActivity() {
         }
         root = container
         setContentView(container)
+        statusRerender = null
         noteDeliberateDashboardNavigation()
         // Attached to the same frame the fullscreen-video view uses, so the dashboard keeps rendering
         // underneath. Seeded from the CURRENT state because a renderer rebuilt mid-outage must not come
@@ -2846,67 +2839,27 @@ class DashboardActivity : AppCompatActivity() {
         main.removeCallbacks(entityFilterAnswerCheck)
         teardownWeb()
         val config = Config(this)
-        val density = resources.displayMetrics.density
-        val dark = config.dashboardThemeDark ?: true
-        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
-        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
-        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
-        val primary = Color.parseColor(if (dark) "#03a9f4" else "#0288d1")
         // The exact page the question is on, so a passer-by does not have to hunt for it. Not a QR: this
         // screen appears mid-setup when the browser is already open somewhere, so the address is what is
         // actually useful, and generating a bitmap here would cost a synchronous encode for nothing.
         val setupUrl = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort, "/setup")
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
-            addView(TextView(this@DashboardActivity).apply {
-                text = "You need to finish the last important questions in your browser to optimise the " +
-                    "performance of your dashboards"
-                setTextColor(body)
-                textSize = 17f
-                gravity = Gravity.CENTER
-            })
-            addView(TextView(this@DashboardActivity).apply {
-                text = setupUrl
-                setTextColor(primary)
-                textSize = 15f
-                gravity = Gravity.CENTER
-                setPadding(0, (14 * density).toInt(), 0, 0)
-            })
+        val surface = statusSurface(config)
+        surface.setBody(
+            surface.heading(
+                "You need to finish the last important questions in your browser to optimise the " +
+                    "performance of your dashboards",
+            ),
+            surface.detail(setupUrl, accent = true),
             // Escape hatch. The hold exists to protect the first impression, not to trap anyone: someone at
             // the panel with no browser to hand must be able to get a dashboard. Says what it costs, because
             // skipping is the unfiltered load this screen exists to avoid.
-            addView(Button(this@DashboardActivity).apply {
-                text = "Skip and load the dashboard now"
-                setOnClickListener { skipEntityFilterQuestion() }
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = (24 * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            addView(TextView(this@DashboardActivity).apply {
-                text = "Skipping loads every entity Home Assistant has, which is slower on this panel. " +
-                    "You can turn filtering on later under Configure → Dashboard."
-                setTextColor(subtle)
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setPadding(0, (10 * density).toInt(), 0, 0)
-            })
-        }
-        setContentView(
-            FrameLayout(this).apply {
-                setBackgroundColor(bg)
-                addView(
-                    content,
-                    FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                    ).apply { gravity = Gravity.CENTER },
-                )
-            },
+            surface.action("Skip and load the dashboard now") { skipEntityFilterQuestion() },
+            surface.caption(
+                "Skipping loads every entity Home Assistant has, which is slower on this panel. " +
+                    "You can turn filtering on later under Configure → Dashboard.",
+            ),
         )
+        showStatusSurface(surface) { showWaitingForEntityFilterAnswer() }
         main.postDelayed(entityFilterAnswerCheck, ENTITY_FILTER_ANSWER_CHECK_MS)
     }
 
@@ -2923,33 +2876,20 @@ class DashboardActivity : AppCompatActivity() {
             ?: if (entityBootstrapWatchdogGaveUp) EntityBootstrapProblem.SYNCHRONIZATION else null
         entityBootstrapBlockedCount = blockingIssues
         entityBootstrapProblem = bootstrapProblem
-        val density = resources.displayMetrics.density
-        val dark = Config(this).dashboardThemeDark ?: true
-        val bg = Color.parseColor(if (dark) "#111111" else "#ffffff")
-        val body = Color.parseColor(if (dark) "#c8ccd2" else "#2a2e34")
-        val subtle = Color.parseColor(if (dark) "#8a8f99" else "#5a6068")
-        val primary = Color.parseColor(if (dark) "#03a9f4" else "#0288d1")
-        val recoveryActionWidth = minOf(
-            (360 * density).toInt(),
-            resources.displayMetrics.widthPixels - (48 * density).toInt(),
-        ).coerceAtLeast(1)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding((24 * density).toInt(), (32 * density).toInt(), (24 * density).toInt(), (32 * density).toInt())
+        val surface = statusSurface()
+        val rows = mutableListOf<View>()
+        run {
             if (blockingIssues == 0 && filterHold == null && bootstrapProblem == null) {
                 // Deterministic milestones, not a spinner: nobody trusts the circle (hardware review),
                 // and this text updates with the live scan count on every bootstrap poll tick.
-                entityBootstrapMilestoneView = TextView(this@DashboardActivity).apply {
-                    text = EntityLearningRuntime.bootstrapMilestone()
-                    setTextColor(primary)
-                    textSize = 14f
-                    gravity = Gravity.CENTER
-                }
-                addView(entityBootstrapMilestoneView)
+                entityBootstrapMilestoneView = surface.detail(
+                    EntityLearningRuntime.bootstrapMilestone(),
+                    accent = true,
+                )
+                rows += entityBootstrapMilestoneView!!
             }
-            addView(TextView(this@DashboardActivity).apply {
-                text = if (filterHold != null) {
+            rows += surface.heading(
+                if (filterHold != null) {
                     "Optimized dashboard subscription unavailable"
                 } else if (blockingIssues > 0) {
                     "Entity filter needs attention"
@@ -2959,15 +2899,10 @@ class DashboardActivity : AppCompatActivity() {
                     "Dashboard scan could not finish"
                 } else {
                     "Preparing optimized dashboard subscription"
-                }
-                setTextColor(body)
-                textSize = 17f
-                gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (20 * density).toInt() })
-            val bootstrapHint = TextView(this@DashboardActivity).apply {
-                text = if (filterHold != null) {
+                },
+            )
+            val bootstrapHint = surface.detail(
+                if (filterHold != null) {
                     "${filterHold.detail} Home Assistant has not been opened, preventing an unfiltered entity stream. Retry after updating System WebView, or review entity diagnostics in panel settings."
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
@@ -2981,14 +2916,9 @@ class DashboardActivity : AppCompatActivity() {
                     "The optimized dashboard scan failed. Check the panel connection and Home Assistant availability, then retry. Home Assistant remains closed to prevent an unfiltered entity stream."
                 } else {
                     "Home Assistant will open when the first filtered entity set is ready."
-                }
-                setTextColor(subtle)
-                textSize = 13f
-                gravity = Gravity.CENTER
-            }
-            addView(bootstrapHint, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = (10 * density).toInt() })
+                },
+            )
+            rows += bootstrapHint
             if (blockingIssues == 0 && filterHold == null && bootstrapProblem == null) {
                 // The happy wait needs an honesty rung of its own: watched live, a stuck first scan held
                 // this screen for many minutes with no acknowledgement, indistinguishable from a hang.
@@ -3001,87 +2931,47 @@ class DashboardActivity : AppCompatActivity() {
                     }
                 }, BOOTSTRAP_HOLD_HONESTY_MS)
             }
-            if (filterHold != null) addView(Button(this@DashboardActivity).apply {
-                text = "Retry optimized dashboard"
-                setOnClickListener { retryEntityFilter(Config(this@DashboardActivity)) }
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = (20 * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
-            if (filterHold == null && bootstrapProblem != null) addView(Button(this@DashboardActivity).apply {
-                text = "Retry dashboard scan"
-                setOnClickListener {
-                    // A user-driven retry restores hope: the watchdog clock restarts and the screen
-                    // returns to the progress presentation until the new deadline.
-                    entityBootstrapWatchdogGaveUp = false
-                    entityBootstrapWatchdogFired = false
-                    entityBootstrapHoldSinceMs = SystemClock.elapsedRealtime()
-                    if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
-                }
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = (20 * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
+            if (filterHold != null) rows += surface.action("Retry optimized dashboard") {
+                retryEntityFilter(Config(this@DashboardActivity))
+            }
+            if (filterHold == null && bootstrapProblem != null) rows += surface.action("Retry dashboard scan") {
+                // A user-driven retry restores hope: the watchdog clock restarts and the screen
+                // returns to the progress presentation until the new deadline.
+                entityBootstrapWatchdogGaveUp = false
+                entityBootstrapWatchdogFired = false
+                entityBootstrapHoldSinceMs = SystemClock.elapsedRealtime()
+                if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
+            }
             if (filterHold == null && blockingIssues > 0) {
                 if (canIgnoreBlockingIssues) {
-                    addView(Button(this@DashboardActivity).apply {
-                        text = "Ignore flagged entities and continue"
-                        backgroundTintList = ColorStateList.valueOf(primary)
-                        setTextColor(Color.WHITE)
-                        setOnClickListener {
-                            isEnabled = false
-                            text = "Preparing dashboard…"
-                            if (!EntityLearningRuntime.ignoreBlockingIssues()) {
-                                isEnabled = true
-                                text = "Ignore flagged entities and continue"
-                            }
+                    rows += surface.action(
+                        "Ignore flagged entities and continue",
+                        primary = true,
+                        fullWidth = true,
+                    ) { button ->
+                        button.isEnabled = false
+                        button.text = "Preparing dashboard…"
+                        if (!EntityLearningRuntime.ignoreBlockingIssues()) {
+                            button.isEnabled = true
+                            button.text = "Ignore flagged entities and continue"
                         }
-                    }, LinearLayout.LayoutParams(
-                        recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
-                    ).apply {
-                        topMargin = (20 * density).toInt()
-                        gravity = Gravity.CENTER_HORIZONTAL
-                    })
-                }
-                addView(Button(this@DashboardActivity).apply {
-                    text = "Disable entity filter"
-                    setOnClickListener {
-                        isEnabled = false
-                        if (!EntityLearningRuntime.disableAutomaticFilter()) isEnabled = true
                     }
-                }, LinearLayout.LayoutParams(
-                    recoveryActionWidth, LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topMargin = (10 * density).toInt()
-                    gravity = Gravity.CENTER_HORIZONTAL
-                })
-            }
-            addView(Button(this@DashboardActivity).apply {
-                text = if (blockingIssues > 0) "Open entity-discovery settings" else "Open panel settings"
-                setOnClickListener {
-                    val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
-                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
                 }
-            }, LinearLayout.LayoutParams(
-                if (blockingIssues > 0) recoveryActionWidth else LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                topMargin = ((if (blockingIssues > 0) 10 else 20) * density).toInt()
-                gravity = Gravity.CENTER_HORIZONTAL
-            })
+                rows += surface.action("Disable entity filter", fullWidth = true) { button ->
+                    button.isEnabled = false
+                    if (!EntityLearningRuntime.disableAutomaticFilter()) button.isEnabled = true
+                }
+            }
+            rows += surface.action(
+                if (blockingIssues > 0) "Open entity-discovery settings" else "Open panel settings",
+                fullWidth = blockingIssues > 0,
+            ) {
+                val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
+                startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
+            }
         }
-        val container = FrameLayout(this).apply {
-            setBackgroundColor(bg)
-            addView(content, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
-            ))
-        }
-        root = container
-        setContentView(container)
+        surface.setBody(*rows.toTypedArray())
+        showStatusSurface(surface) { showWaitingForEntityBootstrap() }
         if (filterHold != null) scheduleEntityFilterRetry()
         else main.postDelayed(entityBootstrapCheck, ENTITY_BOOTSTRAP_CHECK_MS)
         Log.i(TAG, if (filterHold != null) {
