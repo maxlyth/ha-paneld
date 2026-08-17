@@ -4623,11 +4623,12 @@ else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
 
-if grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION" && \
-   grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$PROVISION"; then
-  pass "first-time system helper install verifies init start before direct fallback"
+if [ "$(grep -Fxc '      if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then' "$PROVISION")" = 1 ] && \
+   [ "$(grep -Fxc "        run_root '/system/bin/hapaneld-helper >/dev/null 2>&1 &' >/dev/null 2>&1 || true" "$PROVISION")" = 1 ] && \
+   ! grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION"; then
+  pass "system helper init start gets an exact-BUILDID window before direct fallback"
 else
-  fail_test "first-time system helper install verifies init start before direct fallback"
+  fail_test "system helper init start gets an exact-BUILDID window before direct fallback"
 fi
 
 assert_install_retirement_before_swap() {

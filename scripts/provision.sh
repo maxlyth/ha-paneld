@@ -3485,9 +3485,10 @@ EOF
         stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
         pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
         start hapaneld_helper 2>/dev/null
-        /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-          ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
       ' >/dev/null 2>&1 || true
+      if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then
+        run_root '/system/bin/hapaneld-helper >/dev/null 2>&1 &' >/dev/null 2>&1 || true
+      fi
       ;;
     hybrid)
       out2="$(run_root_helper_transaction install-hybrid 2>&1)" || true
