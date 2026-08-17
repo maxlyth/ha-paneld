@@ -30,7 +30,7 @@ sqliteJdbc = "3.50.3.0"
 # oldest-Android runtime qualification rather than coupling that risk to the build-tool migration.
 snakeyamlEngine = "2.10"
 shizuku = "13.1.5"
-cyclonedx = "3.3.0"
+cyclonedx = "3.4.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
