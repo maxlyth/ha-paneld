@@ -4623,14 +4623,27 @@ else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
 
-system_install_body="$(sed -n '/^install_root_helper() {$/,/^}$/p' "$PROVISION")"
-system_exact_launch=$'start hapaneld_helper 2>/dev/null\n        # Android init can report success while the previous daemon is still stopping. Its PING is\n        # not evidence that the replacement started, so always launch the exact installed binary;\n        # same-inode replacement arbitration makes a concurrent init launch harmless.\n        /system/bin/hapaneld-helper >/dev/null 2>&1 &'
-if [[ "$system_install_body" == *"$system_exact_launch"* ]] &&
-   [[ "$system_install_body" != *'/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||'* ]]; then
-  pass "system helper install never lets a stale daemon PING suppress the exact replacement launch"
+if grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION" && \
+   grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$PROVISION"; then
+  pass "first-time system helper install verifies init start before direct fallback"
 else
-  fail_test "system helper install never lets a stale daemon PING suppress the exact replacement launch"
+  fail_test "first-time system helper install verifies init start before direct fallback"
 fi
+
+assert_install_retirement_before_swap() {
+  local function_name="$1" body expected count
+  body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
+  expected=$'  pkill -x hapaneld-helper 2>/dev/null\n  pkill -x hapaneld-ledd 2>/dev/null\n  wait_for_helper_retirement || return 1'
+  count="$(grep -Fxc '  wait_for_helper_retirement || return 1' <<<"$body" || true)"
+  if [[ "$body" == *"$expected"* ]] && [ "$count" = 1 ]; then
+    pass "$function_name retires the old daemon before replacing helper files"
+  else
+    fail_test "$function_name retires the old daemon before replacing helper files"
+  fi
+}
+assert_install_retirement_before_swap install_system
+assert_install_retirement_before_swap install_systemless
+assert_install_retirement_before_swap install_hybrid
 
 # `start` is successful even when Android init has not loaded the restored service. Every rollback
 # route that can restore /system/bin/hapaneld-helper must therefore probe the helper and launch it

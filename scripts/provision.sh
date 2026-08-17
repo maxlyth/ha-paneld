@@ -2753,6 +2753,7 @@ install_system() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc \
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
@@ -2813,6 +2814,7 @@ install_systemless() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
   mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1
   mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || return 1
@@ -2908,6 +2910,7 @@ install_hybrid() {
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
+  wait_for_helper_retirement || return 1
   rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /data/adb/service.d/hapaneld-helper.sh || return 1
@@ -3482,10 +3485,8 @@ EOF
         stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
         pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
         start hapaneld_helper 2>/dev/null
-        # Android init can report success while the previous daemon is still stopping. Its PING is
-        # not evidence that the replacement started, so always launch the exact installed binary;
-        # same-inode replacement arbitration makes a concurrent init launch harmless.
-        /system/bin/hapaneld-helper >/dev/null 2>&1 &
+        /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
+          ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
       ' >/dev/null 2>&1 || true
       ;;
     hybrid)
