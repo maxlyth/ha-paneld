@@ -176,7 +176,7 @@ class DashboardScreenPolicyTest {
         val source = dashboardSource()
         val bodies = source.split(Regex("\\n    (?:private |internal |public )?(?:override )?fun "))
         val painting = bodies.filter { it.contains("setContentView(") }
-        assertEquals("a new screen must decide its disarm behavior", 6, painting.size)
+        assertEquals("a new screen must decide its disarm behavior", 3, painting.size)
         painting.forEach { body ->
             assertTrue(
                 "a content-replacing function must disarm the admission auto-retry: ${body.lineSequence().first()}",
@@ -193,9 +193,16 @@ class DashboardScreenPolicyTest {
         )
         assertTrue(runnable.contains("destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched"))
         assertTrue("the timer must not reset the back-off it is pacing", runnable.contains("retryAdmission(resetBackoff = false)"))
+        // Scoped to the manual button's own construction rather than matched anywhere in the file: the
+        // shared status frame builds it, so the click handler no longer sits beside a setOnClickListener
+        // call here. What must hold is unchanged — this one button, and nothing else, resets the back-off.
+        val manualButton = source.substring(
+            source.indexOf("retryLabel?.let { label ->"),
+            source.indexOf("add(surface.action(\"Configure\")"),
+        )
         assertTrue(
             "a present human does not wait out a timer",
-            source.contains("setOnClickListener { retryAdmission(resetBackoff = true) }"),
+            manualButton.contains("retryAdmission(resetBackoff = true)"),
         )
         val sequence = source.substring(
             source.indexOf("private fun retryAdmission(resetBackoff: Boolean)"),

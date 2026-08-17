@@ -128,7 +128,14 @@ class LaunchScreenWiringContractTest {
         assertTrue(main.contains("speaker and sensors to Home Assistant over your local network"))
         assertTrue(main.contains("Configure the panel from "))
         assertTrue(main.contains("a browser using the address below"))
-        assertTrue(main.contains("v${'$'}{BuildConfig.VERSION_NAME} · build ${'$'}{BuildConfig.VERSION_CODE}"))
+        // The version line is still on this screen, but it is now drawn by the shared brand header
+        // rather than by this screen's own column, so the string is composed in two places. Both
+        // halves are asserted, so dropping either still fails: the screen supplies the build number,
+        // the shared header supplies the version and the separator.
+        assertTrue(main.contains("build ${'$'}{BuildConfig.VERSION_CODE}"))
+        assertTrue(
+            source("StatusSurface.kt").contains("v${'$'}{BuildConfig.VERSION_NAME} · ${'$'}suffix"),
+        )
         assertTrue(!main.contains("running in the background"))
         assertTrue(!main.contains("runs in the background so Home Assistant can control"))
     }
