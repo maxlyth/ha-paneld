@@ -2281,12 +2281,16 @@ class DashboardActivity : AppCompatActivity() {
                             ". The V2-only built-in renderer cannot start safely; update Home Assistant and retry.",
                         AdmissionOutcome.VERSION_UNVERIFIABLE,
                     )
-                    // Two different situations, and they get different outcomes rather than one shared
-                    // terminal verdict. A panel that holds no credential can only be repaired by a
-                    // person, and connecting it relaunches admission at once. A credential the server
-                    // REFUSED can equally be repaired server-side — a re-enabled user, a reissued
-                    // token, a proxy that stops answering 401 — with nothing to tell the panel, so it
-                    // re-asks at the ceiling cadence instead of parking until someone walks to it.
+                    // Two different situations, kept as separate outcomes so a diagnostic surface can
+                    // tell them apart, but BOTH person-repaired. Neither runs a timer: an absent
+                    // credential has nothing to re-ask with, and replaying an unchanged rejected one
+                    // every few minutes is what triggers Home Assistant's login-attempt banning, which
+                    // would turn a repairable refusal into a locked-out account. Only a resolution
+                    // carrying no authentication verdict at all retries by itself.
+                    //
+                    // The copy below must therefore never promise that the panel keeps checking. It
+                    // did between the ceiling-cadence proposal and the review correction that kept
+                    // this outcome manual, which left the screen promising a retry that never came.
                     DashboardV2ProbeResult.AuthenticationFailed -> {
                         val neverSignedIn = config.haToken.isBlank() && config.haRefreshToken.isBlank()
                         // Nothing recorded WHY the panel reached this verdict, which left a 2026-08-17
@@ -2305,9 +2309,9 @@ class DashboardActivity : AppCompatActivity() {
                             if (neverSignedIn) {
                                 "Connect the panel to Home Assistant in Configure, then retry."
                             } else {
-                                "Home Assistant did not accept the panel's saved sign-in. It will keep " +
-                                    "checking in case the server is repaired; to fix it here, repair the " +
-                                    "Home Assistant connection in Configure."
+                                "Home Assistant did not accept the panel's saved sign-in. Repair the " +
+                                    "Home Assistant connection in Configure, or tap Retry once the " +
+                                    "account or token has been restored on the server."
                             },
                             if (neverSignedIn) {
                                 AdmissionOutcome.SIGN_IN_REQUIRED

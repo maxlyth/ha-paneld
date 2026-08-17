@@ -53,10 +53,35 @@ class DashboardScreenPolicyTest {
         // problem that did not exist; the body had always said authentication.
         assertTrue(block.contains("\"Home Assistant sign-in rejected\""))
         assertFalse(block.contains("version check rejected"))
-        // The two situations must reach DIFFERENT outcomes: holding no credential is terminal, while
-        // a refusal the server can repair keeps probing.
+        // The two situations must reach DIFFERENT outcomes so a diagnostic surface can tell them
+        // apart, even though both are person-repaired.
         assertTrue(block.contains("AdmissionOutcome.SIGN_IN_REQUIRED"))
         assertTrue(block.contains("AdmissionOutcome.CREDENTIAL_REFUSED"))
+    }
+
+    /**
+     * A blocked screen must not promise a retry its outcome will never perform. This pairs the COPY
+     * with the CLASS: both credential outcomes are `MANUAL_ONLY`, because an absent credential has
+     * nothing to re-ask with and replaying a rejected one triggers Home Assistant login-attempt
+     * banning. Between the ceiling-cadence proposal and the review correction that kept the outcome
+     * manual, the shipped screen said it would "keep checking" and then never did.
+     */
+    @Test fun aManualOnlyCredentialScreenNeverPromisesToKeepChecking() {
+        val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/DashboardActivity.kt").readText()
+        val block = source.substring(
+            source.indexOf("DashboardV2ProbeResult.AuthenticationFailed"),
+            source.indexOf("is DashboardV2ProbeResult.Unavailable"),
+        )
+
+        listOf("keep checking", "keep trying", "will retry automatically", "retrying automatically").forEach {
+            assertFalse("credential copy must not promise an automatic retry: $it", block.contains(it))
+        }
+        // It must still name a route back, or the screen is a dead end.
+        assertTrue(block.contains("Configure"))
+        assertTrue(block.contains("Retry"))
+        // The pairing this test exists to protect: neither credential outcome runs a timer.
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED))
     }
 
     // --- admission auto-retry contracts (an admission screen must never be terminal) ---
