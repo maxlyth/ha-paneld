@@ -46,11 +46,10 @@ object DashboardAuth {
         val rejected: Boolean = false,
         val transientDetail: String? = null,
         val transientEvidence: HaTransportEvidence = HaTransportEvidence.NONE,
-        /** Set when NO credential attempt was made at all — the panel is not configured yet, or the
-         *  request was abandoned because its owner changed under it. Distinct from every other empty
-         *  result: nothing judged the credential, so a caller must not report an authentication
-         *  verdict. Without it, a not-yet-loaded configuration on a cold boot is indistinguishable
-         *  from a server refusal, and the panel parks on a credential screen it can never clear. */
+        /** Set when no authentication verdict may be reported: the panel is not configured yet, the
+         *  request lost ownership, or a refreshed credential could not be committed. Without this
+         *  distinction, a cold-boot race or abandoned refresh is indistinguishable from a server
+         *  refusal, and the panel parks on a credential screen for a credential HA never rejected. */
         val notAttempted: Boolean = false,
     )
 
@@ -61,6 +60,9 @@ object DashboardAuth {
         result: Result,
     ): Result =
         if (stillCurrent && current == expected) result else Result(null, notAttempted = true)
+
+    internal fun retainAfterRefreshPersistence(result: Result, persisted: Boolean): Result =
+        if (persisted) result else Result(null, notAttempted = true)
 
     /** Comfortable life a cached access token must have left to be reused rather than refreshed. */
     const val REFRESH_SKEW_SEC = 60L
@@ -159,6 +161,9 @@ object DashboardAuth {
         )
         val owned = retainIfOwned(owner, current, stillCurrent(), r)
         val refresh = owned.persist ?: return owned
-        return if (persistRefresh(snapshot, refresh.first, refresh.second)) owned else Result(null)
+        return retainAfterRefreshPersistence(
+            owned,
+            persistRefresh(snapshot, refresh.first, refresh.second),
+        )
     }
 }

@@ -340,28 +340,20 @@ class DashboardRecoveryTest {
 
     @Test fun `an answer carried by an event or owned by a person never runs a timer`() {
         // An ABSENT credential is repaired by connecting the panel, which relaunches admission
-        // immediately, and there is nothing to re-ask with meanwhile. The other two are
+        // immediately, and there is nothing to re-ask with meanwhile. A refused credential must not
+        // be replayed unattended because HA can ban repeated login failures. The other two are
         // maintainer-designated terminal outcomes.
         listOf(
             AdmissionOutcome.SIGN_IN_REQUIRED,
+            AdmissionOutcome.CREDENTIAL_REFUSED,
             AdmissionOutcome.UNSUPPORTED_HA,
             AdmissionOutcome.BRIDGE_UNAVAILABLE,
         ).forEach { assertEquals(it.name, AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(it)) }
     }
 
-    @Test fun `a refused credential re-asks slowly because only the server can repair it`() {
-        // The 2026-08-17 regression: a refusal was latched with no timer, so a panel stayed parked
-        // after the server was repaired. Re-enabling an HA user, reissuing a token or fixing a proxy
-        // that answered 401 all happen server-side with no event reaching the panel.
-        assertEquals(AdmissionRetryClass.AT_CEILING, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
-        // It must NOT be promoted to the fast ladder: a rejected credential is not urgent, and
-        // hammering re-auth interacts with Home Assistant's login-attempt banning.
+    @Test fun `a refused credential waits for an explicit retry instead of risking a login ban`() {
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
         assertNotEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
-        // Holding a credential and holding none are different situations with different routes back.
-        assertNotEquals(
-            admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED),
-            admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED),
-        )
     }
 
     @Test fun `a missed handshake and an absent credential are classified oppositely`() {
@@ -372,12 +364,13 @@ class DashboardRecoveryTest {
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED))
         // ...and a missed handshake is not the same evidence as a WebView that cannot bridge at all.
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.BRIDGE_UNAVAILABLE))
-        // No blocked outcome may be left without any route back: only the two maintainer-designated
-        // terminal outcomes and the panel that holds no credential may have no timer at all.
+        // No blocked outcome may be left without any route back: the explicit retry action owns
+        // credential refusal, while the other outcomes below need configuration or platform repair.
         val latched = AdmissionOutcome.entries.filter { admissionRetryClass(it) == AdmissionRetryClass.MANUAL_ONLY }
         assertEquals(
             setOf(
                 AdmissionOutcome.SIGN_IN_REQUIRED,
+                AdmissionOutcome.CREDENTIAL_REFUSED,
                 AdmissionOutcome.UNSUPPORTED_HA,
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             ),

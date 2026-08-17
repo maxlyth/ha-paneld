@@ -52,6 +52,19 @@ class ConfigTransactionTest {
         assertFalse(live.notAttempted)
     }
 
+    @Test fun aRefreshThatCannotBeCommittedCarriesNoAuthenticationVerdict() {
+        val refreshed = DashboardAuth.Result(
+            session = DashboardAuth.Session("fresh-access", 300L),
+            persist = "fresh-access" to 1_000_300L,
+        )
+
+        val abandoned = DashboardAuth.retainAfterRefreshPersistence(refreshed, persisted = false)
+        assertNull(abandoned.session)
+        assertTrue("an uncommitted refresh cannot be called rejected", abandoned.notAttempted)
+        assertFalse(abandoned.rejected)
+        assertEquals(refreshed, DashboardAuth.retainAfterRefreshPersistence(refreshed, persisted = true))
+    }
+
     @Test fun generatedPanelIdentityIsPersistedOnce() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

@@ -1188,10 +1188,10 @@ MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=0 run_provision "$MOCK_TARGET" --a
 assert_failure "read-only system without a verified service.d runner fails closed"
 assert_contains 'read-only /system and no verified systemless boot-service runner' "missing persistence mechanism names the migration blocker"
 assert_contains 'Magisk, KernelSU, or APatch' "missing persistence mechanism gives supported recovery choices"
-# On Android 10+ a rooted panel still has a read-only /system because of dm-verity, so the usual cure
-# is a one-time host-side remount, not a root manager. A real report (#106) reached this exact message
-# on a rooted panel and was pointed only at Magisk. Naming the remount first, and its reboot, is the
-# difference between a five-minute fix and an evening installing something unnecessary.
+# A rooted panel may need its existing overlay mounted or may still have verity enabled, rather than
+# needing another root manager. A real report (#106) reached this exact message and was pointed only
+# at Magisk. Naming the reboot-free probe first, then keeping both fallback stages executable, avoids
+# that detour without claiming which mechanism is active.
 assert_contains 'not a missing root manager' "read-only /system names the usual Android 10+ cause"
 assert_contains 'adb -s panel.test:5555 remount' "the reboot-free remount is offered"
 assert_contains 'disable-verity' "verity removal remains available as the fallback"
@@ -1201,11 +1201,14 @@ assert_contains 'REBOOTS the panel' "the step that reboots says so before it is 
 # strand a PIN-protected panel in Direct Boot. Pin the reboot-free route ahead of the rebooting one.
 remount_line="$(grep -n 'adb -s panel.test:5555 remount' "$LAST_OUTPUT" | head -1 | cut -d: -f1)"
 verity_line="$(grep -n 'disable-verity' "$LAST_OUTPUT" | head -1 | cut -d: -f1)"
-if [ -n "$remount_line" ] && [ -n "$verity_line" ] && [ "$remount_line" -lt "$verity_line" ]; then
+post_remount_line="$(grep -n 'adb -s panel.test:5555 remount' "$LAST_OUTPUT" | tail -1 | cut -d: -f1)"
+if [ -n "$remount_line" ] && [ -n "$verity_line" ] && [ -n "$post_remount_line" ] &&
+   [ "$remount_line" -lt "$verity_line" ] && [ "$verity_line" -lt "$post_remount_line" ]; then
   pass "the reboot-free remount is offered before the one that reboots"
 else
   fail_test "the reboot-free remount is offered before the one that reboots"
 fi
+assert_not_contains 'disable-verity.*remount' "$LAST_OUTPUT" "the post-reboot remount remains an executable command"
 assert_contains 'unlock any PIN-protected panel' "the remount advice names the Direct Boot unlock step"
 assert_not_contains '/data/adb/service\.d/hapaneld-helper\.sh\.new|^adb .* install( |$)' "$MOCK_CALL_LOG" "unverified service.d path never installs a helper or replaces the APK"
 

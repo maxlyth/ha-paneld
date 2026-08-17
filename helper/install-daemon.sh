@@ -1290,18 +1290,19 @@ else
   # read at all has not told us anything about its /system, and saying it did would send the operator
   # to install a root manager it may not need.
   if printf '%s\n' "$out" | grep -qx SYSTEM_RO && printf '%s\n' "$out" | grep -qx NO_SYSTEMLESS_RUNNER; then
-    # Name the route that actually applies to most rooted panels FIRST. Android 10 and newer keep
-    # /system read-only behind dm-verity even with root, and the fix is a one-time host-side remount,
-    # not a root manager — which is what docs/hardware/nspanel-pro.md and tpa10.md already tell people
-    # to do for this project's own panels. Sending an operator to install Magisk when their userdebug
-    # panel just needs verity disabled is advice that costs them an evening. It reboots, so say so.
+    # A read-only /system may need only its existing writable overlay mounted, or it may still be
+    # protected by verity. Offer the reboot-free probe first instead of assuming either mechanism or
+    # sending the operator straight to a root manager. Keep the rebooting fallback executable as two
+    # separate stages so copying the first command cannot silently comment out the post-reboot step.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The existing helper was left running and no files were replaced." \
       "On a userdebug panel with an unlocked bootloader this is usually a writable overlay that is not mounted, or dm-verity — not a missing root manager." \
       "Try the host-side remount FIRST. It needs no reboot, and on panels that already carry a scratch overlay it is the whole fix:" \
       "  adb -s $TARGET root && adb -s $TARGET remount" \
       "Only if that is refused, disable verity — this REBOOTS the panel, so do it with the panel in front of you and unlock any PIN-protected panel before expecting it back:" \
-      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot   # then: adb -s $TARGET root && adb -s $TARGET remount" \
+      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
+      "After the panel restarts and is unlocked:" \
+      "  adb -s $TARGET root && adb -s $TARGET remount" \
       "Then re-run this installer. If remount is still refused after that, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
   fail "could not determine where a boot-persistent helper can be installed" \

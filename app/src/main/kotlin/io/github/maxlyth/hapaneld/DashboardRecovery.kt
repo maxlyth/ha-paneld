@@ -352,9 +352,9 @@ internal enum class AdmissionOutcome {
      *  a prerelease build. An answer arrived, but it settles nothing. */
     VERSION_UNVERIFIABLE,
 
-    /** The server refused a credential the panel actually holds. A disabled HA user, a revoked token
-     *  or a repaired reverse proxy all change this server-side with nothing to tell the panel, so it
-     *  re-asks slowly rather than parking. */
+    /** The server refused a credential the panel actually holds. Repeating the unchanged credential
+     *  can trigger Home Assistant login-attempt banning, so recovery requires an explicit retry or a
+     *  new credential rather than an unattended timer. */
     CREDENTIAL_REFUSED,
 
     /** No credential is configured at all. There is nothing to re-ask WITH, so a timer would repeat an
@@ -419,10 +419,10 @@ internal fun admissionRetryClass(outcome: AdmissionOutcome): AdmissionRetryClass
 
     AdmissionOutcome.VERSION_UNVERIFIABLE,
     AdmissionOutcome.NO_LEGAL_DASHBOARD,
-    AdmissionOutcome.CREDENTIAL_REFUSED,
     -> AdmissionRetryClass.AT_CEILING
 
     AdmissionOutcome.SIGN_IN_REQUIRED,
+    AdmissionOutcome.CREDENTIAL_REFUSED,
     AdmissionOutcome.UNSUPPORTED_HA,
     AdmissionOutcome.BRIDGE_UNAVAILABLE,
     -> AdmissionRetryClass.MANUAL_ONLY

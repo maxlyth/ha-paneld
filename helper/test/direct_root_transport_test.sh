@@ -139,15 +139,18 @@ for transport in shell_v2 pty; do
   run_installer
   expect_refuses "names the real cause when there is genuinely no boot route" \
     "read-only /system and no verified systemless boot-service runner"
-  # A rooted Android 10+ panel reaches this with dm-verity, not a missing root manager, so the
-  # host-side remount must be offered before the operator goes and installs one. It reboots the panel,
-  # which on a locked panel is not a small thing, so the warning travels with the command.
+  # A rooted panel may need its existing overlay mounted or may still have verity enabled, rather than
+  # needing another root manager. Offer the non-rebooting probe first and keep the post-reboot command
+  # executable on its own line.
   # Order matters more than presence. A panel that already carries a scratch overlay needs only
   # `adb remount`; leading with disable-verity prescribes a reboot it does not need, and a reboot is
   # the one step that can strand a PIN-protected panel in Direct Boot.
   rl=$(grep -n 'remount$' "$TMP/out.txt" | head -1 | cut -d: -f1)
   vl=$(grep -n 'disable-verity' "$TMP/out.txt" | head -1 | cut -d: -f1)
-  if [ -n "$rl" ] && [ -n "$vl" ] && [ "$rl" -lt "$vl" ] &&
+  post_rl=$(grep -n 'remount$' "$TMP/out.txt" | tail -1 | cut -d: -f1)
+  if [ -n "$rl" ] && [ -n "$vl" ] && [ -n "$post_rl" ] &&
+     [ "$rl" -lt "$vl" ] && [ "$vl" -lt "$post_rl" ] &&
+     ! grep -Eq 'disable-verity.*remount' "$TMP/out.txt" &&
      grep -Fq 'REBOOTS the panel' "$TMP/out.txt" &&
      grep -Fq 'unlock any PIN-protected panel' "$TMP/out.txt"; then
     check "offers the reboot-free remount first, then the rebooting fallback with its unlock step" ok

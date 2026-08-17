@@ -3395,17 +3395,18 @@ EOF
   else
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     rm -f "$rc_file" "$hybrid_rc_file" "$service_file" "$transaction_file"
-    # Same advice as helper/install-daemon.sh, and for the same reason: on Android 10 and newer,
-    # /system stays read-only behind dm-verity even on a rooted panel, so the usual answer is a
-    # one-time host-side remount rather than a root manager. This is the wording a real report reached
-    # (#106) after everything upstream of it had already been fixed. It reboots, so say so.
+    # Keep this aligned with helper/install-daemon.sh: a read-only /system may need only its existing
+    # writable overlay mounted, or it may still be protected by verity. Try the reboot-free route
+    # first, then print the rebooting fallback as two executable stages.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The helper was not installed and the previous APK was left in place." \
       "On a userdebug panel with an unlocked bootloader this is usually a writable overlay that is not mounted, or dm-verity — not a missing root manager." \
       "Try the host-side remount FIRST. It needs no reboot, and on panels that already carry a scratch overlay it is the whole fix:" \
       "  adb -s $TARGET root && adb -s $TARGET remount" \
       "Only if that is refused, disable verity — this REBOOTS the panel, so do it with the panel in front of you and unlock any PIN-protected panel before expecting it back:" \
-      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot   # then: adb -s $TARGET root && adb -s $TARGET remount" \
+      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
+      "After the panel restarts and is unlocked:" \
+      "  adb -s $TARGET root && adb -s $TARGET remount" \
       "Then re-run the installer. If remount is still refused after that, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
 

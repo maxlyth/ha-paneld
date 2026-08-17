@@ -122,14 +122,12 @@ class RendererAdmissionPresentationTest {
         assertTrue(p.action.contains("will not clear on its own"))
     }
 
-    @Test fun aRefusedCredentialIsBlockedButKeepsAskingTheServer() {
+    @Test fun aRefusedCredentialIsBlockedUntilAnExplicitRetry() {
         val p = present(record(RendererAdmissionState.BLOCKED, AdmissionOutcome.CREDENTIAL_REFUSED))
         assertEquals("credential_refused", p.outcome)
-        // NOT manual_only: a re-enabled user or reissued token is a server-side repair with no event
-        // to tell the panel, so a latched screen would outlive the fault it reports.
-        assertEquals("at_ceiling", p.recovery)
+        assertEquals("manual_only", p.recovery)
         assertEquals(HaTransportFault.NONE, p.fault)
-        assertFalse(p.action.contains("will not clear on its own"))
+        assertTrue(p.action.contains("will not clear on its own"))
     }
 
     @Test fun anUnsupportedServerIsBlockedAndTerminalUntilSomeoneUpgradesIt() {
