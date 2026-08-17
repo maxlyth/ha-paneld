@@ -1813,14 +1813,18 @@ assert_success "root-helper transaction works through an exec-style vendor su di
 assert_log_contains 'su 0 sh -c .*helper-transaction-[0-9a-f]+.*install-system' "vendor su executes only the staged transaction path"
 
 caps_line="$(grep -n '^helper-probe COMPANIONCAPS$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
-build_id_line="$(grep -n '^helper-probe BUILDID$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+init_build_id_line="$(grep -n '^helper-probe BUILDID$' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
+validated_build_id_line="$(grep -n '^helper-probe BUILDID$' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+build_id_count="$(grep -c '^helper-probe BUILDID$' "$MOCK_CALL_LOG" || true)"
 app_line="$(grep -nE '^adb .* install( |$)' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
 commit_line="$(grep -nE 'helper-transaction-[0-9a-f]+.*commit-system' "$MOCK_CALL_LOG" | head -1 | cut -d: -f1)"
-if [ -n "$caps_line" ] && [ -n "$build_id_line" ] && [ -n "$app_line" ] && [ -n "$commit_line" ] && \
-   [ "$caps_line" -lt "$build_id_line" ] && [ "$build_id_line" -lt "$app_line" ] && [ "$app_line" -lt "$commit_line" ]; then
-  pass "exact helper capability and build identity succeed before APK replacement and recovery commits afterward"
+if [ "$build_id_count" = 2 ] && [ -n "$caps_line" ] && [ -n "$init_build_id_line" ] && \
+   [ -n "$validated_build_id_line" ] && [ -n "$app_line" ] && [ -n "$commit_line" ] && \
+   [ "$init_build_id_line" -lt "$caps_line" ] && [ "$caps_line" -lt "$validated_build_id_line" ] && \
+   [ "$validated_build_id_line" -lt "$app_line" ] && [ "$app_line" -lt "$commit_line" ]; then
+  pass "init identity, helper capability, and final build identity precede APK replacement and commit"
 else
-  fail_test "exact helper capability and build identity succeed before APK replacement and recovery commits afterward"
+  fail_test "init identity, helper capability, and final build identity precede APK replacement and commit"
 fi
 
 # Official release assets are authenticated before the first install, launch, or privilege grant
@@ -4625,7 +4629,7 @@ fi
 
 if [ "$(grep -Fxc '      if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then' "$PROVISION")" = 1 ] && \
    [ "$(grep -Fxc "        run_root '/system/bin/hapaneld-helper >/dev/null 2>&1 &' >/dev/null 2>&1 || true" "$PROVISION")" = 1 ] && \
-   ! grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION"; then
+   [ "$(grep -Fxc '        /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION")" = 0 ]; then
   pass "system helper init start gets an exact-BUILDID window before direct fallback"
 else
   fail_test "system helper init start gets an exact-BUILDID window before direct fallback"
