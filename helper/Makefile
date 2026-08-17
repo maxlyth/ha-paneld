@@ -28,7 +28,7 @@ CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c gpio.c sysct
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test peer-auth-test request-timeout-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
+.PHONY: all daemon test peer-auth-test request-timeout-test replacement-identity-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -37,12 +37,13 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
-test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
 	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.1.0 proto=1.1"
 	$(BUILD)/companion-boundary
 	$(BUILD)/peer-auth
 	$(BUILD)/request-timeout
+	bash ./test/replacement_identity_test.sh $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
 	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	bash ./test/root_command_quote_test.sh
 	bash ./test/standalone_installer_transaction_test.sh
@@ -68,6 +69,20 @@ request-timeout-test: $(BUILD)/request-timeout
 	$(BUILD)/request-timeout
 $(BUILD)/request-timeout: test/request_timeout.c $(SRC_DIR)/main.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) test/request_timeout.c $(SRC_DIR)/version.c $(SRC_DIR)/util.c $(LDLIBS) -o $@
+
+# Start two real daemon binaries on an isolated socket. Their names intentionally share the exact
+# 15-byte Linux comm value used on panels while their executable inodes and BUILDIDs differ.
+REPLACEMENT_SOCKET := hapaneld-helper-replacement-test
+OLD_BUILD_ID := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+NEW_BUILD_ID := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+REPLACEMENT_FLAGS := -DSOCK_NAME=\"$(REPLACEMENT_SOCKET)\" -DAPP_DATA=\"/proc/self\" \
+	-DREPLACEMENT_RETIRE_ATTEMPTS=40 -DREPLACEMENT_RETIRE_DELAY_MS=10
+replacement-identity-test: $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
+	bash ./test/replacement_identity_test.sh $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
+$(BUILD)/hapaneld-helper-old: $(DAEMON_SRCS) | $(BUILD)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) $(REPLACEMENT_FLAGS) -DHAPANELD_BUILD_ID=\"$(OLD_BUILD_ID)\" $(DAEMON_SRCS) $(LDLIBS) -o $@
+$(BUILD)/hapaneld-helper-new: $(DAEMON_SRCS) | $(BUILD)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) $(REPLACEMENT_FLAGS) -DHAPANELD_BUILD_ID=\"$(NEW_BUILD_ID)\" $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 install-security-test:
 	bash ./test/install_daemon_security_test.sh

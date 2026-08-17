@@ -23,6 +23,7 @@
 // Protocol: see helper/README.md and the dispatch table in dispatch.c.
 
 #define _GNU_SOURCE             // struct ucred / SO_PEERCRED
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -55,7 +56,15 @@
 #define REQUEST_TIMEOUT_MS 3000
 #endif
 // ha-paneld's data dir — we stat() it to learn the app's uid (it changes on every reinstall).
+#ifndef APP_DATA
 #define APP_DATA   "/data/data/io.github.maxlyth.hapaneld"
+#endif
+#ifndef REPLACEMENT_RETIRE_ATTEMPTS
+#define REPLACEMENT_RETIRE_ATTEMPTS 20
+#endif
+#ifndef REPLACEMENT_RETIRE_DELAY_MS
+#define REPLACEMENT_RETIRE_DELAY_MS 50
+#endif
 // MAX_CONN (the concurrent-connection cap) + the conn_admit/release/active gate live in server.[ch]
 // so the cap is unit-testable without this accept loop.
 
@@ -74,6 +83,101 @@ static int uid_allowed(uid_t uid) {
 static int set_cloexec(int fd) {
     int flags = fcntl(fd, F_GETFD, 0);
     return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == 0 ? 0 : -1;
+}
+
+// An in-place upgrade replaces the helper inode before launching this process. Some Android root
+// environments return from pkill while the previous daemon still owns the abstract socket, so a
+// direct or init launch can otherwise lose the race and leave the old BUILDID observable. On an
+// occupied socket, retire only helpers executing a different inode. A concurrent launch of this
+// exact replacement is left alone and will continue serving the expected identity.
+static int replaced_helper_processes(int signal_number) {
+    struct stat self_executable;
+    if (stat("/proc/self/exe", &self_executable) != 0) return -1;
+
+    DIR *proc = opendir("/proc");
+    if (!proc) return -1;
+    int found = 0;
+    struct dirent *entry;
+    while ((entry = readdir(proc)) != NULL) {
+        char *end = NULL;
+        long parsed = strtol(entry->d_name, &end, 10);
+        if (!entry->d_name[0] || !end || *end != '\0' || parsed <= 0 || parsed > INT_MAX ||
+                (pid_t)parsed == getpid()) {
+            continue;
+        }
+
+        char path[64];
+        if (snprintf(path, sizeof path, "/proc/%ld/comm", parsed) >= (int)sizeof path) continue;
+        FILE *comm_file = fopen(path, "r");
+        if (!comm_file) continue;
+        char comm[32];
+        char *read_result = fgets(comm, sizeof comm, comm_file);
+        fclose(comm_file);
+        if (!read_result) continue;
+        comm[strcspn(comm, "\r\n")] = '\0';
+        if (strcmp(comm, "hapaneld-helper") != 0) continue;
+
+        if (snprintf(path, sizeof path, "/proc/%ld/exe", parsed) >= (int)sizeof path) continue;
+        struct stat executable;
+        if (stat(path, &executable) != 0) continue;
+        if (executable.st_dev == self_executable.st_dev && executable.st_ino == self_executable.st_ino) {
+            continue;
+        }
+        found++;
+        if (signal_number != 0 && kill((pid_t)parsed, signal_number) != 0 && errno != ESRCH) {
+            closedir(proc);
+            return -1;
+        }
+    }
+    closedir(proc);
+    return found;
+}
+
+static int retire_replaced_helper(void) {
+    int found = replaced_helper_processes(SIGTERM);
+    if (found <= 0) return found;
+
+    const struct timespec delay = {
+        .tv_sec = REPLACEMENT_RETIRE_DELAY_MS / 1000,
+        .tv_nsec = (REPLACEMENT_RETIRE_DELAY_MS % 1000) * 1000000L,
+    };
+    for (int attempt = 0; attempt < REPLACEMENT_RETIRE_ATTEMPTS; attempt++) {
+        nanosleep(&delay, NULL);
+        found = replaced_helper_processes(0);
+        if (found <= 0) return found;
+    }
+
+    found = replaced_helper_processes(SIGKILL);
+    if (found < 0) return -1;
+    for (int attempt = 0; attempt < REPLACEMENT_RETIRE_ATTEMPTS; attempt++) {
+        nanosleep(&delay, NULL);
+        found = replaced_helper_processes(0);
+        if (found <= 0) return found;
+    }
+    return -1;
+}
+
+static int bind_helper_socket(int fd, const struct sockaddr *address, socklen_t length) {
+    if (bind(fd, address, length) == 0) return 0;
+    if (errno != EADDRINUSE) return -1;
+
+    int retired = retire_replaced_helper();
+    if (retired < 0) {
+        errno = EADDRINUSE;
+        return -1;
+    }
+
+    const struct timespec delay = {
+        .tv_sec = REPLACEMENT_RETIRE_DELAY_MS / 1000,
+        .tv_nsec = (REPLACEMENT_RETIRE_DELAY_MS % 1000) * 1000000L,
+    };
+    for (int attempt = 0; attempt < REPLACEMENT_RETIRE_ATTEMPTS; attempt++) {
+        if (bind(fd, address, length) == 0) return 0;
+        if (errno != EADDRINUSE) return -1;
+        nanosleep(&delay, NULL);
+    }
+    errno = EADDRINUSE;
+    return -1;
 }
 
 // Installer/provisioner probe mode. It is intentionally restricted to read-only identity verbs and
@@ -237,7 +341,11 @@ int main(int argc, char **argv) {
     memcpy(addr.sun_path + 1, SOCK_NAME, sizeof SOCK_NAME - 1);
     socklen_t alen = offsetof(struct sockaddr_un, sun_path) + 1 + (sizeof SOCK_NAME - 1);
 
-    if (bind(sfd, (struct sockaddr *)&addr, alen) < 0) { perror("bind"); return 1; }
+    if (bind_helper_socket(sfd, (struct sockaddr *)&addr, alen) < 0) {
+        perror("bind");
+        close(sfd);
+        return 1;
+    }
     if (listen(sfd, MAX_CONN) < 0) { perror("listen"); return 1; }
     fprintf(stderr, "hapaneld-helper listening on abstract unix socket @%s\n", SOCK_NAME);
 
