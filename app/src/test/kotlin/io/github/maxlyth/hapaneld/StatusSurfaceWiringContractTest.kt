@@ -492,6 +492,41 @@ class StatusSurfaceWiringContractTest {
         )
     }
 
+    /**
+     * The frame's installer disarms the admission auto-retry, because a replaced screen must not leave
+     * a timer running against a discarded view tree. That makes redrawing a blocked screen — a panel
+     * theme or configuration change — dangerous in the opposite direction: recomputing the delay would
+     * advance the back-off ladder and push the deadline further out every time, so a panel being
+     * rotated could postpone its own recovery indefinitely. The redraw must therefore carry the
+     * pending remainder across. `AdmissionCountdownOwner.remainingMs` is proven executably in
+     * `DashboardRecoveryTest`; what is asserted here is that the painter actually uses it.
+     */
+    @Test
+    fun aRedrawnAdmissionScreenCarriesItsPendingRetryRatherThanRestartingIt() {
+        val painter = dashboard.substringAfter("private fun paintV2CompatibilityScreen(").substringBefore("\n    }")
+        assertTrue(
+            "the installer must disarm, or a replaced screen keeps its timer",
+            dashboard.substringAfter("private fun showStatusSurface(").substringBefore("\n    }")
+                .contains("cancelAdmissionAutoRetry()"),
+        )
+        assertTrue(
+            "a redraw must read the remaining time before the installer disarms it",
+            painter.contains("val carriedMs = if (rearm) null else admissionCountdown.remainingMs()"),
+        )
+        assertTrue(
+            "the carried remainder must win over a freshly computed ladder delay",
+            painter.contains("carriedMs ?: if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)"),
+        )
+        assertTrue(
+            "the rerender hook must ask for a redraw, not a fresh failure",
+            painter.contains("rearm = false"),
+        )
+        assertTrue(
+            "the entry point remains a genuine failure, which does advance the ladder",
+            dashboard.contains("= paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = true)"),
+        )
+    }
+
     /** A screen shown because something failed must not itself depend on the network. */
     @Test
     fun theBrandNeverReachesTheNetwork() {

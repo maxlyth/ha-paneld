@@ -467,6 +467,28 @@ class DashboardRecoveryTest {
         assertNull(owner.onVisibilityChanged(true).text)
     }
 
+    @Test fun `a redraw can carry the pending deadline across rather than restarting it`() {
+        val clock = Clock()
+        val owner = AdmissionCountdownOwner(clock)
+        assertNull("nothing pending means nothing to carry", owner.remainingMs())
+
+        owner.arm(30_000L)
+        clock.now += 12_000L
+        assertEquals(18_000L, owner.remainingMs())
+
+        // What a redraw actually does: read the remainder, disarm to replace the screen, re-arm the
+        // SAME figure. The deadline must land where it already was, not 30s further out.
+        val carried = owner.remainingMs()!!
+        owner.disarm()
+        assertNull(owner.remainingMs())
+        owner.arm(carried)
+        assertEquals(18_000L, owner.remainingMs())
+
+        // A deadline already passed reads as zero, never as a negative delay that would post into the past.
+        clock.now += 60_000L
+        assertEquals(0L, owner.remainingMs())
+    }
+
     @Test fun `admission retries back off from the base and stop growing at the ceiling`() {
         val policy = AdmissionRetryPolicy(jitterSource = { 0.5 })   // 0.5 → zero jitter offset
         val ladder = generateSequence { policy.nextDelayMs(AdmissionRetryClass.FROM_BASE) }.take(8).toList()
