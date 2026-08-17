@@ -142,10 +142,18 @@ for transport in shell_v2 pty; do
   # A rooted Android 10+ panel reaches this with dm-verity, not a missing root manager, so the
   # host-side remount must be offered before the operator goes and installs one. It reboots the panel,
   # which on a locked panel is not a small thing, so the warning travels with the command.
-  grep -Fq 'disable-verity' "$TMP/out.txt" && grep -Fq 'REBOOTS the panel' "$TMP/out.txt" &&
-    grep -Fq 'unlock any PIN-protected panel' "$TMP/out.txt" &&
-    check "offers the one-time remount, warns that it reboots, and names the unlock step" ok ||
-    check "offers the one-time remount, warns that it reboots, and names the unlock step" bad
+  # Order matters more than presence. A panel that already carries a scratch overlay needs only
+  # `adb remount`; leading with disable-verity prescribes a reboot it does not need, and a reboot is
+  # the one step that can strand a PIN-protected panel in Direct Boot.
+  rl=$(grep -n 'remount$' "$TMP/out.txt" | head -1 | cut -d: -f1)
+  vl=$(grep -n 'disable-verity' "$TMP/out.txt" | head -1 | cut -d: -f1)
+  if [ -n "$rl" ] && [ -n "$vl" ] && [ "$rl" -lt "$vl" ] &&
+     grep -Fq 'REBOOTS the panel' "$TMP/out.txt" &&
+     grep -Fq 'unlock any PIN-protected panel' "$TMP/out.txt"; then
+    check "offers the reboot-free remount first, then the rebooting fallback with its unlock step" ok
+  else
+    check "offers the reboot-free remount first, then the rebooting fallback with its unlock step" bad
+  fi
 
   # 3b. An answer we cannot read says nothing about /system, so the refusal must not claim it did —
   #     telling this operator to go and install Magisk would send them to fix the wrong machine.

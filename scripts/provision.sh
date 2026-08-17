@@ -3401,11 +3401,12 @@ EOF
     # (#106) after everything upstream of it had already been fixed. It reboots, so say so.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The helper was not installed and the previous APK was left in place." \
-      "On a userdebug panel with an unlocked bootloader this is usually dm-verity rather than a missing root manager." \
-      "Try the one-time host-side remount first — it REBOOTS the panel, so do it with the panel in front of you:" \
-      "  adb -s $TARGET root && adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
-      "  # once it is back, unlock any PIN-protected panel; then:  adb -s $TARGET root && adb -s $TARGET remount" \
-      "Then re-run the installer. If remount is still refused, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
+      "On a userdebug panel with an unlocked bootloader this is usually a writable overlay that is not mounted, or dm-verity — not a missing root manager." \
+      "Try the host-side remount FIRST. It needs no reboot, and on panels that already carry a scratch overlay it is the whole fix:" \
+      "  adb -s $TARGET root && adb -s $TARGET remount" \
+      "Only if that is refused, disable verity — this REBOOTS the panel, so do it with the panel in front of you and unlock any PIN-protected panel before expecting it back:" \
+      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot   # then: adb -s $TARGET root && adb -s $TARGET remount" \
+      "Then re-run the installer. If remount is still refused after that, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
 
   if [ "$install_kind" = hybrid ]; then

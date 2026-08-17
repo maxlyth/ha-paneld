@@ -1297,11 +1297,12 @@ else
     # panel just needs verity disabled is advice that costs them an evening. It reboots, so say so.
     fail "the panel has read-only /system and no verified systemless boot-service runner" \
       "The existing helper was left running and no files were replaced." \
-      "On a userdebug panel with an unlocked bootloader this is usually dm-verity rather than a missing root manager." \
-      "Try the one-time host-side remount first — it REBOOTS the panel, so do it with the panel in front of you:" \
-      "  adb -s $TARGET root && adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
-      "  # once it is back, unlock any PIN-protected panel; then:  adb -s $TARGET root && adb -s $TARGET remount" \
-      "Then re-run this installer. If remount is still refused, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
+      "On a userdebug panel with an unlocked bootloader this is usually a writable overlay that is not mounted, or dm-verity — not a missing root manager." \
+      "Try the host-side remount FIRST. It needs no reboot, and on panels that already carry a scratch overlay it is the whole fix:" \
+      "  adb -s $TARGET root && adb -s $TARGET remount" \
+      "Only if that is refused, disable verity — this REBOOTS the panel, so do it with the panel in front of you and unlock any PIN-protected panel before expecting it back:" \
+      "  adb -s $TARGET disable-verity && adb -s $TARGET reboot   # then: adb -s $TARGET root && adb -s $TARGET remount" \
+      "Then re-run this installer. If remount is still refused after that, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
   fail "could not determine where a boot-persistent helper can be installed" \
     "The existing helper was left running and no files were replaced." \
