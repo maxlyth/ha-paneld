@@ -554,20 +554,20 @@ jobs:
 
       - name: Attest release asset provenance
         continue-on-error: true
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/*
 
       - name: Attest Android and Gradle runtime SBOM
         continue-on-error: true
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.android_sbom_name }}
 
       - name: Attest profile-editor runtime SBOM
         continue-on-error: true
-        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.profile_editor_sbom_name }}
