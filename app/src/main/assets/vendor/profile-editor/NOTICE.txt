@@ -7,7 +7,7 @@ This runtime bundle contains the following MIT-licensed packages:
 @codemirror/lint 6.9.7
 @codemirror/search 6.7.1
 @codemirror/state 6.7.1
-@codemirror/view 6.43.7
+@codemirror/view 6.43.8
 @lezer/common 1.5.2
 @lezer/highlight 1.2.3
 @lezer/lr 1.4.10

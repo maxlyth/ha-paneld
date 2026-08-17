@@ -143,7 +143,7 @@ class ProfileUiSourceTest {
         assertTrue(build.isFile)
         assertTrue(bundle.length() > 100_000)
         assertTrue(license.readText().contains("Permission is hereby granted"))
-        assertTrue(notice.readText().contains("@codemirror/view 6.43.7"))
+        assertTrue(notice.readText().contains("@codemirror/view 6.43.8"))
         assertTrue(bundle.readText().startsWith("/*! @license CodeMirror 6"))
         assertFalse(packageJson.readText().contains("\"latest\""))
         assertFalse(File("build.gradle.kts").readText().contains("profile-editor"))
