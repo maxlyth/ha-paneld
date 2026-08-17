@@ -48,6 +48,10 @@ static int spawn_real;
 static long last_pclose_offset = -1;
 static int sleep_call_count;
 static unsigned long sleep_total_ms;
+#define MAX_DEADLINE_HISTORY 16
+static unsigned deadline_history[MAX_DEADLINE_HISTORY];
+static int deadline_call_count;
+static unsigned deadline_elapsed_ms;
 
 void sysexec_stub_reset(void) {
     memset(run_fail_needle, 0, sizeof run_fail_needle);
@@ -68,6 +72,9 @@ void sysexec_stub_reset(void) {
     last_pclose_offset = -1;
     sleep_call_count = 0;
     sleep_total_ms = 0;
+    memset(deadline_history, 0, sizeof deadline_history);
+    deadline_call_count = 0;
+    deadline_elapsed_ms = 0;
 }
 
 void sysexec_stub_set_spawn_result(int status) { spawn_status = status; }
@@ -259,3 +266,35 @@ void sysexec_sleep_ms(unsigned ms) {
 
 int sysexec_stub_count_sleep(void) { return sleep_call_count; }
 unsigned long sysexec_stub_total_sleep_ms(void) { return sleep_total_ms; }
+
+// The deadline form records what bound it was given and then behaves exactly like the unbounded form,
+// so every existing failure rule and argv assertion keeps working through it. The elapsed value is
+// programmable because it is the input to the caller's remainder-sleep policy, not an output of it.
+int sysexec_run_argv_deadline(const char *path, const char *const argv[], int quiet,
+                              unsigned deadline_ms, unsigned *elapsed_ms) {
+    pthread_mutex_lock(&run_block_lock);
+    if (deadline_call_count < MAX_DEADLINE_HISTORY)
+        deadline_history[deadline_call_count] = deadline_ms;
+    deadline_call_count++;
+    unsigned elapsed = deadline_elapsed_ms > deadline_ms ? deadline_ms : deadline_elapsed_ms;
+    pthread_mutex_unlock(&run_block_lock);
+    if (elapsed_ms) *elapsed_ms = elapsed;
+    return sysexec_run_argv(path, argv, quiet);
+}
+
+int sysexec_stub_count_deadline_calls(void) {
+    pthread_mutex_lock(&run_block_lock);
+    int count = deadline_call_count;
+    pthread_mutex_unlock(&run_block_lock);
+    return count;
+}
+
+unsigned sysexec_stub_deadline_ms(int index) {
+    if (index < 0 || index >= MAX_DEADLINE_HISTORY) return 0;
+    pthread_mutex_lock(&run_block_lock);
+    unsigned value = index < deadline_call_count ? deadline_history[index] : 0;
+    pthread_mutex_unlock(&run_block_lock);
+    return value;
+}
+
+void sysexec_stub_set_deadline_elapsed(unsigned ms) { deadline_elapsed_ms = ms; }

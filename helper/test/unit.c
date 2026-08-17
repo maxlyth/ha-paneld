@@ -458,6 +458,35 @@ static void test_reboot_escalation(void) {
     CHECK(sysexec_stub_count_sleep() == 2 && sysexec_stub_total_sleep_ms() == 10000UL,
           "each request is followed by its bounded wait (calls=%d total=%lums)\n",
           sysexec_stub_count_sleep(), sysexec_stub_total_sleep_ms());
+    // The actuator is an app_process wrapper that can wedge rather than fail, so an unbounded wait on
+    // it would mean the second mechanism is never reached at all. Every request carries its own window
+    // as a hard deadline.
+    CHECK(sysexec_stub_count_deadline_calls() == 2,
+          "every reboot mechanism runs under a deadline, never an unbounded wait (calls=%d)\n",
+          sysexec_stub_count_deadline_calls());
+    CHECK(sysexec_stub_deadline_ms(0) == 6000u && sysexec_stub_deadline_ms(1) == 4000u,
+          "each mechanism's deadline is its own escalation window (%u, %u)\n",
+          sysexec_stub_deadline_ms(0), sysexec_stub_deadline_ms(1));
+
+    // The window is what the policy buys, so time already spent waiting on the actuator comes OUT of
+    // it. A wedged mechanism that consumed its whole window must not then be slept for a second one.
+    sysexec_stub_reset();
+    sysexec_stub_set_deadline_elapsed(6000u);
+    dispatch_reply("REBOOT AWAIT", out, sizeof out);
+    CHECK(sysexec_stub_total_sleep_ms() == 0UL,
+          "a mechanism that consumed its whole window is not slept again (total=%lums)\n",
+          sysexec_stub_total_sleep_ms());
+    CHECK(sysexec_stub_count_argv("/system/bin/reboot", direct_argv, 1) == 1,
+          "a wedged first mechanism still escalates once its deadline expires\n");
+
+    // And a partly consumed window sleeps only what is left of it, so the total stays the same in
+    // every case — which is what keeps the whole escalation inside the client's own budget.
+    sysexec_stub_reset();
+    sysexec_stub_set_deadline_elapsed(1000u);
+    dispatch_reply("REBOOT AWAIT", out, sizeof out);
+    CHECK(sysexec_stub_total_sleep_ms() == 8000UL,
+          "only the unconsumed remainder of each window is slept (total=%lums)\n",
+          sysexec_stub_total_sleep_ms());
 
     // A failing first mechanism escalates identically — the outcome never depends on exit status.
     sysexec_stub_reset();
@@ -521,6 +550,18 @@ static void test_keyevent_named_keys_only(void) {
     sysexec_stub_fail_run("input", 256);
     dispatch_reply("KEYEVENT SLEEP", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "a failed injection is reported as ERR (got '%s')\n", out);
+
+    // `input` is an app_process wrapper too. Without a deadline a wedged one holds this connection
+    // thread for the life of the daemon, and because the client abandons its read long before the
+    // injection finishes, that is the ordinary case on a daemon-only panel rather than a rare one.
+    sysexec_stub_reset();
+    dispatch_reply("KEYEVENT SLEEP", out, sizeof out);
+    CHECK(sysexec_stub_count_deadline_calls() == 1,
+          "the key injection runs under a deadline, never an unbounded wait (calls=%d)\n",
+          sysexec_stub_count_deadline_calls());
+    CHECK(sysexec_stub_deadline_ms(0) == 4000u,
+          "the injection deadline outlasts a slow app_process rather than racing the client (%u)\n",
+          sysexec_stub_deadline_ms(0));
 }
 
 static void test_sysctl_execution_results(void) {

@@ -17,5 +17,10 @@ void sysexec_stub_set_spawn_result(int status);
 void sysexec_stub_set_spawn_real(int enabled);
 int  sysexec_stub_count_sleep(void);
 unsigned long sysexec_stub_total_sleep_ms(void);
+// Deadline-form controls: how many bounded runs happened, the deadline each was given, and how much
+// of it the stub reports as consumed (so a caller's remainder-sleep policy is observable).
+int  sysexec_stub_count_deadline_calls(void);
+unsigned sysexec_stub_deadline_ms(int index);
+void sysexec_stub_set_deadline_elapsed(unsigned ms);
 
 #endif

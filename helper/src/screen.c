@@ -62,6 +62,10 @@ void cmd_screen(conn_ctx *ctx, const char *args) {
  * environment, so OK means the request was executed and never that the display changed state — the
  * app proves that separately by reading Android interactivity back.
  */
+// Long enough that no working `input keyevent` is ever killed on a slow panel, short enough that a
+// wedged one cannot hold a connection slot. The app's matching confirmation window is the same length.
+#define KEYEVENT_DEADLINE_MS 4000u
+
 static int keyevent_code(const char *name) {
     if (strcmp(name, "SLEEP") == 0) return 223;    // KEYCODE_SLEEP
     if (strcmp(name, "WAKEUP") == 0) return 224;   // KEYCODE_WAKEUP
@@ -76,7 +80,13 @@ void cmd_keyevent(conn_ctx *ctx, const char *args) {
     char code_text[8];
     snprintf(code_text, sizeof code_text, "%d", code);
     const char *const argv[] = { "input", "keyevent", code_text, NULL };
-    reply(ctx->fd, sysexec_run_argv("/system/bin/input", argv, 1) == 0 ? "OK\n" : "ERR\n");
+    // `input` is an app_process wrapper, so it can wedge instead of failing. The deadline is what
+    // releases this connection thread; it is deliberately far longer than the client's own read
+    // timeout, because killing a slow-but-working injection to make the reply arrive sooner would
+    // trade a real screen-off for a punctual answer. The client no longer needs the answer: it reads
+    // Android's interactivity after every submitted attempt.
+    int ran = sysexec_run_argv_deadline("/system/bin/input", argv, 1, KEYEVENT_DEADLINE_MS, NULL);
+    reply(ctx->fd, ran == 0 ? "OK\n" : "ERR\n");
 }
 
 // BLPOWER — actual framebuffer blanking state: 0 = unblanked; nonzero = blanked/powered down.

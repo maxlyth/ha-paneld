@@ -44,8 +44,11 @@ value class AutomaticOffEpoch internal constructor(internal val generation: Long
  *   not dispatch touches to windows, so arming it would claim a local wake the route cannot provide.
  *   **Local touch wake on this route is a platform property, declared by the profile rather than
  *   probed** (the same rule as `hasNativeNavbar`): where the touchscreen is a kernel wake source
- *   Android wakes itself and [reconcileObservedLit] adopts that wake; where it is not, Home Assistant
- *   is the way back. The route also refuses to sleep a device with a configured credential
+ *   Android wakes itself and [reconcilePhysicalWake] adopts that wake; where it is not, Home Assistant
+ *   is the way back. This is the only route on which a wake can reach the panel without passing
+ *   through [wake], so it is the reason that adoption has to be reachable from a plain platform
+ *   screen-on broadcast and not only from the MQTT sync tick — see [reconcilePhysicalWake]. The route
+ *   also refuses to sleep a device with a configured credential
  *   ([ScreenPower.isDeviceSecure]), because waking into a lock screen on a wall panel is the same
  *   class of strand as rebooting one.
  */
@@ -335,17 +338,41 @@ class ScreenController(
      * anything, so a submitted request is never accepted as a state change: each transport is judged
      * by the interactivity it produced, and the next one is tried when the first only claimed to work.
      * Root goes first because a full environment is the form the behaviour was reported working in.
+     *
+     * The transport's own answer is read for nothing here, deliberately. A lost reply is indis-
+     * tinguishable from a refusal, and on a daemon-only panel the reply is lost as a matter of course:
+     * the helper client abandons an ordinary command read after half a second, while `input` is still
+     * starting, so "actuated but the caller never heard" is this route's ordinary case, not its edge
+     * case. Reading interactivity after every submitted attempt is what makes that case land right.
+     *
+     * Re-submitting SLEEP to an already-sleeping panel is harmless, which is part of why this route
+     * takes named keys: `KEYCODE_SLEEP` asks for one direction, where `KEYCODE_POWER` would toggle and
+     * a duplicate would undo the first.
      */
     private fun sleepByKeyevent(): Boolean =
-        keyeventTransports().any { transport -> transport("SLEEP") && awaitInteractive(false) }
+        keyeventTransports().any { transport ->
+            transport.submit("SLEEP")
+            awaitInteractive(false, transport.confirmMs)
+        }
 
     /** Best-effort wake injection; the caller's wakelock pulse is the actual guarantee. */
     private fun injectKeyevent(name: String): Boolean =
-        keyeventTransports().any { transport -> transport(name) }
+        keyeventTransports().any { transport -> transport.submit(name) }
 
-    private fun keyeventTransports(): List<(String) -> Boolean> = listOf(
-        { name: String -> root.run("input keyevent ${keycodeOf(name)}") },
-        { name: String -> daemon.send("KEYEVENT $name") == "OK" },
+    /**
+     * A way to inject, paired with the window inside which its injection can still take effect. The
+     * confirmation window must never be shorter than the transport's actuation bound, or a sleep that
+     * is merely slow gets recorded as a sleep that failed.
+     */
+    private class KeyeventTransport(val confirmMs: Long, val submit: (String) -> Boolean)
+
+    private fun keyeventTransports(): List<KeyeventTransport> = listOf(
+        // Root is synchronous: `input` has already run by the time the call returns, so the window
+        // only has to cover Android acting on the key.
+        KeyeventTransport(ROOT_CONFIRM_MS) { name -> root.run("input keyevent ${keycodeOf(name)}") },
+        // The daemon's is not. Its reply is abandoned long before the helper's own injection deadline,
+        // so this window matches that deadline rather than the socket timeout.
+        KeyeventTransport(DAEMON_CONFIRM_MS) { name -> daemon.send("KEYEVENT $name") == "OK" },
     )
 
     /** Named keys only, resolved here so no caller or profile document can select another keycode. */
@@ -356,11 +383,11 @@ class ScreenController(
     }
 
     /** Poll interactivity for a bounded interval. False means the actuator did not do what it said. */
-    private fun awaitInteractive(expected: Boolean): Boolean {
+    private fun awaitInteractive(expected: Boolean, windowMs: Long): Boolean {
         var waited = 0L
         while (true) {
             if (power.isInteractive() == expected) return true
-            if (waited >= KEYEVENT_CONFIRM_MS) return false
+            if (waited >= windowMs) return false
             nap(KEYEVENT_POLL_MS)
             waited += KEYEVENT_POLL_MS
         }
@@ -400,6 +427,31 @@ class ScreenController(
         BuiltinDashboard.onScreenAwake(true)
         onWakeCompleted?.invoke()
         return true
+    }
+
+    /**
+     * Adopt a wake this controller did not perform, from whatever noticed it.
+     *
+     * [reconcileObservedLit] needs an epoch and a proof of lit, and until now the only place that
+     * assembled both was the MQTT bridge's sync tick. That was sufficient while every route left
+     * Android interactive, because then nothing outside ha-paneld could light the panel on its own —
+     * a physical touch reached the armed overlay and came back through [wake]. [ScreenOff.KEYEVENT]
+     * breaks that assumption: Android can wake itself from a power key or a wake-capable touchscreen
+     * with ha-paneld uninvolved. Leaving the adoption inside MQTT would mean a panel that a person
+     * woke by hand stays [intendedOff] with its renderer frozen until the broker is reachable — a lit
+     * screen showing a stale, un-tappable dashboard, which is a worse failure than a dark one because
+     * it looks alive.
+     *
+     * Whoever calls this must be off the main thread: on the bl_power routes [observedLit] reads a
+     * backlight through root or the daemon, and neither is main-safe.
+     */
+    @Synchronized
+    fun reconcilePhysicalWake(): Boolean {
+        val generation = currentOffGeneration() ?: return false
+        // Route-agnostic on purpose: a spurious screen-on for a route whose backlight is still off
+        // must not clear the off intent, so the panel has to be observed genuinely lit first.
+        if (observedLit() != true) return false
+        return reconcileObservedLit(generation)
     }
 
     /** Reject a gesture queued for an older screen state. This is called only from the existing wake
@@ -508,7 +560,15 @@ class ScreenController(
         // Android takes a moment to leave the interactive state, so the read-back is a short bounded
         // poll rather than one immediate sample. It runs inside the transition monitor, which the
         // privileged su/daemon calls around it already hold for a comparable time.
-        private const val KEYEVENT_CONFIRM_MS = 1_000L
+        /** Root injection is synchronous, so this only has to cover Android acting on the key. */
+        private const val ROOT_CONFIRM_MS = 1_000L
+        /**
+         * Matches the helper's own `KEYEVENT` deadline. The helper kills a wedged `input` at 4 s, and
+         * until then the injection may still land — long after this client abandoned its 500 ms read.
+         * Confirming for less than that would call a slow sleep a failed one and dim a panel that is
+         * about to go noninteractive anyway.
+         */
+        private const val DAEMON_CONFIRM_MS = 4_000L
         private const val KEYEVENT_POLL_MS = 100L
     }
 }

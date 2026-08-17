@@ -22,7 +22,24 @@ int   sysexec_run_constant(const char *program);
 
 // Execute an absolute path with a structural argument vector, without a shell. When quiet is true,
 // stdin/stdout/stderr are connected to /dev/null. Returns the raw child wait status.
+//
+// This form waits for the child forever. Use it only where the program is known to terminate; for a
+// privileged Android actuator use the deadline form below.
 int   sysexec_run_argv(const char *path, const char *const argv[], int quiet);
+
+// As sysexec_run_argv, but the child gets at most [deadline_ms] before it is killed and reaped.
+// Returns the raw child wait status, or -1 when the child was spawned but did not exit inside the
+// deadline (and on spawn failure). When [elapsed_ms] is non-NULL it receives how much of the deadline
+// the wait consumed, so a caller whose policy is "give this mechanism N ms" can sleep the remainder
+// without owning a clock.
+//
+// Why the deadline exists: several /system/bin actuators (`svc`, `input`, `am`, `wm`) are app_process
+// wrappers, and one that cannot reach the framework can block indefinitely rather than fail. An
+// unbounded wait there pins the calling connection thread for the life of the daemon, so a policy
+// that escalates on a deadline can never reach its next mechanism and the connection cap is consumed
+// one stuck request at a time. Bounding the wait is what makes the escalation above it real.
+int   sysexec_run_argv_deadline(const char *path, const char *const argv[], int quiet,
+                                unsigned deadline_ms, unsigned *elapsed_ms);
 
 // Execute an absolute path without a shell and capture bounded stdout. Output is always NUL
 // terminated when capacity is non-zero. Returns the raw child wait status, or -1 on I/O/fork error.

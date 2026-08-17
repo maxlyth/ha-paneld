@@ -804,16 +804,19 @@ class ScreenControllerTest {
     // state read-back, the never-blank guarantee and the watchdog's reach all change with it.
 
     /**
-     * Build a KEYEVENT-route controller. [rootInjects]/[daemonInjects] say whether that transport's
-     * command was accepted; [rootEffective]/[daemonEffective] say whether it actually moved Android —
-     * the two are deliberately separable, because `input` is an app_process wrapper that has been
-     * reported exiting zero under the helper's sanitized environment without doing anything.
+     * Build a KEYEVENT-route controller. [rootInjects]/[daemonInjects] say what that transport
+     * ANSWERED; [rootEffective]/[daemonEffective] say what it actually DID to Android. The two axes
+     * are fully independent, and every one of the four combinations is reachable on real hardware:
+     * `input` is an app_process wrapper that has been reported exiting zero without acting, and the
+     * daemon's reply is routinely abandoned by the client's own read timeout while the injection it
+     * asked for goes on to succeed.
      */
     private fun keyeventController(
         rootInjects: Boolean = true,
         rootEffective: Boolean = true,
         daemonInjects: Boolean = false,
         daemonEffective: Boolean = true,
+        nap: (Long) -> Unit = {},
     ): Triple<ScreenController, FakeRootShell, FakeDaemon> {
         val apply = { cmd: String, effective: Boolean ->
             if (effective) {
@@ -823,14 +826,14 @@ class ScreenControllerTest {
         }
         val root = FakeRootShell(
             runResult = rootInjects,
-            onRun = { cmd -> if (rootInjects) apply(cmd, rootEffective) },
+            onRun = { cmd -> apply(cmd, rootEffective) },
         )
         val daemon = FakeDaemon(
             replies = if (daemonInjects) mapOf("KEYEVENT SLEEP" to "OK", "KEYEVENT WAKEUP" to "OK") else emptyMap(),
-            onSend = { cmd -> if (daemonInjects) apply(cmd, daemonEffective) },
+            onSend = { cmd -> apply(cmd, daemonEffective) },
         )
         val sc = ScreenController(
-            backlight, power, root, daemon, wakeTap, ScreenOff.KEYEVENT, nap = {},
+            backlight, power, root, daemon, wakeTap, ScreenOff.KEYEVENT, nap = nap,
         )
         return Triple(sc, root, daemon)
     }
@@ -846,7 +849,9 @@ class ScreenControllerTest {
     }
 
     @Test fun keyeventSleepFallsToTheDaemonWhenRootCannotInject() {
-        val (sc, root, daemon) = keyeventController(rootInjects = false, daemonInjects = true)
+        val (sc, root, daemon) = keyeventController(
+            rootInjects = false, rootEffective = false, daemonInjects = true,
+        )
         sc.sleep()
         assertEquals(listOf("input keyevent 223"), root.ran)
         assertEquals(listOf("KEYEVENT SLEEP"), daemon.sent)
@@ -861,6 +866,47 @@ class ScreenControllerTest {
         assertEquals(listOf("input keyevent 223"), root.ran)
         assertEquals(listOf("KEYEVENT SLEEP"), daemon.sent)
         assertFalse("the daemon actually slept the panel", power.interactive)
+    }
+
+    /**
+     * The mirror case, and the one that actually bites on a daemon-only panel: the transport reports
+     * failure while its injection lands anyway. A lost reply is indistinguishable from a refusal, so
+     * the answer is read for nothing and the state is read after every submitted attempt. Getting this
+     * wrong dims a panel that is already asleep and records the wrong route to undo.
+     */
+    @Test fun keyeventSleepIsConfirmedWhenTheInjectorActedButItsAnswerWasLost() {
+        backlight.level = 200
+        val (sc, root, daemon) = keyeventController(
+            rootInjects = false, rootEffective = true,
+            daemonInjects = false, daemonEffective = false,
+        )
+        sc.sleep()
+        assertEquals(listOf("input keyevent 223"), root.ran)
+        assertTrue("a confirmed sleep must not be re-submitted anywhere", daemon.sent.isEmpty())
+        assertTrue(sc.isIntendedOff())
+        assertTrue("Android is noninteractive, whatever the transport claimed", sc.looksDark())
+        assertTrue("an actuated sleep must not be recorded as a failed one", backlight.calls.isEmpty())
+    }
+
+    /**
+     * A confirmation window must be at least as long as its transport's actuation bound. The helper
+     * lets a wedged `input` run for four seconds before killing it, so a daemon injection can still
+     * land long after this client abandoned its half-second read. Confirming for any less would dim a
+     * panel that was about to sleep on its own, then record a route that never ran.
+     */
+    @Test fun keyeventDaemonConfirmationOutlastsTheHelperInjectionDeadline() {
+        backlight.level = 200
+        var naps = 0
+        val (sc, _, daemon) = keyeventController(
+            rootInjects = false, rootEffective = false,
+            daemonInjects = false, daemonEffective = false,
+            nap = { naps++; if (naps == 25) power.interactive = false },
+        )
+        sc.sleep()
+        assertEquals(listOf("KEYEVENT SLEEP"), daemon.sent)
+        assertTrue("root's shorter window must not be the one that gave up on the daemon", naps > 10)
+        assertTrue("a sleep that landed inside the helper's own deadline is still a sleep", sc.looksDark())
+        assertTrue("no dim floor is warranted for a slow but successful sleep", backlight.calls.isEmpty())
     }
 
     /** When no transport can prove the state changed, the panel must end visibly lit at the floor
@@ -979,6 +1025,50 @@ class ScreenControllerTest {
         assertEquals(false, sc.observedLit())
         assertTrue("no bl_power probe belongs on a panel with no backlight class",
             root.outputRan.isEmpty() && daemon.sent.isEmpty())
+    }
+
+    /**
+     * A wake nobody here performed has to be adopted without a broker.
+     *
+     * On this route Android can be woken by its power key or a wake-capable touchscreen with ha-paneld
+     * uninvolved, and until this seam existed the only place that adopted such a wake was the MQTT
+     * sync tick. This test constructs no bridge, no broker and no publisher at all: if the recovery
+     * needed any of them, the renderer would still be frozen at the end of it, which on a lit panel
+     * means a stale dashboard nobody can tap.
+     */
+    @Test fun physicalWakeIsAdoptedWithNoMqttInvolvement() {
+        val awakeStates = mutableListOf<Boolean>()
+        val listener: (Boolean) -> Unit = { awakeStates.add(it) }
+        val (sc, _, _) = keyeventController()
+        BuiltinDashboard.setScreenListener(listener)
+        try {
+            sc.sleep()
+            assertEquals("the renderer freezes with the panel", listOf(false), awakeStates)
+            power.interactive = true          // a person pressed the power key
+            assertTrue(sc.reconcilePhysicalWake())
+            assertEquals("and must thaw again the moment the panel is lit", listOf(false, true), awakeStates)
+        } finally {
+            BuiltinDashboard.clearScreenListener(listener)
+        }
+        assertFalse("the off intent dies with the wake that ended it", sc.isIntendedOff())
+        assertNull("nothing is left owning an off epoch", sc.currentOffGeneration())
+    }
+
+    /** The adoption is evidence-led, not signal-led: a screen-on announcement for a panel that is
+     *  still observably dark must not clear the off intent and strand it dark-but-not-intended. */
+    @Test fun physicalWakeIsRefusedWhileThePanelIsStillObservablyDark() {
+        val (sc, _, _) = keyeventController()
+        sc.sleep()
+        assertFalse("still noninteractive, so nothing was woken", sc.reconcilePhysicalWake())
+        assertTrue(sc.isIntendedOff())
+    }
+
+    /** And with no deliberate off in flight there is nothing to adopt, so a spurious announcement is
+     *  inert rather than a generation bump. */
+    @Test fun physicalWakeIsInertWhenNothingIsIntentionallyOff() {
+        val (sc, _, _) = keyeventController()
+        assertFalse(sc.reconcilePhysicalWake())
+        assertFalse(sc.isIntendedOff())
     }
 
     /** Epoch ownership is route-independent, so an automatic off on this route must still refuse a

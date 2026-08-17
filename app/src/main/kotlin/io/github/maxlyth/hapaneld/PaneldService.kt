@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
@@ -800,6 +802,11 @@ class PaneldService : Service() {
     private val launcherHomeFailedGeneration = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
     @Volatile private var kioskReassert: OwnedThread? = null
     private val wakeOnWaveWorker = SingleFlightExecutor("ha-paneld-wake-on-wave")
+    // Adopting a wake nobody here performed must not depend on the broker being up, so it gets its own
+    // worker rather than sharing the MQTT sync tick. Single-flight is right for it: the work is
+    // idempotent and generation-guarded, so a dropped duplicate costs nothing.
+    private val screenWakeWorker = SingleFlightExecutor("ha-paneld-screen-reconcile")
+    @Volatile private var screenOnReceiver: BroadcastReceiver? = null
     private val lightMqttPublisher = SensorLightPublisher(
         publish = { lux ->
             if (!teardownBoundary.isStopping) {
@@ -2682,6 +2689,7 @@ class PaneldService : Service() {
             // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
             // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
             runCatching { adb.reassert() }
+            startScreenOnReconciliation()
             sensors.start(
                 onLux = { lux ->
                     submitIlluminanceIfExposed(
@@ -3530,8 +3538,14 @@ class PaneldService : Service() {
             }
             closeOwner("watchdog") { watchdog.stop() }
             closeOwner("LED effect") { ledEffect.close() }
+            closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
             closeOwnerResult("wake-on-wave worker") {
                 wakeOnWaveWorker.closeAndJoin(
+                    minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
+                )
+            }
+            closeOwnerResult("screen reconcile worker") {
+                screenWakeWorker.closeAndJoin(
                     minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
                 )
             }
@@ -3752,6 +3766,55 @@ class PaneldService : Service() {
             isDaemon = true
             name = "ha-paneld-service-finalizer"
         }.start()
+    }
+
+    /**
+     * Adopt a wake that ha-paneld did not perform, without depending on the broker.
+     *
+     * `ACTION_SCREEN_ON` is the platform announcing its own display came back, and it arrives whether
+     * or not MQTT is configured, connected or enabled at all. That matters because the keyevent
+     * screen-off route puts Android itself to sleep, and Android can be woken from its power key or a
+     * wake-capable touchscreen with this process uninvolved — the only route where a wake reaches the
+     * panel without passing through ScreenController. Until now the adoption lived in the MQTT sync
+     * tick, so on a broker-less panel a hand-woken screen stayed marked off with its renderer frozen:
+     * lit, stale and un-tappable.
+     *
+     * The receiver only hands off. Reconciliation reads the backlight through root or the daemon on
+     * the bl_power routes, which must not happen on the main thread.
+     */
+    private fun startScreenOnReconciliation() {
+        if (screenOnReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != Intent.ACTION_SCREEN_ON || teardownBoundary.isStopping) return
+                screenWakeWorker.execute {
+                    if (teardownBoundary.isStopping) return@execute
+                    if (!screen.reconcilePhysicalWake()) return@execute
+                    Log.i(TAG, "adopted a physical wake that did not pass through ha-paneld")
+                    // Best-effort only, and deliberately after the reconciliation: telling Home
+                    // Assistant is the part that is allowed to fail here, not the recovery.
+                    runCatching { mqtt.publishScreenOn() }
+                        .onFailure { Log.d(TAG, "screen-on publish after a physical wake failed", it) }
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
+        // ACTION_SCREEN_ON is a protected system broadcast, so unlike the navbar's @hide volume action
+        // this one is still delivered to a NOT_EXPORTED receiver — the tighter of the two flags.
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
+            }
+        }.onSuccess { screenOnReceiver = receiver }
+            .onFailure { Log.w(TAG, "screen-on reconciliation could not be registered", it) }
+    }
+
+    private fun stopScreenOnReconciliation() {
+        screenOnReceiver?.let { runCatching { unregisterReceiver(it) } }
+        screenOnReceiver = null
     }
 
     private fun runFinalizerStep(deadline: MonotonicDeadline, block: () -> Unit): Boolean {

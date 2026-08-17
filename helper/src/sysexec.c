@@ -47,7 +47,7 @@ static int wait_child(pid_t pid) {
     return status;
 }
 
-int sysexec_run_argv(const char *path, const char *const argv[], int quiet) {
+static pid_t spawn_argv(const char *path, const char *const argv[], int quiet) {
     if (!path || path[0] != '/' || !argv || !argv[0]) return -1;
 
     int null_fd = -1;
@@ -69,7 +69,69 @@ int sysexec_run_argv(const char *path, const char *const argv[], int quiet) {
     }
 
     if (null_fd >= 0) close(null_fd);
+    return pid;
+}
+
+int sysexec_run_argv(const char *path, const char *const argv[], int quiet) {
+    pid_t pid = spawn_argv(path, argv, quiet);
+    if (pid < 0) return -1;
     return wait_child(pid);
+}
+
+// Poll rather than install a SIGCHLD handler: this daemon is thread-per-connection, and a process-wide
+// handler to bound one actuator would reach every other thread's children.
+#define WAIT_POLL_MS 20u
+// After SIGKILL the child normally disappears at once. A child wedged in uninterruptible sleep must
+// not become a second unbounded wait, so give the reap its own bound and abandon it after that: one
+// rare zombie costs a process-table slot, a pinned connection thread costs the connection.
+#define REAP_GRACE_MS 500u
+
+// Wait up to [deadline_ms] for [pid]. Returns its wait status, or -1 if the deadline passed first.
+// [waited_out] always receives the elapsed portion of the deadline, including on the -1 paths.
+static int wait_child_deadline(pid_t pid, unsigned deadline_ms, unsigned *waited_out) {
+    unsigned waited = 0;
+    for (;;) {
+        int status;
+        pid_t done = waitpid(pid, &status, WNOHANG);
+        if (done == pid) {
+            *waited_out = waited;
+            return status;
+        }
+        if (done < 0 && errno != EINTR) {
+            *waited_out = waited;
+            return -1;
+        }
+        if (waited >= deadline_ms) {
+            *waited_out = waited;
+            return -1;
+        }
+        unsigned remaining = deadline_ms - waited;
+        unsigned slice = remaining < WAIT_POLL_MS ? remaining : WAIT_POLL_MS;
+        sysexec_sleep_ms(slice);
+        waited += slice;
+    }
+}
+
+int sysexec_run_argv_deadline(const char *path, const char *const argv[], int quiet,
+                              unsigned deadline_ms, unsigned *elapsed_ms) {
+    unsigned elapsed = 0;
+    pid_t pid = spawn_argv(path, argv, quiet);
+    if (pid < 0) {
+        if (elapsed_ms) *elapsed_ms = 0;
+        return -1;
+    }
+    int status = wait_child_deadline(pid, deadline_ms, &elapsed);
+    if (status < 0 && elapsed >= deadline_ms) {
+        // Only the direct child is signalled. A wrapper that forked before wedging can still leak its
+        // own children, which is the platform's problem to reap; what matters here is that this thread
+        // is released and the daemon keeps answering.
+        kill(pid, SIGKILL);
+        unsigned reaped = 0;
+        (void)wait_child_deadline(pid, REAP_GRACE_MS, &reaped);
+        elapsed += reaped;
+    }
+    if (elapsed_ms) *elapsed_ms = elapsed;
+    return status;
 }
 
 static int pipe_argv(const char *path, const char *const argv[], int output_fd,

@@ -345,8 +345,8 @@ void cmd_sethome(conn_ctx *ctx, const char *args) {
  * anyway. Escalating during a slow but genuine shutdown re-requests the same orderly reboot init is
  * already performing, which is why the first interval is the generous one.
  */
-#define REBOOT_ESCALATE_MS 6000u   // wait after a request before trying the next mechanism
-#define REBOOT_SETTLE_MS   4000u   // wait after the last mechanism before reporting failure
+#define REBOOT_ESCALATE_MS 6000u   // window for a request before the next mechanism is tried
+#define REBOOT_SETTLE_MS   4000u   // window for the last mechanism before reporting failure
 
 static const char *const REBOOT_SVC_ARGV[] = { "svc", "power", "reboot", NULL };
 static const char *const REBOOT_DIRECT_ARGV[] = { "reboot", NULL };
@@ -358,11 +358,20 @@ static const struct { const char *path; const char *const *argv; } REBOOT_MECHAN
 
 // Request a reboot through every mechanism in turn. Returns only when none of them took the panel
 // down; a reboot that actually happens never comes back from here.
+//
+// What each mechanism is given is a WINDOW, not a call: the actuator's own exit tells us nothing (that
+// is the whole premise here), so what the window buys is time for the host-level effect to appear.
+// Running under a deadline and then sleeping the unused remainder makes the window the same length in
+// all three cases — the actuator returned quickly, returned slowly, or never returned at all — which
+// is what keeps the total inside the client's own budget. Without the deadline a wedged app_process
+// wrapper simply never yields, and no later mechanism is ever tried.
 static void request_reboot_bounded(void) {
     const size_t count = sizeof REBOOT_MECHANISMS / sizeof REBOOT_MECHANISMS[0];
     for (size_t i = 0; i < count; i++) {
-        (void)sysexec_run_argv(REBOOT_MECHANISMS[i].path, REBOOT_MECHANISMS[i].argv, 1);
-        sysexec_sleep_ms(i + 1 < count ? REBOOT_ESCALATE_MS : REBOOT_SETTLE_MS);
+        const unsigned window = i + 1 < count ? REBOOT_ESCALATE_MS : REBOOT_SETTLE_MS;
+        unsigned elapsed = 0;
+        (void)sysexec_run_argv_deadline(REBOOT_MECHANISMS[i].path, REBOOT_MECHANISMS[i].argv, 1, window, &elapsed);
+        if (elapsed < window) sysexec_sleep_ms(window - elapsed);
     }
 }
 
