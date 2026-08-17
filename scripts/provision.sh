@@ -3482,8 +3482,10 @@ EOF
         stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
         pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
         start hapaneld_helper 2>/dev/null
-        /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-          ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+        # Android init can report success while the previous daemon is still stopping. Its PING is
+        # not evidence that the replacement started, so always launch the exact installed binary;
+        # same-inode replacement arbitration makes a concurrent init launch harmless.
+        /system/bin/hapaneld-helper >/dev/null 2>&1 &
       ' >/dev/null 2>&1 || true
       ;;
     hybrid)

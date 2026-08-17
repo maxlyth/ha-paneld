@@ -4623,11 +4623,13 @@ else
   fail_test "transaction nonce and monotonic lease protect validation through APK install and matching commit"
 fi
 
-if grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$PROVISION" && \
-   grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$PROVISION"; then
-  pass "first-time system helper install verifies init start before direct fallback"
+system_install_body="$(sed -n '/^install_root_helper() {$/,/^}$/p' "$PROVISION")"
+system_exact_launch=$'start hapaneld_helper 2>/dev/null\n        # Android init can report success while the previous daemon is still stopping. Its PING is\n        # not evidence that the replacement started, so always launch the exact installed binary;\n        # same-inode replacement arbitration makes a concurrent init launch harmless.\n        /system/bin/hapaneld-helper >/dev/null 2>&1 &'
+if [[ "$system_install_body" == *"$system_exact_launch"* ]] &&
+   [[ "$system_install_body" != *'/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||'* ]]; then
+  pass "system helper install never lets a stale daemon PING suppress the exact replacement launch"
 else
-  fail_test "first-time system helper install verifies init start before direct fallback"
+  fail_test "system helper install never lets a stale daemon PING suppress the exact replacement launch"
 fi
 
 # `start` is successful even when Android init has not loaded the restored service. Every rollback
