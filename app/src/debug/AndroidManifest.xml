@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only. Declares the empty host Activity that instrumented tests measure StatusSurface in.
+  Instrumentation runs in the app process, so the host has to belong to the app package rather than
+  the test package. Nothing here reaches a release build.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".StatusSurfaceTestHost"
+            android:exported="false" />
+    </application>
+</manifest>
