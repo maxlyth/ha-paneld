@@ -2218,7 +2218,7 @@ resolve_root_helper_install_state() {
 
 install_root_helper() {
   local abi helper_dir="" helper="" helper_name="" helper_asset="" build_records="" rc_file="" hybrid_rc_file="" service_file="" transaction_file=""
-  local bin_sha256 rc_sha256 hybrid_rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" out out2 root_ready=0 install_kind=""
+  local bin_sha256 rc_sha256 hybrid_rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" staged_build_id="" out out2 root_ready=0 install_kind=""
   local system_avail_kb="" system_need_kb="" vendor_probe=""
   local access_timeout="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}" access_status
 
@@ -2324,8 +2324,8 @@ install_root_helper() {
         "No helper or APK was replaced, so the panel remains on its previous working version."
     fi
     build_records="$(grep -aoE 'BUILDID [0-9a-f]{64}' "$helper" 2>/dev/null || true)"
-    expected_build_id="$(printf '%s\n' "$build_records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
-    if [ "$(printf '%s\n' "$expected_build_id" | grep -Ec '^[0-9a-f]{64}$')" -ne 1 ]; then
+    staged_build_id="$(printf '%s\n' "$build_records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
+    if [ "$(printf '%s\n' "$staged_build_id" | grep -Ec '^[0-9a-f]{64}$')" -ne 1 ]; then
       rm -rf "$helper_dir"
       fail "the root helper embedded in the local APK has an invalid build identity" \
         "Build the complete APK again, then re-run. No helper or APK was replaced."
@@ -2337,12 +2337,23 @@ install_root_helper() {
     return 0
   fi
   HELPER_REQUIRED=1
+  # What the post-swap probe has to establish is that the daemon now answering the socket is the exact
+  # helper this run staged, so a local APK is measured against the identity stamped into that staged
+  # binary. Asking `helper/source-id.sh` instead describes whichever helper sources happen to sit
+  # beside the running script, which is a different helper whenever the installer and the artifact
+  # come from different trees — an older clone installing a downloaded APK, or a pinned provisioner
+  # installing a newer one. The two identities then disagree for a correctly installed helper, and the
+  # transaction rolls a good install back and reports it as a build-identity failure.
+  #
+  # A release keeps its existing rule instead: the signed versioned provisioner is the authority on
+  # which helper that release ships, and a release that cannot state it still fails closed rather than
+  # being trusted from the bytes it just served.
   expected_build_id="$RELEASE_HELPER_BUILD_ID"
   if [ -z "$expected_build_id" ] && [ -n "$APK_RELEASE_TAG" ]; then
     step "🔎 helper compatibility" "${D}checking the authenticated provisioner's build identity${X}"
     expected_build_id="$(fetch_release_helper_build_id "$APK_RELEASE_TAG" || true)"
-  elif [ -z "$expected_build_id" ] && [ -x "$SCRIPT_DIR/../helper/source-id.sh" ]; then
-    expected_build_id="$("$SCRIPT_DIR/../helper/source-id.sh" 2>/dev/null || true)"
+  elif [ -z "$expected_build_id" ]; then
+    expected_build_id="$staged_build_id"
   fi
   if ! printf '%s\n' "$expected_build_id" | grep -Eq '^[0-9a-f]{64}$'; then
     if [ -n "$APK_RELEASE_TAG" ]; then
@@ -2350,7 +2361,7 @@ install_root_helper() {
         "The signed versioned provisioner did not provide a valid helper identity. No APK or helper was replaced."
     fi
     fail "the expected root-helper build identity is unavailable" \
-      "Run ./helper/build.sh from a complete checkout, then retry. No APK or helper was replaced."
+      "Rebuild the APK from a complete checkout, then retry. No APK or helper was replaced."
   fi
   ROOT_HELPER_TRANSACTION_ID="$(host_transaction_id)" || fail "could not create a unique root-helper transaction identity" \
     "No helper or APK files were changed. Check host access to /dev/urandom, then retry."

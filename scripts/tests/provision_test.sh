@@ -1170,6 +1170,48 @@ assert_failure "rooted local provisioning rejects an embedded helper with invali
 assert_contains 'embedded in the local APK has an invalid build identity' "invalid embedded identity gives exact recovery"
 assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid embedded identity fails before panel mutation"
 
+# A local APK carries its own helper, so the identity that must be proven is the one stamped into the
+# APK — never the identity of whatever helper sources sit beside the running script. Every case below
+# keeps the checkout identity deliberately different from the APK's, because when the two agree (as
+# the shared fixtures otherwise arrange) this whole class of defect is invisible.
+CHECKOUT_BUILD_ID="$MOCK_HELPER_BUILD_ID"
+APK_ONLY_BUILD_ID=1111111111111111111111111111111111111111111111111111111111111111
+PRIOR_BUILD_ID=2222222222222222222222222222222222222222222222222222222222222222
+if [ "$APK_ONLY_BUILD_ID" != "$CHECKOUT_BUILD_ID" ] && [ "$PRIOR_BUILD_ID" != "$CHECKOUT_BUILD_ID" ] &&
+   [ "$APK_ONLY_BUILD_ID" != "$PRIOR_BUILD_ID" ]; then
+  pass "moving-checkout helper identities are distinct from the checkout identity"
+else
+  fail_test "moving-checkout helper identities are distinct from the checkout identity"
+fi
+MOVING_CHECKOUT_HELPER_DIST="$TMP/moving-checkout-helper-dist"
+mkdir -p "$MOVING_CHECKOUT_HELPER_DIST"
+printf 'moving-checkout arm helper\nBUILDID %s\n' "$APK_ONLY_BUILD_ID" > "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm"
+printf 'moving-checkout arm64 helper\nBUILDID %s\n' "$APK_ONLY_BUILD_ID" > "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm64"
+MOVING_CHECKOUT_APK="$TMP/moving-checkout.apk"
+make_local_apk "$MOVING_CHECKOUT_APK" \
+  "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm" \
+  "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm64"
+
+# The vc573 fleet defect: the replacement helper started correctly and answered its own identity, but
+# the expectation had been re-derived from the installer's checkout, so all eight panels rolled a good
+# install back. The staged helper is the authority here, so this install completes.
+MOCK_HELPER_BUILD_ID="$APK_ONLY_BUILD_ID" \
+  run_provision "$MOCK_TARGET" --apk "$MOVING_CHECKOUT_APK" --no-tame
+assert_success "a local APK is verified against its own helper identity, not the installer's checkout"
+assert_log_contains 'helper-probe BUILDID' "moving-checkout local provisioning still probes the running daemon identity"
+assert_log_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "a proven replacement identity completes the coupled helper and APK transaction"
+assert_not_contains "$CHECKOUT_BUILD_ID" "$MOCK_CALL_LOG" "local provisioning never stages or expects the checkout helper identity"
+
+# The old daemon still owning the socket must stay indistinguishable from any other wrong answer: it
+# is not the staged helper, so the transaction fails closed and rolls back. Reading the expectation
+# from the staged binary must not become a reason to accept whoever happens to reply.
+MOCK_HELPER_BUILD_ID="$PRIOR_BUILD_ID" \
+  run_provision "$MOCK_TARGET" --apk "$MOVING_CHECKOUT_APK" --no-tame
+assert_failure "a prior daemon still serving the socket cannot satisfy the replacement identity check"
+assert_contains 'failed its exact build-identity check; the prior helper was restored' "an unretired prior daemon reports verified rollback"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "an unretired prior daemon invokes the rollback journal"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "an unretired prior daemon stops before APK replacement"
+
 MOCK_SYSTEM_WRITABLE=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "rooted systemless provisioning installs the helper through service.d"
 assert_log_contains 'helper-transaction-[0-9a-f]+.*install-systemless' "systemless helper path uses the same transactional installer"
