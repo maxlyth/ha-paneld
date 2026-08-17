@@ -3,7 +3,7 @@
 How Sonoff NSPanel Pro OTA firmware is distributed, how to verify a download URL, and the update procedure hardware-verified through 4.4.0, with CDN-verified extensions past it.
 
 > [!NOTE]
-> The **community-maintained version index** — every verified OTA URL for 86P and 120P, with sizes and CDN indices — lives in a GitHub Discussion, because it changes faster than this repo's release cycle and takes community contributions: **[NSPanel Pro firmware — OTA URL index](https://github.com/maxlyth/ha-paneld/discussions/7)**. This page is the stable scheme and how-to; the Discussion carries the per-version link list. That Discussion body is regenerated from `tools/firmware-index/*.dat` by the scheduled monitor, so it can lag this repo until that job next runs successfully — when the two disagree, the `.dat` files are the authority.
+> The **community-maintained version index** lives in a GitHub Discussion, because it changes faster than this repo's release cycle and takes community contributions: **[NSPanel Pro firmware — OTA URL index](https://github.com/maxlyth/ha-paneld/discussions/7)**. It carries the recent upgrade targets rather than the whole history, since GitHub caps a Discussion body; every verified OTA URL for 86P and 120P, with sizes, CDN indices and archival status, is in the [complete index](nspanel-pro-firmware-archive.md). This page is the stable scheme and how-to; the Discussion carries the per-version link list. That Discussion body is regenerated from `tools/firmware-index/*.dat` by the scheduled monitor, so it can lag this repo until that job next runs successfully — when the two disagree, the `.dat` files are the authority.
 
 Two physically distinct models, each on its **own** CDN channel — do not cross them:
 

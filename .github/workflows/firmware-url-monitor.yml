@@ -193,6 +193,23 @@ jobs:
             echo '{"samples":[]}' > history.json
           fi
 
+      # The retry republishes the whole Discussion body, so it needs the same
+      # archival state as the first attempt. Without it the retry would silently
+      # replace every capture date with a gap marker — a transient probe failure
+      # would then look like an archival failure.
+      - name: Restore Wayback state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" wayback-state >/dev/null 2>&1; then
+            git fetch -q "$repo_url" wayback-state
+            git show FETCH_HEAD:wayback.json > wayback.json
+          else
+            echo "::notice::no wayback-state branch yet; the Archived column will be empty"
+            echo '{"files":{}}' > wayback.json
+          fi
+
       - name: Probe firmware URLs (retry)
         id: retry_probe
         continue-on-error: true
@@ -201,7 +218,7 @@ jobs:
       - name: Render Discussion body
         id: retry_render
         continue-on-error: true
-        run: python tools/firmware-index/firmware_index.py render --history history.json --out body.md
+        run: python tools/firmware-index/firmware_index.py render --wayback wayback.json --out body.md
 
       - name: Update Discussion body
         id: retry_discussion

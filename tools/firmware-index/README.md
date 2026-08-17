@@ -1,6 +1,6 @@
 # Firmware index, availability monitor, and Wayback archiver
 
-Source of truth for the **NSPanel Pro firmware OTA download index** published in [Discussion #7](https://github.com/maxlyth/ha-paneld/discussions/7), plus the daily checker that annotates every download link with a 7-day availability sparkline, and a weekly job that preserves every firmware file in the Internet Archive.
+Source of truth for the **NSPanel Pro firmware OTA download index**, published in two places: [Discussion #7](https://github.com/maxlyth/ha-paneld/discussions/7) carries the recent upgrade targets, because GitHub caps a Discussion body, and the generated [complete index](../../docs/hardware/nspanel-pro-firmware-archive.md) carries every indexed object. Alongside them, a daily checker verifies every download link still resolves at its recorded size, and a weekly job preserves every firmware file in the Internet Archive — each row's capture date is what the **Archived** column reports.
 
 ## Files
 
@@ -40,11 +40,14 @@ python tools/firmware-index/firmware_index.py render --out body.md
 # Check every URL and append a sample to a history file:
 python tools/firmware-index/firmware_index.py probe --history history.json
 
-# Render with that history so the sparklines are populated:
-python tools/firmware-index/firmware_index.py render --history history.json --out body.md
+# Render with the archival state so the Archived column is populated:
+python tools/firmware-index/firmware_index.py render --wayback wayback.json --out body.md
+
+# Regenerate the complete in-repo index (also needs the archival state):
+python tools/firmware-index/firmware_index.py archive --wayback wayback.json
 ```
 
-Stdlib only — no dependencies. Sparkline: 🟩 reachable · 🟥 unreachable · ⬜ no data yet (7 points = 7 days at the daily cadence, newest on the right).
+Stdlib only — no dependencies. The **Archived** column is the Wayback Machine capture date, read from `wayback.json` on the `wayback-state` branch; `—` means no capture is recorded yet. `archive` refuses to write a page with fewer archived rows than the one it replaces, so forgetting `--wayback` fails the run instead of quietly erasing the dates.
 
 ## Shelly Wall Display monitor
 

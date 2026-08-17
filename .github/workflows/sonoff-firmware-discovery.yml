@@ -88,6 +88,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Needed before the archive page is regenerated below. Fetched here rather
+      # than next to that step so a missing branch fails the run early instead of
+      # after the index has already been modified.
+      - name: Restore Wayback state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" wayback-state >/dev/null 2>&1; then
+            git fetch -q "$repo_url" wayback-state
+            git show FETCH_HEAD:wayback.json > wayback.json
+          else
+            echo "::notice::no wayback-state branch yet; archive coverage will be empty"
+            echo '{"files":{}}' > wayback.json
+          fi
+
       # Aborts non-zero if the prober cannot see known-good objects, so a broken
       # prober fails the run instead of reporting a clean negative forever.
       - name: Search the CDN for unindexed releases
@@ -101,7 +117,7 @@ jobs:
         if: steps.discover.outputs.found == 'true'
         run: |
           python tools/firmware-index/firmware_index.py probe --history /tmp/discovery-history.json
-          python tools/firmware-index/firmware_index.py render --out /tmp/discovery-discussion.md
+          python tools/firmware-index/firmware_index.py render --wayback wayback.json --out /tmp/discovery-discussion.md
 
       - name: Open/update pull request with the firmware index
         if: steps.discover.outputs.found == 'true'
@@ -135,7 +151,11 @@ jobs:
           # The exhaustive in-repo index is generated from the .dat files, and a
           # data-derived test fails if it drifts from them. Regenerate it in the
           # same commit so a discovery PR is never merged into a red main.
-          python tools/firmware-index/firmware_index.py archive
+          # The archival state must be supplied: without it every capture date
+          # and full-ROM archive link would be rewritten to a gap marker, which
+          # the URL-only drift test cannot see. The generator refuses to lose
+          # coverage, so a failure here is a real one, not a formality.
+          python tools/firmware-index/firmware_index.py archive --wayback wayback.json
 
           git add tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat \
                   docs/hardware/nspanel-pro-firmware-archive.md

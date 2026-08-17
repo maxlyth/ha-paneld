@@ -310,7 +310,10 @@ class DiscoveryTest(unittest.TestCase):
         workflow = (root / ".github/workflows/sonoff-firmware-discovery.yml").read_text()
         self.assertNotIn("git show FETCH_HEAD:tools/firmware-index", workflow)
         self.assertNotIn("[skip ci]", workflow)
-        self.assertIn("firmware_index.py render --out", workflow)
+        # The guarded property is that the validation step still renders, not the
+        # exact argv — pinning the flag order made adding --wayback look like a
+        # regression when it was the fix for one.
+        self.assertRegex(workflow, r"firmware_index\.py render\b[^\n]*--out")
         self.assertIn("git diff --cached --quiet", workflow)
         self.assertIn("--force-with-lease", workflow)
 
@@ -389,6 +392,62 @@ class RenderedIndexTest(unittest.TestCase):
         self.assertEqual(
             firmware_index.archived_cell("u", {"u": "20260803124531"}), "2026-08-03"
         )
+
+    def test_archive_refuses_to_erase_existing_capture_dates(self):
+        """A caller that forgets the archival state must fail, not silently regress.
+
+        This is the defect the URL-only drift test cannot see: the regenerated
+        page keeps every URL and loses every date.
+        """
+        import tempfile
+
+        urls = list(firmware_index.all_url_sizes(self.devices))
+        fixture = {u: "20260803124531" for u in urls}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            page = pathlib.Path(tmp) / "archive.md"
+            with mock.patch.object(firmware_index, "load_wayback", return_value=fixture), \
+                    mock.patch("sys.stderr", io.StringIO()):
+                covered_rc = firmware_index.cmd_archive(
+                    SimpleNamespace(wayback="fixture", out=str(page), allow_coverage_loss=False)
+                )
+            self.assertEqual(covered_rc, 0)
+            before = firmware_index.archived_rows(page.read_text(encoding="utf-8"))
+            self.assertGreater(before, 0, "fixture run produced no archived rows")
+
+            err = io.StringIO()
+            with mock.patch.object(firmware_index, "load_wayback", return_value={}), \
+                    mock.patch("sys.stderr", err):
+                rc = firmware_index.cmd_archive(
+                    SimpleNamespace(wayback=None, out=str(page), allow_coverage_loss=False)
+                )
+
+            self.assertEqual(rc, 1, "regenerating without archival state must fail")
+            self.assertIn("refusing to write", err.getvalue())
+            self.assertEqual(
+                firmware_index.archived_rows(page.read_text(encoding="utf-8")),
+                before,
+                "the existing page must be left untouched when the guard fires",
+            )
+
+    def test_every_render_path_receives_the_archival_state(self):
+        """Each workflow step that renders or archives must pass --wayback.
+
+        One such call site was missing it, so the
+        contract is checked across all of them rather than fixed in one place.
+        """
+        workflows = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows"
+        pattern = re.compile(r"firmware_index\.py (render|archive)([^\n]*)")
+        found = 0
+        for wf in sorted(workflows.glob("*.yml")):
+            for verb, rest in pattern.findall(wf.read_text(encoding="utf-8")):
+                found += 1
+                self.assertIn(
+                    "--wayback", rest,
+                    f"{wf.name}: `{verb}` is invoked without --wayback, which would "
+                    f"publish empty archival coverage",
+                )
+        self.assertGreaterEqual(found, 3, "expected render/archive call sites were not found")
 
     def test_banner_reports_coverage_over_everything_indexed(self):
         # Coverage must be measured against the full index, not the subset the

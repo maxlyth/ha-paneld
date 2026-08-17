@@ -38,6 +38,7 @@ Data files (`fw-120p.dat`, `fw-86p.dat`) are the source of truth. Format:
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -785,8 +786,23 @@ def archive_device_block(name, sub, d, wb):
 """
 
 
+ARCHIVED_CELL_RE = re.compile(r"\|\s*\[?(\d{4}-\d{2}-\d{2})\]?[^|]*\|\s*$", re.M)
+
+
+def archived_rows(text):
+    """How many rows in a generated page carry a capture date."""
+    return len(ARCHIVED_CELL_RE.findall(text))
+
+
 def cmd_archive(args):
-    """Generate the exhaustive in-repo index page."""
+    """Generate the exhaustive in-repo index page.
+
+    Refuses to publish a page with less archival coverage than the one it would
+    replace. Without that guard a caller that forgets to supply the archival
+    state silently rewrites every capture date to a gap marker, and the drift
+    test cannot catch it because the URLs are unchanged — which is exactly the
+    regression this guard exists to stop.
+    """
     devices = load_devices()
     wb = load_wayback(getattr(args, "wayback", None))
     urls = all_url_sizes(devices)
@@ -809,6 +825,16 @@ Regenerate with `python3 tools/firmware-index/firmware_index.py archive --out {A
     body = "\n".join(blocks)
 
     out = args.out or ARCHIVE_DOC
+    if os.path.exists(out) and not getattr(args, "allow_coverage_loss", False):
+        existing = archived_rows(open(out).read())
+        fresh = archived_rows(body)
+        if fresh < existing:
+            print(f"ERROR: refusing to write {out} — it currently records {existing} archived "
+                  f"row(s) and this run would leave {fresh}. Supply the archival state with "
+                  f"--wayback <wayback.json>, or pass --allow-coverage-loss if the loss is "
+                  f"intended.", file=sys.stderr)
+            return 1
+
     with open(out, "w") as fh:
         fh.write(body)
     print(f"wrote {out}: {len(body.encode())} bytes, {len(urls)} objects, "
@@ -837,6 +863,8 @@ def main():
     a = sub.add_parser("archive", help="generate the exhaustive in-repo index page")
     a.add_argument("--wayback", help="wayback.json from the archival data branch")
     a.add_argument("--out", help=f"output file (default: {ARCHIVE_DOC})")
+    a.add_argument("--allow-coverage-loss", action="store_true",
+                   help="permit writing fewer archived rows than the existing page")
     a.set_defaults(func=cmd_archive)
 
     r = sub.add_parser("render", help="emit the Discussion markdown body")
