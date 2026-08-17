@@ -1192,7 +1192,7 @@ make_local_apk "$MOVING_CHECKOUT_APK" \
   "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm" \
   "$MOVING_CHECKOUT_HELPER_DIST/hapaneld-helper-arm64"
 
-# The vc573 fleet defect: the replacement helper started correctly and answered its own identity, but
+# The vc574 fleet defect: the replacement helper started correctly and answered its own identity, but
 # the expectation had been re-derived from the installer's checkout, so all eight panels rolled a good
 # install back. The staged helper is the authority here, so this install completes.
 MOCK_HELPER_BUILD_ID="$APK_ONLY_BUILD_ID" \
