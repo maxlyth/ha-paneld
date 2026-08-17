@@ -2281,23 +2281,41 @@ class DashboardActivity : AppCompatActivity() {
                             ". The V2-only built-in renderer cannot start safely; update Home Assistant and retry.",
                         AdmissionOutcome.VERSION_UNVERIFIABLE,
                     )
-                    // A genuine server refusal (or a never-signed-in panel) needs a human, but a
-                    // re-enabled HA user or a restored server can also repair it server-side, which a
-                    // parked panel would otherwise never notice — probe at the ceiling cadence.
-                    DashboardV2ProbeResult.AuthenticationFailed -> showBlockedAdmissionScreen(
-                        if (config.haToken.isBlank() && config.haRefreshToken.isBlank()) {
-                            "Home Assistant sign-in needed"
-                        } else {
-                            "Home Assistant version check rejected"
-                        },
-                        if (config.haToken.isBlank() && config.haRefreshToken.isBlank()) {
-                            "Connect the panel to Home Assistant in Configure, then retry."
-                        } else {
-                            "The panel could not authenticate the compatibility check. Repair the Home Assistant " +
-                                "connection in Configure, then retry."
-                        },
-                        AdmissionOutcome.CREDENTIAL_REFUSED,
-                    )
+                    // Two different situations, and they get different outcomes rather than one shared
+                    // terminal verdict. A panel that holds no credential can only be repaired by a
+                    // person, and connecting it relaunches admission at once. A credential the server
+                    // REFUSED can equally be repaired server-side — a re-enabled user, a reissued
+                    // token, a proxy that stops answering 401 — with nothing to tell the panel, so it
+                    // re-asks at the ceiling cadence instead of parking until someone walks to it.
+                    DashboardV2ProbeResult.AuthenticationFailed -> {
+                        val neverSignedIn = config.haToken.isBlank() && config.haRefreshToken.isBlank()
+                        // Nothing recorded WHY the panel reached this verdict, which left a 2026-08-17
+                        // field report with no way to tell a refusal from a probe that ran too early.
+                        Log.w(
+                            TAG,
+                            "HA admission refused authentication (neverSignedIn=$neverSignedIn) — " +
+                                "no token was accepted for the compatibility check",
+                        )
+                        showBlockedAdmissionScreen(
+                            if (neverSignedIn) {
+                                "Home Assistant sign-in needed"
+                            } else {
+                                "Home Assistant sign-in rejected"
+                            },
+                            if (neverSignedIn) {
+                                "Connect the panel to Home Assistant in Configure, then retry."
+                            } else {
+                                "Home Assistant did not accept the panel's saved sign-in. It will keep " +
+                                    "checking in case the server is repaired; to fix it here, repair the " +
+                                    "Home Assistant connection in Configure."
+                            },
+                            if (neverSignedIn) {
+                                AdmissionOutcome.SIGN_IN_REQUIRED
+                            } else {
+                                AdmissionOutcome.CREDENTIAL_REFUSED
+                            },
+                        )
+                    }
                     is DashboardV2ProbeResult.Unavailable -> showBlockedAdmissionScreen(
                         "Home Assistant version unavailable",
                         "The panel could not verify the required Home Assistant 2026.4.2+ version. " +

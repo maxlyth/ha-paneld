@@ -28,6 +28,30 @@ class ConfigTransactionTest {
         assertEquals("2026.4.2", config.cachedHaServerVersion("https://ha.example"))
     }
 
+    // A resolution abandoned before it read anything judged no credential, so it must say so. The
+    // caller turns an empty result with no such marker into an authentication verdict, which is how a
+    // panel ends up parked on a credential screen for a credential nothing ever rejected.
+    @Test fun anAbandonedResolutionReportsThatNoCredentialWasJudged() {
+        val prefs = fakePreferences(
+            initial = mapOf(
+                "ha_url" to "https://ha.example",
+                "ha_token" to "token",
+                "ha_refresh_token" to "refresh",
+            ),
+        )
+        val config = Config(prefs.instance)
+
+        val abandoned = DashboardAuth.forConfig(config, nowSec = 1_000_000L, stillCurrent = { false })
+        assertNull(abandoned.session)
+        assertTrue("an abandoned resolution judged nothing", abandoned.notAttempted)
+        assertFalse(abandoned.rejected)
+
+        // Still current, same configuration: the cached token resolves normally, so the marker tracks
+        // abandonment rather than being set on every empty-looking result.
+        val live = DashboardAuth.forConfig(config, nowSec = 1_000_000L, stillCurrent = { true })
+        assertFalse(live.notAttempted)
+    }
+
     @Test fun generatedPanelIdentityIsPersistedOnce() {
         val prefs = fakePreferences()
         val config = Config(prefs.instance)

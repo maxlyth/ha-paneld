@@ -48,7 +48,15 @@ class DashboardScreenPolicyTest {
 
         assertTrue(block.contains("config.haToken.isBlank() && config.haRefreshToken.isBlank()"))
         assertTrue(block.contains("\"Home Assistant sign-in needed\""))
-        assertTrue(block.contains("\"Home Assistant version check rejected\""))
+        // The refusal title must name the SIGN-IN, not the version check. A panel reported on
+        // 2026-08-17 showing "Home Assistant version check rejected" sent diagnosis after a version
+        // problem that did not exist; the body had always said authentication.
+        assertTrue(block.contains("\"Home Assistant sign-in rejected\""))
+        assertFalse(block.contains("version check rejected"))
+        // The two situations must reach DIFFERENT outcomes: holding no credential is terminal, while
+        // a refusal the server can repair keeps probing.
+        assertTrue(block.contains("AdmissionOutcome.SIGN_IN_REQUIRED"))
+        assertTrue(block.contains("AdmissionOutcome.CREDENTIAL_REFUSED"))
     }
 
     // --- admission auto-retry contracts (an admission screen must never be terminal) ---

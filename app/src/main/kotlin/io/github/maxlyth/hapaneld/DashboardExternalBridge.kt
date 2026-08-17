@@ -175,7 +175,13 @@ internal class DashboardV2CompatibilityProbe(
     /** A missing token is an authentication verdict only when the server refused it or none is
      *  configured. When minting failed in TRANSPORT (certificate, DNS, timeout, 5xx) the credential
      *  was never judged, so the honest verdict is unavailability naming the fault — which also lets a
-     *  previously verified version admit the renderer instead of parking the panel. */
+     *  previously verified version admit the renderer instead of parking the panel.
+     *
+     *  A session that was never ATTEMPTED is the same kind of non-verdict and must be ordered ahead of
+     *  the terminal default. On a cold boot the probe can run before the configuration store has
+     *  loaded, so the URL reads blank and no credential is judged; the panel then showed a credential
+     *  screen it could never clear (field report 2026-08-17: the verdict landed 1.5 s after boot and
+     *  the operator's first manual retry succeeded, proving the credential was always good). */
     private fun blockedBy(session: HaApiSession): DashboardV2ProbeResult? = when {
         session.rejected -> DashboardV2ProbeResult.AuthenticationFailed
         !session.accessToken.isNullOrBlank() -> null
@@ -183,6 +189,10 @@ internal class DashboardV2CompatibilityProbe(
         // be `NONE` here however it was constructed — an unclassified failure degrades to UNKNOWN.
         session.transientDetail != null ->
             unavailable(session.transientDetail, session.transientEvidence.orUnclassified())
+        // Evidence is NONE rather than UNKNOWN on purpose: nothing was attempted, so there is no
+        // transport failure to classify, and claiming an unknown fault would invent one.
+        session.notAttempted ->
+            unavailable("Home Assistant connection is not ready yet", HaTransportEvidence.NONE)
         else -> DashboardV2ProbeResult.AuthenticationFailed
     }
 

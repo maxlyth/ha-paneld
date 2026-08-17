@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -338,29 +339,45 @@ class DashboardRecoveryTest {
     }
 
     @Test fun `an answer carried by an event or owned by a person never runs a timer`() {
-        // A refused or absent credential is repaired by editing the connection, which relaunches
-        // admission immediately — a timer would only repeat the same rejected request. The other two
-        // are maintainer-designated terminal outcomes.
+        // An ABSENT credential is repaired by connecting the panel, which relaunches admission
+        // immediately, and there is nothing to re-ask with meanwhile. The other two are
+        // maintainer-designated terminal outcomes.
         listOf(
-            AdmissionOutcome.CREDENTIAL_REFUSED,
+            AdmissionOutcome.SIGN_IN_REQUIRED,
             AdmissionOutcome.UNSUPPORTED_HA,
             AdmissionOutcome.BRIDGE_UNAVAILABLE,
         ).forEach { assertEquals(it.name, AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(it)) }
     }
 
-    @Test fun `a missed handshake and a refused credential are classified oppositely`() {
+    @Test fun `a refused credential re-asks slowly because only the server can repair it`() {
+        // The 2026-08-17 regression: a refusal was latched with no timer, so a panel stayed parked
+        // after the server was repaired. Re-enabling an HA user, reissuing a token or fixing a proxy
+        // that answered 401 all happen server-side with no event reaching the panel.
+        assertEquals(AdmissionRetryClass.AT_CEILING, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
+        // It must NOT be promoted to the fast ladder: a rejected credential is not urgent, and
+        // hammering re-auth interacts with Home Assistant's login-attempt banning.
+        assertNotEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
+        // Holding a credential and holding none are different situations with different routes back.
+        assertNotEquals(
+            admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED),
+            admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED),
+        )
+    }
+
+    @Test fun `a missed handshake and an absent credential are classified oppositely`() {
         // The two boundaries that were previously inverted, pinned against each other: a capable
-        // WebView that simply missed the exchange recovers, while a refused credential does not.
+        // WebView that simply missed the exchange recovers, while a panel holding no credential does
+        // not, because there is nothing to re-ask with.
         assertEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED))
-        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED))
         // ...and a missed handshake is not the same evidence as a WebView that cannot bridge at all.
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.BRIDGE_UNAVAILABLE))
         // No blocked outcome may be left without any route back: only the two maintainer-designated
-        // terminal outcomes and the event-repaired credential are allowed to have no timer at all.
+        // terminal outcomes and the panel that holds no credential may have no timer at all.
         val latched = AdmissionOutcome.entries.filter { admissionRetryClass(it) == AdmissionRetryClass.MANUAL_ONLY }
         assertEquals(
             setOf(
-                AdmissionOutcome.CREDENTIAL_REFUSED,
+                AdmissionOutcome.SIGN_IN_REQUIRED,
                 AdmissionOutcome.UNSUPPORTED_HA,
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             ),
@@ -375,7 +392,7 @@ class DashboardRecoveryTest {
     @Test fun `every admission outcome is classified deliberately`() {
         // A new outcome must be given a class here rather than inheriting one, so the exhaustive set
         // is asserted by size and by every value resolving.
-        assertEquals(10, AdmissionOutcome.entries.size)
+        assertEquals(11, AdmissionOutcome.entries.size)
         AdmissionOutcome.entries.forEach { assertNotNull(it.name, admissionRetryClass(it)) }
     }
 

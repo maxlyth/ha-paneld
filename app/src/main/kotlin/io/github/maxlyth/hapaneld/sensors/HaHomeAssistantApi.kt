@@ -26,6 +26,8 @@ internal data class HaApiSession(
     /** The same failure classified from its exception type. [transientDetail] is raw platform text
      *  and may embed the configured host; this is what a pasteable diagnostic surface carries. */
     val transientEvidence: HaTransportEvidence = HaTransportEvidence.NONE,
+    /** Set when no credential attempt was made at all — see [DashboardAuth.Result.notAttempted]. */
+    val notAttempted: Boolean = false,
 )
 
 internal fun interface HaApiSessionProvider {
@@ -54,6 +56,7 @@ internal class DashboardHaApiSessionProvider(
             current.takeIf { ownsSession }?.stableOwner(),
             result.transientDetail,
             result.transientEvidence,
+            result.notAttempted,
         )
     }
 }

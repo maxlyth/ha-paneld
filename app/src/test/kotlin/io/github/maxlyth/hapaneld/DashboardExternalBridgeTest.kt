@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -122,6 +123,38 @@ class DashboardV2CompatibilityProbeTest {
         ).check()
         assertEquals(DashboardV2ProbeResult.Unavailable("Trust anchor for certification path not found"), result)
         assertEquals(0, networkCalls)
+    }
+
+    // Field report 2026-08-17: the probe ran 1.5 s into a cold boot, before the configuration store had
+    // loaded, so no credential was judged at all — and the panel showed "version check rejected" and
+    // stayed there. The operator's first manual retry loaded the dashboard, proving the credential was
+    // never refused. A session that was never ATTEMPTED must therefore not reach an auth verdict.
+    @Test fun `a session that was never attempted is unavailable, not an auth rejection`() = runTest {
+        var networkCalls = 0
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, rejected = false, notAttempted = true) },
+            ConfigTransport { networkCalls++; JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+
+        assertTrue("not-attempted must not be an auth verdict", result is DashboardV2ProbeResult.Unavailable)
+        assertNotEquals(DashboardV2ProbeResult.AuthenticationFailed, result)
+        // It carries no invented transport fault: nothing was attempted, so there is nothing to blame.
+        assertEquals(HaTransportEvidence.NONE, (result as DashboardV2ProbeResult.Unavailable).evidence)
+        assertEquals(0, networkCalls)
+        // And it recovers on its own rather than parking, which is the whole point of the report.
+        assertEquals(AdmissionRetryClass.FROM_BASE, admissionRetryClass(AdmissionOutcome.TRANSPORT_FAILED))
+    }
+
+    // A panel that genuinely holds no credential is still an auth verdict — the fix must not turn a
+    // real "connect the panel" state into an endless retry that can never succeed.
+    @Test fun `an unconfigured panel that attempted resolution still reports an auth verdict`() = runTest {
+        val result = DashboardV2CompatibilityProbe(
+            HaApiSessionProvider { HaApiSession(URL, null, rejected = false, notAttempted = false) },
+            ConfigTransport { JSONObject() },
+            Dispatchers.Unconfined,
+        ).check()
+        assertEquals(DashboardV2ProbeResult.AuthenticationFailed, result)
     }
 
     @Test fun `transport failure during the forced refresh is unavailable, not an auth rejection`() = runTest {

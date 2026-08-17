@@ -352,8 +352,14 @@ internal enum class AdmissionOutcome {
      *  a prerelease build. An answer arrived, but it settles nothing. */
     VERSION_UNVERIFIABLE,
 
-    /** The server refused the credential, or no credential is configured. */
+    /** The server refused a credential the panel actually holds. A disabled HA user, a revoked token
+     *  or a repaired reverse proxy all change this server-side with nothing to tell the panel, so it
+     *  re-asks slowly rather than parking. */
     CREDENTIAL_REFUSED,
+
+    /** No credential is configured at all. There is nothing to re-ask WITH, so a timer would repeat an
+     *  empty request forever; connecting the panel relaunches admission immediately. */
+    SIGN_IN_REQUIRED,
 
     /** The signed-in account can reach no legal dashboard. */
     NO_LEGAL_DASHBOARD,
@@ -384,10 +390,16 @@ internal enum class AdmissionOutcome {
  *   so asking again slowly is the only way it will ever find out. Ceiling cadence, never the fast
  *   ladder: these are not urgent, and a parked panel that never asks again is the defect this whole
  *   change exists to remove.
- * - **A definitive answer the panel will learn about by event, or that a person must act on** — a
- *   refused or absent credential is repaired by editing the connection, which relaunches admission
- *   immediately, so a timer would only repeat an unchanged rejected request; an unsupported server and
- *   an incapable WebView are maintainer-designated terminal outcomes. No timer.
+ * - **A definitive answer the panel will learn about by event, or that a person must act on** — an
+ *   ABSENT credential is repaired by connecting the panel, which relaunches admission immediately, and
+ *   there is nothing to re-ask with meanwhile; an unsupported server and an incapable WebView are
+ *   maintainer-designated terminal outcomes. No timer.
+ *
+ * A credential the server REFUSED sits in the second group, not the third, and the distinction is the
+ * whole reason this rule is asked in two parts. Re-enabling an HA user, reissuing a token or repairing
+ * a reverse proxy that was answering 401 all happen server-side with no event reaching the panel, so a
+ * refusal that never re-asks parks the panel until a person walks to it. That is what a 2026-08-17
+ * field report showed, where the screen also blamed a credential that was never actually refused.
  *
  * Note the pairs that look alike and are not: a WebView that cannot bridge at all is terminal, while
  * one that failed to attach the bridge it does support is retried; a handshake Home Assistant never
@@ -407,9 +419,10 @@ internal fun admissionRetryClass(outcome: AdmissionOutcome): AdmissionRetryClass
 
     AdmissionOutcome.VERSION_UNVERIFIABLE,
     AdmissionOutcome.NO_LEGAL_DASHBOARD,
+    AdmissionOutcome.CREDENTIAL_REFUSED,
     -> AdmissionRetryClass.AT_CEILING
 
-    AdmissionOutcome.CREDENTIAL_REFUSED,
+    AdmissionOutcome.SIGN_IN_REQUIRED,
     AdmissionOutcome.UNSUPPORTED_HA,
     AdmissionOutcome.BRIDGE_UNAVAILABLE,
     -> AdmissionRetryClass.MANUAL_ONLY

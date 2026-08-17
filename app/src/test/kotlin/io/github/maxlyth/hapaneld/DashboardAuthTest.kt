@@ -28,6 +28,43 @@ class DashboardAuthTest {
         assertNull(r.session); assertNull(r.persist)
     }
 
+    // The 2026-08-17 boot race: on a cold start the configuration can still be loading, so the URL
+    // reads blank and NOTHING judges the credential. That empty result was indistinguishable from a
+    // server refusal, and the panel parked on a credential screen it could never clear.
+    @Test fun `an empty result says whether the credential was actually judged`() {
+        val notReady = DashboardAuth.resolve("", "tok", "refresh", 0, NOW, false, ::neverRefresh)
+        assertTrue("a blank URL judged no credential", notReady.notAttempted)
+        assertFalse(notReady.rejected)
+
+        // A panel that IS configured but holds nothing is a real credential state, not a non-attempt.
+        val noCredential = DashboardAuth.resolve("https://ha", "", "", 0, NOW, false, ::neverRefresh)
+        assertNull(noCredential.session)
+        assertFalse("holding no credential is a judged state", noCredential.notAttempted)
+
+        // A server refusal stays a refusal and must never be softened into a non-attempt.
+        val rejected = DashboardAuth.resolve("https://ha", "", "refresh", 0, NOW, true) { _, _ ->
+            HaLink.Refresh.Rejected
+        }
+        assertTrue(rejected.rejected)
+        assertFalse(rejected.notAttempted)
+
+        // A transport failure is likewise judged-but-unproven, and keeps its own detail channel.
+        val transient = DashboardAuth.resolve("https://ha", "", "refresh", 0, NOW, true) { _, _ ->
+            HaLink.Refresh.Transient("connect timed out")
+        }
+        assertFalse(transient.notAttempted)
+        assertEquals("connect timed out", transient.transientDetail)
+    }
+
+    @Test fun `a result abandoned because its owner changed is not an authentication verdict`() {
+        val other = OWNER.copy(accessToken = "someone else's")
+        val abandoned = DashboardAuth.retainIfOwned(OWNER, other, true, DashboardAuth.Result(null, rejected = true))
+        assertNull(abandoned.session)
+        assertTrue("an abandoned request judged nothing", abandoned.notAttempted)
+        // The discarded result's rejection must not leak out with it.
+        assertFalse(abandoned.rejected)
+    }
+
     @Test fun `static token is returned as-is with a long life and never refreshed`() {
         val r = DashboardAuth.resolve("https://ha", "llat", "", 0, NOW, false, ::neverRefresh)
         assertEquals("llat", r.session!!.accessToken)

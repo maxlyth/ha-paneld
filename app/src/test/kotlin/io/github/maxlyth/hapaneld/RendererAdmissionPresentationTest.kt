@@ -112,14 +112,24 @@ class RendererAdmissionPresentationTest {
         assertTrue(p.summary.contains("tls_trust"))
     }
 
-    @Test fun aCredentialRefusalIsBlockedAndSaysItNeedsAPerson() {
-        val p = present(record(RendererAdmissionState.BLOCKED, AdmissionOutcome.CREDENTIAL_REFUSED))
-        assertEquals("credential_refused", p.outcome)
+    @Test fun anAbsentCredentialIsBlockedAndSaysItNeedsAPerson() {
+        val p = present(record(RendererAdmissionState.BLOCKED, AdmissionOutcome.SIGN_IN_REQUIRED))
+        assertEquals("sign_in_required", p.outcome)
         assertEquals("manual_only", p.recovery)
         // No transport failure was involved, so no fault is invented and none is appended to the copy.
         assertEquals(HaTransportFault.NONE, p.fault)
         assertFalse(p.summary.contains("("))
         assertTrue(p.action.contains("will not clear on its own"))
+    }
+
+    @Test fun aRefusedCredentialIsBlockedButKeepsAskingTheServer() {
+        val p = present(record(RendererAdmissionState.BLOCKED, AdmissionOutcome.CREDENTIAL_REFUSED))
+        assertEquals("credential_refused", p.outcome)
+        // NOT manual_only: a re-enabled user or reissued token is a server-side repair with no event
+        // to tell the panel, so a latched screen would outlive the fault it reports.
+        assertEquals("at_ceiling", p.recovery)
+        assertEquals(HaTransportFault.NONE, p.fault)
+        assertFalse(p.action.contains("will not clear on its own"))
     }
 
     @Test fun anUnsupportedServerIsBlockedAndTerminalUntilSomeoneUpgradesIt() {

@@ -46,6 +46,12 @@ object DashboardAuth {
         val rejected: Boolean = false,
         val transientDetail: String? = null,
         val transientEvidence: HaTransportEvidence = HaTransportEvidence.NONE,
+        /** Set when NO credential attempt was made at all — the panel is not configured yet, or the
+         *  request was abandoned because its owner changed under it. Distinct from every other empty
+         *  result: nothing judged the credential, so a caller must not report an authentication
+         *  verdict. Without it, a not-yet-loaded configuration on a cold boot is indistinguishable
+         *  from a server refusal, and the panel parks on a credential screen it can never clear. */
+        val notAttempted: Boolean = false,
     )
 
     internal fun retainIfOwned(
@@ -53,7 +59,8 @@ object DashboardAuth {
         current: CredentialOwner,
         stillCurrent: Boolean,
         result: Result,
-    ): Result = if (stillCurrent && current == expected) result else Result(null)
+    ): Result =
+        if (stillCurrent && current == expected) result else Result(null, notAttempted = true)
 
     /** Comfortable life a cached access token must have left to be reused rather than refreshed. */
     const val REFRESH_SKEW_SEC = 60L
@@ -81,7 +88,9 @@ object DashboardAuth {
         force: Boolean,
         refresher: (String, String) -> HaLink.Refresh,
     ): Result {
-        if (url.isBlank()) return Result(null)
+        // No URL means the renderer is not configured — or, on a cold boot, that the configuration
+        // has not loaded yet. Either way no credential was judged, so this is not an auth verdict.
+        if (url.isBlank()) return Result(null, notAttempted = true)
         // Static model: no refresh token → the access token is long-lived, hand it back as-is. (Nothing
         // to refresh, so `force` can't produce a different token — the LLAT is all there is.)
         if (refreshToken.isBlank()) {
@@ -125,7 +134,7 @@ object DashboardAuth {
         stillCurrent: () -> Boolean = { true },
         persistRefresh: (HaAuthSnapshot, String, Long) -> Boolean = config::setHaRefreshedTokenIfOwned,
     ): Result {
-        if (!stillCurrent()) return Result(null)
+        if (!stillCurrent()) return Result(null, notAttempted = true)
         val snapshot = config.haAuthSnapshot()
         val owner = CredentialOwner(
             snapshot.url,
