@@ -510,13 +510,25 @@ class StatusSurfaceWiringContractTest {
                 .contains("cancelAdmissionAutoRetry()"),
         )
         assertTrue(
-            "a redraw must read the remaining time before the installer disarms it",
-            painter.contains("val carriedMs = if (rearm) null else admissionCountdown.remainingMs()"),
+            "a redraw must read the deadline INSTANT before the installer disarms it",
+            painter.contains("val carriedDeadlineMs = if (rearm) null else admissionCountdown.deadlineAtMs"),
         )
         assertTrue(
-            "the carried remainder must win over a freshly computed ladder delay",
-            painter.contains("carriedMs ?: if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)"),
+            "a carried deadline must suppress the fresh ladder delay entirely",
+            painter.contains("if (carriedDeadlineMs != null) null"),
         )
+        assertTrue(
+            "a carried deadline is restored as itself, not as a recomputed duration",
+            painter.contains("if (carriedDeadlineMs != null) resumeAdmissionAutoRetry(carriedDeadlineMs, title)"),
+        )
+        // The delay must be derived at the moment of posting, from the same clock the Handler uses, or
+        // the redraw's own duration lands on the deadline instead of coming off it.
+        val resume = dashboard.substringAfter("private fun resumeAdmissionAutoRetry(").substringBefore("\n    }")
+        assertTrue(
+            "the resumed delay must be measured from now, not carried in",
+            resume.contains("(deadlineMs - SystemClock.uptimeMillis()).coerceAtLeast(0L)"),
+        )
+        assertTrue(resume.contains("admissionCountdown.rearmAt(deadlineMs)"))
         assertTrue(
             "the rerender hook must ask for a redraw, not a fresh failure",
             painter.contains("rearm = false"),

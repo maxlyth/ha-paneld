@@ -2119,8 +2119,10 @@ class DashboardActivity : AppCompatActivity() {
         rearm: Boolean,
     ) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
-        // Read before the shared installer disarms: a redraw re-arms this same remaining time.
-        val carriedMs = if (rearm) null else admissionCountdown.remainingMs()
+        // Read before the shared installer disarms, and read as an INSTANT: everything between here
+        // and the re-arm below — building the views, laying them out, installing them — is time that a
+        // carried duration would add to the deadline on every single repaint.
+        val carriedDeadlineMs = if (rearm) null else admissionCountdown.deadlineAtMs
         if (web != null) teardownWeb()
         val surface = statusSurface()
         val buttons = buildList {
@@ -2134,9 +2136,11 @@ class DashboardActivity : AppCompatActivity() {
             })
         }
         // The retry countdown is deliberately a real number under the actions, not a spinner. The
-        // jittered delay is computed once, here, and this row counts down to that exact figure.
-        val autoRetryDelayMs = carriedMs ?: if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)
-        val countdown = autoRetryDelayMs?.let { surface.caption("") }
+        // jittered delay is computed once, here, and this row counts down to that exact figure. A
+        // redraw computes nothing: it already has a deadline, and only the ROW needs rebuilding.
+        val autoRetryDelayMs = if (carriedDeadlineMs != null) null
+            else if (retryLabel == null) null else admissionRetryPolicy.nextDelayMs(autoRetry)
+        val countdown = if (carriedDeadlineMs != null || autoRetryDelayMs != null) surface.caption("") else null
         surface.setBody(
             *listOfNotNull(
                 surface.heading(title),
@@ -2148,10 +2152,9 @@ class DashboardActivity : AppCompatActivity() {
         showStatusSurface(surface) {
             paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = false)
         }
-        if (autoRetryDelayMs != null) {
-            admissionCountdownView = countdown
-            armAdmissionAutoRetry(autoRetryDelayMs, title)
-        }
+        admissionCountdownView = countdown
+        if (carriedDeadlineMs != null) resumeAdmissionAutoRetry(carriedDeadlineMs, title)
+        else if (autoRetryDelayMs != null) armAdmissionAutoRetry(autoRetryDelayMs, title)
         Log.w(TAG, "$title: $detail")
     }
 
@@ -2460,6 +2463,21 @@ class DashboardActivity : AppCompatActivity() {
         main.postDelayed(admissionRetry, delayMs)
         applyAdmissionPaint(admissionCountdown.arm(delayMs))
         Log.i(TAG, "admission auto-retry armed in ${delayMs}ms ($title)")
+    }
+
+    /**
+     * Put back a deadline the shared installer disarmed, at the instant it already held.
+     *
+     * The delay is derived here rather than passed in, from the same uptime clock the countdown owner
+     * and the Handler both use, so however long the redraw took is subtracted rather than added. A
+     * deadline that expired mid-redraw posts at zero and fires immediately, which is what the panel
+     * would have done had nothing redrawn it.
+     */
+    private fun resumeAdmissionAutoRetry(deadlineMs: Long, title: String) {
+        val delayMs = (deadlineMs - SystemClock.uptimeMillis()).coerceAtLeast(0L)
+        main.postDelayed(admissionRetry, delayMs)
+        applyAdmissionPaint(admissionCountdown.rearmAt(deadlineMs))
+        Log.i(TAG, "admission auto-retry resumed with ${delayMs}ms left ($title)")
     }
 
     /** The owner decides whether to repaint and whether to run again; this only carries out the verdict.

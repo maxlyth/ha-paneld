@@ -497,10 +497,22 @@ internal class AdmissionCountdownOwner(private val nowMs: () -> Long) {
         deadlineMs = 0L
     }
 
-    /** Time left on the pending retry, or null when nothing is armed. A caller that must disarm in
-     *  order to replace the screen re-arms THIS figure, so redrawing a blocked screen cannot push its
-     *  own recovery further away. */
-    fun remainingMs(): Long? = if (armed) (deadlineMs - nowMs()).coerceAtLeast(0L) else null
+    /**
+     * The INSTANT the pending retry is due, or null when nothing is armed.
+     *
+     * Deliberately an instant rather than a remaining duration. A caller that must disarm in order to
+     * replace the screen re-arms this value through [rearmAt], and the time its redraw takes falls
+     * between the read and the re-arm: carrying a duration would silently add that time to the
+     * deadline on every repaint, so a panel being rotated would walk its own recovery away from itself.
+     */
+    val deadlineAtMs: Long? get() = if (armed) deadlineMs else null
+
+    /** Restore an existing deadline unchanged. Unlike [arm] this takes the absolute instant, so the
+     *  retry lands exactly where it already did no matter how long the caller took to get here. */
+    fun rearmAt(instantMs: Long): Paint {
+        deadlineMs = instantMs
+        return paint()
+    }
 
     /** Top-visibility changed. Returning to visible reconciles immediately, so the first thing seen is
      *  the true remaining time rather than a stale figure or a blank. */

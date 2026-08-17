@@ -467,26 +467,42 @@ class DashboardRecoveryTest {
         assertNull(owner.onVisibilityChanged(true).text)
     }
 
-    @Test fun `a redraw can carry the pending deadline across rather than restarting it`() {
-        val clock = Clock()
+    @Test fun `a redraw carries the deadline itself, so redraw time cannot move it`() {
+        val clock = Clock(now = 100_000L)
         val owner = AdmissionCountdownOwner(clock)
-        assertNull("nothing pending means nothing to carry", owner.remainingMs())
+        assertNull("nothing pending means nothing to carry", owner.deadlineAtMs)
 
         owner.arm(30_000L)
-        clock.now += 12_000L
-        assertEquals(18_000L, owner.remainingMs())
+        assertEquals(130_000L, owner.deadlineAtMs)
 
-        // What a redraw actually does: read the remainder, disarm to replace the screen, re-arm the
-        // SAME figure. The deadline must land where it already was, not 30s further out.
-        val carried = owner.remainingMs()!!
+        // Exactly what a redraw does, and the reason this carries an INSTANT: the read happens before
+        // the installer disarms, the re-arm after it has built and installed a new view tree, and real
+        // time passes in between. Carrying a remaining DURATION would re-add that 900ms here, and
+        // again on the next repaint, and again — walking recovery away from a panel being rotated.
+        val carried = owner.deadlineAtMs!!
         owner.disarm()
-        assertNull(owner.remainingMs())
-        owner.arm(carried)
-        assertEquals(18_000L, owner.remainingMs())
+        assertNull(owner.deadlineAtMs)
+        clock.now += 900L
+        owner.rearmAt(carried)
 
-        // A deadline already passed reads as zero, never as a negative delay that would post into the past.
-        clock.now += 60_000L
-        assertEquals(0L, owner.remainingMs())
+        assertEquals("the redraw moved the deadline", 130_000L, owner.deadlineAtMs)
+        owner.onVisibilityChanged(true)
+        assertEquals("Retrying automatically in 30s", owner.onTick().text)   // 29.1s, ceiled
+
+        // Repeating the cycle must stay put rather than accumulate.
+        repeat(10) {
+            val d = owner.deadlineAtMs!!
+            owner.disarm()
+            clock.now += 900L
+            owner.rearmAt(d)
+        }
+        assertEquals("ten redraws drifted the deadline", 130_000L, owner.deadlineAtMs)
+
+        // A deadline that expired mid-redraw is still restored as itself; the caller derives a
+        // non-negative delay from it rather than posting into the past.
+        clock.now = 200_000L
+        assertEquals(130_000L, owner.deadlineAtMs)
+        assertTrue("an expired deadline is in the past", owner.deadlineAtMs!! < clock.now)
     }
 
     @Test fun `admission retries back off from the base and stop growing at the ceiling`() {
