@@ -1367,6 +1367,125 @@ check_webview() {
   fi
 }
 
+# Report the panel's time zone against this computer's before anything is installed. A panel left on
+# its factory zone timestamps its logs and runs its schedules in that zone, which nothing on screen
+# ever states, so the discrepancy usually surfaces much later as something happening at the wrong
+# hour. Purely diagnostic: no clock is read for correctness, neither zone is changed, and a mismatch
+# never refuses an installation — the panel's zone is the operator's setting to make, not this
+# script's, and a deliberate difference is legitimate.
+#
+# Zones are compared by NAME, never by the offset they happen to produce right now. Two zones can
+# agree on their offset for months and part the moment one of them changes for daylight saving, so a
+# matching offset is not evidence of a matching zone.
+#
+# Different names can still be one zone: the time-zone database carries "backward" links, so a panel
+# may report Asia/Calcutta where this computer reports Asia/Kolkata. Such a pair is confirmed against
+# the host database, where linked names resolve to byte-identical files. Debian and Ubuntu have moved
+# those links into a separate tzdata-legacy package, so a host that cannot resolve one of the names is
+# ordinary rather than broken; that pair is reported as a difference this computer could not confirm,
+# because treating an unresolvable name as equal would be the offset mistake wearing another hat.
+#
+# TZDIR is libc's own override for the database location, not a hook added for tests.
+TIMEZONE_DIR="${TZDIR:-/usr/share/zoneinfo}"
+# The two host-side records live under one directory so a caller can point the whole lookup elsewhere.
+TIMEZONE_HOST_ETC="${HAPANELD_HOST_TIMEZONE_ETC:-/etc}"
+TIMEZONE_PROBE_SECONDS="${HAPANELD_TIMEZONE_PROBE_SECONDS:-10}"
+# A bad override falls back rather than refusing. Every other bounded operation in this script gates
+# a real outcome and is right to stop; this one gates a remark, so it must not be able to end a run.
+case "$TIMEZONE_PROBE_SECONDS" in ''|*[!0-9]*|0) TIMEZONE_PROBE_SECONDS=10 ;; esac
+
+# A zone name is Area/Location, sometimes Area/Region/Location. It arrives from the panel and is used
+# to build a path under the time-zone database, so it is validated as untrusted input BEFORE any file
+# is touched: no absolute path, no traversal, no separator or metacharacter that a name never carries.
+# Names hold no dot, which is what makes the traversal check exhaustive rather than a blocklist.
+valid_timezone_name() {
+  printf '%s\n' "${1-}" | grep -Eq '^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$'
+}
+
+# This computer's zone, in the order the rest of this computer would resolve it. TZ first because
+# every other command here obeys it; a TZ naming a POSIX rule ("GMT0BST,M3.5.0/1") rather than a zone
+# is not a name that can be compared, so it falls through rather than being reported as one.
+host_timezone() {
+  local candidate="${TZ:-}"
+  candidate="${candidate#:}"
+  if valid_timezone_name "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+  # A link into the database on Linux and macOS alike. Absent, unreadable or a plain copy are all
+  # ordinary shapes for a host to have rather than errors, so each falls through to the next source
+  # and finally to "this computer did not say" — which is why these two reads are deliberately fail
+  # open. They read nothing on the panel and decide nothing about it.
+  candidate="$(readlink "$TIMEZONE_HOST_ETC/localtime" 2>/dev/null || true)"
+  case "$candidate" in
+    */zoneinfo/*) candidate="${candidate#*/zoneinfo/}" ;;
+    *) candidate="" ;;
+  esac
+  if valid_timezone_name "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+  # Debian records the name itself, which is the only source left when localtime is a plain copy.
+  candidate="$(head -n 1 "$TIMEZONE_HOST_ETC/timezone" 2>/dev/null | tr -d '\r' || true)"
+  if valid_timezone_name "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+  return 1
+}
+
+# The panel's zone. Android resolves its default from this property, and it answers on a panel with
+# nothing installed yet, which is what a first installation needs. Bounded on its own short deadline
+# rather than the general adb one: this runs in the mutation path, and an advisory that can stall an
+# installation for two minutes has cost more than it explains. Every failure reads as "not reported".
+panel_timezone() {
+  local value
+  value="$(run_with_deadline "$TIMEZONE_PROBE_SECONDS" \
+    "$ADB_COMMAND" -s "$TARGET" shell getprop persist.sys.timezone 2>/dev/null || true)"
+  # A panel whose adbd has no shell protocol v2 returns every reply through a PTY, so strip the CR.
+  value="$(printf '%s' "$value" | tr -d '\r' | head -n 1)"
+  valid_timezone_name "$value" || return 1
+  printf '%s\n' "$value"
+}
+
+# match | alias | differ | silent. Never fails, and speaks only when it can establish the answer.
+# Anything it cannot read, parse or resolve becomes `silent` and produces no output at all — not even
+# a note about its own difficulty. This is an advisory with no bearing on whether the panel works, so
+# a remark the operator has to read and then dismiss costs more than the remark is worth.
+classify_timezone_pair() {
+  local host="${1-}" panel="${2-}"
+  if [ -z "$host" ] || [ -z "$panel" ]; then printf 'silent\n'; return 0; fi
+  if [ "$host" = "$panel" ]; then printf 'match\n'; return 0; fi
+  # Different names can still be one zone: the database records an older name as a link, so linked
+  # names resolve to byte-identical files. A name this database does not carry settles nothing either
+  # way, and Debian and Ubuntu ship those older names separately, so such a pair is passed over in
+  # silence rather than reported as a difference that has not actually been established.
+  if command -v cmp >/dev/null 2>&1 &&
+     [ -f "$TIMEZONE_DIR/$host" ] && [ -f "$TIMEZONE_DIR/$panel" ]; then
+    if cmp -s "$TIMEZONE_DIR/$host" "$TIMEZONE_DIR/$panel"; then printf 'alias\n'; else printf 'differ\n'; fi
+    return 0
+  fi
+  printf 'silent\n'
+}
+
+# Fail-open AND fail-quiet, deliberately. This sits in the pre-mutation path of an installer and has
+# no bearing on whether the panel works, so every read below is guarded and every unresolved outcome
+# prints nothing at all. It cannot end a run, cannot delay one beyond its own short probe, and cannot
+# put a question on screen that the operator has to work out how to dismiss. It starts nothing,
+# changes nothing, and no later step consults its result. `silent` is the default, not the exception:
+# the case below has no fallback arm, so any state that is not a settled answer produces no output.
+report_timezone_alignment() {
+  local host panel state
+  host="$(host_timezone || true)"
+  panel="$(panel_timezone || true)"
+  state="$(classify_timezone_pair "$host" "$panel")"
+  case "$state" in
+    match)
+      echo "   ${D}time zone: this computer and the panel are both $host${X}" ;;
+    alias)
+      echo "   ${D}time zone: this computer is $host and the panel is $panel — two names for the same zone${X}" ;;
+    differ)
+      warn "time zone: this computer is $host but the panel is $panel"
+      # One sentence per line. A sentence split across two echoes reads the same on a terminal and
+      # is invisible to anything line-based that reads this output, including this script's own tests.
+      echo "     ${D}Nothing here changes either clock, and the installation continues.${X}"
+      echo "     ${D}The panel's own timestamps and schedules follow $panel.${X}"
+      echo "     ${D}Change it in the panel's Android date and time settings if that is not what you want.${X}" ;;
+  esac
+  return 0
+}
+
 # Fetch the newest signed release APK from GitHub's bounded HTTPS API. Sets APK + TOINSTALL_VER.
 download_latest() {
   local dir tag="" url json api record asset expected_url
@@ -4550,6 +4669,11 @@ if export_is_only_operation; then
   echo "${GRN}${B}✅ config export complete${X} — no app, setting, or panel state was changed."
   exit 0
 fi
+
+# Report how the panel's time zone compares with this computer's, before release resolution or any
+# panel mutation. Purely diagnostic — it changes no clock and refuses nothing — and placed here so
+# the read-only --export and --verify paths above stay silent on a question they do not act on.
+report_timezone_alignment
 
 # Classify storage health before release resolution or any panel mutation, and report it. Every
 # result is advisory here: an in-place replacement is a recovery attempt, so unreachable, malformed,

@@ -769,6 +769,15 @@ case "${1:-}" in
         fi
         printf '%s\n' "${MOCK_PRODUCT_IDENTITY:-}"
         ;;
+      "getprop persist.sys.timezone")
+        # MOCK_PANEL_TIMEZONE uses ${VAR-default}, not ${VAR:-default}: an explicitly empty value has
+        # to stay empty so a panel whose property is unset — getprop's own answer for that — remains
+        # expressible, which is a different case from a panel that was never configured in a test.
+        #
+        # Replied through a PTY, as an adbd without shell protocol v2 does, so the CR that a real
+        # panel appends is present in every run rather than only in a test written to remember it.
+        printf '%s\r\n' "${MOCK_PANEL_TIMEZONE-Europe/London}"
+        ;;
       "getprop persist.adb.tcp.port")
         if [ "${MOCK_LATE_ADB_PHASE:-identity}" = "persistence" ] && [ "${MOCK_LATE_ADB_STATUS:-0}" -ne 0 ]; then
           exit "$MOCK_LATE_ADB_STATUS"

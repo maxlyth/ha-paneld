@@ -42,6 +42,30 @@ export PROVISION_TEST_ADB_FIXTURE="$FIXTURES/adb"
 export PROVISION_TEST_STATE_DIR="$TMP"
 export HAPANELD_HOST_SQLITE3="$(command -v sqlite3)"
 
+# A private time-zone database, so the host/panel time-zone advisory is decided by these files rather
+# than by whatever tzdata the machine running the suite happens to carry. That is not a convenience:
+# Debian and Ubuntu moved the "backward" links into a separate tzdata-legacy package, so on this very
+# container Asia/Calcutta does not exist and the alias case would be untestable against the real
+# database — while a machine that does have it would silently take a different branch. TZDIR is
+# libc's own override, which is why the production code honours it.
+#
+# The bytes are arbitrary because the comparison is byte identity and never parses TZif: two names
+# are the same zone precisely when the database gives them the same file, which is how it records a
+# link. Asia/Calcutta is therefore written as a copy of Asia/Kolkata, and Etc/UTC is left OUT
+# altogether so a well-formed name the database cannot resolve stays expressible.
+MOCK_ZONEINFO="$TMP/zoneinfo"
+mkdir -p "$MOCK_ZONEINFO/Europe" "$MOCK_ZONEINFO/Asia"
+printf 'TZif2 fixture utcoffset=+0000 dst=eu-summer\n' > "$MOCK_ZONEINFO/Europe/London"
+printf 'TZif2 fixture utcoffset=+0530 dst=none\n' > "$MOCK_ZONEINFO/Asia/Kolkata"
+cp "$MOCK_ZONEINFO/Asia/Kolkata" "$MOCK_ZONEINFO/Asia/Calcutta"
+printf 'TZif2 fixture utcoffset=+0800 dst=none\n' > "$MOCK_ZONEINFO/Asia/Shanghai"
+export MOCK_ZONEINFO
+
+# An empty stand-in for /etc, so the host zone comes from the pinned TZ and nothing on this machine.
+MOCK_HOST_ETC="$TMP/host-etc"
+mkdir -p "$MOCK_HOST_ETC"
+export MOCK_HOST_ETC
+
 # Extend the shared adb fixture with targeted database-backup mutations. This must be an executable
 # (not an exported function) because production deadlines launch adb via setsid(1).
 ADB_WRAPPER_DIR="$TMP/adb-wrapper"
@@ -324,6 +348,11 @@ run_provision() {
   STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-0}" \
   STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-2}" \
   MOCK_APK_INSTALL_PID_FILE="${MOCK_APK_INSTALL_PID_FILE:-}" \
+  MOCK_PANEL_TIMEZONE="${MOCK_PANEL_TIMEZONE-Europe/London}" \
+  TZDIR="$MOCK_ZONEINFO" \
+  HAPANELD_HOST_TIMEZONE_ETC="$MOCK_HOST_ETC" \
+  HAPANELD_TIMEZONE_PROBE_SECONDS="${HAPANELD_TIMEZONE_PROBE_SECONDS:-2}" \
+  TZ="${MOCK_HOST_TZ-Europe/London}" \
   PATH="$provision_path" \
     bash "$PROVISION" "$@" "${unsigned_ack[@]}" > "$LAST_OUTPUT" 2>&1
   LAST_STATUS=$?
@@ -1061,6 +1090,46 @@ assert_not_contains 'Root helper: needed only|system WebView is very old' "$LAST
   "available plan suppresses duplicate blanket helper and WebView guidance"
 assert_not_contains '/api/v1/tame|action=recommended' "$MOCK_CALL_LOG" "recommendations cause no hidden mutation"
 unset MOCK_PLAN MOCK_WEBVIEW_VERSION
+
+# ---- host/panel time-zone advisory ---------------------------------------------------------------
+# Icing: it states both time zones, warns when they are provably different zones, and is silent about
+# everything else. It changes no clock and blocks nothing, so these four runs cover only what would
+# matter if it broke — that it speaks when it should, stays quiet when it cannot be sure, and never
+# touches the panel or the exit status either way.
+
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a matching time zone provisions successfully"
+assert_contains 'time zone: this computer and the panel are both Europe/London' \
+  "a matching time zone is stated rather than left unsaid"
+assert_not_contains '⚠ time zone' "$LAST_OUTPUT" "a matching time zone raises no advisory"
+
+# The case this exists for, and the one this fleet actually has: a panel still on its factory zone.
+# Asserted against the call log, not inferred from the wording: the run reaches the install, and
+# nothing anywhere in it writes a time zone to the panel.
+MOCK_PANEL_TIMEZONE=Asia/Shanghai run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a mismatched time zone still provisions successfully"
+assert_contains '⚠ time zone: this computer is Europe/London but the panel is Asia/Shanghai' \
+  "a mismatch names both zones"
+assert_contains 'installation continues' "the mismatch advisory says it is not blocking"
+assert_log_contains '^adb .* install' "a mismatched time zone does not stop the run reaching the APK install"
+assert_not_contains 'setprop .*persist\.sys\.timezone|settings put (global|system) (time_zone|auto_time_zone)|service call alarm' \
+  "$MOCK_CALL_LOG" "the time-zone advisory changes no clock on the panel"
+
+# Two names for one zone. The database records a link by giving both names the same entry, so this
+# must read as agreement; warning about it would train the operator to ignore the advisory.
+MOCK_HOST_TZ=Asia/Kolkata MOCK_PANEL_TIMEZONE=Asia/Calcutta run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an aliased time zone provisions successfully"
+assert_contains 'time zone: this computer is Asia/Kolkata and the panel is Asia/Calcutta — two names for the same zone' \
+  "an alias is reported as one zone under two names"
+assert_not_contains '⚠ time zone' "$LAST_OUTPUT" "an alias raises no advisory"
+
+# Anything unreadable is passed over in complete silence, including the value itself: it is untrusted
+# input from the panel, so it must not reach the terminal even in a message about not understanding it.
+MOCK_PANEL_TIMEZONE='../../etc/passwd' run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "an unusable panel time zone provisions successfully"
+assert_not_contains 'time zone' "$LAST_OUTPUT" "an unusable panel time zone produces no output at all"
+assert_not_contains 'etc/passwd' "$LAST_OUTPUT" "an unusable panel time zone is never echoed back"
+assert_log_contains '^adb .* install' "an unusable panel time zone does not stop the run reaching the APK install"
 
 # Config/import may change observations. The core-rendered plan is fetched again only after those
 # mutations complete, so its final guidance reflects the resulting panel state.
