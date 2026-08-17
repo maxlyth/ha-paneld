@@ -132,7 +132,13 @@ jobs:
           printf '%s\n' "$p120" > tools/firmware-index/fw-120p.dat
           printf '%s\n' "$p86" > tools/firmware-index/fw-86p.dat
 
-          git add tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat
+          # The exhaustive in-repo index is generated from the .dat files, and a
+          # data-derived test fails if it drifts from them. Regenerate it in the
+          # same commit so a discovery PR is never merged into a red main.
+          python tools/firmware-index/firmware_index.py archive
+
+          git add tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat \
+                  docs/hardware/nspanel-pro-firmware-archive.md
           if [ -n "$remote_head" ] && git diff --quiet FETCH_HEAD -- \
               tools/firmware-index/fw-120p.dat tools/firmware-index/fw-86p.dat; then
             echo "pending automation branch already contains this exact index"

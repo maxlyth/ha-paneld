@@ -61,69 +61,6 @@ class HistoryTrimTest(unittest.TestCase):
         )
 
 
-class SparklineTest(unittest.TestCase):
-    def test_places_missing_utc_day_in_its_calendar_position(self):
-        base_day = 20000
-        url = "https://example.invalid/firmware.zip"
-        history = {
-            "samples": [
-                {"t": (base_day - 2) * 86400 + 8 * 3600, "r": {url: 1}},
-                {"t": base_day * 86400 + 8 * 3600, "r": {url: 0}},
-            ],
-        }
-
-        line = firmware_index.sparkline(
-            url,
-            history,
-            now=base_day * 86400 + 10 * 3600,
-        )
-
-        self.assertEqual(line, "⬜⬜⬜⬜🟩⬜🟥")
-
-    def test_uses_latest_sample_when_a_utc_day_has_a_retry(self):
-        day = 20000
-        url = "https://example.invalid/firmware.zip"
-        history = {
-            "samples": [
-                {"t": day * 86400 + 8 * 3600, "r": {url: 0}},
-                {"t": day * 86400 + 9 * 3600, "r": {url: 1}},
-            ],
-        }
-
-        line = firmware_index.sparkline(url, history, now=day * 86400 + 10 * 3600)
-
-        self.assertEqual(line, "⬜⬜⬜⬜⬜⬜🟩")
-
-    def test_device_render_uses_one_utc_window_anchor_for_every_row(self):
-        device = {
-            "channel": "test-channel",
-            "suffix": "",
-            "apkfmt": "app",
-            "fulls": [("1.0.0", "1", "full.zip", 10)],
-            "diffs": [("1.0.0", "0.9.0", "2", 5)],
-            "apks": [("1.0.0", "3", 2)],
-        }
-        render_time = 20000 * 86400 + 23 * 3600 + 59 * 60 + 59
-
-        with mock.patch.object(
-            firmware_index,
-            "sparkline",
-            return_value="⬜⬜⬜⬜⬜⬜⬜",
-        ) as sparkline:
-            firmware_index.device_block(
-                "Test",
-                "fixture",
-                device,
-                {"samples": []},
-                render_time,
-            )
-
-        self.assertEqual(sparkline.call_count, 3)
-        self.assertTrue(
-            all(call.args[2] == render_time for call in sparkline.call_args_list),
-        )
-
-
 DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs" / "hardware"
 
 # Nothing past this has been flashed on real hardware by this project.
@@ -376,6 +313,90 @@ class DiscoveryTest(unittest.TestCase):
         self.assertIn("firmware_index.py render --out", workflow)
         self.assertIn("git diff --cached --quiet", workflow)
         self.assertIn("--force-with-lease", workflow)
+
+
+class RenderedIndexTest(unittest.TestCase):
+    """Contracts for the two generated surfaces, checked against the index data.
+
+    The Discussion body is capped by GitHub and the archive page is not, so the
+    split between them is a correctness property: the body may drop rows, the
+    archive page may not.
+    """
+
+    def setUp(self):
+        self.devices = firmware_index.load_devices()
+
+    def _body(self, wb=None, window=firmware_index.RENDER_TARGET_WINDOW):
+        return firmware_index.render_body(self.devices, wb or {}, window)
+
+    def test_body_fits_inside_the_github_limit(self):
+        size = len(self._body().encode())
+        self.assertLess(
+            size,
+            firmware_index.GITHUB_BODY_LIMIT,
+            f"rendered body is {size} bytes, at or over GitHub's limit",
+        )
+
+    def test_body_shows_only_the_windowed_targets(self):
+        window = firmware_index.RENDER_TARGET_WINDOW
+        targets = sorted({t for d in self.devices for t, _f, _i, _s in d["diffs"]},
+                         key=firmware_index.vkey)
+        self.assertGreater(len(targets), window, "index has too few targets to exercise the window")
+        body = self._body()
+        for dropped in targets[:-window]:
+            for d in self.devices:
+                for to, frm, idx, _sz in d["diffs"]:
+                    if to == dropped:
+                        self.assertNotIn(firmware_index.diff_url(d, idx, frm, to), body)
+        for kept in targets[-window:]:
+            self.assertIn(f"| **{kept}** |", body)
+
+    def test_archive_page_lists_every_indexed_object(self):
+        # The body is allowed to omit rows; this page is the reason that is safe.
+        page = (DOCS / "nspanel-pro-firmware-archive.md").read_text(encoding="utf-8")
+        for url in firmware_index.all_url_sizes(self.devices):
+            self.assertIn(url, page, f"archive page is missing {url}")
+
+    def test_committed_archive_page_matches_the_index(self):
+        """The generated page must not drift from the data it claims to render.
+
+        Compared by the set of download URLs rather than byte-for-byte, because
+        the committed page carries Wayback dates that a regeneration without the
+        archival state cannot reproduce. URLs are the part that must not drift;
+        an added, removed or renamed object fails this.
+        """
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("r+", suffix=".md") as tmp:
+            with mock.patch("sys.stderr", io.StringIO()):
+                firmware_index.cmd_archive(SimpleNamespace(wayback=None, out=tmp.name))
+            tmp.seek(0)
+            regenerated = tmp.read()
+        committed = (DOCS / "nspanel-pro-firmware-archive.md").read_text(encoding="utf-8")
+
+        cdn = re.compile(r"\((https://global-otadl2bsy\.coolkit\.cc/[^)]+)\)")
+        self.assertEqual(
+            set(cdn.findall(regenerated)),
+            set(cdn.findall(committed)),
+            "committed archive page has drifted from the index — regenerate it with "
+            "`firmware_index.py archive`",
+        )
+
+    def test_a_missing_capture_renders_as_an_explicit_gap(self):
+        # A blank cell would read as "no archive needed"; the marker makes an
+        # unarchived file visible so it can be fixed.
+        self.assertEqual(firmware_index.archived_cell("https://example.invalid/x", {}), "—")
+        self.assertEqual(
+            firmware_index.archived_cell("u", {"u": "20260803124531"}), "2026-08-03"
+        )
+
+    def test_banner_reports_coverage_over_everything_indexed(self):
+        # Coverage must be measured against the full index, not the subset the
+        # body happens to show, or the number would flatter itself.
+        urls = list(firmware_index.all_url_sizes(self.devices))
+        wb = {urls[0]: "20260803124531"}
+        banner = firmware_index.archive_banner(wb, self.devices)
+        self.assertIn(f"**1/{len(urls)}**", banner)
 
 
 if __name__ == "__main__":

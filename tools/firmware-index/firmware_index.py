@@ -6,8 +6,9 @@ hits against the CoolKit OTA CDN (the bucket cannot be listed, so each URL is an
 exact-filename probe). This script keeps that page honest in two ways:
 
   probe     range-GET every URL, record up/down into a rolling 7-day history file
-  render    emit the Discussion markdown body, with a 7-day availability sparkline
-            (green/red/grey squares) on every download row
+  render    emit the Discussion markdown body — a rolling window of recent
+            upgrade targets, with each row's Wayback capture date
+  archive   generate the exhaustive in-repo index page (every indexed object)
   discover  search the CDN for releases newer than the index
 
 `probe` only re-checks URLs that are already indexed, so a clean probe run says
@@ -58,7 +59,15 @@ PROBE_TIMEOUT = 20
 PROBE_WORKERS = 16
 GITHUB_BODY_LIMIT = 65536
 
-UP, DOWN, NODATA = "🟩", "🟥", "⬜"
+# The Discussion body is capped by GitHub, so it carries a rolling window of the
+# most recent diff targets plus APKs from the flashing checkpoint onward. The
+# complete history is generated into ARCHIVE_DOC instead of being dropped.
+RENDER_TARGET_WINDOW = 6
+APK_FLOOR = (4, 0, 12)
+ARCHIVE_DOC = "docs/hardware/nspanel-pro-firmware-archive.md"
+ARCHIVE_DOC_URL = (
+    "https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro-firmware-archive.md"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -168,26 +177,6 @@ def trim(h, now):
             latest_by_day[day] = sample
     h["samples"] = [latest_by_day[day] for day in sorted(latest_by_day)][-MAX_POINTS:]
 
-
-def sparkline(url, h, now=None):
-    """Seven UTC-day squares, oldest→newest, with grey for every missing day."""
-    if now is None:
-        now = int(time.time())
-    current_day = now // 86400
-    latest_by_day = {}
-    for sample in h["samples"]:
-        timestamp = sample.get("t", 0)
-        day = timestamp // 86400
-        previous = latest_by_day.get(day)
-        if previous is None or timestamp >= previous.get("t", 0):
-            latest_by_day[day] = sample
-
-    cells = []
-    for day in range(current_day - MAX_POINTS + 1, current_day + 1):
-        sample = latest_by_day.get(day, {})
-        value = sample.get("r", {}).get(url)
-        cells.append(UP if value == 1 else DOWN if value == 0 else NODATA)
-    return "".join(cells)
 
 
 # --------------------------------------------------------------------------- #
@@ -603,80 +592,147 @@ FOOTER = """---
 """
 
 
-def availability_banner(h):
-    samples = h.get("samples", [])
-    if not samples:
-        return ("> [!NOTE]\n> **Live availability:** the daily checker hasn't run yet — the **7-day** "
-                "column fills in over the next week.\n")
-    last = samples[-1]
-    total = len(last.get("r", {}))
-    up = sum(1 for v in last["r"].values() if v == 1)
-    ts = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(last["t"]))
-    return (f"> [!NOTE]\n> **Live availability** — each download row carries a 7-day sparkline, "
-            f"newest on the right, checked daily: {UP} reachable · {DOWN} unreachable · {NODATA} no data yet. "
-            f"Last check **{ts}**: **{up}/{total}** URLs reachable.\n")
+def archive_banner(wb, devices):
+    """State archival coverage over everything indexed, not just what is rendered."""
+    urls = all_url_sizes(devices)
+    covered = sum(1 for u in urls if wb.get(u))
+    if not wb:
+        return ("> [!NOTE]\n> **Archived copies:** the Wayback state was not available when this page "
+                "was generated, so the **Archived** column is blank. It is not a claim that no copy exists.\n")
+    gaps = len(urls) - covered
+    tail = (f" **{gaps}** indexed file(s) have no capture yet."
+            if gaps else " Every indexed file has a capture.")
+    return ("> [!NOTE]\n> **Archived copies** — the **Archived** column gives the date each file was "
+            "captured by the [Wayback Machine](https://web.archive.org/), which is what protects you if "
+            "CoolKit ever withdraws a build. Reach any capture at "
+            "`https://web.archive.org/web/<date>/<the download URL>`, or browse "
+            "[every capture of the CDN](https://web.archive.org/web/*/global-otadl2bsy.coolkit.cc/*). "
+            f"**{covered}/{len(urls)}** indexed files are archived.{tail}\n")
 
 
-def fulls_table(d, h, now):
-    out = ["| Version | Size | Download | 7d |", "| --- | --- | --- | --- |"]
+def archived_cell(url, wb):
+    """Capture date, or an explicit gap marker — never a silent blank."""
+    stamp = wb.get(url)
+    if not stamp:
+        return "—"
+    return f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}"
+
+
+def wayback_url(url, stamp):
+    return f"https://web.archive.org/web/{stamp}/{url}"
+
+
+def fulls_table(d, wb):
+    """Full ROMs carry a real archive link, not just a date.
+
+    There are few of them and they are the irreplaceable artifacts — 4.0.12 is
+    the checkpoint the whole upgrade path depends on — so the extra bytes buy
+    a one-click recovery route.
+    """
+    out = ["| Version | Size | Download | Archived |", "| --- | --- | --- | --- |"]
     for ver, idx, fn, sz in sorted(d["fulls"], key=lambda x: vkey(x[0]), reverse=True):
         url = full_url(d, idx, fn)
-        out.append(f"| **{ver}** | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
+        stamp = wb.get(url)
+        cell = f"[{archived_cell(url, wb)}]({wayback_url(url, stamp)})" if stamp else "—"
+        out.append(f"| **{ver}** | {human(sz)} | [{fn}]({url}) | {cell} |")
     return "\n".join(out)
 
 
-def diffs_table(d, h, now):
-    out = ["| To (target) | From | Size | Download | 7d |", "| --- | --- | --- | --- | --- |"]
-    for to, frm, idx, sz in sorted(d["diffs"], key=lambda x: (vkey(x[0]), vkey(x[1])), reverse=True):
+def diffs_table(d, wb, diffs=None):
+    rows = d["diffs"] if diffs is None else diffs
+    out = ["| To (target) | From | Size | Download | Archived |", "| --- | --- | --- | --- | --- |"]
+    for to, frm, idx, sz in sorted(rows, key=lambda x: (vkey(x[0]), vkey(x[1])), reverse=True):
         url = diff_url(d, idx, frm, to)
         fn = f"CK_{frm}_{to}{d['suffix']}-diff.zip"
-        out.append(f"| **{to}** | {frm} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
+        out.append(f"| **{to}** | {frm} | {human(sz)} | [{fn}]({url}) | {archived_cell(url, wb)} |")
     return "\n".join(out)
 
 
-def apks_table(d, h, now):
-    out = ["| Version | Size | Download | 7d |", "| --- | --- | --- | --- |"]
-    for ver, idx, sz in sorted(d["apks"], key=lambda x: vkey(x[0]), reverse=True):
+def apks_table(d, wb, apks=None):
+    rows = d["apks"] if apks is None else apks
+    out = ["| Version | Size | Download | Archived |", "| --- | --- | --- | --- |"]
+    for ver, idx, sz in sorted(rows, key=lambda x: vkey(x[0]), reverse=True):
         url = apk_url(d, idx, ver)
         fn = f"{d['apkfmt']}{ver}.apk"
-        out.append(f"| {ver} | {human(sz)} | [{fn}]({url}) | {sparkline(url, h, now)} |")
+        out.append(f"| {ver} | {human(sz)} | [{fn}]({url}) | {archived_cell(url, wb)} |")
     return "\n".join(out)
 
 
-def device_block(name, sub, d, h, now):
+def recent_targets(devices, window):
+    """The most recent `window` diff targets across both channels.
+
+    A rolling window rather than a version floor, because a floor still grows
+    without bound: every release adds ~11 diff rows, which is what pushed the
+    body to 88% of GitHub's limit.
+    """
+    targets = sorted({t for d in devices for t, _f, _i, _s in d["diffs"]}, key=vkey)
+    return set(targets[-window:]) if window else set(targets)
+
+
+def device_block(name, sub, d, wb, targets, floor):
+    """One channel's tables, narrowed to what the documented route can use.
+
+    Diffs onto older targets and APKs below the checkpoint are omitted here and
+    kept in full in the generated archive page — the upgrade rule sends anything
+    below the checkpoint through the full ROM, so those rows describe hops this
+    project tells nobody to take.
+    """
+    diffs = [x for x in d["diffs"] if x[0] in targets]
+    apks = [x for x in d["apks"] if vkey(x[0]) >= floor]
+    omitted = (len(d["diffs"]) - len(diffs)) + (len(d["apks"]) - len(apks))
+    note = (f"\n{omitted} older row(s) for this channel are omitted here and listed in full in "
+            f"[the complete index]({ARCHIVE_DOC_URL}).\n" if omitted else "")
     return f"""## {name} ({sub}) — channel `{d['channel']}`
 
 ### Full ROMs
 
-{fulls_table(d, h, now)}
+{fulls_table(d, wb)}
 
 <details open>
-<summary><b>Incremental diffs ({len(d['diffs'])})</b> — patch an existing version up to a target</summary>
+<summary><b>Incremental diffs ({len(diffs)})</b> — patch an existing version up to a target</summary>
 
-{diffs_table(d, h, now)}
+{diffs_table(d, wb, diffs)}
 
 </details>
 
 <details open>
-<summary><b>eWeLink app APKs ({len(d['apks'])})</b></summary>
+<summary><b>eWeLink app APKs ({len(apks)})</b></summary>
 
-{apks_table(d, h, now)}
+{apks_table(d, wb, apks)}
 
 </details>
-"""
+{note}"""
+
+
+def load_wayback(path):
+    """Wayback capture stamps as {url: "YYYYMMDDhhmmss"}.
+
+    Written by the archival workflow onto its own data branch. A missing file
+    is not an error — the Archived column degrades to gap markers and the
+    banner says so, rather than the page silently implying nothing is archived.
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    with open(path) as fh:
+        state = json.load(fh)
+    return {url: rec.get("wb") for url, rec in state.get("files", {}).items() if rec.get("wb")}
+
+
+def render_body(devices, wb, window):
+    parsed = {fn: d for (_, _, fn), d in zip(DEVICES, devices)}
+    targets = recent_targets(devices, window)
+    blocks = [INTRO, archive_banner(wb, devices), CHANGES, RELEASE_NOTES]
+    for name, sub, fn in DEVICES:
+        blocks.append(device_block(name, sub, parsed[fn], wb, targets, APK_FLOOR))
+    blocks += [SCHEME, FOOTER]
+    return "\n".join(blocks) + "\n"
 
 
 def cmd_render(args):
     devices = load_devices()
-    parsed = {fn: d for (_, _, fn), d in zip(DEVICES, devices)}
-    h = load_history(args.history) if args.history else {"samples": []}
-    render_time = int(time.time())
-
-    blocks = [INTRO, availability_banner(h), CHANGES, RELEASE_NOTES]
-    for name, sub, fn in DEVICES:
-        blocks.append(device_block(name, sub, parsed[fn], h, render_time))
-    blocks += [SCHEME, FOOTER]
-    body = "\n".join(blocks) + "\n"
+    wb = load_wayback(getattr(args, "wayback", None))
+    window = getattr(args, "target_window", RENDER_TARGET_WINDOW)
+    body = render_body(devices, wb, window)
 
     if args.out:
         with open(args.out, "w") as fh:
@@ -684,15 +740,79 @@ def cmd_render(args):
     else:
         sys.stdout.write(body)
 
+    shown_diffs = sum(len([x for x in d["diffs"] if x[0] in recent_targets(devices, window)])
+                      for d in devices)
+    shown_apks = sum(len([x for x in d["apks"] if vkey(x[0]) >= APK_FLOOR]) for d in devices)
     n = len(body.encode())
     msg = (f"rendered {n} bytes "
            f"({sum(len(d['fulls']) for d in devices)} ROMs, "
-           f"{sum(len(d['diffs']) for d in devices)} diffs, "
-           f"{sum(len(d['apks']) for d in devices)} APKs)")
+           f"{shown_diffs} diffs, {shown_apks} APKs shown; "
+           f"{sum(len(d['diffs']) for d in devices)} diffs and "
+           f"{sum(len(d['apks']) for d in devices)} APKs indexed)")
     if n >= GITHUB_BODY_LIMIT:
         print(f"WARNING: {msg} — exceeds GitHub's {GITHUB_BODY_LIMIT}-byte body limit", file=sys.stderr)
         return 1
     print(msg, file=sys.stderr)
+    return 0
+
+
+ARCHIVE_INTRO = """# NSPanel Pro firmware — complete index
+
+Every OTA object this project has located on the CoolKit CDN, for both original NSPanel Pro models. This page is **generated from `tools/firmware-index/fw-120p.dat` and `fw-86p.dat`** — edit those, never this file.
+
+The [firmware Discussion](https://github.com/maxlyth/ha-paneld/discussions/7) carries a readable subset: recent upgrade targets and the app updates that matter for a current panel. It is capped by GitHub's body limit, which is why the exhaustive list lives here instead of being discarded.
+
+Nothing here is a recommendation. **The flashing procedure is hardware-verified only through 4.4.0**; everything past it is CDN-verified — confirmed to exist and to match its recorded size — and has never been flashed on a panel by this project. Read the [firmware & flashing page](nspanel-pro-firmware.md) before using any of it, and note that anything below the **4.0.12** checkpoint is expected to reach current firmware through that full ROM rather than through the older diffs listed here.
+
+The **Archived** column is the Wayback Machine capture date; reach a capture at `https://web.archive.org/web/<date>/<the download URL>`. A `—` means no capture is recorded yet, which is a gap worth closing, not a claim the file is gone.
+"""
+
+
+def archive_device_block(name, sub, d, wb):
+    return f"""## {name} ({sub}) — channel `{d['channel']}`
+
+### Full ROMs ({len(d['fulls'])})
+
+{fulls_table(d, wb)}
+
+### Incremental diffs ({len(d['diffs'])})
+
+{diffs_table(d, wb)}
+
+### eWeLink app APKs ({len(d['apks'])})
+
+{apks_table(d, wb)}
+"""
+
+
+def cmd_archive(args):
+    """Generate the exhaustive in-repo index page."""
+    devices = load_devices()
+    wb = load_wayback(getattr(args, "wayback", None))
+    urls = all_url_sizes(devices)
+    covered = sum(1 for u in urls if wb.get(u))
+
+    blocks = [ARCHIVE_INTRO]
+    parsed = {fn: d for (_, _, fn), d in zip(DEVICES, devices)}
+    for name, sub, fn in DEVICES:
+        blocks.append(archive_device_block(name, sub, parsed[fn], wb))
+    blocks.append(f"""## Coverage
+
+| | Count |
+|---|---|
+| Indexed objects | {len(urls)} |
+| With a Wayback capture | {covered} |
+| Without a capture | {len(urls) - covered} |
+
+Regenerate with `python3 tools/firmware-index/firmware_index.py archive --out {ARCHIVE_DOC}`.
+""")
+    body = "\n".join(blocks)
+
+    out = args.out or ARCHIVE_DOC
+    with open(out, "w") as fh:
+        fh.write(body)
+    print(f"wrote {out}: {len(body.encode())} bytes, {len(urls)} objects, "
+          f"{covered} archived", file=sys.stderr)
     return 0
 
 
@@ -714,8 +834,16 @@ def main():
                      help="append discovered entries to the .dat files")
     dsc.set_defaults(func=cmd_discover)
 
+    a = sub.add_parser("archive", help="generate the exhaustive in-repo index page")
+    a.add_argument("--wayback", help="wayback.json from the archival data branch")
+    a.add_argument("--out", help=f"output file (default: {ARCHIVE_DOC})")
+    a.set_defaults(func=cmd_archive)
+
     r = sub.add_parser("render", help="emit the Discussion markdown body")
-    r.add_argument("--history", help="history JSON (omit for an empty sparkline)")
+    r.add_argument("--wayback", help="wayback.json from the archival data branch")
+    r.add_argument("--target-window", type=int, default=RENDER_TARGET_WINDOW,
+                   help=f"how many recent diff targets to show (default {RENDER_TARGET_WINDOW}; 0 = all)")
+    r.add_argument("--history", help="accepted and ignored; retained so the monitor keeps working")
     r.add_argument("--out", help="output file (default: stdout)")
     r.set_defaults(func=cmd_render)
 

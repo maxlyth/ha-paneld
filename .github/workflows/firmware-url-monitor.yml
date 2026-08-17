@@ -52,6 +52,23 @@ jobs:
             echo '{"samples":[]}' > history.json
           fi
 
+      # The Archived column comes from the archival workflow's own data branch.
+      # A missing branch is tolerated — the column degrades to gap markers and
+      # the page says the state was unavailable — but a branch that exists and
+      # cannot be read is a real failure and must not be silently swallowed.
+      - name: Restore Wayback state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$repo_url" wayback-state >/dev/null 2>&1; then
+            git fetch -q "$repo_url" wayback-state
+            git show FETCH_HEAD:wayback.json > wayback.json
+          else
+            echo "::notice::no wayback-state branch yet; the Archived column will be empty"
+            echo '{"files":{}}' > wayback.json
+          fi
+
       - name: Probe firmware URLs
         id: probe
         continue-on-error: true
@@ -60,7 +77,7 @@ jobs:
       - name: Render Discussion body
         id: render
         continue-on-error: true
-        run: python tools/firmware-index/firmware_index.py render --history history.json --out body.md
+        run: python tools/firmware-index/firmware_index.py render --wayback wayback.json --out body.md
 
       # The built-in GITHUB_TOKEN is a GitHub App integration token, which GitHub
       # forbids from the updateDiscussion GraphQL mutation ("Resource not
