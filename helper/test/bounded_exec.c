@@ -6,6 +6,7 @@
 #include "sysexec.h"
 
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,12 +38,24 @@ static const char *resolve(const char *const candidates[]) {
     return NULL;
 }
 
-// A killed child that was never reaped stays a zombie and is still this process's child, so an
-// exhaustive WNOHANG sweep must report that no child remains.
-static int no_children_remain(void) {
-    int status;
-    pid_t seen = waitpid(-1, &status, WNOHANG);
-    return seen < 0 && errno == ECHILD;
+// The probe must OBSERVE, never reap: a plain waitpid(-1, WNOHANG) sweep consumes the very zombie
+// whose absence it is supposed to prove, so a production path that abandoned reaping entirely would
+// still pass — the probe would have done the reap itself on its first call. waitid with WNOWAIT
+// reports without consuming: it succeeds while any child is pending (an unreaped zombie or a live
+// child alike) and fails ECHILD only once production code has genuinely reaped everything.
+static int child_pending(void) {
+    siginfo_t info;
+    return waitid(P_ALL, 0, &info, WEXITED | WNOHANG | WNOWAIT) == 0;
+}
+
+// Reaping past the inline grace is handed to a detached thread, so "reaped" is eventually true
+// rather than immediately true. Poll for it with a bound far above any sane handoff latency.
+static int eventually_reaped(void) {
+    for (int waited_ms = 0; waited_ms < 3000; waited_ms += 20) {
+        if (!child_pending()) return 1;
+        sysexec_sleep_ms(20);
+    }
+    return !child_pending();
 }
 
 int main(void) {
@@ -66,7 +79,44 @@ int main(void) {
         CHECK(took < 5000UL, "a wedged actuator releases the calling thread at its deadline\n");
         CHECK(took >= 300UL, "the deadline is honoured in full before the child is killed\n");
         CHECK(elapsed >= 300u, "an expired deadline reports its whole window as consumed\n");
-        CHECK(no_children_remain(), "a child killed at its deadline is reaped, not left a zombie\n");
+        CHECK(eventually_reaped(),
+              "a child killed at its deadline is reaped, not left a zombie\n");
+    }
+
+    // A wrapper that forked its real worker before wedging: killing only the direct child would leave
+    // that worker acting past the deadline, unowned. Every process in the actuator's group inherits
+    // this test's stdout, so a pipe placed there reads EOF exactly when the LAST of them is gone —
+    // the leader alone dying is not enough to release it.
+    {
+        static const char *const sh_candidates[] = { "/bin/sh", "/usr/bin/sh", NULL };
+        const char *sh_path = resolve(sh_candidates);
+        int pipe_fds[2] = { -1, -1 };
+        if (!sh_path || pipe(pipe_fds) != 0) {
+            printf("FAIL: descendant test needs sh and a pipe on the build host\n");
+            failures++;
+        } else {
+            fflush(stdout);
+            int saved_stdout = dup(STDOUT_FILENO);
+            dup2(pipe_fds[1], STDOUT_FILENO);
+            close(pipe_fds[1]);
+            // Absolute paths: children run under sysexec's sanitized Android PATH, which resolves
+            // nothing on a build host — the same property the whole issue is about.
+            char script[256];
+            snprintf(script, sizeof script, "%s 30 & exec %s 31", sleep_path, sleep_path);
+            const char *const argv[] = { "sh", "-c", script, NULL };
+            unsigned elapsed = 0;
+            int status = sysexec_run_argv_deadline(sh_path, argv, 0, 300u, &elapsed);
+            fflush(stdout);
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+            struct pollfd probe = { .fd = pipe_fds[0], .events = POLLIN, .revents = 0 };
+            int drained = poll(&probe, 1, 3000);
+            close(pipe_fds[0]);
+            CHECK(status < 0, "the wrapper itself is expired at its deadline\n");
+            CHECK(drained == 1 && (probe.revents & POLLHUP),
+                  "a timed-out actuator's forked descendants die with it, not just the direct child\n");
+            CHECK(eventually_reaped(), "the killed group's leader is still reaped\n");
+        }
     }
 
     // A child that exits inside its deadline: real status, and the unused remainder is the caller's.
@@ -79,7 +129,7 @@ int main(void) {
         CHECK(status == 0, "a fast actuator's real exit status survives the deadline wrapper\n");
         CHECK(took < 2000UL, "a fast actuator is not held until its deadline expires\n");
         CHECK(elapsed < 5000u, "a fast actuator reports an unconsumed remainder to its caller\n");
-        CHECK(no_children_remain(), "a child that exited inside its deadline is reaped\n");
+        CHECK(!child_pending(), "a child that exited inside its deadline is reaped\n");
     }
 
     // A child that fails inside its deadline is still distinguishable from one that timed out only by
@@ -90,7 +140,7 @@ int main(void) {
         int status = sysexec_run_argv_deadline(sleep_path, argv, 1, 5000u, &elapsed);
         CHECK(status != 0, "a failing actuator reports a nonzero status\n");
         CHECK(elapsed < 5000u, "a failing actuator returns without consuming its window\n");
-        CHECK(no_children_remain(), "a failing child is reaped\n");
+        CHECK(!child_pending(), "a failing child is reaped\n");
     }
 
     // Spawn failure must not be reported as a consumed window, or the policy above would sleep out a
@@ -100,7 +150,7 @@ int main(void) {
         unsigned elapsed = 99u;
         int status = sysexec_run_argv_deadline("/nonexistent/actuator", argv, 1, 5000u, &elapsed);
         CHECK(status != 0, "a missing actuator does not report success\n");
-        CHECK(no_children_remain(), "a missing actuator leaves no child behind\n");
+        CHECK(!child_pending(), "a missing actuator leaves no child behind\n");
     }
 
     printf(failures ? "bounded-exec FAILED (%d)\n" : "bounded-exec ok (%d)\n", failures);

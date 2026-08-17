@@ -3481,6 +3481,16 @@ class PaneldService : Service() {
                     .onFailure { Log.w(TAG, "HTTP cleanup failed", it) }
                     .getOrDefault(false),
             )
+            // The physical-wake reconciliation publishes INTO the MQTT runtime, so it must be provably
+            // terminal before that runtime is retired: unregister first so no new work can be posted,
+            // then join the worker so a reconciliation already in flight cannot publish through a
+            // retired client. Ordered before the retirement fence below for exactly that reason.
+            closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
+            closeOwnerResult("screen reconcile worker") {
+                screenWakeWorker.closeAndJoin(
+                    minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
+                )
+            }
             // MQTT commands and convergence observers can use the service-owned hardware controllers.
             // Latest live refresh/replacement work has already drained on this runtime lane. Prove the
             // remaining mutation owners terminal before dismantling any dependent controller. mDNS is
@@ -3538,14 +3548,8 @@ class PaneldService : Service() {
             }
             closeOwner("watchdog") { watchdog.stop() }
             closeOwner("LED effect") { ledEffect.close() }
-            closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
             closeOwnerResult("wake-on-wave worker") {
                 wakeOnWaveWorker.closeAndJoin(
-                    minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
-                )
-            }
-            closeOwnerResult("screen reconcile worker") {
-                screenWakeWorker.closeAndJoin(
                     minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
                 )
             }

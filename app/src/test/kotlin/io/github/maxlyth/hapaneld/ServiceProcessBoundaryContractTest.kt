@@ -622,6 +622,29 @@ class ServiceProcessBoundaryContractTest {
         assertTrue(controller.contains("elapsedRealtime: () -> Long = SystemClock::elapsedRealtime"))
     }
 
+    /**
+     * The physical-wake reconciliation publishes INTO the MQTT runtime, so teardown must prove it
+     * terminal before that runtime is retired: unregister the receiver first (no new posts), then
+     * join its worker (nothing in flight), and only then stop MQTT. Any other order leaves a window
+     * where a reconciliation publishes through a retired client. The receiver and worker are
+     * lifecycle machinery of PaneldService, which no unit test can construct, so the order is pinned
+     * here the same way the other service-lifecycle contracts in this file are.
+     */
+    @Test fun physicalWakeReconciliationIsTerminalBeforeMqttRetirement() {
+        val destroy = source("PaneldService.kt").let { it.substring(it.indexOf("override fun onDestroy()")) }
+        val unregister = destroy.indexOf("closeOwner(\"screen-on reconciliation\")")
+        val join = destroy.indexOf("screenWakeWorker.closeAndJoin(")
+        val retire = destroy.indexOf("activeRuntime.mqtt.stop(")
+        assertTrue("teardown must unregister the screen-on receiver", unregister >= 0)
+        assertTrue("teardown must join the screen reconcile worker", join >= 0)
+        assertTrue("teardown must retire the MQTT runtime", retire >= 0)
+        assertTrue("no new reconciliation may be posted while the worker drains", unregister < join)
+        assertTrue(
+            "a reconciliation in flight must not publish through a retired MQTT runtime",
+            join < retire,
+        )
+    }
+
     private fun source(relative: String): String = locate("src/main/kotlin/io/github/maxlyth/hapaneld/$relative").readText()
 
     private fun locate(relative: String): File = listOf(File(relative), File("app/$relative"), File("../app/$relative"))

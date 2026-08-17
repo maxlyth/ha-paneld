@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -62,12 +63,20 @@ static pid_t spawn_argv(const char *path, const char *const argv[], int quiet) {
         return -1;
     }
     if (pid == 0) {
+        // Own process group, so that killing an expired actuator kills everything it forked: several
+        // /system/bin actuators are wrappers that spawn their real worker, and signalling only the
+        // direct child would leave that worker running unowned past its deadline.
+        (void)setpgid(0, 0);
         if (quiet) child_exec(path, argv, null_fd, null_fd, null_fd);
         close_inherited_fds(-1, -1);
         execve(path, (char *const *)argv, clean_env);
         _exit(127);
     }
 
+    // Both sides create the group so neither can observe a window where it does not exist yet: this
+    // one fails harmlessly (EACCES) once the child has passed exec, by which point the child's own
+    // setpgid has long since succeeded.
+    (void)setpgid(pid, pid);
     if (null_fd >= 0) close(null_fd);
     return pid;
 }
@@ -81,10 +90,19 @@ int sysexec_run_argv(const char *path, const char *const argv[], int quiet) {
 // Poll rather than install a SIGCHLD handler: this daemon is thread-per-connection, and a process-wide
 // handler to bound one actuator would reach every other thread's children.
 #define WAIT_POLL_MS 20u
-// After SIGKILL the child normally disappears at once. A child wedged in uninterruptible sleep must
-// not become a second unbounded wait, so give the reap its own bound and abandon it after that: one
-// rare zombie costs a process-table slot, a pinned connection thread costs the connection.
+// After SIGKILL the child normally becomes reapable within milliseconds, so a short inline grace
+// completes the common case without spawning anything. A child wedged in uninterruptible sleep can
+// outlast any grace, and it must neither become a second unbounded wait on the connection thread nor
+// be abandoned as a permanent zombie — past the grace it is handed to a detached reaper thread whose
+// blocking waitpid finishes the reap whenever the kernel finally releases the child.
 #define REAP_GRACE_MS 500u
+
+static void *reap_child_thread(void *arg) {
+    pid_t pid = (pid_t)(intptr_t)arg;
+    int status;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) continue;
+    return NULL;
+}
 
 // Wait up to [deadline_ms] for [pid]. Returns its wait status, or -1 if the deadline passed first.
 // [waited_out] always receives the elapsed portion of the deadline, including on the -1 paths.
@@ -122,12 +140,18 @@ int sysexec_run_argv_deadline(const char *path, const char *const argv[], int qu
     }
     int status = wait_child_deadline(pid, deadline_ms, &elapsed);
     if (status < 0 && elapsed >= deadline_ms) {
-        // Only the direct child is signalled. A wrapper that forked before wedging can still leak its
-        // own children, which is the platform's problem to reap; what matters here is that this thread
-        // is released and the daemon keeps answering.
-        kill(pid, SIGKILL);
+        // Kill the whole process group, not just the direct child: a wrapper's forked worker would
+        // otherwise keep acting past the deadline, unowned. The direct kill is the fallback for the
+        // (should-be-impossible) case where the group was never created.
+        if (kill(-pid, SIGKILL) != 0) kill(pid, SIGKILL);
         unsigned reaped = 0;
-        (void)wait_child_deadline(pid, REAP_GRACE_MS, &reaped);
+        if (wait_child_deadline(pid, REAP_GRACE_MS, &reaped) < 0 && reaped >= REAP_GRACE_MS) {
+            // Still unreaped: hand the wait to a detached thread so the reap is eventually completed
+            // without pinning this connection thread. If even the thread cannot be created the child
+            // stays a zombie for this daemon's lifetime and init reaps it when the daemon exits —
+            // best effort at that point, because nothing further can be guaranteed without memory.
+            (void)sysexec_spawn(reap_child_thread, (void *)(intptr_t)pid);
+        }
         elapsed += reaped;
     }
     if (elapsed_ms) *elapsed_ms = elapsed;
