@@ -123,7 +123,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `hardware.led` | Required | Mapping containing the LED fields below. |
 | `hardware.led.mechanism` | Required | `none`, `autodetect`, `rk3576-ioctl`, `rk3576-ioctl-daemon` or `sysfs-daemon`. Daemon-only mechanisms are rejected when `platform.app_can_su` is `true`. |
 | `hardware.led.transfer` | Optional; default `identity` | `identity` or `rk3576-four-bit`. |
-| `hardware.screen_off` | Required | `brightness-zero`, `su-blpower` or `daemon-blpower`. `su-blpower` requires `app_can_su: true`; `daemon-blpower` requires `app_can_su: false`. |
+| `hardware.screen_off` | Required | `brightness-zero`, `su-blpower`, `daemon-blpower` or `keyevent`. `su-blpower` requires `app_can_su: true`; `daemon-blpower` requires `app_can_su: false`. `keyevent` is for panels that expose no `/sys/class/backlight` device at all: it injects `KEYCODE_SLEEP` and `KEYCODE_WAKEUP`, which puts **Android itself** to sleep rather than blanking a backlight, and it works through root or the helper daemon, whichever the panel has. Declare it only after checking two things on the hardware, because neither can be probed: whether a touch on the sleeping panel wakes it (Android delivers touches while asleep only where the touchscreen is a kernel wake source, so where it is not, Home Assistant is the only way back), and what the panel shows after `KEYCODE_WAKEUP` — a panel with a PIN, pattern or password configured is refused outright and dims instead, since nobody types a credential on a wall panel. |
 | `hardware.has_button_backlight` | Optional; default `false` | Boolean; selects the bounded helper-backed button-backlight capability when true. |
 | `hardware.zigbee_gateway_dir` | Optional; default absent | Exact allowlisted path `/vendor/bin/siliconlabs_host`; no other path is accepted. |
 | `hardware.relay_base` | Optional; default absent | One exact allowlisted path: `/sys/class/relay`, `/sys/class/st_relay` or `/sys/class/strelay`. |
@@ -201,6 +201,7 @@ Every driver selected by populated fields must appear in `requires.drivers`. All
 | `hardware.screen_off: brightness-zero` | `screen.brightness-zero` |
 | `hardware.screen_off: su-blpower` | `screen.su-blpower` |
 | `hardware.screen_off: daemon-blpower` | `screen.daemon-blpower` |
+| `hardware.screen_off: keyevent` | `screen.keyevent` |
 | `hardware.zigbee_gateway_dir` is present | `radio.siliconlabs-host` |
 | `hardware.relay_base` is present, or `relay_base_fallbacks` is non-empty | `relay.sysfs` |
 | `hardware.button_led_gpio_base` is present | `relay.gpio-button-led` |

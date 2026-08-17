@@ -46,6 +46,8 @@ static int popen_rule_count;
 static int spawn_status = -1;
 static int spawn_real;
 static long last_pclose_offset = -1;
+static int sleep_call_count;
+static unsigned long sleep_total_ms;
 
 void sysexec_stub_reset(void) {
     memset(run_fail_needle, 0, sizeof run_fail_needle);
@@ -64,6 +66,8 @@ void sysexec_stub_reset(void) {
     spawn_status = -1;
     spawn_real = 0;
     last_pclose_offset = -1;
+    sleep_call_count = 0;
+    sleep_total_ms = 0;
 }
 
 void sysexec_stub_set_spawn_result(int status) { spawn_status = status; }
@@ -246,4 +250,12 @@ int sysexec_spawn(void *(*fn)(void *), void *arg) {
     return 0;
 }
 
-void  sysexec_reboot(void)                { }
+// Bounded host waits are recorded and return instantly. A real sleep here would make every unit and
+// fuzz iteration that reaches the reboot escalation stall for its whole interval.
+void sysexec_sleep_ms(unsigned ms) {
+    sleep_call_count++;
+    sleep_total_ms += ms;
+}
+
+int sysexec_stub_count_sleep(void) { return sleep_call_count; }
+unsigned long sysexec_stub_total_sleep_ms(void) { return sleep_total_ms; }

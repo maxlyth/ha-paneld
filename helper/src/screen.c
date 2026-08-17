@@ -1,4 +1,5 @@
 #include "screen.h"
+#include "sysexec.h"
 #include "util.h"
 
 #include <dirent.h>
@@ -47,6 +48,35 @@ void cmd_screen(conn_ctx *ctx, const char *args) {
     sscanf(args, "%7s", w);
     int on = strcasecmp(w, "OFF") != 0;  // anything but OFF -> on
     reply(ctx->fd, set_screen(on) == 0 ? "OK\n" : "ERR\n");
+}
+
+/*
+ * KEYEVENT SLEEP|WAKEUP — Android's own screen power, for panels with no backlight sysfs node at all
+ * (the reason the SCREEN verb above answers ERR there). KEYCODE_SLEEP puts Android noninteractive
+ * rather than only blanking the backlight, so the app owns the consequences of that state; this verb
+ * only injects the key.
+ *
+ * The accepted argument is a fixed name, never a number: each maps to a keycode compiled in here, so
+ * no caller and no profile document can select an arbitrary key through this daemon. `input` is an
+ * app_process wrapper like `svc`, whose exit status has been observed to lie under a sanitized
+ * environment, so OK means the request was executed and never that the display changed state — the
+ * app proves that separately by reading Android interactivity back.
+ */
+static int keyevent_code(const char *name) {
+    if (strcmp(name, "SLEEP") == 0) return 223;    // KEYCODE_SLEEP
+    if (strcmp(name, "WAKEUP") == 0) return 224;   // KEYCODE_WAKEUP
+    return -1;
+}
+
+void cmd_keyevent(conn_ctx *ctx, const char *args) {
+    char name[8] = "", extra[2] = "";
+    if (sscanf(args, "%7s %1s", name, extra) != 1) { reply(ctx->fd, "ERR\n"); return; }
+    int code = keyevent_code(name);
+    if (code < 0) { reply(ctx->fd, "ERR\n"); return; }
+    char code_text[8];
+    snprintf(code_text, sizeof code_text, "%d", code);
+    const char *const argv[] = { "input", "keyevent", code_text, NULL };
+    reply(ctx->fd, sysexec_run_argv("/system/bin/input", argv, 1) == 0 ? "OK\n" : "ERR\n");
 }
 
 // BLPOWER — actual framebuffer blanking state: 0 = unblanked; nonzero = blanked/powered down.

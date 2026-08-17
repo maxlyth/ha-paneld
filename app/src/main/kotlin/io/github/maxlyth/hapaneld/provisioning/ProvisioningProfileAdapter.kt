@@ -75,6 +75,7 @@ private fun DeviceProfile.provisioningDriverIds(): Set<String> =
             when (screenOff) {
                 ScreenOff.SU_BLPOWER -> "screen.su-blpower"
                 ScreenOff.DAEMON_BLPOWER -> "screen.daemon-blpower"
+                ScreenOff.KEYEVENT -> "screen.keyevent"
                 ScreenOff.BRIGHTNESS_ZERO -> "screen.brightness-zero"
             },
         )

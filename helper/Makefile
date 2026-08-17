@@ -39,7 +39,7 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
 test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
-	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.1.0 proto=1.1"
+	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.2.0 proto=1.2"
 	$(BUILD)/companion-boundary
 	$(BUILD)/peer-auth
 	$(BUILD)/request-timeout

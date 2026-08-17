@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.LedMechanism
+import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.hardware.NativeLed
 import io.github.maxlyth.hapaneld.input.ButtonCaptureHealth
 import io.github.maxlyth.hapaneld.input.EvdevButtonClient
@@ -115,12 +116,7 @@ object DiagReader {
                     else -> "needs supported privileged panel access"
                 }),
             screenBrightnessCapability(canWrite, su, daemon, pkg),
-            Cap("Screen on/off", if (daemon || su) "ok" else "degraded",
-                when {
-                    daemon -> "true backlight-off via the helper daemon"
-                    su -> "true backlight-off via su bl_power"
-                    else -> "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off"
-                }),
+            screenOnOffCapability(profile.screenOff, su, daemon),
             if (showLed) Cap("RGB LED", if (rkLed || daemonLed) "ok" else "none",
                 when {
                     rkLed -> "Rockchip /dev/ledjni (app-direct, no root)"
@@ -181,6 +177,20 @@ object DiagReader {
             "none",
             "needs WRITE_SETTINGS: adb shell appops set $pkg WRITE_SETTINGS allow",
         )
+    }
+
+    /**
+     * The keyevent route sleeps Android itself rather than blanking a backlight, so it must not borrow
+     * the bl_power wording: what a person standing at the panel can do to wake it is genuinely
+     * different, and that difference is the part worth stating on a panel's own diagnostics.
+     */
+    internal fun screenOnOffCapability(route: ScreenOff, su: Boolean, daemon: Boolean): Cap = when {
+        route == ScreenOff.KEYEVENT && (daemon || su) -> Cap("Screen on/off", "ok",
+            "Android sleep via KEYCODE_SLEEP; Home Assistant always wakes it, a local touch only where this panel's touchscreen is a platform wake source")
+        daemon -> Cap("Screen on/off", "ok", "true backlight-off via the helper daemon")
+        su -> Cap("Screen on/off", "ok", "true backlight-off via su bl_power")
+        else -> Cap("Screen on/off", "degraded",
+            "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off")
     }
 
     internal fun showShizukuCapability(

@@ -26,7 +26,7 @@ class HelperSocketCompositionTest {
         val daemon = SocketDaemon(socketPath)
 
         assertTrue(daemon.available())
-        assertEquals("HELPER version=1.1.0 proto=1.1", daemon.send("VERSION"))
+        assertEquals("HELPER version=1.2.0 proto=1.2", daemon.send("VERSION"))
         assertEquals("ERR", daemon.send("PINGEXTRA"))
         assertEquals("OK", daemon.sendLong("RELOAD io.example.dashboard", 5_000).replyValue())
     }
@@ -41,7 +41,7 @@ class HelperSocketCompositionTest {
     fun appWireCompatibilityCorpusCrossesKotlinAndNativeHelper() {
         val daemon = SocketDaemon(socketPath)
         listOf(
-            WireTranscript("VERSION", "HELPER version=1.1.0 proto=1.1"),
+            WireTranscript("VERSION", "HELPER version=1.2.0 proto=1.2"),
             WireTranscript("PING", "OK"),
             WireTranscript("BUILDID", "BUILDID development"),
             WireTranscript("COMPANIONCAPS", "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"),
@@ -54,6 +54,14 @@ class HelperSocketCompositionTest {
             WireTranscript("BLREAD", "ERR"),
             WireTranscript("BLSET 42", "ERR"),
             WireTranscript("SCREEN ON", "ERR"),
+            // The two named keys are the whole accepted vocabulary: anything numeric, unknown or
+            // differently cased must be refused before it can reach `input`.
+            WireTranscript("KEYEVENT SLEEP", "OK"),
+            WireTranscript("KEYEVENT WAKEUP", "OK"),
+            WireTranscript("KEYEVENT 26", "ERR"),
+            WireTranscript("KEYEVENT POWER", "ERR"),
+            WireTranscript("KEYEVENT", "ERR"),
+            WireTranscript("REBOOT NOW", "ERR"),
             WireTranscript("START io.homeassistant.companion.android/.Home", "OK"),
             WireTranscript("RELOAD io.homeassistant.companion.android", "OK"),
             WireTranscript("SETHOME io.homeassistant.companion.android/.Home", "OK"),

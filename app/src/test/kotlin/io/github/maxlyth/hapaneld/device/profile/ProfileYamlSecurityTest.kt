@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.device.profile
 
+import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.provisioning.requiresProvisioningHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -162,6 +163,80 @@ class ProfileYamlSecurityTest {
         assertFalse("proximity_near_raw" in serialized)
         assertFalse("proximity_far_raw" in serialized)
         assertFalse("proximity_graded_strategy" in serialized)
+    }
+
+    /**
+     * The keyevent route is legal under either privilege, unlike the two bl_power routes: it injects
+     * through root where the app has it and through the helper daemon otherwise, so neither
+     * `app_can_su` setting can be rejected on its own. It still selects a privileged driver, which the
+     * requirements set must declare.
+     */
+    @Test fun `keyevent screen off validates under either su capability and requires its own driver`() {
+        listOf(false, true).forEach { appCanSu ->
+            val base = testProfileDocument()
+            val document = base.copy(
+                platform = ProfilePlatform(if (appCanSu) "android" else "none", appCanSu = appCanSu),
+                hardware = base.hardware.copy(screenOff = "keyevent"),
+                requires = ProfileRequirements(
+                    drivers = setOf("screen.keyevent") + if (appCanSu) setOf("access.android-su") else emptySet(),
+                ),
+            )
+            assertEquals(
+                "keyevent must validate with app_can_su=$appCanSu",
+                emptyList<ProfileIssue>(),
+                ProfileValidator.validate(document, "1.0.0", bundled = false),
+            )
+            assertEquals(document, ProfileYaml.parse(ProfileYaml.serialize(document)).document)
+
+            val missingDriver = document.copy(
+                requires = ProfileRequirements(
+                    drivers = setOf("screen.brightness-zero") +
+                        if (appCanSu) setOf("access.android-su") else emptySet(),
+                ),
+            )
+            assertTrue(
+                "an undeclared screen.keyevent driver must be rejected",
+                ProfileValidator.validate(missingDriver, "1.0.0", bundled = false)
+                    .any { it.path == "requires.drivers" },
+            )
+        }
+    }
+
+    /** Validation alone proves nothing about what the runtime does with the value, so the adapter's
+     *  own mapping is asserted here: a validated `keyevent` document must reach the keyevent route,
+     *  and the permissive `else` that catches unknown text must not be what carries it there. */
+    @Test fun `a keyevent document reaches the keyevent screen route`() {
+        val base = testProfileDocument()
+        fun profileFor(token: String) = DataDeviceProfile(
+            document = base.copy(hardware = base.hardware.copy(screenOff = token)),
+            productVersion = "1.0.0",
+            revision = "test",
+            trustedBundledContent = false,
+        )
+        assertEquals(ScreenOff.KEYEVENT, profileFor("keyevent").screenOff)
+        assertEquals(ScreenOff.SU_BLPOWER, profileFor("su-blpower").screenOff)
+        assertEquals(ScreenOff.DAEMON_BLPOWER, profileFor("daemon-blpower").screenOff)
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, profileFor("brightness-zero").screenOff)
+        assertEquals("unknown text must stay the safest route", ScreenOff.BRIGHTNESS_ZERO, profileFor("keyevents").screenOff)
+    }
+
+    /** The keyevent route is privileged, so it must select a privileged driver rather than the
+     *  unprivileged brightness one — the classification that decides what a profile is allowed to do. */
+    @Test fun `the keyevent driver is declared and privileged`() {
+        val driver = ProfileMetadata.drivers.single { it.id == "screen.keyevent" }
+        assertTrue("screen.keyevent must be privileged", driver.privileged)
+        assertEquals(ProfileHelperAuthorityDemand.SANDBOX_FALLBACK, driver.helperDemand)
+    }
+
+    /** An unknown route must still be refused: the new value widens the vocabulary, not the grammar. */
+    @Test fun `an unknown screen off route is still rejected`() {
+        val base = testProfileDocument()
+        val issues = ProfileValidator.validate(
+            base.copy(hardware = base.hardware.copy(screenOff = "keyevents")),
+            "1.0.0",
+            bundled = false,
+        )
+        assertTrue(issues.any { it.path == "hardware.screen_off" })
     }
 
     @Test fun `duplicate keys are rejected`() {

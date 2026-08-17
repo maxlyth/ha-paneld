@@ -113,7 +113,7 @@ internal object ProfileValidator {
             reject("hardware.led.mechanism", "Unknown LED mechanism '${document.hardware.led.mechanism}'.")
         }
         if (document.hardware.led.transfer !in setOf("identity", "rk3576-four-bit")) reject("hardware.led.transfer", "Unknown core transfer '${document.hardware.led.transfer}'.")
-        if (document.hardware.screenOff !in setOf("brightness-zero", "su-blpower", "daemon-blpower")) reject("hardware.screen_off", "Unknown screen-off route '${document.hardware.screenOff}'.")
+        if (document.hardware.screenOff !in setOf("brightness-zero", "su-blpower", "daemon-blpower", "keyevent")) reject("hardware.screen_off", "Unknown screen-off route '${document.hardware.screenOff}'.")
         if (document.hardware.screenOff == "su-blpower" && !document.platform.appCanSu) reject("hardware.screen_off", "su-blpower requires app_can_su: true.")
         if (document.hardware.screenOff == "daemon-blpower" && document.platform.appCanSu) reject("hardware.screen_off", "daemon-blpower is reserved for sandbox-walled profiles.")
         if (document.hardware.led.mechanism in setOf("rk3576-ioctl-daemon", "sysfs-daemon") && document.platform.appCanSu) reject("hardware.led.mechanism", "Daemon-only LED routes are reserved for sandbox-walled profiles.")

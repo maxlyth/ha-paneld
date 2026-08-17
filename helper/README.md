@@ -17,12 +17,13 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 
 | Command | Effect | Reply |
 | --- | --- | --- |
-| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.1.0 proto=1.1` / `ERR` when arguments are supplied |
+| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.2.0 proto=1.2` / `ERR` when arguments are supplied |
 | `RGB <r> <g> <b>` | set LED colour (each 0..255) | `OK` / `ERR` |
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
 | `LEDPROBE` | which RGB-LED backend this panel has (so the app gates the LED entity on a reachable node) | `ledjni` / `sysfs` / `none` |
 | `SCREEN ON` / `SCREEN OFF` | screen backlight power (`bl_power` 0/4) | `OK` / `ERR` |
+| `KEYEVENT SLEEP` / `KEYEVENT WAKEUP` | Android screen power for panels with no `/sys/class/backlight` device, by injecting the named key. Named keys only — there is no numeric form, so no caller or profile can select another keycode | `OK` (the request ran) / `ERR` |
 | `BLPOWER` | read physical screen-backlight power (`bl_power`) | `0`–`4` / `ERR` |
 | `BLREAD` | read effective and maximum backlight brightness | `<actual> <max>` / `ERR` |
 | `BLSET <n>` | set hardware backlight brightness, clamped to its maximum | `OK` / `ERR` |
@@ -49,7 +50,7 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 | `ZIGBEECONTAIN` | argument-free containment for the exact vendor-native Sonoff `/vendor/bin/siliconlabs_host` layout; targets only its guard, gateway and matching broker, then demotes a surviving gateway | `OK` / `PARTIAL` / `ERR` |
 | `PERFDUMP` | CPU/load/temp/gpu/process snapshot (for sandbox-walled apps) | marker-delimited stream, then EOF |
 | `CHT8305` | room temp/humidity from exact allowlisted input layouts (`temperature`/`humidity` or ZX-SMT156 `sun-ths`/`sun-hum`) | `T=<centi> H=<centi>` / `ERR` |
-| `REBOOT` | reboot the panel | `OK` (then down) |
+| `REBOOT` / `REBOOT AWAIT` | reboot the panel through every mechanism in turn, waiting a bounded interval after each rather than trusting a zero exit status. `REBOOT` accepts first and then goes down; `REBOOT AWAIT` answers only when the reboot demonstrably did not happen, so the client's EOF is the success signal | `OK` (then down) · `ERR` when every mechanism ran and the panel is still up, or the argument is not `AWAIT` |
 | `PING` | liveness probe | `OK` |
 | anything else | — | `ERR` |
 
@@ -86,7 +87,7 @@ How well each capability meets that today:
 | --- | --- | --- |
 | **Buttons** (`WATCH`/`SUBSCRIBE`) | the app passes the evdev node + grab flag from its profile; daemon streams raw events | **profile only** — no daemon change |
 | **GPIO inputs** (`GPIOWATCH`/`GPIOSUBSCRIBE`) | the app passes a bounded GPIO number from its profile; daemon derives fixed sysfs paths and streams binary values | **profile only** — no daemon change |
-| **Screen** (`SCREEN`) | daemon auto-discovers `/sys/class/backlight` | **none** (optionally accept an app-supplied path for multi-backlight panels) |
+| **Screen** (`SCREEN`, `KEYEVENT`) | daemon auto-discovers `/sys/class/backlight`; `KEYEVENT` covers panels that have no backlight class at all | **profile only** — the app picks the route from `hardware.screen_off` |
 | **Reboot / reload / start** | generic `am`/`svc` | **none** |
 | **LED** (`RGB`/`OFF`/`BTN`) | **hardcoded** to the TPA10 sysfs node + its `avsux` write format | **core change** — see below |
 

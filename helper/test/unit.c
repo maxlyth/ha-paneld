@@ -341,10 +341,10 @@ static void test_stat_jiffies(void) {
 
 static void test_dispatch_exact_match(void) {
     char out[64];
-    CHECK(strcmp(helper_identity(), "HELPER version=1.1.0 proto=1.1") == 0,
+    CHECK(strcmp(helper_identity(), "HELPER version=1.2.0 proto=1.2") == 0,
           "helper identity is stable (got '%s')\n", helper_identity());
     dispatch_reply("VERSION", out, sizeof out);
-    CHECK(strcmp(out, "HELPER version=1.1.0 proto=1.1\n") == 0,
+    CHECK(strcmp(out, "HELPER version=1.2.0 proto=1.2\n") == 0,
           "VERSION -> machine-readable identity (got '%s')\n", out);
     dispatch_reply("VERSION extra", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "VERSION rejects arguments (got '%s')\n", out);
@@ -435,6 +435,92 @@ static void test_dispatch_exact_match(void) {
     CHECK(strcmp(out, "ERR\n") == 0, "RGB with too few args -> ERR (got '%s')\n", out);
     dispatch_reply("BLPOWER", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "BLPOWER with no host backlight node -> ERR (got '%s')\n", out);
+}
+
+// The reporter's defect and its fix, as a request/reply contract: `svc power reboot` exits 0 without
+// rebooting under this daemon's sanitized environment, so a zero exit must never end the escalation.
+static void test_reboot_escalation(void) {
+    char out[64];
+    static const char *const svc_argv[] = { "svc", "power", "reboot", NULL };
+    static const char *const direct_argv[] = { "reboot", NULL };
+
+    // A zero exit from the first mechanism is exactly the lie that used to suppress the fallback.
+    sysexec_stub_reset();
+    dispatch_reply("REBOOT AWAIT", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0,
+          "REBOOT AWAIT reports failure when the panel is still up (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv("/system/bin/svc", svc_argv, 1) == 1,
+          "REBOOT AWAIT requests the svc mechanism exactly once\n");
+    CHECK(sysexec_stub_count_argv("/system/bin/reboot", direct_argv, 1) == 1,
+          "a zero exit from svc must still escalate to /system/bin/reboot\n");
+    CHECK(sysexec_stub_count_argv_calls() == 2,
+          "REBOOT AWAIT runs the two declared mechanisms and nothing else\n");
+    CHECK(sysexec_stub_count_sleep() == 2 && sysexec_stub_total_sleep_ms() == 10000UL,
+          "each request is followed by its bounded wait (calls=%d total=%lums)\n",
+          sysexec_stub_count_sleep(), sysexec_stub_total_sleep_ms());
+
+    // A failing first mechanism escalates identically — the outcome never depends on exit status.
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("svc", 256);
+    dispatch_reply("REBOOT AWAIT", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0,
+          "REBOOT AWAIT still reports failure when svc exits nonzero (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv("/system/bin/reboot", direct_argv, 1) == 1,
+          "a nonzero exit from svc escalates to /system/bin/reboot\n");
+
+    // Bare REBOOT keeps the legacy accept-then-go-down contract for clients that predate AWAIT, and
+    // gains the escalation regardless — an old app on a new helper still reaches the fallback.
+    sysexec_stub_reset();
+    dispatch_reply("REBOOT", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "bare REBOOT accepts before going down (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv("/system/bin/reboot", direct_argv, 1) == 1,
+          "bare REBOOT escalates through the same bounded mechanisms\n");
+
+    sysexec_stub_reset();
+    dispatch_reply("REBOOT NOW", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "REBOOT rejects an unknown mode (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv_calls() == 0, "a rejected REBOOT mode executes nothing\n");
+
+    sysexec_stub_reset();
+    dispatch_reply("REBOOT AWAIT extra", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "REBOOT rejects a trailing argument (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv_calls() == 0, "a rejected REBOOT argument executes nothing\n");
+}
+
+// KEYEVENT accepts named keys only. A numeric or unknown name must never reach `input`, because that
+// would turn a screen-power verb into arbitrary key injection selectable from a profile document.
+static void test_keyevent_named_keys_only(void) {
+    char out[64];
+    static const char *const sleep_argv[] = { "input", "keyevent", "223", NULL };
+    static const char *const wakeup_argv[] = { "input", "keyevent", "224", NULL };
+
+    sysexec_stub_reset();
+    dispatch_reply("KEYEVENT SLEEP", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "KEYEVENT SLEEP -> OK (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv("/system/bin/input", sleep_argv, 1) == 1,
+          "KEYEVENT SLEEP injects the compiled KEYCODE_SLEEP constant\n");
+
+    sysexec_stub_reset();
+    dispatch_reply("KEYEVENT WAKEUP", out, sizeof out);
+    CHECK(strcmp(out, "OK\n") == 0, "KEYEVENT WAKEUP -> OK (got '%s')\n", out);
+    CHECK(sysexec_stub_count_argv("/system/bin/input", wakeup_argv, 1) == 1,
+          "KEYEVENT WAKEUP injects the compiled KEYCODE_WAKEUP constant\n");
+
+    static const char *const refused[] = { "KEYEVENT 26", "KEYEVENT POWER", "KEYEVENT",
+                                           "KEYEVENT SLEEP 26", "KEYEVENT sleep" };
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        sysexec_stub_reset();
+        dispatch_reply(refused[i], out, sizeof out);
+        CHECK(strcmp(out, "ERR\n") == 0, "'%s' -> ERR (got '%s')\n", refused[i], out);
+        CHECK(sysexec_stub_count_argv_calls() == 0,
+              "'%s' must not execute anything\n", refused[i]);
+    }
+
+    // The exit status of `input` is reported, but the app never treats OK as proof of a state change.
+    sysexec_stub_reset();
+    sysexec_stub_fail_run("input", 256);
+    dispatch_reply("KEYEVENT SLEEP", out, sizeof out);
+    CHECK(strcmp(out, "ERR\n") == 0, "a failed injection is reported as ERR (got '%s')\n", out);
 }
 
 static void test_sysctl_execution_results(void) {
@@ -1655,6 +1741,8 @@ int main(void) {
     test_clamp();
     test_stat_jiffies();
     test_dispatch_exact_match();
+    test_reboot_escalation();
+    test_keyevent_named_keys_only();
     test_sysctl_execution_results();
     test_bootchime_protocol();
     test_screencap_stream_writes();

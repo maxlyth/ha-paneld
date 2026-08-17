@@ -15,5 +15,7 @@ void sysexec_stub_add_popen(const char *needle, const char *output, int close_st
 long sysexec_stub_last_pclose_offset(void);
 void sysexec_stub_set_spawn_result(int status);
 void sysexec_stub_set_spawn_real(int enabled);
+int  sysexec_stub_count_sleep(void);
+unsigned long sysexec_stub_total_sleep_ms(void);
 
 #endif

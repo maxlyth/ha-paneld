@@ -35,7 +35,9 @@ int   sysexec_stream_argv(const char *path, const char *const argv[], int output
 // Spawn a detached background thread running fn(arg). Returns 0 on success, non-zero on failure.
 int   sysexec_spawn(void *(*fn)(void *), void *arg);
 
-// Reboot the panel (svc power reboot, falling back to reboot(8)).
-void  sysexec_reboot(void);
+// Block this thread for [ms] milliseconds. Interruptions are absorbed so the caller gets the whole
+// interval. Isolated here with the other host primitives so a policy that waits for a host-level
+// effect (see sysctl.c's reboot escalation) stays deterministic and instant under the test stub.
+void  sysexec_sleep_ms(unsigned ms);
 
 #endif

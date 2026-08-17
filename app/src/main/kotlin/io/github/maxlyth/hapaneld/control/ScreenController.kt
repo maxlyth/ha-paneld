@@ -20,20 +20,34 @@ value class AutomaticOffEpoch internal constructor(internal val generation: Long
 /**
  * Screen on/off — vendor-free with one serialized transition owner.
  *
- * The active profile selects helper, direct `su`, or brightness-zero as the preferred route. The two
- * privileged routes may fall through to each other and then brightness when unavailable; an explicit
- * brightness-zero profile never probes a privileged actuator. All routes leave the device Awake — no
- * keyguard and no PIN on wake.
+ * The active profile selects helper, direct `su`, keyevent, or brightness-zero as the preferred
+ * route. The two bl_power routes may fall through to each other and then brightness when unavailable;
+ * an explicit brightness-zero profile never probes a privileged actuator.
  *
  * This deliberately avoids `DevicePolicyManager.lockNow()`, which turns the screen off via the
  * keyguard and therefore demands the device PIN on wake. Its collaborators are seamed ([Backlight],
  * [ScreenPower], [RootShell], [Daemon], [WakeTap]) so the never-blank logic is unit-testable without a device.
  *
- * Never-blank guarantee: a screen-off must ALWAYS be locally wakeable. Every real off arms a [WakeTap]
- * (a non-consuming touch overlay) so a tap re-lights the panel. If a wake can't be guaranteed
- * ([WakeTap.arm] cannot confirm attachment), the off degrades to a visible dim rather than a true dark,
- * so the panel can never look bricked (the failure mode that stranded a freshly-provisioned panel dark
- * + touch-dead).
+ * **Never-blank guarantee: ha-paneld must always be able to undo its own screen-off.** How that is
+ * guaranteed is a property of the route, and the two families differ:
+ *
+ * - The bl_power and brightness routes leave the device Awake, so the dashboard stays foreground and
+ *   ha-paneld cannot see a wake tap itself. Each real off therefore arms a [WakeTap] (a non-consuming
+ *   touch overlay) and a tap re-lights the panel. If that cannot be confirmed ([WakeTap.arm] returns
+ *   false), the off degrades to a visible dim rather than a true dark, so the panel can never look
+ *   bricked — the failure mode that stranded a freshly-provisioned panel dark and touch-dead.
+ * - [ScreenOff.KEYEVENT] puts Android itself noninteractive, which is a first-class platform state
+ *   rather than a backlight ha-paneld blanked behind the framework's back. Its way back is
+ *   [ScreenPower.pulseWake] — a wakelock with `ACQUIRE_CAUSES_WAKEUP` that needs no privilege at all,
+ *   so it survives root and the helper daemon both disappearing, which the bl_power routes' way back
+ *   does not. The touch overlay is deliberately NOT armed on this route: a noninteractive device does
+ *   not dispatch touches to windows, so arming it would claim a local wake the route cannot provide.
+ *   **Local touch wake on this route is a platform property, declared by the profile rather than
+ *   probed** (the same rule as `hasNativeNavbar`): where the touchscreen is a kernel wake source
+ *   Android wakes itself and [reconcileObservedLit] adopts that wake; where it is not, Home Assistant
+ *   is the way back. The route also refuses to sleep a device with a configured credential
+ *   ([ScreenPower.isDeviceSecure]), because waking into a lock screen on a wall panel is the same
+ *   class of strand as rebooting one.
  */
 class ScreenController(
     private val backlight: Backlight,
@@ -42,6 +56,8 @@ class ScreenController(
     private val daemon: Daemon = HelperClient,
     private val wakeTap: WakeTap = NoWakeTap,
     private val route: ScreenOff,
+    /** Bounded wait between interactivity read-backs. Seamed so tests confirm without real time. */
+    private val nap: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     // Last known "on" level, used by the brightness fallback. Survives an off/on cycle.
     @Volatile private var savedLevel = DEFAULT_ON
@@ -88,6 +104,9 @@ class ScreenController(
         }
         return when (route) {
             ScreenOff.DAEMON_BLPOWER, ScreenOff.SU_BLPOWER -> observedBlPower()?.let(::fromPower) ?: effective()
+            // Android's own interactivity IS this route's screen state; there is no backlight node to
+            // read and no third "unknown" answer to give.
+            ScreenOff.KEYEVENT -> !power.isInteractive()
             ScreenOff.BRIGHTNESS_ZERO -> effective()
         }
     }
@@ -103,6 +122,7 @@ class ScreenController(
             ScreenOff.DAEMON_BLPOWER, ScreenOff.SU_BLPOWER -> observedBlPower()?.let { powerState ->
                 if (powerState == 0) effectiveLit() else false
             }
+            ScreenOff.KEYEVENT -> power.isInteractive()
             ScreenOff.BRIGHTNESS_ZERO -> effectiveLit()
         }
     }
@@ -114,7 +134,7 @@ class ScreenController(
         ScreenOff.SU_BLPOWER -> root.runOutput(blPowerRead())?.trim()?.toIntOrNull()
             ?.takeIf { it in 0..4 }
             ?: daemon.send("BLPOWER")?.trim()?.toIntOrNull()?.takeIf { it in 0..4 }
-        ScreenOff.BRIGHTNESS_ZERO -> null
+        ScreenOff.KEYEVENT, ScreenOff.BRIGHTNESS_ZERO -> null
     }
 
     /** Cautious boolean used by the never-blank watchdog: unknown is not grounds to alter hardware. */
@@ -122,6 +142,9 @@ class ScreenController(
 
     /** Recover only a dark backlight on an otherwise interactive panel. A non-interactive device has
      * entered Android's normal screen sleep and must not be woken by the periodic never-blank guard.
+     * That rule is what makes the watchdog inert on [ScreenOff.KEYEVENT], where "dark" IS
+     * noninteractive: the guard exists to undo a backlight ha-paneld blanked behind the framework's
+     * back, and it must not start fighting Android's own sleep to reach a route that has none.
      * The potentially slow hardware observation stays outside the transition monitor; its generation
      * is then admitted atomically with the wake so a concurrent explicit screen-off always wins. */
     fun recoverUnexpectedDark(): Boolean {
@@ -169,30 +192,34 @@ class ScreenController(
         automaticOffGeneration = if (automatic) intendedOffGeneration else 0L
         observedDarkGeneration = 0L
         intendedOff = true
-        // Never go fully dark without a guaranteed way back. If touch-to-wake can't be armed (no overlay
-        // permission), a real screen-off would leave the panel unwakeable except via HA/proximity — the
-        // "looks bricked" failure that stranded a freshly-provisioned panel dark. Degrade to a visible
-        // dim instead: still legible + tappable, and HA/proximity can still restore full brightness. This
-        // path leaves the screen VISIBLE, so the built-in renderer must NOT be frozen here (a frozen
-        // WebView on a still-lit dashboard would show stale, un-tappable cards).
+        // Never go dark without a guaranteed way back. Which guarantee applies is a property of the
+        // route (see the class KDoc): the backlight families need a touch overlay, because they leave
+        // Android interactive and cannot see the wake tap themselves, and a real off without one would
+        // strand the panel dark and touch-dead — the "looks bricked" failure this rule exists for. The
+        // keyevent route brings its own unprivileged wake instead, and refuses only where a device
+        // credential would stand between that wake and the dashboard.
         val wakeTapGeneration = intendedOffGeneration
         val wakeTapAutomaticEpoch = automaticEpochOrNull()
-        if (!wakeTap.canArm() || !wakeTap.arm {
-                // A touch observer may hand work to another thread. By the time that worker runs, a
-                // manual command or a later automatic transition may own a different OFF epoch. Never
-                // let the old tap wake that newer state: retain and prove the exact epoch armed here.
-                if (wakeIfStillDark(wakeTapGeneration) == WakeOutcome.WOKEN) {
-                    onWakeByTap?.invoke(wakeTapAutomaticEpoch)
+        val refusal = when (route) {
+            // Android's own sleep is undone by the unprivileged wakelock pulse in wake(), so this
+            // route brings its own guarantee and never arms the overlay (see the class KDoc). The one
+            // thing that can put a barrier in front of the dashboard on the way back is a configured
+            // credential, so a secured device is refused rather than slept.
+            ScreenOff.KEYEVENT ->
+                if (power.isDeviceSecure()) "a device credential would gate the wake" else null
+            else -> if (
+                wakeTap.canArm() && wakeTap.arm {
+                    // A touch observer may hand work to another thread. By the time that worker runs,
+                    // a manual command or a later automatic transition may own a different OFF epoch.
+                    // Never let the old tap wake that newer state: retain and prove the exact epoch
+                    // armed here.
+                    if (wakeIfStillDark(wakeTapGeneration) == WakeOutcome.WOKEN) {
+                        onWakeByTap?.invoke(wakeTapAutomaticEpoch)
+                    }
                 }
-            }
-        ) {
-            val cur = backlight.getBrightness()
-            if (cur > 0) savedLevel = cur
-            backlight.setBrightness(NO_WAKE_DIM)
-            appliedOffRoute = null
-            Log.w(TAG, "screen-off with no touch-to-wake — dimming to floor (never-blank; saved=$savedLevel)")
-            return automaticEpochOrNull()
+            ) null else "no touch-to-wake"
         }
+        if (refusal != null) return dimToFloor(refusal)
         // Guaranteed locally wakeable: arm the tap, then power the backlight off for real. Only the two
         // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
         // behind a black backlight). The brightness fallback (0) is not guaranteed dark on panels that
@@ -208,6 +235,7 @@ class ScreenController(
                 daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER
                 else -> null
             }
+            ScreenOff.KEYEVENT -> if (sleepByKeyevent()) ScreenOff.KEYEVENT else null
             ScreenOff.BRIGHTNESS_ZERO -> null
         }
         if (poweredOffRoute != null) {
@@ -220,13 +248,34 @@ class ScreenController(
             Log.d(TAG, "screen -> off (${poweredOffRoute.name.lowercase()})")
             return automaticEpochOrNull()
         }
-        // Last resort: no daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the
-        // raw setter so it can reach 0: the public setBrightness floors at MIN_VISIBLE to stay never-blank.
+        // Last resort. A raw zero is admissible only because the overlay above was armed, so a tap
+        // still re-lights the panel. The keyevent route has no overlay by design, and its way back is
+        // the wakelock pulse, which nobody standing at the panel can trigger — so it must not reach a
+        // dark it cannot let a person out of, and degrades to the visible floor instead.
+        if (route == ScreenOff.KEYEVENT) return dimToFloor("an unconfirmed keyevent sleep")
+        // No daemon, no su — dim to 0 (only a dim on panels that clamp a minimum). Uses the raw setter
+        // so it can reach 0: the public setBrightness floors at MIN_VISIBLE to stay never-blank.
         val cur = backlight.getBrightness()
         if (cur > 0) savedLevel = cur
         backlight.setBrightnessRaw(0)
         appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
+        return automaticEpochOrNull()
+    }
+
+    /**
+     * Degrade an off to a visible dim, the never-blank floor. [appliedOffRoute] records what was
+     * actually applied rather than what was asked for, so [wake] restores the level this dimmed
+     * instead of retrying a privileged actuator that was never used. The screen stays VISIBLE, so the
+     * built-in renderer must not be frozen here: a frozen WebView on a still-lit dashboard would show
+     * stale, un-tappable cards.
+     */
+    private fun dimToFloor(reason: String): AutomaticOffEpoch? {
+        val cur = backlight.getBrightness()
+        if (cur > 0) savedLevel = cur
+        backlight.setBrightness(NO_WAKE_DIM)
+        appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
+        Log.w(TAG, "screen-off with $reason — dimming to floor (never-blank; saved=$savedLevel)")
         return automaticEpochOrNull()
     }
 
@@ -262,10 +311,59 @@ class ScreenController(
                     return
                 }
             }
+            ScreenOff.KEYEVENT -> {
+                // The wakelock pulse inside completeWake is what actually guarantees this wake, and
+                // it needs no privilege, so a failed injection is not worth reporting as a failure —
+                // and the brightness fallback below must not run, because this route never changed
+                // the brightness and restoring a remembered level would move it for no reason.
+                val injected = injectKeyevent("WAKEUP")
+                completeWake(
+                    if (injected) "screen -> on (keyevent wakeup)"
+                    else "screen -> on (wakelock pulse; keyevent wakeup unavailable)"
+                )
+                return
+            }
             ScreenOff.BRIGHTNESS_ZERO -> Unit
         }
         backlight.setBrightness(savedLevel.coerceAtLeast(MIN_ON))
         completeWake("screen -> on (brightness fallback; $savedLevel)")
+    }
+
+    /**
+     * Put Android noninteractive and prove it happened. `input` is an `app_process` wrapper, and one
+     * has been reported exiting zero under the helper daemon's sanitized environment without doing
+     * anything, so a submitted request is never accepted as a state change: each transport is judged
+     * by the interactivity it produced, and the next one is tried when the first only claimed to work.
+     * Root goes first because a full environment is the form the behaviour was reported working in.
+     */
+    private fun sleepByKeyevent(): Boolean =
+        keyeventTransports().any { transport -> transport("SLEEP") && awaitInteractive(false) }
+
+    /** Best-effort wake injection; the caller's wakelock pulse is the actual guarantee. */
+    private fun injectKeyevent(name: String): Boolean =
+        keyeventTransports().any { transport -> transport(name) }
+
+    private fun keyeventTransports(): List<(String) -> Boolean> = listOf(
+        { name: String -> root.run("input keyevent ${keycodeOf(name)}") },
+        { name: String -> daemon.send("KEYEVENT $name") == "OK" },
+    )
+
+    /** Named keys only, resolved here so no caller or profile document can select another keycode. */
+    private fun keycodeOf(name: String): Int = when (name) {
+        "SLEEP" -> KEYCODE_SLEEP
+        "WAKEUP" -> KEYCODE_WAKEUP
+        else -> throw IllegalArgumentException("unsupported screen keyevent: $name")
+    }
+
+    /** Poll interactivity for a bounded interval. False means the actuator did not do what it said. */
+    private fun awaitInteractive(expected: Boolean): Boolean {
+        var waited = 0L
+        while (true) {
+            if (power.isInteractive() == expected) return true
+            if (waited >= KEYEVENT_CONFIRM_MS) return false
+            nap(KEYEVENT_POLL_MS)
+            waited += KEYEVENT_POLL_MS
+        }
     }
 
     /** Token for generation-safe local wake work. Null means there is no deliberate screen-off to wake. */
@@ -405,5 +503,12 @@ class ScreenController(
         private const val MIN_ON = 10
         // Dim level for a screen-off that can't be made touch-wakeable: low but clearly on, never blank.
         private const val NO_WAKE_DIM = 10
+        private const val KEYCODE_SLEEP = 223
+        private const val KEYCODE_WAKEUP = 224
+        // Android takes a moment to leave the interactive state, so the read-back is a short bounded
+        // poll rather than one immediate sample. It runs inside the transition monitor, which the
+        // privileged su/daemon calls around it already hold for a comparable time.
+        private const val KEYEVENT_CONFIRM_MS = 1_000L
+        private const val KEYEVENT_POLL_MS = 100L
     }
 }

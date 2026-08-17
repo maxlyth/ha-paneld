@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import io.github.maxlyth.hapaneld.platform.ActivityRef
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -53,24 +54,62 @@ class SystemControllerTest {
     private val DASH_HOME = ActivityRef(OWN, "io.github.maxlyth.hapaneld.DashboardActivity")
 
     // ---------- reboot ----------
+    /** Build a controller whose helper answers REBOOT AWAIT with an exact [DaemonLongResult]. */
+    private fun rebootController(
+        outcome: DaemonLongResult? = null,
+        su: Boolean = true,
+    ): Triple<SystemController, FakeRootShell, FakeDaemon> {
+        val root = FakeRootShell(runResult = su)
+        val d = FakeDaemon(
+            available = outcome != null,
+            longOutcomes = outcome?.let { mapOf("REBOOT AWAIT" to it) } ?: emptyMap(),
+        )
+        return Triple(SystemController(FakeSystemEnv(), root, d, builtinForeground = { false }), root, d)
+    }
+
+    /** A panel that is genuinely going down closes the socket instead of answering, and that silence
+     *  is the only success signal a reboot can produce. */
     @Test fun rebootPrefersDaemon() {
-        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("REBOOT" to "OK"))
+        val (c, root, d) = rebootController(DaemonLongResult.Indeterminate)
         c.reboot()
-        assertTrue("daemon REBOOT sent", d.sent.contains("REBOOT"))
-        assertTrue("no su when daemon present", root.ran.isEmpty())
+        assertEquals(listOf("REBOOT AWAIT"), d.sent)
+        assertTrue("no su when the panel is already going down", root.ran.isEmpty())
     }
 
     @Test fun rebootFallsToSu() {
-        val (c, root, _) = sc(FakeSystemEnv(), daemon = null)
+        val (c, root, _) = rebootController(outcome = null)
         c.reboot()
         assertTrue("su reboot fired, got ${root.ran}", root.ran.contains("reboot"))
     }
 
-    @Test fun rebootFallsToSuWhenDaemonRejectsVerb() {
-        val (c, root, d) = sc(FakeSystemEnv(), daemon = mapOf("REBOOT" to "ERR"))
+    /**
+     * The reporter's defect, at the app boundary. A helper that ran every mechanism and is still up
+     * answers ERR, and that must reach the root route rather than being reported as a reboot: root
+     * runs from the app's environment, not the daemon's sanitized one, which is exactly the
+     * difference that made `svc power reboot` work in one and silently do nothing in the other.
+     */
+    @Test fun rebootTriesRootWhenTheHelperProvesThePanelIsStillUp() {
+        val (c, root, d) = rebootController(DaemonLongResult.Reply("ERR"))
         c.reboot()
-        assertEquals(listOf("REBOOT"), d.sent)
-        assertTrue("stale helper falls through to su", root.ran.contains("reboot"))
+        assertEquals(listOf("REBOOT AWAIT"), d.sent)
+        assertTrue("a proven-failed helper reboot falls through to su", root.ran.contains("reboot"))
+    }
+
+    /** A helper predating AWAIT ignores the argument and accepts immediately; that is the best
+     *  evidence it can give, so it must still count as a reboot rather than losing one. */
+    @Test fun rebootAcceptsAnOlderHelperThatAnswersImmediately() {
+        val (c, root, d) = rebootController(DaemonLongResult.Reply("OK"))
+        c.reboot()
+        assertEquals(listOf("REBOOT AWAIT"), d.sent)
+        assertTrue("an older helper's acceptance must not be second-guessed", root.ran.isEmpty())
+    }
+
+    /** The wait must outlast the helper's own bounded escalation (two mechanisms, 6s + 4s), or a
+     *  daemon still working through it would be misread as one that already went down. */
+    @Test fun rebootAwaitOutlastsTheHelperEscalationWindow() {
+        val (c, _, d) = rebootController(DaemonLongResult.Reply("ERR"))
+        c.reboot()
+        assertEquals(listOf(15_000L), d.longTimeouts)
     }
 
     // ---------- resolveDashboard / dashboardState ----------

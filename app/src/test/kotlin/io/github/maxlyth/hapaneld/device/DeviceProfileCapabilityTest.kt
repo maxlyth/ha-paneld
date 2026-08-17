@@ -59,6 +59,11 @@ class DeviceProfileCapabilityTest {
             when (it.screenOff) {
                 ScreenOff.SU_BLPOWER -> assertTrue("SU_BLPOWER but !appCanSu on ${it.id}", it.appCanSu)
                 ScreenOff.DAEMON_BLPOWER -> assertFalse("DAEMON_BLPOWER but appCanSu on ${it.id}", it.appCanSu)
+                // KEYEVENT injects through root when the app has it and the helper daemon otherwise,
+                // so unlike the two bl_power routes it is legal under either privilege — but it is
+                // still a privileged route, so a profile with neither is declaring an unreachable one.
+                ScreenOff.KEYEVENT ->
+                    assertTrue("KEYEVENT but no privileged route on ${it.id}", it.appCanSu || it.usesDaemon)
                 ScreenOff.BRIGHTNESS_ZERO -> Unit
             }
         }

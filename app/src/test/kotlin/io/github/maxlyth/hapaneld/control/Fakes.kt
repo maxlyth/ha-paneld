@@ -58,13 +58,16 @@ fun fakeProfile(
 class FakeRootShell(
     private val outputs: Map<String, String> = emptyMap(),
     private val available: Boolean = true,
-    private val runResult: Boolean = true,
+    var runResult: Boolean = true,
+    /** The effect a real root command would have had on the panel. Lets a test tell an actuator that
+     *  genuinely changed the device from one that only reported success. */
+    private val onRun: (String) -> Unit = {},
 ) : RootShell {
     val ran = mutableListOf<String>()
     val outputRan = mutableListOf<String>()
     val isolatedOutputRan = mutableListOf<String>()
     override fun available() = available
-    override fun run(cmd: String): Boolean { ran += cmd; return runResult }
+    override fun run(cmd: String): Boolean { ran += cmd; onRun(cmd); return runResult }
     override fun runOutput(cmd: String): String? {
         outputRan += cmd
         return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value
@@ -113,12 +116,21 @@ class FakeMetricSource(
 class FakeDaemon(
     private val replies: Map<String, String> = emptyMap(),
     private val available: Boolean = true,
+    /** Exact-command [sendLong] outcomes for results no reply line can express — a panel that goes
+     *  down mid-command ends the socket rather than answering, which is [DaemonLongResult.Indeterminate]. */
+    private val longOutcomes: Map<String, DaemonLongResult> = emptyMap(),
+    /** The effect a real daemon command would have had on the panel — see [FakeRootShell.onRun]. */
+    private val onSend: (String) -> Unit = {},
 ) : Daemon {
     val sent = mutableListOf<String>()
+    val longTimeouts = mutableListOf<Long>()
     override fun available() = available
-    override fun send(cmd: String): String? { sent += cmd; return replies[cmd] }
-    override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult =
-        send(cmd)?.let(DaemonLongResult::Reply) ?: DaemonLongResult.NotSubmitted
+    override fun send(cmd: String): String? { sent += cmd; onSend(cmd); return replies[cmd] }
+    override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult {
+        longTimeouts += timeoutMs
+        longOutcomes[cmd]?.let { sent += cmd; return it }
+        return send(cmd)?.let(DaemonLongResult::Reply) ?: DaemonLongResult.NotSubmitted
+    }
     override fun sendBytes(cmd: String): ByteArray? = null
 }
 
@@ -130,11 +142,18 @@ class FakeBacklight(var level: Int = 160) : Backlight {
     override fun setBrightnessRaw(level: Int) { calls += "raw:$level"; this.level = level }
 }
 
-/** Fake [ScreenPower]: settable interactivity; counts wake pulses. */
-class FakeScreenPower(var interactive: Boolean = true) : ScreenPower {
+/** Fake [ScreenPower]: settable interactivity and credential state; counts wake pulses. */
+class FakeScreenPower(
+    var interactive: Boolean = true,
+    var deviceSecure: Boolean = false,
+) : ScreenPower {
     var pulses = 0
     override fun isInteractive() = interactive
+    // Deliberately does NOT flip [interactive]: the real ACQUIRE_CAUSES_WAKEUP does wake the device,
+    // but tests here assert the pulse was issued rather than modelling the platform's response, and
+    // the exit-safety contract relies on driving interactivity explicitly.
     override fun pulseWake() { pulses++ }
+    override fun isDeviceSecure() = deviceSecure
 }
 
 /**

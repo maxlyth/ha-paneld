@@ -41,6 +41,9 @@ class ProvisioningServiceAdapterTest {
             "screen.brightness-zero" to ProfileHelperAuthorityDemand.NONE,
             "screen.daemon-blpower" to ProfileHelperAuthorityDemand.REQUIRED,
             "screen.su-blpower" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
+            // Added 2026-08-17: the keyevent route injects through root where the app has it and the
+            // helper daemon otherwise, so the helper is a fallback rather than a requirement.
+            "screen.keyevent" to ProfileHelperAuthorityDemand.SANDBOX_FALLBACK,
             "sensor.android" to ProfileHelperAuthorityDemand.NONE,
             "sensor.cht8305-daemon" to ProfileHelperAuthorityDemand.SHIZUKU_ALTERNATE,
             // Added 2026-08-14: the VI530x range route is helper-only — there is no sandbox or

@@ -1,11 +1,13 @@
 package io.github.maxlyth.hapaneld.platform
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.os.PowerManager
 
 /**
- * The PowerManager operations [io.github.maxlyth.hapaneld.control.ScreenController] needs — a seam so
- * screen on/off is unit-testable without Android. [AndroidScreenPower] is the real impl; tests use a fake.
+ * The platform power and lock facts [io.github.maxlyth.hapaneld.control.ScreenController] needs — a
+ * seam so screen on/off is unit-testable without Android. [AndroidScreenPower] is the real impl;
+ * tests use a fake.
  */
 interface ScreenPower {
     /** True when the device is interactive (screen on) — `PowerManager.isInteractive`. */
@@ -13,11 +15,21 @@ interface ScreenPower {
 
     /** Briefly acquire a SCREEN_BRIGHT wakelock that also wakes the device — the wake "pulse". */
     fun pulseWake()
+
+    /**
+     * True when a PIN/pattern/password is configured, so leaving Android's interactive state would
+     * put a credential screen between the user and the dashboard. A wall panel has nobody to type
+     * that credential, which is why [io.github.maxlyth.hapaneld.device.ScreenOff.KEYEVENT] refuses
+     * to sleep on a secured device. The bl_power routes are unaffected: they blank the backlight
+     * while the device stays Awake, so no keyguard is ever raised.
+     */
+    fun isDeviceSecure(): Boolean = false
 }
 
 /** Real [ScreenPower] over the Android PowerManager. */
 class AndroidScreenPower(context: Context) : ScreenPower {
     private val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    private val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
 
     override fun isInteractive(): Boolean = pm.isInteractive
 
@@ -28,4 +40,8 @@ class AndroidScreenPower(context: Context) : ScreenPower {
             "ha-paneld:wake",
         ).acquire(3_000)
     }
+
+    // An unavailable KeyguardManager is treated as secured: refusing to sleep costs a dimmer panel,
+    // while guessing "no credential" wrong strands one behind a lock screen nobody can clear.
+    override fun isDeviceSecure(): Boolean = keyguard?.isDeviceSecure ?: true
 }

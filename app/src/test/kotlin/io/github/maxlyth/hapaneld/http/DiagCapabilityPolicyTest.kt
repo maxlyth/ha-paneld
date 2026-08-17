@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.control.fakeProfile
 import io.github.maxlyth.hapaneld.control.TameController
 import io.github.maxlyth.hapaneld.device.EvdevButton
+import io.github.maxlyth.hapaneld.device.ScreenOff
 import io.github.maxlyth.hapaneld.device.profile.BundledProfileFixtures
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
@@ -295,6 +296,39 @@ class DiagCapabilityPolicyTest {
 
         assertEquals("ok", cap.status)
         assertEquals("available directly to ha-paneld", cap.note)
+    }
+
+    @Test fun blPowerRoutesReportABacklightOff() {
+        val daemonRoute = DiagReader.screenOnOffCapability(ScreenOff.DAEMON_BLPOWER, su = false, daemon = true)
+        assertEquals("Screen on/off", daemonRoute.name)
+        assertEquals("ok", daemonRoute.status)
+        assertEquals("true backlight-off via the helper daemon", daemonRoute.note)
+
+        val suRoute = DiagReader.screenOnOffCapability(ScreenOff.SU_BLPOWER, su = true, daemon = false)
+        assertEquals("true backlight-off via su bl_power", suRoute.note)
+
+        val none = DiagReader.screenOnOffCapability(ScreenOff.BRIGHTNESS_ZERO, su = false, daemon = false)
+        assertEquals("degraded", none.status)
+        assertTrue(none.note.contains("DIM ONLY"))
+    }
+
+    /** A panel whose screen-off is Android's own sleep must not be told it has a backlight off, and it
+     *  must be told plainly that a local touch is not guaranteed to wake it. */
+    @Test fun keyeventRouteDescribesAndroidSleepRatherThanABacklightOff() {
+        listOf(
+            DiagReader.screenOnOffCapability(ScreenOff.KEYEVENT, su = true, daemon = false),
+            DiagReader.screenOnOffCapability(ScreenOff.KEYEVENT, su = false, daemon = true),
+        ).forEach { cap ->
+            assertEquals("ok", cap.status)
+            assertTrue(cap.note.contains("KEYCODE_SLEEP"))
+            assertTrue(cap.note.contains("Home Assistant always wakes it"))
+            assertTrue(cap.note.contains("platform wake source"))
+            assertFalse("the keyevent route blanks no backlight", cap.note.contains("backlight-off"))
+        }
+
+        val unprivileged = DiagReader.screenOnOffCapability(ScreenOff.KEYEVENT, su = false, daemon = false)
+        assertEquals("with no privileged injector there is no real off at all", "degraded", unprivileged.status)
+        assertTrue(unprivileged.note.contains("DIM ONLY"))
     }
 
     @Test fun screenBrightnessCallsOutReducedHardwareOnlyControl() {

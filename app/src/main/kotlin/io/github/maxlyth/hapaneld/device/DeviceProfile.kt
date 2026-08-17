@@ -261,8 +261,16 @@ data class WebViewSpec(
  *  The daemon auto-detects sysfs-vs-ledjni itself, so both daemon mechanisms use the same client. */
 enum class LedMechanism { RK3576_IOCTL, RK3576_IOCTL_DAEMON, SYSFS_DAEMON, AUTODETECT, NONE }
 
-/** True-screen-off path. */
-enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, BRIGHTNESS_ZERO }
+/**
+ * True-screen-off path.
+ *
+ * The two `*_BLPOWER` routes blank the backlight through `/sys/class/backlight/<dev>/bl_power` while
+ * Android stays interactive, so no keyguard is raised and a touch still reaches a window. [KEYEVENT]
+ * is for panels that expose no backlight class at all: it injects `KEYCODE_SLEEP`, which puts Android
+ * itself noninteractive. That is a different state with different consequences, spelled out on
+ * [io.github.maxlyth.hapaneld.control.ScreenController].
+ */
+enum class ScreenOff { SU_BLPOWER, DAEMON_BLPOWER, KEYEVENT, BRIGHTNESS_ZERO }
 
 /**
  * A hardware button instrumented through the root helper daemon's evdev reader (for keys Android

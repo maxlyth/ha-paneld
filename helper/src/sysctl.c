@@ -329,10 +329,61 @@ void cmd_sethome(conn_ctx *ctx, const char *args) {
     reply(ctx->fd, set_home(comp) == 0 ? "OK\n" : "ERR\n");
 }
 
+/*
+ * Reboot mechanisms, tried in order.
+ *
+ * A privileged actuator's exit status is not proof that the panel is going down. `/system/bin/svc`
+ * is an app_process wrapper, and on some builds it exits 0 under this daemon's sanitized environment
+ * without rebooting at all (reported on KonstaKANG LineageOS for the Raspberry Pi 4, where the same
+ * command reboots correctly from an ordinary root shell). That lie used to suppress the fallback
+ * below, so a panel simply never rebooted and nothing said so.
+ *
+ * Completion is therefore observed rather than reported: after each request we wait a bounded
+ * interval, and reaching the next statement at all is the proof that the panel did not go down.
+ * There is no positive "shutdown started" signal here on purpose — the portable ones are property
+ * reads whose behaviour varies by init version, and absence of a hint would never be safe to act on
+ * anyway. Escalating during a slow but genuine shutdown re-requests the same orderly reboot init is
+ * already performing, which is why the first interval is the generous one.
+ */
+#define REBOOT_ESCALATE_MS 6000u   // wait after a request before trying the next mechanism
+#define REBOOT_SETTLE_MS   4000u   // wait after the last mechanism before reporting failure
+
+static const char *const REBOOT_SVC_ARGV[] = { "svc", "power", "reboot", NULL };
+static const char *const REBOOT_DIRECT_ARGV[] = { "reboot", NULL };
+
+static const struct { const char *path; const char *const *argv; } REBOOT_MECHANISMS[] = {
+    { "/system/bin/svc", REBOOT_SVC_ARGV },
+    { "/system/bin/reboot", REBOOT_DIRECT_ARGV },
+};
+
+// Request a reboot through every mechanism in turn. Returns only when none of them took the panel
+// down; a reboot that actually happens never comes back from here.
+static void request_reboot_bounded(void) {
+    const size_t count = sizeof REBOOT_MECHANISMS / sizeof REBOOT_MECHANISMS[0];
+    for (size_t i = 0; i < count; i++) {
+        (void)sysexec_run_argv(REBOOT_MECHANISMS[i].path, REBOOT_MECHANISMS[i].argv, 1);
+        sysexec_sleep_ms(i + 1 < count ? REBOOT_ESCALATE_MS : REBOOT_SETTLE_MS);
+    }
+}
+
 void cmd_reboot(conn_ctx *ctx, const char *args) {
-    (void)args;
-    reply(ctx->fd, "OK\n");   // reply before we go down
-    sysexec_reboot();
+    char mode[8] = "", extra[2] = "";
+    int fields = sscanf(args, "%7s %1s", mode, extra);
+    if (fields == 1 && strcmp(mode, "AWAIT") == 0) {
+        // AWAIT holds the reply until the outcome is known. A reboot that happens never answers, so
+        // the client's EOF is the success signal; ERR means every mechanism ran and the panel is
+        // still up, which is the only reliable cue for the client to try its own root route (whose
+        // environment differs from this daemon's, and can therefore succeed where these did not).
+        request_reboot_bounded();
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    if (fields > 0) {
+        reply(ctx->fd, "ERR\n");
+        return;
+    }
+    reply(ctx->fd, "OK\n");   // bare REBOOT keeps the legacy accept-then-go-down contract
+    request_reboot_bounded();
 }
 
 void cmd_appstate(conn_ctx *ctx, const char *args) {

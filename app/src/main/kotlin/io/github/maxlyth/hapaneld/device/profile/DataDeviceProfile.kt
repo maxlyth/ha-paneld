@@ -48,6 +48,7 @@ class DataDeviceProfile internal constructor(
     override val screenOff = when (document.hardware.screenOff) {
         "su-blpower" -> ScreenOff.SU_BLPOWER
         "daemon-blpower" -> ScreenOff.DAEMON_BLPOWER
+        "keyevent" -> ScreenOff.KEYEVENT
         else -> ScreenOff.BRIGHTNESS_ZERO
     }
     override val hasButtonBacklight = document.hardware.hasButtonBacklight

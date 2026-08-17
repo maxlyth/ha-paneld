@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 int sysexec_run_constant(const char *program) {
@@ -141,10 +142,12 @@ int sysexec_spawn(void *(*fn)(void *), void *arg) {
     return 0;
 }
 
-void sysexec_reboot(void) {
-    const char *const svc[] = { "svc", "power", "reboot", NULL };
-    if (sysexec_run_argv("/system/bin/svc", svc, 1) != 0) {
-        const char *const reboot[] = { "reboot", NULL };
-        (void)sysexec_run_argv("/system/bin/reboot", reboot, 1);
-    }
+void sysexec_sleep_ms(unsigned ms) {
+    struct timespec remaining = {
+        .tv_sec = (time_t)(ms / 1000u),
+        .tv_nsec = (long)(ms % 1000u) * 1000000L,
+    };
+    // A signal must not shorten a bounded wait: nanosleep reports the unslept remainder, so resume
+    // from it rather than returning early with the interval only partly elapsed.
+    while (nanosleep(&remaining, &remaining) != 0 && errno == EINTR) continue;
 }

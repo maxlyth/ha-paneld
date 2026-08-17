@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import io.github.maxlyth.hapaneld.RendererResolver
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.SystemEnv
 import io.github.maxlyth.hapaneld.util.AndroidInput
@@ -357,20 +358,43 @@ class SystemController(
         )?.value ?: AppState.UNKNOWN
     }
 
+    /**
+     * Reboot the panel.
+     *
+     * `REBOOT AWAIT` answers only when the reboot demonstrably did not happen. A panel that goes down
+     * closes the socket on its way, which arrives as [DaemonLongResult.Indeterminate]; an explicit
+     * `ERR` is the one reply that proves the panel is still up, and it is the only thing that makes
+     * the root route worth trying. That matters because the root route is not a duplicate of what the
+     * daemon just tried: it runs from the app's own environment rather than the daemon's sanitized
+     * one, and `svc power reboot` has been reported working in the first and silently doing nothing
+     * in the second. A helper predating AWAIT ignores the argument and answers `OK` at once, which is
+     * accepted as the best evidence that helper can give — so an older helper behaves exactly as
+     * before rather than losing its reboot.
+     */
     fun reboot() {
         val route = ShortOperationRouter.effect(
-            EffectAttempt(PrivilegeRoute.DAEMON) { daemon.send("REBOOT") == "OK" },
+            EffectAttempt(PrivilegeRoute.DAEMON) {
+                when (val outcome = daemon.sendLong("REBOOT AWAIT", REBOOT_AWAIT_TIMEOUT_MS)) {
+                    is DaemonLongResult.Reply -> outcome.value == "OK"
+                    DaemonLongResult.Indeterminate -> true
+                    DaemonLongResult.NotSubmitted -> false
+                }
+            },
             EffectAttempt(PrivilegeRoute.SU) { root.fireAndForget("reboot") },
         )
         when (route) {
             PrivilegeRoute.DAEMON -> Log.i(TAG, "reboot via daemon")
             PrivilegeRoute.SU -> Log.i(TAG, "reboot via su fallback")
-            else -> Log.w(TAG, "reboot: helper and su both unavailable")
+            else -> Log.w(TAG, "reboot: helper and su both unavailable, or neither could reboot the panel")
         }
     }
 
     companion object {
         private const val TAG = "ha-paneld/system"
+
+        /** Must exceed the helper's whole bounded escalation, or a still-escalating daemon would be
+         *  mistaken for one that already went down. */
+        private const val REBOOT_AWAIT_TIMEOUT_MS = 15_000L
 
         /** Sentinel `dashboard_package` value selecting ha-paneld's own built-in WebView renderer
          *  ([io.github.maxlyth.hapaneld.DashboardActivity]) instead of a foreign dashboard app.

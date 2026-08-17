@@ -63,6 +63,8 @@ int main(void) {
     CHECK(probe_command_allowed("COMPANIONCAPS"), "root probe mode must allow capability discovery");
     CHECK(probe_command_allowed("BUILDID"), "root probe mode must allow build identity");
     CHECK(!probe_command_allowed("REBOOT"), "root probe mode must not expose mutating verbs");
+    CHECK(!probe_command_allowed("KEYEVENT SLEEP"),
+          "root probe mode must not expose screen-power key injection");
     CHECK(!probe_command_allowed("PING extra"), "root probe mode must require an exact verb");
 
     puts("peer auth tests passed");

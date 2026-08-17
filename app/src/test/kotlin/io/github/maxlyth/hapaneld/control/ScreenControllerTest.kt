@@ -784,6 +784,217 @@ class ScreenControllerTest {
         override fun sendBytes(cmd: String): ByteArray? = null
     }
 
+    /**
+     * `recoverUnexpectedDark` checks interactivity twice: once cheaply before the potentially slow
+     * privileged read, and again inside the transition monitor. The inner check is what makes the
+     * decision, so the outer one changes no outcome and only the ABSENCE of the probe distinguishes
+     * it — without this, removing it is unfalsifiable and the whole guard is unproven.
+     */
+    @Test fun neverBlankDoesNotProbeHardwareOnANonInteractiveDevice() {
+        power.interactive = false
+        val root = FakeRootShell(outputs = mapOf("bl_power" to "4"))
+        val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap, ScreenOff.SU_BLPOWER)
+        assertFalse("Android's own sleep is not ha-paneld's to undo", sc.recoverUnexpectedDark())
+        assertTrue("a sleeping device must not be probed at all, got ${root.outputRan}", root.outputRan.isEmpty())
+    }
+
+    // --- ScreenOff.KEYEVENT: Android's own sleep, for panels with no backlight class -------------
+    //
+    // This route differs from bl_power in kind, not degree: it leaves Android noninteractive, so the
+    // state read-back, the never-blank guarantee and the watchdog's reach all change with it.
+
+    /**
+     * Build a KEYEVENT-route controller. [rootInjects]/[daemonInjects] say whether that transport's
+     * command was accepted; [rootEffective]/[daemonEffective] say whether it actually moved Android —
+     * the two are deliberately separable, because `input` is an app_process wrapper that has been
+     * reported exiting zero under the helper's sanitized environment without doing anything.
+     */
+    private fun keyeventController(
+        rootInjects: Boolean = true,
+        rootEffective: Boolean = true,
+        daemonInjects: Boolean = false,
+        daemonEffective: Boolean = true,
+    ): Triple<ScreenController, FakeRootShell, FakeDaemon> {
+        val apply = { cmd: String, effective: Boolean ->
+            if (effective) {
+                if (cmd.contains("223") || cmd.endsWith("SLEEP")) power.interactive = false
+                if (cmd.contains("224") || cmd.endsWith("WAKEUP")) power.interactive = true
+            }
+        }
+        val root = FakeRootShell(
+            runResult = rootInjects,
+            onRun = { cmd -> if (rootInjects) apply(cmd, rootEffective) },
+        )
+        val daemon = FakeDaemon(
+            replies = if (daemonInjects) mapOf("KEYEVENT SLEEP" to "OK", "KEYEVENT WAKEUP" to "OK") else emptyMap(),
+            onSend = { cmd -> if (daemonInjects) apply(cmd, daemonEffective) },
+        )
+        val sc = ScreenController(
+            backlight, power, root, daemon, wakeTap, ScreenOff.KEYEVENT, nap = {},
+        )
+        return Triple(sc, root, daemon)
+    }
+
+    @Test fun keyeventSleepInjectsThroughRootAndProvesAndroidWentNoninteractive() {
+        val (sc, root, daemon) = keyeventController()
+        sc.sleep()
+        assertEquals(listOf("input keyevent 223"), root.ran)
+        assertTrue("a working root injection must not also consult the daemon", daemon.sent.isEmpty())
+        assertTrue(sc.isIntendedOff())
+        assertTrue("noninteractive IS this route's dark", sc.looksDark())
+        assertTrue("a confirmed off must not degrade to the dim floor", backlight.calls.isEmpty())
+    }
+
+    @Test fun keyeventSleepFallsToTheDaemonWhenRootCannotInject() {
+        val (sc, root, daemon) = keyeventController(rootInjects = false, daemonInjects = true)
+        sc.sleep()
+        assertEquals(listOf("input keyevent 223"), root.ran)
+        assertEquals(listOf("KEYEVENT SLEEP"), daemon.sent)
+        assertTrue(sc.looksDark())
+    }
+
+    /** A submitted request is not a state change. An injector that reports success while Android stays
+     *  interactive must be treated as failed, so the next transport is tried. */
+    @Test fun keyeventSleepRejectsAnInjectorThatOnlyClaimedToWork() {
+        val (sc, root, daemon) = keyeventController(rootEffective = false, daemonInjects = true)
+        sc.sleep()
+        assertEquals(listOf("input keyevent 223"), root.ran)
+        assertEquals(listOf("KEYEVENT SLEEP"), daemon.sent)
+        assertFalse("the daemon actually slept the panel", power.interactive)
+    }
+
+    /** When no transport can prove the state changed, the panel must end visibly lit at the floor
+     *  rather than recorded as dark — never-blank, and never a claimed off nobody can see. */
+    @Test fun keyeventSleepDegradesToTheDimFloorWhenNothingProvesTheStateChanged() {
+        backlight.level = 200
+        val (sc, _, _) = keyeventController(
+            rootEffective = false, daemonInjects = true, daemonEffective = false,
+        )
+        sc.sleep()
+        assertEquals(listOf("set:10"), backlight.calls)
+        assertTrue("the panel is still interactive, so it is not dark", power.interactive)
+        assertFalse(sc.looksDark())
+    }
+
+    /**
+     * The overlay must never be armed on this route. A noninteractive device does not dispatch touches
+     * to windows, so an armed overlay would be a never-blank guarantee that cannot fire — and, worse,
+     * a reason to go dark that was never true.
+     */
+    @Test fun keyeventSleepNeverArmsTheTouchOverlay() {
+        wakeTap.canArm = true
+        val (sc, _, _) = keyeventController()
+        sc.sleep()
+        assertFalse("this route's way back is the wakelock pulse, not a touch overlay", wakeTap.armed)
+    }
+
+    /** ...and its absence must not block the off either: an unavailable overlay is irrelevant here. */
+    @Test fun keyeventSleepProceedsWithoutAnyOverlayPermission() {
+        wakeTap.canArm = false
+        val (sc, _, _) = keyeventController()
+        sc.sleep()
+        assertTrue(sc.looksDark())
+        assertTrue("no dim-floor degradation is warranted", backlight.calls.isEmpty())
+    }
+
+    /** Waking into a credential screen strands a wall panel exactly as a locked reboot does, so a
+     *  secured device is refused rather than slept. */
+    @Test fun keyeventSleepRefusesASecuredDeviceAndDimsInstead() {
+        backlight.level = 200
+        power.deviceSecure = true
+        val (sc, root, daemon) = keyeventController()
+        sc.sleep()
+        assertTrue("no key may be injected on a secured device", root.ran.isEmpty())
+        assertTrue(daemon.sent.isEmpty())
+        assertEquals(listOf("set:10"), backlight.calls)
+        assertTrue("the device stays interactive", power.interactive)
+    }
+
+    @Test fun keyeventWakeInjectsWakeupAndPulses() {
+        val (sc, root, _) = keyeventController()
+        sc.sleep()
+        sc.wake()
+        assertEquals(listOf("input keyevent 223", "input keyevent 224"), root.ran)
+        assertTrue(power.interactive)
+        assertEquals(1, power.pulses)
+        assertFalse(sc.isIntendedOff())
+    }
+
+    /**
+     * The guarantee that this route can always undo its own off: the wakelock pulse needs no privilege,
+     * so a wake still happens when root and the helper have both gone. It must also leave brightness
+     * alone — this route never changed it, and restoring a remembered level would move it for nothing.
+     */
+    @Test fun keyeventWakeStillPulsesWhenEveryPrivilegedInjectorIsGone() {
+        val (sc, root, _) = keyeventController()
+        sc.sleep()
+        assertTrue(sc.looksDark())
+        root.ran.clear()
+        backlight.calls.clear()
+        root.runResult = false          // root and the helper have both gone since the panel slept
+        sc.wake()
+        assertEquals(listOf("input keyevent 224"), root.ran)
+        assertEquals("the unprivileged wakelock pulse is what guarantees this wake", 1, power.pulses)
+        assertTrue("wake must not rewrite a brightness this route never touched", backlight.calls.isEmpty())
+        assertFalse(sc.isIntendedOff())
+    }
+
+    /** A degraded off DID move the brightness, so the wake after it has to move it back — the dim floor
+     *  must not be a one-way trip on the route that returns before the brightness restore. */
+    @Test fun keyeventDimFloorIsRestoredByTheNextWake() {
+        backlight.level = 200
+        val (sc, _, _) = keyeventController(
+            rootEffective = false, daemonInjects = true, daemonEffective = false,
+        )
+        sc.sleep()
+        assertEquals(listOf("set:10"), backlight.calls)
+        backlight.calls.clear()
+        sc.wake()
+        assertEquals(listOf("set:200"), backlight.calls)
+    }
+
+    /** The never-blank watchdog exists to undo a backlight ha-paneld blanked behind the framework's
+     *  back. On this route "dark" IS Android's own sleep, so the guard must stay out of it entirely. */
+    @Test fun neverBlankGuardDoesNotFightAndroidSleepOnTheKeyeventRoute() {
+        val (sc, root, daemon) = keyeventController()
+        sc.sleep()
+        root.ran.clear()
+        daemon.sent.clear()
+        assertFalse("an intended off is left alone", sc.recoverUnexpectedDark())
+        // ...and so is a noninteractive state ha-paneld never asked for.
+        val fresh = keyeventController().first
+        power.interactive = false
+        assertFalse(fresh.recoverUnexpectedDark())
+        assertEquals(0, power.pulses)
+    }
+
+    @Test fun keyeventRouteReadsAndroidInteractivityRatherThanProbingBacklightPower() {
+        val (sc, root, daemon) = keyeventController()
+        backlight.level = 0
+        power.interactive = true
+        assertFalse("a zero brightness is not this route's off state", sc.looksDark())
+        assertEquals(true, sc.observedLit())
+        power.interactive = false
+        assertTrue(sc.looksDark())
+        assertEquals(false, sc.observedLit())
+        assertTrue("no bl_power probe belongs on a panel with no backlight class",
+            root.outputRan.isEmpty() && daemon.sent.isEmpty())
+    }
+
+    /** Epoch ownership is route-independent, so an automatic off on this route must still refuse a
+     *  wake owned by an older generation. */
+    @Test fun keyeventAutomaticOffKeepsItsEpochOwnership() {
+        val (sc, _, _) = keyeventController()
+        val epoch = requireNonNull(sc.sleepAutomatically())
+        sc.wake()
+        power.interactive = false
+        sc.sleep()
+        assertEquals(WakeOutcome.STALE_GENERATION, sc.wakeAutomaticallyIfOwned(epoch))
+        assertTrue("the newer manual off still owns the panel", sc.isIntendedOff())
+    }
+
+    private fun <T : Any> requireNonNull(value: T?): T = value ?: throw AssertionError("expected an epoch")
+
     private class PrivilegeLossAfterOffDaemon : Daemon {
         val sent = mutableListOf<String>()
         var privilegeLost = false
