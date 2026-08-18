@@ -16,8 +16,8 @@ It also replaces fragmented vendor software with one free, open-source way to op
 It is built for panel-class Android, **not** personal phones. Device support is defined through human-readable [runtime panel profiles](docs/profiles/README.md): ha-paneld includes profiles for Sonoff NSPanel Pro, Tuya TPA10, Electron WF1589T, ZHICAI SMT1019, Smatek S9E, the ZX-SMT156/RK3566_T, and the Shelly Wall Display family, while owners and hardware vendors can create, edit, validate, import and share profiles for other panels without rebuilding the app. Use ha-paneld's **built-in renderer** for the integrated dashboard and entity filtering, or the official [HA Companion app](https://github.com/home-assistant/android) when the panel needs Assist voice control or native notifications.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/img/hero-light.png">
-  <img src="docs/img/hero-dark.png" alt="ha-paneld Dashboard showing live panel state, performance and display controls">
+  <source media="(prefers-color-scheme: light)" srcset="https://assets.ha-paneld.com/docs/screenshot/hero-light-a17f5f14.webp">
+  <img src="https://assets.ha-paneld.com/docs/screenshot/hero-dark-aeb93099.webp" alt="ha-paneld Dashboard showing live panel state, performance and display controls">
 </picture>
 
 **One control surface for every panel.** See live state, tune behaviour, manage software, keep the dashboard lean and diagnose problems without hunting through vendor apps or per-device configuration.

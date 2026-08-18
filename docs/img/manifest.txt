@@ -12,3 +12,5 @@
 docs/badge/license-apache-2-0-8aa187e4.svg	8aa187e41b196ee55e33f1d8a7c76f9b361a0d37b7476301e41bc1c1b2116fb6	575	120x20	vendor	https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square	2026-08-18	CC0-1.0 (shields.io badge output)
 docs/logo/wordmark-dark-c957b6e2.webp	c957b6e2e28f368fc59a19fed78c7e7e6d5b540d67285b29f491e12acdcd286a	20546	1067x216	own	-	2026-08-03	apache-2.0
 docs/logo/wordmark-light-e0f5bab8.webp	e0f5bab89967fbb0e0c10eb67e430fecb177a2fbc798dc9c4b4bdd05e7155fce	18114	1067x216	own	-	2026-08-03	apache-2.0
+docs/screenshot/hero-dark-aeb93099.webp	aeb93099577a857c1020aa6210907689cc7ae254c49b3ccca5407e666d8fc57d	62842	1600x1024	own	-	2026-08-18	apache-2.0
+docs/screenshot/hero-light-a17f5f14.webp	a17f5f14c21464db57704bf25afb9f2f8ec855ac729e532ef15f57a2fad4f6bb	61242	1600x1024	own	-	2026-08-18	apache-2.0

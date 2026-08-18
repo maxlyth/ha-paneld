@@ -132,11 +132,16 @@ def strip_and_encode(src, dest, max_width, quality, lossless=None):
         alpha = has_alpha(im)
         mode = "RGBA" if alpha else "RGB"
 
-        # Graphics with hard edges (wordmarks, diagrams, line art) ring badly under lossy WebP, so
-        # default to lossless when the source carries alpha and is therefore probably not a
-        # photograph. Explicit --lossless / --lossy override the guess.
+        # Graphics with hard edges (wordmarks, diagrams, line art, UI screenshots) ring badly under
+        # lossy WebP — and compress BETTER losslessly, because flat colour regions cost almost
+        # nothing while lossy spends bits inventing gradients. Measured on the 1600x1024 hero
+        # screenshot: 61 KB lossless against 168 KB at q90, and the PNG it replaced was 90 KB.
+        #
+        # Alpha alone is too narrow a signal: a palette screenshot has no alpha and would have been
+        # encoded lossy, larger AND degraded. A bounded unique-colour count catches artwork of every
+        # kind while still excluding photographs, which blow past the limit immediately.
         if lossless is None:
-            lossless = alpha
+            lossless = alpha or im.getcolors(maxcolors=4096) is not None
 
         icc = im.info.get("icc_profile")
         # Convert a non-sRGB source into sRGB before discarding its profile, so dropping the profile
