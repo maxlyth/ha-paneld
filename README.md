@@ -5,7 +5,7 @@
 
 [![CI](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/maxlyth/ha-paneld/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?include_prereleases&sort=semver&style=flat-square&color=blue)](https://github.com/maxlyth/ha-paneld/releases)
-[![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square)](LICENSE)
+[![License](https://assets.ha-paneld.com/docs/badge/license-apache-2-0-8aa187e4.svg)](LICENSE)
 
 **The universal Home Assistant dashboard app for Android wall panels.**
 

@@ -167,6 +167,34 @@ def strip_and_encode(src, dest, max_width, quality, lossless=None):
     return size + (lossless,)
 
 
+SVG_FORBIDDEN = ("script", "foreignobject", "iframe", "use", "image")
+
+
+def sanitise_svg(src, dest):
+    """Copy an SVG through, refusing anything that could execute or fetch. Returns (w, h)."""
+    text = open(src, encoding="utf-8").read()
+
+    # An SVG is markup, not pixel data, so it carries no EXIF to strip — but it can carry script,
+    # external references and embedded raster payloads. This is a docs badge/diagram path, so the
+    # safe move is to refuse those outright rather than attempt to rewrite them.
+    lowered = text.lower()
+    for tag in SVG_FORBIDDEN:
+        if re.search(r"<\s*%s\b" % tag, lowered):
+            fail("%s contains a <%s> element; refusing to publish executable or fetching SVG" % (src, tag))
+    for attr in ("onload", "onclick", "onerror", "onmouseover"):
+        if attr in lowered:
+            fail("%s contains an %s handler; refusing to publish executable SVG" % (src, attr))
+    if re.search(r"(href|xlink:href)\s*=\s*[\"\']\s*(https?:|//)", lowered):
+        fail("%s references an external URL; a published asset must be self-contained" % src)
+
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    w = re.search(r'\bwidth\s*=\s*["\']([0-9.]+)', text)
+    h = re.search(r'\bheight\s*=\s*["\']([0-9.]+)', text)
+    return (int(float(w.group(1))) if w else 0, int(float(h.group(1))) if h else 0)
+
+
 def assert_clean(path):
     """Fail if the encoded file still carries identifying metadata."""
     from PIL import Image
@@ -209,15 +237,21 @@ def cmd_ingest(args):
         fail("--category must be lowercase kebab-case path segments: %r" % category)
 
     os.makedirs(ORIGINALS, exist_ok=True)
-    tmp = os.path.join(STAGING, ".tmp-%s.webp" % args.name)
+    is_svg = os.path.splitext(args.source)[1].lower() == ".svg"
+    ext = "svg" if is_svg else "webp"
+    tmp = os.path.join(STAGING, ".tmp-%s.%s" % (args.name, ext))
     os.makedirs(STAGING, exist_ok=True)
 
-    width, height, lossless = strip_and_encode(args.source, tmp, args.max_width, args.quality,
-                                               args.lossless)
-    assert_clean(tmp)
+    if is_svg:
+        width, height = sanitise_svg(args.source, tmp)
+        lossless = True                      # vector: nothing is resampled
+    else:
+        width, height, lossless = strip_and_encode(args.source, tmp, args.max_width, args.quality,
+                                                   args.lossless)
+        assert_clean(tmp)
 
     digest = sha256_file(tmp)
-    key = "%s/%s/%s-%s.webp" % (PREFIX, category, args.name, digest[:8])
+    key = "%s/%s/%s-%s.%s" % (PREFIX, category, args.name, digest[:8], ext)
     dest = os.path.join(STAGING, key)
 
     rows = read_manifest()
@@ -273,7 +307,7 @@ def cmd_check(args):
         if actual != r["sha256"]:
             problems.append("%s hash mismatch: manifest %s, staging %s"
                             % (r["key"], r["sha256"][:12], actual[:12]))
-        if not r["key"].endswith("-%s.webp" % r["sha256"][:8]):
+        if not any(r["key"].endswith("-%s.%s" % (r["sha256"][:8], e)) for e in ("webp", "svg")):
             problems.append("%s is not named after its own hash" % r["key"])
 
     known = {r["key"] for r in rows}
@@ -369,9 +403,10 @@ def cmd_verify(args):
             # the bucket credential is the only isolation boundary in a shared Cloudflare account.
             problems.append("%s CONTENT MISMATCH: expected %s, served %s"
                             % (url, r["sha256"][:12], digest[:12]))
+        expected = "image/svg+xml" if r["key"].endswith(".svg") else "image/webp"
         ctype = headers.get("Content-Type", "")
-        if "image/webp" not in ctype:
-            problems.append("%s served as %r, expected image/webp" % (url, ctype))
+        if expected not in ctype:
+            problems.append("%s served as %r, expected %s" % (url, ctype, expected))
         cache = headers.get("Cache-Control", "")
         if "immutable" not in cache:
             problems.append("%s missing immutable cache header (got %r)" % (url, cache))
