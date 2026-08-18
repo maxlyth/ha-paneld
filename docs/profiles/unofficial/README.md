@@ -22,5 +22,6 @@ Development builds previously carried an earlier Echo revision as a bundled prof
 ## Catalog
 
 - [`community-cronos-lineageos18.yaml`](community-cronos-lineageos18.yaml) — a draft for one contributor's Amazon Echo Show 5 Gen 2 reflashed with LineageOS 18.1. Stock Fire OS cannot run ha-paneld; unlocking, reflashing and recovery are not supported by this project, and the profile has not been maintainer- or fleet-qualified. See the [profile-specific evidence notes](echo-show-5-gen2.md).
+- [`community-rpi4-konstakang-lineageos.yaml`](community-rpi4-konstakang-lineageos.yaml) — a draft for one contributor's Raspberry Pi 4 Model B running KonstaKANG's LineageOS Android 16 build with a separately sourced HDMI touchscreen. This is an assembly rather than a retail panel, so the attached display's density and wake behaviour are the owner's to establish; the profile's one declared behaviour is the `keyevent` screen route, for a board that exposes no Linux backlight device. Whether a touch wakes the sleeping panel depends on that touchscreen and must be proved attended. See the [profile-specific evidence notes](raspberry-pi-4-konstakang.md).
 
 For the profile format, trust boundary and contribution requirements, see the [runtime profile guide](../README.md), [format reference](../format.md), [testing checklist](../testing.md) and [sharing guide](../sharing.md).

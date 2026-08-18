@@ -1,0 +1,66 @@
+schema: 2
+id: community.rpi4-konstakang-lineageos
+version: 1.0.0
+display_name: Unofficial Raspberry Pi 4 (KonstaKANG LineageOS)
+soc_class: Broadcom BCM2711
+metadata:
+  author: Community contributor
+  source: https://github.com/maxlyth/ha-paneld/issues/107
+  license: Apache-2.0
+  maturity: draft
+  tested_firmware:
+    - KonstaKANG LineageOS / Android 16, build BP4A.251205.006, on one contributor-assembled unit
+  limitations:
+    - A Raspberry Pi 4 with a separately sourced HDMI touchscreen is an assembly, not a retail panel. There is no maintainer or fleet qualification.
+    - Whether a touch wakes the sleeping panel is a property of the attached touchscreen, not of the Pi. Prove it attended before relying on the keyevent screen route; where it does not wake, Home Assistant is the only way back.
+    - The keyevent route refuses to sleep a panel that has a PIN, pattern or password configured, and dims to a visible floor instead.
+    - Matching cannot distinguish KonstaKANG's LineageOS image from its AOSP or Android TV images for the same board, which are untested but would also accept this profile when pinned by hand.
+    - Does not describe the Raspberry Pi 5, the Pi 400 or the Compute Module 4.
+    - Display density, font scale and physical size belong to the user-chosen screen and are deliberately not declared.
+    - The root declaration records evidence from one image; it does not grant authority. The live route is probed after activation.
+    - Flashing, recovery and maintaining the community Android image are outside the ha-paneld project.
+requires:
+  min_core_version: 0.9.7-rc1
+  drivers:
+    - access.android-su
+    - screen.keyevent
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 990
+      all:
+        - field: device
+          op: equals
+          values:
+            - rpi4
+        - field: model
+          op: contains
+          values:
+            - 4 model b
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: keyevent
+  has_button_backlight: false
+sensors:
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Raspberry Pi
+  model: Raspberry Pi 4 Model B
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+provisioning:
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

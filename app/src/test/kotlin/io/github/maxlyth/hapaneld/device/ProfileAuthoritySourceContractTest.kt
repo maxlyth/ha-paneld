@@ -210,7 +210,7 @@ class ProfileAuthoritySourceContractTest {
     @Test fun unofficialCatalogIdentityNeverLeaksIntoCoreOrApkAssets() {
         val unofficial = BundledProfileFixtures.unofficial
         assertTrue("unofficial profile catalog is empty", unofficial.isNotEmpty())
-        assertEquals(setOf(UNOFFICIAL_PROFILE_ID), unofficial.mapTo(mutableSetOf()) { it.document.id })
+        assertEquals(UNOFFICIAL_PROFILE_IDS, unofficial.mapTo(mutableSetOf()) { it.document.id })
 
         val identities = unofficial.flatMap { loaded ->
             buildList {
@@ -292,7 +292,10 @@ class ProfileAuthoritySourceContractTest {
                 "[A-Za-z_][A-Za-z0-9_]*\\s*=\\s*(?:io\\.github\\.maxlyth\\.hapaneld\\.device\\." +
                 "(?:profile\\.)?)?(?:DeviceProfile|DataDeviceProfile|ProfileDocument)\\b",
         )
-        const val UNOFFICIAL_PROFILE_ID = "community.cronos-lineageos18"
+        val UNOFFICIAL_PROFILE_IDS = setOf(
+            "community.cronos-lineageos18",
+            "community.rpi4-konstakang-lineageos",
+        )
         val PRODUCTION_TEXT_EXTENSIONS = setOf(
             "aidl",
             "c",

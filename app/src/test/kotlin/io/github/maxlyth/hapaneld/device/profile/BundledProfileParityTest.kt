@@ -280,6 +280,69 @@ class BundledProfileParityTest {
         assertEquals("compound matcher must not contain duplicate predicates", 2, branch.all.size)
     }
 
+    /**
+     * The Pi 4 matcher is deliberately looser than the Echo's exact-equals pair, because the board model
+     * carries a hardware revision suffix that varies per unit. It still has to stay compound: `rpi4` alone
+     * is shared with the Pi 400 and CM4, so device-only must never be enough. The model substring is
+     * chosen to survive either reading of the vendor's manufacturer/model split, which is why it does not
+     * begin with "pi".
+     */
+    @Test fun unofficialRpi4MatcherRequiresTheObservedCompoundIdentity() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.rpi4-konstakang-lineageos"
+        }.document
+        val exact = DeviceFacts(model = "pi 4 model b rev 1.4", device = "rpi4", productVersion = "")
+
+        assertTrue("observed compound identity no longer matches", candidate.matches(exact))
+        assertTrue(
+            "the profile must match whichever way the vendor splits manufacturer and model",
+            candidate.matches(exact.copy(model = "raspberry pi 4 model b rev 1.4")) &&
+                candidate.matches(exact.copy(model = "4 model b rev 1.4")),
+        )
+        assertTrue("hardware revisions must not need a new profile", candidate.matches(exact.copy(model = "pi 4 model b rev 1.2")))
+        assertFalse("device-only identity must not match", candidate.matches(exact.copy(model = "unrelated")))
+        assertFalse("model-only identity must not match", candidate.matches(exact.copy(device = "unrelated")))
+        assertFalse("the pi 400 shares the board codename", candidate.matches(exact.copy(model = "pi 400 rev 1.1")))
+        assertFalse("the compute module 4 shares the board codename", candidate.matches(exact.copy(model = "compute module 4 rev 1.1")))
+        assertFalse("the pi 5 is out of scope", candidate.matches(DeviceFacts("pi 5 model b rev 1.0", "rpi5", "")))
+
+        val branch = candidate.match.any.single()
+        assertEquals(
+            setOf(
+                ProfilePredicate(ProfileFact.DEVICE, ProfileMatchOp.EQUALS, listOf("rpi4")),
+                ProfilePredicate(ProfileFact.MODEL, ProfileMatchOp.CONTAINS, listOf("4 model b")),
+            ),
+            branch.all.toSet(),
+        )
+        assertEquals("compound matcher must not contain duplicate predicates", 2, branch.all.size)
+    }
+
+    /**
+     * The one declared behaviour this profile exists for. A backlight-less board cannot reach a real
+     * screen-off any other way, and the route is a declaration rather than a probe because local touch
+     * wake is a property of the owner's touchscreen.
+     */
+    @Test fun unofficialRpi4SelectsTheKeyeventScreenRouteAndNoPrivilegedHardware() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.rpi4-konstakang-lineageos"
+        }.document
+
+        assertEquals("keyevent", candidate.hardware.screenOff)
+        assertTrue("the keyevent driver must be declared", "screen.keyevent" in candidate.requires.drivers)
+        assertEquals(setOf("access.android-su", "screen.keyevent"), candidate.requires.drivers)
+        assertEquals("none", candidate.hardware.led.mechanism)
+        assertFalse("no button backlight was reported", candidate.hardware.hasButtonBacklight)
+        assertNull("no relay hardware was reported", candidate.hardware.relayBase)
+        assertNull("no zigbee radio was reported", candidate.hardware.zigbeeGatewayDir)
+        assertFalse("no room-climate sensor was reported", candidate.sensors.cht8305)
+        assertNull("no proximity sensor was reported", candidate.sensors.proximityTechnology)
+        assertNull("no ambient-light sensor was reported", candidate.sensors.lightTechnology)
+        assertTrue("the touchscreen must never be grabbed", candidate.input.evdevButtons.isEmpty())
+        assertNull("the attached display is owner-supplied, so density must not be recommended", candidate.provisioning.display.density)
+        assertNull("the attached display is owner-supplied, so its ppi is unknowable", candidate.display.physicalPpi)
+        assertFalse("a native navbar was never verified on this board", candidate.platform.hasNativeNavbar)
+    }
+
     @Test fun actualUnofficialYamlIsInertUntilMatchingExplicitActivationAndCanRollback() {
         BundledProfileFixtures.unofficial.forEach { candidate ->
             val matchingFacts = witness(candidate.document.match.any.maxBy { it.priority })
@@ -533,11 +596,19 @@ class BundledProfileParityTest {
             "wf1589t.yaml" to "bb077b5be035fc25c1366851a8fa55f97753b90c334ea9b07c7240e7aa797b18",
             "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
         )
-        val EXPECTED_UNOFFICIAL_IDS = setOf("community.cronos-lineageos18")
-        val EXPECTED_UNOFFICIAL_FILENAMES = setOf("community-cronos-lineageos18.yaml")
+        val EXPECTED_UNOFFICIAL_IDS = setOf(
+            "community.cronos-lineageos18",
+            "community.rpi4-konstakang-lineageos",
+        )
+        val EXPECTED_UNOFFICIAL_FILENAMES = setOf(
+            "community-cronos-lineageos18.yaml",
+            "community-rpi4-konstakang-lineageos.yaml",
+        )
         val EXPECTED_UNOFFICIAL_SHA256 = mapOf(
             "community-cronos-lineageos18.yaml" to
                 "c0207b2b43f46d84641d2d33683cb7fb0e8a4013544827bd3041337a40d02ea2",
+            "community-rpi4-konstakang-lineageos.yaml" to
+                "e49e0db3e29d8bb77c581c32a2f70d55bc629178d4bb2077a7b55d1885bd2e29",
         )
 
         /** Branch-level collisions belong here; matrix-level cross-profile collisions are pinned above. */
