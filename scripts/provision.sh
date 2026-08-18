@@ -51,7 +51,7 @@ Usage: scripts/provision.sh <panel-ip[:port]> [APK] [options]
 
 Common operations:
   --latest                 Install the latest stable release
-  --prerelease             Install the latest release candidate
+  --prerelease             Install the newest release, including release candidates
   --apk FILE               Install a specific APK
   --export FILE            Export config/settings only; never installs unless combined with mutations
   --restore FILE           Import a config JSON export (not a complete .hpb backup)
@@ -1490,8 +1490,9 @@ report_timezone_alignment() {
 download_latest() {
   local dir tag="" url json api record asset expected_url
   dir="$(mktemp -d)"
-  # PRERELEASE=1 → newest release of ANY kind (incl. rc); else the newest STABLE. GitHub's
-  # /releases/latest EXCLUDES prereleases, so the prerelease path lists all releases and takes the first.
+  # PRERELEASE=1 → newest published release of ANY kind (incl. rc); else the newest STABLE.
+  # GitHub's /releases/latest excludes prereleases, so the inclusive path lists all releases and
+  # takes the first non-draft record. A newer stable therefore wins, including after RC deletion.
   if [ "$PRERELEASE" = 1 ]; then
     api="https://api.github.com/repos/$REPO/releases?per_page=100"
   else
@@ -1502,7 +1503,7 @@ download_latest() {
     record="$(printf '%s' "$json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
+      awk '/"draft":[[:space:]]*false/ && !found { print; found=1 }')"
   else
     record="$json"
   fi

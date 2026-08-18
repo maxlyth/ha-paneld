@@ -183,11 +183,11 @@ if [ "$have_apk" = 0 ]; then
   json="$(curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 30 "$api" 2>/dev/null || true)"
   if [ "$want_prerelease" = 1 ]; then
     # Split the GitHub release array at each top-level release URL, retain the first published
-    # prerelease record, then extract its tag and APK from that record only.
+    # release record of either kind, then extract its tag and APK from that record only.
     record="$(printf '%s' "$json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
+      awk '/"draft":[[:space:]]*false/ && !found { print; found=1 }')"
   else
     record="$json"
   fi

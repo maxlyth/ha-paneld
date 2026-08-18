@@ -8,7 +8,7 @@ Set an MQTT broker on the Configure page and supported entities appear in Home A
 
 | Entity | Contract |
 |---|---|
-| `light.<panel>_screen` | Screen on/off and brightness using Home Assistant's JSON light schema and a `0`–`255` brightness value. Off is true backlight-off without invoking the keyguard. |
+| `light.<panel>_screen` | Screen on/off and brightness using Home Assistant's JSON light schema and a `0`–`255` brightness value. Off follows the active profile: physical backlight-off where the panel exposes it, Android sleep where a `keyevent` route is validated, or safe brightness dimming as the fallback. The Android-sleep route refuses a panel protected by a PIN, pattern or password. |
 | `light.<panel>_led` | RGB or brightness-only panel LED, depending on the available backend; supported backends also expose effects. |
 | `light.<panel>_buttons` | Brightness-capable button backlight when declared by the active profile. |
 | `light.<panel>_button_led1` … `button_led4` | Individually controlled button LEDs when declared by the active profile. |

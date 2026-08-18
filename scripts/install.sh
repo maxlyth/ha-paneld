@@ -3,7 +3,7 @@
 # ha-paneld one-line installer — no repo checkout needed. Run:
 #   curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
 #
-# For the latest PRE-RELEASE (release-candidate) build instead of the newest stable, add --prerelease:
+# To follow the newest published release, including release candidates, add --prerelease:
 #   curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 #
 # Preflights adb + curl (with per-OS fix-it hints), prompts for the panel IP (and optional id / MQTT
@@ -29,7 +29,7 @@ RELEASE_TAG=""
 RELEASE_APK_NAME=""
 PROVISION_COMMIT=""
 
-# --prerelease selects the newest release-candidate instead of the latest stable.
+# --prerelease selects the newest published release of either kind; --latest selects stable only.
 CHANNEL_ARG="--latest"
 ADVANCED_PROVISION=0
 ADVANCED_TARGET=""
@@ -204,7 +204,7 @@ fi
 if [ -n "$RELEASE_TAG" ]; then
   echo "${B}ha-paneld installer${X} ${Y}· $RELEASE_TAG${X}"
 elif [ "$CHANNEL_ARG" = "--prerelease" ]; then
-  echo "${B}ha-paneld installer${X} ${Y}· pre-release channel${X}"
+  echo "${B}ha-paneld installer${X} ${Y}· all-releases channel${X}"
 else
   echo "${B}ha-paneld installer${X}"
 fi
@@ -248,7 +248,7 @@ if [ -z "$RELEASE_TAG" ]; then
     release_record="$(printf '%s' "$release_json" | tr -d '\r\n' | \
       sed 's#{[[:space:]]*"url":[[:space:]]*"https://api.github.com/repos/maxlyth/ha-paneld/releases/\([0-9][0-9]*\)"#\
 &#g' | \
-      awk '/"draft":[[:space:]]*false/ && /"prerelease":[[:space:]]*true/ && !found { print; found=1 }')"
+      awk '/"draft":[[:space:]]*false/ && !found { print; found=1 }')"
   else
     release_record="$release_json"
   fi

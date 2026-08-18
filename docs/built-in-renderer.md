@@ -12,10 +12,13 @@ A WebView inside ha-paneld pointed at your dashboard, authenticated with the fro
 Engineered for weeks-long unattended uptime:
 
 - Freezes the page while the screen is off (roughly 70% of renderer CPU saved overnight), resumes on wake.
+- Reopens the last verified account-default dashboard immediately after a restart while it refreshes Home Assistant's dashboard list in the background. An explicitly configured dashboard or view remains authoritative.
 - A handshake watchdog reloads a dashboard that loaded but never actually connected, with backing-off retries behind a clean "Reconnecting…" screen instead of a browser error page.
+- Admission checks that fail for a recoverable reason retry automatically with bounded backoff, while terminal login, Home Assistant-version and WebView requirements wait for the named correction.
 - Memory is shed by invisible reloads at screen-off.
 - Renderer crashes are contained and rate-limited — a reliably-crashing page falls back to the admin launcher rather than churning all night.
 - Terminally rejected login settings latch and show Browser sign-in instructions on the panel instead of retrying forever.
+- When Home Assistant announces that it is stopping or goes offline through MQTT availability, the panel shows a native notice and clears it only after Home Assistant proves it is back.
 
 Also: instant pull-to-refresh (drag down from the very top edge of the screen; double-pull for a full reload), optional idle return-to-home, optional **Hide Android system bars** mode (swipe from a screen edge to reveal the bars), camera-stream autoplay, and private-CA HTTPS (user-installed CAs are trusted). On panels using ha-paneld's software navigation bar, **Dashboard** brings the configured renderer to the foreground without reloading it; **Reload** remains a separate recovery action.
 
@@ -32,7 +35,7 @@ ha-paneld checks the WebView first and verifies Home Assistant compatibility bef
 
 ## Turning it on
 
-On a new or reset panel, open `http://<panel>:8888/setup` from a laptop or phone, or select **Set up** on the panel itself. The guided journey chooses the renderer, signs in to Home Assistant, selects the Home dashboard or the account default, and asks about the entity filter before the first dashboard load. The authorization happens in the administrator's browser, so credentials do not need to be typed on the panel.
+On a new or reset panel, open `http://<panel>:8888/setup` from a laptop or phone, or select **Set up** on the panel itself. The guided journey chooses the renderer, signs in to Home Assistant, selects a Home dashboard, a specific view or the account default, and asks about the entity filter before the first dashboard load. The authorization happens in the administrator's browser, so credentials do not need to be typed on the panel.
 
 On an existing panel, open the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**, then select **Built-in renderer** as the Dashboard app.
 

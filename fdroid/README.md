@@ -19,8 +19,8 @@ note](../docs/hardware/nspanel-pro.md#firmware-v400--official-f-droid-app-instal
 Because the served APKs are the **same release-signed binaries** as the GitHub Releases (same key), the
 F-Droid client updates panels in place — no signature clash with builds installed via `update-fleet.sh`.
 
-Pre-releases (`…-rcN`) are excluded by the `release: released` trigger, so the user repo only ever
-carries stable versions.
+Pre-releases (`…-rcN`) are excluded by the successful Release-workflow tag filter, so the user repo
+only ever carries stable versions.
 
 ## Identity / signing
 

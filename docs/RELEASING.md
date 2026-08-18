@@ -41,6 +41,6 @@ git tag vX.Y.Z && git push origin vX.Y.Z   # CI builds, signs, publishes the rel
 
 ## After release
 
-- Roll a stable release with `scripts/update-fleet.sh --latest -- <ip> <ip> …`, or a release candidate with `scripts/update-fleet.sh --prerelease -- <ip> <ip> …` (both install **and** launch each panel — a bare `adb install -r` loop leaves them installed-but-dead).
+- Follow stable releases with `scripts/update-fleet.sh --latest -- <ip> <ip> …`, or the newest published release including release candidates with `scripts/update-fleet.sh --prerelease -- <ip> <ip> …` (both install **and** launch each panel — a bare `adb install -r` loop leaves them installed-but-dead).
 - Confirm the release contains both `ha-paneld-helper-<tag>-armeabi-v7a` and `ha-paneld-helper-<tag>-arm64-v8a`, with a `.sha256` and `.sha256.sig` beside each. The provisioner fails closed before APK replacement if the selected helper or proof is absent.
 - Confirm panels report the new version and reappear in HA.

@@ -19,7 +19,7 @@ Add the required options after the address. For example, this assigns a panel na
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --id kitchen --mqtt tcp://192.168.1.10:1883
 ```
 
-Use `--prerelease` before `--provision` to install the newest release candidate instead of the latest stable release. Other routine provisioning options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user`, `--ha-pass-file`, `--home-dashboard` and `--entity-filter`.
+Use `--prerelease` before `--provision` to follow the newest published release, including release candidates; a newer stable release still wins. Without it, the installer follows stable releases only. Other routine provisioning options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user`, `--ha-pass-file`, `--home-dashboard` and `--entity-filter`.
 
 Pass credentials through owner-only files so they do not appear in shell history or get copied into child-process command lines. The file must contain one credential line; a conventional trailing line ending is accepted, but embedded line breaks are rejected. For example, create a Home Assistant password file without echoing the password:
 
@@ -168,7 +168,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
   --builtin --ha-url https://homeassistant.example.com --ha-token-file ha-token.txt
 ```
 
-Repeat the restore command for each target, changing its address and `--id`. Add `--prerelease` before `--provision` when testing the current release candidate.
+Repeat the restore command for each target, changing its address and `--id`. Add `--prerelease` before `--provision` to follow the newest published release, including a current release candidate.
 
 `--restore-fleet` applies only **PORTABLE, non-secret** settings. It deliberately leaves device and identity settings, including the panel ID, and all credentials unchanged. If a bundle-only restore leaves MQTT reporting `auth-failed`, first check that `--mqtt-user` and `--mqtt-pass-file` were supplied; that result does not by itself mean the broker is down.
 
@@ -181,7 +181,7 @@ Whole-fleet updates are an advanced administrator workflow and currently **requi
 scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
 # At most four panels run at once by default; reduce or increase the bounded pool with --jobs (1..32).
 scripts/update-fleet.sh --jobs 2 --latest -- 192.168.1.10 192.168.1.11:5555
-# --prerelease rolls the newest release-candidate instead of the latest stable.
+# --prerelease rolls the newest published release, whether stable or a release candidate.
 # or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 ```
 

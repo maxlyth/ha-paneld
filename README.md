@@ -51,7 +51,7 @@ First enable network ADB on the panel (Developer options → "ADB debugging"). T
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
 ```
 
-No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing), explains each panel change before making it, prompts for the panel IP and a few optional choices, downloads the **latest signed release**, then installs, starts, and verifies ha-paneld. A failed required step exits clearly as incomplete instead of reporting success; correct the named problem and run the same command again. To install the latest **pre-release** (release candidate) instead, append `--prerelease`:
+No checkout, no parameters: it checks your tools (with fix-it hints if `adb`/`curl` are missing), explains each panel change before making it, prompts for the panel IP and a few optional choices, downloads the **latest signed stable release**, then installs, starts, and verifies ha-paneld. A failed required step exits clearly as incomplete instead of reporting success; correct the named problem and run the same command again. To follow the newest published release, including release candidates, append `--prerelease` (a newer stable release still wins):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
@@ -81,7 +81,7 @@ The same one-line installer also supports non-interactive single-panel provision
 | Cap | Surface |
 |-----|---------|
 | Screen brightness | `light.<panel>_screen` brightness |
-| Screen on/off (true backlight off, no lock/PIN) | `light.<panel>_screen` on/off |
+| Screen on/off | `light.<panel>_screen` on/off, using the active profile's physical backlight, Android sleep or safe brightness fallback route |
 | RGB LED | `light.<panel>_led` (per-panel HAL: rk3576 NDK `/dev/ledjni`, or sysfs via the root helper) |
 | Hardware-button events | `event.<panel>_button` (a11y key capture) |
 | Ambient light / proximity | `sensor.<panel>_illuminance`, learned `binary_sensor.<panel>_proximity` + fleet-normalized `sensor.<panel>_proximity_level` (0 far–100 near) — see [Adaptive proximity and wake on wave](docs/adaptive-proximity.md) |
@@ -106,7 +106,7 @@ A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted pan
 
 **Core features need no root:** Home Assistant pairing, screen brightness and dimming, audio announcements/TTS, both dashboard renderers (HA Companion and the built-in renderer), the web UI and REST API, and configuration backup/restore. MQTT discovery publishes only the sensors and controls supported by the active profile and live capability probes. Back/Recents, wake on wave and the soft navigation bar also depend on the panel having the required Android sensor, Accessibility or overlay capability.
 
-**Still needs direct root (`su`) or ha-paneld's root helper:** true screen-off (backlight hard-off), RGB LED and relay control where the hardware requires it, vendor-app taming, reboot and CPU governor.
+**Still needs direct root (`su`) or ha-paneld's root helper:** physical backlight hard-off, Android sleep where a profile selects the privileged key-event route, RGB LED and relay control where the hardware requires it, vendor-app taming, reboot and CPU governor. If no safe screen-off route is available, ha-paneld falls back to brightness dimming.
 
 **Still needs direct root (`su`) inside ha-paneld:** **Lock Android to dashboard**, full system logs, and the legacy Companion-session import compatibility path. Full backups can include and restore an existing Companion login through either direct root or the current authenticated root helper.
 
