@@ -181,6 +181,51 @@ class DiagCapabilityPolicyTest {
         )
     }
 
+    /**
+     * The capability row must describe the route the panel will actually take, and on
+     * [ScreenOff.BRIGHTNESS_ZERO] that route never reaches a privileged actuator at all:
+     * `ScreenController.sleepInternal` hard-codes `ScreenOff.BRIGHTNESS_ZERO -> null` for its
+     * powered-off route. Reporting a helper- or su-backed backlight-off there tells the owner of a
+     * rooted panel that the screen goes properly dark when it only dims.
+     */
+    @Test fun brightnessZeroRouteReportsDimOnlyEvenWhenPrivilegeIsAvailable() {
+        listOf(
+            Triple(true, true, "helper and su"),
+            Triple(false, true, "helper only"),
+            Triple(true, false, "su only"),
+            Triple(false, false, "neither"),
+        ).forEach { (su, daemon, label) ->
+            val cap = DiagReader.screenOnOffCapability(ScreenOff.BRIGHTNESS_ZERO, su = su, daemon = daemon)
+
+            assertEquals("brightness-zero must never claim ok with $label", "degraded", cap.status)
+            assertFalse(
+                "brightness-zero must not claim a backlight-off it never attempts with $label: ${cap.note}",
+                cap.note.contains("backlight-off"),
+            )
+            assertTrue("brightness-zero must say it only dims with $label", cap.note.contains("DIM ONLY"))
+        }
+    }
+
+    /** A bl_power route names the transport it will actually try first, not whichever exists. */
+    @Test fun blPowerRoutesNameTheirOwnFirstAttempt() {
+        val su = DiagReader.screenOnOffCapability(ScreenOff.SU_BLPOWER, su = true, daemon = true)
+        assertEquals("ok", su.status)
+        assertTrue("su-blpower tries su first: ${su.note}", su.note.contains("su bl_power"))
+
+        val daemon = DiagReader.screenOnOffCapability(ScreenOff.DAEMON_BLPOWER, su = true, daemon = true)
+        assertEquals("ok", daemon.status)
+        assertTrue("daemon-blpower tries the daemon first: ${daemon.note}", daemon.note.contains("helper daemon"))
+    }
+
+    /** A bl_power route with no privileged transport at all cannot power the backlight down. */
+    @Test fun blPowerRoutesWithoutPrivilegeReportDimOnly() {
+        listOf(ScreenOff.SU_BLPOWER, ScreenOff.DAEMON_BLPOWER).forEach { route ->
+            val cap = DiagReader.screenOnOffCapability(route, su = false, daemon = false)
+            assertEquals("$route without privilege must be degraded", "degraded", cap.status)
+            assertTrue("$route must say it only dims: ${cap.note}", cap.note.contains("DIM ONLY"))
+        }
+    }
+
     @Test fun profileWithoutEvdevButtonsHasNoRequestedStream() {
         assertNull(DiagReader.evdevRequestDescription(fakeProfile()))
     }

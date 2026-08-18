@@ -180,17 +180,38 @@ object DiagReader {
     }
 
     /**
-     * The keyevent route sleeps Android itself rather than blanking a backlight, so it must not borrow
-     * the bl_power wording: what a person standing at the panel can do to wake it is genuinely
-     * different, and that difference is the part worth stating on a panel's own diagnostics.
+     * The route decides first, then the transport. A profile's declared route is what
+     * [io.github.maxlyth.hapaneld.control.ScreenController] will actually take, so a privileged
+     * transport merely existing proves nothing about what a screen-off will do:
+     * [ScreenOff.BRIGHTNESS_ZERO] hard-codes a null powered-off route and never attempts su or the
+     * daemon at all, which used to be reported as a "true backlight-off" on any rooted panel.
+     *
+     * The keyevent route also must not borrow the bl_power wording: it sleeps Android itself rather
+     * than blanking a backlight, and what a person standing at the panel can do to wake it is
+     * genuinely different. That difference is the part worth stating on a panel's own diagnostics.
      */
-    internal fun screenOnOffCapability(route: ScreenOff, su: Boolean, daemon: Boolean): Cap = when {
-        route == ScreenOff.KEYEVENT && (daemon || su) -> Cap("Screen on/off", "ok",
-            "Android sleep via KEYCODE_SLEEP; Home Assistant always wakes it, a local touch only where this panel's touchscreen is a platform wake source")
-        daemon -> Cap("Screen on/off", "ok", "true backlight-off via the helper daemon")
-        su -> Cap("Screen on/off", "ok", "true backlight-off via su bl_power")
-        else -> Cap("Screen on/off", "degraded",
-            "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off")
+    internal fun screenOnOffCapability(route: ScreenOff, su: Boolean, daemon: Boolean): Cap {
+        val dimOnly = { why: String -> Cap("Screen on/off", "degraded", "DIM ONLY — ") }
+        return when (route) {
+            ScreenOff.KEYEVENT ->
+                if (daemon || su) Cap("Screen on/off", "ok",
+                    "Android sleep via KEYCODE_SLEEP; Home Assistant always wakes it, a local touch only where this panel's touchscreen is a platform wake source")
+                else dimOnly("needs su or the helper daemon to inject KEYCODE_SLEEP")
+            // Not a privilege problem, so do not offer su or the helper as the remedy: this panel's
+            // profile selects brightness zero, and only a different profile route changes it.
+            ScreenOff.BRIGHTNESS_ZERO ->
+                dimOnly("this panel's profile selects the brightness-zero route, which never powers the backlight down")
+            ScreenOff.SU_BLPOWER -> when {
+                su -> Cap("Screen on/off", "ok", "true backlight-off via su bl_power")
+                daemon -> Cap("Screen on/off", "ok", "true backlight-off via the helper daemon")
+                else -> dimOnly("the backlight stays powered; needs su or the helper daemon for a real off")
+            }
+            ScreenOff.DAEMON_BLPOWER -> when {
+                daemon -> Cap("Screen on/off", "ok", "true backlight-off via the helper daemon")
+                su -> Cap("Screen on/off", "ok", "true backlight-off via su bl_power")
+                else -> dimOnly("the backlight stays powered; needs su or the helper daemon for a real off")
+            }
+        }
     }
 
     internal fun showShizukuCapability(
