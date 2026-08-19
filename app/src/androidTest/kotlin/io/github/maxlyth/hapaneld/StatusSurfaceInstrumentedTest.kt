@@ -254,7 +254,7 @@ class StatusSurfaceInstrumentedTest {
     /**
      * At an enlarged font scale the frame grows, and every row stays reachable by scrolling.
      *
-     * The version of this test submitted at `d78c3be3` proved nothing and review was right to say so:
+     * An earlier version of this test proved nothing, and review was right to say so:
      * it never set a font scale, and its reachability expression compared a subtraction to the same
      * subtraction, so it was true whatever the frame did. This one enlarges the scale for real through
      * the host's base context, measures the same phase at both scales, and requires the enlarged one

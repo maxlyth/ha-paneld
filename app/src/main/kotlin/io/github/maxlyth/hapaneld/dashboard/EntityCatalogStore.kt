@@ -1109,7 +1109,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     private fun observedMaintenance(now: Long) {
         // The interval gate is consumed OUTSIDE the retried operation. An admission spent by an
         // attempt that then failed BUSY would make the retry re-run into a refusing gate, ending the
-        // pass with neither the work retried nor the failure latched (failure mode found in `66c85f22`).
+        // pass with neither the work retried nor the failure latched — the failure mode this ordering prevents.
         if (!maintenanceGate.admit(now)) return
         runCatching {
             observedWrite("catalog-maintenance", reportsSuccessfulWrite = { it }) { maintainSoftLimit(now) }

@@ -202,8 +202,8 @@ internal object HaPresenceProtocol {
      * Resolves only this MQTT device's Area; it deliberately needs no entities or current states.
      *
      * [preferredAreaName] is the panel's locally configured area (`ha_area`), resolved by NAME first: a
-     * person may deliberately point the panel at a different room than its HA device sits in — the
-     * a panel lives in an HA area with no motion entities, so its presence sources come
+     * person may deliberately point the panel at a different room than its HA device sits in: a panel
+     * whose own area holds no motion entities takes its presence sources
      * from a neighbouring room (2026-07-26). An unknown or blank name falls back to the device's own
      * registry area, so a renamed area degrades to today's behaviour instead of failing.
      */

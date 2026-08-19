@@ -26,9 +26,9 @@ class HaAreaProtocolTest {
     )
 
     @Test fun aPersonsChoiceIsAnOverrideAdoptionMustNotUndo() {
-        // The first precedence rule reverted every deliberate divergence seconds after it was saved: the
-        // maintainer set an observed panel.s area to a neighbouring room (its own HA area has no motion
-        // entities, so auto-sleep needed sources from next door), hit save, and watched the value snap
+        // The first precedence rule reverted every deliberate divergence seconds after it was saved: on an
+        // observed panel the area was set to a neighbouring room (its own HA area has no motion
+        // entities, so auto-sleep needed sources from next door), the change was saved, and the value snapped
         // back. A user-chosen value beats adoption; only ADOPTED values follow Home Assistant.
         assertEquals(
             ReconcileAction.KEEP,
@@ -192,7 +192,7 @@ class HaAreaProtocolTest {
 
     @Test fun theCanonicalRuleHasAnOwnerThatDoesNotWaitForSomebodyToOpenAMenu() {
         // The rule "Home Assistant's area is canonical" was implemented only at read time, and every reader
-        // was a UI control. So a panel nobody had opened the area dropdown on never adopted anything: five
+        // was a UI control. So a panel nobody had opened the area dropdown on never adopted anything:
         // affected panels held a blank ha_area while their HA devices sat in real areas, and every
         // surface honestly reported "No area" (2026-07-26). Reachable-and-credentialled is the only
         // precondition — the registry read is an authenticated WebSocket call.

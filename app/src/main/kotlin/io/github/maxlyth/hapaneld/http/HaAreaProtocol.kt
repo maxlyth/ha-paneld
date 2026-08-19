@@ -22,7 +22,7 @@ internal fun haAreaCacheEntryUsable(
  * area is assigned, and `config/area_registry/create`) are admin-only — so everything here is honest
  * about what the signed-in account can actually do.
  *
- * The precedence rule (precedence rule): **Home Assistant's value, when set, is
+ * The precedence rule: **Home Assistant's value, when set, is
  * canonical.** The local `ha_area` setting records the panel's *requested* area — it seeds the MQTT
  * discovery `suggested_area` (which applies only at first device registration) and drives write-back
  * attempts — but a differing area reported by HA overwrites the local value, never the reverse. That

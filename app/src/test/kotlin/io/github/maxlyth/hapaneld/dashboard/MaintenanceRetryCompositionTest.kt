@@ -10,8 +10,8 @@ import org.junit.Test
 
 /**
  * The maintenance pass composes three real parts: one [MaintenanceIntervalGate] admission, one
- * [DatabaseBusyRetry] run, and the SQLite work between them. The review of `66c85f22` found the
- * admission being consumed INSIDE the retried operation: the first BUSY spent the gate, the retry
+ * [DatabaseBusyRetry] run, and the SQLite work between them. An earlier revision consumed the
+ * admission INSIDE the retried operation: the first BUSY spent the gate, the retry
  * re-ran into a refusing gate, and the pass ended reporting nothing — the work was never retried and
  * the failure never latched. These tests drive the production composition shape — gate consumed
  * once, before the retry begins — with the real gate and the real retry policy under a scripted

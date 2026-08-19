@@ -833,7 +833,7 @@ done
 #   dead_pm      : the run completes but resolves nothing at all, proving nothing
 #   empty_path   : the run completes but names a bare `package:` with no path, which is not an answer
 #   complete_then_fail : every marker arrives, but the command itself reported failure
-# The `child` cases are the ones the previous implementation could not express and previously could not represent: the
+# The `child` cases are the ones the previous implementation could not represent: the
 # OUTER shell completes perfectly, every marker arrives, and only a command INSIDE it dies. A wrapper
 # proving itself complete says nothing about the commands it wrapped, so each child's own status is
 # now part of the validated payload. A killed child reports 128+signal and can never be read as the

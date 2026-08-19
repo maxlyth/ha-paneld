@@ -1211,7 +1211,7 @@ class Config private constructor(
     /**
      * The panel's REQUESTED Home Assistant area, by name. Home Assistant's value is canonical over
      * ADOPTED values, but a person's explicit choice is a deliberate local override that adoption must
-     * not undo — a panel may use a neighbouring room.s area when its own HA area has no motion entities, so its area is
+     * not undo — a panel whose own HA area holds no motion entities may have its area
      * deliberately set to a neighbouring room for auto-sleep sources (2026-07-26). [haAreaUserOverride]
      * records which kind of value this is. Setter is a plain pref write on purpose — adoption must not
      * re-trigger the write-back side effect.

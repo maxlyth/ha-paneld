@@ -129,7 +129,7 @@ object EntityFilterAdvice {
      * separates the small parts from the large ones; on every tested panel these two agree with the
      * declared tier — API 27 / 4 cores modest, API 30 / 4 cores middling, API 34 / 8 cores capable.
      *
-     * RAM is deliberately almost unused. The supported minimum remains well above this, so it is not a
+     * RAM is deliberately almost unused. The slowest panel measured has 1.9 GB, which is not a
      * memory-starved device, and when it drowned its memory rose 8.7% while renderer CPU went up fourteen
      * fold. So this bottleneck is CPU, and RAM may only ever *drop* a tier — a genuinely tiny device — never
      * raise one, because plentiful RAM in front of slow cores predicts nothing.

@@ -36,7 +36,7 @@ class DatabaseBusyContentionReproTest {
         writer = connect()
         writer.createStatement().use { statement ->
             // Android's platform SQLite is compiled with SQLITE_DEFAULT_AUTOVACUUM=1; apply the same
-            // mode explicitly before the first table so the file matches a deployed panel.s database.
+            // mode explicitly before the first table so the file matches a deployed panel's database.
             statement.execute("PRAGMA auto_vacuum=FULL")
             statement.execute("PRAGMA journal_mode=WAL")
             statement.execute("CREATE TABLE telemetry(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
@@ -119,7 +119,7 @@ class DatabaseBusyContentionReproTest {
 
     @Test
     fun fullAutoVacuumFlipsToIncrementalAsAHeaderChangeAndReclaimsInBoundedSlices() {
-        assertEquals("the database must start in deployed panels's FULL mode", 1L, pragmaLong(writer, "auto_vacuum"))
+        assertEquals("the database must start in a deployed panel's FULL mode", 1L, pragmaLong(writer, "auto_vacuum"))
 
         // The flip is a plain pragma — no VACUUM — and survives a fresh connection (header change).
         writer.createStatement().use { it.execute("PRAGMA auto_vacuum=INCREMENTAL") }
