@@ -1,27 +1,41 @@
 # Provisioning & fleet updates
 
-Unattended setup for rooted or userdebug panels grants permissions over adb without per-device tap-through. For the quick single-panel install see the [README](../README.md#install); this page covers the scriptable path and rolling a whole fleet.
+The downloadable installer can set up one panel over adb without a repository checkout. It installs or updates ha-paneld, applies the requested settings, grants the Android permissions available through adb and verifies the running app before it finishes. This page starts with the ordinary single-panel journey, then covers shared settings and whole-fleet updates.
+
+For the shortest interactive installation, see the [README](../README.md#install). For the database, package and helper safeguards behind these commands, see [Provisioning safety and recovery](provisioning-safety.md).
 
 > [!NOTE]
-> These are `bash` + `adb` commands. On **Windows**, run them in **Git Bash** (from [Git for Windows](https://gitforwindows.org/)) or **WSL** — not PowerShell — with `adb` on `PATH` (`winget install Google.PlatformTools`). macOS and Linux run them as-is.
+> These are `bash` and `adb` commands. On **Windows**, run them in **Git Bash** (from [Git for Windows](https://gitforwindows.org/)) or **WSL**, not PowerShell, with `adb` on `PATH` (`winget install Google.PlatformTools`). macOS and Linux run them as written.
 
-## One panel, without downloading the repository
+## Install or update one panel
 
-The downloadable installer can pass provisioning options to one panel. Replace the example address with the panel's address, then paste the complete command into Git Bash, WSL, macOS Terminal or a Linux terminal:
+Replace the example address with the panel's address, then paste the complete command into Git Bash, WSL, macOS Terminal or a Linux terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555
 ```
 
-Add the required options after the address. For example, this assigns a panel name and MQTT broker:
+The installer downloads and authenticates the matching signed release and provisioner. It connects to the panel, installs the ABI-matched root helper where the firmware permits it, installs the APK, grants the required permissions, starts ha-paneld and finishes with a self-check. The running app then reports any guidance derived from the active hardware profile and live panel state.
+
+Provisioning is idempotent. If a step is interrupted or fails, correct the problem and run the same command again. Optional or manual recommendations remain visible without turning a successful installation into a failure.
+
+### Set the panel identity and connections
+
+Add provisioning options after the address. This example assigns a panel ID and MQTT broker:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --id kitchen --mqtt tcp://192.168.1.10:1883
 ```
 
-Use `--prerelease` before `--provision` to follow the newest published release, including release candidates; a newer stable release still wins. Without it, the installer follows stable releases only. Other routine provisioning options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user`, `--ha-pass-file`, `--home-dashboard` and `--entity-filter`.
+Use `--prerelease` before `--provision` to follow the newest published release, including release candidates. A newer stable release still wins. Without it, the installer follows stable releases only.
 
-Pass credentials through owner-only files so they do not appear in shell history or get copied into child-process command lines. The file must contain one credential line; a conventional trailing line ending is accepted, but embedded line breaks are rejected. For example, create a Home Assistant password file without echoing the password:
+Common options include `--force`, `--builtin`, `--ha-url`, `--ha-token-file`, `--ha-user`, `--ha-pass-file`, `--home-dashboard` and `--entity-filter`. Run the installer with `--help` for usage and the advanced entry points. A source checkout also provides the complete `scripts/provision.sh --help` reference.
+
+### Keep credentials out of the command line
+
+Pass credentials through owner-only files so they do not appear in shell history or child-process command lines. Each file must contain one credential line. A trailing line ending is accepted, but embedded line breaks are rejected.
+
+Create a Home Assistant password file without echoing the password:
 
 ```bash
 umask 077
@@ -30,110 +44,47 @@ printf '%s' "$HA_PASSWORD" > ha-password.txt
 unset HA_PASSWORD
 ```
 
-Use `--ha-pass-file ha-password.txt`, `--ha-token-file ha-token.txt`, or `--mqtt-pass-file mqtt-password.txt` as appropriate, then remove the file when provisioning finishes. The older `--ha-pass`, `--ha-token` and `--mqtt-pass` value flags remain accepted for compatibility, but their literal values are visible in the original shell command and process list and should not be used on a shared computer.
+Use `--ha-pass-file ha-password.txt`, `--ha-token-file ha-token.txt` or `--mqtt-pass-file mqtt-password.txt`, then remove the file when provisioning finishes. The older `--ha-pass`, `--ha-token` and `--mqtt-pass` value flags remain available for compatibility, but their values are visible in the original shell command and process list. Do not use them on a shared computer.
 
-These file options protect the credential on the provisioning computer; they do not add encryption to the panel's management API. ha-paneld's `http://<panel>:8888` API uses the project's trusted-LAN model, so MQTT credentials and Home Assistant tokens, whether supplied directly or minted by provisioning, cross that LAN connection as cleartext HTTP. Provision only from a trusted, segmented network. The Home Assistant password itself is sent from this computer to the configured Home Assistant login endpoint and never to the panel; use an `https://` Home Assistant URL, because an `http://` URL also sends that password without transport encryption.
+These file options protect the credential on the computer running the installer. They do not encrypt the panel's management API. ha-paneld uses `http://<panel>:8888` on a trusted LAN, so MQTT credentials and Home Assistant tokens cross that connection as cleartext HTTP. Provision only from a trusted, segmented network. The Home Assistant password is sent from this computer to Home Assistant and never to the panel; use an `https://` Home Assistant URL so the login is encrypted in transit.
 
-The installer downloads and authenticates the matching **signed release** and provisioner. It connects to the panel, installs the ABI-matched root helper where the firmware permits it, installs the APK, grants the required permissions, starts ha-paneld and finishes with a self-check. The running app then reports guidance derived from the active hardware profile and live panel state.
+### Check or export an existing installation
 
-Provisioning is **idempotent**, so paste the same command again after correcting an interrupted or failed step. Required helper, startup, profile activation, configuration, restore and verification failures return a nonzero result. Optional or manual recommendations remain visible without turning an otherwise successful installation into a failure.
-
-Two read-only operations are safe to run independently:
+These read-only operations do not download or install an APK:
 
 ```bash
-# Secret-inclusive config/settings export. This does not download or install an APK.
+# Export secret-inclusive settings.
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --export panel-config.json
 
 # Check the existing installation without changing it.
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --verify
 ```
 
-## Starting a panel over
+Protect an exported config like a credential. It contains settings and secrets, but it is not a complete panel backup.
 
-`--reset-config` erases a panel's ha-paneld configuration so its next start is a genuine first run, then installs and hands over to guided setup:
+## Provision the built-in dashboard renderer
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --reset-config
-```
+The easiest setup is on the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. Open the short-lived link in an administrator's browser and complete the sign-in, then select **Built-in renderer** in the Dashboard card. A long-lived access token remains available for automated or compatibility setup, but it is not needed for the normal interactive journey.
 
-**Reset is irreversible and makes no backup.** If you may want to recover the panel's complete state, stop and use the separate **Install → Backup** operation, then verify the downloaded `.hpb` is non-empty. Use `--export FILE` as a separate command first only when a settings-only export is sufficient. The reset itself asks you to type `RESET` before anything is erased; `--force` does not stand in for that confirmation. For an unattended reset, set `HAPANELD_RESET_CONFIRM=RESET`.
+The built-in renderer requires Home Assistant 2026.4.2 or newer and a compatible current Android System WebView. See the [renderer requirements and appearance controls](built-in-renderer.md#requirements-and-compatibility).
 
-This erases more than settings: learned entity, proximity and ambient data and the panel's on-panel revision history go with them. The app itself, the root helper and every other app on the panel are untouched. Fleet updates refuse the option outright — reset panels one at a time, deliberately.
-
-When `--export FILE` is combined with install or configuration options, the verified config export is written **before** any panel mutation, and an export that cannot be produced and verified stops the run before anything is installed — you asked for that file, so the installer does not proceed without it. Protect that file like a credential. It is not a complete recovery backup: it omits the runtime profile catalog and selection, learned entity state and history, and Home Assistant Companion login. `--restore FILE` imports this config JSON only and requires Python 3 on the computer running the installer so the file can be validated before the panel is changed.
-
-Before an ordinary upgrade the installer also takes its own settings export into a private owner-only directory, without being asked. That one is best-effort: if it cannot be produced, the installer warns, deletes the partial file, records that no settings export exists and continues with the package replacement.
-
-Before every upgrade the installer also attempts to capture the panel's database as an owner-only mode-600 file, normally next to the settings export. That file is the canonical store: configuration, the entity catalog, proximity and ambient history and the on-panel revision history all live in it, and a normal `adb install -r` preserves it. The copy matters when recovery needs an uninstall, which destroys it.
-
-On a current build, the installer sends one ADB-only request that makes the service take its normal orderly shutdown path. That path closes new work, drains every persistence owner, quiesces database writers, flushes application state, checkpoints the SQLite WAL and closes the database. The app acknowledges the exact request only after recording the old process, app version, byte count, host-verifiable SHA-256, schema version and state-row count. The installer then copies the closed database directly from private app storage, with no second database staged on the panel. It accepts the host file only when its size and mandatory host-side SHA-256 match that acknowledgement and local SQLite integrity, schema and row checks pass.
-
-If the installed app returns no exact upgrade-ready acknowledgement, the installer falls back once to SQLite's live `.backup`, producing the same single self-contained database without WAL or journal sidecars. This normally covers the small pre-handshake population as well as a timed-out or malformed reply; there is no retrying compatibility state machine. A panel with no root route cannot reach the database at all, so it reports that only settings could be saved.
-
-Database-backup availability is best-effort for an ordinary in-place upgrade: any failed or contradictory candidate is removed, a prominent warning is printed and Android package replacement may continue with the original app data untouched. An invalid copy is never labelled or retained as a successful backup. There is no fixed free-space threshold for making this backup; the current direct path needs no panel-side database staging, while the one fallback lets the real capture determine whether it fits. The panel's reported storage health is treated the same way. Storage pressure, a failed database health check, a status endpoint that cannot be reached, a malformed reply and a state this installer does not recognise are all reported prominently, before and after installation, and none of them blocks an ordinary package replacement—the new build may be the only useful recovery attempt on a panel whose old build is already unhealthy or unreachable. Standalone `--verify` still reports those conditions as a failure, so use it when you want a pass/fail answer about a panel rather than an upgrade. `--reset-config` is outside that best-effort upgrade-backup path: it irreversibly erases app data and neither creates nor requires a backup.
-
-Before it changes anything, the installer also states the panel's time zone alongside the one this computer is set to, and warns when the two are different zones. This is diagnostic only: it changes neither clock and never refuses an installation, because a panel deliberately set to somewhere else is a legitimate choice. It exists because a panel left on the zone its factory image shipped with will timestamp its logs and run its schedules in that zone without ever saying so, which usually surfaces much later as something happening at the wrong hour. The two are compared as zone names rather than by the offset they read at that moment, since two zones can hold the same offset for months and part the moment one of them moves for daylight saving. Names that differ can still be one zone, because the time-zone database records older names such as `Asia/Calcutta` as links to a current one such as `Asia/Kolkata`, and the installer resolves that against this computer's own database and reports such a pair as one zone under two names.
-
-Because this is a remark rather than a check anything depends on, it is silent whenever it cannot establish the answer. An unreadable or unrecognisable value from the panel, a probe that does not come back, and a name this computer's database does not carry — which on Debian and Ubuntu includes the older names unless `tzdata-legacy` is installed — all produce no output at all. It has its own short deadline, it cannot fail a run, and nothing later in the installation consults its result.
-
-A panel with no ha-paneld installed reaches none of that: it is an ordinary first installation, and the installer says so and continues. Because a status endpoint is absent on a clean panel and absent on a broken one alike, the installer asks Android's package manager to tell the two apart, and it separates the package manager not answering from it answering that the package is not installed—Android reports both as a failed query. Only the first stops the run, before anything on the panel is changed. If you see the installer refuse because it could not determine whether ha-paneld is installed, the panel's package manager or the ADB connection is genuinely not responding; that is not the expected result on a new panel.
-
-Those files are named `…break-glass.db` because that is what they are. Nothing restores them automatically, and they are only valid on the same panel and the same version they came from — restoring a raw database onto a different version or a different panel is the hazard the panel's own backup format exists to avoid. Use them by hand, as a last resort. The supported restore path is the `.hpb` from the panel's Install page, which the installer cannot produce for you because creating one needs the app to be running and serving its web page — which is exactly the situation the break-glass copy is for.
-
-Before an uninstall or other destructive recovery, use **Install → Backup** on the panel's `:8888` page and verify the downloaded `.hpb` is non-empty. Restore that complete backup with **Install → Restore** on the same page. Do not pass an `.hpb` file to CLI `--restore`; the CLI endpoint accepts config exports, not complete backup archives.
-
-Profile recommendations are report-only. Activating a hardware profile is not consent to disable packages, persist ADB, install privileged software or change display settings. The former `--no-tame` option remains accepted as a compatibility no-op, but recommendation-driven package taming is no longer automatic. Packages already present in the explicitly configured tame blocklist still reapply at boot.
-
-The exceptional `--shizuku` setup remains available for a genuinely unrooted panel whose profile names a concrete supported use. Read the [advanced fallback guide](shizuku.md) before enabling it; the required approval is local to the panel and cannot be supplied by provisioning, the web UI, MQTT, backup/restore or a fleet push.
-
-[Hardened mode](security-mode.md) is a separate, optional network-control policy. It requires physical access for selected high-impact remote actions: someone must approve them on the panel's screen, and they cannot be approved remotely. It is enabled only from the panel and is not copied by provisioning or a fleet update. When enabled, a protected HTTP export or import returns `202 approval-required`; approve it on the panel and repeat the identical command from the same computer within ten minutes. Network ADB cannot coexist with Hardened mode, so return the panel to Relaxed mode locally before an ADB-based installation or fleet update. Normal unattended provisioning retains Relaxed mode unless someone deliberately changes that panel-local setting.
-
-**Root helper:** starting with v0.9.4, release assets include sealed `armeabi-v7a` and `arm64-v8a` helper binaries. The normal installer authenticates the selected binary with the release key, verifies it again after device staging, and atomically installs or upgrades it on every panel where vendor `su` or root ADB is available. Before replacing the APK it checks both the required protocol capabilities and the exact deterministic build identity derived from all helper source, headers and command definitions. The prior root-owned helper and service are retained until the APK installation succeeds, so an install, startup, identity or capability failure restores the previous working pair. If the ADB transport disappears while Android is installing the APK, the provisioner keeps the recovery journal rather than guessing; rerunning the same command authenticates the installed APK bytes and running helper identity, then safely commits or rolls back the interrupted upgrade. Recovery snapshots are root-owned, authenticated by their journaled digest and synchronized before live files are retired. The standalone `helper/install-daemon.sh` installer uses a separate helper-only journal; each installer refuses to overwrite the other's incomplete transaction and identifies the command that must be rerun to recover it. This applies equally to PX30, rk3576 and sandbox-walled rooted panels: the app may use direct `su` for compatible operations, while the helper supplies the fixed privileged protocol required by features such as Companion login backup/restore.
-
-The provisioner uses a writable `/system` init service when enough space can be verified, or a verified Magisk, KernelSU or APatch `/data/adb/service.d` runner when `/system` is read-only. On panels where `/system` is writable but too full for a safe upgrade, it can instead keep the helper and recovery files under `/data/adb/hapaneld` while placing only the startup service in `/vendor/etc/init`. Once installed, this hybrid layout remains selected on later updates. If storage capacity, startup ownership or an existing transaction cannot be identified safely, provisioning stops before replacing the APK.
-
-The APK also contains the matching helper as an in-app update migration backstop. When an older direct-su panel updates ha-paneld from its Install tab, MQTT button or automatic update setting before it is reprovisioned, first startup verifies the helper protocol and launches a root-owned `/data/local` copy if necessary. This preserves existing direct-su backup/restore capability across the transition. A sandbox-walled panel cannot safely make an old helper replace itself, so it remains fail-closed with an explicit reprovision prompt until the authenticated external provisioner installs the matching helper.
-
-### Provisioning a local build
-
-This is a developer workflow and **requires a source checkout**. From the repository root, build the matching local helper binaries first:
-
-<!-- source-checkout-only -->
-```bash
-./helper/build.sh
-scripts/provision.sh <panel-ip:5555> \
-  --apk app/build/outputs/apk/debug/app-debug.apk \
-  --allow-unsigned-helper
-```
-
-`--allow-unsigned-helper` is an explicit acknowledgement that the root helper embedded in a local APK is controlled by the local builder rather than authenticated as a published release. It is required whenever a local APK is provisioned to a panel with a usable root or helper path, including a first helper installation. A genuinely unrooted panel skips helper work. Official `--latest` and `--prerelease` installs continue to authenticate their release helper automatically and do not use this flag.
-
-Local `--apk` provisioning also requires Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. Before any upgrade backup or mutation, the provisioner verifies that the APK contains the ha-paneld package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key; add `--require-release-signer` only when the local file is expected to carry the official ha-paneld release certificate.
-
-The profile-aware plan reports when selected drivers require the helper. Many rk3576 / PX30 panels can also run `su` in-app, while sandbox-walled rooted panels use the helper as their privileged control path for features such as screen-off, density, CPU governor, screenshots, performance data, buttons and LEDs. A genuinely unrooted panel continues with its standard Android capabilities unless its profile declares a separately documented alternate for one exact feature.
-
-## Provisioning the built-in dashboard renderer
-
-Since 0.9, ha-paneld includes its own experimental dashboard renderer. In 0.9.6 it requires Home Assistant 2026.4.2+ and a compatible current Android System WebView; see the [built-in renderer requirements and the separate appearance/lock controls](built-in-renderer.md#requirements-and-compatibility). The easiest setup is on the panel's `:8888` **Configure** page: under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. Complete the short-lived sign-in link in an administrator's browser, then select **Built-in renderer** in the Dashboard card. A long-lived access token remains available for automated or compatibility setup, but is not needed for the normal interactive flow.
-
-For unattended provisioning, `--builtin` selects the renderer and provisions its Home Assistant sign-in **from this machine**, so nothing is typed on the panel:
+For unattended provisioning, `--builtin` selects the renderer and signs in to Home Assistant from this computer, so nothing is typed on the panel:
 
 ```bash
-# Username/password: logs in HERE and mints a revocable refresh token; the password never reaches
-# the panel. Create ha-password.txt as described above, then replace the URL and user.
+# Username/password: the login happens here and mints a revocable refresh token.
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
   bash -s -- --provision 192.168.1.50:5555 --builtin \
   --ha-url https://homeassistant.example.com --ha-user your-user --ha-pass-file ha-password.txt
 
-# or a long-lived access token instead of a login:
+# Or use a long-lived access token instead of a login.
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
   bash -s -- --provision 192.168.1.50:5555 --builtin \
   --ha-url https://homeassistant.example.com --ha-token-file ha-token.txt
 ```
 
-### Choosing the dashboard and entity filtering at install time
+### Choose the dashboard and entity filter
 
-A scripted install deliberately does not ask guided setup's questions — nobody is standing at the panel to answer them — so by default the panel opens whatever Home Assistant treats as that account's default dashboard. On a large account that is often the slowest page you own, and an older panel can take a long time to draw it. `--home-dashboard` and `--entity-filter` answer both questions up front, before the panel's first render:
+An unattended install cannot ask guided setup's questions. By default, the panel opens the Home Assistant account's default dashboard. On a large account that is often the slowest dashboard available, and an older panel can take a long time to draw it. `--home-dashboard` and `--entity-filter` answer both questions before the first render:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
@@ -142,23 +93,41 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
   --home-dashboard /panel-dashboard/kitchen --entity-filter on
 ```
 
-`--home-dashboard` takes a dashboard or a specific view below one, exactly as the Configure page's Custom field does — `/lovelace`, `/panel-dashboard/kitchen` — or `auto` to follow the account's default. `--entity-filter` takes `on` or `off`; `on` limits Home Assistant's state stream to the entities the dashboard actually uses, which is the single biggest difference on an older panel. Both apply to ha-paneld's built-in renderer, so they need `--builtin` in the same command (or a panel already using it).
+`--home-dashboard` accepts a dashboard, a specific dashboard tab such as `/panel-dashboard/kitchen`, or `auto` to follow the account default. `--entity-filter` accepts `on` or `off`. Turning it on limits Home Assistant's state stream to the entities the dashboard uses, which can make the largest difference on an older panel. Both options apply to ha-paneld's built-in renderer, so they require `--builtin` in the same command or a panel already using it.
 
-Supplying either option also answers the matching guided-setup question, so the panel does not ask it again. Anything you change later on the panel wins, as does an explicitly named option over a `--restore` bundle in the same command. If Home Assistant does not currently list the dashboard you named, the value is still saved and the installer says so — a panel can be provisioned before the dashboard it is meant to show exists. A path Home Assistant could never resolve is rejected outright and nothing is recorded as answered, so guided setup still asks.
+Supplying either option also answers the matching guided-setup question. A later change on the panel wins, and an option named in the command wins over a `--restore` bundle in the same command. If Home Assistant does not currently list the named dashboard, the installer saves it and tells you; this allows a panel to be provisioned before its intended dashboard exists. A path Home Assistant could never resolve is rejected, so guided setup still asks.
 
-For an interactive installation, omit the Home Assistant credential arguments. After verification the installer prints the one thing the panel is actually waiting for, and the address to do it at — usually guided setup at `http://<panel>:8888/setup`, which walks the Home Assistant sign-in in the administrator's browser without typing credentials on the panel. You can equally tap **Set up** on the panel's own screen; both surfaces follow the same journey, so it does not matter which you use or whether you switch between them. Existing panels that previously imported a Companion session retain that login as a compatibility path.
+For an interactive installation, omit `--builtin` and the Home Assistant credential arguments. The installer prints the address for the step the panel is waiting for, usually `http://<panel>:8888/setup`. You can continue there from a computer or phone, or tap **Set up** on the panel. Both follow the same journey. Existing panels that imported a Companion session keep that login as a compatibility path.
 
-Reverting to the Companion: set the dashboard app back to it in the Configure tab (or blank `dashboard_package`). The built-in renderer deliberately has **no Voice Assistant (Assist) and no notifications** — keep the Companion where those matter.
+To return to the Companion app, select the installed Home Assistant Companion package as the Dashboard app in the Configure tab. The built-in renderer does not provide Voice Assistant or notifications, so keep the Companion where those features matter.
+
+## Starting a panel over
+
+`--reset-config` erases ha-paneld's data and starts guided setup as a genuine first run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --reset-config
+```
+
+**Reset is irreversible and makes no backup.** If you may need the fullest supported recovery, stop and use the separate **Install → Backup** operation on the panel's `:8888` page. Verify that the downloaded `.hpb` is non-empty before continuing. Use `--export FILE` as a separate command first only when a settings-only export is sufficient.
+
+Reset removes settings, learned entity data, proximity and ambient history, and the panel's on-panel revision history. It does not remove the app, root helper or any other app on the panel. The command asks you to type `RESET`; `--force` does not bypass that confirmation. Set `HAPANELD_RESET_CONFIRM=RESET` only when an unattended reset is deliberate.
+
+Fleet updates refuse `--reset-config`. Reset panels one at a time.
+
+The CLI `--restore FILE` option imports a config JSON export and requires Python 3 on the computer running the installer. It does not accept an `.hpb` backup. Restore an `.hpb` through **Install → Restore** on the same panel page.
+
+For the distinction between config exports, supported `.hpb` backups and automatic break-glass database copies, see [Provisioning safety and recovery](provisioning-safety.md#backups-and-recovery).
 
 ## Deploying shared settings to a fleet
 
-To copy one configured panel's shared settings to other panels without downloading the repository, first export its config:
+Use `--restore-fleet` when several panels should share the same portable settings. First export the configured source panel:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --provision 192.168.1.50:5555 --export fleet-config.json
 ```
 
-The export contains secrets, so store it like a credential. On each target, restore only its portable settings and supply that panel's identity and credentials explicitly:
+The export contains secrets, so store it like a credential. On each target, restore the portable settings and supply that panel's identity and credentials explicitly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
@@ -168,48 +137,80 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
   --builtin --ha-url https://homeassistant.example.com --ha-token-file ha-token.txt
 ```
 
-Repeat the restore command for each target, changing its address and `--id`. Add `--prerelease` before `--provision` to follow the newest published release, including a current release candidate.
+Repeat the command for each target, changing its address and `--id`. Add `--prerelease` before `--provision` when the panels should follow the newest published release, including a current release candidate.
 
-`--restore-fleet` applies only **PORTABLE, non-secret** settings. It deliberately leaves device and identity settings, including the panel ID, and all credentials unchanged. If a bundle-only restore leaves MQTT reporting `auth-failed`, first check that `--mqtt-user` and `--mqtt-pass-file` were supplied; that result does not by itself mean the broker is down.
+`--restore-fleet` applies only **PORTABLE, non-secret** settings. It leaves the panel ID, other device-specific settings and every credential unchanged. If MQTT reports `auth-failed` after a bundle-only restore, check that `--mqtt-user` and `--mqtt-pass-file` were supplied. That result does not by itself mean the broker is down.
 
 ## Updating a whole fleet
 
-Whole-fleet updates are an advanced administrator workflow and currently **require a source checkout**. From the repository root, use [`scripts/update-fleet.sh`](../scripts/update-fleet.sh). It downloads the release once and runs the provisioner per panel, so every panel is installed, launched and verified:
+Whole-fleet updates currently require a source checkout. From the repository root, run [`scripts/update-fleet.sh`](../scripts/update-fleet.sh) with the panel addresses. The script downloads the release once, authenticates one APK before any worker starts, then installs, launches and verifies each panel:
 
 <!-- source-checkout-only -->
 ```bash
 scripts/update-fleet.sh --latest -- 192.168.1.10 192.168.1.11:5555
-# At most four panels run at once by default; reduce or increase the bounded pool with --jobs (1..32).
+
+# At most four panels run at once by default. Set a smaller bounded pool when required.
 scripts/update-fleet.sh --jobs 2 --latest -- 192.168.1.10 192.168.1.11:5555
-# --prerelease rolls the newest published release, whether stable or a release candidate.
-# or pipe a host list:  printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
+
+# Follow the newest published release, whether stable or a release candidate.
+scripts/update-fleet.sh --prerelease -- 192.168.1.10 192.168.1.11:5555
+
+# A host list can also come from standard input.
+printf '%s\n' 192.168.1.10 192.168.1.11 | scripts/update-fleet.sh --latest
 ```
 
-Fleet runs print each panel's provisioning guidance but never accept profile recommendations automatically. `HAPANELD_FLEET_JOBS` sets the default concurrency when `--jobs` is omitted; the command-line option takes precedence.
+Four panels run concurrently by default. Set `--jobs 1..32` to change the bounded pool, or use `HAPANELD_FLEET_JOBS` as the default when `--jobs` is omitted. The command-line option takes precedence.
 
-Options that describe one panel are refused before any fleet worker starts: use `--reset-config`, `--export FILE`, `--id` and device-specific `--restore FILE` with `scripts/provision.sh` one panel at a time. `--restore-fleet FILE` remains the supported way to apply portable, non-secret settings across several panels.
+Each worker prints the panel's provisioning guidance, but fleet updates never accept hardware-profile recommendations automatically. Options that describe one panel are refused before any worker starts. Run `--reset-config`, `--export FILE`, `--id` and device-specific `--restore FILE` through `scripts/provision.sh` one panel at a time. `--restore-fleet FILE` is the supported way to apply portable settings across several panels.
 
-Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The fleet wrapper authenticates one APK package, signer and SHA-256 digest before starting any panel worker. An APK downloaded through `--latest` or `--prerelease` must carry the official release certificate; a supplied self-built APK may use its builder's consistent signer unless `--require-release-signer` is requested.
+Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The wrapper checks the selected APK before the workers start, and each panel's provisioner verifies its input again before changing the panel. The [technical provisioning page](provisioning-safety.md#fleet-update-boundaries) records the signer rules and remaining fleet safeguards.
 
-## Bootstrapping adb (Tuya TPA10 / Smatek panels)
+## Exceptional access and security modes
 
-adb is often only available on the **USB port**, and `adb root` often works only there. Plug in, enable network adb, then provision as normal:
+Hardware-profile recommendations are report-only. Choosing a profile is not consent to disable packages, persist ADB, install privileged software or change display settings. The old `--no-tame` option remains as a compatibility no-op. Packages already present in the configured tame blocklist still reapply at boot.
+
+The exceptional `--shizuku` route remains available as a last attempt on a genuinely unrooted panel whose profile names one concrete supported use. It is not part of the normal provisioning journey. Read the [advanced fallback guide](shizuku.md) before enabling it. Approval must happen locally on the panel and cannot be supplied through provisioning, the web UI, MQTT, backup/restore or a fleet update.
+
+[Hardened security mode](security-mode.md) requires physical access for selected high-impact remote actions. Someone must approve them on the panel's screen, and they cannot be approved remotely. It is enabled only from the panel and is not copied by provisioning or a fleet update. Network ADB cannot coexist with Hardened security mode, so return the panel to Relaxed mode locally before an ADB-based installation or fleet update.
+
+## Provision a local build
+
+This developer workflow requires a source checkout. Build the APK from the repository root, then supply it to the provisioner:
+
+<!-- source-checkout-only -->
+```bash
+./gradlew :app:assembleDebug
+scripts/provision.sh <panel-ip:5555> \
+  --apk app/build/outputs/apk/debug/app-debug.apk \
+  --allow-unsigned-helper
+```
+
+`--allow-unsigned-helper` acknowledges that the helper embedded in a local APK is controlled by the local builder instead of authenticated as a published release. It is required whenever a local APK is sent to a panel with a usable root or helper route, including the first helper installation. A genuinely unrooted panel skips helper work. Official `--latest` and `--prerelease` installs authenticate the release helper automatically and do not use this flag.
+
+Local `--apk` provisioning requires Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. Before any upgrade backup or panel change, the provisioner verifies the package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key. Add `--require-release-signer` only when the local file should carry the official release certificate.
+
+The profile-aware plan reports when selected drivers need the helper. Many rk3576 and PX30 panels can run `su` in-app, while sandboxed rooted panels use the helper for privileged operations. A genuinely unrooted panel continues with standard Android capabilities unless its profile declares a separately documented alternative for one exact feature.
+
+## Bootstrapping adb
+
+On some Tuya TPA10 and Smatek panels, adb initially works only over USB. Connect the USB cable, then enable network adb before running the normal provisioning command:
 
 ```bash
 adb devices                   # accept the on-screen RSA prompt if shown
-adb root                      # if supported (needed for the sysfs-LED helper daemon)
-adb tcpip 5555                # expose adb on the network (resets on reboot)
-adb connect 192.168.1.50:5555 # replace this example address with the panel's address
+adb root                      # if this firmware supports it
+adb tcpip 5555                # expose adb on the network; this resets on reboot
+adb connect 192.168.1.50:5555 # replace this address with the panel's address
 ```
 
-**No adb at all.** With a browser or file manager on the panel, download the [release APK](https://github.com/maxlyth/ha-paneld/releases/latest), enable "install unknown apps" and tap to install — then **grant permissions by hand** (Settings → Apps → ha-paneld → *Modify system settings*; Accessibility → enable the service); the app's setup screen guides you through this. Not possible on locked-down panels with no browser/file manager.
+If a panel has no adb but does have a browser or file manager, download the [release APK](https://github.com/maxlyth/ha-paneld/releases/latest), allow installation from that app and tap the APK. Grant the required permissions by hand under Android Settings, then follow ha-paneld's setup screen. This route is not available on a locked-down panel with no browser or file manager.
 
-## Permission → why
+## Android permissions
 
-| Permission | For | Grant |
-|------------|-----|-------|
-| `POST_NOTIFICATIONS` | foreground-service notification | runtime / `pm grant` |
-| `WRITE_SETTINGS` | screen brightness | `appops set <pkg> WRITE_SETTINGS allow` |
-| Accessibility (key filter) | hardware-button events | `settings put secure enabled_accessibility_services …` |
+| Permission | Used for | Provisioning grant |
+|------------|----------|--------------------|
+| `POST_NOTIFICATIONS` | Foreground-service notification | Runtime permission or `pm grant` |
+| `WRITE_SETTINGS` | Screen brightness | `appops set <pkg> WRITE_SETTINGS allow` |
+| `SYSTEM_ALERT_WINDOW` | Software navigation bar | `appops set <pkg> SYSTEM_ALERT_WINDOW allow` |
+| Accessibility key capture | Hardware-button events | `settings put secure enabled_accessibility_services …` |
 
-Screen-off needs **no device admin** — ha-paneld powers the backlight off via the root helper daemon or `su` (`bl_power`), falling back to brightness-0, so it never raises a keyguard/PIN and never blocks its own uninstall. (Builds ≤ 0.5.0 shipped an optional device admin; 0.5.1 removed it — see the [build & signing notes](local-builds.md) if you're upgrading from one where you'd activated it.)
+Screen-off does not use Android device administrator. The active hardware profile may power off a physical backlight, send Android sleep and wake key events, or fall back to brightness zero. The profile route determines whether root, the authenticated helper or standard Android access is required. Builds up to 0.5.0 included an optional device administrator; 0.5.1 removed it. See the [build and signing notes](local-builds.md) if you are upgrading from a build where it was enabled.

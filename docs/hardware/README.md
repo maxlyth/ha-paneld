@@ -8,13 +8,13 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 | Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx) | yes — NXP, but Android-NFC disabled | no | [wf1589t.md](wf1589t.md) |
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
-| ZHICAI SMT1019 ‡ | rk3576 | none (LED ioctl root-locked, no su) | none Android-exposed reported | no | no | [smt1019.md](smt1019.md) |
+| ZHICAI SMT1019 ‡ | rk3576 | root helper on supplier `userdebug`; unavailable on stock firmware | GXHT30 temperature + humidity (accuracy unverified); experimental VI530x proximity | no | no | [smt1019.md](smt1019.md) |
 | ZX-SMT156 / RK3566_T ‡ | rk3566 | `/dev/ledjni` (app-direct) | binary proximity, ambient light; GXHT30 temp+humidity (helper or fixed shell-level alternate) | unknown | vendor relays reported, control path unknown | [zx-smt156.md](zx-smt156.md) |
 | Shelly Wall Display § | MT6580 / SC7731E / RK3326-S / RK3566 (model-dependent) | none established | ambient light on original/X2/X1i/X2i/XL; temperature/humidity on original + X2; proximity on X2/X1i/X2i; XL motion; relays vary by model/base | not established for every model | not established for every model | [shelly-wall-display.md](shelly-wall-display.md) |
 
 † S9E specs are from Smatek's listing; control paths are from [#98](https://github.com/seaky/nspanel_pro_tools_apk/issues/98) + the HA community thread, **not** validated on a unit here — relay/button support is implemented but untested.
 
-‡ SMT1019 and ZX-SMT156 facts are from reporter diagnostics and linked OEM/retail evidence ([#8](https://github.com/maxlyth/ha-paneld/issues/8), [#24](https://github.com/maxlyth/ha-paneld/issues/24)), **not** validated on units here. ZX climate support is optional; USB/vendor root or persistent unlock routes remain untested.
+‡ SMT1019 and ZX-SMT156 facts come from reporter diagnostics and linked OEM or retail evidence ([#8](https://github.com/maxlyth/ha-paneld/issues/8), [#24](https://github.com/maxlyth/ha-paneld/issues/24)); neither panel is available for local testing. SMT1019 helper persistence and raw climate axes have reporter evidence, but climate accuracy, end-to-end proximity and the complete profile still need hardware tests. ZX climate support is optional; USB or vendor root and persistent unlock routes remain untested.
 
 § Shelly Wall Display facts are from firmware OTA analysis (incl. a device-tree parse of the modern partition image), the official changelog, and community/KB sources — **not** validated on a unit here. The **legacy** OTA declares a `userdebug` target build, so `adb root` may be reachable there if an adb foothold exists; the **modern** OTA declares no build type — see [shelly-wall-display.md](shelly-wall-display.md) for the per-track evidence and for Shelly's own statement about current hardware. The bundled `shelly-wall-display` and `shelly-wall-display-v2` YAML profiles are implemented but speculative.
 
@@ -29,6 +29,8 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 - **Control surfaces**: `/sys/class/leds`, `/dev`, and each LED node's own attributes (some panels self-document, e.g. the TPA10's `avsux_info` / `avsux_firmware`).
 
 Corrections and additions for other panels are welcome.
+
+The `Native` navbar mode is profile-gated, not specific to Electron panels. The bundled WF1589T profile currently declares it because that firmware's Android navbar has been verified. Other profiles can enable the same mode after their system bar has been confirmed.
 
 ## Gaining adb + root access
 

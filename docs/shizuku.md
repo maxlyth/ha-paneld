@@ -1,8 +1,10 @@
-# Shizuku enhanced access
+# Shizuku as an advanced fallback
 
-Shizuku is an optional way for ha-paneld to perform a small set of privileged Android operations on a panel whose firmware does **not** provide root access. It is useful on locked-down tablets and wall displays, but it is not required on the vendor-rooted wall panels that make up most existing ha-paneld installations.
+Shizuku is a best-effort last resort for a panel that is genuinely unrooted. It is not part of ha-paneld's normal supported-hardware path, and it does not provide the same access or hardware support as vendor `su` or the ha-paneld root helper.
 
-If your panel diagnostics already report working `su` or the ha-paneld root helper, keep that normal path. Installing Shizuku will not add the root-only hardware features that those panels already have. ha-paneld does not recommend modifying or rooting a device that was supplied unrooted.
+Do not install Shizuku when panel diagnostics already report working `su` or the root helper. Keep that established route. Only consider this guide when standard Android cannot provide a specific capability you need and the panel offers neither supported root route. Shizuku support varies with the firmware, may need attention after a reboot, and should not be treated as a promise that an otherwise unsupported panel will work with ha-paneld.
+
+ha-paneld does not recommend modifying or rooting a device that was supplied unrooted. If the standard Android feature set is enough for the panel, use it without Shizuku.
 
 ## What Shizuku is
 
@@ -16,7 +18,7 @@ Shell is more capable than an ordinary Android app, but it is not root:
 - its service may stop at reboot and need to be started again;
 - every client application still needs explicit approval in the Shizuku Manager.
 
-Shizuku therefore fills the gap between ha-paneld's standard Android permissions and a panel whose vendor firmware already supplies `su` or permits installation of the root helper.
+This gives ha-paneld a narrow middle ground on some unrooted firmware. It is not a substitute for root or the helper.
 
 ## How ha-paneld uses it
 
@@ -38,9 +40,9 @@ vendor su → ha-paneld root helper → locally approved Shizuku
 
 Ordinary Android and Accessibility capabilities continue to handle operations that do not need one of those routes. Shizuku is therefore dormant on a normal rooted wall panel unless the administrator deliberately sets it up, and it does not replace a working root/helper path.
 
-## Capability comparison
+## What this fallback can and cannot do
 
-| Capability | Standard Android | Shizuku enhanced access | Vendor `su` / root helper |
+| Capability | Standard Android | Shizuku fallback | Vendor `su` / root helper |
 | --- | --- | --- | --- |
 | HA dashboards, MQTT entities, web UI, audio/TTS, brightness and dimming | Yes | Yes | Yes |
 | Display density and system text scale | No | Yes | Yes |
@@ -56,44 +58,28 @@ Ordinary Android and Accessibility capabilities continue to handle operations th
 
 Some ordinary input features, such as Back and Recents, can alternatively use ha-paneld's Accessibility service. Hardware availability also varies by panel: having root cannot create an LED or relay interface that the firmware does not expose.
 
-## Rooted vendor panel or Shizuku?
+## Choose the normal route when one exists
 
 ### Vendor-rooted wall panel
 
-Purpose-built panels such as the Sonoff NSPanel Pro commonly ship with a vendor-provided `su`, root ADB, or a firmware arrangement that lets the installer place ha-paneld's small root helper. This is the normal ha-paneld path.
+Purpose-built panels such as the Sonoff NSPanel Pro commonly ship with vendor-provided `su`, root ADB, or firmware that lets the installer place ha-paneld's small root helper. This is the normal ha-paneld route. It avoids an extra Manager application and approval lifecycle, normally returns immediately after reboot, and supports the full hardware-specific feature set.
 
-Advantages:
-
-- no extra Manager application or approval lifecycle;
-- normally available again immediately after reboot;
-- supports the full hardware-specific feature set;
-- already exercised by the established ha-paneld fleet.
-
-Trade-offs:
-
-- availability and command behavior depend on the vendor firmware;
-- some firmwares isolate applications from `su`, requiring the separately installed root helper;
-- root is a broader authority, so ha-paneld keeps root/helper commands allowlisted and bounded.
-
-Use the root route supplied by the panel. Do not install Shizuku merely to duplicate it, and do not root an otherwise locked device solely for ha-paneld.
+Use the root route supplied by the panel. Some firmware isolates applications from `su`, in which case the separately installed root helper provides the supported path. Root has broader authority, so ha-paneld keeps root and helper commands allowlisted and bounded. Do not install Shizuku merely to duplicate this route, and do not root an otherwise locked device solely for ha-paneld.
 
 ### Genuinely unrooted panel with Shizuku
 
-Advantages:
+Consider Shizuku only when the panel has no working root or helper route and its standard Android capabilities are not enough. It can add selected maintenance and display controls without modifying the firmware for root, requires visible local approval that can be revoked in the Manager, and allows signer-verified application updates that an ordinary app cannot install silently. ha-paneld exposes only a narrow typed subset of the shell identity.
 
-- adds the most useful maintenance and display controls without modifying the firmware for root;
-- requires visible local approval and can be revoked in the Shizuku Manager;
-- ha-paneld exposes only a narrow typed subset of the shell identity;
-- enables signed application updates that an ordinary app cannot install silently.
-
-Trade-offs:
+The limits are substantial:
 
 - installation and initial service start require ADB or supported wireless debugging;
 - the Shizuku Manager is another application and trust dependency to maintain;
 - ADB-started services commonly need rearming after reboot, especially on older Android versions;
 - it offers fewer capabilities than root and cannot operate vendor hardware or private app data;
 - ha-paneld does not auto-update the Shizuku Manager;
-- behavior varies across unrooted wall-panel firmware and should be verified on each panel.
+- behavior varies across unrooted wall-panel firmware and must be verified on each panel.
+
+This route remains best effort even after it has been set up successfully. Expect to maintain its separate service and approval lifecycle, and do not assume that success on one unrooted panel establishes support for another.
 
 ### Standard Android only
 
@@ -135,6 +121,6 @@ To stop using the feature, open **Enhanced access** in ha-paneld and choose **Di
 
 Shizuku approval expands what ha-paneld can do through its existing local API: for example, a trusted-LAN caller can request a screenshot, inject input or initiate a signer-verified component update. Relaxed mode assumes the panel is on a trusted network. If the panel shares a network with untrusted clients, isolate access using a VLAN or firewall before enabling privileged routes.
 
-Optional [Hardened mode](security-mode.md) is a separate layer. Shizuku approval grants ha-paneld a bounded Android shell capability; Hardened mode requires someone physically at the panel to approve selected high-impact network requests on its screen, and they cannot be approved remotely. It disables non-loopback tap injection even when Shizuku could perform the tap. Enabling either one does not enable the other, and neither setting is copied by backup, restore or fleet update.
+Optional [Hardened security mode](security-mode.md) is a separate layer. Shizuku approval grants ha-paneld a bounded Android shell capability; Hardened security mode requires someone physically at the panel to approve selected high-impact network requests on its screen, and they cannot be approved remotely. It disables non-loopback tap injection even when Shizuku could perform the tap. Enabling either one does not enable the other, and neither setting is copied by backup, restore or fleet update.
 
-The Shizuku boundary reduces authority compared with root, and Hardened mode protects only its documented operation set; neither makes an untrusted LAN safe. The exact project threat model is documented in [Security posture](architecture/security.md).
+The Shizuku boundary reduces authority compared with root, and Hardened security mode protects only its documented operation set; neither makes an untrusted LAN safe. The exact project threat model is documented in [Security posture](architecture/security.md).

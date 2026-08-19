@@ -10,6 +10,7 @@ cd "$ROOT"
 checkout_free_docs=(
   README.md
   docs/provisioning.md
+  docs/provisioning-safety.md
   docs/shizuku.md
   docs/built-in-renderer.md
   docs/profiles/unofficial/echo-show-5-gen2.md
@@ -91,10 +92,10 @@ fi
 # The focused provisioner suite mutation-proves these branches; this contract prevents editorial
 # changes from silently describing the former staged/capacity-gated behavior again.
 backup_doc_section="$(awk '
-  /^## Starting a panel over$/ { in_section = 1; next }
-  in_section && /^## / { exit }
+  /^## Backups and recovery$/ { in_section = 1 }
+  in_section && /^## Time zone and first-install checks$/ { exit }
   in_section { print }
-' docs/provisioning.md)"
+' docs/provisioning-safety.md)"
 
 backup_doc_claims=(
   'quiesces database writers'
@@ -110,7 +111,7 @@ backup_doc_claims=(
 )
 for claim in "${backup_doc_claims[@]}"; do
   if ! grep -Fq -- "$claim" <<< "$backup_doc_section"; then
-    printf 'docs/provisioning.md: backup contract is missing %s\n' "$claim" >&2
+    printf 'docs/provisioning-safety.md: backup contract is missing %s\n' "$claim" >&2
     failed=1
   fi
 done
@@ -127,7 +128,7 @@ reject_backup_prose() {
 
   matches="$(grep -Ein -- "$pattern" <<< "$backup_prose_for_contradictions" || true)"
   if [ -n "$matches" ]; then
-    printf 'docs/provisioning.md: backup contract contradicts %s:\n%s\n' \
+    printf 'docs/provisioning-safety.md: backup contract contradicts %s:\n%s\n' \
       "$description" "$matches" >&2
     failed=1
   fi
@@ -148,7 +149,7 @@ reject_backup_prose \
   '((ordinary|normal|in-place)[^.!?]*(upgrade|install)[^.!?]*(fail(s|ed)?|abort(s|ed)?|refus(e|es|ed)|block(s|ed)?|stop(s|ped)?|cannot continue|will not continue)[^.!?]*(backup|snapshot)|(backup|snapshot)[^.!?]*(unavailable|missing|fail(s|ed)?|cannot be captured)[^.!?]*(fail(s|ed)?|abort(s|ed)?|refus(e|es|ed)|block(s|ed)?|stop(s|ped)?|prevent(s|ed)?)[^.!?]*(ordinary|normal|in-place|upgrade|install|package replacement)|(ordinary|normal|in-place)[^.!?]*(upgrade|install)[^.!?]*(requires?|mandatory|must have)[^.!?]*(backup|snapshot))'
 reset_prose_for_contradictions="${backup_prose_for_contradictions//and neither creates nor requires a backup/and bypasses automatic backup}"
 if grep -Eiq -- '((--reset-config|reset)[^.!?]*(requires?|must have|will not erase|refus(e|es|ed))[^.!?]*(backup|snapshot)|(backup|snapshot)[^.!?]*(required|mandatory)[^.!?]*(--reset-config|reset))' <<< "$reset_prose_for_contradictions"; then
-  printf 'docs/provisioning.md: reset contract contradicts its no-backup behavior\n' >&2
+  printf 'docs/provisioning-safety.md: reset contract contradicts its no-backup behavior\n' >&2
   failed=1
 fi
 
