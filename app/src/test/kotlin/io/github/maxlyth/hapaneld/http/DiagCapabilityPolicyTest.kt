@@ -202,7 +202,11 @@ class DiagCapabilityPolicyTest {
                 "brightness-zero must not claim a backlight-off it never attempts with $label: ${cap.note}",
                 cap.note.contains("backlight-off"),
             )
-            assertTrue("brightness-zero must say it only dims with $label", cap.note.contains("DIM ONLY"))
+            assertEquals(
+                "brightness-zero must say it only dims, and why, with $label",
+                "DIM ONLY — this panel's profile selects the brightness-zero route, which never powers the backlight down",
+                cap.note,
+            )
         }
     }
 
@@ -222,7 +226,11 @@ class DiagCapabilityPolicyTest {
         listOf(ScreenOff.SU_BLPOWER, ScreenOff.DAEMON_BLPOWER).forEach { route ->
             val cap = DiagReader.screenOnOffCapability(route, su = false, daemon = false)
             assertEquals("$route without privilege must be degraded", "degraded", cap.status)
-            assertTrue("$route must say it only dims: ${cap.note}", cap.note.contains("DIM ONLY"))
+            assertEquals(
+                "$route must say it only dims, and why",
+                "DIM ONLY — the backlight stays powered; needs su or the helper daemon for a real off",
+                cap.note,
+            )
         }
     }
 
@@ -354,7 +362,10 @@ class DiagCapabilityPolicyTest {
 
         val none = DiagReader.screenOnOffCapability(ScreenOff.BRIGHTNESS_ZERO, su = false, daemon = false)
         assertEquals("degraded", none.status)
-        assertTrue(none.note.contains("DIM ONLY"))
+        assertEquals(
+            "DIM ONLY — this panel's profile selects the brightness-zero route, which never powers the backlight down",
+            none.note,
+        )
     }
 
     /** A panel whose screen-off is Android's own sleep must not be told it has a backlight off, and it
@@ -373,7 +384,10 @@ class DiagCapabilityPolicyTest {
 
         val unprivileged = DiagReader.screenOnOffCapability(ScreenOff.KEYEVENT, su = false, daemon = false)
         assertEquals("with no privileged injector there is no real off at all", "degraded", unprivileged.status)
-        assertTrue(unprivileged.note.contains("DIM ONLY"))
+        assertEquals(
+            "DIM ONLY — needs su or the helper daemon to inject KEYCODE_SLEEP",
+            unprivileged.note,
+        )
     }
 
     @Test fun screenBrightnessCallsOutReducedHardwareOnlyControl() {

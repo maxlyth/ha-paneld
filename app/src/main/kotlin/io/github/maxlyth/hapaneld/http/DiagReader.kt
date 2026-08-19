@@ -191,7 +191,7 @@ object DiagReader {
      * genuinely different. That difference is the part worth stating on a panel's own diagnostics.
      */
     internal fun screenOnOffCapability(route: ScreenOff, su: Boolean, daemon: Boolean): Cap {
-        val dimOnly = { why: String -> Cap("Screen on/off", "degraded", "DIM ONLY — ") }
+        val dimOnly = { why: String -> Cap("Screen on/off", "degraded", "DIM ONLY — $why") }
         return when (route) {
             ScreenOff.KEYEVENT ->
                 if (daemon || su) Cap("Screen on/off", "ok",
