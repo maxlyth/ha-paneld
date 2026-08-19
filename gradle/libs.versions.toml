@@ -2,7 +2,7 @@
 # Kotlin 2.4's table names AGP 9.1.0 and Gradle 9.5 as its upper tested versions. AGP 9.1.1 is
 # Android's API 37 support patch; Gradle 9.6.1 is a separately gated CI-performance update;
 # build.gradle.kts selects Kotlin 2.4.0 explicitly.
-agp = "9.1.1"
+agp = "9.3.1"
 coreKtx = "1.19.0"
 appcompat = "1.7.0"
 swiperefresh = "1.2.0"
@@ -25,10 +25,10 @@ junit = "4.13.2"
 orgJson = "20260719"
 # Test-only real SQLite (JDBC): reproduces WAL writer-lock BUSY semantics between two connections
 # deterministically on the JVM (Issue #91). Never packaged in the APK.
-sqliteJdbc = "3.50.3.0"
+sqliteJdbc = "3.53.2.1"
 # 3.x raises the library bytecode floor from Java 8 to Java 11; retain 2.10 until it has separate
 # oldest-Android runtime qualification rather than coupling that risk to the build-tool migration.
-snakeyamlEngine = "2.10"
+snakeyamlEngine = "3.1.1"
 shizuku = "13.1.5"
 cyclonedx = "3.4.1"
 
