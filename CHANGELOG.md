@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.7-rc1 - 2026-08-18
+## v0.9.7-rc1 - 2026-08-19
 
 ### Panels reach their dashboards faster and recover from Home Assistant outages
 
