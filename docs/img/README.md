@@ -11,7 +11,7 @@ This directory holds images that are committed to the repository, plus [`manifes
 
 **Committed here:** screenshots of ha-paneld's own interface. They are the project's own work, they carry no third-party rights, and they are tied to the release they depict — a screenshot of the Configure tab from one version is misleading against another, so having git version them alongside the code is correct. [`docs/RELEASING.md`](../RELEASING.md) covers refreshing them when the interface changes.
 
-**Served from `assets.ha-paneld.com`:** hardware photographs and vendor product shots. These are not committed. [`docs/infrastructure.md`](../infrastructure.md) explains why, what the host records about readers, and the rules for maintaining it. Every published object is listed in `manifest.txt` with its SHA-256 hash, so the served set can be enumerated and checked rather than taken on trust.
+**Served from `assets.ha-paneld.com`:** hardware photographs and vendor product shots. These are not committed. [`docs/infrastructure.md`](../infrastructure.md) explains why and what the host records about readers. Every published object is listed in `manifest.txt` with its SHA-256 hash, so the served set can be enumerated and checked rather than taken on trust.
 
 ## Adding an image
 
