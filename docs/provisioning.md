@@ -38,31 +38,6 @@ The installer downloads and authenticates the matching **signed release** and pr
 
 Provisioning is **idempotent**, so paste the same command again after correcting an interrupted or failed step. Required helper, startup, profile activation, configuration, restore and verification failures return a nonzero result. Optional or manual recommendations remain visible without turning an otherwise successful installation into a failure.
 
-What a run does, and where it will and will not stop:
-
-```mermaid
-flowchart TD
-    A["Download and authenticate the signed<br/>release and provisioner"] --> B["Connect to the panel over adb"]
-    B --> C{"--export FILE requested<br/>alongside install options?"}
-    C -- "yes" --> D["Produce and verify the config export<br/>BEFORE any panel mutation"]
-    D --> E{"Export produced<br/>and verified?"}
-    E -- "no" --> STOP1["STOP — nothing is installed.<br/>You asked for that file."]
-    E -- "yes" --> F
-    C -- "no" --> F["Best-effort settings export into a<br/>private owner-only directory"]
-    F --> G["Best-effort database capture<br/>see the break-glass sequence below"]
-    G --> H["Install the ABI-matched root helper<br/>where the firmware permits"]
-    H --> I{"Helper identity, capabilities,<br/>storage and transaction state<br/>all identified safely?"}
-    I -- "no" --> STOP2["STOP before replacing the APK.<br/>Previous helper and service retained."]
-    I -- "yes" --> J["Install the APK"]
-    J --> K["Grant permissions, start ha-paneld,<br/>run the self-check"]
-    K --> L["Report profile recommendations<br/>— report-only, never acted on"]
-
-    F -. "failure warns, deletes the partial<br/>file and continues" .-> G
-    G -. "failure warns loudly and continues —<br/>the new build may be the only<br/>useful recovery on an unhealthy panel" .-> H
-```
-
-The two dotted edges are the ones worth internalising. A failed **backup** does not stop an upgrade, because a panel whose current build is already unhealthy is often best served by replacing it. A failed **export you explicitly asked for** does stop the run, because you asked for it. Standalone `--verify` inverts the first rule and reports those same conditions as a failure, so use it when you want a pass or fail answer about a panel rather than an upgrade.
-
 Two read-only operations are safe to run independently:
 
 ```bash
@@ -94,33 +69,6 @@ Before every upgrade the installer also attempts to capture the panel's database
 On a current build, the installer sends one ADB-only request that makes the service take its normal orderly shutdown path. That path closes new work, drains every persistence owner, quiesces database writers, flushes application state, checkpoints the SQLite WAL and closes the database. The app acknowledges the exact request only after recording the old process, app version, byte count, host-verifiable SHA-256, schema version and state-row count. The installer then copies the closed database directly from private app storage, with no second database staged on the panel. It accepts the host file only when its size and mandatory host-side SHA-256 match that acknowledgement and local SQLite integrity, schema and row checks pass.
 
 If the installed app returns no exact upgrade-ready acknowledgement, the installer falls back once to SQLite's live `.backup`, producing the same single self-contained database without WAL or journal sidecars. This normally covers the small pre-handshake population as well as a timed-out or malformed reply; there is no retrying compatibility state machine. A panel with no root route cannot reach the database at all, so it reports that only settings could be saved.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant I as Installer (host)
-    participant A as ha-paneld (panel)
-    participant D as App-private database
-
-    I->>A: one ADB-only upgrade-ready request
-    A->>A: orderly shutdown — close new work, drain persistence owners,<br/>quiesce writers, flush state, checkpoint the WAL, close the database
-    A-->>I: acknowledgement — old process, app version, byte count,<br/>SHA-256, schema version, state-row count
-
-    alt exact acknowledgement received
-        I->>D: copy the closed database directly from private storage<br/>nothing is staged a second time on the panel
-    else no reply, timed out, or malformed
-        I->>D: single fallback — SQLite live .backup<br/>one self-contained file, no WAL or journal sidecars
-    end
-
-    I->>I: verify size and host-side SHA-256 against the acknowledgement,<br/>then SQLite integrity, schema and row-count checks
-    alt every check passes
-        I->>I: retain as the break-glass copy, mode 600
-    else any check fails or contradicts
-        I->>I: delete the candidate, warn prominently,<br/>never label an invalid copy a successful backup
-    end
-```
-
-The verification is deliberately two-sided: the panel states what it wrote, and the host independently confirms the file it received matches that statement *and* is a sound database on its own terms. Either half alone would accept a file that is intact but wrong, or correct but truncated in transit.
 
 Database-backup availability is best-effort for an ordinary in-place upgrade: any failed or contradictory candidate is removed, a prominent warning is printed and Android package replacement may continue with the original app data untouched. An invalid copy is never labelled or retained as a successful backup. There is no fixed free-space threshold for making this backup; the current direct path needs no panel-side database staging, while the one fallback lets the real capture determine whether it fits. The panel's reported storage health is treated the same way. Storage pressure, a failed database health check, a status endpoint that cannot be reached, a malformed reply and a state this installer does not recognise are all reported prominently, before and after installation, and none of them blocks an ordinary package replacement—the new build may be the only useful recovery attempt on a panel whose old build is already unhealthy or unreachable. Standalone `--verify` still reports those conditions as a failure, so use it when you want a pass/fail answer about a panel rather than an upgrade. `--reset-config` is outside that best-effort upgrade-backup path: it irreversibly erases app data and neither creates nor requires a backup.
 
