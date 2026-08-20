@@ -1526,6 +1526,19 @@ assert_contains 'root-helper install failed' "helper staging failure names the i
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "failed system transaction preserves or restores the prior helper"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed helper staging does not replace the APK"
 
+MOCK_HELPER_INSTALL=retirement \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a helper that cannot be retired fails the install"
+assert_contains 'root-helper install failed' "retirement timeout names the incomplete migration"
+assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
+  "retirement timeout surfaces the surviving pids and init state to the operator"
+
+MOCK_HELPER_INSTALL=step_failed \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a failed staging step fails the install"
+assert_contains 'The panel reported: INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' \
+  "a failed staging step names itself instead of one generic message"
+
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_CAPABILITY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "systemless helper capability failure leaves the previous APK installed"
@@ -4759,9 +4772,9 @@ else
 fi
 snapshot_line="$(grep -n 'old_bin_record=.*snapshot /system/bin/hapaneld-helper ' "$PROVISION" | head -1 | cut -d: -f1)"
 marker_line="$(grep -n '} > "\$marker.new"' "$PROVISION" | head -1 | cut -d: -f1)"
-pre_marker_sync_line="$(awk -v after="$marker_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
+pre_marker_sync_line="$(awk -v after="$marker_line" 'NR > after && /sync \|\| /{print NR; exit}' "$PROVISION")"
 marker_move_line="$(grep -n 'mv -f "\$marker.new" "\$marker"' "$PROVISION" | head -1 | cut -d: -f1)"
-post_marker_sync_line="$(awk -v after="$marker_move_line" 'NR > after && /sync \|\| return 1/{print NR; exit}' "$PROVISION")"
+post_marker_sync_line="$(awk -v after="$marker_move_line" 'NR > after && /sync \|\| /{print NR; exit}' "$PROVISION")"
 retire_alt_line="$(grep -n '/data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh' "$PROVISION" | head -1 | cut -d: -f1)"
 if [ -n "$snapshot_line" ] && [ -n "$marker_line" ] && [ -n "$retire_alt_line" ] && \
    [ -n "$pre_marker_sync_line" ] && [ -n "$marker_move_line" ] && [ -n "$post_marker_sync_line" ] && \
@@ -4807,11 +4820,10 @@ else
 fi
 
 assert_install_retirement_before_swap() {
-  local function_name="$1" body expected count
+  local function_name="$1" body count
   body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
-  expected=$'  pkill -x hapaneld-helper 2>/dev/null\n  pkill -x hapaneld-ledd 2>/dev/null\n  wait_for_helper_retirement || return 1'
-  count="$(grep -Fxc '  wait_for_helper_retirement || return 1' <<<"$body" || true)"
-  if [[ "$body" == *"$expected"* ]] && [ "$count" = 1 ]; then
+  count="$(grep -Fxc '  retire_helpers || return 1' <<<"$body" || true)"
+  if [ "$count" = 1 ]; then
     pass "$function_name retires the old daemon before replacing helper files"
   else
     fail_test "$function_name retires the old daemon before replacing helper files"
@@ -4820,6 +4832,88 @@ assert_install_retirement_before_swap() {
 assert_install_retirement_before_swap install_system
 assert_install_retirement_before_swap install_systemless
 assert_install_retirement_before_swap install_hybrid
+
+# The retirement helper must escalate rather than poll one signal forever, and a timeout must
+# emit machine-readable evidence naming the surviving pids and Android init's view of both
+# services, because Issue #120 was undiagnosable from "install failed" alone.
+retire_body="$(sed -n '/^retire_helpers() {$/,/^}$/p' "$PROVISION")"
+if grep -Fq 'pkill -x hapaneld-helper 2>/dev/null' <<<"$retire_body" && \
+   grep -Fq 'pkill -KILL -x hapaneld-helper 2>/dev/null' <<<"$retire_body" && \
+   grep -Fq 'rh_attempt" -ge 2' <<<"$retire_body" && \
+   grep -Fq 'rh_attempt" -ge 4' <<<"$retire_body" && \
+   grep -Fq 'RETIREMENT_TIMEOUT helper_pids=' <<<"$retire_body" && \
+   grep -Fq 'init_helper=' <<<"$retire_body" && \
+   grep -Fq 'getprop init.svc.hapaneld_helper' <<<"$retire_body"; then
+  pass "retire_helpers escalates to SIGKILL and reports pids plus init state on timeout"
+else
+  fail_test "retire_helpers escalates to SIGKILL and reports pids plus init state on timeout"
+fi
+
+# Execute the extracted retirement function offline against stubbed panel commands, so the
+# escalation order and the timeout diagnostic are proven behaviour rather than source shape.
+RETIRE_STUBS="$TMP/retire-stubs"; RETIRE_LOG="$TMP/retire-calls.log"
+mkdir -p "$RETIRE_STUBS"
+cat > "$RETIRE_STUBS/stop" <<'STUB'
+#!/usr/bin/env bash
+echo "stop $*" >> "$RETIRE_LOG"
+STUB
+cat > "$RETIRE_STUBS/pkill" <<'STUB'
+#!/usr/bin/env bash
+echo "pkill $*" >> "$RETIRE_LOG"
+case " $* " in *" -KILL "*) [ "${RETIRE_SCENARIO:?}" = kill_needed ] && : > "$RETIRE_LOG.killed" ;; esac
+exit 0
+STUB
+cat > "$RETIRE_STUBS/pidof" <<'STUB'
+#!/usr/bin/env bash
+echo "pidof $*" >> "$RETIRE_LOG"
+[ "$1" = hapaneld-helper ] || exit 1
+case "${RETIRE_SCENARIO:?}" in
+  normal) exit 1 ;;
+  kill_needed) [ -e "$RETIRE_LOG.killed" ] && exit 1; echo 4242; exit 0 ;;
+  stuck_init) echo 4242; exit 0 ;;
+esac
+STUB
+cat > "$RETIRE_STUBS/getprop" <<'STUB'
+#!/usr/bin/env bash
+echo "getprop $*" >> "$RETIRE_LOG"
+[ "$1" = init.svc.hapaneld_helper ] && echo running
+STUB
+cat > "$RETIRE_STUBS/sleep" <<'STUB'
+#!/usr/bin/env bash
+echo "sleep $*" >> "$RETIRE_LOG"
+STUB
+chmod +x "$RETIRE_STUBS"/*
+sed -n '/^retire_helpers() {$/,/^}$/p' "$PROVISION" > "$TMP/retire-fn.sh"
+
+run_retire_scenario() {
+  : > "$RETIRE_LOG"; rm -f "$RETIRE_LOG.killed"
+  RETIRE_SCENARIO="$1" RETIRE_LOG="$RETIRE_LOG" PATH="$RETIRE_STUBS:$PATH" \
+    bash -c ". '$TMP/retire-fn.sh'; retire_helpers" > "$TMP/retire-out.txt" 2>&1
+}
+
+if run_retire_scenario normal && ! grep -q 'pkill -KILL' "$RETIRE_LOG" && [ ! -s "$TMP/retire-out.txt" ]; then
+  pass "a cleanly retired helper needs no SIGKILL and emits no diagnostic"
+else
+  fail_test "a cleanly retired helper needs no SIGKILL and emits no diagnostic"
+fi
+
+if run_retire_scenario kill_needed && grep -q 'pkill -KILL -x hapaneld-helper' "$RETIRE_LOG" && \
+   [ "$(grep -n 'pkill -x hapaneld-helper' "$RETIRE_LOG" | head -1 | cut -d: -f1)" -lt \
+     "$(grep -n 'pkill -KILL -x hapaneld-helper' "$RETIRE_LOG" | head -1 | cut -d: -f1)" ] && \
+   ! grep -q RETIREMENT_TIMEOUT "$TMP/retire-out.txt"; then
+  pass "a helper that ignores SIGTERM is retired by escalation to SIGKILL"
+else
+  fail_test "a helper that ignores SIGTERM is retired by escalation to SIGKILL"
+fi
+
+if ! run_retire_scenario stuck_init && \
+   grep -q '^RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' "$TMP/retire-out.txt" && \
+   [ "$(grep -c '^stop hapaneld_helper' "$RETIRE_LOG")" -ge 2 ] && \
+   grep -q 'pkill -KILL -x hapaneld-helper' "$RETIRE_LOG"; then
+  pass "an unkillable helper times out with surviving pids and init state in the diagnostic"
+else
+  fail_test "an unkillable helper times out with surviving pids and init state in the diagnostic"
+fi
 
 # `start` is successful even when Android init has not loaded the restored service. Every rollback
 # route that can restore /system/bin/hapaneld-helper must therefore probe the helper and launch it
@@ -4832,7 +4926,7 @@ assert_rollback_restart_probe() {
   if grep -Fq 'start hapaneld_helper 2>/dev/null || /system/bin/hapaneld-helper >/dev/null 2>&1 &' <<<"$body"; then
     fail_test "$function_name does not trust init start success during rollback"
   elif [[ "$body" == *"$expected"* ]] &&
-       [[ "$body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n  wait_for_helper_retirement || return 1'* ]]; then
+       grep -Fxq '  retire_helpers || return 1' <<<"$body"; then
     pass "$function_name probes the restored helper before direct rollback fallback"
   else
     fail_test "$function_name probes the restored helper before direct rollback fallback"
@@ -4860,8 +4954,8 @@ if grep -Fq 'live_matches_recorded_or_target OLD_BIN /data/adb/hapaneld/hapaneld
    grep -Fq 'live_matches_recorded_or_target OLD_RC /vendor/etc/init/hapaneld-helper.rc @HYBRID_RC_SHA256@ "$marker"' "$PROVISION" && \
    grep -Fq 'echo TRANSITION' "$PROVISION" && \
    grep -Fq '[ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1' "$PROVISION" && \
-   grep -Fq 'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1' "$PROVISION" && \
-   grep -Fq 'mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || return 1' "$PROVISION"; then
+   grep -Fq 'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper"; return 1; }' "$PROVISION" && \
+   grep -Fq 'mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper.rc"; return 1; }' "$PROVISION"; then
   pass "hybrid recovery authenticates each atomic step of a partially completed two-file swap"
 else
   fail_test "hybrid recovery authenticates each atomic step of a partially completed two-file swap"

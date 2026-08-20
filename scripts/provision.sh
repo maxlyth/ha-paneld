@@ -2817,7 +2817,7 @@ install_system() {
   marker=/system/bin/.hapaneld-helper-upgrade
   state=$(helper_journal_state)
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
-  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || return 1
+  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo "INSTALL_STEP_FAILED install_system vendor_rc_present"; return 1; }
   rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
     /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
     /system/bin/hapaneld-ledd.hapaneld-recovery \
@@ -2825,31 +2825,31 @@ install_system() {
     /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
     /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
 
-  cp @STAGED_HELPER@ /system/bin/hapaneld-helper.new || return 1
-  hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper.new || return 1
-  chown 0:0 /system/bin/hapaneld-helper.new || return 1
-  chmod 755 /system/bin/hapaneld-helper.new || return 1
+  cp @STAGED_HELPER@ /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new"; return 1; }
+  hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper_new"; return 1; }
+  chown 0:0 /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper_new"; return 1; }
+  chmod 755 /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper_new"; return 1; }
   chcon u:object_r:system_file:s0 /system/bin/hapaneld-helper.new 2>/dev/null
-  cp @STAGED_RC@ /system/etc/init/hapaneld-helper.rc.new || return 1
-  hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc.new || return 1
-  chown 0:0 /system/etc/init/hapaneld-helper.rc.new || return 1
-  chmod 644 /system/etc/init/hapaneld-helper.rc.new || return 1
+  cp @STAGED_RC@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper.rc_new"; return 1; }
+  hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper.rc_new"; return 1; }
+  chown 0:0 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper.rc_new"; return 1; }
+  chmod 644 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper.rc_new"; return 1; }
   chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc.new 2>/dev/null
 
-  old_bin_record=$(snapshot /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-recovery 755) || return 1
-  old_service_record=$(snapshot /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-recovery 644) || return 1
-  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-recovery 755) || return 1
-  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery 644) || return 1
-  alt_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || return 1
-  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
+  old_bin_record=$(snapshot /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_bin_record"; return 1; }
+  old_service_record=$(snapshot /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_service_record"; return 1; }
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_bin_record"; return 1; }
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_service_record"; return 1; }
+  alt_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_bin_record"; return 1; }
+  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_service_record"; return 1; }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
   legacy_bin=${legacy_bin_record%% *}; legacy_bin_sha=${legacy_bin_record#* }
   legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
   alt_bin=${alt_bin_record%% *}; alt_bin_sha=${alt_bin_record#* }
   alt_service=${alt_service_record%% *}; alt_service_sha=${alt_service_record#* }
-  current_boot=$(boot_id) || return 1
-  now=$(uptime_seconds) || return 1
+  current_boot=$(boot_id) || { echo "INSTALL_STEP_FAILED install_system boot_id_current_boot"; return 1; }
+  now=$(uptime_seconds) || { echo "INSTALL_STEP_FAILED install_system uptime_seconds_now"; return 1; }
   lease_until=$((now + 600))
 
   {
@@ -2873,53 +2873,49 @@ install_system() {
     echo ALT_SERVICE_SHA256=$alt_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
-  } > "$marker.new" || return 1
-  chown 0:0 "$marker.new" || return 1
-  chmod 600 "$marker.new" || return 1
-  sync || return 1
-  mv -f "$marker.new" "$marker" || return 1
-  sync || return 1
+  } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_system _"; return 1; }
+  chown 0:0 "$marker.new" || { echo "INSTALL_STEP_FAILED install_system chown"; return 1; }
+  chmod 600 "$marker.new" || { echo "INSTALL_STEP_FAILED install_system chmod"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
+  mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_system mv"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
 
-  stop hapaneld_helper 2>/dev/null
-  stop hapaneld_ledd 2>/dev/null
-  pkill -x hapaneld-helper 2>/dev/null
-  pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
+  retire_helpers || return 1
   rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc \
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
-  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || return 1
-  mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || return 1
-  sync || return 1
+  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_system mv_hapaneld-helper"; return 1; }
+  mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_system mv_hapaneld-helper.rc"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
   echo INSTALL_OK
 }
 
 install_systemless() {
-  mkdir -p /data/adb/service.d /data/adb/hapaneld || return 1
-  chown 0:0 /data/adb/hapaneld || return 1
-  chmod 700 /data/adb/hapaneld || return 1
+  mkdir -p /data/adb/service.d /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_systemless mkdir_hapaneld"; return 1; }
+  chown 0:0 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld"; return 1; }
+  chmod 700 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld"; return 1; }
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   state=$(helper_journal_state)
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
-  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || return 1
+  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo "INSTALL_STEP_FAILED install_systemless vendor_rc_present"; return 1; }
   rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
     /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
 
-  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || return 1
-  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || return 1
-  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || return 1
-  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || return 1
-  cp @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh.new || return 1
-  hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh.new || return 1
-  chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new || return 1
-  chmod 755 /data/adb/service.d/hapaneld-helper.sh.new || return 1
+  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper_new"; return 1; }
+  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper_new"; return 1; }
+  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper_new"; return 1; }
+  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper_new"; return 1; }
+  cp @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper.sh_new"; return 1; }
+  hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper.sh_new"; return 1; }
+  chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper.sh_new"; return 1; }
+  chmod 755 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper.sh_new"; return 1; }
 
-  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || return 1
-  old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
+  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_bin_record"; return 1; }
+  old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_service_record"; return 1; }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
-  current_boot=$(boot_id) || return 1
-  now=$(uptime_seconds) || return 1
+  current_boot=$(boot_id) || { echo "INSTALL_STEP_FAILED install_systemless boot_id_current_boot"; return 1; }
+  now=$(uptime_seconds) || { echo "INSTALL_STEP_FAILED install_systemless uptime_seconds_now"; return 1; }
   lease_until=$((now + 600))
   {
     echo JOURNAL_VERSION=1
@@ -2934,22 +2930,18 @@ install_systemless() {
     echo OLD_SERVICE_SHA256=$old_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
-  } > "$marker.new" || return 1
-  chown 0:0 "$marker.new" || return 1
-  chmod 600 "$marker.new" || return 1
-  sync || return 1
-  mv -f "$marker.new" "$marker" || return 1
-  sync || return 1
+  } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_systemless _"; return 1; }
+  chown 0:0 "$marker.new" || { echo "INSTALL_STEP_FAILED install_systemless chown"; return 1; }
+  chmod 600 "$marker.new" || { echo "INSTALL_STEP_FAILED install_systemless chmod"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
+  mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_systemless mv"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
 
-  stop hapaneld_helper 2>/dev/null
-  stop hapaneld_ledd 2>/dev/null
-  pkill -x hapaneld-helper 2>/dev/null
-  pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
+  retire_helpers || return 1
   rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
-  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1
-  mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || return 1
-  sync || return 1
+  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper"; return 1; }
+  mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper.sh"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
   echo INSTALL_OK
 }
 
@@ -2961,15 +2953,15 @@ install_hybrid() {
   mount -o rw,remount / 2>/dev/null
   mount -o rw,remount /system 2>/dev/null
   mount -o rw,remount /vendor 2>/dev/null
-  mkdir -p /data/adb/hapaneld || return 1
-  chown 0:0 /data/adb/hapaneld || return 1
-  chmod 700 /data/adb/hapaneld || return 1
+  mkdir -p /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_hybrid mkdir_hapaneld"; return 1; }
+  chown 0:0 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld"; return 1; }
+  chmod 700 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld"; return 1; }
   marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
   state=$(helper_journal_state)
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
   if [ -e /vendor/etc/init/hapaneld-helper.rc ]; then
-    root_owned /vendor/etc/init/hapaneld-helper.rc || return 1
-    hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc || return 1
+    root_owned /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid root_owned_hapaneld-helper.rc"; return 1; }
+    hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc"; return 1; }
   fi
   rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
     /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
@@ -2977,25 +2969,25 @@ install_hybrid() {
     /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
     /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
     /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery || return 1
+    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery || { echo "INSTALL_STEP_FAILED install_hybrid _data_adb_service.d_hapaneld-helper.sh.hapaneld-recovery_hapaneld-helper.sh.hapaneld-recovery"; return 1; }
 
-  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || return 1
-  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || return 1
-  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || return 1
-  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || return 1
-  cp @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc.new || return 1
-  hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc.new || return 1
-  chown 0:0 /vendor/etc/init/hapaneld-helper.rc.new || return 1
-  chmod 644 /vendor/etc/init/hapaneld-helper.rc.new || return 1
+  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper_new"; return 1; }
+  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper_new"; return 1; }
+  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper_new"; return 1; }
+  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper_new"; return 1; }
+  cp @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper.rc_new"; return 1; }
+  hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc_new"; return 1; }
+  chown 0:0 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper.rc_new"; return 1; }
+  chmod 644 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper.rc_new"; return 1; }
   chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/hapaneld-helper.rc.new 2>/dev/null
 
-  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || return 1
-  old_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery 644) || return 1
-  sys_rc_record=$(snapshot /system/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery 644) || return 1
-  sys_bin_record=$(snapshot /system/bin/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery 755) || return 1
-  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery 755) || return 1
-  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery 644) || return 1
-  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || return 1
+  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_bin_record"; return 1; }
+  old_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_rc_record"; return 1; }
+  sys_rc_record=$(snapshot /system/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_rc_record"; return 1; }
+  sys_bin_record=$(snapshot /system/bin/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_bin_record"; return 1; }
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_bin_record"; return 1; }
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_service_record"; return 1; }
+  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_alt_service_record"; return 1; }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_rc=${old_rc_record%% *}; old_rc_sha=${old_rc_record#* }
   sys_rc=${sys_rc_record%% *}; sys_rc_sha=${sys_rc_record#* }
@@ -3003,8 +2995,8 @@ install_hybrid() {
   legacy_bin=${legacy_bin_record%% *}; legacy_bin_sha=${legacy_bin_record#* }
   legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
   alt_service=${alt_service_record%% *}; alt_service_sha=${alt_service_record#* }
-  current_boot=$(boot_id) || return 1
-  now=$(uptime_seconds) || return 1
+  current_boot=$(boot_id) || { echo "INSTALL_STEP_FAILED install_hybrid boot_id_current_boot"; return 1; }
+  now=$(uptime_seconds) || { echo "INSTALL_STEP_FAILED install_hybrid uptime_seconds_now"; return 1; }
   lease_until=$((now + 600))
 
   {
@@ -3030,39 +3022,52 @@ install_hybrid() {
     echo ALT_SERVICE_SHA256=$alt_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
-  } > "$marker.new" || return 1
-  chown 0:0 "$marker.new" || return 1
-  chmod 600 "$marker.new" || return 1
-  sync || return 1
-  mv -f "$marker.new" "$marker" || return 1
-  sync || return 1
+  } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_hybrid _"; return 1; }
+  chown 0:0 "$marker.new" || { echo "INSTALL_STEP_FAILED install_hybrid chown"; return 1; }
+  chmod 600 "$marker.new" || { echo "INSTALL_STEP_FAILED install_hybrid chmod"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
+  mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_hybrid mv"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
 
+  retire_helpers || return 1
+  rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
+    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_hybrid _data_adb_service.d_hapaneld-helper.sh_hapaneld-helper.sh"; return 1; }
+  [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -e /system/bin/hapaneld-helper ] && \
+    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] && \
+    [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || { echo "INSTALL_STEP_FAILED install_hybrid __hapaneld-helper.sh"; return 1; }
+  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper"; return 1; }
+  mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper.rc"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
+  echo INSTALL_OK
+}
+
+retire_helpers() {
   stop hapaneld_helper 2>/dev/null
   stop hapaneld_ledd 2>/dev/null
   pkill -x hapaneld-helper 2>/dev/null
   pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
-  rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
-    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
-    /data/adb/service.d/hapaneld-helper.sh || return 1
-  [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -e /system/bin/hapaneld-helper ] && \
-    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] && \
-    [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || return 1
-  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || return 1
-  mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || return 1
-  sync || return 1
-  echo INSTALL_OK
-}
-
-wait_for_helper_retirement() {
-  attempt=0
-  while [ "$attempt" -lt 10 ]; do
+  rh_attempt=0
+  while [ "$rh_attempt" -lt 10 ]; do
     if ! pidof hapaneld-helper >/dev/null 2>&1 && ! pidof hapaneld-ledd >/dev/null 2>&1; then
       return 0
     fi
-    attempt=$((attempt + 1))
+    if [ "$rh_attempt" -ge 2 ]; then
+      stop hapaneld_helper 2>/dev/null
+      stop hapaneld_ledd 2>/dev/null
+    fi
+    if [ "$rh_attempt" -ge 4 ]; then
+      pkill -KILL -x hapaneld-helper 2>/dev/null
+      pkill -KILL -x hapaneld-ledd 2>/dev/null
+    fi
+    rh_attempt=$((rh_attempt + 1))
     sleep 1
   done
+  rh_helper_pids=$(pidof hapaneld-helper 2>/dev/null)
+  rh_ledd_pids=$(pidof hapaneld-ledd 2>/dev/null)
+  rh_init_helper=$(getprop init.svc.hapaneld_helper 2>/dev/null)
+  rh_init_ledd=$(getprop init.svc.hapaneld_ledd 2>/dev/null)
+  echo "RETIREMENT_TIMEOUT helper_pids=${rh_helper_pids:-none} ledd_pids=${rh_ledd_pids:-none} init_helper=${rh_init_helper:-unset} init_ledd=${rh_init_ledd:-unset}"
   return 1
 }
 
@@ -3091,11 +3096,7 @@ rollback_system() {
   chmod 700 "$probe" || return 1
   hash_matches @BIN_SHA256@ "$probe" || return 1
 
-  stop hapaneld_helper 2>/dev/null
-  stop hapaneld_ledd 2>/dev/null
-  pkill -x hapaneld-helper 2>/dev/null
-  pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
+  retire_helpers || return 1
   restore_or_remove OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
   restore_or_remove LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
@@ -3138,11 +3139,7 @@ rollback_systemless() {
   chown 0:0 "$probe" || return 1
   chmod 700 "$probe" || return 1
   hash_matches @BIN_SHA256@ "$probe" || return 1
-  stop hapaneld_helper 2>/dev/null
-  stop hapaneld_ledd 2>/dev/null
-  pkill -x hapaneld-helper 2>/dev/null
-  pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
+  retire_helpers || return 1
   restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
   sync || return 1
@@ -3190,11 +3187,7 @@ rollback_hybrid() {
   chmod 700 "$probe" || return 1
   hash_matches @BIN_SHA256@ "$probe" || return 1
 
-  stop hapaneld_helper 2>/dev/null
-  stop hapaneld_ledd 2>/dev/null
-  pkill -x hapaneld-helper 2>/dev/null
-  pkill -x hapaneld-ledd 2>/dev/null
-  wait_for_helper_retirement || return 1
+  retire_helpers || return 1
   restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove OLD_RC /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
   restore_or_remove SYS_RC /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
@@ -3605,12 +3598,15 @@ EOF
       out2="$(run_root_helper_transaction install-system 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
         if rollback_root_helper "$install_kind"; then
           fail "/system root-helper install failed; the prior helper was preserved or restored" \
-            "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions."
+            "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions." \
+            ${install_detail:+"The panel reported: $install_detail"}
         fi
         fail "/system root-helper install failed and rollback could not be verified" \
-          "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+          "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
+          ${install_detail:+"The panel reported: $install_detail"}
       fi
       run_root '
         stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
@@ -3625,12 +3621,14 @@ EOF
       out2="$(run_root_helper_transaction install-hybrid 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
         if rollback_root_helper "$install_kind"; then
           fail "hybrid root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb."
         fi
         fail "hybrid root-helper install failed and rollback could not be verified" \
-          "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+          "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
+          ${install_detail:+"The panel reported: $install_detail"}
       fi
       # A newly written init definition is loaded on the next boot. Launch the exact data helper for
       # this session instead of trusting `start`, which can report success for an unknown service.
@@ -3644,12 +3642,14 @@ EOF
       out2="$(run_root_helper_transaction install-systemless 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
         if rollback_root_helper "$install_kind"; then
           fail "systemless root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions."
         fi
         fail "systemless root-helper install failed and rollback could not be verified" \
-          "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+          "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
+          ${install_detail:+"The panel reported: $install_detail"}
       fi
       run_root '
         stop hapaneld_helper 2>/dev/null
@@ -3667,7 +3667,8 @@ EOF
     fi
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     fail "new root helper failed its capability check and rollback could not be verified" \
-      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
+            ${install_detail:+"The panel reported: $install_detail"}
   fi
   if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then
     if rollback_root_helper "$install_kind"; then
@@ -3677,7 +3678,8 @@ EOF
     fi
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     fail "new root helper failed its exact build-identity check and rollback could not be verified" \
-      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
+            ${install_detail:+"The panel reported: $install_detail"}
   fi
   renew_root_helper_lease "$install_kind" || fail "the root-helper transaction lease could not be renewed after validation" \
     "The APK was not replaced. Re-run after any competing provisioner finishes; this journal remains recoverable."
