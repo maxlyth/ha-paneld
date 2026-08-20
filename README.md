@@ -142,7 +142,7 @@ The web interface marks unavailable controls with a lock and explains what the p
 
 **Direct `su` inside ha-paneld is still needed:** Lock Android to dashboard, complete system logs, relay control where the profile requires it, and the legacy Companion-session import path. A full backup can include an existing Companion login when direct root or the authenticated helper is available.
 
-A limited [advanced fallback](docs/shizuku.md) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
+A limited [advanced fallback](docs/provisioning.md#shizuku-fallback-for-unrooted-panels) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
 
 ## Guides and reference
 

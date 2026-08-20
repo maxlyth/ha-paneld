@@ -34,7 +34,7 @@ For relays and mains-connected hardware, use an attended, electrically safe test
 
 ### Stage 5: authority-dependent behavior
 
-Only after the standard path is healthy should you test a declared privileged route. Verify live authority separately from the profile declaration. If the profile uses the exceptional shell fallback, follow its [advanced setup guide](../shizuku.md) and confirm that revoking it fails closed without changing profile state.
+Only after the standard path is healthy should you test a declared privileged route. Verify live authority separately from the profile declaration. If the profile uses the exceptional shell fallback, follow its [advanced setup guide](../provisioning.md#shizuku-fallback-for-unrooted-panels) and confirm that revoking it fails closed without changing profile state.
 
 A root/helper-backed driver must remain bounded to its compiled operation and validated parameters. Test missing helper, denied `su`, inaccessible node and malformed readback as normal failure cases.
 

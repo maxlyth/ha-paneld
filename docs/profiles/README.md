@@ -88,7 +88,7 @@ Start here. Dashboard rendering, MQTT pairing and ordinary Android sensors, brig
 
 ### Exceptional shell fallback
 
-Omit `provisioning.access.shizuku` unless the profile selects a concrete compiled capability whose authority contract explicitly supports that alternate route. Generic conveniences do not justify a profile recommendation. The declaration is guidance only and never installs or approves anything; the narrow setup and security boundary are documented in the [advanced fallback guide](../shizuku.md).
+Omit `provisioning.access.shizuku` unless the profile selects a concrete compiled capability whose authority contract explicitly supports that alternate route. Generic conveniences do not justify a profile recommendation. The declaration is guidance only and never installs or approves anything; the narrow setup and security boundary are documented in the [Shizuku fallback section of the provisioning guide](../provisioning.md#shizuku-fallback-for-unrooted-panels).
 
 ### Vendor root or the ha-paneld helper
 

@@ -275,7 +275,7 @@ A declared capability is a candidate until the driver confirms it. The UI and di
 
 Access metadata may identify the exceptional shell fallback only when it enables a concrete declared capability. Generic update, screenshot, input or display-sizing convenience is not enough. The declaration may travel with a profile, but it does not change permission state; installation, service readiness, local consent and approval remain live local state excluded from backup, restore, MQTT and fleet activation.
 
-See the [advanced fallback guide](../shizuku.md) for the fixed shell-identity subset and [Runtime panel profiles](README.md#authority-standard-android-and-privileged-routes) for author guidance.
+See the [Shizuku fallback section of the provisioning guide](../provisioning.md#shizuku-fallback-for-unrooted-panels) for the fixed shell-identity subset and [Runtime panel profiles](README.md#authority-standard-android-and-privileged-routes) for author guidance.
 
 ## Compatibility behavior
 

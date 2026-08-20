@@ -11,7 +11,6 @@ checkout_free_docs=(
   README.md
   docs/provisioning.md
   docs/provisioning-safety.md
-  docs/shizuku.md
   docs/built-in-renderer.md
   docs/profiles/unofficial/echo-show-5-gen2.md
   docs/hardware/zx-smt156.md
