@@ -3336,7 +3336,7 @@ $proximityScript"""
         <div class="profile-guidance" id="profile-shizuku-guidance" hidden>
           <p><b>Exceptional access requirement</b></p>
           <p>This profile declares a specific shell-level fallback. It does not install, enable, or approve the separate access service.</p>
-          <p><a href="$REPO_URL/blob/main/docs/shizuku.md" target="_blank" rel="noopener">Read the advanced setup guide</a></p>
+          <p><a href="$REPO_URL/blob/main/docs/provisioning.md#shizuku-fallback-for-unrooted-panels" target="_blank" rel="noopener">Read the advanced setup guide</a></p>
         </div>
         <section><h3>Compared with active</h3><div id="profile-diff" class="profile-diff"></div></section>
         <section><h3>Observed device facts</h3><p class="profile-report-note">Runtime observations only — these are not YAML fields. Use them to choose matching predicates and supported profile fields.</p><div id="profile-report" class="profile-report"></div></section>
