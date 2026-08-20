@@ -176,6 +176,12 @@ jobs:
           fi
 
           dat_content="$(cat "$DAT")"
+          # The working-tree .dat was deliberately overwritten from the pending PR branch
+          # earlier, so it is dirty against HEAD. Its content is saved above; restore the
+          # checked-out copy or the branch switch below refuses with "local changes would
+          # be overwritten by checkout" (this failed every scheduled run while a pending
+          # branch existed).
+          git checkout -q -- "$DAT"
           if git ls-remote --exit-code --heads "$repo_url" "$branch" >/dev/null 2>&1; then
             git fetch -q "$repo_url" "$branch"
             git checkout -q -B "$branch" FETCH_HEAD
