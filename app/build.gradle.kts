@@ -53,8 +53,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the release line/candidate; publication remains a separate explicit action.
-        versionCode = 577
-        versionName = "0.9.7-rc1"
+        versionCode = 579
+        versionName = "0.9.7-rc2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
