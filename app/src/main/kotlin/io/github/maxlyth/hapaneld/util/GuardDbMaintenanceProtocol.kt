@@ -358,8 +358,14 @@ internal object GuardDbMaintenanceProtocol {
         val boot = if (fields[5] == "NONE") null else fields[5].takeIf(::validSha256) ?: return null
         val role = if (fields[6] == "NONE") null else enumValueOrNull<Role>(fields[6]) ?: return null
         val apk = if (fields[7] == "NONE") null else fields[7].takeIf(::validSha256) ?: return null
-        val version = fields[8].strictNonNegativeLong()?.takeIf { it > 0L }
-        val schema = fields[9].strictNonNegativeLong()?.takeIf { it in 1..Int.MAX_VALUE }?.toInt()
+        val versionToken = fields[8].strictNonNegativeLong() ?: return null
+        val version = versionToken.takeIf { it > 0L }
+        val schemaToken = fields[9].strictNonNegativeLong() ?: return null
+        val schema = when {
+            schemaToken == 0L -> null
+            schemaToken <= Int.MAX_VALUE.toLong() -> schemaToken.toInt()
+            else -> return null
+        }
         val baselineCount = fields[10].strictNonNegativeLong() ?: return null
         val error = fields[11].takeUnless { it == "NONE" }
             ?.takeIf(STATUS_ERROR::matches) ?: if (fields[11] == "NONE") null else return null

@@ -144,6 +144,19 @@ class GuardDbMaintenanceProtocolTest {
         assertTrue(requireNotNull(waiting).ownsMaintenance)
     }
 
+    @Test fun `malformed empty helper status cannot authorize bootstrap export`() {
+        val exact = "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0"
+        listOf(
+            exact.replace("NONE 0 0 0", "NONE -1 0 0"),
+            exact.replace("NONE 0 0 0", "NONE garbage 0 0"),
+            exact.replace("NONE 0 0 0", "NONE 0 -1 0"),
+            exact.replace("NONE 0 0 0", "NONE 0 garbage 0"),
+            exact.replace("NONE 0 0 0", "NONE 00 0 0"),
+            exact.replace("NONE 0 0 0", "NONE 0 00 0"),
+            exact.replace("NONE 0 0 0", "NONE 0 2147483648 0"),
+        ).forEach { assertNull(it, GuardDbMaintenanceProtocol.parseStatus(it)) }
+    }
+
     @Test fun `status parser preserves durable staging capture hold errors`() {
         listOf("CAPTURE_INTENT", "FAILED_NO_MUTATION").forEach { error ->
             val status = GuardDbMaintenanceProtocol.parseStatus(

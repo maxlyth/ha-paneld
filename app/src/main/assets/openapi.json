@@ -652,7 +652,7 @@
             }
           } } } },
           "202": { "$ref": "#/components/responses/ApprovalRequired" },
-          "400": { "description": "Malformed, oversized, duplicate-member, escaped-key or non-exact JSON request" },
+          "400": { "description": "Malformed, duplicate-member, escaped-key or non-exact JSON request" },
           "403": { "description": "Direct-LAN source and allowed request origin required" },
           "409": { "description": "The successor is not exact BASELINE_READY, the session or prepared/app/helper/database authority mismatched, or authority changed across approval" },
           "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
