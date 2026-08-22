@@ -810,6 +810,9 @@ object SettingsRegistry {
     /** Settings accepted via the HTTP config API (everything settable; excludes publish-only sensors). */
     fun settable(): List<SettingSpec> = SPECS.filterNot { it.readOnly }
 
+    /** Every spec with a persisted expose-to-HA decision, including publish-only telemetry. */
+    fun haCapable(): List<SettingSpec> = SPECS.filter { it.ha != null }
+
     /** Settable settings whose durable desired state must be applied through the shared live path. */
     fun liveApplyKeys(): List<String> = SPECS.filter { it.liveApply }.map { it.key }
 

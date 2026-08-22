@@ -19,7 +19,10 @@ class StateBackupPolicyTest {
         // Namespaces are opened through AppState.preferences in two shapes — positional and with the
         // argument named — and missing either shape would make this test quietly weaker than it looks.
         val positional = Regex("""AppState\.preferences\(\s*[^,()]+,\s*"([a-z0-9-]+)"""", RegexOption.DOT_MATCHES_ALL)
-        val named = Regex("""namespace\s*=\s*"([a-z0-9-]+)"""")
+        val named = Regex(
+            """AppState\.preferences\(\s*[^)]*?namespace\s*=\s*"([a-z0-9-]+)"""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
         val namespaces = sources.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .flatMap { file ->

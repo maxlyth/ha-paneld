@@ -20,6 +20,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
+import io.github.maxlyth.hapaneld.config.SettingType
+import io.github.maxlyth.hapaneld.config.SettingValue
+import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -470,7 +473,161 @@ data class CleanDatabaseProof(
     val sha256: String,
     val userVersion: Int,
     val appStateRows: Long,
+    val orderedAppStateSha256: String = "",
+    val settingsSemanticSha256: String = "",
 )
+
+internal data class AppStateDigestRow(
+    val namespace: String,
+    val key: String,
+    val type: String,
+    val valueText: String?,
+    val updatedAt: Long,
+)
+
+internal data class AppStateSemanticProof(
+    val count: Long,
+    val orderedSha256: String,
+    val settingsSha256: String,
+)
+
+internal data class GuardDbSettingDefault(val key: String, val type: String, val value: String)
+
+internal fun authoritativeGuardDbSettingDefaults(): List<GuardDbSettingDefault> = buildList {
+    SettingsRegistry.settable().forEach { spec ->
+        val type = when (spec.type) {
+            SettingType.BOOL -> "boolean"
+            SettingType.INT -> "int"
+            SettingType.LONG -> "long"
+            SettingType.FLOAT -> "float"
+            SettingType.ENUM, SettingType.STRING, SettingType.PASSWORD -> "string"
+        }
+        val canonicalDefault = if (spec.type == SettingType.BOOL) {
+            if (SettingValue.parseBool(spec.default) == true) "1" else "0"
+        } else spec.default
+        add(GuardDbSettingDefault(spec.key, type, canonicalDefault))
+    }
+    SettingsRegistry.haCapable().forEach { spec ->
+        add(
+            GuardDbSettingDefault(
+                SettingsRegistry.exposureKey(spec),
+                "boolean",
+                if (spec.haExposedByDefault) "1" else "0",
+            ),
+        )
+    }
+}.sortedBy(GuardDbSettingDefault::key)
+
+/** Sealed SETTINGS authority consumed by the native immutable-copy verifier. */
+internal fun canonicalGuardDbSettingsAuthority(
+    settingDefaults: List<GuardDbSettingDefault> = authoritativeGuardDbSettingDefaults(),
+): ByteArray {
+    require(settingDefaults.isNotEmpty())
+    val sorted = settingDefaults.sortedBy(GuardDbSettingDefault::key)
+    require(sorted.map(GuardDbSettingDefault::key).distinct().size == sorted.size)
+    fun hex(value: String): String = value.toByteArray(Charsets.UTF_8)
+        .joinToString("") { byte -> "%02x".format(byte) }
+    return buildString {
+        append("S2\n")
+        sorted.forEach { setting ->
+            require(setting.key.isNotEmpty() && setting.type in setOf("boolean", "int", "long", "float", "string"))
+            append(hex(setting.key))
+            append('|')
+            append(hex(setting.type))
+            append('|')
+            append(hex(setting.value))
+            append('\n')
+        }
+    }.toByteArray(Charsets.US_ASCII)
+}
+
+/** Canonical semantic proof shared by clean ARM capture and replacement-process health acknowledgement. */
+internal fun canonicalAppStateSemanticProof(
+    rows: List<AppStateDigestRow>,
+    settingDefaults: List<GuardDbSettingDefault> = authoritativeGuardDbSettingDefaults(),
+): AppStateSemanticProof {
+    val ordered = rows.sortedWith(compareBy(AppStateDigestRow::namespace, AppStateDigestRow::key))
+    fun digest(domain: String, selected: List<AppStateDigestRow>, includeTimestamp: Boolean): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        fun frame(value: String?) {
+            if (value == null) {
+                digest.update(0.toByte())
+                return
+            }
+            digest.update(1.toByte())
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            for (shift in 56 downTo 0 step 8) digest.update(((bytes.size.toLong() ushr shift) and 0xff).toByte())
+            digest.update(bytes)
+        }
+        frame(domain)
+        selected.forEach { row ->
+            frame(row.namespace)
+            frame(row.key)
+            frame(row.type)
+            frame(row.valueText)
+            if (includeTimestamp) frame(row.updatedAt.toString())
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+    val configByKey = ordered.filter { it.namespace == "config" }.associateBy(AppStateDigestRow::key)
+    require(settingDefaults.map(GuardDbSettingDefault::key).distinct().size == settingDefaults.size)
+    val knownKeys = settingDefaults.mapTo(linkedSetOf(), GuardDbSettingDefault::key)
+    val effectiveSettings = buildList {
+        settingDefaults.sortedBy(GuardDbSettingDefault::key).forEach { default ->
+            val present = configByKey[default.key]
+            add(
+                AppStateDigestRow(
+                    namespace = "config-effective-v2",
+                    key = default.key,
+                    type = present?.type ?: default.type,
+                    valueText = present?.valueText ?: default.value,
+                    updatedAt = 0L,
+                ),
+            )
+        }
+        // Internal/dynamic config rows are not silently discarded merely because they are absent from
+        // the ordinary settings registry. They remain exact present-value semantics.
+        ordered.filter { it.namespace == "config" && it.key !in knownKeys }.forEach { row ->
+            add(row.copy(namespace = "config-extra-v2", updatedAt = 0L))
+        }
+    }
+    return AppStateSemanticProof(
+        count = ordered.size.toLong(),
+        orderedSha256 = digest("guard-db/app-state/v1", ordered, includeTimestamp = true),
+        settingsSha256 = digest(
+            "guard-db/settings/v2",
+            effectiveSettings,
+            includeTimestamp = false,
+        ),
+    )
+}
+
+internal fun readAppStateSemanticProof(
+    database: SQLiteDatabase,
+    budget: ShutdownProofBudget? = null,
+): AppStateSemanticProof? = runCatching {
+    val rows = database.rawQuery(
+        "SELECT namespace,state_key,value_type,value_text,updated_at FROM app_state " +
+            "ORDER BY namespace COLLATE BINARY,state_key COLLATE BINARY",
+        null,
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                if (budget?.hasTime() == false) error("shutdown proof budget exhausted during app-state digest")
+                add(
+                    AppStateDigestRow(
+                        namespace = cursor.getString(0),
+                        key = cursor.getString(1),
+                        type = cursor.getString(2),
+                        valueText = if (cursor.isNull(3)) null else cursor.getString(3),
+                        updatedAt = cursor.getLong(4),
+                    ),
+                )
+            }
+        }
+    }
+    canonicalAppStateSemanticProof(rows)
+}.getOrNull()
 
 internal fun cleanCheckpointAccepted(
     busy: Int,
@@ -516,7 +673,8 @@ private fun proveStableDatabase(
         check(budget.hasTime()) { "shutdown proof budget exhausted during WAL checkpoint" }
         check(busy == 0) { "WAL checkpoint remained busy" }
         val userVersion = scalarLong(database, "PRAGMA user_version", budget).toInt()
-        val appStateRows = scalarLong(database, "SELECT count(*) FROM app_state", budget)
+        val appState = readAppStateSemanticProof(database, budget)
+            ?: error("application-state semantic proof failed")
         // Explicit close is API-27-safe; SQLiteOpenHelper does not implement AutoCloseable until API 29.
         closeDatabase()
         closed = true
@@ -542,7 +700,9 @@ private fun proveStableDatabase(
             databaseBytes = databaseBytesAfterDigest,
             sha256 = sha256,
             userVersion = userVersion,
-            appStateRows = appStateRows,
+            appStateRows = appState.count,
+            orderedAppStateSha256 = appState.orderedSha256,
+            settingsSemanticSha256 = appState.settingsSha256,
         )
     } catch (failure: Throwable) {
         Log.e("AppState", "clean database shutdown proof failed", failure)

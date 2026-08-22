@@ -11,7 +11,7 @@ interface Daemon {
     /** True when the daemon answers `PING`. */
     fun available(): Boolean
 
-    /** Send one command; return the daemon's reply line (trimmed), or null if unreachable. */
+    /** Send one command; return the exact printable reply line without its LF, or null if unreachable/malformed. */
     fun send(cmd: String): String?
 
     /**

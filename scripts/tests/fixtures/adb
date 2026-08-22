@@ -18,6 +18,7 @@ fi
 
 printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
+HELPER_STATE_FIXTURE="$(cd "$(dirname "$0")" && pwd)/helper-state"
 # A clean panel has no package at all. Without this the fixture would silently re-create one and a
 # genuine first installation could never be modelled.
 if [ "${MOCK_NO_INSTALLED_PACKAGE:-0}" != 1 ]; then
@@ -42,11 +43,9 @@ adb_root_active() {
 # traffic; when it is, it answers and exits with the status the panel would have returned.
 standalone_manual_reply() {
   local text="$1"
-  # The standalone journal lives at a DIFFERENT path per install kind: /system/bin/.hapaneld-helper-
-  # manual-upgrade on the vendor-init route, /data/adb/hapaneld/.helper-manual-upgrade.marker on the
-  # systemless one. Matching only the first meant the systemless route's lease, commit and rollback
-  # were never answered, so that whole route went uncovered. Neither pattern can match the APK-coupled
-  # provisioner journal (`.helper-upgrade.marker`), which must keep falling through to its own branch.
+  # Standalone v3 owns one canonical journal under /data/local; the other spellings are retained for
+  # v1/v2 recovery. Neither pattern can match an APK-coupled provisioner journal
+  # (`.helper-upgrade.marker`), which must keep falling through to its own branch.
   manual_journal_referenced() {
     printf '%s' "$1" | grep -Eq '\.hapaneld-helper-manual-upgrade|\.helper-manual-upgrade\.marker'
   }
@@ -60,10 +59,6 @@ standalone_manual_reply() {
       printf 'NO_STALE_TRANSACTION\n'
     fi
     exit 0
-  elif manual_journal_referenced "$text" &&
-       printf '%s' "$text" | grep -Fq '[ ! -f'; then
-    [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
-    exit $?
   elif printf '%s' "$text" | grep -Fq 'echo INSTALL_OK' && manual_journal_referenced "$text"; then
     : > "$STATE_DIR/manual-helper-transaction"
     [ "${MOCK_MANUAL_INSTALL_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_MANUAL_INSTALL_DELAY"
@@ -80,6 +75,11 @@ standalone_manual_reply() {
     rm -f "$STATE_DIR/manual-helper-transaction"
     printf 'ROLLBACK_FINALIZED\n'
     exit 0
+  elif manual_journal_referenced "$text" &&
+       printf '%s' "$text" | grep -Fq '[ ! -e' &&
+       printf '%s' "$text" | grep -Fq '[ ! -L'; then
+    [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+    exit $?
   fi
   return 1
 }
@@ -88,6 +88,17 @@ standalone_manual_reply() {
 helper_request_reply() {
   local text="$1"
   printf '%s' "$text" | grep -Fq ' --request ' || return 1
+  if [ "${MOCK_HELPER_STATEFUL:-0}" = 1 ]; then
+    local request_tail verb request_head helper_path
+    request_tail="${text#* --request }"
+    verb="${request_tail%%[!A-Z0-9_]*}"
+    request_head="${text%% --request *}"
+    helper_path="${request_head##* }"
+    helper_path="${helper_path//\\/}"
+    helper_path="${helper_path//\"/}"
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" request "$helper_path" "$verb"
+    exit $?
+  fi
   case "$text" in
     *' --request PING'*) [ "${MOCK_ROLLBACK_PING:-ok}" = ok ] && printf 'OK\n' ;;
     *' --request COMPANIONCAPS'*)
@@ -99,9 +110,112 @@ helper_request_reply() {
       [ "${MOCK_HELPER_REQUEST_DELAY:-0}" = 0 ] || /bin/sleep "$MOCK_HELPER_REQUEST_DELAY"
       [ "${MOCK_HELPER_BUILD_ID_MATCH:-ok}" = ok ] && printf 'BUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?}"
       ;;
+    *' --request GUARDCAPS'*)
+      [ "${MOCK_HELPER_START:-ok}" = ok ] &&
+        printf 'OK GUARDCAPS 1 PREPARE DEFINE STREAM ACTION HEALTH REFUSAL STATUS EVIDENCE CANCEL RETIRE JOURNAL AUTONOMOUS SUPERVISED TERMINAL_RETIRE\n'
+      ;;
+    *' --request GUARDSTATUS'*)
+      [ "${MOCK_HELPER_START:-ok}" = ok ] &&
+        printf 'OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0\n'
+      ;;
+    *) printf 'ERR\n'; exit 1 ;;
   esac
   # A refused request answers nothing and exits non-zero, exactly as the inline branch did.
   exit $?
+}
+
+# Stateful managed-provision traffic.  The legacy fixture branches below remain available to the
+# broad suite; this lane is enabled explicitly so focused tests observe one coherent device instead
+# of choosing independent canned answers for install, requests, processes, and rollback.
+stateful_helper_reply() {
+  local text="$1" kind path launch_paths launch_count transaction_call action_kind transaction_id target_apk target_build target_helper transaction_open supervisors
+  [ "${MOCK_HELPER_STATEFUL:-0}" = 1 ] || return 1
+
+  if printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*discover-(system|systemless|hybrid)'; then
+    kind="$(printf '%s' "$text" | sed -nE 's/.*discover-(systemless|hybrid|system).*/\1/p')"
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" record "$kind"
+    exit $?
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*status-(system|systemless|hybrid)'; then
+    transaction_call="$(printf '%s\n' "$text" | grep -oE 'status-(systemless|hybrid|system) [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64} [0-9a-f]{64}' | tail -1)"
+    set -- $transaction_call
+    [ "$#" -eq 5 ] || exit 1
+    action_kind="$1"; transaction_id="$2"; target_apk="$3"; target_build="$4"; target_helper="$5"
+    kind="${action_kind#status-}"
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" record "$kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper"
+    exit $?
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
+    # Keep systemless before system: ERE alternation is leftmost-first and `.*` would otherwise let
+    # the shorter prefix classify install-systemless as install-system.
+    transaction_call="$(printf '%s\n' "$text" | grep -oE 'install-(systemless|hybrid|system) [0-9a-f]{32} [0-9a-f]{64} [0-9a-f]{64} [0-9a-f]{64}' | tail -1)"
+    set -- $transaction_call
+    [ "$#" -eq 5 ] || exit 1
+    action_kind="$1"; transaction_id="$2"; target_apk="$3"; target_build="$4"; target_helper="$5"
+    kind="${action_kind#install-}"
+    transaction_open="$(MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" inspect | sed -n 's/^TRANSACTION_OPEN=//p')"
+    if [ "$transaction_open" = 1 ]; then
+      printf 'STALE_%s_TRANSACTION\n' "$(printf '%s' "$kind" | tr '[:lower:]' '[:upper:]')"
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event "STALE_DETECTED kind=$kind"
+      exit 2
+    fi
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" install "$kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper"
+    status=$?
+    [ "$status" -ne 0 ] || : > "$STATE_DIR/active-helper-transaction"
+    exit "$status"
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*finalize-rollback-(system|systemless|hybrid)'; then
+    printf 'ROLLBACK_FINALIZED\n'
+    rm -f "$STATE_DIR/stale-helper-transaction" "$STATE_DIR/active-helper-transaction"
+    exit 0
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)'; then
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" rollback
+    exit $?
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
+    if [ "${MOCK_STATEFUL_COMMIT_FAIL:-0}" = 1 ]; then
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event COMMIT_REFUSED
+      printf 'COMMIT_INVALID\n'
+      exit 1
+    fi
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" commit
+    exit $?
+  elif printf '%s' "$text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
+    printf 'LEASE_OK\n'
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event LEASE_OK
+    exit 0
+  elif printf '%s' "$text" | grep -Fq ' --replacement-safe'; then
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" replacement-safe
+    exit $?
+  elif printf '%s' "$text" | grep -Fq 'echo HELPER_PROCESSES_PRESENT' && printf '%s' "$text" | grep -Fq 'echo NO_HELPER_PROCESSES'; then
+    supervisors="$(MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" inspect | sed -n 's/^SUPERVISORS=//p')"
+    if [ "$supervisors" = 0 ]; then
+      printf 'NO_HELPER_PROCESSES\n'
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event 'PROCESS_PROBE result=NO_HELPER_PROCESSES'
+    else
+      printf 'HELPER_PROCESSES_PRESENT\n'
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event 'PROCESS_PROBE result=HELPER_PROCESSES_PRESENT'
+    fi
+    exit 0
+  elif printf '%s' "$text" | grep -Fq 'pidof hapaneld-helper'; then
+    supervisors="$(MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" inspect | sed -n 's/^SUPERVISORS=//p')"
+    [ "$supervisors" = 1 ] && printf '4242\n'
+    [ "$supervisors" = 1 ]
+    exit $?
+  elif printf '%s' "$text" | grep -Fq ' --request '; then
+    helper_request_reply "$text"
+  fi
+
+  launch_paths="$(printf '%s\n' "$text" | grep -oE '/(data/local|system/bin|data/adb/hapaneld)/hapaneld-helper --supervise' | sed 's/ --supervise$//' || true)"
+  launch_count="$(printf '%s\n' "$launch_paths" | awk 'NF { n++ } END { print n+0 }')"
+  if [ "$launch_count" -gt 0 ]; then
+    if printf '%s' "$text" | grep -Eq '(^|[ ;])stop hapaneld_helper|pkill -x hapaneld-helper'; then
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" stop >/dev/null
+    fi
+    # More than one syntactic launch authority in one command is malformed even if shell branching
+    # would happen to choose one.  Tests can therefore kill fallback/rollback multi-authority mutants.
+    [ "$launch_count" = 1 ] || { MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" event "LAUNCH_REFUSED syntactic-authorities=$launch_count"; exit 1; }
+    path="$launch_paths"
+    MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" launch "$path" supervised
+    exit $?
+  fi
+  return 1
 }
 
 # Package presence and package-manager responsiveness are INDEPENDENT axes, because Android reports
@@ -178,6 +292,48 @@ pm_marked_probe_reply() {
   exit 0
 }
 
+installer_marked_probe_reply() {
+  local text="$1" nonce trc lrc urc installed=no retained_mode
+  nonce="${text#*HAPANELD_INSTALLER_PKG_BEGIN:}"
+  nonce="${nonce%%[!0-9a-f]*}"
+  [ -f "$STATE_DIR/installed-apk" ] && installed=yes
+  case "${MOCK_PM_PATH:-ok}" in ok) trc=0 ;; *) trc=1 ;; esac
+  case "${MOCK_PM_LIVENESS:-ok}" in ok) lrc=0 ;; *) lrc=1 ;; esac
+  retained_mode="${MOCK_PM_UNINSTALLED_RECORD:-absent}"
+  printf 'HAPANELD_INSTALLER_PKG_BEGIN:%s\n' "$nonce"
+  pm_marked_paths "${MOCK_PM_PATH:-ok}" 'package:/data/app/io.github.maxlyth.hapaneld/base.apk' "$installed"
+  printf 'HAPANELD_INSTALLER_PKG_TARGET:%s:%s\n' "$nonce" "$trc"
+  case "$retained_mode" in
+    absent) urc=0 ;;
+    retained) printf 'package:io.github.maxlyth.hapaneld\n'; urc=0 ;;
+    malformed) printf 'package:other.package\n'; urc=0 ;;
+    *) urc=1 ;;
+  esac
+  printf 'HAPANELD_INSTALLER_DATA:%s:%s\n' "$nonce" "$urc"
+  pm_marked_paths "${MOCK_PM_LIVENESS:-ok}" 'package:/system/framework/framework-res.apk' yes
+  printf 'HAPANELD_INSTALLER_PKG_LIVE:%s:%s\n' "$nonce" "$lrc"
+  printf 'HAPANELD_INSTALLER_PKG_END:%s\n' "$nonce"
+}
+
+data_record_probe_reply() {
+  local text="$1" nonce urc lrc mode
+  nonce="${text#*HAPANELD_DATA_BEGIN:}"
+  nonce="${nonce%%[!0-9a-f]*}"
+  mode="${MOCK_PM_UNINSTALLED_RECORD:-absent}"
+  case "${MOCK_PM_LIVENESS:-ok}" in ok) lrc=0 ;; *) lrc=1 ;; esac
+  printf 'HAPANELD_DATA_BEGIN:%s\n' "$nonce"
+  case "$mode" in
+    absent) urc=0 ;;
+    retained) printf 'package:io.github.maxlyth.hapaneld\n'; urc=0 ;;
+    malformed) printf 'package:other.package\n'; urc=0 ;;
+    *) urc=1 ;;
+  esac
+  printf 'HAPANELD_DATA_TARGET:%s:%s\n' "$nonce" "$urc"
+  pm_marked_paths "${MOCK_PM_LIVENESS:-ok}" 'package:/system/framework/framework-res.apk' yes
+  printf 'HAPANELD_DATA_LIVE:%s:%s\n' "$nonce" "$lrc"
+  printf 'HAPANELD_DATA_END:%s\n' "$nonce"
+}
+
 # Emit the path lines one `pm path` would print inside the marked run. `empty_path` models a
 # truncated line — a bare `package:` with nothing after it, which must never count as an answer.
 pm_marked_paths() {
@@ -205,6 +361,95 @@ pm_query_reply() {
       ;;
     *) printf 'mock adb: unknown pm query mode %s\n' "$mode" >&2; exit 64 ;;
   esac
+}
+
+emit_host_database_gate() {
+  local primary primary_fingerprint recovery retained inventory inventory_fingerprint nonce observation_count
+  nonce="${command_text#*HOSTDB_BEGIN:}"
+  nonce="${nonce%%[!0-9a-f]*}"
+  primary="${MOCK_HOST_DB_PRIMARY:-readable:${MOCK_DB_DEVICE_USER_VERSION:-9}:ok}"
+  recovery="${MOCK_HOST_DB_RECOVERY:-none}"
+  if [ -n "${MOCK_HOST_DB_RETAINED:-}" ]; then
+    retained="$MOCK_HOST_DB_RETAINED"
+  elif [ -f "$STATE_DIR/installed-apk" ]; then
+    retained=1
+  else
+    retained=0
+    primary=missing
+  fi
+  if [ -n "${MOCK_HOST_DB_INVENTORY:-}" ]; then
+    inventory="$MOCK_HOST_DB_INVENTORY"
+  elif [ -f "$STATE_DIR/installed-apk" ]; then
+    inventory=readable
+  else
+    inventory=absent
+  fi
+  inventory_fingerprint="${MOCK_HOST_DB_INVENTORY_FINGERPRINT:-fixture:$recovery:$retained}"
+  primary_fingerprint="${MOCK_HOST_DB_PRIMARY_FINGERPRINT:-fixture:$primary}"
+  printf x >> "$STATE_DIR/host-db-observation-count"
+  observation_count="$(wc -c < "$STATE_DIR/host-db-observation-count")"
+  if [ "$observation_count" -gt 1 ]; then
+    primary="${MOCK_HOST_DB_PRIMARY_AFTER_FIRST:-$primary}"
+    primary_fingerprint="${MOCK_HOST_DB_PRIMARY_FINGERPRINT_AFTER_FIRST:-$primary_fingerprint}"
+    recovery="${MOCK_HOST_DB_RECOVERY_AFTER_FIRST:-$recovery}"
+    retained="${MOCK_HOST_DB_RETAINED_AFTER_FIRST:-$retained}"
+    inventory="${MOCK_HOST_DB_INVENTORY_AFTER_FIRST:-$inventory}"
+    inventory_fingerprint="${MOCK_HOST_DB_INVENTORY_FINGERPRINT_AFTER_FIRST:-$inventory_fingerprint}"
+  fi
+  if [ "$observation_count" -gt 2 ]; then
+    primary="${MOCK_HOST_DB_PRIMARY_AFTER_SECOND:-$primary}"
+    primary_fingerprint="${MOCK_HOST_DB_PRIMARY_FINGERPRINT_AFTER_SECOND:-$primary_fingerprint}"
+    recovery="${MOCK_HOST_DB_RECOVERY_AFTER_SECOND:-$recovery}"
+    retained="${MOCK_HOST_DB_RETAINED_AFTER_SECOND:-$retained}"
+    inventory="${MOCK_HOST_DB_INVENTORY_AFTER_SECOND:-$inventory}"
+    inventory_fingerprint="${MOCK_HOST_DB_INVENTORY_FINGERPRINT_AFTER_SECOND:-$inventory_fingerprint}"
+  fi
+  if [ -f "$STATE_DIR/package-data-cleared" ]; then
+    primary=missing
+    primary_fingerprint=none
+    recovery=none
+    retained=0
+    inventory=readable
+    inventory_fingerprint=none
+  fi
+  [ "${MOCK_HOST_DB_OBSERVATION:-ok}" = ok ] || { printf 'HOSTDB_BEGIN:%s\n' "$nonce"; return 0; }
+  printf 'HOSTDB_BEGIN:%s\n' "$nonce"
+  printf 'HOSTDB_PRIMARY=%s\n' "$primary"
+  printf 'HOSTDB_PRIMARY_FINGERPRINT=%s\n' "$primary_fingerprint"
+  printf 'HOSTDB_RECOVERY=%s\n' "$recovery"
+  printf 'HOSTDB_RETAINED=%s\n' "$retained"
+  printf 'HOSTDB_INVENTORY=%s\n' "$inventory"
+  printf 'HOSTDB_INVENTORY_FINGERPRINT=%s\n' "$inventory_fingerprint"
+  printf 'HOSTDB_END:%s\n' "$nonce"
+  if [ -n "${MOCK_PACKAGE_APPEAR_AFTER_DB_OBSERVATION:-}" ] && \
+     [ "$observation_count" -eq "$MOCK_PACKAGE_APPEAR_AFTER_DB_OBSERVATION" ]; then
+    printf 'externally installed apk\n' > "$STATE_DIR/installed-apk"
+  fi
+}
+
+emit_legacy_installer_database_inventory() {
+  local nonce app_data database recovery inventory observation_count
+  nonce="${command_text#*HAPANELD_INSTALLER_DB_BEGIN:}"
+  nonce="${nonce%%[!0-9a-f]*}"
+  app_data="${MOCK_INSTALLER_APP_DATA:-absent}"
+  database="${MOCK_INSTALLER_DATABASE:-absent}"
+  recovery="${MOCK_INSTALLER_RECOVERY:-absent}"
+  inventory="${MOCK_INSTALLER_INVENTORY:-readable}"
+  printf x >> "$STATE_DIR/installer-db-observation-count"
+  observation_count="$(wc -c < "$STATE_DIR/installer-db-observation-count")"
+  if [ "$observation_count" -gt 1 ]; then
+    app_data="${MOCK_INSTALLER_APP_DATA_AFTER_FIRST:-$app_data}"
+    database="${MOCK_INSTALLER_DATABASE_AFTER_FIRST:-$database}"
+    recovery="${MOCK_INSTALLER_RECOVERY_AFTER_FIRST:-$recovery}"
+    inventory="${MOCK_INSTALLER_INVENTORY_AFTER_FIRST:-$inventory}"
+  fi
+  printf 'HAPANELD_INSTALLER_DB_BEGIN:%s\n' "$nonce"
+  printf 'HAPANELD_INSTALLER_ROOT_UID:zero\n'
+  printf 'HAPANELD_INSTALLER_APP_DATA:%s\n' "$app_data"
+  printf 'HAPANELD_INSTALLER_DATABASE:%s\n' "$database"
+  printf 'HAPANELD_INSTALLER_RECOVERY:%s\n' "$recovery"
+  printf 'HAPANELD_INSTALLER_INVENTORY:%s\n' "$inventory"
+  printf 'HAPANELD_INSTALLER_DB_END:%s\n' "$nonce"
 }
 
 mark_hapaneld_stopped() {
@@ -478,6 +723,9 @@ case "${1:-}" in
         [ "${MOCK_DB_TXN:-ok}" = push_fail ] && exit 1
         cp "${2:?push source missing}" "$STATE_DIR/db-txn-script.$ADB_TARGET" ;;
     esac
+    if [ "${MOCK_HELPER_STATEFUL:-0}" = 1 ]; then
+      MOCK_STATE_DIR="$STATE_DIR" "$HELPER_STATE_FIXTURE" capture "${2:?push source missing}" "${3:?push destination missing}"
+    fi
     ;;
   pull)
     # MOCK_APK_QUERY=fail models a package manager that became unanswerable at the install-outcome
@@ -548,6 +796,14 @@ case "${1:-}" in
   shell)
     shift
     command_text="$*"
+    if printf '%s' "$command_text" | grep -Fq 'HAPANELD_INSTALLER_DB_BEGIN'; then
+      emit_legacy_installer_database_inventory
+      exit 0
+    fi
+    if printf '%s' "$command_text" | grep -Fq 'HOSTDB_BEGIN'; then
+      emit_host_database_gate
+      exit 0
+    fi
     # Reclamation transport failure: the run's own outcome must not change, and the notice must be
     # honest about what happens next (the panel-side sweep removes the leftovers).
     if [ "${MOCK_STAGING_CLEANUP:-ok}" = fail ] &&
@@ -674,6 +930,12 @@ case "${1:-}" in
         ;;
       "pm clear io.github.maxlyth.hapaneld")
         [ "${MOCK_PM_CLEAR:-ok}" = ok ] || { printf 'Failed\n'; exit 0; }
+        : > "$STATE_DIR/package-data-cleared"
+        if [ "${MOCK_RELAUNCH_AFTER_PM_CLEAR:-0}" = 1 ]; then
+          : > "$STATE_DIR/reset-package-relaunched"
+          : > "$STATE_DIR/reset-database-recreated"
+          [ "${MOCK_RESTOP_AFTER_RELAUNCH:-0}" != 1 ] || : > "$STATE_DIR/reset-package-restopped"
+        fi
         printf 'Success\n'
         ;;
       # The nonce-marked package probe: ONE run answering both questions and proving it completed.
@@ -682,6 +944,24 @@ case "${1:-}" in
       # `fail` and `absent` become indistinguishable to the classifier, so it cannot depend on them.
       "echo HAPANELD_PKG_BEGIN:"*)
         pm_marked_probe_reply "$command_text"
+        ;;
+      "echo HAPANELD_INSTALLER_PKG_BEGIN:"*)
+        installer_marked_probe_reply "$command_text"
+        ;;
+      "echo HAPANELD_DATA_BEGIN:"*)
+        data_record_probe_reply "$command_text"
+        ;;
+      "echo HAPANELD_RESET_STOP_BEGIN:"*)
+        nonce="${command_text#*HAPANELD_RESET_STOP_BEGIN:}"
+        nonce="${nonce%%[!0-9a-f]*}"
+        printf 'HAPANELD_RESET_STOP_BEGIN:%s\n' "$nonce"
+        printf '  User 0: ceDataInode=123 installed=true hidden=false suspended=false stopped=%s notLaunched=%s enabled=0\n' \
+          "$([ ! -f "$STATE_DIR/reset-package-relaunched" ] || [ -f "$STATE_DIR/reset-package-restopped" ] && printf true || printf false)" \
+          "$([ -f "$STATE_DIR/reset-package-relaunched" ] && printf false || printf true)"
+        printf 'HAPANELD_RESET_STOP_TARGET:%s:0\n' "$nonce"
+        printf 'package:/system/framework/framework-res.apk\n'
+        printf 'HAPANELD_RESET_STOP_LIVE:%s:0\n' "$nonce"
+        printf 'HAPANELD_RESET_STOP_END:%s\n' "$nonce"
         ;;
       "pm path io.github.maxlyth.hapaneld")
         if [ "${MOCK_APK_QUERY:-ok}" != ok ] && [ -f "$STATE_DIR/apk-install-attempted" ]; then exit 1; fi
@@ -843,6 +1123,8 @@ case "${1:-}" in
           [ "${MOCK_ROOT_LIVE:-ok}" = ok ] && [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
         elif standalone_manual_reply "$command_text"; then
           :
+        elif stateful_helper_reply "$command_text"; then
+          :
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -892,6 +1174,15 @@ case "${1:-}" in
             fi
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
+          printf x >> "$STATE_DIR/helper-lease-observation-count"
+          helper_lease_observation_count="$(wc -c < "$STATE_DIR/helper-lease-observation-count")"
+          candidate_contract_read_count="$(wc -c < "$STATE_DIR/candidate-contract-read-count" 2>/dev/null || printf 0)"
+          if [ "${MOCK_SWAP_APK_AFTER_FINAL_GATE_LEASE:-0}" = 1 ] && \
+             [ "$candidate_contract_read_count" -eq 3 ]; then
+            candidate_apk_path="$(cat "$STATE_DIR/candidate-apk-path")"
+            printf 'swapped after final compatibility gate and helper lease renewal\n' >> \
+              "$candidate_apk_path"
+          fi
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless|hybrid)'; then
           printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTRANSACTION_ID=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\nLEASE_BOOT_ID=fixture-boot\nLEASE_UNTIL_UPTIME=999999\nLIVE_STATE=%s\n' \
@@ -923,9 +1214,10 @@ case "${1:-}" in
       'su 0 sh -c "'*'"')
         if printf '%s' "$command_text" | grep -Fq 'id; id' && [ "${MOCK_SU_DIALECT:-join}" = shc ]; then
           [ "${MOCK_ROOT:-1}" = 1 ] && printf 'uid=0(root) gid=0(root)\n'
-        elif printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade' && \
-             printf '%s' "$command_text" | grep -Fq '[ ! -f'; then
-          [ "${MOCK_MANUAL_STALE:-0}" != 1 ]
+        elif stateful_helper_reply "$command_text"; then
+          :
+        elif standalone_manual_reply "$command_text"; then
+          :
         elif printf '%s' "$command_text" | grep -Fq 'touch /system/.rw_probe'; then
           emit_system_layout_probe
         elif printf '%s' "$command_text" | grep -Fq '.hapaneld-rw-probe-'; then
@@ -975,6 +1267,15 @@ case "${1:-}" in
             fi
           fi
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*lease-(system|systemless|hybrid)'; then
+          printf x >> "$STATE_DIR/helper-lease-observation-count"
+          helper_lease_observation_count="$(wc -c < "$STATE_DIR/helper-lease-observation-count")"
+          candidate_contract_read_count="$(wc -c < "$STATE_DIR/candidate-contract-read-count" 2>/dev/null || printf 0)"
+          if [ "${MOCK_SWAP_APK_AFTER_FINAL_GATE_LEASE:-0}" = 1 ] && \
+             [ "$candidate_contract_read_count" -eq 3 ]; then
+            candidate_apk_path="$(cat "$STATE_DIR/candidate-apk-path")"
+            printf 'swapped after final compatibility gate and helper lease renewal\n' >> \
+              "$candidate_apk_path"
+          fi
           [ "${MOCK_TRANSACTION_TOKEN_MISMATCH:-0}" != 1 ] && [ "${MOCK_TOKEN_MISMATCH_ACTION:-}" != lease ] && printf 'LEASE_OK\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*(discover|status)-(system|systemless|hybrid)'; then
           printf 'JOURNAL_VERSION=1\nJOURNAL_SCOPE=%s\nTRANSACTION_ID=%s\nTARGET_APK_SHA256=%s\nTARGET_BUILD_ID=%s\nTARGET_HELPER_SHA256=%s\nLEASE_BOOT_ID=fixture-boot\nLEASE_UNTIL_UPTIME=999999\nLIVE_STATE=%s\n' \
@@ -996,6 +1297,8 @@ case "${1:-}" in
               [ -f "$STATE_DIR/adb-root-escalated" ] || printf 'HAPANELD_TRANSPORT_ALIVE\n' ;;
           esac
         elif adb_root_active && standalone_manual_reply "$command_text"; then
+          :
+        elif adb_root_active && stateful_helper_reply "$command_text"; then
           :
         elif adb_root_active && helper_request_reply "$command_text"; then
           :

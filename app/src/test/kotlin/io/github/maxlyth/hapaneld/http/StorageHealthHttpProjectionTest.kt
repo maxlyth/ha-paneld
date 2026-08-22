@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
 import java.io.File
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,6 +14,58 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StorageHealthHttpProjectionTest {
+    @Test fun refreshStatusPerformsFreshStorageObservationBeforeRenderingProof() = runBlocking {
+        val events = mutableListOf<String>()
+        val fresh = snapshot(StorageHealthSeverity.HEALTHY)
+
+        val result = refreshedStatusStorage(
+            refreshRequested = true,
+            refreshUpdates = { events += "updates" },
+            refreshStorage = { events += "storage"; fresh },
+            cachedStorage = { error("refresh must not reuse cached storage") },
+        )
+        events += "status-json"
+
+        assertEquals(listOf("updates", "storage", "status-json"), events)
+        assertEquals(fresh, result.snapshot)
+        assertTrue(result.fresh)
+        assertEquals(
+            "0123456789abcdef0123456789abcdef",
+            databaseObservationProof(true, "0123456789abcdef0123456789abcdef", result),
+        )
+    }
+
+    @Test fun incompleteRefreshCannotEchoNonceOrReusePreviouslyHealthyProof() = runBlocking {
+        val cachedHealthy = snapshot(StorageHealthSeverity.HEALTHY)
+        val result = refreshedStatusStorage(
+            refreshRequested = true,
+            refreshUpdates = {},
+            refreshStorage = { null },
+            cachedStorage = { cachedHealthy },
+        )
+
+        assertEquals(StorageHealthSnapshot.UNCHECKED, result.snapshot)
+        assertFalse(result.fresh)
+        assertNull(databaseObservationProof(true, "0123456789abcdef0123456789abcdef", result))
+        assertNull(databaseObservationProof(true, "ABCDEF0123456789ABCDEF0123456789", result.copy(fresh = true)))
+    }
+
+    @Test fun freshStatusRouteUsesTheSingleServiceObservationQueueBeforeStatusJson() {
+        val server = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val route = server.substring(server.indexOf("get(\"/status\")"), server.indexOf("get(\"/power-safety\")"))
+        assertTrue(route.indexOf("refreshedStatusStorage(") < route.indexOf("statusJson("))
+        assertTrue(route.contains("databaseObservationProof(refreshRequested, observationNonce, statusStorage)"))
+        assertTrue(route.contains("queryParameters[\"database_observation_nonce\"]"))
+
+        val service = File("src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt").readText()
+        val refresh = service.substring(
+            service.indexOf("private suspend fun refreshStorageHealthForStatus()"),
+            service.indexOf("private suspend fun runStorageHealthObservation("),
+        )
+        assertTrue(refresh.contains("runQueuedStorageHealthObservation()"))
+        assertFalse(refresh.contains("entityLearning.storageHealthObservation"))
+    }
+
     @Test fun uncheckedIsExplicitWithoutInventingMetricsOrWarning() {
         val projection = HealthAudit.storage(StorageHealthSnapshot.UNCHECKED)
         val json = JSONObject(projection.statusJson())
@@ -184,6 +237,15 @@ class StorageHealthHttpProjectionTest {
         assertTrue(properties.has("failure"))
         val status = api.getJSONObject("paths").getJSONObject("/api/v1/status").getJSONObject("get")
         assertTrue(status.toString().contains("storage_health"))
+        val nonce = status.getJSONArray("parameters").let { parameters ->
+            (0 until parameters.length()).map { parameters.getJSONObject(it) }
+                .single { it.getString("name") == "database_observation_nonce" }
+        }
+        assertEquals("^[0-9a-f]{32}$", nonce.getJSONObject("schema").getString("pattern"))
+        assertTrue(
+            status.getJSONObject("responses").getJSONObject("200").toString()
+                .contains("database_observation_nonce"),
+        )
     }
 
     private fun snapshot(

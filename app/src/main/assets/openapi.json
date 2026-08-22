@@ -117,7 +117,7 @@
         "responses": { "200": { "description": "playing" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "no-url" }, "503": { "description": "stopping" } } }
     },
     "/api/v1/openapi.json": { "get": { "summary": "This OpenAPI document", "tags": ["status"], "responses": { "200": { "description": "OpenAPI 3 JSON" } } } },
-    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix, Zigbee gateway, renderer, storage and power-safety health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force a fresh update check; browser requests must pass same-origin Fetch Metadata admission" }], "responses": { "200": { "description": "Health warnings plus structured component snapshots. renderer, storage_health and power_safety are always present; unavailable power probes produce unknown rather than safe, and a renderer with nothing observed reports unobserved rather than health.", "content": { "application/json": { "schema": { "type": "object", "required": ["warnings", "capabilities", "zigbee_gateway", "storage_health", "renderer", "power_safety"], "properties": { "warnings": { "type": "array", "items": { "type": "string", "description": "Ready-to-render trusted HTML warning" } }, "capabilities": { "type": "array", "items": { "type": "object" } }, "zigbee_gateway": { "type": "object", "nullable": true }, "storage_health": { "$ref": "#/components/schemas/StorageHealth" }, "renderer": { "$ref": "#/components/schemas/RendererHealth" }, "power_safety": { "$ref": "#/components/schemas/PowerSafety" } } } } } }, "403": { "description": "Cross-origin or unverifiable browser request refused when refresh=1; headerless LAN automation remains supported" } } } },
+    "/api/v1/status": { "get": { "summary": "Panel-health warnings, capability matrix, Zigbee gateway, renderer, storage and power-safety health as JSON", "tags": ["status"], "parameters": [{ "name": "refresh", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Force fresh update and serialized database-health checks; browser requests must pass same-origin Fetch Metadata admission" }, { "name": "database_observation_nonce", "in": "query", "required": false, "schema": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "description": "Request nonce-bound fresh database evidence. Echoed at top level only after a complete clean same-request schema and quick_check observation; older builds and incomplete checks omit it." }], "responses": { "200": { "description": "Health warnings plus structured component snapshots. renderer, storage_health and power_safety are always present; unavailable or incomplete fresh probes produce unknown rather than safe, and a renderer with nothing observed reports unobserved rather than health.", "content": { "application/json": { "schema": { "type": "object", "required": ["warnings", "capabilities", "zigbee_gateway", "storage_health", "renderer", "power_safety"], "properties": { "warnings": { "type": "array", "items": { "type": "string", "description": "Ready-to-render trusted HTML warning" } }, "capabilities": { "type": "array", "items": { "type": "object" } }, "zigbee_gateway": { "type": "object", "nullable": true }, "database_observation_nonce": { "type": "string", "pattern": "^[0-9a-f]{32}$", "description": "Same-request freshness proof; present only when requested with a valid nonce and the database observation completed cleanly" }, "storage_health": { "$ref": "#/components/schemas/StorageHealth" }, "renderer": { "$ref": "#/components/schemas/RendererHealth" }, "power_safety": { "$ref": "#/components/schemas/PowerSafety" } } } } } }, "403": { "description": "Cross-origin or unverifiable browser request refused when a fresh observation is requested; headerless LAN automation remains supported" } } } },
     "/api/v1/power-safety": { "get": { "summary": "Read the bounded panel power-safety assessment and sanitized observations", "tags": ["status"], "responses": { "200": { "description": "Current app-owned power-safety assessment", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PowerSafety" } } } } } } },
     "/api/v1/power-safety/state": { "get": { "summary": "Read only the power-safety state as one terminal-safe token", "tags": ["status"], "responses": { "200": { "description": "Exactly one of safe, caution, at_risk or unknown followed by a newline", "content": { "text/plain": { "schema": { "type": "string", "enum": ["safe", "caution", "at_risk", "unknown"] } } } } } } },
     "/api/v1/power-safety/repair": { "post": { "summary": "Explicitly enable and read back supported panel power-safety guards; never reboots", "tags": ["control"], "responses": { "200": { "description": "Repair completed or partially completed. The response reports each step as already, applied, unavailable or failed, a human-readable message, next_action, and the post-repair assessment. Partial does not imply the warning was cleared." }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "503": { "description": "The app wake-lock repair failed; no reboot was attempted" } } } },
@@ -541,6 +541,277 @@
     "/api/v1/install/apk/discard": { "post": { "summary": "Discard the exact inspected-but-uncommitted APK named by token, deleting its staged bytes", "description": "Releases the single staged-upload slot and deletes exactly the named entry's file. token is either the preview's commit token or the discard reference from /api/v1/install/apk/pending, so every discard is scoped to the entry its caller saw: naming an entry the slot no longer holds answers 409 different-pending and removes nothing — a stale recovery view cannot delete a replacement upload staged after its probe. A committed entry is claimed only once its install genuinely starts, so nothing-pending is always durable truth. Idempotent: discarding when nothing is pending reports discarded=false. Never cancels a running package install (a committed entry has already left the slot) and never stops a transfer still arriving, which has its own cancel.", "tags": ["install"], "requestBody": { "required": true, "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string", "description": "The preview's commit token, or the discard reference from the pending probe." } } } } } }, "responses": { "200": { "description": "{ok,discarded}" }, "400": { "description": "missing token" }, "409": { "description": "different-pending — another upload owns the slot now; re-probe" } } } },
     "/api/v1/install/apk/pending": { "get": { "summary": "Whether an inspected-but-uncommitted APK is holding staged bytes", "description": "Existence, inspected identity and a discard reference — never the preview token, which is the commit authority and reaches only the client that staged the upload. The discard field scopes a recovery discard to exactly this entry and carries no install authority: it cannot peek, claim or commit.", "tags": ["install"], "responses": { "200": { "description": "{pending} plus discard, package, version and signer when pending" } } } },
     "/api/v1/install/apk/commit": { "post": { "summary": "Consume an APK preview token and start installation", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string" } } } } } }, "responses": { "200": { "description": "{status:started|busy}" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "409": { "description": "stale-or-missing token" } } } },
+    "/api/v1/guard-db/clock": {
+      "get": {
+        "summary": "Read Guard DB duration-budget bounds and the panel's diagnostic monotonic clock",
+        "description": "Direct-LAN-only read returning {ok:true,elapsed_realtime_ms,minimum_overall_budget_ms,maximum_overall_budget_ms,recovery_reserve_ms}. Choose overall_budget_ms directly within the inclusive minimum/maximum range. It is a duration owned by helper PREPARE, not an absolute elapsed-realtime timestamp; do not add elapsed_realtime_ms to it. The minimum includes the reserved recovery interval. Loopback, public and unparseable peers are refused.",
+        "tags": ["install"],
+        "responses": {
+          "200": { "description": "Inclusive minimum/maximum overall duration budgets, reserved recovery interval, and current same-boot monotonic milliseconds for diagnostics" },
+          "403": { "description": "Direct-LAN source required. Loopback, public and unparseable peers are refused." }
+        }
+      }
+    },
+    "/api/v1/guard-db/stage": {
+      "post": {
+        "summary": "Retain an exact inspected ha-paneld APK as Guard DB candidate A or B",
+        "description": "Claims one existing /api/v1/install/apk preview into the fixed Guard DB candidate slot. The request is accepted only from a direct LAN peer; loopback, public and unparseable peers are refused. In Hardened mode the raw JSON and every inspected candidate identity field, including the sealed SETTINGS authority identity, are bound to physical approval on this panel, and the candidate is rechecked while it is claimed so changed bytes require a new challenge.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["token", "role"], "properties": {
+            "token": { "type": "string", "pattern": "^[A-Za-z0-9-]{1,128}$" },
+            "role": { "type": "string", "enum": ["A", "B"] }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "{ok:true,role,sha256,version_code,schema}; the exact candidate file and its parent entry are durable" },
+          "202": { "description": "Hardened-mode approval-required: approve this exact candidate request physically on the panel, then retry the identical request from the same direct LAN peer.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source required. Loopback, public and unparseable peers are refused; or state-changing request admission refused the caller." },
+          "409": { "description": "Stale or missing upload token, another operation owns admission, the role slot is already occupied, or the inspected upload changed and remains retained" },
+          "412": { "description": "Hardened mode is not active; no approval challenge or candidate claim was created" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "422": { "description": "APK is not an exact signed ha-paneld candidate with a valid database compatibility contract" }
+        }
+      }
+    },
+    "/api/v1/guard-db/discard": {
+      "post": {
+        "summary": "Discard one exact retained Guard DB candidate",
+        "description": "Requires a direct LAN peer, Hardened mode and physical approval on this panel. Approval binds the exact role and current retained candidate identity; a changed or absent candidate cannot spend the approval. Loopback, public and unparseable peers are refused.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["role"], "properties": {
+            "role": { "type": "string", "enum": ["A", "B"] }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "{ok:true,role}; the exact retained candidate was durably removed" },
+          "202": { "description": "Hardened-mode approval-required: approve this exact discard physically on the panel, then retry the identical request from the same direct LAN peer.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApprovalRequired" } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source required. Loopback, public and unparseable peers are refused; or state-changing request admission refused the caller." },
+          "409": { "description": "Candidate absent or changed, another operation owns admission, or durable removal failed" },
+          "412": { "description": "Hardened mode is not active; no approval challenge or candidate removal was created" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" }
+        }
+      }
+    },
+    "/api/v1/guard-db/arm": {
+      "post": {
+        "summary": "Arm an exact same-boot Guard DB A/B canary and begin one-way clean shutdown",
+        "description": "Requires direct LAN access, Hardened mode with network debugging proved inactive, physical approval on this panel, an autonomous supervised helper with explicit terminal-retirement support reporting EMPTY, retained exact A/B candidates, and candidate A equal to the currently installed app. Approval binds the session, overall duration budget, current boot identity, complete A/B manifests and sealed SETTINGS authority identity. Every authority is rechecked after approval. Success durably records the same-boot startup sentinel and returns a preparing receipt before the scheduled one-way clean-shutdown handoff; progress and any indeterminate helper reply are reconciled through typed Guard DB status rather than by replaying a mutation.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "overall_budget_ms"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Caller-minted exact transaction identity; valid only in the current boot" },
+            "overall_budget_ms": { "type": "integer", "format": "int64", "minimum": 600000, "maximum": 1800000, "description": "Exact total helper duration budget in milliseconds. This is not a wall-clock or elapsed-realtime timestamp; send a value directly within minimum_overall_budget_ms..maximum_overall_budget_ms." }
+          }
+        } } } },
+        "responses": {
+          "202": { "description": "Either Hardened-mode approval-required for this exact ARM request, or accepted {ok:true,state:preparing-clean-proof,session,settlement:approve-arm-commit-after-shutdown,same_boot_only:true}. On acceptance wait for the writer-free maintenance successor and physically approve its separately bound custody commit; do not replay this shutdown request.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "required": ["ok", "state", "session", "settlement", "same_boot_only"], "properties": {
+              "ok": { "type": "boolean", "enum": [true] },
+              "state": { "type": "string", "enum": ["preparing-clean-proof"] },
+              "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "settlement": { "type": "string", "enum": ["approve-arm-commit-after-shutdown"] },
+              "same_boot_only": { "type": "boolean", "enum": [true] }
+            } }
+          ] } } } },
+          "400": { "description": "Malformed, oversized or non-exact JSON request; or overall_budget_ms is outside the inclusive minimum_overall_budget_ms..maximum_overall_budget_ms range" },
+          "403": { "description": "Direct-LAN source required. Loopback, public and unparseable peers are refused; or state-changing request admission refused the caller." },
+          "409": { "description": "Candidate pair, installed A identity, helper EMPTY state, approval authority or shutdown handoff changed; or another operation owns admission" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "423": { "description": "Shutdown handoff did not arm and the durable sentinel could not be safely cleared; maintenance admission remains held" },
+          "503": { "description": "Current boot identity is unavailable or the helper lacks the exact autonomous supervised Guard DB protocol with terminal-retirement support" },
+          "507": { "description": "The same-boot startup sentinel was not durably written and read back" }
+        }
+      }
+    },
+    "/api/v1/guard-db/status": {
+      "get": {
+        "summary": "Read typed Guard DB helper status",
+        "description": "Direct-LAN read available from both the ordinary bootstrap server and the same-boot writer-free maintenance successor. It reports typed helper generation, phase, durable error/hold state, terminal outcome and elapsed-realtime deadlines; the successor also reports installed candidate identity and same_boot_only. Callers use status to reconcile accepted, malformed or indeterminate mutation replies without replay.",
+        "tags": ["install"],
+        "responses": {
+          "200": { "description": "Typed Guard DB status, or an explicit indeterminate status receipt" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "502": { "description": "Helper returned a malformed status record" },
+          "503": { "description": "Helper is unreachable or does not support typed Guard DB status" }
+        }
+      }
+    },
+    "/api/v1/guard-db/evidence": {
+      "get": {
+        "summary": "Download bounded Guard DB transaction evidence",
+        "description": "Direct-LAN read available from both the ordinary bootstrap server and the same-boot writer-free maintenance successor. The ordinary server requires the exact session query; the successor derives the session from its durable sentinel and also requires current helper status to match that same-boot authority. The bounded canonical record includes the exact SETTINGS authority identity after BASELINE and before candidate A/B custody fields.",
+        "tags": ["install"],
+        "parameters": [
+          { "name": "session", "in": "query", "required": false, "description": "Exact 64-character lowercase transaction ID; required on the ordinary bootstrap server and ignored by the sentinel-bound writer-free successor", "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+        ],
+        "responses": {
+          "200": { "description": "Bounded framed ASCII helper evidence", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "400": { "description": "Ordinary bootstrap request omitted or malformed the exact session query" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "409": { "description": "Helper status does not match the durable sentinel session and boot identity" },
+          "503": { "description": "Evidence is unavailable or malformed" }
+        }
+      }
+    },
+    "/api/v1/guard-db/evidence/retire": {
+      "post": {
+        "summary": "Retire exact collected terminal Guard DB evidence and release helper replacement",
+        "description": "Ordinary-server-only terminal cleanup after the caller has downloaded and hashed exact FINALIZED evidence. Requires a direct LAN non-loopback peer, Hardened mode, a current durable security epoch with remote debugging proved inactive, and one-use physical approval. Approval binds the raw JSON body, exact FINALIZED status and outcome, raw evidence SHA-256 and security epoch. Every authority and the evidence bytes are re-fetched under the transition gate after approval. Before the single GUARDRETIRE TERMINAL submission, the app durably records an exact non-replayable intent in no-backup storage. Reply loss and RETIRING are reconciled only by typed status; the mutation is never blindly replayed. Exact EMPTY marks durable completion, and an identical later request may return that completion receipt.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "generation", "evidence_sha256"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generation": { "type": "integer", "format": "int64", "minimum": 0, "maximum": 9223372036854775806, "description": "Exact FINALIZED generation embedded in the collected evidence" },
+            "evidence_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the exact raw bounded evidence response bytes" }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Exact EMPTY was settled and the matching app-private completion record is durable, including an idempotent identical later request", "content": { "application/json": { "schema": {
+            "type": "object", "additionalProperties": false, "required": ["ok", "state", "session", "retirement_generation", "settlement"], "properties": {
+              "ok": { "type": "boolean", "enum": [true] },
+              "state": { "type": "string", "enum": ["empty"] },
+              "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "retirement_generation": { "type": "integer", "format": "int64", "minimum": 1 },
+              "settlement": { "type": "string", "enum": ["complete"] }
+            }
+          } } } },
+          "202": { "description": "Either physical approval is required: approve the exact bound request on the panel and retry the identical request from the same direct LAN peer within 10 minutes; this includes a crash-retained durable INTENT that still observes exact FINALIZED, whose mutation fence stays held until the approved exact idempotent command is serialized or status advances. Otherwise native RETIRING settlement remains pending and is reconciled by status only without replay; FINALIZED is never reported as actively RETIRING.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "required": ["ok", "state", "session", "settlement"], "properties": {
+              "ok": { "type": "boolean", "enum": [true] },
+              "state": { "type": "string", "enum": ["retiring"] },
+              "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "settlement": { "type": "string", "enum": ["poll-status"] }
+            } }
+          ] } } } },
+          "400": { "description": "Malformed, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN non-loopback source and normal state-changing Host/Origin request admission required" },
+          "409": { "description": "The helper is not exact FINALIZED, session/generation/evidence/status changed, evidence hash is wrong, post-approval authority changed, or another retirement record owns the slot" },
+          "412": { "description": "Hardened mode, current security epoch or settled-inactive remote debugging was not proved" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "423": { "description": "A corrupt or indeterminate durable retirement record/status is held for inspection and cannot be replayed" },
+          "502": { "description": "Helper status or evidence was malformed" },
+          "503": { "description": "Helper/evidence unavailable, exact terminal-retirement capability absent, submission definitely did not occur after intent, or completion could not be made durable" },
+          "507": { "description": "The exact non-replayable retirement intent was not durably written and read back" }
+        }
+      }
+    },
+    "/api/v1/guard-db/arm/commit": {
+      "post": {
+        "summary": "Commit a prepared clean Guard DB baseline to helper custody",
+        "description": "Available only from the same-boot writer-free maintenance successor after /api/v1/guard-db/arm has shut down database writers and durably retained an exact clean proof. Requires a direct LAN peer and separate physical approval on this panel. Approval binds the raw request, peer, method, path, complete prepared proof, exact A/B manifests, sealed SETTINGS authority identity, helper EMPTY generation zero, original overall duration budget and current security epoch. Hardened mode and the durable debug-off proof are atomically rechecked at the exact helper-mutation boundary; helper PREPARE owns the full duration budget when custody submission begins.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "generation"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generation": { "type": "integer", "format": "int64", "minimum": 0, "maximum": 0, "description": "Exact helper EMPTY generation; v1 custody commit accepts only zero" }
+          }
+        } } } },
+        "responses": {
+          "202": { "description": "Either approval-required for this exact writer-free custody commit, or accepted {ok:true,state:submitting-custody,session,settlement:poll-status}. The response pipeline completes before helper custody submission can force-stop the successor; reconcile only through /api/v1/guard-db/status and do not replay.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "required": ["ok", "state", "session", "settlement"], "properties": {
+              "ok": { "type": "boolean", "enum": [true] },
+              "state": { "type": "string", "enum": ["submitting-custody"] },
+              "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "settlement": { "type": "string", "enum": ["poll-status"] }
+            } }
+          ] } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "409": { "description": "Session, prepared clean proof, A/B manifests, helper EMPTY generation or post-approval authority changed" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "503": { "description": "The helper lacks the exact autonomous supervised protocol" }
+        }
+      }
+    },
+    "/api/v1/guard-db/refusal": {
+      "post": {
+        "summary": "Submit exact A refusal while B remains installed",
+        "description": "Available only from the same-boot writer-free maintenance successor in the exact refusal phase. Requires direct LAN access and physical approval bound to the current helper generation, installed B identity, repeated read-only exact-A refusal proof and current security epoch. Hardened mode and the durable debug-off proof are atomically rechecked at the mutation boundary. Indeterminate settlement is reconciled through status without replay.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "generation"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generation": { "type": "integer", "format": "int64", "minimum": 0 }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Refusal settled to a typed newer helper generation and phase" },
+          "202": { "description": "Either approval-required for this exact refusal, or indeterminate-poll-status after possible helper submission; poll status and do not replay.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "properties": { "ok": { "type": "boolean", "enum": [false] }, "error": { "type": "string", "enum": ["indeterminate-poll-status"] } } }
+          ] } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "409": { "description": "Session, current phase, installed B identity or exact-A refusal proof changed; or the helper rejected the mutation" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "503": { "description": "Helper status was unavailable or the mutation was definitely not submitted" }
+        }
+      }
+    },
+    "/api/v1/guard-db/cancel": {
+      "post": {
+        "summary": "Cancel Guard DB maintenance before package or database custody",
+        "description": "Available only from the same-boot writer-free maintenance successor while the helper is EMPTY, ordinary STAGING, STAGING with the explicit FAILED_NO_MUTATION hold, or PREPARED and before CAPTURE takes package/database custody. STAGING with CAPTURE_INTENT is hold-only and cannot be cancelled. Requires direct LAN access and physical approval bound to the exact request, prepared proof, helper status and current security epoch. Hardened mode and the durable debug-off proof are atomically rechecked before helper or local-hold mutation. On a settled EMPTY result the prepared proof and sentinel are cleared before the normal process is resumed; indeterminate helper settlement must be polled without replay.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "generation"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generation": { "type": "integer", "format": "int64", "minimum": 0 }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Cancellation settled with {ok:true,phase:EMPTY,outcome:CANCELLED_NO_MUTATION}; local prepared proof and sentinel were cleared" },
+          "202": { "description": "Either approval-required for this exact cancellation, or cancel-indeterminate-poll-status after possible helper submission; poll status and do not replay.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "properties": { "ok": { "type": "boolean", "enum": [false] }, "error": { "type": "string", "enum": ["cancel-indeterminate-poll-status"] } } }
+          ] } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "409": { "description": "Session, generation, prepared proof or helper status changed, or helper custody already passed the cancellable boundary" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "423": { "description": "Helper settled EMPTY but the local prepared proof or sentinel could not be durably cleared; maintenance remains held" },
+          "503": { "description": "Helper status was unavailable or cancellation was definitely not submitted" }
+        }
+      }
+    },
+    "/api/v1/guard-db/action": {
+      "post": {
+        "summary": "Advance one exact Guard DB maintenance transition",
+        "description": "Available only from the same-boot writer-free maintenance successor. Requires a direct LAN peer and physical approval bound to the exact session, complete canonical preview status, current generation, transition, peer, method, path and current security epoch. After approval, exact status, phase admission, Hardened mode and the durable debug-off proof are atomically rechecked at the mutation boundary. An indeterminate helper reply is reconciled by status and is never replayed automatically. ROLLBACK_REQUIRED is observe-only here: the native supervisor owns rollback and no external or manual ROLLBACK action is admitted.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "generation", "action"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generation": { "type": "integer", "format": "int64", "minimum": 0 },
+            "action": { "type": "string", "enum": ["WITHHOLD_PREMIGRATE", "RESTORE_PREMIGRATE", "FINALIZE"] }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Action settled to a typed newer helper generation and phase" },
+          "202": { "description": "Either approval-required for this exact action, or indeterminate-poll-status after possible helper submission; poll status and do not replay.", "content": { "application/json": { "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/ApprovalRequired" },
+            { "type": "object", "properties": { "ok": { "type": "boolean", "enum": [false] }, "error": { "type": "string", "enum": ["indeterminate-poll-status"] } } }
+          ] } } } },
+          "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source and allowed request origin required. Loopback, public and unparseable peers are refused." },
+          "409": { "description": "Session, generation or allowed phase transition changed; or the helper rejected the mutation" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
+          "413": { "description": "Request body exceeds the bounded Guard DB JSON limit" },
+          "503": { "description": "Helper status was unavailable or the mutation was definitely not submitted" }
+        }
+      }
+    },
     "/api/v1/backup": { "post": { "summary": "Download an encrypted full panel backup of configuration, entity-filter state, durable panel state and the profile catalog, optionally with Companion login", "tags": ["install"], "requestBody": { "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "include_companion": { "type": "boolean", "description": "Omit to include the HA Companion login only when a supported Companion is installed, so a panel without it still receives its own backup. Send true to require the login, which fails with 422 when it cannot be captured, or false to exclude it. There is no default value: an omitted parameter is not equivalent to either, and any value other than true, 1, false or 0 is rejected." }, "passphrase": { "type": "string", "format": "password", "description": "Required unless plaintext export is explicitly acknowledged" }, "allow_plaintext": { "type": "boolean", "default": false, "description": "Explicitly acknowledge an unencrypted ZIP containing credentials; ignored when a passphrase is supplied" } } } } } }, "responses": { "200": { "description": "encrypted .hpb attachment, or plaintext .zip when explicitly acknowledged" }, "202": { "$ref": "#/components/responses/ApprovalRequired" }, "400": { "description": "passphrase required unless allow_plaintext=true, or include_companion was neither true/1 nor false/0" }, "409": { "description": "busy" }, "413": { "description": "Companion backup too large" }, "422": { "description": "Companion capture unavailable; an omitted include_companion still refuses this way when a Companion is installed but cannot be captured" }, "507": { "description": "sensitive plaintext staging could not be removed, so no backup is delivered" } } } },
     "/api/v1/packages": { "get": { "summary": "Installed package inventory used by admin pickers", "tags": ["install"], "responses": { "200": { "description": "package JSON" } } } },
     "/api/v1/apps": { "get": { "summary": "Launchable app and installed supported-renderer inventory", "tags": ["install"], "responses": { "200": { "description": "JSON with launchable apps plus installed full/minimal Home Assistant Companion renderer choices" } } } },

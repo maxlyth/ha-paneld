@@ -9,6 +9,7 @@
 
 #include "input.h"
 #include "gpio.h"
+#include "guard_maintenance.h"
 #include "led.h"
 #include "screen.h"
 #include "server.h"
@@ -31,6 +32,8 @@ int main(int argc, char **argv) {
 
     sysexec_stub_reset();
     sysexec_stub_add_popen("screencap -p", "PNG\nfixture\n", 0);
+    guard_test_reset();
+    if (guard_maintenance_init() != 0) return 5;
     input_init();
     gpio_init();
     screen_init();
@@ -69,6 +72,7 @@ int main(int argc, char **argv) {
         close(client);
     }
 
+    guard_test_reset();
     unlink(address.sun_path);
     return 0;
 }

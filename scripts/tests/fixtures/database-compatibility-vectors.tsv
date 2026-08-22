@@ -1,0 +1,26 @@
+# id	contract	owner	primary	recoveries	verdict	reason
+runtime-fresh	hapaneld-db:v1:ha-paneld.db:11:14	RUNTIME_STARTUP	MISSING	-	FRESH	-
+proven-fresh-install	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_ABSENT_PROVEN	MISSING	-	FRESH	-
+installed-missing	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	MISSING	-	REFUSE	PRIMARY_MISSING_NOT_PROVEN_FRESH
+unknown-owner-missing	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_UNKNOWN	MISSING	-	REFUSE	PRIMARY_MISSING_NOT_PROVEN_FRESH
+missing-with-retained-state	hapaneld-db:v1:ha-paneld.db:11:14	RUNTIME_STARTUP	MISSING	P:ha-paneld.db.v14.premigrate:14:14:ok:file	REFUSE	PRIMARY_MISSING_WITH_RECOVERY
+unreadable-primary	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	UNREADABLE	P:ha-paneld.db.v14.premigrate:14:14:ok:file	REFUSE	PRIMARY_UNREADABLE
+minimum-direct	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:11	-	DIRECT	-
+maximum-direct	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:14	-	DIRECT	-
+too-old-without-recovery	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:10	-	REFUSE	PRIMARY_BELOW_MINIMUM
+too-old-with-valid-recovery	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:10	P:ha-paneld.db.v14.premigrate:14:14:ok:file	REFUSE	PRIMARY_BELOW_MINIMUM
+too-new-without-recovery	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	-	REFUSE	PRIMARY_ABOVE_MAXIMUM_WITHOUT_PREMIGRATE
+superseded-never-restores	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	S:ha-paneld.db.v14.superseded:14:14:ok:file	REFUSE	PRIMARY_ABOVE_MAXIMUM_WITHOUT_PREMIGRATE
+exact-recovery	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:14:ok:file	RECOVER	ha-paneld.db.v14.premigrate
+newer-out-of-range-does-not-poison	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:14:ok:file;P:ha-paneld.db.v15.premigrate:15:15:ok:file	RECOVER	ha-paneld.db.v14.premigrate
+poisoned-newest-blocks-fallback	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v13.premigrate:13:13:ok:file;P:ha-paneld.db.v14.premigrate:14:14:bad:file	REFUSE	NEWEST_PREMIGRATE_INTEGRITY_FAILED
+orphan-newest-blocks-fallback	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v13.premigrate:13:13:ok:file;P:ha-paneld.db.v14.premigrate:14:?:bad:incomplete	REFUSE	NEWEST_PREMIGRATE_INCOMPLETE
+recovery-filename-schema-mismatch	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:13:ok:file	REFUSE	NEWEST_PREMIGRATE_SCHEMA_MISMATCH
+recovery-unreadable	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:?:bad:file	REFUSE	NEWEST_PREMIGRATE_UNREADABLE
+recovery-not-regular	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:14:ok:not-file	REFUSE	NEWEST_PREMIGRATE_NOT_REGULAR
+recovery-with-companion	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v14.premigrate:14:15:ok:file+sidecar	REFUSE	NEWEST_PREMIGRATE_NOT_STANDALONE
+recovery-below-minimum	hapaneld-db:v1:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:15	P:ha-paneld.db.v10.premigrate:10:10:ok:file	REFUSE	NEWEST_PREMIGRATE_OUTSIDE_BOUNDARY
+missing-candidate-contract	-	PACKAGE_PRESENT	READABLE:14	-	REFUSE	CANDIDATE_METADATA_MISSING
+malformed-candidate-contract	hapaneld-db:v2:ha-paneld.db:11:14	PACKAGE_PRESENT	READABLE:14	-	REFUSE	CANDIDATE_METADATA_MALFORMED
+wrong-database-contract	hapaneld-db:v1:other.db:11:14	PACKAGE_PRESENT	READABLE:14	-	REFUSE	CANDIDATE_METADATA_MALFORMED
+incoherent-candidate-contract	hapaneld-db:v1:ha-paneld.db:15:14	PACKAGE_PRESENT	READABLE:14	-	REFUSE	CANDIDATE_METADATA_MALFORMED

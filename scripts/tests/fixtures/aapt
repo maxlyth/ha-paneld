@@ -1,3 +1,48 @@
 #!/usr/bin/env bash
-printf 'aapt %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
-printf "package: name='%s' versionCode='220' versionName='0.9.2-rc3'\n" "${MOCK_RELEASE_PACKAGE:-io.github.maxlyth.hapaneld}"
+printf '%s %s\n' "${0##*/}" "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+database_contract="${MOCK_DB_CANDIDATE_CONTRACT:-hapaneld-db:v1:ha-paneld.db:1:14}"
+aapt2_mode=0
+[ "${0##*/}" != aapt2 ] || aapt2_mode=1
+case "$*" in
+  "dump xmltree "*" AndroidManifest.xml"|"dump xmltree "*" --file AndroidManifest.xml")
+    for candidate_arg in "$@"; do
+      case "$candidate_arg" in *.apk) printf '%s\n' "$candidate_arg" > "${MOCK_STATE_DIR:?}/candidate-apk-path"; break ;; esac
+    done
+    printf 'E: manifest (line=2)\n'
+    printf '  E: application (line=8)\n'
+    if [ "${MOCK_DB_METADATA_SCOPE:-application}" = component ]; then
+      printf '    E: activity (line=9)\n'
+      metadata_indent='      '
+    else
+      metadata_indent='    '
+    fi
+    if [ "$database_contract" != missing ]; then
+      printf '%sE: meta-data (line=10)\n' "$metadata_indent"
+      if [ "$aapt2_mode" = 1 ]; then
+        printf '%s  A: http://schemas.android.com/apk/res/android:name(0x01010003)="io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY" (Raw: "io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY")\n' "$metadata_indent"
+        printf '%s  A: http://schemas.android.com/apk/res/android:value(0x01010024)="%s" (Raw: "%s")\n' \
+          "$metadata_indent" "$database_contract" "$database_contract"
+      else
+        printf '%s  A: android:name(0x01010003)="io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY" (Raw: "io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY")\n' "$metadata_indent"
+        printf '%s  A: android:value(0x01010024)="%s" (Raw: "%s")\n' \
+          "$metadata_indent" "$database_contract" "$database_contract"
+      fi
+      if [ "${MOCK_DB_CANDIDATE_DUPLICATE:-0}" = 1 ]; then
+        printf '    E: meta-data (line=11)\n'
+        printf '      A: android:name(0x01010003)="io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY"\n'
+        printf '      A: android:value(0x01010024)="%s"\n' "$database_contract"
+      fi
+    fi
+    if [ "${MOCK_DB_APPLICATION_DUPLICATE:-0}" = 1 ]; then printf '  E: application (line=20)\n'; fi
+    printf x >> "${MOCK_STATE_DIR:?}/candidate-contract-read-count"
+    contract_read_count="$(wc -c < "${MOCK_STATE_DIR:?}/candidate-contract-read-count")"
+    if [ "${MOCK_SWAP_APK_AFTER_CONTRACT:-0}" = 1 ] || \
+       { [ -n "${MOCK_SWAP_APK_AFTER_CONTRACT_OBSERVATION:-}" ] && \
+         [ "$contract_read_count" -eq "$MOCK_SWAP_APK_AFTER_CONTRACT_OBSERVATION" ]; }; then
+      for candidate_arg in "$@"; do
+        case "$candidate_arg" in *.apk) printf 'swapped after compatibility admission\n' >> "$candidate_arg"; break ;; esac
+      done
+    fi
+    ;;
+  *) printf "package: name='%s' versionCode='220' versionName='0.9.2-rc3'\n" "${MOCK_RELEASE_PACKAGE:-io.github.maxlyth.hapaneld}" ;;
+esac

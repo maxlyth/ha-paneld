@@ -145,6 +145,7 @@ jobs:
           PROVISION_TEST_SCOPE: core
         run: |
           scripts/tests/provision_test.sh
+          scripts/tests/install_legacy_database_gate_test.sh
           scripts/tests/hardware_collector_test.sh
           scripts/tests/consumer_docs_test.sh
           scripts/tests/gitbash_path_conversion_test.sh

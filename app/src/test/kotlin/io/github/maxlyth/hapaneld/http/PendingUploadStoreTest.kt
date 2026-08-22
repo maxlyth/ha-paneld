@@ -281,6 +281,22 @@ class PendingUploadStoreTest {
         assertEquals("and A still never reappears", PendingUploadStore.DiscardResult.NOTHING_PENDING, store.discard(a.token))
     }
 
+    @Test fun durableClaimFailureOrExceptionLeavesTheSameUploadPending() {
+        val store = PendingUploadStore { "token" }.apply { open() }
+        val staged = store.stage(granted(store.begin()), file("guard-role.apk"))!!
+
+        assertNull(store.claimAfter(staged.token) { false })
+        assertEquals(staged.file, store.peek(staged.token)?.file)
+        assertTrue(staged.file.exists())
+
+        assertNull(store.claimAfter(staged.token) { error("copy failed") })
+        assertEquals(staged.file, store.peek(staged.token)?.file)
+        assertTrue(staged.file.exists())
+
+        assertEquals(staged.file, store.claimAfter(staged.token) { true }?.file)
+        assertNull(store.peek(staged.token))
+    }
+
     /** Discard owns only the slot's PENDING occupant: a body still arriving is someone's upload
      *  stream the panel cannot retract, and in-flight panel work has its own owner-scoped cancel. */
     @Test fun discardNeverTouchesAnArrivingBodyOrInFlightPanelWork() {

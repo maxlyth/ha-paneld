@@ -35,6 +35,8 @@ import androidx.appcompat.app.AppCompatActivity
  */
 class AdminLauncherActivity : AppCompatActivity() {
 
+    private val maintenanceFence = GuardDbActivityMaintenanceFence()
+
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     /**
@@ -61,6 +63,7 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (maintenanceFence.stop(this)) return
         KioskAdminUi.setVisible(this, true)
         supportActionBar?.hide()
         setContentView(buildUi())
@@ -68,6 +71,7 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (maintenanceFence.stop(this)) return
         KioskAdminUi.setVisible(this, true)
     }
 
@@ -85,6 +89,7 @@ class AdminLauncherActivity : AppCompatActivity() {
     // ha-paneld stays resident.
     override fun onResume() {
         super.onResume()
+        if (maintenanceFence.stop(this)) return
         setContentView(buildUi())
     }
 

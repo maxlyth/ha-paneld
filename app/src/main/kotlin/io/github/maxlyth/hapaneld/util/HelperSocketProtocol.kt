@@ -5,12 +5,21 @@ import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.nio.charset.StandardCharsets
 
 /** Helper command framing shared by the Android local-socket client and host composition tests. */
 internal object HelperSocketProtocol {
     fun sendLine(command: String, input: InputStream, output: OutputStream): String? {
         output.apply { write((command + "\n").toByteArray()); flush() }
-        return BufferedReader(InputStreamReader(input)).readLine()?.trim()
+        val bytes = ByteArray(MAX_LINE_BYTES)
+        var used = 0
+        while (true) {
+            val next = input.read()
+            if (next < 0) return null
+            if (next == '\n'.code) return String(bytes, 0, used, StandardCharsets.US_ASCII)
+            if (next !in 0x20..0x7e || used == bytes.size) return null
+            bytes[used++] = next.toByte()
+        }
     }
 
     fun sendBytes(
@@ -40,4 +49,6 @@ internal object HelperSocketProtocol {
         output = output,
         shutdownOutput = shutdownOutput,
     )
+
+    private const val MAX_LINE_BYTES = 512
 }

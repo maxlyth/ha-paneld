@@ -760,6 +760,38 @@ internal class MqttAnnouncementReadiness {
     }
 }
 
+internal fun normalizeSelfUpdateChannel(raw: String): String =
+    if (raw.trim().trim('"').lowercase(Locale.ROOT).startsWith("pre")) "prerelease" else "stable"
+
+/**
+ * Keep an active self-update channel switch out of durable configuration until the service has acquired
+ * the operation lane and started the exact-candidate preflight. The service owns the later order:
+ * authenticate + database-admit exact staged APK -> commit channel -> consume that same staged APK.
+ * With auto-update disabled there is no candidate or package replacement, so the preference is ordinary
+ * configuration and may be committed immediately.
+ */
+internal fun stageSelfUpdateChannelChange(
+    current: String,
+    requested: String,
+    selfUpdateEnabled: Boolean,
+    requestAdmittedInstall: (requested: String, previous: String) -> Boolean,
+    persist: (String) -> Unit,
+    publishCurrent: () -> Unit,
+) {
+    if (requested == current) {
+        publishCurrent()
+        return
+    }
+    if (!selfUpdateEnabled) {
+        persist(requested)
+        publishCurrent()
+        return
+    }
+    // Starting work is not compatibility proof. The asynchronous owner commits only after the prepared
+    // candidate is authenticated and admitted; a busy refusal re-projects unchanged durable truth.
+    if (!requestAdmittedInstall(requested, current)) publishCurrent()
+}
+
 internal class MqttBridge(
     private val config: Config,
     private val brightness: BrightnessController,
@@ -819,6 +851,11 @@ internal class MqttBridge(
     // Trigger a ha-paneld self-update on the configured channel. force=true installs the channel's newest
     // regardless of the version check (the update_paneld button + a pre-release→stable channel switch).
     private val onSelfUpdate: (force: Boolean) -> Unit = {},
+    // A channel switch with self-update enabled is a staged install transaction. The service resolves,
+    // authenticates and database-admits the exact APK before it durably commits the requested channel;
+    // this bridge must not make the preference visible ahead of that proof. False means the shared
+    // operation lane was busy, in which case the current state is re-published immediately.
+    private val onSelfUpdateChannelChange: (requested: String, previous: String) -> Boolean,
     // Home-dashboard commands change the automatic entity-learning ownership target. Notify only after
     // the normalized path is durably visible so the manager can hide/rebuild the correct subscription.
     private val onDashboardTargetChanged: () -> Unit = {},
@@ -2414,6 +2451,12 @@ internal class MqttBridge(
         dispatchStateWork { stateConverger.reconcile("kiosk_lock", force = true) }
     }
 
+    /** Publish only the already-committed channel. Staged self-update transactions call this after the
+     * exact candidate has passed compatibility admission, never while the preference is still pending. */
+    fun publishSelfUpdateChannelState() {
+        dispatchStateWork { stateConverger.reconcile("update_channel", force = true) }
+    }
+
     private fun handleCompanionAuto(payload: String, approvalRequired: Boolean = true) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on && approvalRequired) authorizeMqttSensitive(
@@ -2453,19 +2496,20 @@ internal class MqttBridge(
         approvalRequired: Boolean = true,
     ) {
         val was = previousValue ?: config.updateChannel
-        val requested = payload.trim().trim('"')
+        val requested = normalizeSelfUpdateChannel(payload)
         if (approvalRequired && config.selfUpdate && requested != was) authorizeMqttSensitive(
             SensitiveOperation.APK_INSTALL,
             "update_channel\u0000$requested",
             "Change the ha-paneld update channel and check for an update",
         )
-        config.setUpdateChannel(requested)
-        val now = config.updateChannel
-        stateConverger.reconcile("update_channel", force = true)
-        // Apply the new channel now (when self-update is on). Switching pre-release → stable FORCES the
-        // move onto stable even if that's a downgrade off the current rc (the deliberate exception to the
-        // no-auto-downgrade rule); any other switch just takes the new channel's newest if it's newer.
-        if (config.selfUpdate && now != was) onSelfUpdate(was == "prerelease" && now == "stable")
+        stageSelfUpdateChannelChange(
+            current = was,
+            requested = requested,
+            selfUpdateEnabled = config.selfUpdate,
+            requestAdmittedInstall = onSelfUpdateChannelChange,
+            persist = config::setUpdateChannel,
+            publishCurrent = { stateConverger.reconcile("update_channel", force = true) },
+        )
     }
 
     private fun handleCompanionChannel(

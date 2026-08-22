@@ -17,6 +17,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.HardenedNetworkAdbAdmission
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityTransitionGate
 import io.github.maxlyth.hapaneld.control.VerifiedRelayTransition
 import io.github.maxlyth.hapaneld.shizuku.ShizukuConsent
 import io.github.maxlyth.hapaneld.shizuku.ShizukuManagerIdentity
@@ -44,6 +46,7 @@ import kotlinx.coroutines.withContext
  */
 class ConfigActivity : AppCompatActivity() {
 
+    private val maintenanceFence = GuardDbActivityMaintenanceFence()
     private lateinit var web: WebView
     private lateinit var readinessPanel: LinearLayout
     private lateinit var readinessMessage: TextView
@@ -57,6 +60,7 @@ class ConfigActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (maintenanceFence.stop(this)) return
         KioskAdminUi.setVisible(this, true)
     }
 
@@ -67,6 +71,7 @@ class ConfigActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (maintenanceFence.stop(this)) return
         KioskAdminUi.setVisible(this, true)
         supportActionBar?.hide()
         web = WebView(this).apply {
@@ -174,7 +179,9 @@ class ConfigActivity : AppCompatActivity() {
             )
             .setPositiveButton(if (hardened) "Use Relaxed mode" else "Enable Hardened mode") { _, _ ->
                 if (hardened) {
-                    config.setSecurityMode(Config.SecurityMode.RELAXED)
+                    RemoteDebugSecurityTransitionGate.mutate {
+                        config.setSecurityMode(Config.SecurityMode.RELAXED)
+                    }
                     LocalApprovalBroker.instance.clear()
                 } else {
                     enableHardenedMode(config)
@@ -187,16 +194,22 @@ class ConfigActivity : AppCompatActivity() {
 
     private fun enableHardenedMode(config: Config) {
         activityScope.launch {
-            var networkAdbActive: Boolean? = null
+            var networkAdbAdmission = HardenedNetworkAdbAdmission.UNVERIFIED
             // Root process/listener termination and property reads are bounded but blocking. Keep the
             // complete relay-stop -> ADB-proof -> durable-mode transition off the activity thread and
             // under the relay lifecycle lock so an inspect/start request cannot cross the commit.
             val transition = withContext(Dispatchers.IO) {
-                CdpRelay.stopAndVerifyThen(this@ConfigActivity) {
-                    networkAdbActive = AdbController(config).activeState()
-                    if (networkAdbActive != false) return@stopAndVerifyThen false
-                    WebView.setWebContentsDebuggingEnabled(false)
-                    config.setSecurityMode(Config.SecurityMode.HARDENED)
+                RemoteDebugSecurityTransitionGate.mutate {
+                    val result = CdpRelay.stopAndVerifyThen(this@ConfigActivity) {
+                        networkAdbAdmission = AdbController(this@ConfigActivity, config)
+                            .commitHardenedWhenRemoteAdbInactive {
+                                config.setSecurityMode(Config.SecurityMode.HARDENED)
+                            }
+                        networkAdbAdmission == HardenedNetworkAdbAdmission.APPLIED
+                    }
+                    if (result == VerifiedRelayTransition.APPLIED &&
+                        !RemoteDebugSecurityTransitionGate.sealHardened()
+                    ) VerifiedRelayTransition.ACTION_FAILED else result
                 }
             }
             if (transition == VerifiedRelayTransition.VERIFICATION_FAILED) {
@@ -208,32 +221,48 @@ class ConfigActivity : AppCompatActivity() {
                     )
                     .setPositiveButton("OK", null)
                     .show()
-            } else if (networkAdbActive == null) {
-                AlertDialog.Builder(this@ConfigActivity)
-                    .setTitle("Unable to verify remote ADB")
-                    .setMessage(
-                        "Hardened mode was not enabled because the panel could not verify that classic " +
-                            "network ADB and Android Wireless debugging are off. Turn off both remote-control " +
-                            "paths in Android's developer settings, then try again.",
-                    )
-                    .setPositiveButton("OK", null)
-                    .show()
-            } else if (networkAdbActive == true) {
-                AlertDialog.Builder(this@ConfigActivity)
-                    .setTitle("Turn off remote ADB first")
-                    .setMessage(
-                        "Hardened mode cannot protect physical approvals while classic network ADB or Android " +
-                            "Wireless debugging is active. Turn off both in Android's developer settings, then " +
-                            "enable Hardened mode again.",
-                    )
-                    .setPositiveButton("OK", null)
-                    .show()
-            } else if (transition != VerifiedRelayTransition.APPLIED) {
-                AlertDialog.Builder(this@ConfigActivity)
-                    .setTitle("Unable to enable Hardened mode")
-                    .setMessage("The security-mode change could not be saved. Relaxed mode remains active.")
-                    .setPositiveButton("OK", null)
-                    .show()
+            } else when (networkAdbAdmission) {
+                HardenedNetworkAdbAdmission.DISABLE_FAILED -> {
+                    AlertDialog.Builder(this@ConfigActivity)
+                        .setTitle("Unable to stop remote ADB")
+                        .setMessage(
+                            "Hardened mode was not enabled because ha-paneld could not durably clear and " +
+                                "verify all owned classic/TLS network ADB state. The disable transition " +
+                                "remains pending so startup will retry it; check Developer options, then try again.",
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+                HardenedNetworkAdbAdmission.UNVERIFIED -> {
+                    AlertDialog.Builder(this@ConfigActivity)
+                        .setTitle("Unable to verify remote ADB")
+                        .setMessage(
+                            "Hardened mode was not enabled because the panel could not verify that classic " +
+                                "network ADB and Android Wireless debugging are off. Turn off both remote-control " +
+                                "paths in Android's developer settings, then try again.",
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+                HardenedNetworkAdbAdmission.ACTIVE -> {
+                    AlertDialog.Builder(this@ConfigActivity)
+                        .setTitle("Turn off remote ADB first")
+                        .setMessage(
+                            "Hardened mode cannot protect physical approvals while classic network ADB or Android " +
+                                "Wireless debugging is active. Turn off both in Android's developer settings, then " +
+                                "enable Hardened mode again.",
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+                HardenedNetworkAdbAdmission.COMMIT_FAILED -> {
+                    AlertDialog.Builder(this@ConfigActivity)
+                        .setTitle("Unable to enable Hardened mode")
+                        .setMessage("The security-mode change could not be saved. Relaxed mode remains active.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+                HardenedNetworkAdbAdmission.APPLIED -> Unit
             }
         }
     }
@@ -300,12 +329,13 @@ class ConfigActivity : AppCompatActivity() {
         KioskAdminUi.setVisible(this, false)
         readinessJob?.cancel()
         activityScope.cancel()
-        web.destroy()
+        if (::web.isInitialized) web.destroy()
         super.onDestroy()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (maintenanceFence.stop(this)) return
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 

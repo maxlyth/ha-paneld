@@ -42,6 +42,18 @@ class ApiRouteSpecContractTest {
         }
         active += "GET /health"
 
+        val guardDb = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/GuardDbBootstrapRoutes.kt").readText()
+        literalRoutes(guardDb).mapTo(active) { (method, path) ->
+            "$method /api/v1/guard-db$path"
+        }
+
+        val guardDbMaintenance =
+            File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/GuardDbMaintenanceServer.kt").readText()
+        literalRoutes(guardDbMaintenance).forEach { (method, path) ->
+            if (path == "/health") active += "$method $path"
+            else active += "$method /api/v1/guard-db$path"
+        }
+
         val spec = JSONObject(File(root, "src/main/assets/openapi.json").readText()).getJSONObject("paths")
         val documented = linkedSetOf<String>()
         for (path in spec.keys()) {

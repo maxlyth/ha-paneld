@@ -174,8 +174,23 @@ internal class PendingUploadStore(
      */
     @Synchronized
     fun claim(token: String): Entry? {
+        return claimAfter(token) { true }
+    }
+
+    /**
+     * Keep the entry pending until [durableClaim] has durably established the caller's next owner.
+     *
+     * Guard DB role staging needs this stricter hand-off because copying/inspection/fsync can fail.
+     * Removing [active] before that work completes would strand the sole uploaded APK outside both
+     * the pending store and durable role custody. The callback runs while this store is locked, so a
+     * concurrent replace/discard cannot invalidate the source halfway through the hand-off. False or
+     * an exception leaves the same token and file pending; true linearizes the ordinary final claim.
+     */
+    @Synchronized
+    fun claimAfter(token: String, durableClaim: (Entry) -> Boolean): Entry? {
         expireActive()
         val entry = active?.takeIf { open && it.token == token && it.file.exists() } ?: return null
+        if (!runCatching { durableClaim(entry) }.getOrDefault(false)) return null
         active = null
         return entry
     }

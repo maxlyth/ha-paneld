@@ -15,6 +15,11 @@ if [ "${MOCK_APKSIGNER_RUNS:-1}" != 1 ]; then
 fi
 printf 'apksigner %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 case "$*" in
+  *installed-apk*)
+    [ "${MOCK_INSTALLED_APK_VERIFY_FAIL:-0}" = 0 ] || exit 1
+    printf 'Signer #1 certificate SHA-256 digest: %s\n' "${MOCK_INSTALLED_CERT:-${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}}"
+    [ -z "${MOCK_ADDITIONAL_INSTALLED_CERT:-}" ] || printf 'Signer #2 certificate SHA-256 digest: %s\n' "$MOCK_ADDITIONAL_INSTALLED_CERT"
+    ;;
   *ha-paneld-v*-manual-setup-required.apk*)
     if [ "${MOCK_RELEASE_VERIFY_FAIL:-0}" != 0 ]; then
       printf 'mock release verification failed\n' >&2

@@ -32,6 +32,7 @@
 #include "sysctl.h"
 #include "input.h"
 #include "gpio.h"
+#include "guard_maintenance.h"
 #include "led.h"
 #include "perf.h"
 #include "sysexec_stub.h"
@@ -341,10 +342,10 @@ static void test_stat_jiffies(void) {
 
 static void test_dispatch_exact_match(void) {
     char out[64];
-    CHECK(strcmp(helper_identity(), "HELPER version=1.2.0 proto=1.2") == 0,
+    CHECK(strcmp(helper_identity(), "HELPER version=1.3.0 proto=1.3") == 0,
           "helper identity is stable (got '%s')\n", helper_identity());
     dispatch_reply("VERSION", out, sizeof out);
-    CHECK(strcmp(out, "HELPER version=1.2.0 proto=1.2\n") == 0,
+    CHECK(strcmp(out, "HELPER version=1.3.0 proto=1.3\n") == 0,
           "VERSION -> machine-readable identity (got '%s')\n", out);
     dispatch_reply("VERSION extra", out, sizeof out);
     CHECK(strcmp(out, "ERR\n") == 0, "VERSION rejects arguments (got '%s')\n", out);
@@ -1778,6 +1779,8 @@ static void test_room_climate_input_discovery(void) {
 }
 
 int main(void) {
+    guard_test_reset();
+    CHECK(guard_test_reconcile() == 0, "Guard package gate initializes empty for legacy unit cases\n");
     test_validators();
     test_clamp();
     test_stat_jiffies();

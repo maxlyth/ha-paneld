@@ -23,6 +23,7 @@ internal enum class SensitiveOperation(val label: String) {
     DISPLAY_CONFIGURATION("Change display sizing"),
     POWER_CONFIGURATION("Change panel power safety guards"),
     POWER_SAFETY_ACKNOWLEDGEMENT("Hide one exact power safety caution"),
+    GUARD_DB_MAINTENANCE("Advance database recovery"),
 }
 
 internal data class PendingApproval(

@@ -3,8 +3,10 @@ package io.github.maxlyth.hapaneld.util
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
 import java.io.File
+import java.security.SecureRandom
 
 /**
  * First-start migration backstop for the supported in-app self-update path.
@@ -24,42 +26,68 @@ import java.io.File
  * so it reported `app_can_su: false` and never installed the helper it could plainly have installed.
  */
 internal object BundledHelperInstaller {
-    enum class Result { ALREADY_CURRENT, INSTALLED, SKIPPED, FAILED }
+    enum class Result {
+        ALREADY_CURRENT,
+        INSTALLED,
+        SKIPPED,
+        REPROVISION_REQUIRED,
+        BLOCKED_ACTIVE,
+        FAILED,
+    }
 
     @Synchronized
     fun ensureCurrent(context: Context): Result {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) return Result.BLOCKED_ACTIVE
+        val companionSupported = HelperClient.supportsCompanionData()
+        val bundledBuildMatches = HelperClient.matchesBundledHelper()
+        val guardSupported = companionSupported && bundledBuildMatches && GuardDbMaintenance.client.supported()
         bundledHelperAdmission(
-            alreadyCurrent = HelperClient.supportsCompanionData() && HelperClient.matchesBundledHelper(),
+            bundledBuildMatches = bundledBuildMatches,
+            companionSupported = companionSupported,
+            guardSupported = guardSupported,
             rootObserved = { Su.available() },
         )?.let { return it }
+        val guardStatus = GuardDbMaintenance.client.statusProbe()
+        if (!bundledHelperReplacementAllowed(guardStatus)) return Result.BLOCKED_ACTIVE
+        val stagedBuildId = BuildConfig.HELPER_BUILD_ID
+            .takeIf(GuardDbMaintenanceProtocol::validSha256) ?: return Result.FAILED
+        val incumbentBuildId = HelperClient.installedBuildId()
+            ?.takeIf { it != stagedBuildId } ?: return Result.FAILED
         val asset = helperAssetName(Build.SUPPORTED_ABIS.asIterable()) ?: return Result.SKIPPED
         val staged = runCatching { File.createTempFile("hapaneld-helper-", ".bin", context.cacheDir) }
             .getOrElse { return Result.FAILED }
-        var privilegedAttempted = false
         return try {
             context.assets.open(asset).use { input -> staged.outputStream().use(input::copyTo) }
             val expectedSha256 = AppInstaller.sha256(staged)
-            privilegedAttempted = true
             val output = Su.runWithStdinLongChecked(
-                bundledHelperInstallCommand(expectedSha256),
+                bundledHelperStageCommand(expectedSha256),
                 staged,
                 INSTALL_TIMEOUT_MS,
             )
-            if (output?.lineSequence()?.lastOrNull()?.trim() != "INSTALL_OK") {
-                Log.w(TAG, "bundled helper install failed: ${output.orEmpty().take(120)}")
-                recoverPreviousHelper()
+            if (output?.lineSequence()?.lastOrNull()?.trim() != "STAGED_OK") {
+                Log.w(TAG, "bundled helper staging failed: ${output.orEmpty().take(120)}")
                 return Result.FAILED
             }
-            repeat(CAPABILITY_POLLS) {
-                if (HelperClient.supportsCompanionData() && HelperClient.matchesBundledHelper()) return Result.INSTALLED
-                Thread.sleep(CAPABILITY_POLL_MS)
+            when (executeBundledHelperReplacement(
+                retire = {
+                    GuardDbMaintenance.client.retireApp(
+                        freshBundledHelperReplacementNonce(),
+                        expectedSha256,
+                        stagedBuildId,
+                    )
+                },
+                probe = { HelperClient.replacementProbe(stagedBuildId, incumbentBuildId) },
+                pause = { Thread.sleep(SETTLEMENT_POLL_MS) },
+                polls = SETTLEMENT_POLLS,
+            )) {
+                BundledHelperReplacementSettlement.INSTALLED -> Result.INSTALLED
+                BundledHelperReplacementSettlement.BLOCKED_ACTIVE -> Result.BLOCKED_ACTIVE
+                BundledHelperReplacementSettlement.OLD_SAFE,
+                BundledHelperReplacementSettlement.NOT_SUBMITTED,
+                BundledHelperReplacementSettlement.HOLD -> Result.FAILED
             }
-            Log.w(TAG, "bundled helper launched but exact Companion capability did not appear")
-            recoverPreviousHelper()
-            Result.FAILED
         } catch (failure: Exception) {
             Log.w(TAG, "bundled helper migration failed", failure)
-            if (privilegedAttempted) recoverPreviousHelper()
             Result.FAILED
         } finally {
             staged.delete()
@@ -68,24 +96,8 @@ internal object BundledHelperInstaller {
 
     private const val TAG = "ha-paneld/helper-migrate"
     private const val INSTALL_TIMEOUT_MS = 30_000L
-    private const val CAPABILITY_POLLS = 20
-    private const val CAPABILITY_POLL_MS = 250L
-    private const val RECOVERY_POLLS = 8
-    private const val RECOVERY_POLL_MS = 250L
-
-    private fun recoverPreviousHelper() {
-        // A failed root submission may have left the pre-existing helper untouched. Do not kill the
-        // only working ephemeral daemon merely because it predates BUILDID or this APK's identity.
-        if (HelperClient.available() && !HelperClient.matchesBundledHelper()) return
-        for (command in bundledHelperRecoveryCommands()) {
-            if (!Su.runLong(command, INSTALL_TIMEOUT_MS)) continue
-            repeat(RECOVERY_POLLS) {
-                if (HelperClient.available()) return
-                Thread.sleep(RECOVERY_POLL_MS)
-            }
-        }
-        Log.e(TAG, "could not restore a responsive root helper after migration failure")
-    }
+    private const val SETTLEMENT_POLLS = 120
+    private const val SETTLEMENT_POLL_MS = 250L
 }
 
 /**
@@ -94,20 +106,32 @@ internal object BundledHelperInstaller {
  * Deliberately takes no device-profile argument. The profile's `app_can_su` is an attempt-order hint,
  * and a hint standing in for an observation is what Issue #21 corrected elsewhere; here it used to veto
  * the migration outright, which denied the helper to any panel whose owner had flashed a rooted
- * firmware while its profile still described the stock image. Root readiness is the only admission
- * fact, and it is read live — `rootObserved` is a lambda so it is not evaluated when the helper is
- * already current and no probe is warranted.
+ * firmware while its profile still described the stock image. Root readiness is read live only when
+ * a different helper build is eligible for replacement. An equal-build daemon must also expose the
+ * exact Companion and autonomous/supervised/terminal Guard surfaces; an equal but noncanonical daemon
+ * is left untouched for explicit reprovisioning. `rootObserved` is a lambda so neither terminal
+ * equal-build result probes root.
  *
  * Returns the terminal result, or null when the caller should continue with the install.
  */
 internal fun bundledHelperAdmission(
-    alreadyCurrent: Boolean,
+    bundledBuildMatches: Boolean,
+    companionSupported: Boolean,
+    guardSupported: Boolean,
     rootObserved: () -> Boolean,
 ): BundledHelperInstaller.Result? = when {
-    alreadyCurrent -> BundledHelperInstaller.Result.ALREADY_CURRENT
+    bundledHelperIsCanonical(bundledBuildMatches, companionSupported, guardSupported) ->
+        BundledHelperInstaller.Result.ALREADY_CURRENT
+    bundledBuildMatches -> BundledHelperInstaller.Result.REPROVISION_REQUIRED
     !rootObserved() -> BundledHelperInstaller.Result.SKIPPED
     else -> null
 }
+
+internal fun bundledHelperIsCanonical(
+    bundledBuildMatches: Boolean,
+    companionSupported: Boolean,
+    guardSupported: Boolean,
+): Boolean = bundledBuildMatches && companionSupported && guardSupported
 
 internal fun helperAssetName(abis: Iterable<String>): String? = when {
     abis.any { it == "arm64-v8a" } -> "hapaneld-helper-arm64"
@@ -115,63 +139,80 @@ internal fun helperAssetName(abis: Iterable<String>): String? = when {
     else -> null
 }
 
-/** Fixed command: callers contribute only a validated lowercase SHA-256 digest. */
-internal fun bundledHelperInstallCommand(expectedSha256: String): String {
+internal fun bundledHelperReplacementAllowed(status: GuardDbMaintenanceClient.StatusProbe): Boolean = when (status) {
+    GuardDbMaintenanceClient.StatusProbe.Unsupported -> true
+    is GuardDbMaintenanceClient.StatusProbe.Valid -> !status.status.ownsMaintenance
+    GuardDbMaintenanceClient.StatusProbe.Unreachable,
+    GuardDbMaintenanceClient.StatusProbe.Malformed -> false
+}
+
+/** Root stages one fixed candidate. Only the helper-owned R1 lease may replace or launch it. */
+internal fun bundledHelperStageCommand(expectedSha256: String): String {
     require(expectedSha256.matches(Regex("[0-9a-f]{64}")))
     val dollar = '$'
     return """
         [ -d /data/local ] && [ ! -L /data/local ] &&
         rm -f /data/local/.hapaneld-helper.new &&
         cat > /data/local/.hapaneld-helper.new &&
-        actual=${dollar}( (sha256sum /data/local/.hapaneld-helper.new 2>/dev/null || toybox sha256sum /data/local/.hapaneld-helper.new 2>/dev/null) | awk '{print ${dollar}1}' ) &&
+        [ -f /data/local/.hapaneld-helper.new ] && [ ! -L /data/local/.hapaneld-helper.new ] &&
+        actual=${dollar}(sha256sum /data/local/.hapaneld-helper.new 2>/dev/null || toybox sha256sum /data/local/.hapaneld-helper.new 2>/dev/null) &&
+        actual=${dollar}{actual%% *} &&
         [ "${dollar}actual" = "$expectedSha256" ] &&
         chown 0:0 /data/local/.hapaneld-helper.new &&
         chmod 700 /data/local/.hapaneld-helper.new &&
-        rm -f /data/local/.hapaneld-helper.previous &&
-        ( [ ! -f /data/local/hapaneld-helper ] ||
-          ( [ ! -L /data/local/hapaneld-helper ] &&
-            cp -p /data/local/hapaneld-helper /data/local/.hapaneld-helper.previous &&
-            chown 0:0 /data/local/.hapaneld-helper.previous &&
-            chmod 700 /data/local/.hapaneld-helper.previous ) ) &&
-        mv -f /data/local/.hapaneld-helper.new /data/local/hapaneld-helper &&
-        (stop hapaneld_helper 2>/dev/null || true) &&
-        (pkill -x hapaneld-helper 2>/dev/null || true) &&
-        (/data/local/hapaneld-helper >/dev/null 2>&1 &) &&
-        echo INSTALL_OK
+        meta=${dollar}(stat -c '%u:%g:%a:%h:%s' /data/local/.hapaneld-helper.new 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' /data/local/.hapaneld-helper.new 2>/dev/null) &&
+        case "${dollar}meta" in 0:0:700:1:*) ;; *) false ;; esac &&
+        bytes=${dollar}{meta##*:} &&
+        [ "${dollar}bytes" -ge 1 ] && [ "${dollar}bytes" -le $MAX_STAGED_HELPER_BYTES ] &&
+        echo STAGED_OK
     """.trimIndent()
 }
 
-/**
- * Ordered recovery candidates. Each attempt is followed by a root-authenticated PING in the app;
- * successfully forking a background executable alone is not evidence that it could execute, bind or
- * survive SELinux. Init is tried before durable path guesses because its service may point elsewhere.
- */
-internal fun bundledHelperRecoveryCommands(): List<String> = listOf(
-    """
-        [ -f /data/local/.hapaneld-helper.previous ] &&
-        [ ! -L /data/local/.hapaneld-helper.previous ] &&
-        (stop hapaneld_helper 2>/dev/null || true) &&
-        (pkill -x hapaneld-helper 2>/dev/null || true) &&
-        mv -f /data/local/.hapaneld-helper.previous /data/local/hapaneld-helper &&
-        chown 0:0 /data/local/hapaneld-helper &&
-        chmod 700 /data/local/hapaneld-helper &&
-        (/data/local/hapaneld-helper >/dev/null 2>&1 &)
-    """.trimIndent(),
-    """
-        (stop hapaneld_helper 2>/dev/null || true) &&
-        (pkill -x hapaneld-helper 2>/dev/null || true) &&
-        start hapaneld_helper
-    """.trimIndent(),
-    """
-        [ -x /data/adb/hapaneld/hapaneld-helper ] &&
-        (stop hapaneld_helper 2>/dev/null || true) &&
-        (pkill -x hapaneld-helper 2>/dev/null || true) &&
-        (/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &)
-    """.trimIndent(),
-    """
-        [ -x /system/bin/hapaneld-helper ] &&
-        (stop hapaneld_helper 2>/dev/null || true) &&
-        (pkill -x hapaneld-helper 2>/dev/null || true) &&
-        (/system/bin/hapaneld-helper >/dev/null 2>&1 &)
-    """.trimIndent(),
-)
+private const val MAX_STAGED_HELPER_BYTES = 16 * 1024 * 1024
+private val BUNDLED_HELPER_REPLACEMENT_RANDOM = SecureRandom()
+
+internal fun freshBundledHelperReplacementNonce(): String = ByteArray(32)
+    .also(BUNDLED_HELPER_REPLACEMENT_RANDOM::nextBytes)
+    .joinToString("") { "%02x".format(it) }
+
+internal enum class BundledHelperReplacementSettlement {
+    INSTALLED,
+    OLD_SAFE,
+    BLOCKED_ACTIVE,
+    NOT_SUBMITTED,
+    HOLD,
+}
+
+/** Submit RETIRE exactly once; after possible submission the helper alone owns every filesystem/process mutation. */
+internal fun executeBundledHelperReplacement(
+    retire: () -> GuardDbMaintenanceProtocol.AppRetireResult,
+    probe: () -> HelperReplacementProbe,
+    pause: () -> Unit,
+    polls: Int,
+): BundledHelperReplacementSettlement {
+    require(polls > 0)
+    when (val result = retire()) {
+        GuardDbMaintenanceProtocol.AppRetireResult.Requested,
+        GuardDbMaintenanceProtocol.AppRetireResult.Indeterminate -> Unit
+        GuardDbMaintenanceProtocol.AppRetireResult.NotSubmitted ->
+            return BundledHelperReplacementSettlement.NOT_SUBMITTED
+        is GuardDbMaintenanceProtocol.AppRetireResult.Rejected -> return if (
+            result.code in setOf("ARMED", "HOLD") && result.token == "replacement"
+        ) BundledHelperReplacementSettlement.BLOCKED_ACTIVE else BundledHelperReplacementSettlement.NOT_SUBMITTED
+    }
+    var consecutiveOld = 0
+    repeat(polls) { attempt ->
+        when (val observed = probe()) {
+            is HelperReplacementProbe.Settled -> when (observed.build) {
+                HelperReplacementBuild.NEW -> return BundledHelperReplacementSettlement.INSTALLED
+                HelperReplacementBuild.OLD -> {
+                    consecutiveOld++
+                    if (consecutiveOld == 2) return BundledHelperReplacementSettlement.OLD_SAFE
+                }
+            }
+            HelperReplacementProbe.Hold -> consecutiveOld = 0
+        }
+        if (attempt + 1 < polls) pause()
+    }
+    return BundledHelperReplacementSettlement.HOLD
+}

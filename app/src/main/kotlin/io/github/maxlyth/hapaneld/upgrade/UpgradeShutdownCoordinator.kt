@@ -98,46 +98,54 @@ internal class UpgradeRequestGate {
     }
 
     /** Transfer the normal shutdown freeze to the request only after the normal stable-DB proof. */
-    @Synchronized
     fun holdReady(
         claim: UpgradeShutdownClaim,
         freeze: StateQuiescence,
         proof: CleanDatabaseProof,
         releaseSuccessor: () -> Unit,
     ): Boolean {
-        val request = active ?: return false
-        if (request.ready || request.claimToken !== claim.token) return false
-        request.freeze = freeze
-        request.releaseSuccessor = releaseSuccessor
-        request.ready = true
-        request.completion.ready(request.nonce, proof)
+        val completion = synchronized(this) {
+            val request = active ?: return false
+            if (request.ready || request.claimToken !== claim.token) return false
+            request.freeze = freeze
+            request.releaseSuccessor = releaseSuccessor
+            request.ready = true
+            request.completion to request.nonce
+        }
+        // Clean proof persistence or a helper handoff can block. Never run it while holding the gate
+        // monitor: cancel/recovery observers must still be able to inspect the unique active claim.
+        completion.first.ready(completion.second, proof)
         return true
     }
 
-    @Synchronized
     fun cancel(nonce: String?, reason: String): UpgradeCancellation {
-        val request = active ?: return UpgradeCancellation(matched = false)
-        if (nonce != null && request.nonce != nonce) return UpgradeCancellation(matched = false)
-        active = null
-        request.completion.failed(reason)
-        return UpgradeCancellation(
-            matched = true,
-            freeze = request.freeze,
-            releaseSuccessor = request.releaseSuccessor,
-        )
+        val cancelled = synchronized(this) {
+            val request = active ?: return UpgradeCancellation(matched = false)
+            if (nonce != null && request.nonce != nonce) return UpgradeCancellation(matched = false)
+            active = null
+            request to UpgradeCancellation(
+                matched = true,
+                freeze = request.freeze,
+                releaseSuccessor = request.releaseSuccessor,
+            )
+        }
+        cancelled.first.completion.failed(reason)
+        return cancelled.second
     }
 
-    @Synchronized
     fun cancelClaim(claim: UpgradeShutdownClaim, reason: String): UpgradeCancellation {
-        val request = active ?: return UpgradeCancellation(matched = false)
-        if (request.claimToken !== claim.token) return UpgradeCancellation(matched = false)
-        active = null
-        request.completion.failed(reason)
-        return UpgradeCancellation(
-            matched = true,
-            freeze = request.freeze,
-            releaseSuccessor = request.releaseSuccessor,
-        )
+        val cancelled = synchronized(this) {
+            val request = active ?: return UpgradeCancellation(matched = false)
+            if (request.claimToken !== claim.token) return UpgradeCancellation(matched = false)
+            active = null
+            request to UpgradeCancellation(
+                matched = true,
+                freeze = request.freeze,
+                releaseSuccessor = request.releaseSuccessor,
+            )
+        }
+        cancelled.first.completion.failed(reason)
+        return cancelled.second
     }
 
     @Synchronized
@@ -189,6 +197,11 @@ internal object UpgradeShutdownCoordinator {
         )
         return true
     }
+
+    /** Guard DB owns its settlement deadline in the root journal. A generic app watchdog must never
+     *  release writers while CAPTURE/install has an indeterminate reply. */
+    fun armWithoutWatchdog(nonce: String, completion: UpgradeRequestCompletion): Boolean =
+        gate.arm(nonce, completion)
 
     fun holdAfterCleanShutdown(
         claim: UpgradeShutdownClaim?,

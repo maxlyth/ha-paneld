@@ -42,20 +42,11 @@ class EntityCatalogSchemaTest {
         assertEquals("a non-additive step must set breaksCompatibility", emptyList<String>(), undeclared)
     }
 
-    /**
-     * And declaring it is not free: an older build meeting that structure will not find what it expects,
-     * so the compatible baseline has to move past the break. Otherwise the downgrade tolerance would
-     * still claim these versions are interchangeable when they are not.
-     */
-    @Test fun aDeclaredBreakMovesTheCompatibleBaselinePastIt() {
-        val plan = EntityCatalogSchema.plan(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, EntityCatalogSchema.CURRENT_VERSION)
-        plan.filter { it.breaksCompatibility }.forEach { step ->
-            assertTrue(
-                "step ${step.from}->${step.to} breaks compatibility, so MINIMUM_COMPATIBLE_VERSION must be " +
-                    "at least ${step.to} (is ${EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION})",
-                EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION >= step.to,
-            )
-        }
+    @Test fun theAuthoritativeBoundaryIsFiniteAtTheCandidateCurrentSchema() {
+        val boundary = EntityCatalogSchema.DATABASE_COMPATIBILITY
+        assertEquals(EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION, boundary.minimumSchema)
+        assertEquals(EntityCatalogSchema.CURRENT_VERSION, boundary.maximumSchema)
+        assertFalse(boundary.contains(EntityCatalogSchema.CURRENT_VERSION + 1))
     }
 
     /** A step that claims a break must actually contain one, or the declaration is noise. */

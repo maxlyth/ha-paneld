@@ -107,53 +107,81 @@ object CdpRelay {
     }
 
     /** Status codes the HTTP layer maps to UI text. */
-    @Synchronized fun start(ctx: Context): String {
-        // A DevTools relay would allow its LAN client to drive an authenticated browser after the one
-        // physical approval has been consumed. It is therefore incompatible with Hardened mode, and
-        // this check shares the transition lock so a Relaxed-mode request cannot race mode entry.
-        if (Config(ctx).hardenedSecurityEnabled) return "failed"
-        if (!Su.available()) return "needs-root"
-        val name = socketName(ctx) ?: return "no-socket" // WebView debugging not enabled
-        val bin = extractBinary(ctx) ?: return "no-binary"
-        if (!stopLocked()) return "failed" // clear and prove away any stale instance first
-        val ok = process.start {
-            // Give the child a short chance to bind and fail before probing; a successful background
-            // shell launch alone cannot prove that the socket name or TCP port was usable.
-            Su.run(startCommand(bin.absolutePath, name))
+    fun start(ctx: Context): String = RemoteDebugSecurityTransitionGate.mutate {
+        synchronized(this) {
+            // A DevTools relay would allow its LAN client to drive an authenticated browser after the one
+            // physical approval has been consumed. It is therefore incompatible with Hardened mode, and
+            // this check shares the transition lock so a Relaxed-mode request cannot race mode entry.
+            if (Config(ctx).hardenedSecurityEnabled) return@mutate "failed"
+            if (!Su.available()) return@mutate "needs-root"
+            val name = socketName(ctx) ?: return@mutate "no-socket" // WebView debugging not enabled
+            val bin = extractBinary(ctx) ?: return@mutate "no-binary"
+            if (!stopLocked()) return@mutate "failed" // clear and prove away any stale instance first
+            val ok = process.start {
+                // Give the child a short chance to bind and fail before probing; a successful background
+                // shell launch alone cannot prove that the socket name or TCP port was usable.
+                Su.run(startCommand(bin.absolutePath, name))
+            }
+            Log.i(TAG, "start relay ($name) -> $ok")
+            if (ok) "started" else "failed"
         }
-        Log.i(TAG, "start relay ($name) -> $ok")
-        return if (ok) "started" else "failed"
     }
 
-    @Synchronized fun stop(): Boolean = stopLocked()
+    fun stop(): Boolean = RemoteDebugSecurityTransitionGate.mutate { synchronized(this) { stopLocked() } }
 
     /** Process exit needs proof that no relay is externally reachable, not proof that this app has never
      * staged the immutable source binary. Keep Hardened-mode admission conservative while allowing a
      * formerly rooted panel to restart after root disappears and repeated loopback probes refuse. */
-    @Synchronized internal fun stopAndVerifyForProcessExit(): Boolean =
-        if (Su.availableIsolated()) {
-            stopLocked()
-        } else {
-            noRootRelayInactiveForProcessExit(
-                buildList {
-                    repeat(NO_ROOT_LISTENER_PROBES) { attempt ->
-                        add(probeLocalListener())
-                        if (attempt + 1 < NO_ROOT_LISTENER_PROBES) {
-                            Thread.sleep(NO_ROOT_LISTENER_PROBE_DELAY_MS)
+    internal fun stopAndVerifyForProcessExit(): Boolean = RemoteDebugSecurityTransitionGate.mutate {
+        synchronized(this) {
+            if (Su.availableIsolated()) {
+                stopLocked()
+            } else {
+                noRootRelayInactiveForProcessExit(
+                    buildList {
+                        repeat(NO_ROOT_LISTENER_PROBES) { attempt ->
+                            add(probeLocalListener())
+                            if (attempt + 1 < NO_ROOT_LISTENER_PROBES) {
+                                Thread.sleep(NO_ROOT_LISTENER_PROBE_DELAY_MS)
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
+    }
+
+    /** Guard DB has already committed an exact physical-approval epoch into its sentinel. From that
+     * point shutdown may only prove relay absence; attempting a new stop would mutate that epoch after
+     * approval. Any present/unknown exposure fails the clean handoff instead. */
+    internal fun proveAbsentForGuardDbHandoff(): Boolean = RemoteDebugSecurityTransitionGate.withLock {
+        synchronized(this) {
+            if (Su.availableIsolated()) {
+                probeExposure() == RelayExposureState.ABSENT
+            } else {
+                noRootRelayInactiveForProcessExit(
+                    buildList {
+                        repeat(NO_ROOT_LISTENER_PROBES) { attempt ->
+                            add(probeLocalListener())
+                            if (attempt + 1 < NO_ROOT_LISTENER_PROBES) {
+                                Thread.sleep(NO_ROOT_LISTENER_PROBE_DELAY_MS)
+                            }
+                        }
+                    },
+                )
+            }
+        }
+    }
 
     /** Keep verified relay absence and the security-mode commit in one lifecycle critical section. */
-    @Synchronized internal fun stopAndVerifyThen(
+    internal fun stopAndVerifyThen(
         ctx: Context,
         action: () -> Boolean,
-    ): VerifiedRelayTransition {
-        val verifiedAbsent = if (Su.availableIsolated()) {
-            stopLocked()
-        } else {
+    ): VerifiedRelayTransition = RemoteDebugSecurityTransitionGate.mutate {
+        synchronized(this) {
+            val verifiedAbsent = if (Su.availableIsolated()) {
+                stopLocked()
+            } else {
             // A never-rooted panel cannot have launched this root-owned relay. Do not require root merely
             // to enable Hardened there, but retain two independent facts: no prior extraction attempt in
             // this app data and repeated connection-refused results from the relay's fixed loopback port.
@@ -168,9 +196,10 @@ object CdpRelay {
                     }
                 },
             )
+            }
+            if (!verifiedAbsent) return@mutate VerifiedRelayTransition.VERIFICATION_FAILED
+            if (action()) VerifiedRelayTransition.APPLIED else VerifiedRelayTransition.ACTION_FAILED
         }
-        if (!verifiedAbsent) return VerifiedRelayTransition.VERIFICATION_FAILED
-        return if (action()) VerifiedRelayTransition.APPLIED else VerifiedRelayTransition.ACTION_FAILED
     }
 
     private fun stopLocked(): Boolean = process.stop {

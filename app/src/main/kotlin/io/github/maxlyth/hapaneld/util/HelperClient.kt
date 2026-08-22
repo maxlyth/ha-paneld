@@ -79,6 +79,48 @@ internal sealed interface HelperBootstrapReply {
     data object Malformed : HelperBootstrapReply
 }
 
+internal enum class HelperReplacementBuild { NEW, OLD }
+
+internal sealed interface HelperReplacementProbe {
+    data class Settled(val build: HelperReplacementBuild) : HelperReplacementProbe
+    data object Hold : HelperReplacementProbe
+}
+
+internal fun parseHelperBuildId(reply: String?): String? = reply
+    ?.removePrefix("BUILDID ")
+    ?.takeIf { reply == "BUILDID $it" && Regex("[0-9a-f]{64}").matches(it) }
+
+internal fun classifyHelperReplacementProbe(
+    ping: String?,
+    buildReply: String?,
+    capsReply: String?,
+    statusReply: String?,
+    stagedBuildId: String,
+    incumbentBuildId: String,
+): HelperReplacementProbe {
+    if (ping != "OK" || !GuardDbMaintenanceProtocol.validSha256(stagedBuildId) ||
+        !GuardDbMaintenanceProtocol.validSha256(incumbentBuildId) || stagedBuildId == incumbentBuildId
+    ) return HelperReplacementProbe.Hold
+    val build = parseHelperBuildId(buildReply) ?: return HelperReplacementProbe.Hold
+    val capabilities = GuardDbMaintenanceProtocol.parseCapabilities(capsReply)
+        ?.takeIf { it.supervised && it.autonomous && it.terminalRetire }
+        ?: return HelperReplacementProbe.Hold
+    val status = GuardDbMaintenanceProtocol.parseStatus(statusReply)
+        ?.takeIf { it.phase == GuardDbMaintenanceProtocol.Phase.EMPTY } ?: return HelperReplacementProbe.Hold
+    // Retain both parsed objects in this exact tuple; neither generic reachability nor BUILDID alone is
+    // settlement authority while the helper-owned R1 fence may still exist.
+    if (!capabilities.supervised || !capabilities.autonomous || !capabilities.terminalRetire ||
+        status.generation != 0L
+    ) {
+        return HelperReplacementProbe.Hold
+    }
+    return when (build) {
+        stagedBuildId -> HelperReplacementProbe.Settled(HelperReplacementBuild.NEW)
+        incumbentBuildId -> HelperReplacementProbe.Settled(HelperReplacementBuild.OLD)
+        else -> HelperReplacementProbe.Hold
+    }
+}
+
 /**
  * Read one exact ASCII bootstrap line into fixed storage. Socket timeouts are reset to the remaining
  * absolute budget before every read, so a sender cannot extend the deadline by trickling bytes.
@@ -150,6 +192,18 @@ internal class IdentityAdmittingHelperClient(
         val session = transport.open() ?: return HelperIdentityStatus.Missing
         return session.use { probeIdentity(it, newDeadline()).status }
     }
+
+    fun replacementProbe(stagedBuildId: String, incumbentBuildId: String): HelperReplacementProbe =
+        execute(HelperReplacementProbe.Hold) { session ->
+            classifyHelperReplacementProbe(
+                ping = session.send("PING"),
+                buildReply = session.send("BUILDID"),
+                capsReply = session.send("GUARDCAPS"),
+                statusReply = session.send("GUARDSTATUS"),
+                stagedBuildId = stagedBuildId,
+                incumbentBuildId = incumbentBuildId,
+            )
+        }
 
     override fun available(): Boolean = execute(null) { it.send("PING") } == "OK"
 
@@ -274,6 +328,11 @@ object HelperClient : Daemon by admittedHelperClient {
 
     /** Exact source identity of the helper carried by this APK. */
     internal fun matchesBundledHelper(): Boolean = helperBuildIdentitySupported(send("BUILDID"), BuildConfig.HELPER_BUILD_ID)
+
+    internal fun installedBuildId(): String? = parseHelperBuildId(send("BUILDID"))
+
+    internal fun replacementProbe(stagedBuildId: String, incumbentBuildId: String): HelperReplacementProbe =
+        admittedHelperClient.replacementProbe(stagedBuildId, incumbentBuildId)
 
     /** Non-blocking transaction state used to retain app-side launch suppression after a client timeout. */
     internal fun companionOperationStatus(): CompanionOperationStatus =

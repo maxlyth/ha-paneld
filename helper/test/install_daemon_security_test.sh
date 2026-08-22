@@ -3,33 +3,41 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/helper/install-daemon.sh"
+RC="$ROOT/helper/hapaneld-helper.rc"
 
 bash -n "$SCRIPT"
-grep -Fq '/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &' "$SCRIPT"
-grep -Fq 'chown 0:0 /data/adb/hapaneld/hapaneld-helper.new' "$SCRIPT"
-grep -Fq 'chmod 700 /data/adb/hapaneld' "$SCRIPT"
-grep -Fq 'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper' "$SCRIPT"
-grep -Fq 'sha256sum /data/adb/hapaneld/hapaneld-helper.new' "$SCRIPT"
-grep -Fq 'sha256sum /system/etc/init/hapaneld-helper.rc.new' "$SCRIPT"
-grep -Fq 'sha256sum /data/adb/service.d/hapaneld-helper.sh.new' "$SCRIPT"
-grep -Fq 'mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh' "$SCRIPT"
-grep -Fq 'NO_SYSTEMLESS_RUNNER' "$SCRIPT"
-grep -Fq '.hapaneld-helper-manual-upgrade' "$SCRIPT"
-grep -Fq '.helper-manual-upgrade.marker' "$SCRIPT"
-grep -Fq 'hapaneld-helper.hapaneld-manual-recovery' "$SCRIPT"
-grep -Fq '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ]' "$SCRIPT"
-grep -Fq '[ ! -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]' "$SCRIPT"
-grep -Fq 'incomplete APK-coupled helper upgrade must be recovered by the provisioner first' "$SCRIPT"
-grep -Fq 'JOURNAL_VERSION=2' "$SCRIPT"
-grep -Fq 'JOURNAL_SCOPE=HELPER_ONLY' "$SCRIPT"
-grep -Fq 'TRANSACTION_ID=' "$SCRIPT"
-grep -Fq 'TARGET_BUILD_ID=' "$SCRIPT"
-grep -Fq 'TARGET_HELPER_SHA256=' "$SCRIPT"
-grep -Fq 'TARGET_SERVICE_SHA256=' "$SCRIPT"
-grep -Fq 'LEASE_BOOT_ID=' "$SCRIPT"
-grep -Fq 'LEASE_UNTIL_UPTIME=' "$SCRIPT"
-for recovery_field in OLD_BIN OLD_SERVICE LEGACY_BIN LEGACY_SERVICE ALT_BIN ALT_SERVICE; do
-  grep -Fq "${recovery_field}_SHA256=" "$SCRIPT"
+grep -Fqx 'service hapaneld_helper /data/local/hapaneld-helper --supervise' "$RC"
+! grep -Eq '^service .* /(system/bin|data/adb/hapaneld)/hapaneld-helper' "$RC"
+
+grep -Fq 'CANONICAL_HELPER_PATH="/data/local/hapaneld-helper"' "$SCRIPT"
+grep -Fq 'CANONICAL_CANDIDATE_PATH="/data/local/.hapaneld-helper.manual-$TRANSACTION_ID"' "$SCRIPT"
+! grep -Fq 'CANONICAL_CANDIDATE_PATH="/data/local/.hapaneld-helper.new"' "$SCRIPT"
+grep -Fq 'chown 0:0 /data/local/hapaneld-helper' "$SCRIPT"
+grep -Fq 'chmod 700 /data/local/hapaneld-helper' "$SCRIPT"
+grep -Fq 'mv -f "$candidate" /data/local/hapaneld-helper' "$SCRIPT"
+
+grep -Fq 'JOURNAL_VERSION=3' "$SCRIPT"
+grep -Fq 'REGISTRATION_KIND=' "$SCRIPT"
+grep -Fq 'SWAP_PHASE=PREPARED' "$SCRIPT"
+grep -Fq 'SWAP_PHASE=MUTATING' "$SCRIPT"
+grep -Fq 'SWAP_PHASE=TARGET' "$SCRIPT"
+grep -Fq 'inspect_manual_journal_v1()' "$SCRIPT"
+grep -Fq 'inspect_manual_journal_v2()' "$SCRIPT"
+grep -Fq 'inspect_manual_journal_v3()' "$SCRIPT"
+grep -Fq '1) inspect_manual_journal_v1 "$kind" "$marker"' "$SCRIPT"
+grep -Fq '2) inspect_manual_journal_v2 "$kind" "$marker"' "$SCRIPT"
+grep -Fq 'rollback_root_helper system "$recovery_id"' "$SCRIPT"
+grep -Fq 'rollback_root_helper systemless "$recovery_id"' "$SCRIPT"
+grep -Fq 'rollback_root_helper_v3 "$recovery_kind"' "$SCRIPT"
+grep -Fq 'LEGACY_V1_SYSTEM_RC_SHA256="b42a66ff435a830390c7f04e66ffa252e3bf4027e68c72a29002df4886f8d4f4"' "$SCRIPT"
+grep -Fq 'LEGACY_V1_SYSTEMLESS_SERVICE_SHA256="60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493"' "$SCRIPT"
+grep -Fq '[ "$transaction_id" != legacy ] || target_registration=' "$SCRIPT"
+
+for field in LIVE_CANONICAL LIVE_SYSTEM_BIN LIVE_SYSTEM_RC LIVE_VENDOR_RC \
+  LIVE_SYSTEMLESS_BIN LIVE_SYSTEMLESS_SERVICE LIVE_LEGACY_BIN LIVE_LEGACY_RC; do
+  grep -Fq "snapshot $field " "$SCRIPT"
+  grep -Fq "recorded $field " "$SCRIPT"
+  grep -Fq "recorded_live $field " "$SCRIPT"
 done
 grep -Fq '[ "${actual%% *}" = "$expected" ] || exit 1' "$SCRIPT"
 if grep -Eq '/data/local/tmp/hapaneld-helper\.(expected|actual)' "$SCRIPT"; then
@@ -43,8 +51,6 @@ selection_line="$(grep -nF "out=\"\$(run_root '" "$SCRIPT" | tail -1 | cut -d: -
 probe_stage_line="$(grep -nF 'push "$BIN" "$PROBE_STAGING_PATH"' "$SCRIPT" | head -1 | cut -d: -f1)"
 [ "$probe_stage_line" -lt "$state_line" ]
 [ "$state_line" -lt "$selection_line" ]
-grep -Fq "cp '\"\$PROBE_STAGING_PATH\"' /system/bin/hapaneld-helper.new" "$SCRIPT"
-grep -Fq "cp '\"\$PROBE_STAGING_PATH\"' /data/adb/hapaneld/hapaneld-helper.new" "$SCRIPT"
 grep -Fq 'push "$HERE/hapaneld-helper.rc" "$RC_STAGING_PATH"' "$SCRIPT"
 grep -Fq 'push "$SVC" "$SVC_STAGING_PATH"' "$SCRIPT"
 if grep -Fq 'push "$BIN" /data/local/tmp/hapaneld-helper' "$SCRIPT"; then
@@ -82,6 +88,8 @@ grep -Fq "LC_ALL=C grep -aoE 'BUILDID .*'" "$SCRIPT"
 grep -Fq "LC_ALL=C grep -c '^BUILDID '" "$SCRIPT"
 grep -Fq "LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})\$/\\1/p'" "$SCRIPT"
 grep -Fq "LC_ALL=C grep -Ec '^[0-9a-f]{64}\$'" "$SCRIPT"
+grep -Fq "[ \"\$records\" = 'BUILDID ' ] || return 1" "$SCRIPT"
+grep -Fq "LC_ALL=C grep -aoE '^[0-9a-f]{64}\$'" "$SCRIPT"
 if grep -Eq "grep -aoE 'BUILDID (\[[^]]*\][*+]?|\[0-9a-f\]\{64\})'" "$SCRIPT"; then
   echo "installer collects the helper identity with a bounded match, which truncates a longer record" >&2
   exit 1
@@ -99,182 +107,113 @@ adb_root_line="$(grep -nF 'adb -s "$TARGET" root >/dev/null 2>&1 || true' "$SCRI
 su_probe_line="$(grep -nF 'if ! probe_su; then' "$SCRIPT" | head -1 | cut -d: -f1)"
 [ "$identity_line" -lt "$adb_root_line" ]
 [ "$identity_line" -lt "$su_probe_line" ]
-grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$SCRIPT"
-grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$SCRIPT"
-grep -Fq 'system) helper_path=/system/bin/hapaneld-helper' "$SCRIPT"
-grep -Fq 'systemless) helper_path=/data/adb/hapaneld/hapaneld-helper' "$SCRIPT"
 grep -Fq 'run_root '"'"'exec '"'"'"$helper_path"'"'"' --request '"'"'"$command"' "$SCRIPT"
 grep -Fq '.helper-manual-probe-$TRANSACTION_ID' "$SCRIPT"
 grep -Fq 'wait_for_helper_reply PING OK "$install_kind" "$probe_path"' "$SCRIPT"
 grep -Fq 'toybox sha256sum' "$SCRIPT"
 grep -Fq 'echo STALE_${kind}_TRANSACTION legacy "$target_build" "$target_helper"' "$SCRIPT"
 grep -Fq 'echo STALE_${kind}_TRANSACTION "$transaction_id" "$target_build" "$target_helper" "$target_service"' "$SCRIPT"
+
+install_body="$(sed -n '/^# Select a verified boot-registration route/,/^if ! wait_for_helper_reply COMPANIONCAPS/p' "$SCRIPT")"
+retirement_line="$(grep -nF 'while pidof hapaneld-helper' <<<"$install_body" | cut -d: -f1)"
+identity_fence_line="$(grep -nF 'recorded_live LIVE_CANONICAL' <<<"$install_body" | cut -d: -f1)"
+replacement_line="$(grep -nF '"$candidate" --replacement-safe' <<<"$install_body" | cut -d: -f1)"
+rename_line="$(grep -nF 'mv -f "$candidate" /data/local/hapaneld-helper' <<<"$install_body" | cut -d: -f1)"
+[ -n "$retirement_line" ] && [ -n "$identity_fence_line" ] &&
+  [ -n "$replacement_line" ] && [ -n "$rename_line" ] &&
+  [ "$retirement_line" -lt "$identity_fence_line" ] &&
+  [ "$identity_fence_line" -lt "$replacement_line" ] &&
+  [ "$replacement_line" -lt "$rename_line" ]
+grep -Fq 'live helper topology changed after the standalone snapshot' <<<"$install_body"
+grep -Fq '[ "$replacement_status" -eq 3 ] && [ "$replacement_reply" = GUARD_ARMED ]' <<<"$install_body"
+grep -Fq 'echo REPLACEMENT_AUTHORITY_ACTIVE' <<<"$install_body"
+grep -Fq 'echo GUARD_ARMED_ROLLBACK' <<<"$install_body"
+grep -Fq 'Guard DB authority is armed; the prior helper topology was restored' <<<"$install_body"
+grep -Fq 'APK-coupled helper replacement custody refused standalone helper replacement' <<<"$install_body"
+authority_hold="$(sed -n '/\*REPLACEMENT_AUTHORITY_ACTIVE\*)/,/;;/p' <<<"$install_body")"
+[ -n "$authority_hold" ]
+! grep -Fq 'rollback_root_helper_v3' <<<"$authority_hold"
+guard_rollback="$(sed -n '/\*GUARD_ARMED_ROLLBACK\*)/,/;;/p' <<<"$install_body")"
+grep -Fq 'rollback_root_helper_v3' <<<"$guard_rollback"
+
+rollback_v3="$(sed -n '/^rollback_root_helper_v3()/,/^finalize_root_helper_rollback_v3()/p' "$SCRIPT")"
+for custody in \
+    /data/local/.hapaneld-helper.new \
+    /data/local/.hapaneld-helper.previous \
+    /data/local/.hapaneld-helper.previous.tmp \
+    /data/local/.hapaneld-guard-db/replacement.v1 \
+    /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+  [ "$(grep -Fc "$custody" "$SCRIPT")" -ge 3 ]
+done
+grep -Fq 'echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE' <<<"$rollback_v3"
+rollback_retirement_line="$(grep -nF 'while pidof hapaneld-helper' <<<"$rollback_v3" | cut -d: -f1)"
+rollback_recheck_line="$(grep -nF 'phase_state_known || { echo ROLLBACK_UNKNOWN; exit 0; }' <<<"$rollback_v3" | tail -1 | cut -d: -f1)"
+rollback_restore_line="$(grep -nF 'restore LIVE_CANONICAL /data/local/hapaneld-helper 700' <<<"$rollback_v3" | cut -d: -f1)"
+[ -n "$rollback_retirement_line" ] && [ -n "$rollback_recheck_line" ] && [ -n "$rollback_restore_line" ] &&
+  [ "$rollback_retirement_line" -lt "$rollback_recheck_line" ] &&
+  [ "$rollback_recheck_line" -lt "$rollback_restore_line" ]
+
+# Every historical and v3 rollback publishes through an authenticated same-directory temporary.
+# The temporary is exact and durable before atomic rename; the parent is made durable afterwards.
+[ "$(grep -Fc 'temporary="$live".hapaneld-manual-"$transaction_id".restore' "$SCRIPT")" = 5 ]
+[ "$(grep -Fc 'sync_path "$temporary"' "$SCRIPT")" = 3 ]
+[ "$(grep -Fc 'mv -f "$temporary" "$live"' "$SCRIPT")" = 3 ]
+[ "$(grep -Fc 'expected=$1; hash_path=$2' "$SCRIPT")" = 2 ]
+! grep -Fq 'expected=$1; live=$2' "$SCRIPT"
+[ "$(grep -Ec '^[[:space:]]+recorded_exact\(\)' "$SCRIPT")" = 3 ]
+[ "$(grep -Ec '^[[:space:]]+publish_rollback_phase\(\)' "$SCRIPT")" = 3 ]
+[ "$(grep -Fc 'echo ROLLBACK_PHASE=PUBLISHING >> "$phase_tmp"' "$SCRIPT")" = 3 ]
+[ "$(grep -Fc 'sync_path "$phase_tmp"' "$SCRIPT")" = 3 ]
+[ "$(grep -Fc 'mv -f "$phase_tmp" "$marker"' "$SCRIPT")" = 3 ]
+! grep -Fq 'cp -p "$recovery" "$live"' "$SCRIPT"
+! grep -Fq 'cp -p "$snapshot" "$live"' "$SCRIPT"
+grep -Fq 'if [ -e "$live" ] || [ -L "$live" ]; then' "$SCRIPT"
+! grep -Fq '[ ! -e "$live" ] ;' "$SCRIPT"
+! grep -Fq '[ ! -e "$snapshot" ] ;' "$SCRIPT"
+
+# One same-session success launch. The init file and generated service.d script each contain one
+# boot-time launch, but the transaction itself must not start init and then race a direct fallback.
+[ "$(grep -Fxc '  /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &' <<<"$install_body")" = 1 ]
+! grep -Fq 'start hapaneld_helper' <<<"$install_body"
+! grep -Eq '/(system/bin|data/adb/hapaneld)/hapaneld-helper --supervise >/dev/null 2>&1 &' <<<"$install_body"
+
+grep -Fq 'REGISTRATION_PATH=/system/etc/init/hapaneld-helper.rc' "$SCRIPT"
+grep -Fq 'REGISTRATION_PATH=/vendor/etc/init/hapaneld-helper.rc' "$SCRIPT"
+grep -Fq 'REGISTRATION_PATH=/data/adb/service.d/hapaneld-helper.sh' "$SCRIPT"
+service_body="$(sed -n "/cat > \"\$SVC\" <<'SVCEOF'/,/^SVCEOF$/p" "$SCRIPT")"
+grep -Fq '/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &' <<<"$service_body"
+! grep -Eq '/(system/bin|data/adb/hapaneld)/hapaneld-helper' <<<"$service_body"
+
+grep -Fq 'wait_for_helper_reply GUARDCAPS "OK GUARDCAPS 1 PREPARE DEFINE STREAM ACTION HEALTH REFUSAL STATUS EVIDENCE CANCEL RETIRE JOURNAL AUTONOMOUS SUPERVISED TERMINAL_RETIRE"' "$SCRIPT"
+grep -Fq 'wait_for_helper_reply GUARDSTATUS "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0"' "$SCRIPT"
+grep -Fq 'wait_for_helper_reply BUILDID "BUILDID $BUILD_ID"' "$SCRIPT"
+
+# Device-executable request paths stay an explicit fixed allowlist.
+grep -Fq '/data/local/hapaneld-helper|/data/adb/hapaneld/.helper-manual-probe-[0-9a-f]*|/data/local/.hapaneld-helper-manual-probe-[0-9a-f]*)' "$SCRIPT"
+
 grep -Fq 'PROBE_STAGING_PATH="/data/local/tmp/hapaneld-helper.probe-$TRANSACTION_ID"' "$SCRIPT"
-grep -Fq "trap 'exit 130' INT" "$SCRIPT"
-grep -Fq "trap 'exit 143' TERM" "$SCRIPT"
-probe_dir_line="$(grep -nF 'mkdir -p /data/adb/hapaneld || { echo PROBE_DIR_FAIL' "$SCRIPT" | head -1 | cut -d: -f1)"
-system_journal_line="$(grep -nF 'echo JOURNAL_VERSION=2 > /system/bin/.hapaneld-helper-manual-upgrade.new' "$SCRIPT" | head -1 | cut -d: -f1)"
-[ "$probe_dir_line" -lt "$system_journal_line" ]
-if grep -Eq 'adb .*forward|/dev/tcp/' "$SCRIPT"; then
-  echo "installer still probes the root daemon through Android shell uid forwarding" >&2
+if grep -Fq '/data/local/tmp/hapaneld-helper --supervise' "$SCRIPT"; then
+  echo "shell-writable adb staging is executable as the live daemon" >&2
   exit 1
 fi
-grep -Fq 'ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION' "$SCRIPT"
-grep -Fq 'grep -qx TRANSACTION_ID=' "$SCRIPT"
 if grep -Fq 'exec {' "$SCRIPT"; then
-  echo "installer uses dynamic file descriptors unsupported by the macOS Bash 3.2 baseline" >&2
+  echo "installer uses dynamic file descriptors unsupported by Bash 3.2" >&2
   exit 1
 fi
 if grep -Eq '(^|[[:space:]])seq([[:space:]]|$)' "$SCRIPT"; then
-  echo "installer depends on seq, which is absent from the default macOS command set" >&2
+  echo "installer depends on non-default macOS seq" >&2
+  exit 1
+fi
+if grep -Eq '[[:space:]]\+[[:space:]]+/' "$SCRIPT"; then
+  echo "installer contains a literal plus argument between fixed cleanup paths" >&2
   exit 1
 fi
 
-assert_order() {
-  local copy="$1" verify="$2" publish="$3" copy_line verify_line publish_line
-  copy_line="$(grep -nF "$copy" "$SCRIPT" | head -1 | cut -d: -f1)"
-  verify_line="$(grep -nF "$verify" "$SCRIPT" | head -1 | cut -d: -f1)"
-  publish_line="$(grep -nF "$publish" "$SCRIPT" | head -1 | cut -d: -f1)"
-  [ "$copy_line" -lt "$verify_line" ] && [ "$verify_line" -lt "$publish_line" ]
-}
-assert_order \
-  "cp '\"\$RC_STAGING_PATH\"' /system/etc/init/hapaneld-helper.rc.new" \
-  'sha256sum /system/etc/init/hapaneld-helper.rc.new' \
-  'mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc'
-assert_order \
-  "cp '\"\$SVC_STAGING_PATH\"' /data/adb/service.d/hapaneld-helper.sh.new" \
-  'sha256sum /data/adb/service.d/hapaneld-helper.sh.new' \
-  'mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh'
-
-assert_text_order() {
-  local text="$1" first="$2" second="$3" first_line second_line
-  first_line="$(grep -nF "$first" <<<"$text" | head -1 | cut -d: -f1)"
-  second_line="$(grep -nF "$second" <<<"$text" | head -1 | cut -d: -f1)"
-  [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ]
-}
-
-system_install_body="$(sed -n '/echo "==> \/system is writable/,/^elif printf.*SYSTEMLESS_RUNNER/p' "$SCRIPT")"
-assert_text_order "$system_install_body" \
-  'cp -p /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-manual-recovery' \
-  'mv -f /system/bin/.hapaneld-helper-manual-upgrade.new /system/bin/.hapaneld-helper-manual-upgrade'
-assert_text_order "$system_install_body" \
-  'cmp -s /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery' \
-  'sync || exit 1'
-assert_text_order "$system_install_body" \
-  'sync || exit 1' \
-  'mv -f /system/bin/.hapaneld-helper-manual-upgrade.new /system/bin/.hapaneld-helper-manual-upgrade'
-assert_text_order "$system_install_body" \
-  'mv -f /system/bin/.hapaneld-helper-manual-upgrade.new /system/bin/.hapaneld-helper-manual-upgrade' \
-  'rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh'
-
-systemless_install_body="$(sed -n '/echo "==> \/system not rw-remountable/,/^else$/p' "$SCRIPT")"
-assert_text_order "$systemless_install_body" \
-  'cp -p /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery' \
-  'mv -f /data/adb/hapaneld/.helper-manual-upgrade.marker.new /data/adb/hapaneld/.helper-manual-upgrade.marker'
-assert_text_order "$systemless_install_body" \
-  'cmp -s /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery' \
-  'sync || exit 1'
-assert_text_order "$systemless_install_body" \
-  'sync || exit 1' \
-  'mv -f /data/adb/hapaneld/.helper-manual-upgrade.marker.new /data/adb/hapaneld/.helper-manual-upgrade.marker'
-assert_text_order "$systemless_install_body" \
-  'mv -f /data/adb/hapaneld/.helper-manual-upgrade.marker.new /data/adb/hapaneld/.helper-manual-upgrade.marker' \
-  'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper'
-
-rollback_body="$(sed -n '/^rollback_root_helper()/,/^commit_root_helper_upgrade()/p' "$SCRIPT")"
-rollback_system_body="$(sed -n '/^    system)$/,/^    systemless)$/p' <<<"$rollback_body")"
-rollback_systemless_body="$(sed -n '/^    systemless)$/,/^    \*)/p' <<<"$rollback_body")"
-grep -Fq 'live_state=PRE_SWAP' <<<"$rollback_system_body"
-grep -Fq 'live_state=TARGET' <<<"$rollback_system_body"
-grep -Fq 'echo ROLLBACK_UNKNOWN' <<<"$rollback_system_body"
-grep -Fq 'live_state=PRE_SWAP' <<<"$rollback_systemless_body"
-grep -Fq 'live_state=TARGET' <<<"$rollback_systemless_body"
-grep -Fq 'echo ROLLBACK_UNKNOWN' <<<"$rollback_systemless_body"
-! grep -Fq 'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1' <<<"$rollback_system_body"
-! grep -Fq 'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1' <<<"$rollback_systemless_body"
-# Android init reports success for an unknown service, so both rollback branches that restore a
-# /system helper must probe it before falling back to a direct launch. Keep this limited to the
-# rollback body: the installer has separate first-install restart coverage above.
-rollback_restart_sequence=$'start hapaneld_helper 2>/dev/null\n          /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||\n            ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )'
-if [[ "$rollback_system_body" == *"$rollback_restart_sequence"* ]] && \
-   [[ "$rollback_systemless_body" == *"$rollback_restart_sequence"* ]] && \
-   [[ "$rollback_system_body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n        wait_for_helper_retirement || exit 1'* ]] && \
-   [[ "$rollback_systemless_body" == *$'pkill -x hapaneld-ledd 2>/dev/null\n        wait_for_helper_retirement || exit 1'* ]] && \
-   ! grep -Fq 'start hapaneld_helper 2>/dev/null || ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' <<<"$rollback_body"; then
-  :
-else
-  echo "rollback restart paths do not verify init before direct fallback" >&2
-  exit 1
-fi
-assert_text_order "$rollback_body" \
-  'wait_for_helper_reply PING OK "$install_kind" "$probe_path"' \
-  'finalize_root_helper_rollback "$install_kind" "$transaction_id" "$target_build" "$target_helper"'
-
-finalize_body="$(sed -n '/^finalize_root_helper_rollback()/,/^commit_root_helper_upgrade()/p' "$SCRIPT")"
-finalize_system_body="$(sed -n '/^    system)$/,/^    systemless)$/p' <<<"$finalize_body")"
-finalize_systemless_body="$(sed -n '/^    systemless)$/,/^    \*)/p' <<<"$finalize_body")"
-assert_text_order "$finalize_system_body" \
-  'live_recorded OLD_BIN /system/bin/hapaneld-helper' \
-  'rm -f "$marker" || exit 1'
-assert_text_order "$finalize_system_body" \
-  'rm -f "$marker" || exit 1' \
-  'rm -f /system/bin/hapaneld-helper.hapaneld-manual-recovery'
-assert_text_order "$finalize_systemless_body" \
-  'live_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper' \
-  'rm -f "$marker" || exit 1'
-assert_text_order "$finalize_systemless_body" \
-  'rm -f "$marker" || exit 1' \
-  'rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery'
-
-commit_body="$(sed -n '/^commit_root_helper_upgrade()/,/^# Stage the binary/p' "$SCRIPT")"
-commit_system_body="$(sed -n '/^    system)$/,/^    systemless)$/p' <<<"$commit_body")"
-commit_systemless_body="$(sed -n '/^    systemless)$/,/^    \*)/p' <<<"$commit_body")"
-assert_text_order "$commit_system_body" \
-  '/system/etc/init/hapaneld-helper.rc || exit 1' \
-  'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1'
-grep -Fq '[ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] || exit 1' <<<"$commit_system_body"
-grep -Fq '[ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || exit 1' <<<"$commit_system_body"
-assert_text_order "$commit_system_body" \
-  'rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1' \
-  'rm -f /system/bin/hapaneld-helper.hapaneld-manual-recovery'
-assert_text_order "$commit_systemless_body" \
-  '/data/adb/service.d/hapaneld-helper.sh || exit 1' \
-  'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1'
-assert_text_order "$commit_systemless_body" \
-  'rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1' \
-  'rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery'
-
-grep -Fq '/system/bin/hapaneld-ledd.hapaneld-manual-recovery' "$SCRIPT"
-grep -Fq '/system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery' "$SCRIPT"
-grep -Fq '/data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery' "$SCRIPT"
-grep -Fq '/data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery' "$SCRIPT"
-
-# The exact fail-closed primitive used by each root block must reject content changed after host hashing.
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 printf trusted > "$fixture/source"
 expected="$(sha256sum "$fixture/source" | awk '{print $1}')"
 printf tampered > "$fixture/staged"
-if sha256sum "$fixture/staged" | grep -q "^$expected"; then
-  echo "tampered root staging unexpectedly passed its host digest" >&2
-  exit 1
-fi
-
-service_body="$(sed -n "/cat > \"\$SVC\" << 'SVCEOF'$/,/^SVCEOF$/p" "$SCRIPT")"
-if grep -Fq '/data/local/tmp/hapaneld-helper' <<<"$service_body"; then
-  echo "systemless service still executes the shell-writable adb staging path" >&2
-  exit 1
-fi
-grep -Fq '/system/bin/pkill -x hapaneld-helper' <<<"$service_body"
-
-if grep -Eq '^[[:space:]]*/data/local/tmp/hapaneld-helper >/dev/null' "$SCRIPT"; then
-  echo "installer still executes the shell-writable adb staging path" >&2
-  exit 1
-fi
-
-selection_line="$(grep -nF 'NO_SYSTEMLESS_RUNNER' "$SCRIPT" | tail -1 | cut -d: -f1)"
-system_swap_line="$(grep -nF 'mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper' "$SCRIPT" | tail -1 | cut -d: -f1)"
-systemless_swap_line="$(grep -nF 'mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper' "$SCRIPT" | tail -1 | cut -d: -f1)"
-[ "$selection_line" -lt "$system_swap_line" ] && [ "$selection_line" -lt "$systemless_swap_line" ]
+! sha256sum "$fixture/staged" | grep -q "^$expected"
 
 echo "helper installer security contract passed"

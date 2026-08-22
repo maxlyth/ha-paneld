@@ -304,9 +304,27 @@ JSON
       *) emit_body '%s\n' "${MOCK_POWER_SAFETY:-safe}" ;;
     esac
     ;;
-  */api/v1/status)
+  */api/v1/status|*/api/v1/status\?database_observation_nonce=*)
     storage_health="${MOCK_STORAGE_HEALTH:-healthy}"
     power_safety="${MOCK_POWER_SAFETY:-safe}"
+    database_json=',"schema_version":'"${MOCK_STATUS_DB_SCHEMA:-${MOCK_DB_DEVICE_USER_VERSION:-9}}"',"quick_check":"'"${MOCK_STATUS_DB_QUICK_CHECK:-ok}"'"'
+    case "${MOCK_STATUS_DB_FIELDS:-exact}" in
+      duplicate_schema) database_json="$database_json"',"schema_version":'"${MOCK_STATUS_DB_SCHEMA:-14}" ;;
+      duplicate_quick) database_json="$database_json"',"quick_check":"'"${MOCK_STATUS_DB_QUICK_CHECK:-ok}"'"' ;;
+    esac
+    observation_json=''
+    case "$url" in
+      *\?database_observation_nonce=*)
+        observation_nonce="${url##*database_observation_nonce=}"
+        case "${MOCK_STATUS_DB_NONCE:-exact}" in
+          exact) observation_json=',"database_observation_nonce":"'"$observation_nonce"'"' ;;
+          missing) observation_json='' ;;
+          wrong) observation_json=',"database_observation_nonce":"00000000000000000000000000000000"' ;;
+          malformed) observation_json=',"database_observation_nonce":"not-a-nonce"' ;;
+          duplicate) observation_json=',"database_observation_nonce":"'"$observation_nonce"'","database_observation_nonce":"'"$observation_nonce"'"' ;;
+          *) observation_json=',"database_observation_nonce":"'"$MOCK_STATUS_DB_NONCE"'"' ;;
+        esac ;;
+    esac
     case "$power_safety" in
       missing) power_json="" ;;
       malformed) power_json=',"power_safety":{' ;;
@@ -323,9 +341,9 @@ JSON
         attempts=$((attempts + 1))
         printf '%s\n' "$attempts" > "$attempts_file"
         if [ "$attempts" -lt 3 ]; then
-          printf '{"storage_health":{"state":"unchecked"}%s}\n' "$power_json"
+          printf '{"storage_health":{"state":"unchecked"%s}%s%s}\n' "$database_json" "$observation_json" "$power_json"
         else
-          printf '{"storage_health":{"state":"healthy"}%s}\n' "$power_json"
+          printf '{"storage_health":{"state":"healthy"%s}%s%s}\n' "$database_json" "$observation_json" "$power_json"
         fi
         ;;
       healthy-then-critical|healthy-then-database_failure)
@@ -339,13 +357,13 @@ JSON
         else
           next_health="${storage_health#healthy-then-}"
         fi
-        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}%s}\n' \
-          "$next_health" "$power_json"
+        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"%s}%s%s}\n' \
+          "$next_health" "$database_json" "$observation_json" "$power_json"
         ;;
       always-unchecked) printf '{"storage_health":{"state":"unchecked"}%s}\n' "$power_json" ;;
       healthy|unchecked|warning|critical|database_failure)
-        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"}%s}\n' \
-          "$storage_health" "$power_json"
+        printf '{"storage_health":{"state":"%s","summary":"fixture storage summary","action":"fixture storage action"%s}%s%s}\n' \
+          "$storage_health" "$database_json" "$observation_json" "$power_json"
         ;;
       missing-state) printf '{"storage_health":{"summary":"fixture storage summary"}%s}\n' "$power_json" ;;
       *) printf '{"storage_health":{"state":"%s"}%s}\n' "$storage_health" "$power_json" ;;

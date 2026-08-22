@@ -203,12 +203,26 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         }
     }
 
-    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Reached only when pre-open reconciliation (reconcilePreOpen) could neither restore a
-        // compatible snapshot nor set the newer database aside. Never throw: a thrown downgrade aborts
-        // the open and takes the whole store — config included — down. Accepting the open lets a newer
-        // additive schema degrade gracefully; non-additive drift is exactly why schema changes must stay
-        // additive (see reconcilePreOpen).
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) =
+        observedSchemaWrite("database-downgrade-tripwire") {
+            // DB_COMPAT_MUTATION_ANCHOR: RUNTIME_DOWNGRADE_TRIPWIRE
+            // Pre-open admission must have restored a candidate-readable snapshot. Reaching this callback
+            // means the actual SQLite state changed afterward; throw before SQLiteOpenHelper can stamp the
+            // newer database down to this build's version.
+            throw DatabaseCompatibilityException(
+                DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION,
+            )
+        }
+
+    override fun onOpen(db: SQLiteDatabase) {
+        super.onOpen(db)
+        val restored = lastSchemaReconcile?.action == SchemaReconcileAction.RESTORED
+        if (restored && !DatabaseRestoreTransaction(
+                appContext.getDatabasePath(DATABASE_NAME),
+            ).consumeOrdinaryRestored()
+        ) {
+            throw DatabaseRestoreHoldException("database restore receipt could not be consumed")
+        }
     }
 
     fun markStatus(instance: String, path: String, status: String, error: String = ""): Unit =
@@ -1970,44 +1984,38 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         internal var lastConfigRestore: ConfigRestore? = null
             private set
 
-        /**
-         * Runs the pre-open backup/restore reconciliation for [DATABASE_NAME] and returns the name to
-         * open. Wrapped so a reconciliation fault can never prevent the store from opening.
-         */
+        /** Runs the authoritative pre-open decision; refusal must prevent SQLiteOpenHelper from opening. */
         private fun reconcileSchemaAndName(context: Context): String = synchronized(SCHEMA_RECONCILE_LOCK) {
-            runCatching {
+            try {
                 val target = context.getDatabasePath(DATABASE_NAME)
+                val boundary = EntityCatalogSchema.DATABASE_COMPATIBILITY
+                val restore = DatabaseRestoreTransaction(target)
+                val resumed = restore.reconcile()
+                if (resumed is DatabaseRestoreResult.Hold) {
+                    throw DatabaseRestoreHoldException(resumed.reason)
+                }
+                val observation = DatabaseCompatibility.observe(context, boundary)
+                (observation.primary as? PrimaryDatabaseObservation.Unreadable)?.let { unreadable ->
+                    val failure = SQLException(unreadable.detail ?: "database observation unreadable")
+                    retainDatabaseFailure("database-version-read", failure)
+                }
                 val outcome = reconcilePreOpen(
                     target,
-                    EntityCatalogSchema.CURRENT_VERSION,
-                    readUserVersion(target),
+                    boundary,
+                    observation,
                     checkpoint = ::checkpointDatabaseFile,
                     vaultConfig = { database -> vaultConfiguration(context, database) },
+                    revalidateObservation = { DatabaseCompatibility.observe(context, boundary) },
+                    stageRecovery = { recovery -> stageValidatedRecovery(recovery, context.cacheDir) },
+                    restoreTransaction = restore,
                 )
                 lastSchemaReconcile = retainFirstSchemaReconcile(lastSchemaReconcile, outcome)
-            }.onFailure { retainDatabaseFailure("database-preopen-reconcile", it) }
+            } catch (failure: Throwable) {
+                retainDatabaseFailure("database-preopen-reconcile", failure)
+                throw failure
+            }
             DATABASE_NAME
         }
-
-        /**
-         * The on-disk schema version, or null when the file is absent or unreadable. Opened READWRITE
-         * so a hot -wal left by an unclean kill (e.g. `pm install -d` during a downgrade) is recovered:
-         * a read-only open of a hot-WAL database can fail and spuriously report no version, which would
-         * defeat downgrade detection and strand a newer database in place to be version-stamped down.
-         */
-        private fun readUserVersion(database: File): Int? {
-            if (!database.isFile) return null
-            return openForVersion(database, SQLiteDatabase.OPEN_READWRITE)
-                ?: openForVersion(database, SQLiteDatabase.OPEN_READONLY)
-        }
-
-        private fun openForVersion(database: File, flags: Int): Int? = runCatching {
-            SQLiteDatabase.openDatabase(
-                database.path,
-                null,
-                flags or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
-            ).use { it.version }
-        }.onFailure { retainDatabaseFailure("database-version-read", it) }.getOrNull()
 
         /**
          * Copies configuration and imported device profiles into the vault before the structure changes.
@@ -2242,7 +2250,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                         SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
                     ).use { opened ->
                         opened.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
-                            cursor.moveToFirst() && cursor.getInt(0) == 0
+                            cursor.moveToFirst() && cursor.columnCount == 3 &&
+                                cursor.getLong(0) == 0L && cursor.getLong(1) == 0L &&
+                                cursor.getLong(2) == 0L && !cursor.moveToNext()
                         }
                     }
                     if (completed) {
@@ -2270,11 +2280,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
 // an older schema must never take the whole store — config included — down. Strategy, all pre-open:
 //   * Upgrade imminent (on-disk version < this build): snapshot the pre-migration file so a later
 //     downgrade can roll back. Additive schema growth is the common case and needs nothing more.
-//   * Downgrade (on-disk version > this build): restore the newest snapshot this build understands;
-//     if none exists, move the newer database aside for recovery and start fresh. Never delete the
-//     live data, never throw.
-// Every schema change SHOULD stay additive (never drop/rename a table or column an older supported
-// build reads) so the no-op onDowngrade path degrades gracefully when no snapshot is available.
+//   * Downgrade (on-disk version > this build): restore the exact newest validated premigration snapshot
+//     inside this build's finite range. If none exists, refuse before touching the live file.
+// Missing files are fresh only at runtime startup; unreadable or retained-state-only stores refuse.
 
 internal enum class SchemaReconcileAction { NONE, BACKED_UP, RESTORED, PRESERVED_FRESH }
 
@@ -2288,6 +2296,10 @@ internal data class SchemaReconcile(
     val toVersion: Int,
     val restoredVersion: Int = 0,
 )
+
+internal class DatabaseCompatibilityException(
+    val refusal: DatabaseCompatibilityRefusal,
+) : SQLException("database compatibility refused: $refusal")
 
 /** Keep a meaningful downgrade outcome visible for the lifetime of the process. */
 internal fun retainFirstSchemaReconcile(
@@ -2317,8 +2329,6 @@ private fun storageSaturatedMultiply(left: Long, right: Long): Long = when {
     else -> left * right
 }
 
-private val DB_SIDECAR_SUFFIXES = listOf("-wal", "-shm", "-journal")
-
 /** Path of the pre-migration snapshot taken at [version] for [target] (a restore source). */
 internal fun preMigrationBackupFile(target: File, version: Int): File =
     File(target.parentFile, "${target.name}.v$version.$PREMIGRATE_SUFFIX")
@@ -2329,23 +2339,72 @@ internal fun supersededFile(target: File, version: Int): File =
 
 /**
  * Reconcile the on-disk schema version against this build before the database is opened. Pure file
- * operations; [checkpoint] flushes WAL for the real store and is stubbed in tests. Never deletes the
- * live data outright and never throws.
+ * operations; [checkpoint] flushes WAL for the real store and is stubbed in tests. A refusal throws
+ * before vault, checkpoint, or file mutations so SQLiteOpenHelper cannot bypass the decision.
  */
 internal fun reconcilePreOpen(
     target: File,
-    currentVersion: Int,
-    onDiskVersion: Int?,
+    boundary: DatabaseCompatibilityBoundary,
+    observation: DatabaseCompatibilityObservation,
     keepBackups: Int = MAX_PREMIGRATE_BACKUPS,
     maxBackupBytes: Long = MAX_PREMIGRATE_BYTES,
     freeSpace: (File) -> Long = { it.usableSpace },
     checkpoint: (File) -> Boolean = { true },
-    minimumSupportedVersion: Int = EntityCatalogSchema.MINIMUM_SUPPORTED_VERSION,
-    minimumCompatibleVersion: Int = EntityCatalogSchema.MINIMUM_COMPATIBLE_VERSION,
     vaultConfig: (File) -> Unit = {},
+    revalidateObservation: () -> DatabaseCompatibilityObservation = { observation },
+    stageRecovery: (RecoveryDatabaseObservation) -> File? = { it.file },
+    restoreTransaction: DatabaseRestoreTransaction = DatabaseRestoreTransaction(target),
 ): SchemaReconcile {
-    if (onDiskVersion == null || onDiskVersion == currentVersion) {
-        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion ?: 0, currentVersion)
+    val currentVersion = boundary.maximumSchema
+    when (val durable = restoreTransaction.reconcile()) {
+        DatabaseRestoreResult.Absent -> Unit
+        is DatabaseRestoreResult.Hold -> throw DatabaseRestoreHoldException(durable.reason)
+        is DatabaseRestoreResult.Restored -> {
+            if (durable.reconcile.toVersion != currentVersion ||
+                durable.reconcile.restoredVersion != currentVersion
+            ) throw DatabaseRestoreHoldException("database restore receipt is for another schema")
+            return durable.reconcile
+        }
+    }
+    val decision = DatabaseCompatibility.decide(
+        boundary,
+        observation,
+        DatabaseOwnerState.RUNTIME_STARTUP,
+    )
+    if (decision is DatabaseCompatibilityDecision.Refuse) {
+        throw DatabaseCompatibilityException(decision.reason)
+    }
+    // DB_COMPAT_MUTATION_ANCHOR: OBSERVATION_REVALIDATION
+    // DB_COMPAT_MUTATION_ANCHOR: RUNTIME_FRESH_REVALIDATION
+    // Fresh is only an observation, not a durable state. Reobserve it at the same last pre-open gate as
+    // every existing database so a file, recovery, retained sidecar, or unreadable path that appears
+    // after the initial observation cannot be opened, created over, or otherwise mutated by the helper.
+    val revalidatedObservation = revalidateObservation()
+    if (revalidatedObservation != observation ||
+        DatabaseCompatibility.decide(
+            boundary,
+            revalidatedObservation,
+            DatabaseOwnerState.RUNTIME_STARTUP,
+        ) != decision
+    ) {
+        throw DatabaseCompatibilityException(
+            DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION,
+        )
+    }
+    if (decision is DatabaseCompatibilityDecision.Fresh) {
+        return SchemaReconcile(SchemaReconcileAction.NONE, 0, currentVersion)
+    }
+    val onDiskVersion = (observation.primary as? PrimaryDatabaseObservation.Readable)?.schema
+        ?: throw IllegalStateException("non-fresh decision requires readable primary database")
+    if (decision is DatabaseCompatibilityDecision.Direct && onDiskVersion == currentVersion) {
+        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
+    }
+    val restore = (decision as? DatabaseCompatibilityDecision.Recover)?.recovery
+    val stagedRestore = restore?.let(stageRecovery)
+    if (restore != null && stagedRestore == null) {
+        throw DatabaseCompatibilityException(
+            DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION,
+        )
     }
     // The structure is about to change, the file is about to be replaced, or an older build is about to
     // operate on a newer one. Copy configuration out first, unconditionally: it is a fraction of a
@@ -2353,32 +2412,7 @@ internal fun reconcilePreOpen(
     // deliberately skipped when the file is large or space is short — exactly the conditions under which
     // loss is most likely. It dumps raw rows, so it captures keys this build does not itself understand.
     runCatching { vaultConfig(target) }
-    if (onDiskVersion > currentVersion && onDiskVersion >= minimumCompatibleVersion &&
-        currentVersion >= minimumCompatibleVersion
-    ) {
-        // Newer, but only additively so: every version at or above the compatible baseline is a superset
-        // of the others, enforced by SchemaAdditivePolicy rather than assumed. Open it untouched. This
-        // build reads and writes the columns it knows, ignores the rest, and its inserts still satisfy
-        // the newer constraints because additive columns carry defaults.
-        //
-        // The alternative — setting the database aside and starting fresh — resets the owner's
-        // configuration, which is why this case is worth distinguishing at all: it turns every future
-        // version bump from a latent config-reset event into a non-event.
-        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
-    }
-    if (onDiskVersion < currentVersion) {
-        if (onDiskVersion < minimumSupportedVersion) {
-            // Below the supported floor: the steps that would carry this structure forward have been
-            // deleted, so onUpgrade would throw — and a thrown upgrade aborts the open, taking config
-            // down with it. Preserve the whole file-set for manual recovery and start fresh instead.
-            // Reported as PRESERVED_FRESH because that is exactly what happened; too-old and too-new are
-            // distinguishable from fromVersion versus toVersion, and it inherits the health warning.
-            return if (preserveAside(target, onDiskVersion, checkpoint)) {
-                SchemaReconcile(SchemaReconcileAction.PRESERVED_FRESH, onDiskVersion, currentVersion)
-            } else {
-                SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
-            }
-        }
+    if (decision is DatabaseCompatibilityDecision.Direct && onDiskVersion < currentVersion) {
         // Upgrade imminent: snapshot the pre-migration structure so a later downgrade can roll back.
         // Space-aware and best-effort — an upgrade must never fail for lack of room to archive a copy.
         val backedUp = writePreMigrationBackup(
@@ -2395,19 +2429,21 @@ internal fun reconcilePreOpen(
             currentVersion,
         )
     }
-    // Downgrade: this build is older than the on-disk structure and cannot open it directly. Choose the
-    // newest snapshot this build understands that is also a structurally valid SQLite file.
-    val restore = listVersioned(target, PREMIGRATE_SUFFIX)
-        .filter { it.version <= currentVersion && it.file.isFile && looksLikeSqlite(it.file) }
-        .maxByOrNull { it.version }
-    if (!preserveAside(target, onDiskVersion, checkpoint)) {
-        // Could not safely set the newer database aside; leave it for the onDowngrade backstop.
-        return SchemaReconcile(SchemaReconcileAction.NONE, onDiskVersion, currentVersion)
+    try {
+        restore ?: throw IllegalStateException("non-direct decision requires recovery")
+        when (val restored = restoreTransaction.restore(
+            staged = checkNotNull(stagedRestore),
+            sourceSchema = onDiskVersion,
+            stagedSchema = checkNotNull(restore.namedSchema),
+            checkpoint = checkpoint,
+        )) {
+            DatabaseRestoreResult.Absent -> throw IllegalStateException("database restore did not start")
+            is DatabaseRestoreResult.Hold -> throw DatabaseRestoreHoldException(restored.reason)
+            is DatabaseRestoreResult.Restored -> return restored.reconcile
+        }
+    } finally {
+        if (stagedRestore != null && stagedRestore != restore?.file) runCatching { stagedRestore.delete() }
     }
-    if (restore != null && installBackup(restore.file, target)) {
-        return SchemaReconcile(SchemaReconcileAction.RESTORED, onDiskVersion, currentVersion, restore.version)
-    }
-    return SchemaReconcile(SchemaReconcileAction.PRESERVED_FRESH, onDiskVersion, currentVersion)
 }
 
 private data class VersionedFile(val file: File, val version: Int)
@@ -2459,76 +2495,6 @@ private fun writePreMigrationBackup(
         false
     }
 }
-
-/**
- * Move the newer database aside for recovery; returns true when [target] is safely gone afterward.
- * Checkpoints first so the recovery copy absorbs committed WAL frames, and keeps ONLY this newest
- * recovery copy — pruning by embedded version could delete the copy that holds the current live data
- * when a stale higher-version aside from an earlier downgrade already exists.
- */
-private fun preserveAside(target: File, version: Int, checkpoint: (File) -> Boolean): Boolean {
-    if (!target.isFile) {
-        clearSidecars(target)
-        return true
-    }
-    // A successful checkpoint folds ordinary WAL frames into the main file. If the checkpoint cannot
-    // complete, preserve the complete SQLite file-set below instead of deleting live sidecars.
-    runCatching { checkpoint(target) }
-    val aside = supersededFile(target, version)
-    val sources = listOf("") + DB_SIDECAR_SUFFIXES
-    val destinations = sources.map { suffix -> if (suffix.isEmpty()) aside else File(aside.path + suffix) }
-    destinations.forEach { runCatching { it.delete() } }
-    val copied = sources.zip(destinations).all { (suffix, destination) ->
-        val source = if (suffix.isEmpty()) target else File(target.path + suffix)
-        !source.isFile || runCatching { source.copyTo(destination, overwrite = true) }.isSuccess
-    }
-    if (!copied) return false
-    val removed = sources.all { suffix ->
-        val source = if (suffix.isEmpty()) target else File(target.path + suffix)
-        !source.exists() || runCatching { source.delete() }.getOrDefault(false)
-    }
-    if (!removed) return false
-    listVersioned(target, SUPERSEDED_SUFFIX)
-        .filter { it.file.name != aside.name }
-        .forEach {
-            runCatching { it.file.delete() }
-            DB_SIDECAR_SUFFIXES.forEach { suffix -> runCatching { File(it.file.path + suffix).delete() } }
-        }
-    return true
-}
-
-private fun installBackup(backup: File, target: File): Boolean = runCatching {
-    val tmp = File(target.path + ".restore.tmp")
-    backup.copyTo(tmp, overwrite = true)
-    clearSidecars(target)
-    tmp.renameTo(target).also { if (!it) tmp.delete() }
-}.getOrDefault(false)
-
-private fun clearSidecars(target: File) {
-    DB_SIDECAR_SUFFIXES.forEach { runCatching { File(target.path + it).delete() } }
-}
-
-/** The 16-byte SQLite file header, so a torn or non-database snapshot is never restored over live data. */
-private val SQLITE_MAGIC = byteArrayOf(
-    0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00,
-) // ASCII "SQLite format 3" followed by NUL
-
-private fun looksLikeSqlite(file: File): Boolean = runCatching {
-    if (file.length() < SQLITE_MAGIC.size) {
-        false
-    } else {
-        file.inputStream().use { input ->
-            val header = ByteArray(SQLITE_MAGIC.size)
-            var read = 0
-            while (read < header.size) {
-                val n = input.read(header, read, header.size - read)
-                if (n < 0) break
-                read += n
-            }
-            read == header.size && header.contentEquals(SQLITE_MAGIC)
-        }
-    }
-}.getOrDefault(false)
 
 /** Heat-map percentiles are diagnostic context, not control state. Recompute them at most once per
  * five minutes while the Entities tab is open; exact per-page values remain current. */
@@ -2818,29 +2784,21 @@ object EntityCatalogSchema {
      *
      * Steps below this are deliberately deleted rather than kept forever: each one is dead weight that
      * still has to be read, tested and reasoned about, and none can run because no supported release
-     * produces such a database. Anything older is handled before the database is opened
-     * (`reconcilePreOpen` preserves it and starts fresh); it must never reach [plan], because a throw
-     * inside `onUpgrade` aborts the open and takes configuration down with it.
+     * produces such a database. Anything older is refused before the database is opened; it must never
+     * reach [plan], because a throw inside `onUpgrade` aborts the open and takes configuration down.
      *
      * Raising this floor is a compatibility decision, not a cleanup: it makes upgrading from an older
      * release impossible, so it belongs with a release that states the supported upgrade range.
      */
     const val MINIMUM_SUPPORTED_VERSION = 11
 
-    /**
-     * Oldest structure this build can *tolerate being newer than itself* — the downgrade counterpart to
-     * [MINIMUM_SUPPORTED_VERSION].
-     *
-     * Versions at or above this are additive supersets of one another, which [SchemaAdditivePolicy] and
-     * the realized-schema superset test enforce rather than assume. That makes a downgrade across them a
-     * non-event: this build reads and writes the columns it knows and ignores the rest, and every column
-     * added since carries a default so its inserts still satisfy the newer constraints.
-     *
-     * Without this, any newer database was set aside and replaced by a fresh one, resetting the owner's
-     * configuration — so every version bump manufactured a future config-reset event. Raising this is
-     * therefore the deliberate act of shipping a non-additive change, and costs exactly that.
-     */
-    const val MINIMUM_COMPATIBLE_VERSION = 14
+    /** Candidate metadata and runtime admission share this one finite compatibility boundary. */
+    internal val DATABASE_COMPATIBILITY = DatabaseCompatibilityBoundary(
+        formatVersion = DatabaseCompatibilityBoundary.FORMAT_VERSION,
+        databaseName = DatabaseCompatibilityBoundary.DATABASE_NAME,
+        minimumSchema = MINIMUM_SUPPORTED_VERSION,
+        maximumSchema = CURRENT_VERSION,
+    )
 
     /**
      * [transform] carries data that SQL alone cannot express — an encoding, for instance. It runs after
@@ -2858,9 +2816,8 @@ object EntityCatalogSchema {
          *
          * Such a change is allowed — the forward migration chain handles it on upgrade, which is the
          * common direction — but it cannot be *silent*, because the one thing the chain cannot do is run
-         * backwards. An older build meeting this structure will not find what it expects, so
-         * [MINIMUM_COMPATIBLE_VERSION] must move past it and the downgrade takes the set-aside path,
-         * where configuration is refilled from the vault rather than lost.
+         * backwards. The finite compatibility boundary ensures an older candidate never assumes that
+         * a structure written by a future build is additive.
          */
         val breaksCompatibility: Boolean = false,
     )

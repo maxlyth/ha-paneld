@@ -12,6 +12,10 @@ import io.github.maxlyth.hapaneld.persistence.StateQuiescence
 import java.net.URL
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import io.github.maxlyth.hapaneld.dashboard.DatabaseCompatibilityDecision
+import io.github.maxlyth.hapaneld.dashboard.DatabaseCompatibilityRefusal
+import io.github.maxlyth.hapaneld.dashboard.RecoveryDatabaseKind
+import io.github.maxlyth.hapaneld.dashboard.RecoveryDatabaseObservation
 
 /**
  * [AppInstaller.httpsRedirect] — the download redirect gate: only ever follow a hop to an HTTPS
@@ -19,6 +23,335 @@ import java.io.ByteArrayOutputStream
  * JVM class, so this needs no device.
  */
 class AppInstallerTest {
+    private val boundary = DatabaseCompatibilityApkContract.Boundary(1, "ha-paneld.db", 11, 14)
+
+    private fun selfInfo(
+        signer: String? = AppInstaller.HA_PANELD.certSha256,
+        contract: DatabaseCompatibilityApkContract.Parsed =
+            DatabaseCompatibilityApkContract.Parsed.Valid(boundary),
+    ) = AppInstaller.ApkInfo(
+        pkg = AppInstaller.HA_PANELD.pkg,
+        version = "candidate",
+        signerSha256 = signer,
+        databaseCompatibility = contract,
+    )
+
+    @Test fun selfCandidateSignerIsAuthenticatedBeforeDatabaseMetadataIsTrusted() {
+        var compatibilityConsulted = false
+
+        val refusal = AppInstaller.selfReplacementRefusal(selfInfo(signer = "untrusted")) {
+            compatibilityConsulted = true
+            null
+        }
+
+        assertEquals("candidate must have exactly the pinned running-package signer", refusal)
+        assertFalse("untrusted metadata must not reach the compatibility authority", compatibilityConsulted)
+    }
+
+    @Test fun selfCandidateWithPinnedAndExtraSignerRefusesBeforeCompatibilityAuthority() {
+        var compatibilityConsulted = false
+        val info = AppInstaller.ApkInfo(
+            pkg = AppInstaller.HA_PANELD.pkg,
+            version = "candidate",
+            signerSha256 = AppInstaller.HA_PANELD.certSha256,
+            databaseCompatibility = DatabaseCompatibilityApkContract.Parsed.Valid(boundary),
+            signerSha256s = setOf(AppInstaller.HA_PANELD.certSha256, "unexpected-extra-signer"),
+        )
+
+        val refusal = AppInstaller.selfReplacementRefusal(info) {
+            compatibilityConsulted = true
+            null
+        }
+
+        assertEquals("candidate must have exactly the pinned running-package signer", refusal)
+        assertFalse(compatibilityConsulted)
+    }
+
+    @Test fun missingOrMalformedCandidateBoundaryRefusesBeforeCompatibilityDecision() {
+        listOf(
+            DatabaseCompatibilityApkContract.Parsed.Missing,
+            DatabaseCompatibilityApkContract.Parsed.Malformed("bad contract"),
+        ).forEach { contract ->
+            var compatibilityConsulted = false
+            val refusal = AppInstaller.selfReplacementRefusal(selfInfo(contract = contract)) {
+                compatibilityConsulted = true
+                null
+            }
+            assertTrue(refusal?.isNotBlank() == true)
+            assertFalse(compatibilityConsulted)
+        }
+    }
+
+    @Test fun authenticatedExactBoundaryReachesCompatibilityAuthorityOnce() {
+        val seen = mutableListOf<DatabaseCompatibilityApkContract.Boundary>()
+
+        val refusal = AppInstaller.selfReplacementRefusal(selfInfo()) {
+            seen += it
+            "primary database is unreadable"
+        }
+
+        assertEquals(listOf(boundary), seen)
+        assertEquals("primary database is unreadable", refusal)
+    }
+
+    @Test fun preparedAdmissionReobservesChangedDatabaseBeforeFirstMutation() {
+        val events = mutableListOf<String>()
+        val initial = AppInstaller.selfReplacementRefusal(selfInfo()) {
+            events += "prepare-allow"
+            null
+        }
+        assertNull(initial)
+
+        val final = AppInstaller.preparedSelfReplacementRefusal(selfInfo(), boundary) {
+            events += "install-reobserve-refuse"
+            "database compatibility primary unreadable"
+        }
+        if (final == null) {
+            events += "snapshot"
+            events += "quiesce"
+            events += "package-install"
+        }
+
+        assertEquals("database compatibility primary unreadable", final)
+        assertEquals(listOf("prepare-allow", "install-reobserve-refuse"), events)
+    }
+
+    @Test fun preparedFinalUnreadableOrWrongPackageCannotFallThroughAsNonSelf() {
+        val wrongPackage = AppInstaller.ApkInfo(
+            pkg = "example.not.the.running.package",
+            version = "candidate",
+            signerSha256 = AppInstaller.HA_PANELD.certSha256,
+            databaseCompatibility = DatabaseCompatibilityApkContract.Parsed.Valid(boundary),
+        )
+        var compatibilityConsulted = false
+
+        val unreadable = AppInstaller.localInstallCandidateRefusal(
+            info = null,
+            runningPackage = AppInstaller.HA_PANELD.pkg,
+            admittedBoundary = boundary,
+        ) {
+            compatibilityConsulted = true
+            null
+        }
+        val wrong = AppInstaller.localInstallCandidateRefusal(
+            info = wrongPackage,
+            runningPackage = AppInstaller.HA_PANELD.pkg,
+            admittedBoundary = boundary,
+        ) {
+            compatibilityConsulted = true
+            null
+        }
+
+        assertEquals("unreadable candidate APK", unreadable)
+        assertEquals("prepared candidate is not the running package", wrong)
+        assertFalse("neither invalid identity may reach database admission", compatibilityConsulted)
+    }
+
+    @Test fun unpreparedLocalInstallRequiresReadableApkButStillAllowsReadableNonSelfPackage() {
+        var compatibilityConsulted = false
+        val unreadable = AppInstaller.localInstallCandidateRefusal(
+            info = null,
+            runningPackage = AppInstaller.HA_PANELD.pkg,
+            admittedBoundary = null,
+        ) {
+            compatibilityConsulted = true
+            null
+        }
+        val readableNonSelf = AppInstaller.localInstallCandidateRefusal(
+            info = AppInstaller.ApkInfo(
+                pkg = "example.curated.package",
+                version = "candidate",
+                signerSha256 = null,
+                databaseCompatibility = DatabaseCompatibilityApkContract.Parsed.Missing,
+            ),
+            runningPackage = AppInstaller.HA_PANELD.pkg,
+            admittedBoundary = null,
+        ) {
+            compatibilityConsulted = true
+            null
+        }
+
+        assertEquals("unreadable candidate APK", unreadable)
+        assertNull("a readable non-self upload retains its existing confirmation policy", readableNonSelf)
+        assertFalse("non-self packages have no ha-paneld database contract to consult", compatibilityConsulted)
+    }
+
+    @Test fun configCommitRevalidationRejectsChangedBytesIdentityBoundaryAndDatabaseBeforeCommit() {
+        val changedBoundary = DatabaseCompatibilityApkContract.Boundary(1, "ha-paneld.db", 11, 15)
+        val wrongPackage = selfInfo().copy(pkg = "example.not.the.running.package")
+        val wrongBoundary = selfInfo(
+            contract = DatabaseCompatibilityApkContract.Parsed.Valid(changedBoundary),
+        )
+        var compatibilityConsults = 0
+        val decide: (DatabaseCompatibilityApkContract.Boundary) -> String? = {
+            compatibilityConsults++
+            "database is no longer direct"
+        }
+
+        assertEquals(
+            "prepared install already consumed",
+            AppInstaller.preparedDirectConfigCommitRefusal(false, false, null, boundary, decide),
+        )
+        assertEquals(
+            "prepared APK changed after admission",
+            AppInstaller.preparedDirectConfigCommitRefusal(true, false, null, boundary, decide),
+        )
+        assertEquals(
+            "unreadable candidate APK",
+            AppInstaller.preparedDirectConfigCommitRefusal(true, true, null, boundary, decide),
+        )
+        assertEquals(
+            "candidate is not the running package",
+            AppInstaller.preparedDirectConfigCommitRefusal(true, true, wrongPackage, boundary, decide),
+        )
+        assertEquals(
+            "prepared APK database boundary changed after admission",
+            AppInstaller.preparedDirectConfigCommitRefusal(true, true, wrongBoundary, boundary, decide),
+        )
+        assertEquals(
+            "database is no longer direct",
+            AppInstaller.preparedDirectConfigCommitRefusal(true, true, selfInfo(), boundary, decide),
+        )
+        assertEquals("only the fully authenticated exact boundary may consult current DB state", 1, compatibilityConsults)
+    }
+
+    @Test fun onlyDirectOrExactValidatedRecoveryDecisionsAdmitSelfReplacement() {
+        assertNull(AppInstaller.compatibilityDecisionRefusal(DatabaseCompatibilityDecision.Direct(14)))
+        val recoveryFile = File.createTempFile("database-recovery-", ".premigrate").also { it.deleteOnExit() }
+        assertNull(
+            AppInstaller.compatibilityDecisionRefusal(
+                DatabaseCompatibilityDecision.Recover(
+                    RecoveryDatabaseObservation(
+                        file = recoveryFile,
+                        kind = RecoveryDatabaseKind.PREMIGRATE,
+                        namedSchema = 14,
+                        actualSchema = 14,
+                        integrityValid = true,
+                        regularFile = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(
+            "installed package database is not proven present",
+            AppInstaller.compatibilityDecisionRefusal(DatabaseCompatibilityDecision.Fresh),
+        )
+        assertEquals(
+            "database compatibility primary unreadable",
+            AppInstaller.compatibilityDecisionRefusal(
+                DatabaseCompatibilityDecision.Refuse(DatabaseCompatibilityRefusal.PRIMARY_UNREADABLE),
+            ),
+        )
+        assertEquals(
+            "database compatibility primary missing not proven fresh",
+            AppInstaller.compatibilityDecisionRefusal(
+                DatabaseCompatibilityDecision.Refuse(
+                    DatabaseCompatibilityRefusal.PRIMARY_MISSING_NOT_PROVEN_FRESH,
+                ),
+            ),
+        )
+    }
+
+    @Test fun preparedCapabilityIsBoundToExactBytesAndDeletesWhenDiscarded() {
+        val apk = File.createTempFile("prepared-self-install-", ".apk").apply { writeText("original") }
+        val prepared = AppInstaller.PreparedSelfInstall(
+            apk = apk,
+            expectedSha256 = AppInstaller.sha256(apk),
+            version = "candidate",
+            boundary = boundary,
+            databaseDisposition = AppInstaller.SelfInstallDatabaseDisposition.DIRECT,
+            allowShizuku = true,
+        )
+
+        assertTrue(prepared.bytesUnchanged())
+        apk.writeText("changed")
+        assertFalse(prepared.bytesUnchanged())
+        prepared.close()
+        assertFalse(apk.exists())
+        assertNull(prepared.consume())
+    }
+
+    @Test fun recoveryChannelCandidateIsRefusedAndDestroyedBeforeConfigCommit() {
+        val apk = File.createTempFile("prepared-recovery-channel-", ".apk").apply { writeText("candidate") }
+        val candidate = AppInstaller.PreparedSelfInstall(
+            apk = apk,
+            expectedSha256 = AppInstaller.sha256(apk),
+            version = "older-candidate",
+            boundary = boundary,
+            databaseDisposition = AppInstaller.SelfInstallDatabaseDisposition.RECOVER,
+            allowShizuku = true,
+        )
+        var configCommits = 0
+
+        val admitted = SelfUpdater.admitConfigCoupledChannel(
+            SelfUpdater.ChannelPreparation.Ready(candidate, "ready"),
+        )
+        if (admitted is SelfUpdater.ChannelPreparation.Ready) configCommits++
+
+        assertTrue(admitted is SelfUpdater.ChannelPreparation.Refused)
+        assertEquals(0, configCommits)
+        assertFalse("refused recovery bytes must not survive for a later bypass", apk.exists())
+    }
+
+    @Test fun packageOnlyRecoveryCandidateRemainsInstallable() {
+        val apk = File.createTempFile("prepared-package-recovery-", ".apk").apply { writeText("candidate") }
+        val candidate = AppInstaller.PreparedSelfInstall(
+            apk = apk,
+            expectedSha256 = AppInstaller.sha256(apk),
+            version = "older-candidate",
+            boundary = boundary,
+            databaseDisposition = AppInstaller.SelfInstallDatabaseDisposition.RECOVER,
+            allowShizuku = true,
+        )
+
+        val packageOnly = SelfUpdater.ChannelPreparation.Ready(candidate, "ready")
+
+        assertEquals(AppInstaller.SelfInstallDatabaseDisposition.RECOVER, packageOnly.databaseDisposition)
+        assertFalse(candidate.requiresDirectAtConsumption())
+        assertTrue(apk.exists())
+        candidate.close()
+    }
+
+    @Test fun configCoupledDirectCandidateRefusesConsumeTimeRecoveryFlip() {
+        val apk = File.createTempFile("prepared-direct-race-", ".apk").apply { writeText("candidate") }
+        val candidate = AppInstaller.PreparedSelfInstall(
+            apk = apk,
+            expectedSha256 = AppInstaller.sha256(apk),
+            version = "candidate",
+            boundary = boundary,
+            databaseDisposition = AppInstaller.SelfInstallDatabaseDisposition.DIRECT,
+            allowShizuku = true,
+        )
+        val admitted = SelfUpdater.admitConfigCoupledChannel(
+            SelfUpdater.ChannelPreparation.Ready(candidate, "ready"),
+        )
+        assertTrue(admitted is SelfUpdater.ChannelPreparation.Ready)
+        assertTrue(candidate.requiresDirectAtConsumption())
+
+        val recoveryFile = File.createTempFile("database-recovery-race-", ".premigrate").also { it.deleteOnExit() }
+        val finalRecovery = DatabaseCompatibilityDecision.Recover(
+            RecoveryDatabaseObservation(
+                file = recoveryFile,
+                kind = RecoveryDatabaseKind.PREMIGRATE,
+                namedSchema = 14,
+                actualSchema = 14,
+                integrityValid = true,
+                regularFile = true,
+            ),
+        )
+
+        assertNull(AppInstaller.compatibilityDecisionRefusal(DatabaseCompatibilityDecision.Direct(14), requireDirect = true))
+        assertEquals(
+            "database compatibility changed from direct to recovery after configuration admission",
+            AppInstaller.compatibilityDecisionRefusal(finalRecovery, requireDirect = true),
+        )
+        assertNull(
+            "package-only installs retain the validated recovery path",
+            AppInstaller.compatibilityDecisionRefusal(finalRecovery, requireDirect = false),
+        )
+        candidate.close()
+    }
+
     @Test fun successfulSelfInstallKeepsStateQuiescedWhileFailedInstallReopensIt() {
         val successReopened = AtomicBoolean()
         val successful = StateQuiescence { successReopened.set(true) }

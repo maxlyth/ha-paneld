@@ -15,6 +15,7 @@
 #define HAPANELD_SYSEXEC_H
 
 #include <stddef.h>
+#include <sys/types.h>
 
 // Run an audited, argument-free constant shell program, blocking until it exits. Never pass request,
 // profile, environment, filesystem, or network-derived bytes. Returns the raw wait status.
@@ -41,9 +42,30 @@ int   sysexec_run_argv(const char *path, const char *const argv[], int quiet);
 int   sysexec_run_argv_deadline(const char *path, const char *const argv[], int quiet,
                                 unsigned deadline_ms, unsigned *elapsed_ms);
 
+/* Execute with a monotonic deadline. Returns raw wait status, -1 for spawn/wait failure, or -2
+ * after terminating the process group that exceeded timeout_ms. The leader is reaped inline for at
+ * most 500 ms, then by a detached reaper if necessary. timed_out is always initialized. */
+int   sysexec_run_argv_timeout(const char *path, const char *const argv[], int quiet,
+                               unsigned timeout_ms, int *timed_out);
+
+/* Start one directly-execed child owned by the caller. A CLOEXEC handshake proves exec succeeded;
+ * the returned pid is also its process-group id. poll returns 0 running, 1 reaped, -1 unknown.
+ * terminate returns 0 only with the leader's exact wait status; it returns -1 after a safe detached
+ * reap handoff because no exact status is available to that caller. */
+int   sysexec_start_argv(const char *path, const char *const argv[], int quiet, pid_t *pid);
+int   sysexec_poll_argv(pid_t pid, int *status);
+int   sysexec_terminate_argv(pid_t pid, int *status);
+
 // Execute an absolute path without a shell and capture bounded stdout. Output is always NUL
 // terminated when capacity is non-zero. Returns the raw child wait status, or -1 on I/O/fork error.
 int   sysexec_capture_argv(const char *path, const char *const argv[], char *output, size_t capacity);
+
+/* Capture bounded stdout under a monotonic deadline. The process group is killed on timeout and its
+ * leader is reaped inline for at most 500 ms, then by a detached reaper if necessary. Output is always
+ * NUL terminated. Returns raw wait status, -1 for I/O/spawn failure, or -2 for timeout. Callers must
+ * independently adjudicate side effects. */
+int   sysexec_capture_argv_timeout(const char *path, const char *const argv[], char *output,
+                                   size_t capacity, unsigned timeout_ms, int *timed_out);
 
 // Execute an absolute path without a shell and copy stdout to an already-open descriptor. The child
 // receives /dev/null on stdin and stderr. Returns the raw child wait status, or -1 on I/O/fork error.

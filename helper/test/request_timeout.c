@@ -28,6 +28,35 @@ void input_unsubscribe(int fd) { (void)fd; }
 void gpio_unsubscribe(int fd) { (void)fd; }
 void conn_release(void) {}
 int conn_admit(void) { return 0; }
+int guard_maintenance_init(void) { return 0; }
+int guard_maintenance_replacement_safe(void) { return 0; }
+int guard_maintenance_replacement_parent_grant(char nonce[65]) { (void)nonce; return -1; }
+int guard_maintenance_replacement_export_lease(void) { return -1; }
+int guard_maintenance_replacement_parent_abort(const char nonce[65]) { (void)nonce; return -1; }
+int guard_maintenance_replacement_stage_app(const char nonce[65]) { (void)nonce; return -1; }
+int guard_maintenance_replacement_supervisor_adopt_app(const char nonce[65]) {
+    (void)nonce; return -1;
+}
+int guard_maintenance_replacement_worker_commit_app(const char nonce[65]) {
+    (void)nonce; return -1;
+}
+int guard_maintenance_replacement_startup_reconcile_app(char nonce[65]) {
+    (void)nonce; return 0;
+}
+void guard_maintenance_set_supervised(int supervised) { (void)supervised; }
+void guard_maintenance_set_supervisor_owner(void) {}
+int guard_maintenance_supervisor_tick(void) { return 0; }
+int guard_maintenance_supervisor_work_deadline(enum guard_supervisor_work work,
+        uint64_t *deadline_ms) { (void)work; (void)deadline_ms; return -1; }
+int guard_maintenance_supervisor_start_work(enum guard_supervisor_work work, pid_t *pid) {
+    (void)work; (void)pid; return -1;
+}
+int guard_maintenance_supervisor_complete(enum guard_supervisor_work work,
+        enum guard_execution_result result, int status) {
+    (void)work; (void)result; (void)status; return -1;
+}
+int sysexec_poll_argv(pid_t pid, int *status) { (void)pid; (void)status; return -1; }
+int sysexec_terminate_argv(pid_t pid, int *status) { (void)pid; (void)status; return -1; }
 
 #define CHECK(condition, message) do { \
     if (!(condition)) { fprintf(stderr, "FAIL: %s\n", message); return 1; } \
@@ -55,6 +84,17 @@ static int create_listener(void) {
 }
 
 int main(void) {
+    CHECK(supervisor_executor_deadline(100, 1000000) == 60100,
+        "supervisor executor applies the fixed command cap");
+    CHECK(supervisor_executor_deadline(100, 60099) == 60099,
+        "persisted phase deadline tightens the command cap");
+    CHECK(supervisor_executor_deadline(100, 100) == 100,
+        "phase-deadline equality cannot receive fresh executor time");
+    CHECK(supervisor_executor_deadline(LLONG_MAX - 10, UINT64_MAX) == LLONG_MAX - 10,
+        "clock overflow fails closed without extending executor authority");
+    CHECK(supervisor_executor_deadline(-1, 1000) == -1,
+        "invalid monotonic time cannot create executor authority");
+
     int listener = create_listener();
     CHECK(listener >= 0, "partial-reply test listener must bind");
 

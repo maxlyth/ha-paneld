@@ -188,6 +188,7 @@ internal class EntityFilterRetryPolicy(
  */
 class DashboardActivity : AppCompatActivity() {
 
+    private val maintenanceFence = GuardDbActivityMaintenanceFence()
     private lateinit var activityConfig: Config
     private var web: WebView? = null
     private var swipe: SwipeRefreshLayout? = null
@@ -546,6 +547,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (maintenanceFence.stop(this)) return
         supportActionBar?.hide()
         // DashboardActivity can be foregrounded directly by HOME restoration, the admin path, or a
         // privileged start. Always bootstrap the service here too so the local HTTP/MQTT surface is
@@ -1154,6 +1156,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        if (maintenanceFence.stop(this)) return
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || authLatched) return
         // The sign-in form has no accreted memory worth shedding, and reloading it would discard a
         // part-entered Home Assistant login. Leave it alone; it is short-lived by nature.
@@ -1180,6 +1183,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onLowMemory() {
         super.onLowMemory()
+        if (maintenanceFence.stop(this)) return
         if (!destroyed && BuiltinDashboard.ownsActivity(activityOwner) && !authLatched &&
             (!screenAwake || !BuiltinDashboard.foreground)) {
             lastFullLoadAt = SystemClock.elapsedRealtime()
@@ -1224,6 +1228,7 @@ class DashboardActivity : AppCompatActivity() {
      *  left untouched — snapping back from Recents must not blank the dashboard with a full reload. */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        if (maintenanceFence.stop(this)) return
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
         val config = Config(this)
         if (shouldRouteDashboardHomeToAdmin(config.launcherPackage, packageName, intent?.action, intent?.categories)) {
@@ -1923,6 +1928,7 @@ class DashboardActivity : AppCompatActivity() {
     // predate translucent Overview, so resume/pause suffices there).
     override fun onResume() {
         super.onResume()
+        if (maintenanceFence.stop(this)) return
         // Below API 29 onTopResumedActivityChanged is never delivered, so resume owns visibility there.
         if (resumeOwnsAdmissionVisibility(android.os.Build.VERSION.SDK_INT)) onAdmissionVisibilityChanged(true)
         BuiltinDashboard.setActivityForeground(activityOwner, true)
@@ -1980,6 +1986,7 @@ class DashboardActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        if (maintenanceFence.stop(this)) return
         if (hasFocus) applyFullscreen()
     }
     override fun onPause() {
@@ -1989,6 +1996,7 @@ class DashboardActivity : AppCompatActivity() {
     }
     override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
         super.onTopResumedActivityChanged(isTopResumedActivity)
+        if (maintenanceFence.stop(this)) return
         if (!resumeOwnsAdmissionVisibility(android.os.Build.VERSION.SDK_INT)) {
             onAdmissionVisibilityChanged(isTopResumedActivity)
         }
@@ -2032,6 +2040,7 @@ class DashboardActivity : AppCompatActivity() {
      *  resulting prefers-color-scheme change; no reload). No-op below 10 (config-driven) and on 13+. */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        if (maintenanceFence.stop(this)) return
         if (android.os.Build.VERSION.SDK_INT in 29..32) web?.let { applyForceDark(it) }
         // This activity handles orientation, screen size and night mode itself rather than being
         // recreated, so a status screen that is up stays as drawn unless it is redrawn here — but only

@@ -157,7 +157,7 @@ for transport in shell_v2 pty; do
   export MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=0
   run_installer
   expect_refuses "names the real cause when there is genuinely no boot route" \
-    "read-only /system and no verified systemless boot-service runner"
+    "could not determine where the canonical helper can be boot-registered"
   # A rooted panel may need its existing overlay mounted or may still have verity enabled, rather than
   # needing another root manager. Offer the non-rebooting probe first and keep the post-reboot command
   # executable on its own line.
@@ -183,7 +183,7 @@ for transport in shell_v2 pty; do
   export MOCK_LAYOUT_INJECT="MOUNT_PROBE_CONFUSED"
   run_installer
   expect_refuses "refuses an unreadable capability probe without inventing a cause" \
-    "could not determine where a boot-persistent helper can be installed"
+    "could not determine where the canonical helper can be boot-registered"
   grep -Fq 'read-only /system and no verified systemless boot-service runner' "$TMP/out.txt" &&
     check "does not claim read-only /system when it never learned that" bad ||
     check "does not claim read-only /system when it never learned that" ok

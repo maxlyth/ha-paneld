@@ -326,6 +326,245 @@ case "$IP" in
   *[!0-9a-zA-Z.:-]*|.*|-*) echo "${R}'$IP' doesn't look like an IP address or hostname (optionally :port).${X} Find it on the panel under Settings → About → Status, or in your router's client list."; exit 1 ;;
 esac
 case "$IP" in *:*) TARGET="$IP" ;; *) TARGET="$IP:5555" ;; esac
+
+# A historical release can carry a correctly authenticated provisioner that predates database
+# admission. Never execute those bytes against existing or indeterminate app data. Package-path
+# absence is not fresh-install proof: Android must also prove that no retained `-u` package/data
+# record exists, and a usable root route strengthens that proof with the actual CE/DE app-data,
+# canonical-database and recovery inventory. Current provisioners expose the stable marker below and
+# perform the full exact-APK/actual-database HOST_GATE themselves.
+legacy_provisioner_package_verdict() {
+  local nonce out status=0 verdict
+  nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  printf '%s\n' "$nonce" | grep -Eq '^[0-9a-f]{32}$' || { printf 'unknown\n'; return; }
+  out="$(adb -s "$TARGET" shell \
+    "echo HAPANELD_INSTALLER_PKG_BEGIN:$nonce; pm path io.github.maxlyth.hapaneld; echo HAPANELD_INSTALLER_PKG_TARGET:$nonce:\$?; pm list packages -u io.github.maxlyth.hapaneld; echo HAPANELD_INSTALLER_DATA:$nonce:\$?; pm path android; echo HAPANELD_INSTALLER_PKG_LIVE:$nonce:\$?; echo HAPANELD_INSTALLER_PKG_END:$nonce" 2>/dev/null)" || status=$?
+  [ "$status" -eq 0 ] || { printf 'unknown\n'; return; }
+  verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" '
+    /^HAPANELD_INSTALLER_PKG_BEGIN:/  { fields=split($0,a,":"); if (fields!=2 || a[2]!=n || seg!=0) bad=1; else seg=1; next }
+    /^HAPANELD_INSTALLER_PKG_TARGET:/ { fields=split($0,a,":"); if (fields!=3 || a[2]!=n || seg!=1 || a[3]!~/^[0-9]+$/) bad=1; else { trc=a[3]; seg=2 }; next }
+    /^HAPANELD_INSTALLER_DATA:/       { fields=split($0,a,":"); if (fields!=3 || a[2]!=n || seg!=2 || a[3]!~/^[0-9]+$/) bad=1; else { urc=a[3]; seg=3 }; next }
+    /^HAPANELD_INSTALLER_PKG_LIVE:/   { fields=split($0,a,":"); if (fields!=3 || a[2]!=n || seg!=3 || a[3]!~/^[0-9]+$/) bad=1; else { lrc=a[3]; seg=4 }; next }
+    /^HAPANELD_INSTALLER_PKG_END:/    { fields=split($0,a,":"); if (fields!=2 || a[2]!=n || seg!=4) bad=1; else seg=5; next }
+    seg==1 && /^package:/ { if ($0~/^package:\/[^ \t]+$/) target=1; else malformed=1; next }
+    seg==2 && /^package:/ { if ($0=="package:io.github.maxlyth.hapaneld") retained=1; else malformed=1; next }
+    seg==3 && /^package:/ { if ($0~/^package:\/[^ \t]+$/) live=1; else malformed=1; next }
+    NF { malformed=1 }
+    END {
+      if (bad || malformed || seg!=5 || urc+0!=0 || lrc+0!=0 || !live) print "unknown"
+      else if (target) print (trc+0==0) ? "present" : "unknown"
+      else if (!(trc+0==0 || trc+0==1)) print "unknown"
+      else print retained ? "retained" : "absent"
+    }')"
+  case "$verdict" in present|retained|absent) printf '%s\n' "$verdict" ;; *) printf 'unknown\n' ;; esac
+}
+
+legacy_provisioner_root_form() {
+  local out key prefix
+  out="$(adb -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || out=""
+  case "$out" in uid=0*) printf 'shell\n'; return 0 ;; esac
+  for key in su0 suroot; do
+    case "$key" in su0) prefix='su 0' ;; suroot) prefix='su root' ;; esac
+    out="$(adb -s "$TARGET" shell "$prefix \"id; id\"" 2>/dev/null | tr -d '\r')" || out=""
+    case "$out" in *uid=0*) printf '%sjoin\n' "$key"; return 0 ;; esac
+    out="$(adb -s "$TARGET" shell "$prefix sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || out=""
+    case "$out" in *uid=0*) printf '%sshc\n' "$key"; return 0 ;; esac
+  done
+  out="$(adb -s "$TARGET" shell 'su -c "id; id"' 2>/dev/null | tr -d '\r')" || out=""
+  case "$out" in *uid=0*) printf 'suc\n'; return 0 ;; esac
+  printf 'none\n'
+  return 1
+}
+
+legacy_quote_root_command() {
+  local command="$1"
+  command="${command//\\/\\\\}"
+  command="${command//\"/\\\"}"
+  command="${command//\$/\\\$}"
+  command="${command//\`/\\\`}"
+  printf '%s\n' "$command"
+}
+
+legacy_run_root() {
+  local form="$1" command="$2" quoted
+  quoted="$(legacy_quote_root_command "$command")"
+  case "$form" in
+    shell)      adb -s "$TARGET" shell "$command" ;;
+    su0join)    adb -s "$TARGET" shell "su 0 \"$quoted\"" ;;
+    su0shc)     adb -s "$TARGET" shell "su 0 sh -c \"$quoted\"" ;;
+    surootjoin) adb -s "$TARGET" shell "su root \"$quoted\"" ;;
+    surootshc)  adb -s "$TARGET" shell "su root sh -c \"$quoted\"" ;;
+    suc)        adb -s "$TARGET" shell "su -c \"$quoted\"" ;;
+    *) return 1 ;;
+  esac
+}
+
+# A proven root route makes Android's private filesystem directly observable, so do not discard that
+# stronger evidence and rely only on package-manager bookkeeping. The three independent fields keep
+# an odd or partially removed tree fail-closed: an app-data directory, a canonical DB/sidecar, or any
+# recovery/superseded artifact is retained state. `unknown` means root was proven but the inventory
+# did not complete, which is also a refusal.
+legacy_provisioner_root_data_verdict() {
+  local form nonce command out status=0 verdict
+  form="$(legacy_provisioner_root_form)" || form=none
+  [ "$form" != none ] || { printf 'unavailable\n'; return; }
+  nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  printf '%s\n' "$nonce" | grep -Eq '^[0-9a-f]{32}$' || { printf 'unknown\n'; return; }
+  command='set -u
+app_data=absent
+database=absent
+recovery=absent
+inventory=readable
+root_uid=unknown
+root_id=$(id 2>/dev/null) || root_id=""
+case "$root_id" in uid=0*) root_uid=zero ;; *) inventory=unreadable ;; esac
+for data_base in /data/user/0 /data/data /data/user_de/0; do
+  if [ -L "$data_base" ] || [ -d "$data_base" ]; then
+    if ! ls -1A "$data_base" >/dev/null 2>&1; then inventory=unreadable; continue; fi
+  elif [ -e "$data_base" ]; then
+    inventory=unreadable
+    continue
+  else
+    inventory=unreadable
+    continue
+  fi
+  app="$data_base/io.github.maxlyth.hapaneld"
+  if [ -L "$app" ] || [ -e "$app" ]; then
+    app_data=retained
+    if [ -L "$app" ] || [ ! -d "$app" ] || ! ls -1A "$app" >/dev/null 2>&1; then
+      inventory=unreadable
+      continue
+    fi
+  else
+    continue
+  fi
+  db_dir="$app/databases"
+  if [ -L "$db_dir" ]; then inventory=unreadable; database=retained; recovery=retained; continue
+  elif [ -e "$db_dir" ]; then
+    if [ ! -d "$db_dir" ] || ! ls -1A "$db_dir" >/dev/null 2>&1; then
+      inventory=unreadable
+      database=retained
+      recovery=retained
+      continue
+    fi
+  else
+    continue
+  fi
+  db="$db_dir/ha-paneld.db"
+  for database_path in "$db" "$db"-wal "$db"-shm "$db"-journal; do
+    if [ -L "$database_path" ] || [ -e "$database_path" ]; then database=retained; fi
+  done
+  for recovery_path in \
+    "$db".restore.tmp "$db".v*.premigrate "$db".v*.superseded \
+    "$db".v*.premigrate.tmp "$db".v*.superseded.tmp \
+    "$db".v*.premigrate-wal "$db".v*.premigrate-shm "$db".v*.premigrate-journal \
+    "$db".v*.superseded-wal "$db".v*.superseded-shm "$db".v*.superseded-journal; do
+    if [ -L "$recovery_path" ] || [ -e "$recovery_path" ]; then recovery=retained; fi
+  done
+done
+echo HAPANELD_INSTALLER_DB_BEGIN:@NONCE@
+echo HAPANELD_INSTALLER_ROOT_UID:$root_uid
+echo HAPANELD_INSTALLER_APP_DATA:$app_data
+echo HAPANELD_INSTALLER_DATABASE:$database
+echo HAPANELD_INSTALLER_RECOVERY:$recovery
+echo HAPANELD_INSTALLER_INVENTORY:$inventory
+echo HAPANELD_INSTALLER_DB_END:@NONCE@'
+  command="${command//@NONCE@/$nonce}"
+  out="$(legacy_run_root "$form" "$command" 2>/dev/null)" || status=$?
+  [ "$status" -eq 0 ] || { printf 'unknown\n'; return; }
+  verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" '
+    $0=="HAPANELD_INSTALLER_DB_BEGIN:" n { if (seg!=0) bad=1; else seg=1; next }
+    /^HAPANELD_INSTALLER_ROOT_UID:/ {
+      if (seg!=1 || root_uid!="") bad=1; else { root_uid=$0; sub(/^[^:]*:/,"",root_uid); seg=2 }; next
+    }
+    /^HAPANELD_INSTALLER_APP_DATA:/ {
+      if (seg!=2 || app!="") bad=1; else { app=$0; sub(/^[^:]*:/,"",app); seg=3 }; next
+    }
+    /^HAPANELD_INSTALLER_DATABASE:/ {
+      if (seg!=3 || db!="") bad=1; else { db=$0; sub(/^[^:]*:/,"",db); seg=4 }; next
+    }
+    /^HAPANELD_INSTALLER_RECOVERY:/ {
+      if (seg!=4 || recovery!="") bad=1; else { recovery=$0; sub(/^[^:]*:/,"",recovery); seg=5 }; next
+    }
+    /^HAPANELD_INSTALLER_INVENTORY:/ {
+      if (seg!=5 || inventory!="") bad=1; else { inventory=$0; sub(/^[^:]*:/,"",inventory); seg=6 }; next
+    }
+    $0=="HAPANELD_INSTALLER_DB_END:" n { if (seg!=6) bad=1; else seg=7; next }
+    NF { bad=1 }
+    END {
+      if (bad || seg!=7 || root_uid!="zero" || (app!="absent" && app!="retained") ||
+          (db!="absent" && db!="retained") ||
+          (recovery!="absent" && recovery!="retained") ||
+          (inventory!="readable" && inventory!="unreadable")) print "unknown"
+      else if (inventory!="readable") print "unknown"
+      else if (app=="absent" && db=="absent" && recovery=="absent") print "absent"
+      else print "retained"
+    }')"
+  case "$verdict" in absent|retained) printf '%s\n' "$verdict" ;; *) printf 'unknown\n' ;; esac
+}
+
+legacy_provisioner_fresh_verdict() {
+  local package_verdict root_verdict
+  package_verdict="$(legacy_provisioner_package_verdict)"
+  case "$package_verdict" in
+    present|retained) printf '%s\n' "$package_verdict"; return ;;
+    absent) ;;
+    *) printf 'unknown\n'; return ;;
+  esac
+  root_verdict="$(legacy_provisioner_root_data_verdict)"
+  case "$root_verdict" in
+    absent) printf 'fresh-root\n' ;;
+    unavailable) printf 'fresh-android-removal\n' ;;
+    retained) printf 'actual-retained\n' ;;
+    *) printf 'actual-unknown\n' ;;
+  esac
+}
+
+refuse_legacy_provisioner() {
+  local verdict="$1" phase="${2:-initial}" timing=""
+  [ "$phase" != consume ] || timing=" at the consume-time recheck"
+  case "$verdict" in
+    present)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing against an installed ha-paneld package: that historical script has no database-compatibility gate.${X}" >&2
+      ;;
+    retained)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing: Android retains an uninstalled ha-paneld package/data record, so this is not a proven fresh install.${X}" >&2
+      ;;
+    actual-retained)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing: root inspection found retained ha-paneld app-data, database, or recovery state.${X}" >&2
+      ;;
+    actual-unknown)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing: a proven root route could not establish a complete app-data, database, and recovery inventory.${X}" >&2
+      ;;
+    root-proof-lost)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing: the root route used to inspect actual app data at admission is no longer available.${X}" >&2
+      ;;
+    *)
+      echo "${R}Refusing to run the $PROVISION_REF provisioner$timing because package/data state is unknown and that historical script has no database-compatibility gate.${X}" >&2
+      ;;
+  esac
+  echo "Use a current database-compatible provisioner, or prove a complete Android data removal before retrying. Nothing was installed or changed." >&2
+  exit 1
+}
+
+LEGACY_PROVISIONER_FRESH_GATE=0
+LEGACY_PROVISIONER_INITIAL_FRESH_VERDICT=""
+if [ "$PROVISION_NEEDS_APK" = 1 ] && ! grep -q 'HAPANELD_HOST_DB_GATE_V1' "$SCRIPT"; then
+  LEGACY_PROVISIONER_FRESH_VERDICT="$(legacy_provisioner_fresh_verdict)"
+  case "$LEGACY_PROVISIONER_FRESH_VERDICT" in
+    fresh-root)
+      LEGACY_PROVISIONER_FRESH_GATE=1
+      LEGACY_PROVISIONER_INITIAL_FRESH_VERDICT="$LEGACY_PROVISIONER_FRESH_VERDICT"
+      echo "${Y}Legacy provisioner is eligible only because Android and root inspection proved this is a fresh install with no retained database or recovery state.${X}"
+      ;;
+    fresh-android-removal)
+      LEGACY_PROVISIONER_FRESH_GATE=1
+      LEGACY_PROVISIONER_INITIAL_FRESH_VERDICT="$LEGACY_PROVISIONER_FRESH_VERDICT"
+      echo "${Y}Legacy provisioner is eligible only because Android proved both package absence and complete package/data-record removal.${X}"
+      ;;
+    *) refuse_legacy_provisioner "$LEGACY_PROVISIONER_FRESH_VERDICT" ;;
+  esac
+fi
 if [ "$ADVANCED_PROVISION" = 0 ]; then
   printf "Panel id [blank = auto from device name]: " > "$TTY"; read -r PID < "$TTY" || PID=""
   printf "MQTT broker tcp://host:1883 [blank = auto-discover Home Assistant]: " > "$TTY"; read -r BROKER < "$TTY" || BROKER=""
@@ -360,6 +599,18 @@ fi
 # Give provision.sh the terminal as stdin so its own prompts (e.g. downgrade confirm) work.
 PROVISION_STDIN=/dev/null
 if { : < "$TTY"; } 2>/dev/null; then PROVISION_STDIN="$TTY"; fi
+# The legacy provisioner is the first panel-mutating operation in this wrapper. Re-run the complete
+# fresh-install proof as the immediately preceding observation so a package install, retained-data
+# record, app-data directory, canonical DB, or recovery file that appeared since admission cannot be
+# raced into guardless historical code.
+if [ "$LEGACY_PROVISIONER_FRESH_GATE" = 1 ]; then
+  LEGACY_PROVISIONER_FRESH_VERDICT="$(legacy_provisioner_fresh_verdict)"
+  case "$LEGACY_PROVISIONER_INITIAL_FRESH_VERDICT:$LEGACY_PROVISIONER_FRESH_VERDICT" in
+    fresh-root:fresh-root|fresh-android-removal:fresh-root|fresh-android-removal:fresh-android-removal) ;;
+    fresh-root:fresh-android-removal) refuse_legacy_provisioner root-proof-lost consume ;;
+    *) refuse_legacy_provisioner "$LEGACY_PROVISIONER_FRESH_VERDICT" consume ;;
+  esac
+fi
 if ! bash "$SCRIPT" "${ARGS[@]}" < "$PROVISION_STDIN"; then
   echo "${R}${B}ha-paneld installation did not complete.${X}" >&2
   echo "Read the failed item above, correct it, and run the same installer command again. Existing panel configuration was not deliberately removed." >&2

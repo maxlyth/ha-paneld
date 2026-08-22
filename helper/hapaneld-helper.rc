@@ -1,14 +1,4 @@
-# ha-paneld root helper — boot-persistent control daemon (LED, screen backlight, buttons, sysctls).
-#
-# Installed to /system/etc/init/hapaneld-helper.rc (auto-imported by init at boot). Runs in the `su`
-# domain so it can write the root-only sysfs nodes (sysfs_lights, backlight bl_power) on a
-# userdebug panel — the same domain a manual `su 0 shell uses. `class main` auto-starts it during
-# boot. See helper/install-daemon.sh and helper/README.md.
-#
-# DO NOT add `critical` — it causes a reboot-loop if the daemon crashes at boot (7-second cycle,
-# recovery-mode only). Without it, Android init's built-in backoff disables the service after
-# 4 rapid crashes rather than rebooting, which is the safe behaviour we want.
-service hapaneld_helper /system/bin/hapaneld-helper
+service hapaneld_helper /data/local/hapaneld-helper --supervise
     class main
     user root
     group root

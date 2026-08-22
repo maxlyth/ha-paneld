@@ -9,6 +9,7 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import io.github.maxlyth.hapaneld.platform.AccessibilityActions
+import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,7 +27,7 @@ class PanelAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
+        if (GuardDbProcessAdmission.ordinaryMutationsAllowed()) instance = this
     }
 
     override fun onDestroy() {
@@ -39,6 +40,7 @@ class PanelAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) return super.onKeyEvent(event)
         val name = KeyEvent.keyCodeToString(event.keyCode)
         ButtonEventPolicy.accessibility(
             down = event.action == KeyEvent.ACTION_DOWN,

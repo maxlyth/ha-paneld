@@ -49,6 +49,7 @@ import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationGate
 import io.github.maxlyth.hapaneld.control.CompanionDataOperationState
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityTransitionGate
 import io.github.maxlyth.hapaneld.control.NavbarController
 import io.github.maxlyth.hapaneld.control.PowerController
 import io.github.maxlyth.hapaneld.control.PowerSafetyController
@@ -169,8 +170,11 @@ import org.json.JSONObject
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
+import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
+import io.github.maxlyth.hapaneld.util.GuardDbSentinelLoad
 import io.github.maxlyth.hapaneld.util.HelperInstallReconciler
 import io.github.maxlyth.hapaneld.util.HelperInstallTransaction
 import io.github.maxlyth.hapaneld.util.SelfUpdater
@@ -198,6 +202,50 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+
+/** A failed candidate may undo only the channel it committed; a newer concurrent choice is preserved. */
+internal fun failedSelfUpdateChannelRollback(
+    currentChannel: String,
+    failedChannel: String,
+    previousChannel: String,
+): String? = previousChannel.takeIf { currentChannel == failedChannel }
+
+/** A committed channel is retained only when the exact prepared APK reports package installation. */
+internal suspend fun installCommittedSelfUpdateChannel(
+    install: suspend () -> io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult,
+    rollback: () -> Unit,
+    onInstalled: () -> Unit = {},
+): io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult {
+    var installed = false
+    try {
+        return install().also {
+            installed = it.installed
+            if (installed) onInstalled()
+        }
+    } finally {
+        if (!installed) rollback()
+    }
+}
+
+/** A scope canceled before the promoted install body starts still owes cleanup before ticket release. */
+internal fun cleanupCanceledCommittedSelfUpdateChannel(
+    cause: Throwable?,
+    installed: Boolean = false,
+    discardPrepared: () -> Unit,
+    rollback: () -> Unit,
+    finishProgress: () -> Unit,
+) {
+    if (cause == null) return
+    try {
+        discardPrepared()
+    } finally {
+        try {
+            if (!installed) rollback()
+        } finally {
+            finishProgress()
+        }
+    }
+}
 
 internal fun shouldDisableAutoBrightnessForMissingSource(
     enabled: Boolean,
@@ -753,6 +801,7 @@ internal fun acceptCommittedAutoSleepSetting(
  * external dashboard application.
  */
 class PaneldService : Service() {
+    private var guardDbRedirect = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     // One dedicated transition lane owns initial start, config rebuilds, reconnects, and final teardown.
     // Observations capture the generation and concrete MQTT/mDNS pair together, so watchdog/network work cannot read a generation from one runtime and then reach a replacement through a mutable field.
@@ -894,6 +943,16 @@ class PaneldService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (GuardDbProcessAdmission.maintenanceRequired()) {
+            // A stale START_STICKY or explicit component intent may still name PaneldService after a
+            // package replacement. Promote promptly, hand off to the narrow writer-free service, and
+            // return before Config/AppState/profile/controller construction.
+            startForegroundCompat("Database recovery maintenance", silent = true)
+            guardDbRedirect = true
+            GuardDbMaintenanceService.start(this)
+            stopSelf()
+            return
+        }
         // Android starts the foreground-service deadline before onCreate. Promote before profile/DB/
         // controller construction: slow root-backed initialization must never consume that deadline.
         // The bootstrap notification is deliberately silent until persisted notification policy is read.
@@ -1149,7 +1208,7 @@ class PaneldService : Service() {
         )
         relay = RelayController(profile)
         cpu = CpuController(profile)
-        adb = AdbController(config)
+        adb = AdbController(this, config)
         power = PowerController(this)
         powerSafety = PowerSafetyController(
             context = this,
@@ -1316,6 +1375,8 @@ class PaneldService : Service() {
             effectiveBrightness = { brightness.getBrightness() },
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
+            prepareSelfUpdateChannel = ::prepareSelfUpdateChannel,
+            onSelfUpdateChannelCommitted = ::completeSelfUpdateChannelChange,
             powerSafety = { powerSafety.assess(config.keepAwake, config.preventIdleDim) },
             freshPowerSafetyRepairCapability = powerSafety::repairCapabilityFresh,
             onRepairPowerSafety = ::repairPowerSafety,
@@ -1406,6 +1467,7 @@ class PaneldService : Service() {
                 )
             },
             storageHealth = StorageHealthRuntime::snapshot,
+            refreshStorageHealth = ::refreshStorageHealthForStatus,
         )
         storageHealthSubscription = StorageHealthRuntime.subscribe(::onStorageHealthSnapshot)
         sensors.setLearnedProximityListener {
@@ -1468,6 +1530,7 @@ class PaneldService : Service() {
                     Log.w(TAG, "self-update skipped: another destructive operation is running")
                 }
             },
+            onSelfUpdateChannelChange = ::launchSelfUpdateChannelChange,
             onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
             onDirectKioskSetting = { on ->
                 kioskSettings.apply(on)
@@ -1518,7 +1581,16 @@ class PaneldService : Service() {
         val spec = SettingsRegistry.spec(key)
             ?: return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
         val previous = previousValue ?: config.getRaw(spec)
-        val actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock"
+        // update_channel owns a two-phase candidate transaction. Its bridge handler starts the exact
+        // preflight and the service commits only after compatibility admission; the ordinary live-setting
+        // rule (persist before actuation) would create the forbidden configuration-mutation bypass.
+        if (key == "update_channel") {
+            return bridge.applySettingObserved(key, value, previous.takeUnless { spec.transient })
+        }
+        // Network ADB must retain its durable ownership marker until the controller has cleared every
+        // classic/TLS property and authoritatively read them all inactive. Persisting false here first
+        // made AdbController.set(false) conclude that the listener was external and skip teardown.
+        val actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock" || key == "network_adb"
         if (!spec.transient && !actuationOwnsPersistence && !config.commitRaw(spec, value)) {
             return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
         }
@@ -2532,6 +2604,153 @@ class PaneldService : Service() {
         )
     }
 
+    private suspend fun prepareSelfUpdateChannel(
+        requested: String,
+        force: Boolean,
+    ): io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight =
+        when (val prepared = SelfUpdater.admitConfigCoupledChannel(
+            SelfUpdater.prepareChannelUpdate(this@PaneldService, requested, force),
+        )) {
+            is SelfUpdater.ChannelPreparation.Unresolved ->
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved(prepared.message)
+            is SelfUpdater.ChannelPreparation.UpToDate ->
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.UpToDate(prepared.message)
+            is SelfUpdater.ChannelPreparation.Refused ->
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused(prepared.message)
+            is SelfUpdater.ChannelPreparation.Ready -> {
+                val candidate = prepared.prepared
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Ready(
+                    message = prepared.message,
+                    requiresRecovery = prepared.databaseDisposition ==
+                        AppInstaller.SelfInstallDatabaseDisposition.RECOVER,
+                    revalidateForConfigCommit = {
+                        AppInstaller.revalidatePreparedDirectForConfigCommit(
+                            this@PaneldService,
+                            candidate,
+                        )
+                    },
+                    install = {
+                        SelfUpdater.installPreparedOutcome(this@PaneldService, candidate).let {
+                            io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult(
+                                message = it.message,
+                                installed = it.installed,
+                            )
+                        }
+                    },
+                    discardPrepared = candidate::close,
+                )
+            }
+        }
+
+    /** MQTT channel switches own the install lane from preflight through the exact prepared install. */
+    private fun launchSelfUpdateChannelChange(requested: String, previous: String): Boolean = launchOperation(
+        component = "ha-paneld",
+        logLabel = "self-update channel $previous -> $requested",
+        operation = {
+            when (val preflight = prepareSelfUpdateChannel(
+                requested,
+                force = previous == "prerelease" && requested == "stable",
+            )) {
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Ready -> preflight.use {
+                    if (it.requiresRecovery) {
+                        return@launchOperation "refused: an update-channel change cannot recover an older database snapshot"
+                    }
+                    var commitRefusal: String? = null
+                    if (!config.synchronizedTransaction {
+                            if (config.updateChannel != previous || !config.selfUpdate) {
+                                false
+                            } else {
+                                // Revalidate the exact bytes, signer, boundary and current database as
+                                // DIRECT at the final boundary before this channel preference mutates.
+                                // DB_COMPAT_MUTATION_ANCHOR: MQTT_CONFIG_COMMIT
+                                commitRefusal = it.revalidateForConfigCommit()
+                                if (commitRefusal != null) false
+                                else config.applyBatch { config.setUpdateChannel(requested) }
+                            }
+                        }
+                    ) {
+                        return@launchOperation commitRefusal?.let { refusal -> "refused: $refusal" }
+                            ?: "refused: update channel changed during compatibility preflight"
+                    }
+                    mqtt.publishSelfUpdateChannelState()
+                    installCommittedSelfUpdateChannel(
+                        install = it.install,
+                        rollback = { rollbackSelfUpdateChannel(requested, previous) },
+                    ).message
+                }
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.UpToDate -> {
+                    if (!config.synchronizedTransaction {
+                            if (config.updateChannel != previous || !config.selfUpdate) false
+                            else config.applyBatch { config.setUpdateChannel(requested) }
+                        }
+                    ) "refused: update channel changed during compatibility preflight"
+                    else {
+                        mqtt.publishSelfUpdateChannelState()
+                        preflight.message
+                    }
+                }
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused -> preflight.message
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved -> preflight.message
+            }
+        },
+        after = { mqtt.publishSelfUpdateChannelState() },
+    )
+
+    /** Direct HTTP/import saves promote their config claim without releasing the shared lane. */
+    private fun completeSelfUpdateChannelChange(
+        preflight: io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Ready?,
+        progress: InstallProgress.Ticket?,
+        previous: String,
+        committed: String,
+    ) {
+        liveSettingAuthority.discard("update_channel")
+        mqtt.publishSelfUpdateChannelState()
+        if (preflight == null) {
+            progress?.let { InstallProgress.finish(it, "self-update candidate absent") }
+            return
+        }
+        val promoted = requireNotNull(progress) { "prepared channel install requires promoted ownership" }
+        val installed = AtomicBoolean(false)
+        val job = scope.launch {
+            completeOperation(
+                promoted,
+                "self-update committed channel",
+                operation = {
+                    preflight.use { ready ->
+                        installCommittedSelfUpdateChannel(
+                            install = ready.install,
+                            rollback = { rollbackSelfUpdateChannel(committed, previous) },
+                            onInstalled = { installed.set(true) },
+                        ).message
+                    }
+                },
+            )
+        }
+        job.invokeOnCompletion { cause ->
+            cleanupCanceledCommittedSelfUpdateChannel(
+                cause = cause,
+                installed = installed.get(),
+                discardPrepared = preflight::close,
+                rollback = { rollbackSelfUpdateChannel(committed, previous) },
+                finishProgress = { InstallProgress.finish(promoted, "cancelled") },
+            )
+        }
+    }
+
+    /** Roll back only the channel this failed exact candidate committed; a newer user choice wins. */
+    private fun rollbackSelfUpdateChannel(failedChannel: String, previousChannel: String) {
+        config.synchronizedTransaction {
+            val rollback = failedSelfUpdateChannelRollback(
+                config.updateChannel,
+                failedChannel,
+                previousChannel,
+            ) ?: return@synchronizedTransaction false
+            config.applyBatch { config.setUpdateChannel(rollback) }
+        }
+        liveSettingAuthority.discard("update_channel")
+        mqtt.publishSelfUpdateChannelState()
+    }
+
     /** Install/update a managed component from the Install tab (POST /api/v1/install/component). Runs
      *  off-thread; progress is reported via InstallProgress so the web UI can poll. action="reinstall"
      *  forces even when the installed build is already current. Single-slot (InstallProgress.start gates). */
@@ -2604,6 +2823,7 @@ class PaneldService : Service() {
     private fun canDrawOverlays(): Boolean = Settings.canDrawOverlays(this)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (guardDbRedirect) return START_NOT_STICKY
         // Start subsystems once. Android re-delivers onStartCommand on every startForegroundService()
         // re-issue and on START_STICKY re-create; re-running this block would call server.start() again,
         // binding a second Ktor server on :8888 -> BindException crashes the process (and would also
@@ -2655,6 +2875,10 @@ class PaneldService : Service() {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")
                 BundledHelperInstaller.Result.FAILED ->
                     Log.w(TAG, "root helper migration failed; versioned helper features remain unavailable")
+                BundledHelperInstaller.Result.BLOCKED_ACTIVE ->
+                    Log.i(TAG, "retaining current root helper while Guard DB maintenance owns recovery")
+                BundledHelperInstaller.Result.REPROVISION_REQUIRED ->
+                    Log.w(TAG, "root helper matches this release but is not canonical; reprovision required")
                 BundledHelperInstaller.Result.ALREADY_CURRENT,
                 BundledHelperInstaller.Result.SKIPPED -> Unit
             }
@@ -2737,8 +2961,8 @@ class PaneldService : Service() {
             // re-assert it after a delay if it was enabled. The delay leaves an unlocked window each boot so
             // an admin is never stranded; skipped if it was turned off (corner gesture / :8888 / HA) meanwhile.
             if (config.kioskLock || !kioskRecoveredAtStartup) scheduleKioskReassert()
-            // Boot re-assert of network adb — some firmwares strip persist.adb.tcp.port at boot, so
-            // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
+            // Boot recovery gives a durable interrupted-OFF marker priority over the older persisted
+            // ownership bit; only a marker-free ON intent may re-enable TCP. See AdbController.reassert.
             runCatching { adb.reassert() }
             startScreenOnReconciliation()
             startWebViewRebindWatch()
@@ -3285,6 +3509,17 @@ class PaneldService : Service() {
         storageHealthObservationQueue.run(::runStorageHealthObservation)
             ?: StorageHealthObservationAttempt.Stopped
 
+    /** Same-request HTTP proof joins the daily/recovery queue; it never creates a second SQLite reader
+     * authority. Only a complete clean observation earns a nonce-bound status proof. */
+    private suspend fun refreshStorageHealthForStatus(): StorageHealthSnapshot? =
+        when (runQueuedStorageHealthObservation()) {
+            StorageHealthObservationAttempt.Complete -> StorageHealthRuntime.snapshot().takeIf {
+                it.schemaVersion > 0 && it.quickCheck == StorageQuickCheck.OK && it.checkedAtMillis > 0L
+            }
+            StorageHealthObservationAttempt.Retry,
+            StorageHealthObservationAttempt.Stopped -> null
+        }
+
     private suspend fun runStorageHealthObservation(
         cancellationSignal: CancellationSignal,
     ): StorageHealthObservationAttempt {
@@ -3470,6 +3705,11 @@ class PaneldService : Service() {
     )
 
     override fun onDestroy() {
+        if (guardDbRedirect) {
+            stopForeground(true)
+            super.onDestroy()
+            return
+        }
         // A stood-down generation constructed no controller, holds no restart lease and armed no
         // boundary, so every wait, drain and proof below would be about another generation's owners.
         if (standingDown) {
@@ -4183,7 +4423,18 @@ class PaneldService : Service() {
                 }.onFailure { Log.e(TAG, "screen recovery before process restart failed", it) }
                     .getOrDefault(false)
                 val relaySafe = runCatching {
-                    CdpRelay.stopAndVerifyForProcessExit()
+                    if (GuardDbProcessAdmission.maintenanceRequired()) {
+                        RemoteDebugSecurityTransitionGate.withLock {
+                            val guard = (GuardDbProcessAdmission.current() as? GuardDbSentinelLoad.Valid)?.sentinel
+                                ?: return@withLock false
+                            CdpRelay.proveAbsentForGuardDbHandoff() &&
+                                config.hardenedSecurityEnabled && adb.hardenedRemoteDebugOff() &&
+                                RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch() ==
+                                guard.securityAuthorityEpoch
+                        }
+                    } else {
+                        CdpRelay.stopAndVerifyForProcessExit()
+                    }
                 }.onFailure { Log.e(TAG, "CDP relay cleanup before process restart failed", it) }
                     .getOrDefault(false)
                 // Durable markers preserve deferred policy cleanup. Once the screen is proved usable,
@@ -4346,6 +4597,10 @@ class PaneldService : Service() {
         private val PROCESS_BOUNDARY_COMMITMENT = ProcessBoundaryCommitment()
 
         fun start(context: Context) {
+            if (GuardDbProcessAdmission.maintenanceRequired()) {
+                GuardDbMaintenanceService.start(context)
+                return
+            }
             val intent = Intent(context, PaneldService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

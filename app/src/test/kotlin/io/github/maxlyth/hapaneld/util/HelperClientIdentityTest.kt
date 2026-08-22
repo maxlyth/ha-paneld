@@ -303,6 +303,43 @@ class HelperClientIdentityTest {
     }
 
     @Test
+    fun replacementSettlementTupleIsIdentityAdmittedAndUsesOneFreshConnectionPerProbe() {
+        val staged = "a".repeat(64)
+        val incumbent = "b".repeat(64)
+        val generation = FakeGeneration(
+            lineReplies = mapOf(
+                "PING" to "OK",
+                "BUILDID" to "BUILDID $staged",
+                "GUARDCAPS" to
+                    "${GuardDbMaintenanceProtocol.CAPS_REPLY} AUTONOMOUS SUPERVISED TERMINAL_RETIRE",
+                "GUARDSTATUS" to "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0",
+            ),
+        )
+        val transport = FakeHelperTransport(generation)
+        val client = IdentityAdmittingHelperClient(transport, nowNs = { 0L })
+
+        repeat(2) {
+            assertEquals(
+                HelperReplacementProbe.Settled(HelperReplacementBuild.NEW),
+                client.replacementProbe(staged, incumbent),
+            )
+        }
+
+        val sessions = transport.lineCommands.map(RecordedCommand::session).distinct()
+        assertEquals(2, sessions.size)
+        sessions.forEach { session ->
+            assertEquals(
+                listOf("PING", "BUILDID", "GUARDCAPS", "GUARDSTATUS"),
+                transport.lineCommands.filter { it.session == session }.map(RecordedCommand::command),
+            )
+            assertEquals(
+                listOf("VERSION"),
+                transport.bootstrapCommands.filter { it.session == session }.map(RecordedCommand::command),
+            )
+        }
+    }
+
+    @Test
     fun failedOperationCannotCarryAdmissionAcrossAnInstallerReplacement() {
         val transport = FakeHelperTransport(FakeGeneration(lineReply = null))
         val client = IdentityAdmittingHelperClient(transport, nowNs = { 0L })
@@ -430,6 +467,7 @@ private data class FakeGeneration(
     val ping: HelperBootstrapReply = HelperBootstrapReply.Line("OK"),
     val companionCaps: HelperBootstrapReply = HelperBootstrapReply.Line("COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"),
     val lineReply: String? = "OK",
+    val lineReplies: Map<String, String?> = emptyMap(),
 ) {
     @Volatile var afterVersion: (() -> Unit)? = null
 
@@ -468,7 +506,7 @@ private class FakeHelperTransport(initial: FakeGeneration = FakeGeneration()) : 
 
             override fun send(cmd: String): String? {
                 lineCommands += RecordedCommand(session, snapshot.id, cmd)
-                return snapshot.lineReply
+                return snapshot.lineReplies.getOrElse(cmd) { snapshot.lineReply }
             }
 
             override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult {

@@ -1,5 +1,6 @@
 #include "sysctl.h"
 #include "companion.h"
+#include "guard_maintenance.h"
 #include "sysexec.h"
 #include "util.h"
 
@@ -674,7 +675,12 @@ void cmd_installstream(conn_ctx *ctx, const char *args) {
         reply(ctx->fd, "STREAMERR\n");
         return;
     }
+    if (guard_maintenance_install_begin() != 0) {
+        reply(ctx->fd, "BUSY\n");
+        return;
+    }
     if (pthread_mutex_trylock(&install_lock) != 0) {
+        guard_maintenance_install_end();
         reply(ctx->fd, "BUSY\n");
         return;
     }
@@ -686,6 +692,7 @@ void cmd_installstream(conn_ctx *ctx, const char *args) {
         (uint64_t)space.f_bavail > UINT64_MAX / (uint64_t)space.f_frsize ||
         (uint64_t)space.f_bavail * (uint64_t)space.f_frsize < size + INSTALL_HEADROOM_BYTES) {
         pthread_mutex_unlock(&install_lock);
+        guard_maintenance_install_end();
         reply(ctx->fd, "STREAMERR\n");
         return;
     }
@@ -695,6 +702,7 @@ void cmd_installstream(conn_ctx *ctx, const char *args) {
         if (output >= 0) close(output);
         unlink(INSTALL_STREAM_STAGE);
         pthread_mutex_unlock(&install_lock);
+        guard_maintenance_install_end();
         reply(ctx->fd, "STREAMERR\n");
         return;
     }
@@ -711,6 +719,7 @@ void cmd_installstream(conn_ctx *ctx, const char *args) {
     }
     unlink(INSTALL_STREAM_STAGE);
     pthread_mutex_unlock(&install_lock);
+    guard_maintenance_install_end();
     reply(ctx->fd, installed ? "OK\n" : "ERR\n");
 }
 

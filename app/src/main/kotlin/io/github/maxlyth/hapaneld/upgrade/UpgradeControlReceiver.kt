@@ -14,11 +14,16 @@ import io.github.maxlyth.hapaneld.upgrade.UpgradeShutdownCoordinator
 import io.github.maxlyth.hapaneld.upgrade.canonicalUpgradeNonce
 import io.github.maxlyth.hapaneld.upgrade.formatUpgradeReady
 import io.github.maxlyth.hapaneld.upgrade.formatUpgradeReleased
+import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** ADB-shell-only ordered-broadcast barrier; all quiescence work is owned by PaneldService.onDestroy. */
 class UpgradeControlReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+            failResult("guard_db_maintenance_active")
+            return
+        }
         when (intent.action) {
             PREPARE_UPGRADE_ACTION -> prepare(context, intent)
             RELEASE_UPGRADE_ACTION -> release(context, intent)

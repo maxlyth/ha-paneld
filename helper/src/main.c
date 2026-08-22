@@ -36,7 +36,9 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -44,7 +46,9 @@
 #include "screen.h"
 #include "input.h"
 #include "gpio.h"
+#include "guard_maintenance.h"
 #include "server.h"
+#include "sysexec.h"
 #include "version.h"
 
 // Abstract-namespace UNIX socket name (leading NUL added at bind time). Must match the app's
@@ -64,6 +68,13 @@
 #endif
 #ifndef REPLACEMENT_RETIRE_DELAY_MS
 #define REPLACEMENT_RETIRE_DELAY_MS 50
+#endif
+#ifdef HAPANELD_TEST
+#define APP_HELPER_LIVE "/tmp/.hapaneld-helper-live-test"
+#define APP_HELPER_STAGE "/tmp/.hapaneld-helper-live-test.new"
+#else
+#define APP_HELPER_LIVE "/data/local/hapaneld-helper"
+#define APP_HELPER_STAGE "/data/local/.hapaneld-helper.new"
 #endif
 // MAX_CONN (the concurrent-connection cap) + the conn_admit/release/active gate live in server.[ch]
 // so the cap is unit-testable without this accept loop.
@@ -157,9 +168,13 @@ static int retire_replaced_helper(void) {
     return -1;
 }
 
-static int bind_helper_socket(int fd, const struct sockaddr *address, socklen_t length) {
+static int bind_helper_socket(
+        int fd,
+        const struct sockaddr *address,
+        socklen_t length,
+        int may_retire_replaced) {
     if (bind(fd, address, length) == 0) return 0;
-    if (errno != EADDRINUSE) return -1;
+    if (errno != EADDRINUSE || !may_retire_replaced) return -1;
 
     int retired = retire_replaced_helper();
     if (retired < 0) {
@@ -186,7 +201,9 @@ static int bind_helper_socket(int fd, const struct sockaddr *address, socklen_t 
 static int probe_command_allowed(const char *command) {
     return strcmp(command, "PING") == 0 ||
            strcmp(command, "COMPANIONCAPS") == 0 ||
-           strcmp(command, "BUILDID") == 0;
+           strcmp(command, "BUILDID") == 0 ||
+           strcmp(command, "GUARDCAPS") == 0 ||
+           strcmp(command, "GUARDSTATUS") == 0;
 }
 
 static long long monotonic_millis(void) {
@@ -306,16 +323,14 @@ static void *conn_thread(void *arg) {
     return NULL;
 }
 
-int main(int argc, char **argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-        puts(helper_identity());
-        return 0;
-    }
-    if (argc == 3 && strcmp(argv[1], "--request") == 0) {
-        return request_daemon(argv[2]);
-    }
-
+static int run_daemon(
+        int argc,
+        char **argv,
+        const char *replacement_nonce,
+        int may_retire_replaced) {
     signal(SIGPIPE, SIG_IGN);   // a dead subscriber's socket must not kill the daemon
+    if (!replacement_nonce && guard_maintenance_init() != 0)
+        fprintf(stderr, "hapaneld-helper guard maintenance recovery is in fail-closed hold\n");
     input_init();
     gpio_init();
     screen_init();
@@ -341,12 +356,18 @@ int main(int argc, char **argv) {
     memcpy(addr.sun_path + 1, SOCK_NAME, sizeof SOCK_NAME - 1);
     socklen_t alen = offsetof(struct sockaddr_un, sun_path) + 1 + (sizeof SOCK_NAME - 1);
 
-    if (bind_helper_socket(sfd, (struct sockaddr *)&addr, alen) < 0) {
+    if (bind_helper_socket(sfd, (struct sockaddr *)&addr, alen, may_retire_replaced) < 0) {
         perror("bind");
         close(sfd);
         return 1;
     }
     if (listen(sfd, MAX_CONN) < 0) { perror("listen"); return 1; }
+    if (replacement_nonce &&
+        guard_maintenance_replacement_worker_commit_app(replacement_nonce) != 0) {
+        fprintf(stderr, "hapaneld-helper replacement commit is in fail-closed hold\n");
+        close(sfd);
+        return 1;
+    }
     fprintf(stderr, "hapaneld-helper listening on abstract unix socket @%s\n", SOCK_NAME);
 
     for (;;) {
@@ -377,4 +398,189 @@ int main(int argc, char **argv) {
     }
     close(sfd);
     return 0;
+}
+
+/*
+ * Same-session crash supervision for writable-/data panels with no proved init or service.d hook.
+ * The app launches this exact mode as root. The parent owns no socket or transaction state; it only
+ * forks the worker before threads exist, waits for it, and restarts it after a bounded delay. The
+ * internal supervised flag is set only in that fork branch, so invoking the ordinary daemon cannot
+ * claim SUPERVISED. This is deliberately not a reboot-persistence claim.
+ */
+static pid_t spawn_socket_worker(
+        char **argv,
+        const char *replacement_nonce,
+        int may_retire_replaced) {
+    pid_t worker = fork();
+    if (worker != 0) return worker;
+    pid_t supervisor = getppid();
+    if (supervisor <= 1 || prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 ||
+        getppid() != supervisor) _exit(1);
+    guard_maintenance_set_supervised(1);
+    _exit(run_daemon(1, argv, replacement_nonce, may_retire_replaced));
+}
+
+static long long supervisor_executor_deadline(long long now_ms, uint64_t phase_deadline_ms) {
+    if (now_ms < 0) return -1;
+    long long command_deadline = now_ms <= LLONG_MAX - GUARD_EXECUTOR_TIMEOUT_MS
+        ? now_ms + GUARD_EXECUTOR_TIMEOUT_MS : now_ms;
+    return phase_deadline_ms < (uint64_t)command_deadline
+        ? (long long)phase_deadline_ms : command_deadline;
+}
+
+static int run_supervisor(char **argv, const char *replacement_nonce) {
+    if (geteuid() != 0) return 1;
+    if (!replacement_nonce && guard_maintenance_init() != 0) return 1;
+    guard_maintenance_set_supervisor_owner();
+    pid_t worker = -1;
+    long long worker_after_ms = 0;
+    pid_t executor = -1;
+    enum guard_supervisor_work executor_work = GUARD_WORK_NONE;
+    long long executor_deadline_ms = 0;
+    enum guard_supervisor_work pending_work = GUARD_WORK_NONE;
+    for (;;) {
+        long long now = monotonic_millis();
+        if (now < 0) return 1;
+        if (worker <= 1 && now >= worker_after_ms) {
+            int may_retire_replaced = replacement_nonce == NULL &&
+                guard_maintenance_replacement_safe() == 0;
+            worker = spawn_socket_worker(argv, replacement_nonce, may_retire_replaced);
+            if (worker < 0) worker_after_ms = now + 1000;
+        }
+        if (worker > 1) {
+            int status = 0;
+            pid_t reaped = waitpid(worker, &status, WNOHANG);
+            if (reaped == worker) {
+                worker = -1;
+                if (WIFEXITED(status) && WEXITSTATUS(status) == GUARD_REPLACEMENT_EXIT) {
+                    char nonce[65];
+                    if (executor > 1 || pending_work != GUARD_WORK_NONE ||
+                        guard_maintenance_replacement_parent_grant(nonce) !=
+                            GUARD_REPLACEMENT_READY ||
+                        guard_maintenance_replacement_export_lease() != 0) {
+                        /* A bare exit code is only a worker crash. A valid durable request may not
+                         * preempt package work; remain fail-closed under the original lease. */
+                        worker_after_ms = now + 1000;
+                        continue;
+                    }
+                    char *const replacement_argv[] = {
+                        (char *)"hapaneld-helper", (char *)"--replace-app-lease", nonce, NULL,
+                    };
+                    char *const replacement_env[] = {
+                        (char *)"PATH=/system/bin:/system/xbin", NULL,
+                    };
+                    execve(APP_HELPER_STAGE, replacement_argv, replacement_env);
+                    (void)guard_maintenance_replacement_parent_abort(nonce);
+                    worker_after_ms = now + 1000;
+                    continue;
+                }
+                worker_after_ms = now + 1000;
+            } else if (reaped < 0 && errno != EINTR) {
+                worker = -1;
+                worker_after_ms = now + 1000;
+            }
+        }
+
+        if (executor > 1) {
+            int status = 0;
+            int state = sysexec_poll_argv(executor, &status);
+            enum guard_execution_result result = GUARD_EXEC_REAPED;
+            if (state == 0 && now >= executor_deadline_ms) {
+                result = sysexec_terminate_argv(executor, &status) == 0
+                    ? GUARD_EXEC_TIMED_OUT : GUARD_EXEC_WAIT_LOST;
+                state = 1;
+            } else if (state < 0) {
+                result = GUARD_EXEC_WAIT_LOST;
+                state = 1;
+            }
+            if (state == 1) {
+                int next = guard_maintenance_supervisor_complete(executor_work, result, status);
+                executor = -1;
+                executor_work = GUARD_WORK_NONE;
+                executor_deadline_ms = 0;
+                pending_work = next > 0 ? (enum guard_supervisor_work)next : GUARD_WORK_NONE;
+            }
+        }
+
+        if (executor <= 1) {
+            if (pending_work == GUARD_WORK_NONE) {
+                int next = guard_maintenance_supervisor_tick();
+                if (next > 0) pending_work = (enum guard_supervisor_work)next;
+            }
+            if (pending_work != GUARD_WORK_NONE) {
+                pid_t started = -1;
+                uint64_t phase_deadline = 0;
+                int start_result = guard_maintenance_supervisor_work_deadline(
+                        pending_work, &phase_deadline) == 0
+                    ? guard_maintenance_supervisor_start_work(pending_work, &started) : -1;
+                if (start_result == 0) {
+                    executor = started;
+                    executor_work = pending_work;
+                    executor_deadline_ms = supervisor_executor_deadline(now, phase_deadline);
+                    pending_work = GUARD_WORK_NONE;
+                } else {
+                    int next = guard_maintenance_supervisor_complete(
+                        pending_work, start_result == -2
+                            ? GUARD_EXEC_WAIT_LOST : GUARD_EXEC_NOT_STARTED, 0);
+                    pending_work = next > 0 ? (enum guard_supervisor_work)next : GUARD_WORK_NONE;
+                    continue;
+                }
+            }
+        }
+        struct timespec pause = { .tv_sec = 0, .tv_nsec = 50000000L };
+        while (nanosleep(&pause, &pause) != 0 && errno == EINTR) { }
+    }
+}
+
+static int run_supervisor_entry(char **argv) {
+    char nonce[65];
+    int replacement = guard_maintenance_replacement_startup_reconcile_app(nonce);
+    if (replacement < 0) return 1;
+    if (replacement == 1) {
+        guard_maintenance_set_supervisor_owner();
+        if (guard_maintenance_replacement_export_lease() != 0) return 1;
+        char *const adopted_argv[] = {
+            (char *)"hapaneld-helper", (char *)"--supervise-app-lease", nonce, NULL,
+        };
+        char *const replacement_env[] = {
+            (char *)"PATH=/system/bin:/system/xbin", NULL,
+        };
+        execve(APP_HELPER_LIVE, adopted_argv, replacement_env);
+        return 1;
+    }
+    return run_supervisor(argv, NULL);
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        puts(helper_identity());
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--request") == 0) return request_daemon(argv[2]);
+    if (argc == 2 && strcmp(argv[1], "--replacement-safe") == 0) {
+        int safe = guard_maintenance_replacement_safe() == 0;
+        puts(safe ? "REPLACE_SAFE" : "GUARD_ARMED");
+        return safe ? 0 : 3;
+    }
+    if (argc == 3 && strcmp(argv[1], "--replace-app-lease") == 0) {
+        if (guard_maintenance_replacement_stage_app(argv[2]) != 0) return 4;
+        char *const adopted_argv[] = {
+            (char *)"hapaneld-helper", (char *)"--supervise-app-lease", argv[2], NULL,
+        };
+        char *const replacement_env[] = {
+            (char *)"PATH=/system/bin:/system/xbin", NULL,
+        };
+        execve(APP_HELPER_LIVE, adopted_argv, replacement_env);
+        return 5;
+    }
+    if (argc == 3 && strcmp(argv[1], "--supervise-app-lease") == 0) {
+        if (guard_maintenance_replacement_supervisor_adopt_app(argv[2]) != 0) return 6;
+        return run_supervisor(argv, argv[2]);
+    }
+    if (argc == 2 && strcmp(argv[1], "--supervise") == 0) return run_supervisor_entry(argv);
+#ifdef HAPANELD_TEST_ALLOW_STALE_OWNER_RETIREMENT
+    return run_daemon(argc, argv, NULL, 1);
+#else
+    return run_daemon(argc, argv, NULL, 0);
+#endif
 }

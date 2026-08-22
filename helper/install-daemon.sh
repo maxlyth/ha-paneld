@@ -4,17 +4,17 @@
 # Run it on every rooted supported panel. Sandbox-walled panels need the daemon for privileged
 # controls; direct-su panels also need the current descriptor-confined Companion data protocol.
 #
-# Two install paths, chosen by a capability probe on the device (not by root-tool identity):
+# One canonical live binary and three boot-registration paths, chosen by capability probes on the
+# device (not by root-tool identity):
 #
-#   Vendor root / userdebug (default): /system is rw-remountable. Places the binary in /system/bin
-#   and the init .rc in /system/etc/init. Boot-persistent via the Android init service. An
-#   OTA/factory-reset would remove it.
+#   Every route installs root:root 0700 /data/local/hapaneld-helper. A writable /system or /vendor
+#   receives only an init registration; a verified systemless environment receives only a service.d
+#   registration. Every registration launches the canonical binary with --supervise. Historical
+#   /system/bin and /data/adb helper layouts are removed only inside the authenticated transaction
+#   and restored byte-for-byte if that transaction rolls back.
 #
-#   Systemless root (Magisk, KernelSU, APatch, …): /system is NOT rw-remountable. A root-owned binary
-#   is installed under /data/adb/hapaneld and a service.d script is written to
-#   /data/adb/service.d/hapaneld-helper.sh, which waits for sys.boot_completed then launches the
-#   daemon in background. This path is selected only after detecting a supported systemless runner.
-#   Survives reboots; removed by a factory-reset (same as the vendor path).
+#   The new journal is version 3 and describes that canonical topology. Version 1 and 2 journals
+#   remain version-dispatched to their original recovery code and are never interpreted as v3.
 #
 #   ./helper/install-daemon.sh <panel-ip:5555> [abi]
 #
@@ -359,15 +359,26 @@ RC_SHA256="$(host_sha256 "$HERE/hapaneld-helper.rc")"
 # through the environment rather than through the pattern. Bytes, not characters, is in any case the
 # right reading for an ELF artifact.
 extract_helper_build_id() {
-  local file="$1" records ids
+  local file="$1" records ids bare_ids
   # No match and an unreadable file are both "cannot state an identity", which the count checks below
   # turn into a refusal; the tolerated statuses here only stop `set -e` from aborting the run before
   # that refusal can be reported with its own message.
   records="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null | LC_ALL=C grep -aoE 'BUILDID .*' || true)"
   [ "$(printf '%s\n' "$records" | LC_ALL=C grep -c '^BUILDID ')" -eq 1 ] || return 1
   ids="$(printf '%s\n' "$records" | LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
-  [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
-  printf '%s\n' "$ids"
+  if [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ]; then
+    printf '%s\n' "$ids"
+    return 0
+  fi
+  # The current helper writes the reply in three calls, so its ELF contains a marker-only
+  # "BUILDID " string and a separate NUL-terminated identity. Accept that layout only when the
+  # marker is exact and the artifact contains exactly one whole bare identity record; an invalid or
+  # ambiguous prefixed record must never fall through and borrow an unrelated hash.
+  [ "$records" = 'BUILDID ' ] || return 1
+  bare_ids="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null |
+    LC_ALL=C grep -aoE '^[0-9a-f]{64}$' || true)"
+  [ "$(printf '%s\n' "$bare_ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
+  printf '%s\n' "$bare_ids"
 }
 if ! BUILD_ID="$(extract_helper_build_id "$BIN")"; then
   fail "the helper at $BIN does not state a single valid build identity" \
@@ -406,11 +417,19 @@ if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb
     "This standalone installer uses a separate journal and did not change helper files."
 fi
 
+# Journal v1 predates TARGET_SERVICE_SHA256. These are the only two registration byte streams ever
+# published by that journal version; accepting anything else would let an unrecorded live file gain
+# rollback authority merely because it occupies the historical fixed path.
+LEGACY_V1_SYSTEM_RC_SHA256="b42a66ff435a830390c7f04e66ffa252e3bf4027e68c72a29002df4886f8d4f4"
+LEGACY_V1_SYSTEMLESS_SERVICE_SHA256="60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493"
 TRANSACTION_ID="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
 printf '%s\n' "$TRANSACTION_ID" | grep -Eq '^[0-9a-f]{32}$' || fail "could not create a root-helper transaction nonce"
 PROBE_STAGING_PATH="/data/local/tmp/hapaneld-helper.probe-$TRANSACTION_ID"
 RC_STAGING_PATH="$PROBE_STAGING_PATH.rc"
 SVC_STAGING_PATH="$PROBE_STAGING_PATH.svc"
+CANONICAL_HELPER_PATH="/data/local/hapaneld-helper"
+CANONICAL_CANDIDATE_PATH="/data/local/.hapaneld-helper.manual-$TRANSACTION_ID"
+MANUAL_V3_MARKER="/data/local/.hapaneld-helper-manual-upgrade"
 MANUAL_LEASE_SECONDS="${HAPANELD_MANUAL_LEASE_SECONDS:-600}"
 MANUAL_LEASE_RENEW_SECONDS="${HAPANELD_MANUAL_LEASE_RENEW_SECONDS:-60}"
 case "$MANUAL_LEASE_SECONDS" in ''|*[!0-9]*|0) fail "invalid standalone transaction lease duration" ;; esac
@@ -440,16 +459,15 @@ trap 'exit 143' TERM
 
 helper_daemon_reply() {
   local command="$1" install_kind="$2" helper_path="${3:-}"
-  case "$command" in PING|COMPANIONCAPS|BUILDID) ;; *) return 1 ;; esac
+  case "$command" in PING|COMPANIONCAPS|BUILDID|GUARDCAPS|GUARDSTATUS) ;; *) return 1 ;; esac
   if [ -z "$helper_path" ]; then
     case "$install_kind" in
-      system) helper_path=/system/bin/hapaneld-helper ;;
-      systemless) helper_path=/data/adb/hapaneld/hapaneld-helper ;;
+      system|vendor|systemless) helper_path="$CANONICAL_HELPER_PATH" ;;
       *) return 1 ;;
     esac
   fi
   case "$helper_path" in
-    /system/bin/hapaneld-helper|/data/adb/hapaneld/hapaneld-helper|/data/adb/hapaneld/.helper-manual-probe-[0-9a-f]*) ;;
+    /data/local/hapaneld-helper|/data/adb/hapaneld/.helper-manual-probe-[0-9a-f]*|/data/local/.hapaneld-helper-manual-probe-[0-9a-f]*) ;;
     *) return 1 ;;
   esac
   run_root 'exec '"$helper_path"' --request '"$command"
@@ -469,13 +487,9 @@ wait_for_helper_reply() {
 renew_manual_lease() {
   local install_kind="$1" marker target_service renewed
   case "$install_kind" in
-    system)
-      marker=/system/bin/.hapaneld-helper-manual-upgrade
-      target_service="$RC_SHA256"
-      ;;
-    systemless)
-      marker=/data/adb/hapaneld/.helper-manual-upgrade.marker
-      target_service="${SVC_SHA256:-}"
+    system|vendor|systemless)
+      marker="$MANUAL_V3_MARKER"
+      target_service="${SERVICE_SHA256:-}"
       ;;
     *) return 1 ;;
   esac
@@ -483,8 +497,9 @@ renew_manual_lease() {
   renewed="$(run_root '
     marker='"$marker"'
     [ -f "$marker" ] || { echo LEASE_PENDING; exit 0; }
-    grep -q ^JOURNAL_VERSION=2$ "$marker" || exit 1
+    grep -q ^JOURNAL_VERSION=3$ "$marker" || exit 1
     grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ "$marker" || exit 1
+    grep -qx REGISTRATION_KIND='"$install_kind"' "$marker" || exit 1
     grep -qx TRANSACTION_ID='"$TRANSACTION_ID"' "$marker" || exit 1
     grep -qx TARGET_BUILD_ID='"$BUILD_ID"' "$marker" || exit 1
     grep -qx TARGET_HELPER_SHA256='"$BIN_SHA256"' "$marker" || exit 1
@@ -575,6 +590,9 @@ rollback_root_helper() {
         fi
         grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ /system/bin/.hapaneld-helper-manual-upgrade || exit 1
         marker=/system/bin/.hapaneld-helper-manual-upgrade
+        transaction_id='"$transaction_id"'
+        target_registration='"$target_service"'
+        [ "$transaction_id" != legacy ] || target_registration='"$LEGACY_V1_SYSTEM_RC_SHA256"'
         live_recorded() {
           name=$1; live=$2
           if grep -q ^"$name"=1$ "$marker"; then
@@ -582,13 +600,59 @@ rollback_root_helper() {
             actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
             [ "${actual%% *}" = "$expected" ]
           else
-            [ ! -e "$live" ]
+            [ ! -e "$live" ] && [ ! -L "$live" ]
           fi
         }
         hash_is() {
-          expected=$1; live=$2
-          actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
+          expected=$1; hash_path=$2
+          actual=$(sha256sum "$hash_path" 2>/dev/null || toybox sha256sum "$hash_path" 2>/dev/null) || return 1
           [ "${actual%% *}" = "$expected" ]
+        }
+        owner_mode() {
+          owner=$(stat -c %u:%g "$1" 2>/dev/null || toybox stat -c %u:%g "$1" 2>/dev/null) || return 1
+          mode=$(stat -c %a "$1" 2>/dev/null || toybox stat -c %a "$1" 2>/dev/null) || return 1
+          [ "$owner" = 0:0 ] && [ "$mode" = "$2" ]
+        }
+        sync_path() {
+          sync "$1" 2>/dev/null || sync
+        }
+        publish_rollback_phase() {
+          phase_tmp="$marker".hapaneld-manual-"$transaction_id".phase
+          rm -f "$phase_tmp" || return 1
+          sed "/^ROLLBACK_PHASE=/d" "$marker" > "$phase_tmp" || return 1
+          echo ROLLBACK_PHASE=PUBLISHING >> "$phase_tmp"
+          chown 0:0 "$phase_tmp" || return 1
+          chmod 600 "$phase_tmp" || return 1
+          sync_path "$phase_tmp" || return 1
+          mv -f "$phase_tmp" "$marker" || return 1
+          sync_path "${marker%/*}" || return 1
+          [ "$(grep -c ^ROLLBACK_PHASE=PUBLISHING$ "$marker")" = 1 ]
+        }
+        publish_recorded() {
+          name=$1; recovery=$2; live=$3; mode=$4
+          expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+          temporary="$live".hapaneld-manual-"$transaction_id".restore
+          rm -f "$temporary" || return 1
+          cp -p "$recovery" "$temporary" || return 1
+          chown 0:0 "$temporary" || return 1
+          chmod "$mode" "$temporary" || return 1
+          hash_is "$expected" "$temporary" && owner_mode "$temporary" "$mode" || return 1
+          sync_path "$temporary" || return 1
+          mv -f "$temporary" "$live" || return 1
+          sync_path "${live%/*}" || return 1
+          hash_is "$expected" "$live" && owner_mode "$live" "$mode"
+        }
+        publish_absent() {
+          live=$1
+          temporary="$live".hapaneld-manual-"$transaction_id".restore
+          rm -f "$temporary" "$live" || return 1
+          sync_path "${live%/*}" || return 1
+          [ ! -e "$live" ] && [ ! -L "$live" ]
+        }
+        recorded_exact() {
+          name=$1; live=$2; mode=$3
+          live_recorded "$name" "$live" || return 1
+          grep -q ^"$name"=0$ "$marker" || owner_mode "$live" "$mode"
         }
         wait_for_helper_retirement() {
           attempt=0
@@ -601,22 +665,42 @@ rollback_root_helper() {
           done
           return 1
         }
-        if live_recorded OLD_BIN /system/bin/hapaneld-helper &&
-           live_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc &&
-           live_recorded LEGACY_BIN /system/bin/hapaneld-ledd &&
-           live_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc &&
-           live_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper &&
-           live_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh; then
-          live_state=PRE_SWAP
-        elif hash_is '"$target_helper"' /system/bin/hapaneld-helper &&
-             hash_is '"$target_service"' /system/etc/init/hapaneld-helper.rc &&
-             [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
-             [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
-          live_state=TARGET
-        else
-          echo ROLLBACK_UNKNOWN
-          exit 0
-        fi
+        all_live_recorded() {
+          live_recorded OLD_BIN /system/bin/hapaneld-helper &&
+          live_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc &&
+          live_recorded LEGACY_BIN /system/bin/hapaneld-ledd &&
+          live_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc &&
+          live_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper &&
+          live_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh
+        }
+        target_live() {
+          hash_is '"$target_helper"' /system/bin/hapaneld-helper &&
+          hash_is "$target_registration" /system/etc/init/hapaneld-helper.rc &&
+          [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+          [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] &&
+          [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+          [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ]
+        }
+        rollback_live_known() {
+          { live_recorded OLD_BIN /system/bin/hapaneld-helper ||
+            hash_is '"$target_helper"' /system/bin/hapaneld-helper; } &&
+          { live_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc ||
+            hash_is "$target_registration" /system/etc/init/hapaneld-helper.rc; } &&
+          { live_recorded LEGACY_BIN /system/bin/hapaneld-ledd ||
+            { [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ]; }; } &&
+          { live_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc ||
+            { [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ]; }; } &&
+          { live_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper ||
+            { [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ]; }; } &&
+          { live_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh ||
+            { [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ]; }; }
+        }
+        rollback_phase=$(sed -n s/^ROLLBACK_PHASE=//p "$marker")
+        case "$rollback_phase" in
+          "") all_live_recorded || target_live || { echo ROLLBACK_UNKNOWN; exit 0; }; begin_rollback=1 ;;
+          PUBLISHING) rollback_live_known || { echo ROLLBACK_UNKNOWN; exit 0; }; begin_rollback=0 ;;
+          *) echo ROLLBACK_UNKNOWN; exit 0 ;;
+        esac
         if grep -q ^OLD_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
           expected=$(sed -n s/^OLD_BIN_SHA256=//p /system/bin/.hapaneld-helper-manual-upgrade)
           actual=$(sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null) || exit 1
@@ -647,6 +731,7 @@ rollback_root_helper() {
           actual=$(sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null) || exit 1
           [ "${actual%% *}" = "$expected" ] || exit 1
         fi
+        [ "$begin_rollback" = 0 ] || publish_rollback_phase || exit 1
         mkdir -p /data/adb/hapaneld || exit 1
         chown 0:0 /data/adb/hapaneld || exit 1
         chmod 700 /data/adb/hapaneld || exit 1
@@ -661,44 +746,42 @@ rollback_root_helper() {
         pkill -x hapaneld-ledd 2>/dev/null
         wait_for_helper_retirement || exit 1
         if grep -q ^OLD_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          rm -f /system/bin/hapaneld-helper
-          cp -p /system/bin/hapaneld-helper.hapaneld-manual-recovery /system/bin/hapaneld-helper || exit 1
-          chown 0:0 /system/bin/hapaneld-helper; chmod 755 /system/bin/hapaneld-helper
+          publish_recorded OLD_BIN /system/bin/hapaneld-helper.hapaneld-manual-recovery /system/bin/hapaneld-helper 755 || exit 1
         else
-          rm -f /system/bin/hapaneld-helper
+          publish_absent /system/bin/hapaneld-helper || exit 1
         fi
         if grep -q ^OLD_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          rm -f /system/etc/init/hapaneld-helper.rc
-          cp -p /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery /system/etc/init/hapaneld-helper.rc || exit 1
-          chown 0:0 /system/etc/init/hapaneld-helper.rc; chmod 644 /system/etc/init/hapaneld-helper.rc
+          publish_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery /system/etc/init/hapaneld-helper.rc 644 || exit 1
         else
-          rm -f /system/etc/init/hapaneld-helper.rc
+          publish_absent /system/etc/init/hapaneld-helper.rc || exit 1
         fi
         if grep -q ^LEGACY_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          cp -p /system/bin/hapaneld-ledd.hapaneld-manual-recovery /system/bin/hapaneld-ledd || exit 1
-          chown 0:0 /system/bin/hapaneld-ledd; chmod 755 /system/bin/hapaneld-ledd
+          publish_recorded LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-manual-recovery /system/bin/hapaneld-ledd 755 || exit 1
         else
-          rm -f /system/bin/hapaneld-ledd
+          publish_absent /system/bin/hapaneld-ledd || exit 1
         fi
         if grep -q ^LEGACY_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          cp -p /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery /system/etc/init/hapaneld-ledd.rc || exit 1
-          chown 0:0 /system/etc/init/hapaneld-ledd.rc; chmod 644 /system/etc/init/hapaneld-ledd.rc
+          publish_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery /system/etc/init/hapaneld-ledd.rc 644 || exit 1
         else
-          rm -f /system/etc/init/hapaneld-ledd.rc
+          publish_absent /system/etc/init/hapaneld-ledd.rc || exit 1
         fi
         if grep -q ^ALT_BIN=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          cp -p /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery /data/adb/hapaneld/hapaneld-helper || exit 1
-          chown 0:0 /data/adb/hapaneld/hapaneld-helper; chmod 755 /data/adb/hapaneld/hapaneld-helper
+          publish_recorded ALT_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery /data/adb/hapaneld/hapaneld-helper 755 || exit 1
         else
-          rm -f /data/adb/hapaneld/hapaneld-helper
+          publish_absent /data/adb/hapaneld/hapaneld-helper || exit 1
         fi
         if grep -q ^ALT_SERVICE=1$ /system/bin/.hapaneld-helper-manual-upgrade; then
-          cp -p /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery /data/adb/service.d/hapaneld-helper.sh || exit 1
-          chown 0:0 /data/adb/service.d/hapaneld-helper.sh; chmod 755 /data/adb/service.d/hapaneld-helper.sh
+          publish_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery /data/adb/service.d/hapaneld-helper.sh 755 || exit 1
         else
-          rm -f /data/adb/service.d/hapaneld-helper.sh
+          publish_absent /data/adb/service.d/hapaneld-helper.sh || exit 1
         fi
         sync || exit 1
+        recorded_exact OLD_BIN /system/bin/hapaneld-helper 755 &&
+          recorded_exact OLD_SERVICE /system/etc/init/hapaneld-helper.rc 644 &&
+          recorded_exact LEGACY_BIN /system/bin/hapaneld-ledd 755 &&
+          recorded_exact LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc 644 &&
+          recorded_exact ALT_BIN /data/adb/hapaneld/hapaneld-helper 755 &&
+          recorded_exact ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 || exit 1
         if [ -f /system/bin/hapaneld-helper.hapaneld-manual-recovery ]; then
           start hapaneld_helper 2>/dev/null
           /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
@@ -731,6 +814,9 @@ rollback_root_helper() {
         fi
         grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
         marker=/data/adb/hapaneld/.helper-manual-upgrade.marker
+        transaction_id='"$transaction_id"'
+        target_registration='"$target_service"'
+        [ "$transaction_id" != legacy ] || target_registration='"$LEGACY_V1_SYSTEMLESS_SERVICE_SHA256"'
         live_recorded() {
           name=$1; live=$2
           if grep -q ^"$name"=1$ "$marker"; then
@@ -738,7 +824,7 @@ rollback_root_helper() {
             actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
             [ "${actual%% *}" = "$expected" ]
           else
-            [ ! -e "$live" ]
+            [ ! -e "$live" ] && [ ! -L "$live" ]
           fi
         }
         wait_for_helper_retirement() {
@@ -753,20 +839,76 @@ rollback_root_helper() {
           return 1
         }
         hash_is() {
-          expected=$1; live=$2
-          actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
+          expected=$1; hash_path=$2
+          actual=$(sha256sum "$hash_path" 2>/dev/null || toybox sha256sum "$hash_path" 2>/dev/null) || return 1
           [ "${actual%% *}" = "$expected" ]
         }
-        if live_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper &&
-           live_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh; then
-          live_state=PRE_SWAP
-        elif hash_is '"$target_helper"' /data/adb/hapaneld/hapaneld-helper &&
-             hash_is '"$target_service"' /data/adb/service.d/hapaneld-helper.sh; then
-          live_state=TARGET
-        else
-          echo ROLLBACK_UNKNOWN
-          exit 0
-        fi
+        owner_mode() {
+          owner=$(stat -c %u:%g "$1" 2>/dev/null || toybox stat -c %u:%g "$1" 2>/dev/null) || return 1
+          mode=$(stat -c %a "$1" 2>/dev/null || toybox stat -c %a "$1" 2>/dev/null) || return 1
+          [ "$owner" = 0:0 ] && [ "$mode" = "$2" ]
+        }
+        sync_path() {
+          sync "$1" 2>/dev/null || sync
+        }
+        publish_recorded() {
+          name=$1; recovery=$2; live=$3; mode=$4
+          expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+          temporary="$live".hapaneld-manual-"$transaction_id".restore
+          rm -f "$temporary" || return 1
+          cp -p "$recovery" "$temporary" || return 1
+          chown 0:0 "$temporary" || return 1
+          chmod "$mode" "$temporary" || return 1
+          hash_is "$expected" "$temporary" && owner_mode "$temporary" "$mode" || return 1
+          sync_path "$temporary" || return 1
+          mv -f "$temporary" "$live" || return 1
+          sync_path "${live%/*}" || return 1
+          hash_is "$expected" "$live" && owner_mode "$live" "$mode"
+        }
+        publish_absent() {
+          live=$1
+          temporary="$live".hapaneld-manual-"$transaction_id".restore
+          rm -f "$temporary" "$live" || return 1
+          sync_path "${live%/*}" || return 1
+          [ ! -e "$live" ] && [ ! -L "$live" ]
+        }
+        recorded_exact() {
+          name=$1; live=$2; mode=$3
+          live_recorded "$name" "$live" || return 1
+          grep -q ^"$name"=0$ "$marker" || owner_mode "$live" "$mode"
+        }
+        publish_rollback_phase() {
+          phase_tmp="$marker".hapaneld-manual-"$transaction_id".phase
+          rm -f "$phase_tmp" || return 1
+          sed "/^ROLLBACK_PHASE=/d" "$marker" > "$phase_tmp" || return 1
+          echo ROLLBACK_PHASE=PUBLISHING >> "$phase_tmp"
+          chown 0:0 "$phase_tmp" || return 1
+          chmod 600 "$phase_tmp" || return 1
+          sync_path "$phase_tmp" || return 1
+          mv -f "$phase_tmp" "$marker" || return 1
+          sync_path "${marker%/*}" || return 1
+          [ "$(grep -c ^ROLLBACK_PHASE=PUBLISHING$ "$marker")" = 1 ]
+        }
+        all_live_recorded() {
+          live_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper &&
+          live_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh
+        }
+        target_live() {
+          hash_is '"$target_helper"' /data/adb/hapaneld/hapaneld-helper &&
+          hash_is "$target_registration" /data/adb/service.d/hapaneld-helper.sh
+        }
+        rollback_live_known() {
+          { live_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper ||
+            hash_is '"$target_helper"' /data/adb/hapaneld/hapaneld-helper; } &&
+          { live_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh ||
+            hash_is "$target_registration" /data/adb/service.d/hapaneld-helper.sh; }
+        }
+        rollback_phase=$(sed -n s/^ROLLBACK_PHASE=//p "$marker")
+        case "$rollback_phase" in
+          "") all_live_recorded || target_live || { echo ROLLBACK_UNKNOWN; exit 0; }; begin_rollback=1 ;;
+          PUBLISHING) rollback_live_known || { echo ROLLBACK_UNKNOWN; exit 0; }; begin_rollback=0 ;;
+          *) echo ROLLBACK_UNKNOWN; exit 0 ;;
+        esac
         if grep -q ^OLD_BIN=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
           expected=$(sed -n s/^OLD_BIN_SHA256=//p /data/adb/hapaneld/.helper-manual-upgrade.marker)
           actual=$(sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null) || exit 1
@@ -777,6 +919,7 @@ rollback_root_helper() {
           actual=$(sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null) || exit 1
           [ "${actual%% *}" = "$expected" ] || exit 1
         fi
+        [ "$begin_rollback" = 0 ] || publish_rollback_phase || exit 1
         mkdir -p /data/adb/hapaneld || exit 1
         chown 0:0 /data/adb/hapaneld || exit 1
         chmod 700 /data/adb/hapaneld || exit 1
@@ -790,20 +933,18 @@ rollback_root_helper() {
         pkill -x hapaneld-ledd 2>/dev/null
         wait_for_helper_retirement || exit 1
         if grep -q ^OLD_BIN=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
-          rm -f /data/adb/hapaneld/hapaneld-helper
-          cp -p /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery /data/adb/hapaneld/hapaneld-helper || exit 1
-          chown 0:0 /data/adb/hapaneld/hapaneld-helper; chmod 755 /data/adb/hapaneld/hapaneld-helper
+          publish_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery /data/adb/hapaneld/hapaneld-helper 755 || exit 1
         else
-          rm -f /data/adb/hapaneld/hapaneld-helper
+          publish_absent /data/adb/hapaneld/hapaneld-helper || exit 1
         fi
         if grep -q ^OLD_SERVICE=1$ /data/adb/hapaneld/.helper-manual-upgrade.marker; then
-          rm -f /data/adb/service.d/hapaneld-helper.sh
-          cp -p /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery /data/adb/service.d/hapaneld-helper.sh || exit 1
-          chown 0:0 /data/adb/service.d/hapaneld-helper.sh; chmod 755 /data/adb/service.d/hapaneld-helper.sh
+          publish_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery /data/adb/service.d/hapaneld-helper.sh 755 || exit 1
         else
-          rm -f /data/adb/service.d/hapaneld-helper.sh
+          publish_absent /data/adb/service.d/hapaneld-helper.sh || exit 1
         fi
         sync || exit 1
+        recorded_exact OLD_BIN /data/adb/hapaneld/hapaneld-helper 755 &&
+          recorded_exact OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 || exit 1
         if [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery ]; then
           /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
           echo ROLLBACK_RESTARTED
@@ -865,7 +1006,7 @@ finalize_root_helper_rollback() {
             actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
             [ "${actual%% *}" = "$expected" ]
           else
-            [ ! -e "$live" ]
+            [ ! -e "$live" ] && [ ! -L "$live" ]
           fi
         }
         live_recorded OLD_BIN /system/bin/hapaneld-helper &&
@@ -907,7 +1048,7 @@ finalize_root_helper_rollback() {
             actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
             [ "${actual%% *}" = "$expected" ]
           else
-            [ ! -e "$live" ]
+            [ ! -e "$live" ] && [ ! -L "$live" ]
           fi
         }
         live_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper &&
@@ -925,63 +1066,415 @@ finalize_root_helper_rollback() {
   printf '%s\n' "$finalized" | grep -qx ROLLBACK_FINALIZED
 }
 
-commit_root_helper_upgrade() {
-  local committed
-  case "$1" in
-    system)
-      committed="$(run_root_locked '
-        mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
-        grep -q ^JOURNAL_VERSION=2$ /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        grep -qx TRANSACTION_ID='"$TRANSACTION_ID"' /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        grep -qx TARGET_BUILD_ID='"$BUILD_ID"' /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        grep -qx TARGET_HELPER_SHA256='"$BIN_SHA256"' /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        grep -qx TARGET_SERVICE_SHA256='"$RC_SHA256"' /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        hash_is() {
-          expected=$1; live=$2
-          actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
-          [ "${actual%% *}" = "$expected" ]
-        }
-        hash_is '"$BIN_SHA256"' /system/bin/hapaneld-helper || exit 1
-        hash_is '"$RC_SHA256"' /system/etc/init/hapaneld-helper.rc || exit 1
-        [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] || exit 1
-        [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || exit 1
-        rm -f /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-        sync || exit 1
-        rm -f /system/bin/hapaneld-helper.hapaneld-manual-recovery \
-          /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery \
-          /system/bin/hapaneld-ledd.hapaneld-manual-recovery \
-          /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery \
-          /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery \
-          /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery \
-          /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc 2>/dev/null || true
-        sync 2>/dev/null || true
-        echo COMMIT_OK
-      ' 2>&1)" || true
-      ;;
-    systemless)
-      committed="$(run_root_locked '
-        grep -q ^JOURNAL_VERSION=2$ /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        grep -qx TRANSACTION_ID='"$TRANSACTION_ID"' /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        grep -qx TARGET_BUILD_ID='"$BUILD_ID"' /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        grep -qx TARGET_HELPER_SHA256='"$BIN_SHA256"' /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        grep -qx TARGET_SERVICE_SHA256='"$SVC_SHA256"' /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        hash_is() {
-          expected=$1; live=$2
-          actual=$(sha256sum "$live" 2>/dev/null || toybox sha256sum "$live" 2>/dev/null) || return 1
-          [ "${actual%% *}" = "$expected" ]
-        }
-        hash_is '"$BIN_SHA256"' /data/adb/hapaneld/hapaneld-helper || exit 1
-        hash_is '"$SVC_SHA256"' /data/adb/service.d/hapaneld-helper.sh || exit 1
-        rm -f /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-        sync || exit 1
-        rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery \
-          /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || true
-        sync 2>/dev/null || true
-        echo COMMIT_OK
-      ' 2>&1)" || true
-      ;;
-    *) return 1 ;;
-  esac
+# Journal v3 is deliberately separate from the historical v1/v2 rollback above. The old formats
+# describe binaries living under /system or /data/adb; v3 describes one canonical /data/local
+# binary plus exactly one boot registration. Never feed an old marker through this classifier.
+rollback_root_helper_v3() {
+  local install_kind="$1" transaction_id="$2" target_build="$3"
+  local target_helper="$4" target_service="$5" restored probe_path
+  probe_path="/data/local/.hapaneld-helper-manual-probe-$TRANSACTION_ID"
+  restored="$(run_root_locked '
+    marker='"$MANUAL_V3_MARKER"'
+    transaction_id='"$transaction_id"'
+    case "$transaction_id" in *[!0-9a-f]*|"") exit 1 ;; esac
+    [ "${#transaction_id}" -eq 32 ] || exit 1
+    if [ ! -f "$marker" ]; then
+      rm -f /data/local/.hapaneld-helper.manual-"$transaction_id" \
+        /data/local/.hapaneld-helper-manual-"$transaction_id".recovery-* \
+        /system/etc/init/hapaneld-helper.rc.manual-"$transaction_id" \
+        /vendor/etc/init/hapaneld-helper.rc.manual-"$transaction_id" \
+        /data/adb/service.d/hapaneld-helper.sh.manual-"$transaction_id" 2>/dev/null || true
+      echo ROLLBACK_UNNEEDED
+      exit 0
+    fi
+    grep -q ^JOURNAL_VERSION=3$ "$marker" || exit 1
+    grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ "$marker" || exit 1
+    grep -qx REGISTRATION_KIND='"$install_kind"' "$marker" || exit 1
+    grep -qx TRANSACTION_ID='"$transaction_id"' "$marker" || exit 1
+    grep -qx TARGET_BUILD_ID='"$target_build"' "$marker" || exit 1
+    grep -qx TARGET_HELPER_SHA256='"$target_helper"' "$marker" || exit 1
+    grep -qx TARGET_SERVICE_SHA256='"$target_service"' "$marker" || exit 1
+    app_replacement_custody_present() {
+      for custody in \
+          /data/local/.hapaneld-helper.new \
+          /data/local/.hapaneld-helper.previous \
+          /data/local/.hapaneld-helper.previous.tmp \
+          /data/local/.hapaneld-guard-db/replacement.v1 \
+          /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+        if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
+      done
+      return 1
+    }
+    if app_replacement_custody_present; then
+      echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE
+      exit 0
+    fi
+
+    file_hash() {
+      actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+      printf %s "${actual%% *}"
+    }
+    owner_mode() {
+      owner=$(stat -c %u:%g "$1" 2>/dev/null || toybox stat -c %u:%g "$1" 2>/dev/null) || return 1
+      mode=$(stat -c %a "$1" 2>/dev/null || toybox stat -c %a "$1" 2>/dev/null) || return 1
+      [ "$owner" = 0:0 ] && [ "$mode" = "$2" ]
+    }
+    sync_path() {
+      sync "$1" 2>/dev/null || sync
+    }
+    publish_rollback_phase() {
+      ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+      phase_tmp="$marker".hapaneld-manual-"$transaction_id".phase
+      rm -f "$phase_tmp" || return 1
+      sed "/^ROLLBACK_PHASE=/d" "$marker" > "$phase_tmp" || return 1
+      echo ROLLBACK_PHASE=PUBLISHING >> "$phase_tmp"
+      chown 0:0 "$phase_tmp" || return 1
+      chmod 600 "$phase_tmp" || return 1
+      sync_path "$phase_tmp" || return 1
+      ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+      mv -f "$phase_tmp" "$marker" || return 1
+      sync_path "${marker%/*}" || return 1
+      [ "$(grep -c ^ROLLBACK_PHASE=PUBLISHING$ "$marker")" = 1 ]
+    }
+    recorded() {
+      name=$1; live=$2
+      flag=$(sed -n s/^"$name"=//p "$marker")
+      expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+      case "$flag" in
+        0) [ "$expected" = - ] && [ ! -e "$live" ] && [ ! -L "$live" ] ;;
+        1) printf %s "$expected" | grep -Eq ^[0-9a-f]{64}$ &&
+           [ "$(file_hash "$live")" = "$expected" ] ;;
+        *) return 1 ;;
+      esac
+    }
+    snapshot_valid() {
+      name=$1
+      flag=$(sed -n s/^"$name"=//p "$marker")
+      expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+      snapshot=/data/local/.hapaneld-helper-manual-"$transaction_id".recovery-"$name"
+      case "$flag" in
+        0) [ "$expected" = - ] && [ ! -e "$snapshot" ] && [ ! -L "$snapshot" ] ;;
+        1) [ "$(file_hash "$snapshot")" = "$expected" ] ;;
+        *) return 1 ;;
+      esac
+    }
+    original_or_absent() {
+      recorded "$1" "$2" || { [ ! -e "$2" ] && [ ! -L "$2" ]; }
+    }
+    original_absent_or_hash() {
+      recorded "$1" "$2" || { [ ! -e "$2" ] && [ ! -L "$2" ]; } ||
+        [ "$(file_hash "$2")" = "$3" ]
+    }
+    all_recorded() {
+      recorded LIVE_CANONICAL /data/local/hapaneld-helper &&
+      recorded LIVE_SYSTEM_BIN /system/bin/hapaneld-helper &&
+      recorded LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
+      recorded LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc &&
+      recorded LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper &&
+      recorded LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh &&
+      recorded LIVE_LEGACY_BIN /system/bin/hapaneld-ledd &&
+      recorded LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc
+    }
+    recorded_exact() {
+      name=$1; live=$2; mode=$3
+      recorded "$name" "$live" || return 1
+      grep -q ^"$name"=0$ "$marker" || owner_mode "$live" "$mode"
+    }
+    all_recorded_exact() {
+      recorded_exact LIVE_CANONICAL /data/local/hapaneld-helper 700 &&
+      recorded_exact LIVE_SYSTEM_BIN /system/bin/hapaneld-helper 755 &&
+      recorded_exact LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc 644 &&
+      recorded_exact LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 &&
+      recorded_exact LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper 755 &&
+      recorded_exact LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 &&
+      recorded_exact LIVE_LEGACY_BIN /system/bin/hapaneld-ledd 755 &&
+      recorded_exact LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc 644
+    }
+    all_snapshots_valid() {
+      snapshot_valid LIVE_CANONICAL && snapshot_valid LIVE_SYSTEM_BIN &&
+      snapshot_valid LIVE_SYSTEM_RC && snapshot_valid LIVE_VENDOR_RC &&
+      snapshot_valid LIVE_SYSTEMLESS_BIN && snapshot_valid LIVE_SYSTEMLESS_SERVICE &&
+      snapshot_valid LIVE_LEGACY_BIN && snapshot_valid LIVE_LEGACY_RC
+    }
+    target_exact() {
+      [ "$(file_hash /data/local/hapaneld-helper)" = '"$target_helper"' ] &&
+      [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+      [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+      [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+      [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] || return 1
+      case '"$install_kind"' in
+        system)
+          [ "$(file_hash /system/etc/init/hapaneld-helper.rc)" = '"$target_service"' ] &&
+          [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+          [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] ;;
+        vendor)
+          [ "$(file_hash /vendor/etc/init/hapaneld-helper.rc)" = '"$target_service"' ] &&
+          [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+          [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] ;;
+        systemless)
+          [ "$(file_hash /data/adb/service.d/hapaneld-helper.sh)" = '"$target_service"' ] &&
+          [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+          [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] ;;
+        *) return 1 ;;
+      esac
+    }
+    mutation_state_known() {
+      original_absent_or_hash LIVE_CANONICAL /data/local/hapaneld-helper '"$target_helper"' &&
+      original_or_absent LIVE_SYSTEM_BIN /system/bin/hapaneld-helper &&
+      original_or_absent LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper &&
+      original_or_absent LIVE_LEGACY_BIN /system/bin/hapaneld-ledd &&
+      original_or_absent LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc || return 1
+      case '"$install_kind"' in
+        system)
+          original_absent_or_hash LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc '"$target_service"' &&
+          original_or_absent LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc &&
+          original_or_absent LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh ;;
+        vendor)
+          original_absent_or_hash LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc '"$target_service"' &&
+          original_or_absent LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
+          original_or_absent LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh ;;
+        systemless)
+          original_absent_or_hash LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh '"$target_service"' &&
+          original_or_absent LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
+          original_or_absent LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc ;;
+        *) return 1 ;;
+      esac
+    }
+    phase_state_known() {
+      if [ "$rollback_phase" = PUBLISHING ]; then
+        mutation_state_known
+        return
+      fi
+      [ -z "$rollback_phase" ] || return 1
+      case "$phase" in
+        PREPARED) all_recorded ;;
+        MUTATING) mutation_state_known ;;
+        TARGET) target_exact ;;
+        *) return 1 ;;
+      esac
+    }
+    phase=$(sed -n s/^SWAP_PHASE=//p "$marker")
+    rollback_phase=$(sed -n s/^ROLLBACK_PHASE=//p "$marker")
+    phase_state_known || { echo ROLLBACK_UNKNOWN; exit 0; }
+    all_snapshots_valid || exit 1
+    if [ -z "$rollback_phase" ]; then
+      ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+      publish_rollback_phase || exit 1
+      rollback_phase=PUBLISHING
+    fi
+
+    rm -f '"$probe_path"'
+    [ "$(file_hash '"$PROBE_STAGING_PATH"')" = '"$BIN_SHA256"' ] || exit 1
+    cp '"$PROBE_STAGING_PATH"' '"$probe_path"' || exit 1
+    chown 0:0 '"$probe_path"' || exit 1
+    chmod 700 '"$probe_path"' || exit 1
+    [ "$(file_hash '"$probe_path"')" = '"$BIN_SHA256"' ] || exit 1
+
+    stop hapaneld_helper 2>/dev/null
+    stop hapaneld_ledd 2>/dev/null
+    pkill -x hapaneld-helper 2>/dev/null
+    pkill -x hapaneld-ledd 2>/dev/null
+    attempt=0
+    while pidof hapaneld-helper >/dev/null 2>&1 || pidof hapaneld-ledd >/dev/null 2>&1; do
+      attempt=$((attempt + 1)); [ "$attempt" -lt 10 ] || exit 1; sleep 1
+    done
+    # An already-execed app R1 stage can cross to the canonical live path during retirement. The
+    # phase classifier above was true before the wait; require it again at the last possible point
+    # before restore so a stale snapshot can never overwrite that newly published helper/topology.
+    ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+    phase_state_known || { echo ROLLBACK_UNKNOWN; exit 0; }
+    restore() {
+      name=$1; live=$2; mode=$3
+      flag=$(sed -n s/^"$name"=//p "$marker")
+      snapshot=/data/local/.hapaneld-helper-manual-"$transaction_id".recovery-"$name"
+      expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+      temporary="$live".hapaneld-manual-"$transaction_id".restore
+      ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+      rm -f "$temporary" || return 1
+      if [ "$flag" = 1 ]; then
+        mkdir -p "${live%/*}" || return 1
+        cp -p "$snapshot" "$temporary" || return 1
+        chown 0:0 "$temporary" || return 1
+        chmod "$mode" "$temporary" || return 1
+        [ "$(file_hash "$temporary")" = "$expected" ] &&
+          owner_mode "$temporary" "$mode" || return 1
+        sync_path "$temporary" || return 1
+        ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+        mv -f "$temporary" "$live" || return 1
+        sync_path "${live%/*}" || return 1
+        [ "$(file_hash "$live")" = "$expected" ] && owner_mode "$live" "$mode"
+      else
+        ! app_replacement_custody_present || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+        rm -f "$live" || return 1
+        sync_path "${live%/*}" || return 1
+        [ ! -e "$live" ] && [ ! -L "$live" ]
+      fi
+    }
+    mount -o rw,remount / 2>/dev/null
+    mount -o rw,remount /system 2>/dev/null
+    mount -o rw,remount /vendor 2>/dev/null
+    restore LIVE_CANONICAL /data/local/hapaneld-helper 700 || exit 1
+    restore LIVE_SYSTEM_BIN /system/bin/hapaneld-helper 755 || exit 1
+    restore LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc 644 || exit 1
+    restore LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 || exit 1
+    restore LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper 755 || exit 1
+    restore LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 || exit 1
+    restore LIVE_LEGACY_BIN /system/bin/hapaneld-ledd 755 || exit 1
+    restore LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc 644 || exit 1
+    sync || exit 1
+    all_recorded_exact || exit 1
+    if grep -q ^LIVE_CANONICAL=1$ "$marker"; then
+      /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+      echo ROLLBACK_RESTARTED
+    elif grep -q ^LIVE_SYSTEM_BIN=1$ "$marker"; then
+      /system/bin/hapaneld-helper --supervise >/dev/null 2>&1 &
+      echo ROLLBACK_RESTARTED
+    elif grep -q ^LIVE_SYSTEMLESS_BIN=1$ "$marker"; then
+      /data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
+      echo ROLLBACK_RESTARTED
+    elif grep -q ^LIVE_LEGACY_BIN=1$ "$marker"; then
+      /system/bin/hapaneld-ledd >/dev/null 2>&1 &
+      echo ROLLBACK_LEGACY
+    else
+      echo ROLLBACK_EMPTY
+    fi
+  ' 2>&1)" || true
+  if printf '%s\n' "$restored" | grep -qx ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; then
+    return 3
+  fi
+  if printf '%s\n' "$restored" | grep -qx ROLLBACK_RESTARTED; then
+    if wait_for_helper_reply PING OK "$install_kind" "$probe_path"; then
+      run_root 'rm -f '"$probe_path" >/dev/null 2>&1 || true
+      finalize_root_helper_rollback_v3 "$install_kind" "$transaction_id" "$target_build" "$target_helper" "$target_service"
+      return $?
+    fi
+    run_root 'rm -f '"$probe_path" >/dev/null 2>&1 || true
+    return 1
+  fi
+  run_root 'rm -f '"$probe_path" >/dev/null 2>&1 || true
+  if printf '%s\n' "$restored" | grep -Eqx 'ROLLBACK_(EMPTY|LEGACY)'; then
+    finalize_root_helper_rollback_v3 "$install_kind" "$transaction_id" "$target_build" "$target_helper" "$target_service"
+  else
+    printf '%s\n' "$restored" | grep -qx ROLLBACK_UNNEEDED
+  fi
+}
+
+finalize_root_helper_rollback_v3() {
+  local install_kind="$1" transaction_id="$2" target_build="$3"
+  local target_helper="$4" target_service="$5" finalized
+  finalized="$(run_root_locked '
+    marker='"$MANUAL_V3_MARKER"'
+    grep -q ^JOURNAL_VERSION=3$ "$marker" || exit 1
+    grep -qx REGISTRATION_KIND='"$install_kind"' "$marker" || exit 1
+    grep -qx TRANSACTION_ID='"$transaction_id"' "$marker" || exit 1
+    grep -qx TARGET_BUILD_ID='"$target_build"' "$marker" || exit 1
+    grep -qx TARGET_HELPER_SHA256='"$target_helper"' "$marker" || exit 1
+    grep -qx TARGET_SERVICE_SHA256='"$target_service"' "$marker" || exit 1
+    for custody in \
+        /data/local/.hapaneld-helper.new \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+      [ ! -e "$custody" ] && [ ! -L "$custody" ] || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+    done
+    file_hash() {
+      actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+      printf %s "${actual%% *}"
+    }
+    recorded() {
+      name=$1; live=$2
+      flag=$(sed -n s/^"$name"=//p "$marker")
+      expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+      [ "$flag" = 1 ] && [ "$(file_hash "$live")" = "$expected" ] ||
+        { [ "$flag" = 0 ] && [ "$expected" = - ] && [ ! -e "$live" ] && [ ! -L "$live" ]; }
+    }
+    recorded LIVE_CANONICAL /data/local/hapaneld-helper &&
+    recorded LIVE_SYSTEM_BIN /system/bin/hapaneld-helper &&
+    recorded LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
+    recorded LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc &&
+    recorded LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper &&
+    recorded LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh &&
+    recorded LIVE_LEGACY_BIN /system/bin/hapaneld-ledd &&
+    recorded LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc || exit 1
+    for custody in \
+        /data/local/.hapaneld-helper.new \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+      [ ! -e "$custody" ] && [ ! -L "$custody" ] || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
+    done
+    rm -f "$marker" || exit 1
+    sync || exit 1
+    rm -f /data/local/.hapaneld-helper-manual-'"$transaction_id"'.recovery-* \
+      /data/local/.hapaneld-helper.manual-'"$transaction_id"' \
+      /system/etc/init/hapaneld-helper.rc.manual-'"$transaction_id"' \
+      /vendor/etc/init/hapaneld-helper.rc.manual-'"$transaction_id"' \
+      /data/adb/service.d/hapaneld-helper.sh.manual-'"$transaction_id"' 2>/dev/null || true
+    sync 2>/dev/null || true
+    echo ROLLBACK_FINALIZED
+  ' 2>&1)" || true
+  if printf '%s\n' "$finalized" | grep -qx ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; then
+    return 3
+  fi
+  printf '%s\n' "$finalized" | grep -qx ROLLBACK_FINALIZED
+}
+
+commit_root_helper_upgrade_v3() {
+  local install_kind="$1" committed
+  committed="$(run_root_locked '
+    marker='"$MANUAL_V3_MARKER"'
+    grep -q ^JOURNAL_VERSION=3$ "$marker" || exit 1
+    grep -q ^SWAP_PHASE=TARGET$ "$marker" || exit 1
+    grep -qx REGISTRATION_KIND='"$install_kind"' "$marker" || exit 1
+    grep -qx TRANSACTION_ID='"$TRANSACTION_ID"' "$marker" || exit 1
+    grep -qx TARGET_BUILD_ID='"$BUILD_ID"' "$marker" || exit 1
+    grep -qx TARGET_HELPER_SHA256='"$BIN_SHA256"' "$marker" || exit 1
+    grep -qx TARGET_SERVICE_SHA256='"$SERVICE_SHA256"' "$marker" || exit 1
+    file_hash() {
+      actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+      printf %s "${actual%% *}"
+    }
+    owner_mode() {
+      owner=$(stat -c %u:%g "$1" 2>/dev/null || toybox stat -c %u:%g "$1" 2>/dev/null) || return 1
+      mode=$(stat -c %a "$1" 2>/dev/null || toybox stat -c %a "$1" 2>/dev/null) || return 1
+      [ "$owner" = 0:0 ] && [ "$mode" = "$2" ]
+    }
+    [ "$(file_hash /data/local/hapaneld-helper)" = '"$BIN_SHA256"' ] &&
+    owner_mode /data/local/hapaneld-helper 700 || exit 1
+    [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+    [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+    [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] || exit 1
+    case '"$install_kind"' in
+      system)
+        [ "$(file_hash /system/etc/init/hapaneld-helper.rc)" = '"$SERVICE_SHA256"' ] &&
+        owner_mode /system/etc/init/hapaneld-helper.rc 644 &&
+        [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] || exit 1 ;;
+      vendor)
+        [ "$(file_hash /vendor/etc/init/hapaneld-helper.rc)" = '"$SERVICE_SHA256"' ] &&
+        owner_mode /vendor/etc/init/hapaneld-helper.rc 644 &&
+        [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] || exit 1 ;;
+      systemless)
+        [ "$(file_hash /data/adb/service.d/hapaneld-helper.sh)" = '"$SERVICE_SHA256"' ] &&
+        owner_mode /data/adb/service.d/hapaneld-helper.sh 755 &&
+        [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] || exit 1 ;;
+      *) exit 1 ;;
+    esac
+    rm -f "$marker" || exit 1
+    sync || exit 1
+    rm -f /data/local/.hapaneld-helper-manual-'"$TRANSACTION_ID"'.recovery-* \
+      /data/local/.hapaneld-helper.manual-'"$TRANSACTION_ID"' \
+      /system/etc/init/hapaneld-helper.rc.manual-'"$TRANSACTION_ID"' \
+      /vendor/etc/init/hapaneld-helper.rc.manual-'"$TRANSACTION_ID"' \
+      /data/adb/service.d/hapaneld-helper.sh.manual-'"$TRANSACTION_ID"' 2>/dev/null || true
+    sync 2>/dev/null || true
+    echo COMMIT_OK
+  ' 2>&1)" || true
   printf '%s\n' "$committed" | grep -qx COMMIT_OK
 }
 
@@ -990,18 +1483,21 @@ commit_root_helper_upgrade() {
 adb -s "$TARGET" push "$BIN" "$PROBE_STAGING_PATH" >/dev/null
 
 manual_journal_state="$(run_root_locked '
-  inspect_manual_journal() {
+  inspect_manual_journal_v1() {
     kind=$1; marker=$2
     owner=$(stat -c %u:%g "$marker" 2>/dev/null || toybox stat -c %u:%g "$marker" 2>/dev/null) || { echo INVALID_MANUAL_TRANSACTION; return; }
     [ "$owner" = 0:0 ] || { echo INVALID_MANUAL_TRANSACTION; return; }
-    if grep -q ^JOURNAL_VERSION=1$ "$marker"; then
-      target_build=$(sed -n s/^TARGET_BUILD_ID=//p "$marker")
-      target_helper=$(sed -n s/^TARGET_HELPER_SHA256=//p "$marker")
-      printf %s "$target_build" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
-      printf %s "$target_helper" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
-      echo STALE_${kind}_TRANSACTION legacy "$target_build" "$target_helper" -
-      return
-    fi
+    grep -q ^JOURNAL_VERSION=1$ "$marker" || { echo INVALID_MANUAL_TRANSACTION; return; }
+    target_build=$(sed -n s/^TARGET_BUILD_ID=//p "$marker")
+    target_helper=$(sed -n s/^TARGET_HELPER_SHA256=//p "$marker")
+    printf %s "$target_build" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    printf %s "$target_helper" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    echo STALE_${kind}_TRANSACTION legacy "$target_build" "$target_helper" -
+  }
+  inspect_manual_journal_v2() {
+    kind=$1; marker=$2
+    owner=$(stat -c %u:%g "$marker" 2>/dev/null || toybox stat -c %u:%g "$marker" 2>/dev/null) || { echo INVALID_MANUAL_TRANSACTION; return; }
+    [ "$owner" = 0:0 ] || { echo INVALID_MANUAL_TRANSACTION; return; }
     grep -q ^JOURNAL_VERSION=2$ "$marker" || { echo INVALID_MANUAL_TRANSACTION; return; }
     transaction_id=$(sed -n s/^TRANSACTION_ID=//p "$marker")
     target_build=$(sed -n s/^TARGET_BUILD_ID=//p "$marker")
@@ -1023,19 +1519,72 @@ manual_journal_state="$(run_root_locked '
       echo STALE_${kind}_TRANSACTION "$transaction_id" "$target_build" "$target_helper" "$target_service"
     fi
   }
+  inspect_manual_journal_v3() {
+    marker=$1
+    owner=$(stat -c %u:%g "$marker" 2>/dev/null || toybox stat -c %u:%g "$marker" 2>/dev/null) || { echo INVALID_MANUAL_TRANSACTION; return; }
+    [ "$owner" = 0:0 ] || { echo INVALID_MANUAL_TRANSACTION; return; }
+    grep -q ^JOURNAL_VERSION=3$ "$marker" || { echo INVALID_MANUAL_TRANSACTION; return; }
+    registration_kind=$(sed -n s/^REGISTRATION_KIND=//p "$marker")
+    transaction_id=$(sed -n s/^TRANSACTION_ID=//p "$marker")
+    target_build=$(sed -n s/^TARGET_BUILD_ID=//p "$marker")
+    target_helper=$(sed -n s/^TARGET_HELPER_SHA256=//p "$marker")
+    target_service=$(sed -n s/^TARGET_SERVICE_SHA256=//p "$marker")
+    lease_boot=$(sed -n s/^LEASE_BOOT_ID=//p "$marker")
+    lease_until=$(sed -n s/^LEASE_UNTIL_UPTIME=//p "$marker")
+    case "$registration_kind" in system|vendor|systemless) ;; *) echo INVALID_MANUAL_TRANSACTION; return ;; esac
+    printf %s "$transaction_id" | grep -Eq ^[0-9a-f]{32}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    printf %s "$target_build" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    printf %s "$target_helper" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    printf %s "$target_service" | grep -Eq ^[0-9a-f]{64}$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    printf %s "$lease_until" | grep -Eq ^[0-9]+$ || { echo INVALID_MANUAL_TRANSACTION; return; }
+    current_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
+    current_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null || true)
+    if [ -n "$current_boot" ] && [ "$lease_boot" = "$current_boot" ] &&
+       printf %s "$current_uptime" | grep -Eq ^[0-9]+$ && [ "$current_uptime" -lt "$lease_until" ]; then
+      echo ACTIVE_V3_TRANSACTION
+    else
+      echo STALE_V3_TRANSACTION "$registration_kind" "$transaction_id" "$target_build" "$target_helper" "$target_service"
+    fi
+  }
+  inspect_historical_journal() {
+    kind=$1; marker=$2
+    version=$(sed -n s/^JOURNAL_VERSION=//p "$marker")
+    case "$version" in
+      1) inspect_manual_journal_v1 "$kind" "$marker" ;;
+      2) inspect_manual_journal_v2 "$kind" "$marker" ;;
+      *) echo INVALID_MANUAL_TRANSACTION ;;
+    esac
+  }
   if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
     echo FOREIGN_PROVISION_TRANSACTION
-  elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+  elif { [ -f /data/local/.hapaneld-helper-manual-upgrade ] &&
+         { [ -f /system/bin/.hapaneld-helper-manual-upgrade ] || [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; }; } ||
+       { [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; }; then
     echo MULTIPLE_STALE_TRANSACTIONS
+  elif [ -f /data/local/.hapaneld-helper-manual-upgrade ]; then
+    inspect_manual_journal_v3 /data/local/.hapaneld-helper-manual-upgrade
   elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
-    inspect_manual_journal SYSTEM /system/bin/.hapaneld-helper-manual-upgrade
+    inspect_historical_journal SYSTEM /system/bin/.hapaneld-helper-manual-upgrade
   elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
-    inspect_manual_journal SYSTEMLESS /data/adb/hapaneld/.helper-manual-upgrade.marker
+    inspect_historical_journal SYSTEMLESS /data/adb/hapaneld/.helper-manual-upgrade.marker
   else
     echo NO_STALE_TRANSACTION
   fi
 ' 2>&1)" || true
 case "$manual_journal_state" in
+  STALE_V3_TRANSACTION\ *)
+    read -r _ recovery_kind recovery_id recovery_build recovery_helper recovery_service <<<"$manual_journal_state"
+    if rollback_root_helper_v3 "$recovery_kind" "$recovery_id" "$recovery_build" "$recovery_helper" "$recovery_service"; then
+      :
+    else
+      recovery_status=$?
+      if [ "$recovery_status" -eq 3 ]; then
+        fail "APK-coupled helper replacement custody blocks standalone journal recovery" \
+          "The retained v3 journal and every live helper path were left unchanged. Let the app R1 replacement finish or reconcile its fixed custody records before retrying."
+      fi
+      fail "the retained canonical helper-only journal could not be recovered safely" \
+        "No unrecognised live helper bytes were overwritten. Inspect the authenticated recovery snapshots before retrying."
+    fi ;;
   STALE_SYSTEM_TRANSACTION\ *)
     read -r _ recovery_id recovery_build recovery_helper recovery_service <<<"$manual_journal_state"
     rollback_root_helper system "$recovery_id" "$recovery_build" "$recovery_helper" "$recovery_service" || fail "the retained /system helper-only journal could not be recovered safely" \
@@ -1044,7 +1593,7 @@ case "$manual_journal_state" in
     read -r _ recovery_id recovery_build recovery_helper recovery_service <<<"$manual_journal_state"
     rollback_root_helper systemless "$recovery_id" "$recovery_build" "$recovery_helper" "$recovery_service" || fail "the retained systemless helper-only journal could not be recovered safely" \
       "No live helper files were changed. Inspect the authenticated recovery snapshots before retrying." ;;
-  ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION)
+  ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION|ACTIVE_V3_TRANSACTION)
     fail "another standalone root-helper installer owns an active transaction lease" \
       "Wait for it to finish or for its boot-scoped uptime lease to expire, then re-run." ;;
   MULTIPLE_STALE_TRANSACTIONS)
@@ -1067,313 +1616,84 @@ case "$manual_journal_state" in
     "https://github.com/maxlyth/ha-paneld/issues" ;;
 esac
 
-# Select a verified persistence runner before stopping the old daemon. A read-only /system alone does
-# not prove that any service.d implementation will execute at boot.
+# Select a verified boot-registration route before stopping the old daemon. /data/local is the only
+# live binary location; writable system/vendor init and verified service.d are registration choices.
 out="$(run_root '
-  mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  mount -o rw,remount /vendor 2>/dev/null
   if touch /system/.rw_probe 2>/dev/null && rm /system/.rw_probe 2>/dev/null; then
     echo SYSTEM_RW
   else
     echo SYSTEM_RO
-    if command -v magisk >/dev/null 2>&1 || [ -x /data/adb/magisk/busybox ] || [ -x /data/adb/ksu/bin/busybox ] || [ -x /data/adb/ap/bin/busybox ]; then
-      echo SYSTEMLESS_RUNNER
-    else
-      echo NO_SYSTEMLESS_RUNNER
-    fi
+  fi
+  if [ -d /vendor/etc/init ] &&
+     touch /vendor/etc/init/.hapaneld-rw-probe 2>/dev/null &&
+     rm /vendor/etc/init/.hapaneld-rw-probe 2>/dev/null; then
+    echo VENDOR_INIT_RW
+  else
+    echo VENDOR_INIT_RO
+  fi
+  if command -v magisk >/dev/null 2>&1 || [ -x /data/adb/magisk/busybox ] ||
+     [ -x /data/adb/ksu/bin/busybox ] || [ -x /data/adb/ap/bin/busybox ]; then
+    echo SYSTEMLESS_RUNNER
+  else
+    echo NO_SYSTEMLESS_RUNNER
   fi
 ' 2>&1)" || true
 echo "$out" | sed 's/^/   /'
 
 INSTALL_KIND=""
+REGISTRATION_PATH=""
+REGISTRATION_STAGING_PATH=""
+REGISTRATION_MODE=""
+SERVICE_SHA256=""
 if printf '%s\n' "$out" | grep -qx SYSTEM_RW; then
   INSTALL_KIND=system
-  # ── Vendor root / userdebug path ───────────────────────────────────────────────────────────────
+  REGISTRATION_PATH=/system/etc/init/hapaneld-helper.rc
+  REGISTRATION_STAGING_PATH=/system/etc/init/hapaneld-helper.rc.manual-$TRANSACTION_ID
+  REGISTRATION_MODE=644
+  SERVICE_SHA256="$RC_SHA256"
   adb -s "$TARGET" push "$HERE/hapaneld-helper.rc" "$RC_STAGING_PATH" >/dev/null
-  echo "==> /system is writable — installing to /system/bin ($ABI)"
-  start_manual_lease_guard "$INSTALL_KIND"
-  out2="$(run_root_locked '
-    mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
-    mkdir -p /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
-    chown 0:0 /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
-    chmod 700 /data/adb/hapaneld || { echo PROBE_DIR_FAIL; exit 1; }
-    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
-      echo FOREIGN_PROVISION_TRANSACTION; exit 75
-    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
-      echo MULTIPLE_STALE_TRANSACTIONS; exit 75
-    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
-      echo ACTIVE_SYSTEM_TRANSACTION; exit 75
-    elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
-      echo ACTIVE_SYSTEMLESS_TRANSACTION; exit 75
-    fi
-    cp '"$PROBE_STAGING_PATH"' /system/bin/hapaneld-helper.new || { echo CP_FAIL; exit 1; }
-    ( sha256sum /system/bin/hapaneld-helper.new 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.new 2>/dev/null ) | grep -q ^'"$BIN_SHA256"' || { echo HASH_FAIL; exit 1; }
-    chmod 755 /system/bin/hapaneld-helper.new
-    chcon u:object_r:system_file:s0 /system/bin/hapaneld-helper.new 2>/dev/null
-    cp '"$RC_STAGING_PATH"' /system/etc/init/hapaneld-helper.rc.new || { echo RC_FAIL; exit 1; }
-    ( sha256sum /system/etc/init/hapaneld-helper.rc.new 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-helper.rc.new 2>/dev/null ) | grep -q ^'"$RC_SHA256"' || { echo RC_HASH_FAIL; exit 1; }
-    chmod 644 /system/etc/init/hapaneld-helper.rc.new
-    chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc.new 2>/dev/null
-
-    rm -f /system/bin/hapaneld-helper.hapaneld-manual-recovery
-    rm -f /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery
-    rm -f /system/bin/hapaneld-ledd.hapaneld-manual-recovery
-    rm -f /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery
-    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-    rm -f /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-    lease_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || exit 1
-    lease_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null) || exit 1
-    echo "$lease_uptime" | grep -Eq ^[0-9]+$ || exit 1
-    lease_until=$((lease_uptime + '"$MANUAL_LEASE_SECONDS"'))
-    echo JOURNAL_VERSION=2 > /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo JOURNAL_SCOPE=HELPER_ONLY >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo TRANSACTION_ID='"$TRANSACTION_ID"' >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo TARGET_BUILD_ID='"$BUILD_ID"' >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo TARGET_HELPER_SHA256='"$BIN_SHA256"' >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo TARGET_SERVICE_SHA256='"$RC_SHA256"' >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo LEASE_BOOT_ID="$lease_boot" >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    echo LEASE_UNTIL_UPTIME="$lease_until" >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    if [ -f /system/bin/hapaneld-helper ]; then
-      cp -p /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      chown 0:0 /system/bin/hapaneld-helper.hapaneld-manual-recovery
-      chmod 755 /system/bin/hapaneld-helper.hapaneld-manual-recovery
-      cmp -s /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      echo OLD_BIN=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_BIN_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo OLD_BIN=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo OLD_BIN_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    if [ -f /system/etc/init/hapaneld-helper.rc ]; then
-      cp -p /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery || exit 1
-      chown 0:0 /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery
-      chmod 644 /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery
-      cmp -s /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery || exit 1
-      echo OLD_SERVICE=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-helper.rc.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_SERVICE_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo OLD_SERVICE=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo OLD_SERVICE_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    if [ -f /system/bin/hapaneld-ledd ]; then
-      cp -p /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-manual-recovery || exit 1
-      chown 0:0 /system/bin/hapaneld-ledd.hapaneld-manual-recovery
-      chmod 755 /system/bin/hapaneld-ledd.hapaneld-manual-recovery
-      cmp -s /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-manual-recovery || exit 1
-      echo LEGACY_BIN=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/bin/hapaneld-ledd.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/LEGACY_BIN_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo LEGACY_BIN=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo LEGACY_BIN_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    if [ -f /system/etc/init/hapaneld-ledd.rc ]; then
-      cp -p /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery || exit 1
-      chown 0:0 /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery
-      chmod 644 /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery
-      cmp -s /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery || exit 1
-      echo LEGACY_SERVICE=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /system/etc/init/hapaneld-ledd.rc.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/LEGACY_SERVICE_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo LEGACY_SERVICE=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo LEGACY_SERVICE_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    if [ -f /data/adb/hapaneld/hapaneld-helper ]; then
-      cp -p /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      chown 0:0 /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-      chmod 755 /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-      cmp -s /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      echo ALT_BIN=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/ALT_BIN_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo ALT_BIN=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo ALT_BIN_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    if [ -f /data/adb/service.d/hapaneld-helper.sh ]; then
-      cp -p /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery || exit 1
-      chown 0:0 /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-      chmod 755 /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-      cmp -s /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery || exit 1
-      echo ALT_SERVICE=1 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      ( sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/ALT_SERVICE_SHA256=/ >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    else
-      echo ALT_SERVICE=0 >> /system/bin/.hapaneld-helper-manual-upgrade.new
-      echo ALT_SERVICE_SHA256=- >> /system/bin/.hapaneld-helper-manual-upgrade.new
-    fi
-    grep -q ^OLD_BIN=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^OLD_BIN_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    grep -q ^OLD_SERVICE=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^OLD_SERVICE_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    grep -q ^LEGACY_BIN=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^LEGACY_BIN_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    grep -q ^LEGACY_SERVICE=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^LEGACY_SERVICE_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    grep -q ^ALT_BIN=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^ALT_BIN_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    grep -q ^ALT_SERVICE=0$ /system/bin/.hapaneld-helper-manual-upgrade.new || grep -Eq ^ALT_SERVICE_SHA256=[0-9a-f]{64}$ /system/bin/.hapaneld-helper-manual-upgrade.new || exit 1
-    chown 0:0 /system/bin/.hapaneld-helper-manual-upgrade.new
-    chmod 600 /system/bin/.hapaneld-helper-manual-upgrade.new
-    sync || exit 1
-    mv -f /system/bin/.hapaneld-helper-manual-upgrade.new /system/bin/.hapaneld-helper-manual-upgrade || exit 1
-    sync || exit 1
-    stop hapaneld_helper 2>/dev/null
-    stop hapaneld_ledd 2>/dev/null
-    pkill -x hapaneld-helper 2>/dev/null
-    pkill -x hapaneld-ledd 2>/dev/null
-    rm -f /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc
-    rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
-    mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || { echo MV_FAIL; exit 1; }
-    mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || { echo RC_MV_FAIL; exit 1; }
-    sync || exit 1
-    rm -f '"$PROBE_STAGING_PATH $RC_STAGING_PATH $SVC_STAGING_PATH"'
-    echo INSTALL_OK
-  ' 2>&1)" || true
-  echo "$out2" | sed 's/^/   /'
-  case "$out2" in
-    *ACTIVE_SYSTEM_TRANSACTION*|*ACTIVE_SYSTEMLESS_TRANSACTION*|*STALE_SYSTEM_TRANSACTION*|*STALE_SYSTEMLESS_TRANSACTION*|*MULTIPLE_STALE_TRANSACTIONS*|*FOREIGN_PROVISION_TRANSACTION*|*TRANSACTION_BUSY*)
-      fail "root-helper journal state changed while the standalone installer was running" \
-        "No live helper files were replaced by this attempt. Re-run to recover the retained journal." ;;
-  esac
-  if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
-    if rollback_root_helper "$INSTALL_KIND"; then
-      fail "/system install failed; the prior helper was restored" \
-        "Re-run after checking writable-system capacity and permissions."
-    fi
-    fail "/system install failed and rollback could not be verified" \
-      "Restore the helper manually before relying on privileged operations."
-  fi
-  run_root '
-    stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
-    pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
-    # A first-time init .rc is only loaded on the next boot on some vendor firmware, while `start`
-    # still exits successfully. Verify the socket and run the authenticated binary directly when
-    # init did not actually create the service process.
-    start hapaneld_helper 2>/dev/null
-    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
-  ' >/dev/null 2>&1 || true
-
+  echo "==> installing canonical helper with /system init registration ($ABI)"
+elif printf '%s\n' "$out" | grep -qx VENDOR_INIT_RW; then
+  INSTALL_KIND=vendor
+  REGISTRATION_PATH=/vendor/etc/init/hapaneld-helper.rc
+  REGISTRATION_STAGING_PATH=/vendor/etc/init/hapaneld-helper.rc.manual-$TRANSACTION_ID
+  REGISTRATION_MODE=644
+  SERVICE_SHA256="$RC_SHA256"
+  adb -s "$TARGET" push "$HERE/hapaneld-helper.rc" "$RC_STAGING_PATH" >/dev/null
+  echo "==> installing canonical helper with /vendor init registration ($ABI)"
 elif printf '%s\n' "$out" | grep -qx SYSTEMLESS_RUNNER; then
   INSTALL_KIND=systemless
-  # ── Systemless root path (Magisk / KernelSU / APatch / …) ─────────────────────────────────────
-  echo "==> /system not rw-remountable — verified service.d runner found ($ABI)"
-  # Build the boot script HOST-side and push it, like the .rc on the vendor path. Generating it via a
-  # heredoc inside the nested device shells exposed it to the adb shell's expansion (the boot-time
-  # $(getprop) got evaluated once at install time); a pushed file arrives verbatim.
+  REGISTRATION_PATH=/data/adb/service.d/hapaneld-helper.sh
+  REGISTRATION_STAGING_PATH=/data/adb/service.d/hapaneld-helper.sh.manual-$TRANSACTION_ID
+  REGISTRATION_MODE=755
+  echo "==> installing canonical helper with verified service.d registration ($ABI)"
   SVC="$(mktemp)"
-  cat > "$SVC" << 'SVCEOF'
+  cat > "$SVC" <<'SVCEOF'
 #!/system/bin/sh
 while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
 /system/bin/stop hapaneld_helper 2>/dev/null
 /system/bin/stop hapaneld_ledd 2>/dev/null
 /system/bin/pkill -x hapaneld-helper 2>/dev/null
 /system/bin/pkill -x hapaneld-ledd 2>/dev/null
-/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
 SVCEOF
-  SVC_SHA256="$(host_sha256 "$SVC")"
+  SERVICE_SHA256="$(host_sha256 "$SVC")"
   adb -s "$TARGET" push "$SVC" "$SVC_STAGING_PATH" >/dev/null
   rm -f "$SVC"
-  start_manual_lease_guard "$INSTALL_KIND"
-  out2="$(run_root_locked '
-    mkdir -p /data/adb/service.d /data/adb/hapaneld
-    chown 0:0 /data/adb/hapaneld
-    chmod 700 /data/adb/hapaneld
-    if [ -f /system/bin/.hapaneld-helper-upgrade ] || [ -f /data/adb/hapaneld/.helper-upgrade.marker ] || [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
-      echo FOREIGN_PROVISION_TRANSACTION; exit 75
-    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
-      echo MULTIPLE_STALE_TRANSACTIONS; exit 75
-    elif [ -f /system/bin/.hapaneld-helper-manual-upgrade ]; then
-      echo ACTIVE_SYSTEM_TRANSACTION; exit 75
-    elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
-      echo ACTIVE_SYSTEMLESS_TRANSACTION; exit 75
-    fi
-    cp '"$PROBE_STAGING_PATH"' /data/adb/hapaneld/hapaneld-helper.new || { echo CP_FAIL; exit 1; }
-    ( sha256sum /data/adb/hapaneld/hapaneld-helper.new 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.new 2>/dev/null ) | grep -q ^'"$BIN_SHA256"' || { echo HASH_FAIL; exit 1; }
-    chown 0:0 /data/adb/hapaneld/hapaneld-helper.new
-    chmod 755 /data/adb/hapaneld/hapaneld-helper.new
-    cp '"$SVC_STAGING_PATH"' /data/adb/service.d/hapaneld-helper.sh.new || { echo SVC_FAIL; exit 1; }
-    ( sha256sum /data/adb/service.d/hapaneld-helper.sh.new 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.new 2>/dev/null ) | grep -q ^'"$SVC_SHA256"' || { echo SVC_HASH_FAIL; exit 1; }
-    chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new
-    chmod 755 /data/adb/service.d/hapaneld-helper.sh.new
-
-    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-    rm -f /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-    lease_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || exit 1
-    lease_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null) || exit 1
-    echo "$lease_uptime" | grep -Eq ^[0-9]+$ || exit 1
-    lease_until=$((lease_uptime + '"$MANUAL_LEASE_SECONDS"'))
-    echo JOURNAL_VERSION=2 > /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo JOURNAL_SCOPE=HELPER_ONLY >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo TRANSACTION_ID='"$TRANSACTION_ID"' >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo TARGET_BUILD_ID='"$BUILD_ID"' >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo TARGET_HELPER_SHA256='"$BIN_SHA256"' >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo TARGET_SERVICE_SHA256='"$SVC_SHA256"' >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo LEASE_BOOT_ID="$lease_boot" >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    echo LEASE_UNTIL_UPTIME="$lease_until" >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    if [ -f /data/adb/hapaneld/hapaneld-helper ]; then
-      cp -p /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      chown 0:0 /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-      chmod 755 /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery
-      cmp -s /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery || exit 1
-      echo OLD_BIN=1 >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-      ( sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/hapaneld/hapaneld-helper.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_BIN_SHA256=/ >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    else
-      echo OLD_BIN=0 >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-      echo OLD_BIN_SHA256=- >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    fi
-    if [ -f /data/adb/service.d/hapaneld-helper.sh ]; then
-      cp -p /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery || exit 1
-      chown 0:0 /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-      chmod 755 /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery
-      cmp -s /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery || exit 1
-      echo OLD_SERVICE=1 >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-      ( sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null || toybox sha256sum /data/adb/service.d/hapaneld-helper.sh.hapaneld-manual-recovery 2>/dev/null ) | cut -d\  -f1 | sed s/^/OLD_SERVICE_SHA256=/ >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    else
-      echo OLD_SERVICE=0 >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-      echo OLD_SERVICE_SHA256=- >> /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    fi
-    grep -q ^OLD_BIN=0$ /data/adb/hapaneld/.helper-manual-upgrade.marker.new || grep -Eq ^OLD_BIN_SHA256=[0-9a-f]{64}$ /data/adb/hapaneld/.helper-manual-upgrade.marker.new || exit 1
-    grep -q ^OLD_SERVICE=0$ /data/adb/hapaneld/.helper-manual-upgrade.marker.new || grep -Eq ^OLD_SERVICE_SHA256=[0-9a-f]{64}$ /data/adb/hapaneld/.helper-manual-upgrade.marker.new || exit 1
-    chown 0:0 /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    chmod 600 /data/adb/hapaneld/.helper-manual-upgrade.marker.new
-    sync || exit 1
-    mv -f /data/adb/hapaneld/.helper-manual-upgrade.marker.new /data/adb/hapaneld/.helper-manual-upgrade.marker || exit 1
-    sync || exit 1
-    stop hapaneld_helper 2>/dev/null
-    stop hapaneld_ledd 2>/dev/null
-    pkill -x hapaneld-helper 2>/dev/null
-    pkill -x hapaneld-ledd 2>/dev/null
-    mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo MV_FAIL; exit 1; }
-    mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || { echo SVC_MV_FAIL; exit 1; }
-    sync || exit 1
-    rm -f '"$PROBE_STAGING_PATH $RC_STAGING_PATH $SVC_STAGING_PATH"'
-    echo INSTALL_OK
-  ' 2>&1)" || true
-  echo "$out2" | sed 's/^/   /'
-  case "$out2" in
-    *ACTIVE_SYSTEM_TRANSACTION*|*ACTIVE_SYSTEMLESS_TRANSACTION*|*STALE_SYSTEM_TRANSACTION*|*STALE_SYSTEMLESS_TRANSACTION*|*MULTIPLE_STALE_TRANSACTIONS*|*FOREIGN_PROVISION_TRANSACTION*|*TRANSACTION_BUSY*)
-      fail "root-helper journal state changed while the standalone installer was running" \
-        "No live helper files were replaced by this attempt. Re-run to recover the retained journal." ;;
-  esac
-  if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
-    if rollback_root_helper "$INSTALL_KIND"; then
-      fail "systemless install failed; the prior helper was restored" \
-        "Re-run after checking /data capacity and service.d permissions."
-    fi
-    fail "systemless install failed and rollback could not be verified" \
-      "Restore the helper manually before relying on privileged operations."
-  fi
-  run_root '
-    stop hapaneld_helper 2>/dev/null
-    pkill -x hapaneld-helper 2>/dev/null
-    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
-  ' >/dev/null 2>&1 || true
 else
   run_root 'rm -f '"$PROBE_STAGING_PATH $RC_STAGING_PATH $SVC_STAGING_PATH" >/dev/null 2>&1 || true
-  # Both branches refuse, but they must not claim the same cause. A panel that genuinely answered
-  # "read-only /system, no runner" needs a different environment; a panel whose answer we could not
-  # read at all has not told us anything about its /system, and saying it did would send the operator
-  # to install a root manager it may not need.
-  if printf '%s\n' "$out" | grep -qx SYSTEM_RO && printf '%s\n' "$out" | grep -qx NO_SYSTEMLESS_RUNNER; then
-    # A read-only /system may need only its existing writable overlay mounted, or it may still be
-    # protected by verity. Offer the reboot-free probe first instead of assuming either mechanism or
-    # sending the operator straight to a root manager. Keep the rebooting fallback executable as two
-    # separate stages so copying the first command cannot silently comment out the post-reboot step.
-    fail "the panel has read-only /system and no verified systemless boot-service runner" \
-      "The existing helper was left running and no files were replaced." \
+  # A trustworthy negative capability result gets actionable recovery guidance. An unreadable or
+  # unrecognised probe stays on the generic refusal below: it has not established that /system is
+  # read-only and must not send the operator to modify verity or install a root manager.
+  if printf '%s\n' "$out" | grep -qx SYSTEM_RO &&
+     ! printf '%s\n' "$out" | grep -qx VENDOR_INIT_RW &&
+     printf '%s\n' "$out" | grep -qx NO_SYSTEMLESS_RUNNER; then
+    fail "could not determine where the canonical helper can be boot-registered" \
+      "The panel has read-only /system and no verified systemless boot-service runner; no writable vendor init registration was found." \
+      "The existing helper was left running and no live files were replaced." \
       "On a userdebug panel with an unlocked bootloader this is usually a writable overlay that is not mounted, or dm-verity — not a missing root manager." \
       "Try the host-side remount FIRST. It needs no reboot, and on panels that already carry a scratch overlay it is the whole fix:" \
       "  adb -s $TARGET root && adb -s $TARGET remount" \
@@ -1381,25 +1701,264 @@ else
       "  adb -s $TARGET disable-verity && adb -s $TARGET reboot" \
       "After the panel restarts and is unlocked:" \
       "  adb -s $TARGET root && adb -s $TARGET remount" \
-      "Then re-run this installer. If remount is still refused after that, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
+      "Then re-run this installer. If remount is still refused after that, provide a writable /vendor init directory, install a supported Magisk, KernelSU, or APatch service.d environment, or use firmware with a writable /system init path."
   fi
-  fail "could not determine where a boot-persistent helper can be installed" \
-    "The existing helper was left running and no files were replaced." \
+  fail "could not determine where the canonical helper can be boot-registered" \
+    "The existing helper was left running and no live files were replaced." \
     "$(describe_observed_state "$out")" \
-    "Re-run, and if it repeats include that line and 'adb features $TARGET' in a report:" \
-    "https://github.com/maxlyth/ha-paneld/issues"
+    "Provide a writable /system or /vendor init directory, or a supported Magisk, KernelSU, or APatch service.d environment."
+fi
+
+start_manual_lease_guard "$INSTALL_KIND"
+out2="$(run_root_locked '
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  mount -o rw,remount /vendor 2>/dev/null
+  mkdir -p /data/local /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+  [ '"$INSTALL_KIND"' != systemless ] || mkdir -p /data/adb/service.d ||
+    { echo TARGET_DIR_FAIL; exit 1; }
+  chown 0:0 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+  chmod 700 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+
+  if [ -f /system/bin/.hapaneld-helper-upgrade ] ||
+     [ -f /data/adb/hapaneld/.helper-upgrade.marker ] ||
+     [ -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ]; then
+    echo FOREIGN_PROVISION_TRANSACTION; exit 75
+  elif [ -f /data/local/.hapaneld-helper-manual-upgrade ] ||
+       [ -f /system/bin/.hapaneld-helper-manual-upgrade ] ||
+       [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+    echo ACTIVE_MANUAL_TRANSACTION; exit 75
+  fi
+
+  file_hash() {
+    actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+    printf %s "${actual%% *}"
+  }
+  candidate='"$CANONICAL_CANDIDATE_PATH"'
+  registration='"$REGISTRATION_PATH"'
+  registration_staged='"$REGISTRATION_STAGING_PATH"'
+  cp '"$PROBE_STAGING_PATH"' "$candidate" || { echo CP_FAIL; exit 1; }
+  chown 0:0 "$candidate" || exit 1
+  chmod 700 "$candidate" || exit 1
+  [ "$(file_hash "$candidate")" = '"$BIN_SHA256"' ] || { echo HASH_FAIL; exit 1; }
+  case '"$INSTALL_KIND"' in
+    system|vendor) registration_source='"$RC_STAGING_PATH"' ;;
+    systemless) registration_source='"$SVC_STAGING_PATH"' ;;
+    *) exit 1 ;;
+  esac
+  cp "$registration_source" "$registration_staged" || { echo SERVICE_FAIL; exit 1; }
+  chown 0:0 "$registration_staged" || exit 1
+  chmod '"$REGISTRATION_MODE"' "$registration_staged" || exit 1
+  [ "$(file_hash "$registration_staged")" = '"$SERVICE_SHA256"' ] ||
+    { echo SERVICE_HASH_FAIL; exit 1; }
+
+  marker='"$MANUAL_V3_MARKER"'
+  snapshot() {
+    name=$1; live=$2; recovery=/data/local/.hapaneld-helper-manual-'"$TRANSACTION_ID"'.recovery-"$name"
+    rm -f "$recovery"
+    if [ -e "$live" ] || [ -L "$live" ]; then
+      [ -f "$live" ] && [ ! -L "$live" ] || return 1
+      cp -p "$live" "$recovery" || return 1
+      chown 0:0 "$recovery" || return 1
+      chmod 600 "$recovery" || return 1
+      expected=$(file_hash "$recovery") || return 1
+      [ "$(file_hash "$live")" = "$expected" ] || return 1
+      echo "$name=1" >> "$marker.new"
+      echo "$name"_SHA256="$expected" >> "$marker.new"
+    else
+      echo "$name=0" >> "$marker.new"
+      echo "$name"_SHA256=- >> "$marker.new"
+    fi
+  }
+  rm -f "$marker.new"
+  lease_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || exit 1
+  lease_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null) || exit 1
+  echo "$lease_uptime" | grep -Eq ^[0-9]+$ || exit 1
+  lease_until=$((lease_uptime + '"$MANUAL_LEASE_SECONDS"'))
+  echo JOURNAL_VERSION=3 > "$marker.new"
+  echo JOURNAL_SCOPE=HELPER_ONLY >> "$marker.new"
+  echo REGISTRATION_KIND='"$INSTALL_KIND"' >> "$marker.new"
+  echo TRANSACTION_ID='"$TRANSACTION_ID"' >> "$marker.new"
+  echo TARGET_BUILD_ID='"$BUILD_ID"' >> "$marker.new"
+  echo TARGET_HELPER_SHA256='"$BIN_SHA256"' >> "$marker.new"
+  echo TARGET_SERVICE_SHA256='"$SERVICE_SHA256"' >> "$marker.new"
+  echo SWAP_PHASE=PREPARED >> "$marker.new"
+  echo LEASE_BOOT_ID="$lease_boot" >> "$marker.new"
+  echo LEASE_UNTIL_UPTIME="$lease_until" >> "$marker.new"
+  snapshot LIVE_CANONICAL /data/local/hapaneld-helper || exit 1
+  snapshot LIVE_SYSTEM_BIN /system/bin/hapaneld-helper || exit 1
+  snapshot LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc || exit 1
+  snapshot LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc || exit 1
+  snapshot LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper || exit 1
+  snapshot LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh || exit 1
+  snapshot LIVE_LEGACY_BIN /system/bin/hapaneld-ledd || exit 1
+  snapshot LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc || exit 1
+  chown 0:0 "$marker.new" || exit 1
+  chmod 600 "$marker.new" || exit 1
+  sync || exit 1
+  mv -f "$marker.new" "$marker" || exit 1
+  sync || exit 1
+
+  stop hapaneld_helper 2>/dev/null
+  stop hapaneld_ledd 2>/dev/null
+  pkill -x hapaneld-helper 2>/dev/null
+  pkill -x hapaneld-ledd 2>/dev/null
+  attempt=0
+  while pidof hapaneld-helper >/dev/null 2>&1 || pidof hapaneld-ledd >/dev/null 2>&1; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 10 ] || exit 1; sleep 1
+  done
+
+  # The incumbent can finish an APK-coupled R1 replacement while this installer is waiting for it
+  # to retire. Fence the complete recorded topology after retirement: a PREPARED journal whose live
+  # identity has changed is evidence for another writer, never authority to overwrite or roll back
+  # that writer with our now-stale snapshots.
+  recorded_live() {
+    name=$1; live=$2
+    flag=$(sed -n s/^"$name"=//p "$marker")
+    expected=$(sed -n s/^"$name"_SHA256=//p "$marker")
+    case "$flag" in
+      0) [ "$expected" = - ] && [ ! -e "$live" ] && [ ! -L "$live" ] ;;
+      1) printf %s "$expected" | grep -Eq ^[0-9a-f]{64}$ &&
+         [ -f "$live" ] && [ ! -L "$live" ] && [ "$(file_hash "$live")" = "$expected" ] ;;
+      *) return 1 ;;
+    esac
+  }
+  app_replacement_custody_present() {
+    for custody in \
+        /data/local/.hapaneld-helper.new \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+      if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
+    done
+    return 1
+  }
+  recorded_live LIVE_CANONICAL /data/local/hapaneld-helper &&
+  recorded_live LIVE_SYSTEM_BIN /system/bin/hapaneld-helper &&
+  recorded_live LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
+  recorded_live LIVE_VENDOR_RC /vendor/etc/init/hapaneld-helper.rc &&
+  recorded_live LIVE_SYSTEMLESS_BIN /data/adb/hapaneld/hapaneld-helper &&
+  recorded_live LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh &&
+  recorded_live LIVE_LEGACY_BIN /system/bin/hapaneld-ledd &&
+  recorded_live LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc || {
+    echo LIVE_IDENTITY_CHANGED
+    exit 76
+  }
+
+  replacement_reply=$("$candidate" --replacement-safe 2>/dev/null)
+  replacement_status=$?
+  if [ "$replacement_status" -ne 0 ] || [ "$replacement_reply" != REPLACE_SAFE ]; then
+    if [ "$replacement_status" -eq 3 ] && [ "$replacement_reply" = GUARD_ARMED ]; then
+      # Native status 3 covers either Guard state or the R1 replacement namespace. Fixed R1 custody
+      # makes rollback unsafe; without custody this is ordinary Guard state and the exact recorded
+      # topology must be restored immediately because the incumbent supervisor was already stopped.
+      if app_replacement_custody_present; then
+        echo REPLACEMENT_AUTHORITY_ACTIVE
+        exit 73
+      fi
+      echo GUARD_ARMED_ROLLBACK
+      exit 78
+    fi
+    echo REPLACEMENT_SAFETY_UNKNOWN
+    exit 74
+  fi
+
+  sed s/^SWAP_PHASE=PREPARED$/SWAP_PHASE=MUTATING/ "$marker" > "$marker.phase" || exit 1
+  chown 0:0 "$marker.phase" || exit 1
+  chmod 600 "$marker.phase" || exit 1
+  sync || exit 1
+  mv -f "$marker.phase" "$marker" || exit 1
+  sync || exit 1
+
+  rm -f /system/bin/hapaneld-helper /data/adb/hapaneld/hapaneld-helper \
+    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
+    /system/etc/init/hapaneld-helper.rc /vendor/etc/init/hapaneld-helper.rc \
+    /data/adb/service.d/hapaneld-helper.sh || exit 1
+  [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+  [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+  [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+  [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] &&
+  [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+  [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] || exit 1
+  rm -f /data/local/hapaneld-helper || exit 1
+  mv -f "$candidate" /data/local/hapaneld-helper || { echo LIVE_MV_FAIL; exit 1; }
+  chown 0:0 /data/local/hapaneld-helper || exit 1
+  chmod 700 /data/local/hapaneld-helper || exit 1
+  [ "$(file_hash /data/local/hapaneld-helper)" = '"$BIN_SHA256"' ] || exit 1
+  mv -f "$registration_staged" "$registration" || { echo SERVICE_MV_FAIL; exit 1; }
+  chown 0:0 "$registration" || exit 1
+  chmod '"$REGISTRATION_MODE"' "$registration" || exit 1
+  [ "$(file_hash "$registration")" = '"$SERVICE_SHA256"' ] || exit 1
+  sed s/^SWAP_PHASE=MUTATING$/SWAP_PHASE=TARGET/ "$marker" > "$marker.phase" || exit 1
+  chown 0:0 "$marker.phase" || exit 1
+  chmod 600 "$marker.phase" || exit 1
+  sync || exit 1
+  mv -f "$marker.phase" "$marker" || exit 1
+  sync || exit 1
+
+  /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+  echo INSTALL_OK
+' 2>&1)" || true
+echo "$out2" | sed 's/^/   /'
+case "$out2" in
+  *LIVE_IDENTITY_CHANGED*)
+    fail "live helper topology changed after the standalone snapshot" \
+      "Another helper replacement completed while the incumbent was retiring; no live file was overwritten and the stale snapshots were not rolled back." \
+      "Recover the retained v3 journal after reconciling the current canonical helper topology." ;;
+  *REPLACEMENT_AUTHORITY_ACTIVE*)
+    fail "APK-coupled helper replacement custody refused standalone helper replacement" \
+      "The staged candidate reported GUARD_ARMED and an exact fixed R1 custody path is present." \
+      "No live file was overwritten and the PREPARED snapshots were not rolled back over that authority. Let R1 finish or reconcile its custody records before retrying." ;;
+  *GUARD_ARMED_ROLLBACK*)
+    if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
+      fail "Guard DB authority is armed; the prior helper topology was restored" \
+        "Complete or cancel the Guard plan before retrying standalone helper replacement."
+    else
+      guard_rollback_status=$?
+    fi
+    if [ "$guard_rollback_status" -eq 3 ]; then
+      fail "APK-coupled helper replacement custody appeared while restoring the Guard-refused install" \
+        "No further rollback publication was attempted. Let R1 finish or reconcile its custody records before retrying."
+    fi
+    fail "Guard DB authority is armed and the prior helper topology could not be verified" \
+      "Recover the retained v3 journal before relying on privileged operations." ;;
+  *ACTIVE_MANUAL_TRANSACTION*|*FOREIGN_PROVISION_TRANSACTION*|*TRANSACTION_BUSY*)
+    fail "root-helper journal state changed while the standalone installer was running" \
+      "No live helper files were replaced by this attempt. Re-run to recover the retained journal." ;;
+esac
+if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
+    fail "canonical helper install failed; the prior helper topology was restored" \
+      "Re-run after checking writable storage and registration permissions."
+  fi
+  fail "canonical helper install failed and rollback could not be verified" \
+    "Recover the retained v3 journal before relying on privileged operations."
 fi
 
 if ! wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" "$INSTALL_KIND"; then
-  if rollback_root_helper "$INSTALL_KIND"; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
     fail "new helper failed its exact capability check; the prior helper was restored" \
       "Re-run after checking helper logs and available storage."
   fi
   fail "new helper failed its exact capability check and rollback could not be verified" \
     "Restore the helper manually before relying on privileged operations."
 fi
+if ! wait_for_helper_reply GUARDCAPS "OK GUARDCAPS 1 PREPARE DEFINE STREAM ACTION HEALTH REFUSAL STATUS EVIDENCE CANCEL RETIRE JOURNAL AUTONOMOUS SUPERVISED TERMINAL_RETIRE" "$INSTALL_KIND"; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
+    fail "new helper failed its exact autonomous-supervision capability check; the prior helper was restored" "Re-run with the current helper build."
+  fi
+  fail "new helper failed its exact autonomous-supervision capability check and rollback could not be verified" "Recover the retained v3 journal before relying on Guard DB operations."
+fi
+if ! wait_for_helper_reply GUARDSTATUS "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0" "$INSTALL_KIND"; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
+    fail "new helper did not report the exact empty Guard DB status; the prior helper was restored" "Do not replace a helper while Guard DB authority is armed."
+  fi
+  fail "new helper Guard DB status was not exact and rollback could not be verified" "Recover the retained v3 journal before relying on Guard DB operations."
+fi
 if ! wait_for_helper_reply BUILDID "BUILDID $BUILD_ID" "$INSTALL_KIND"; then
-  if rollback_root_helper "$INSTALL_KIND"; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
     fail "new helper failed its exact build-identity check; the prior helper was restored" \
       "Rebuild with ./helper/build.sh and retry."
   fi
@@ -1408,15 +1967,15 @@ if ! wait_for_helper_reply BUILDID "BUILDID $BUILD_ID" "$INSTALL_KIND"; then
 fi
 stop_manual_lease_guard
 if ! manual_lease_guard_succeeded; then
-  if rollback_root_helper "$INSTALL_KIND"; then
+  if rollback_root_helper_v3 "$INSTALL_KIND" "$TRANSACTION_ID" "$BUILD_ID" "$BIN_SHA256" "$SERVICE_SHA256"; then
     fail "the standalone root-helper transaction lease could not be renewed; the prior helper was restored" \
       "Re-run after checking adb/root stability and competing installer activity."
   fi
   fail "the standalone root-helper transaction lease failed and rollback could not be verified" \
     "Do not reboot yet. Recover the retained helper journal before relying on privileged operations."
 fi
-if ! commit_root_helper_upgrade "$INSTALL_KIND" && \
-   ! commit_root_helper_upgrade "$INSTALL_KIND"; then
+if ! commit_root_helper_upgrade_v3 "$INSTALL_KIND" && \
+   ! commit_root_helper_upgrade_v3 "$INSTALL_KIND"; then
   fail "new helper passed its checks, but the durable commit point could not be confirmed" \
     "Do not reboot yet. Check panel storage and permissions, then re-run this installer; it will reconcile any retained journal."
 fi

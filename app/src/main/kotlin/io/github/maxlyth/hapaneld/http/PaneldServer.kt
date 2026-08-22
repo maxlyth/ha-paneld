@@ -44,6 +44,7 @@ import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.CdpRelay
+import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.AdaptiveLuxCurve
 import io.github.maxlyth.hapaneld.control.CompanionDb
 import io.github.maxlyth.hapaneld.control.CompanionDataLease
@@ -53,6 +54,8 @@ import io.github.maxlyth.hapaneld.control.DensityController
 import io.github.maxlyth.hapaneld.control.DisplaySizingObservation
 import io.github.maxlyth.hapaneld.control.InteractiveController
 import io.github.maxlyth.hapaneld.control.PrivilegeRoute
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityTransitionGate
+import io.github.maxlyth.hapaneld.control.RemoteDebugAuthorityResult
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.PowerRepairCapability
 import io.github.maxlyth.hapaneld.control.PowerSafetyAcknowledgementDecision
@@ -113,10 +116,20 @@ import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.BoundedDns
 import io.github.maxlyth.hapaneld.util.BundledHelperInstaller
+import io.github.maxlyth.hapaneld.util.bundledHelperIsCanonical
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionHelperProtocol
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.GuardDbArmCoordinator
+import io.github.maxlyth.hapaneld.util.GuardDbMaintenance
+import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
+import io.github.maxlyth.hapaneld.util.guardDbSettingsAuthorityStore
+import io.github.maxlyth.hapaneld.util.guardDbAppStaging
+import io.github.maxlyth.hapaneld.util.guardDbBootNonce
+import io.github.maxlyth.hapaneld.util.guardDbSentinelStore
+import io.github.maxlyth.hapaneld.util.guardDbTerminalRetirementStore
+import io.github.maxlyth.hapaneld.util.inspectGuardDbCandidate
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import io.github.maxlyth.hapaneld.util.isLocalSource
@@ -929,6 +942,87 @@ internal data class DirectConfigMutationPlan(
     val requiresReconfigure: Boolean get() = changedKeys.any { it !in SettingsRegistry.liveApplyKeys() }
 }
 
+/** An exact channel candidate prepared without changing configuration, helper state, or packages. */
+internal sealed interface SelfUpdateChannelPreflight {
+    val message: String
+
+    data class Unresolved(override val message: String) : SelfUpdateChannelPreflight
+    data class UpToDate(override val message: String) : SelfUpdateChannelPreflight
+    data class Refused(override val message: String) : SelfUpdateChannelPreflight
+    class Ready(
+        override val message: String,
+        val requiresRecovery: Boolean,
+        val revalidateForConfigCommit: () -> String?,
+        val install: suspend () -> SelfUpdateChannelInstallResult,
+        private val discardPrepared: () -> Unit,
+    ) : SelfUpdateChannelPreflight, AutoCloseable {
+        override fun close() = discardPrepared()
+    }
+}
+
+internal data class SelfUpdateChannelInstallResult(
+    val message: String,
+    val installed: Boolean,
+)
+
+internal data class SelfUpdateChannelMutation(
+    val requested: String,
+    val force: Boolean,
+)
+
+/** Only an enabled updater changing channels creates an immediate APK candidate. */
+internal fun selfUpdateChannelMutation(
+    currentChannel: String,
+    currentSelfUpdate: Boolean,
+    requestedValues: Map<String, String>,
+): SelfUpdateChannelMutation? {
+    val requested = requestedValues["update_channel"] ?: return null
+    if (requested == currentChannel) return null
+    val enabled = requestedValues["self_update"]?.let(SettingValue::parseBool) ?: currentSelfUpdate
+    if (!enabled) return null
+    return SelfUpdateChannelMutation(
+        requested = requested,
+        force = currentChannel == "prerelease" && requested == "stable",
+    )
+}
+
+/** A restore already owns a destructive ticket and cannot hand it off to an asynchronous self-install.
+ * Reject every actual channel change, including a bundle that simultaneously disables self-update; this
+ * also guarantees a later rollback never needs to resolve/install a candidate under the restore owner. */
+internal fun restoreChangesUpdateChannel(
+    currentChannel: String,
+    accepted: Map<String, String>,
+): Boolean = accepted["update_channel"]?.let { it != currentChannel } == true
+
+/** One request-scoped status refresh. A failed/incomplete fresh database observation must not fall back
+ * to a previously healthy snapshot, because provisioning treats schema + quick_check as admission proof. */
+internal data class RefreshedStatusStorage(
+    val snapshot: StorageHealthSnapshot,
+    val fresh: Boolean,
+)
+
+internal suspend fun refreshedStatusStorage(
+    refreshRequested: Boolean,
+    refreshUpdates: suspend () -> Unit,
+    refreshStorage: suspend () -> StorageHealthSnapshot?,
+    cachedStorage: () -> StorageHealthSnapshot,
+): RefreshedStatusStorage {
+    if (!refreshRequested) return RefreshedStatusStorage(cachedStorage(), fresh = false)
+    refreshUpdates()
+    val fresh = refreshStorage()
+    return RefreshedStatusStorage(fresh ?: StorageHealthSnapshot.UNCHECKED, fresh = fresh != null)
+}
+
+internal fun validDatabaseObservationNonce(raw: String?): String? = raw?.takeIf {
+    it.length == 32 && it.all { char -> char in '0'..'9' || char in 'a'..'f' }
+}
+
+internal fun databaseObservationProof(
+    refreshRequested: Boolean,
+    rawNonce: String?,
+    observation: RefreshedStatusStorage,
+): String? = validDatabaseObservationNonce(rawNonce).takeIf { refreshRequested && observation.fresh }
+
 /** Server-side equality is the transaction authority; browser dirty tracking is only a UX hint. */
 internal fun planDirectConfigMutation(
     posted: Map<String, String>,
@@ -1059,6 +1153,22 @@ class PaneldServer internal constructor(
     // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
     // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
+    // Active channel changes are two-phase: prepare authenticates and database-admits one exact APK
+    // without mutation; the server then commits the whole config transaction and hands that same
+    // capability back to the service. Null means the admitted change had no APK to install (up to date,
+    // or self-update disabled) and still needs its MQTT state re-projected after commit.
+    private val prepareSelfUpdateChannel: suspend (String, Boolean) -> SelfUpdateChannelPreflight = { _, _ ->
+        SelfUpdateChannelPreflight.Unresolved("self-update channel preflight unavailable")
+    },
+    private val onSelfUpdateChannelCommitted: (
+        SelfUpdateChannelPreflight.Ready?,
+        InstallProgress.Ticket?,
+        String,
+        String,
+    ) -> Unit = { prepared, ticket, _, _ ->
+        prepared?.close()
+        ticket?.let { InstallProgress.finish(it, "self-update handoff unavailable") }
+    },
     // One read-only Android power assessment shared by every user and diagnostic surface.
     private val powerSafety: () -> PowerSafetyAssessment,
     // Uncached harmless direct-root capability probe. Explicit acknowledgement and repair paths only;
@@ -1119,6 +1229,9 @@ class PaneldServer internal constructor(
     // Cheap process-local storage/database-health snapshot. The runtime starts at UNCHECKED, so
     // staged callers and tests that omit this provider retain an explicit, truthful initial state.
     private val storageHealth: () -> StorageHealthSnapshot = { StorageHealthRuntime.snapshot() },
+    // Fresh observation uses the service's single serialized SQLite observation owner. Null means the
+    // same-request probe stopped or was incomplete; refresh=1 then renders UNCHECKED, never stale health.
+    private val refreshStorageHealth: suspend () -> StorageHealthSnapshot? = { null },
 ) {
     private suspend fun authorizeSensitive(
         call: ApplicationCall,
@@ -1365,6 +1478,7 @@ class PaneldServer internal constructor(
         return result is TapCaptureResult.Success
     }
     private val pendingApks = PendingUploadStore()
+    private val guardDbStaging = guardDbAppStaging(appContext)
 
     fun start() {
         stopping = false
@@ -1390,6 +1504,13 @@ class PaneldServer internal constructor(
                 // RFC1918 check, 403-ing legitimate LAN clients. Verified: remoteAddress returns 192.168.x etc.
                 if (!isLocalSource(call.request.origin.remoteAddress)) {
                     call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
+                    return@intercept finish()
+                }
+                if (GuardDbProcessAdmission.maintenanceRequired()) {
+                    // The request which durably created INTENT has already crossed this interceptor.
+                    // Every later request belongs to a writer-owning server which is being retired;
+                    // the successor's narrow control plane is the sole admitted surface.
+                    call.respondText("guard database maintenance owns this process\n", status = HttpStatusCode.Locked)
                     return@intercept finish()
                 }
                 // While guided setup is waiting on a person, every HTML page follows the panel into the
@@ -1479,6 +1600,125 @@ class PaneldServer internal constructor(
                                 }
                                 job.invokeOnCompletion { cause -> if (cause != null) apk.delete() }
                                 InstallProgress.finishOnFailure(progress, job)
+                            },
+                        ),
+                    ),
+                )
+                guardDbBootstrapRoutes(
+                    GuardDbBootstrapRouteDependencies(
+                        pendingUploads = pendingApks,
+                        staging = guardDbStaging,
+                        inspectPending = { file -> inspectGuardDbCandidate(appContext, file) },
+                        inspectInstalled = {
+                            inspectGuardDbCandidate(appContext, File(appContext.applicationInfo.sourceDir))
+                        },
+                        settingsAuthority = {
+                            guardDbSettingsAuthorityStore(appContext).materializeExact()
+                        },
+                        client = GuardDbMaintenance.client,
+                        sentinelStore = guardDbSentinelStore(appContext),
+                        bootNonce = ::guardDbBootNonce,
+                        monotonicMs = SystemClock::elapsedRealtime,
+                        httpPort = { config.httpPort },
+                        hardened = { config.hardenedSecurityEnabled },
+                        securityEpoch = {
+                            RemoteDebugSecurityTransitionGate.withLock {
+                                val epoch = RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch()
+                                    ?: return@withLock null
+                                val adb = AdbController(appContext, config)
+                                epoch.takeIf {
+                                    config.hardenedSecurityEnabled && !CdpRelay.running &&
+                                        adb.hardenedRemoteDebugOff() && config.hardenedSecurityEnabled &&
+                                        !CdpRelay.running &&
+                                        RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch() == epoch
+                                }
+                            }
+                        },
+                        commitSentinel = { expectedEpoch, sentinel ->
+                            when (val authority = RemoteDebugSecurityTransitionGate.withEpoch(expectedEpoch) {
+                                if (sentinel.securityAuthorityEpoch != expectedEpoch ||
+                                    RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch() != expectedEpoch ||
+                                    !config.hardenedSecurityEnabled || CdpRelay.running
+                                ) {
+                                    return@withEpoch GuardDbSentinelCommit.SecurityRefused
+                                }
+                                val adb = AdbController(appContext, config)
+                                if (!adb.hardenedRemoteDebugOff() || !config.hardenedSecurityEnabled ||
+                                    CdpRelay.running ||
+                                    RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch() != expectedEpoch
+                                ) return@withEpoch GuardDbSentinelCommit.SecurityRefused
+                                val store = guardDbSentinelStore(appContext)
+                                val written = store.write(sentinel)
+                                val load = store.load()
+                                if (written && load is io.github.maxlyth.hapaneld.util.GuardDbSentinelLoad.Valid &&
+                                    load.sentinel == sentinel
+                                ) {
+                                    GuardDbSentinelCommit.Committed(load)
+                                } else {
+                                    GuardDbSentinelCommit.Failed(load)
+                                }
+                            }) {
+                                RemoteDebugAuthorityResult.Changed -> GuardDbSentinelCommit.SecurityRefused
+                                is RemoteDebugAuthorityResult.Value -> authority.value
+                            }
+                        },
+                        authorize = { call, operation, payload, summary ->
+                            authorizeSensitiveRequest(
+                                call = call,
+                                hardened = true,
+                                peer = call.request.origin.remoteAddress,
+                                operation = operation,
+                                payload = payload,
+                                summary = summary,
+                                broker = LocalApprovalBroker.instance,
+                            )
+                        },
+                        prepare = { manifest, schedule ->
+                            GuardDbArmCoordinator.prepare(
+                                appContext,
+                                manifest,
+                                schedule,
+                            )
+                        },
+                        contain = {
+                            scope.launch {
+                                delay(GUARD_DB_ARM_RESPONSE_GRACE_MS)
+                                appContext.stopService(
+                                    android.content.Intent(appContext, io.github.maxlyth.hapaneld.PaneldService::class.java),
+                                )
+                                Thread {
+                                    Thread.sleep(1_500L)
+                                    io.github.maxlyth.hapaneld.GuardDbMaintenanceService.start(appContext)
+                                }.start()
+                            }
+                        },
+                        terminalRetirement = GuardDbTerminalRetirementRouteDependencies(
+                            client = GuardDbMaintenance.client,
+                            store = guardDbTerminalRetirementStore(appContext),
+                            hardened = { config.hardenedSecurityEnabled },
+                            securityEpoch = {
+                                RemoteDebugSecurityTransitionGate.withLock {
+                                    val epoch = RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch()
+                                        ?: return@withLock null
+                                    val adb = AdbController(appContext, config)
+                                    epoch.takeIf {
+                                        config.hardenedSecurityEnabled && !CdpRelay.running &&
+                                            adb.hardenedRemoteDebugOff() && config.hardenedSecurityEnabled &&
+                                            !CdpRelay.running &&
+                                            RemoteDebugSecurityTransitionGate.hardenedAuthorityEpoch() == epoch
+                                    }
+                                }
+                            },
+                            authorize = { call, operation, payload, summary ->
+                                authorizeSensitiveRequest(
+                                    call = call,
+                                    hardened = true,
+                                    peer = call.request.origin.remoteAddress,
+                                    operation = operation,
+                                    payload = payload,
+                                    summary = summary,
+                                    broker = LocalApprovalBroker.instance,
+                                )
                             },
                         ),
                     ),
@@ -2105,24 +2345,37 @@ class PaneldServer internal constructor(
                         if (admitActiveRead(call)) handleLogStream(call)
                     }
                     // Health + capabilities as JSON (warnings as ready-to-render HTML) — feeds every
-                    // variant's Install/health section client-side. ?refresh=1 forces a fresh GitHub
-                    // update check first (the "Run health audit" button), else the cached result is used.
+                    // variant's Install/health section client-side. ?refresh=1 forces both the GitHub
+                    // update check and a serialized SQLite observation for this exact response.
                     get("/status") {
-                        if (call.request.queryParameters["refresh"] == "1") {
-                            if (!admitActiveRead(call)) return@get
-                            withContext(Dispatchers.IO) {
-                                runCatching {
-                                    UpdateChecker.check(
-                                        appContext,
-                                        config.updateChannel,
-                                        config.companionUpdateChannel,
-                                        profile.companionMaxVersion,
-                                    )
-                                }
-                            }
+                        val updateRefreshRequested = call.request.queryParameters["refresh"] == "1"
+                        val observationNonce = call.request.queryParameters["database_observation_nonce"]
+                        val refreshRequested = updateRefreshRequested || observationNonce != null
+                        if (refreshRequested && !admitActiveRead(call)) return@get
+                        val statusStorage = withContext(Dispatchers.IO) {
+                            refreshedStatusStorage(
+                                refreshRequested = refreshRequested,
+                                refreshUpdates = {
+                                    if (updateRefreshRequested) runCatching {
+                                        UpdateChecker.check(
+                                            appContext,
+                                            config.updateChannel,
+                                            config.companionUpdateChannel,
+                                            profile.companionMaxVersion,
+                                        )
+                                    }
+                                },
+                                refreshStorage = refreshStorageHealth,
+                                cachedStorage = storageHealth,
+                            )
                         }
                         call.respondText(
-                            withContext(Dispatchers.IO) { statusJson() },
+                            withContext(Dispatchers.IO) {
+                                statusJson(
+                                    statusStorage.snapshot,
+                                    databaseObservationProof(refreshRequested, observationNonce, statusStorage),
+                                )
+                            },
                             ContentType.Application.Json,
                         )
                     }
@@ -2852,7 +3105,10 @@ class PaneldServer internal constructor(
                         call.respondText(inspectJson(status), ContentType.Application.Json)
                     }
                     post("/inspect/stop") {
-                        synchronized(inspectLock) { if (CdpRelay.running) CdpRelay.stop() }
+                        synchronized(inspectLock) {
+                            if (CdpRelay.running) CdpRelay.stop()
+                            if (config.hardenedSecurityEnabled) AdbController(appContext, config).reassert()
+                        }
                         call.respondText(inspectJson("off"), ContentType.Application.Json)
                     }
                 }
@@ -2930,7 +3186,13 @@ class PaneldServer internal constructor(
                 stopServer = null
             },
             // Serialize against an admitted start: teardown either prevents it or waits and then kills it.
-            stopRelay = { synchronized(inspectLock) { !CdpRelay.running || CdpRelay.stop() } },
+            stopRelay = {
+                synchronized(inspectLock) {
+                    val stopped = !CdpRelay.running || CdpRelay.stop()
+                    if (stopped && config.hardenedSecurityEnabled) AdbController(appContext, config).reassert()
+                    stopped
+                }
+            },
             drainTameMutations = { tameReconciliation.closeAndJoin(TAME_SHUTDOWN_MS) },
             drainRemoteControls = { remoteControls.closeAndJoin(REMOTE_CONTROL_SHUTDOWN_MS) },
             onIncomplete = { step, error ->
@@ -3795,12 +4057,17 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     )
 
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
-    private fun statusJson(): String {
+    private fun statusJson(): String = statusJson(storageHealth(), databaseObservationNonce = null)
+
+    private fun statusJson(
+        storageSnapshot: StorageHealthSnapshot,
+        databaseObservationNonce: String? = null,
+    ): String {
         val management = snapStaleOk()
         val powerAdvisory = powerSafetyAdvisory(management.privilege)
         val companion = companionServersStaleOk()
         val radio = radioStatus()
-        val storage = HealthAudit.storage(storageHealth())
+        val storage = HealthAudit.storage(storageSnapshot)
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version). Same finding
         // set as the dashboard banner + Install tab (HealthAudit); the audit lists ALL available updates
         // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
@@ -3842,7 +4109,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // because a consumer must never have to infer applicability from an absent field. A fleet
         // check that reads a missing object as "nothing to worry about" restates the very failure
         // this object exists to expose: a blank panel that every check still reports as green.
+        val storageProof = databaseObservationNonce?.let {
+            "\"database_observation_nonce\":${jsonStr(it)},"
+        }.orEmpty()
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
+            storageProof +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
             "\"renderer\":${rendererAdmission().statusJson()}," +
             "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
@@ -3941,13 +4212,24 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     // The density trio is shared with the Configure tab's Display card (the bulk of ITS slow render).
     private val densityCache = Cached(DENSITY_TTL_MS) { density.observeSizing() }
-    private val companionHelperCache = Cached(SU_TTL_MS) { HelperClient.supportsCompanionData() }
+    private val companionHelperCache = Cached(SU_TTL_MS) {
+        val companionSupported = HelperClient.supportsCompanionData()
+        val bundledBuildMatches = HelperClient.matchesBundledHelper()
+        bundledHelperIsCanonical(
+            bundledBuildMatches = bundledBuildMatches,
+            companionSupported = companionSupported,
+            guardSupported = companionSupported && bundledBuildMatches && GuardDbMaintenance.client.supported(),
+        )
+    }
     private fun ensureCompanionHelper(): Boolean {
-        if (HelperClient.supportsCompanionData()) return true
-        val ready = BundledHelperInstaller.ensureCurrent(appContext) in setOf(
+        val result = BundledHelperInstaller.ensureCurrent(appContext)
+        val ready = result in setOf(
             BundledHelperInstaller.Result.ALREADY_CURRENT,
             BundledHelperInstaller.Result.INSTALLED,
         )
+        if (result == BundledHelperInstaller.Result.REPROVISION_REQUIRED) {
+            Log.w(TAG, "root helper matches this release but is not canonical; reprovision required")
+        }
         if (ready) companionHelperCache.invalidate()
         return ready
     }
@@ -5025,9 +5307,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
         }
         when (result.getOrThrow()) {
-            ApplyAcceptedResult.STALE -> return HaOAuthCompletion.Stale
-            ApplyAcceptedResult.COMMIT_FAILED -> return HaOAuthCompletion.CommitFailed
-            ApplyAcceptedResult.APPLIED -> Unit
+            ApplyAcceptedResult.Stale -> return HaOAuthCompletion.Stale
+            ApplyAcceptedResult.CommitFailed,
+            is ApplyAcceptedResult.CompatibilityRefused -> return HaOAuthCompletion.CommitFailed
+            ApplyAcceptedResult.Applied -> Unit
         }
         val ambientWarning = runCatching {
             config.autoBrightnessHaEntity.takeIf(String::isNotBlank)?.let { entityId ->
@@ -5244,7 +5527,49 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             return
         }
+        var preparedChannel: SelfUpdateChannelPreflight.Ready? = null
+        var committedChannel = false
+        val previousChannel = config.updateChannel
         try {
+        val requestedChannelChanged = p["update_channel"]?.let { it != config.updateChannel } == true
+        selfUpdateChannelMutation(
+            currentChannel = config.updateChannel,
+            currentSelfUpdate = config.selfUpdate,
+            requestedValues = p.names().associateWith { p[it].orEmpty() },
+        )?.let { request ->
+            when (val preflight = prepareSelfUpdateChannel(request.requested, request.force)) {
+                is SelfUpdateChannelPreflight.Ready -> {
+                    if (preflight.requiresRecovery) {
+                        preflight.close()
+                        respondConfigMutation(
+                            call,
+                            "database-compatibility-refused",
+                            emptyList(),
+                            emptyList(),
+                            listOf("update_channel"),
+                            "An update-channel change cannot recover an older database snapshot.",
+                            HttpStatusCode.Conflict,
+                        )
+                        return
+                    }
+                    preparedChannel = preflight
+                }
+                is SelfUpdateChannelPreflight.UpToDate -> Unit
+                is SelfUpdateChannelPreflight.Refused,
+                is SelfUpdateChannelPreflight.Unresolved -> {
+                    respondConfigMutation(
+                        call,
+                        "database-compatibility-refused",
+                        emptyList(),
+                        emptyList(),
+                        listOf("update_channel"),
+                        preflight.message,
+                        HttpStatusCode.Conflict,
+                    )
+                    return
+                }
+            }
+        }
         lateinit var mutationPlan: DirectConfigMutationPlan
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
@@ -5273,6 +5598,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         var ambientSourceValidationStale = false
         var autoSleepPrerequisiteStale = false
         var directAdmissionStale = false
+        var channelCompatibilityRefusal: String? = null
         var previous: ConfigBundle? = null
         val committed = withContext(Dispatchers.IO) {
             synchronized(directConfigMutationLock) {
@@ -5305,6 +5631,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         revisionValues(), kind = ConfigBundle.KIND_REVISION,
                         exportedAt = System.currentTimeMillis().toString(), exportedBy = config.panelId,
                     )
+                    // DB_COMPAT_MUTATION_ANCHOR: HTTP_DIRECT_CONFIG_COMMIT
+                    preparedChannel?.revalidateForConfigCommit()?.let { refusal ->
+                        // The prepared APK and live database can change while HTTP admission is doing
+                        // unrelated validation. No preference in this request may commit unless the
+                        // exact candidate is still authenticated and the current database is DIRECT.
+                        channelCompatibilityRefusal = refusal
+                        return@synchronizedTransaction false
+                    }
                     config.applyBatch(
                         afterCommit = {
                             if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
@@ -5322,6 +5656,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     p["http_allowed_hosts"]?.let { config.setHttpAllowedHosts(it) }
                     // Live keys are deliberately excluded from this batch. Their handlers must observe
                     // the previous value before the live-setting authority persists the applied value.
+                    // update_channel is the exception: its exact APK was admitted above, and putting it
+                    // in this same batch prevents any other setting in the request from becoming visible
+                    // before compatibility proof. Its live handler is suppressed below to avoid resolving
+                    // a second candidate.
+                    p["update_channel"]?.let { config.setUpdateChannel(it) }
                     // Keep-awake (partial wakelock so SoC/network never suspend). Applied live by reconfigure().
                     p["keep_awake"]?.let { config.setKeepAwake(it.trim().equals("true", ignoreCase = true) || it.trim() == "1") }
                     // Room-temperature calibration trim (°C) — a plain local pref with no MQTT command, so it
@@ -5479,6 +5818,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     }
                     }
                 }
+                if (persisted) {
+                    committedChannel = requestedChannelChanged && "update_channel" in mutationPlan.changedKeys
+                }
                 if (persisted && !mutationPlan.isNoOp) {
                     revisions.snapshot(requireNotNull(previous))
                     runCatching {
@@ -5525,6 +5867,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     // concurrent retry therefore observes this request's durable desired state as its baseline.
                     for ((key, raw) in mutationPlan.changedLive) {
                         if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
+                        if (key == "update_channel") continue
                         val spec = SettingsRegistry.spec(key)
                         val value = if (spec != null) {
                             when (val validated = SettingValue.validate(spec, raw)) {
@@ -5612,6 +5955,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             return
         }
+        channelCompatibilityRefusal?.let { refusal ->
+            respondConfigMutation(
+                call,
+                "database-compatibility-refused",
+                emptyList(),
+                emptyList(),
+                listOf("update_channel"),
+                refusal,
+                HttpStatusCode.Conflict,
+            )
+            return
+        }
         if (!committed) {
             call.respondText("configuration commit failed\n", status = HttpStatusCode.InternalServerError)
             return
@@ -5623,6 +5978,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // Ordinary preferences are durably committed even when a later hardware admission is rejected;
         // include them explicitly so a mixed response never hides which unrelated changes took effect.
         liveApplied.addAll(0, mutationPlan.changedKeys.filter { it !in HTTP_LIVE_KEYS })
+        if (committedChannel) liveApplied.add(0, "update_channel")
         snapInvalidate()
         val reconfigureKeys = mutationPlan.changedKeys.filterTo(linkedSetOf()) {
             it !in HTTP_LIVE_KEYS || it == "home_dashboard"
@@ -5671,7 +6027,22 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             if (livePending.isEmpty()) HttpStatusCode.OK else HttpStatusCode.Accepted,
         )
         } finally {
+            val promotedChannelTicket = if (committedChannel && preparedChannel != null) {
+                checkNotNull(InstallProgress.promoteConfigMutation(configMutationTicket, "ha-paneld")) {
+                    "committed self-update channel lost its configuration owner"
+                }
+            } else null
             InstallProgress.finishConfigMutation(configMutationTicket)
+            if (committedChannel) {
+                onSelfUpdateChannelCommitted(
+                    preparedChannel,
+                    promotedChannelTicket,
+                    previousChannel,
+                    config.updateChannel,
+                )
+                preparedChannel = null
+            }
+            preparedChannel?.close()
         }
     }
 
@@ -6738,8 +7109,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 "Import ${accepted.size} panel setting${if (accepted.size == 1) "" else "s"}",
             )
         ) return
-        when (applyAccepted(accepted, expectedConfig.ifEmpty { null })) {
-            ApplyAcceptedResult.STALE -> {
+        when (val applyResult = applyAccepted(accepted, expectedConfig.ifEmpty { null })) {
+            ApplyAcceptedResult.Stale -> {
                 val actual = configConcurrencyHash(currentValues())
                 call.respondText(
                     """{"status":"stale-preview","expected_cfg":${jsonStr(expectedConfig)},"actual_cfg":${jsonStr(actual)}}""",
@@ -6748,7 +7119,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 )
                 return
             }
-            ApplyAcceptedResult.COMMIT_FAILED -> {
+            ApplyAcceptedResult.CommitFailed -> {
                 call.respondText(
                     importJson("error", emptyList(), skipped, warn, listOf("configuration commit failed")),
                     ContentType.Application.Json,
@@ -6756,7 +7127,15 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 )
                 return
             }
-            ApplyAcceptedResult.APPLIED -> Unit
+            is ApplyAcceptedResult.CompatibilityRefused -> {
+                call.respondText(
+                    importJson("database-compatibility-refused", emptyList(), skipped, warn, listOf(applyResult.message)),
+                    ContentType.Application.Json,
+                    HttpStatusCode.Conflict,
+                )
+                return
+            }
+            ApplyAcceptedResult.Applied -> Unit
         }
         val status = if (errors.isEmpty()) "applied" else "partial"
         call.respondText(importJson(status, accepted.keys.toList(), skipped, warn, errors), ContentType.Application.Json)
@@ -6766,7 +7145,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      *  preference fields → run live controller/hardware persistence and side-effects → reconfigure.
      *  External state cannot be rolled back and only starts after a successful preference commit.
      *  Returns false without starting side-effects when the preference commit fails. */
-    private enum class ApplyAcceptedResult { APPLIED, STALE, COMMIT_FAILED }
+    private sealed interface ApplyAcceptedResult {
+        data object Applied : ApplyAcceptedResult
+        data object Stale : ApplyAcceptedResult
+        data object CommitFailed : ApplyAcceptedResult
+        data class CompatibilityRefused(val message: String) : ApplyAcceptedResult
+    }
 
     private suspend fun applyAccepted(
         accepted: Map<String, String>,
@@ -6775,32 +7159,72 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         expectedHaAuthOwner: HaAuthOwner? = null,
         expectedHaOAuthEpoch: Long? = null,
         entityState: DashboardEntityBackupState? = null,
+        existingOperationTicket: InstallProgress.Ticket? = null,
         onDurableRevision: (String) -> Unit = {},
         afterCommitBeforeRenderer: (RendererConfigEffects, String) -> Unit = { _, _ -> },
         afterApply: () -> Unit = {},
     ): ApplyAcceptedResult = withContext(Dispatchers.IO) {
-        rendererPreparation.transaction {
+        if (existingOperationTicket != null && !InstallProgress.owns(existingOperationTicket)) {
+            return@withContext ApplyAcceptedResult.CompatibilityRefused(
+                "the owning panel operation is no longer active",
+            )
+        }
+        val configMutationTicket = if (existingOperationTicket == null) {
+            InstallProgress.startConfigMutation()
+                ?: return@withContext ApplyAcceptedResult.CompatibilityRefused(
+                    "another panel operation owns configuration admission",
+                )
+        } else null
+        var channelMutation: SelfUpdateChannelMutation? = null
+        var preparedChannel: SelfUpdateChannelPreflight.Ready? = null
+        var channelCommitted = false
+        val previousChannel = config.updateChannel
+        try {
+        if (existingOperationTicket != null && restoreChangesUpdateChannel(config.updateChannel, accepted)) {
+            return@withContext ApplyAcceptedResult.CompatibilityRefused(
+                "backup restore cannot change an active self-update channel",
+            )
+        }
+        channelMutation = selfUpdateChannelMutation(config.updateChannel, config.selfUpdate, accepted)
+        channelMutation?.let { request ->
+            when (val preflight = prepareSelfUpdateChannel(request.requested, request.force)) {
+                is SelfUpdateChannelPreflight.Ready -> {
+                    if (preflight.requiresRecovery) {
+                        preflight.close()
+                        return@withContext ApplyAcceptedResult.CompatibilityRefused(
+                            "An update-channel change cannot recover an older database snapshot.",
+                        )
+                    }
+                    preparedChannel = preflight
+                }
+                is SelfUpdateChannelPreflight.UpToDate -> Unit
+                is SelfUpdateChannelPreflight.Refused,
+                is SelfUpdateChannelPreflight.Unresolved ->
+                    return@withContext ApplyAcceptedResult.CompatibilityRefused(preflight.message)
+            }
+        }
+        val result = rendererPreparation.transaction {
             var earlyResult: ApplyAcceptedResult? = null
             var committed: AcceptedCommit? = null
             config.synchronizedTransaction {
                 if (expectedConfig != null &&
                     configConcurrencyHash(currentValues()) != expectedConfig
                 ) {
-                    earlyResult = ApplyAcceptedResult.STALE
+                    earlyResult = ApplyAcceptedResult.Stale
                     return@synchronizedTransaction
                 }
                 if (expectedRevision != null &&
                     io.github.maxlyth.hapaneld.config.ConfigHash.of(revisionValues()) != expectedRevision
                 ) {
-                    earlyResult = ApplyAcceptedResult.STALE
+                    earlyResult = ApplyAcceptedResult.Stale
                     return@synchronizedTransaction
                 }
                 if (expectedHaAuthOwner != null && config.haAuthSnapshot().stableOwner() != expectedHaAuthOwner) {
-                    earlyResult = ApplyAcceptedResult.STALE
+                    earlyResult = ApplyAcceptedResult.Stale
                     return@synchronizedTransaction
                 }
                 if (expectedHaOAuthEpoch != null && !config.isHaOAuthAttemptCurrent(expectedHaOAuthEpoch)) {
-                    earlyResult = ApplyAcceptedResult.STALE
+                    earlyResult = ApplyAcceptedResult.Stale
                     return@synchronizedTransaction
                 }
                 val previous = ConfigBundle.fromValues(
@@ -6816,6 +7240,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         // EntityLearningManager owns enable/disable transition semantics and commits this
                         // preference after the ordinary bundle transaction succeeds.
                         key == "dashboard_entity_learning" -> Unit
+                        key == "update_channel" -> SettingsRegistry.spec(key)?.let { config.stage(editor, it, value) }
                         key in HTTP_LIVE_KEYS -> live.add(key to value)
                         else -> SettingsRegistry.spec(key)?.let { spec ->
                             config.stage(editor, spec, value)
@@ -6824,6 +7249,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 }
                 config.stageImportDependencies(editor, accepted)
                 entityState?.let { config.stageDashboardEntityBackupState(editor, it) }
+                // DB_COMPAT_MUTATION_ANCHOR: HTTP_SHARED_CONFIG_COMMIT
+                preparedChannel?.revalidateForConfigCommit()?.let { refusal ->
+                    // Staging is non-durable. Revalidate at the last boundary before commit so a
+                    // refusal leaves this complete imported/restored configuration untouched.
+                    earlyResult = ApplyAcceptedResult.CompatibilityRefused(refusal)
+                    return@synchronizedTransaction
+                }
                 if (!config.commit(
                         editor,
                         afterCommit = {
@@ -6831,9 +7263,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         },
                     )
                 ) {
-                    earlyResult = ApplyAcceptedResult.COMMIT_FAILED
+                    earlyResult = ApplyAcceptedResult.CommitFailed
                     return@synchronizedTransaction
                 }
+                channelCommitted = "update_channel" in accepted &&
+                    accepted["update_channel"] == config.updateChannel
                 committed = AcceptedCommit(
                     previous = previous,
                     live = live,
@@ -6884,7 +7318,26 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             onReconfigure(accepted.keys)
             rendererFailure?.let { throw it }
             afterApply()
-            ApplyAcceptedResult.APPLIED
+            ApplyAcceptedResult.Applied
+        }
+        result
+        } finally {
+            val promotedChannelTicket = if (channelCommitted && preparedChannel != null) {
+                checkNotNull(
+                    InstallProgress.promoteConfigMutation(requireNotNull(configMutationTicket), "ha-paneld"),
+                ) { "committed self-update channel lost its configuration owner" }
+            } else null
+            configMutationTicket?.let(InstallProgress::finishConfigMutation)
+            if (channelCommitted) {
+                onSelfUpdateChannelCommitted(
+                    preparedChannel,
+                    promotedChannelTicket,
+                    previousChannel,
+                    config.updateChannel,
+                )
+                preparedChannel = null
+            }
+            preparedChannel?.close()
         }
     }
 
@@ -7530,6 +7983,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         configPlan.values,
                         entityState,
                         beforeRevisionHash,
+                        existingOperationTicket = progress,
                         onDurableRevision = { appliedHash ->
                             configCommitted = true
                             appliedRevisionHash = appliedHash
@@ -7592,8 +8046,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     val rollback = if (configCommitted) {
                         val expected = appliedRevisionHash
                         val restored = expected != null && runCatching {
-                            applyAccepted(before, expectedRevision = expected, entityState = beforeEntityState) ==
-                                ApplyAcceptedResult.APPLIED
+                            applyAccepted(before, expectedRevision = expected,
+                                entityState = beforeEntityState,
+                                existingOperationTicket = progress,
+                            ) ==
+                                ApplyAcceptedResult.Applied
                         }
                             .getOrDefault(false)
                         if (restored) InstallProgress.ComponentResult(InstallProgress.Outcome.ROLLED_BACK)
@@ -8063,21 +8520,26 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         accepted: Map<String, String>,
         entityState: DashboardEntityBackupState?,
         expectedRevision: String,
+        existingOperationTicket: InstallProgress.Ticket,
         onDurableRevision: (String) -> Unit,
         afterCommitBeforeRenderer: (RendererConfigEffects, Int, String) -> Unit,
         afterApply: () -> Unit = {},
     ): Int {
-        check(applyAccepted(
+        val result = applyAccepted(
             accepted,
             expectedRevision = expectedRevision,
             entityState = entityState,
+            existingOperationTicket = existingOperationTicket,
             onDurableRevision = onDurableRevision,
             afterCommitBeforeRenderer = { effects, appliedHash ->
                 afterCommitBeforeRenderer(effects, accepted.size, appliedHash)
             },
             afterApply = afterApply,
-        ) == ApplyAcceptedResult.APPLIED) {
-            "configuration commit failed"
+        )
+        check(result == ApplyAcceptedResult.Applied) {
+            if (result is ApplyAcceptedResult.CompatibilityRefused) {
+                "configuration refused: ${result.message}"
+            } else "configuration commit failed"
         }
         return accepted.size
     }
@@ -8283,11 +8745,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             )
             return
         }
-        if (applyAccepted(accepted, entityState = entityState) != ApplyAcceptedResult.APPLIED) {
+        val applied = applyAccepted(accepted, entityState = entityState)
+        if (applied != ApplyAcceptedResult.Applied) {
             call.respondText(
-                importJson("error", emptyList(), emptyList(), emptyList(), listOf("configuration commit failed")),
+                importJson(
+                    if (applied is ApplyAcceptedResult.CompatibilityRefused) "database-compatibility-refused" else "error",
+                    emptyList(), emptyList(), emptyList(),
+                    listOf(
+                        if (applied is ApplyAcceptedResult.CompatibilityRefused) {
+                            applied.message
+                        } else "configuration commit failed",
+                    ),
+                ),
                 ContentType.Application.Json,
-                HttpStatusCode.InternalServerError,
+                if (applied is ApplyAcceptedResult.CompatibilityRefused) HttpStatusCode.Conflict
+                else HttpStatusCode.InternalServerError,
             )
             return
         }
@@ -8392,6 +8864,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     companion object {
         private const val TAG = "ha-paneld/http"
+        private const val GUARD_DB_ARM_RESPONSE_GRACE_MS = 500L
         private const val LOG_SINK_DNS_TIMEOUT_MS = 2_000L
         private const val HARDENED_APPROVAL_TEXT =
             "Requires physical on-panel approval for this action when Hardened mode is enabled."

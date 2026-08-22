@@ -15,6 +15,26 @@ val featureCostsEnabled = providers.gradleProperty("featureCosts").orNull
 val keystoreProps = rootProject.file("keystore.properties")
 val hasReleaseSigning = keystoreProps.exists()
 
+// The compatibility boundary is signed into every APK as one finite manifest value. Keep the
+// database schema object as the source of truth: release tags/versionNames are presentation, not a
+// statement about which on-disk structures a candidate can safely open.
+val entityCatalogSchemaSource = rootProject.file(
+    "app/src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityCatalogStore.kt",
+)
+fun entityCatalogSchemaConstant(name: String): Int {
+    val match = Regex("""const\s+val\s+$name\s*=\s*(\d+)""")
+        .find(entityCatalogSchemaSource.readText())
+        ?: error("EntityCatalogSchema.$name is missing or is not an integer literal")
+    return match.groupValues[1].toInt()
+}
+val databaseMinimumSchema = entityCatalogSchemaConstant("MINIMUM_SUPPORTED_VERSION")
+val databaseMaximumSchema = entityCatalogSchemaConstant("CURRENT_VERSION")
+check(databaseMinimumSchema in 1..databaseMaximumSchema) {
+    "invalid EntityCatalogSchema boundary $databaseMinimumSchema..$databaseMaximumSchema"
+}
+val databaseCompatibilityContract =
+    "hapaneld-db:v1:ha-paneld.db:$databaseMinimumSchema:$databaseMaximumSchema"
+
 val helperIdentityFiles = rootProject.fileTree("helper/src") {
     include("*.c", "*.h", "*.def")
 }.files.sortedBy { it.relativeTo(rootProject.projectDir).invariantSeparatorsPath }
@@ -60,6 +80,8 @@ android {
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
         buildConfigField("boolean", "FEATURE_COSTS_ENABLED", featureCostsEnabled.toString())
         buildConfigField("String", "HELPER_BUILD_ID", "\"$helperBuildId\"")
+        buildConfigField("String", "DATABASE_COMPATIBILITY", "\"$databaseCompatibilityContract\"")
+        manifestPlaceholders["databaseCompatibility"] = databaseCompatibilityContract
 
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
@@ -159,6 +181,13 @@ tasks.matching { it.name.startsWith("generate") && it.name.endsWith("BuildConfig
     inputs.property("featureCostsEnabled", featureCostsEnabled)
     inputs.files(helperIdentityFiles)
     inputs.property("helperBuildId", helperBuildId)
+    inputs.file(entityCatalogSchemaSource)
+    inputs.property("databaseCompatibility", databaseCompatibilityContract)
+}
+
+tasks.matching { it.name.startsWith("process") && it.name.endsWith("MainManifest") }.configureEach {
+    inputs.file(entityCatalogSchemaSource)
+    inputs.property("databaseCompatibility", databaseCompatibilityContract)
 }
 
 dependencies {

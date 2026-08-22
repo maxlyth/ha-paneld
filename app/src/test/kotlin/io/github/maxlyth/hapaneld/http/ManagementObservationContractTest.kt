@@ -257,6 +257,8 @@ class ManagementObservationContractTest {
         val statusRoute = server.substring(server.indexOf("get(\"/status\")"), server.indexOf("post(\"/updates/ignore\")"))
 
         assertTrue(installRoute.contains("withContext(Dispatchers.IO) { page(\"install\", \"Install\", installBody()) }"))
-        assertTrue(statusRoute.contains("withContext(Dispatchers.IO) { statusJson() }"))
+        assertTrue(statusRoute.contains("withContext(Dispatchers.IO)"))
+        assertTrue(statusRoute.contains("statusJson("))
+        assertTrue(statusRoute.indexOf("refreshedStatusStorage(") < statusRoute.indexOf("statusJson("))
     }
 }

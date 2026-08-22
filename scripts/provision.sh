@@ -85,6 +85,8 @@ cleanup_provision_resources() {
   if type discard_db_snapshot_txn >/dev/null 2>&1; then discard_db_snapshot_txn || true; fi
   [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR" || true
   SHIZUKU_DIR=""
+  [ -z "${CANDIDATE_APK_DIR:-}" ] || rm -rf "$CANDIDATE_APK_DIR" || true
+  CANDIDATE_APK_DIR=""
   [ -z "${SECRET_DIR:-}" ] || rm -rf "$SECRET_DIR" || true
   SECRET_DIR=""
   # Keep a possibly armed app quiesced until every abort cleanup above has stopped mutation and
@@ -126,12 +128,23 @@ RELEASE_HELPER_BUILD_ID=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$SCRIPT_DIR/../helper/dist}"
 A11Y="$PKG/.input.PanelAccessibilityService"
-APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0
+APK=""; APK_RELEASE_TAG=""; PANEL_ID=""; MQTT=""; MQTT_USER=""; MQTT_PASS=""; VERIFY_ONLY=0; LATEST=0; PRERELEASE=0; FORCE=0; PERSIST_ADB=0; STRIP_VENDOR=0; SHIZUKU=0; ALLOW_UNSIGNED_HELPER=0; REQUIRE_RELEASE_SIGNER=0; TOINSTALL_VER=""; VERIFY_DIRECT_GRANTS=0; HA_OAUTH_CONFIGURED=0; RESET_CONFIG=0; RESET_CONFIG_COMPLETED=0; CANDIDATE_SIGNER_SHA256=""
 # The schema versions the app has actually shipped. Bump the MAX alongside every new database
 # migration; a snapshot admitting a version outside this set cannot be paired with any build this
 # installer could restore it onto.
 DB_SUPPORTED_USER_VERSION_MIN=1
 DB_SUPPORTED_USER_VERSION_MAX=14
+DB_COMPATIBILITY_METADATA_KEY="io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY"
+DB_COMPATIBILITY_CONTRACT=""
+DB_CANDIDATE_MIN=""
+DB_CANDIDATE_MAX=""
+DB_GATE_RECOVERY=""
+DB_GATE_DECISION_KIND=""
+DB_GATE_INITIAL_EVIDENCE=""
+DB_GATE_CONSUME_EVIDENCE=""
+DB_GATE_RESET_FRESH=0
+HOST_DB_PRIMARY_FINGERPRINT=""
+RESET_PACKAGE_STOPPED="unknown"
 SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
 SNAPSHOT_TXN_HOST_DB_WORK=""; SNAPSHOT_TXN_HOST_DB_TARGET=""
 SNAPSHOT_TXN_HOST_RECEIPT_WORK=""; SNAPSHOT_TXN_HOST_RECEIPT_TARGET=""
@@ -674,11 +687,15 @@ print_next_step() {
 
 STORAGE_HEALTH_RESULT=""
 STORAGE_HEALTH_STATE=""
+STORAGE_HEALTH_SCHEMA_VERSION=""
+STORAGE_HEALTH_QUICK_CHECK=""
+STORAGE_HEALTH_OBSERVATION_NONCE=""
 POWER_SAFETY_RESULT=""
 POWER_SAFETY_STATE=""
 # Never read before classify_package_presence sets it; initialised so an unclassified read is the
 # fail-closed value rather than an unbound-variable abort.
 PACKAGE_PRESENCE="unknown"
+PACKAGE_DATA_RECORD="unknown"
 
 # Read the small status contract without adding jq as a fleet-host dependency. A successful response
 # without storage_health is distinguishable only as a legacy build until this run installs a current
@@ -687,6 +704,8 @@ read_storage_health() {
   local status flat_status
   STORAGE_HEALTH_RESULT="transport"
   STORAGE_HEALTH_STATE=""
+  STORAGE_HEALTH_SCHEMA_VERSION=""
+  STORAGE_HEALTH_QUICK_CHECK=""
   if ! status="$(curl -fsS --max-time 5 "$URL/api/v1/status" 2>/dev/null)"; then
     return 0
   fi
@@ -700,6 +719,10 @@ read_storage_health() {
   fi
   STORAGE_HEALTH_STATE="$(printf '%s' "$flat_status" | sed -n \
     's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  STORAGE_HEALTH_SCHEMA_VERSION="$(printf '%s' "$flat_status" | sed -n \
+    's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"schema_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  STORAGE_HEALTH_QUICK_CHECK="$(printf '%s' "$flat_status" | sed -n \
+    's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"quick_check"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   STORAGE_HEALTH_STATE="$(printf '%s' "$STORAGE_HEALTH_STATE" | sanitize_terminal)"
   if [ -z "$STORAGE_HEALTH_STATE" ]; then
     STORAGE_HEALTH_RESULT="malformed"
@@ -709,6 +732,31 @@ read_storage_health() {
     healthy|unchecked|warning|critical|database_failure) STORAGE_HEALTH_RESULT="valid" ;;
     *) STORAGE_HEALTH_RESULT="unknown" ;;
   esac
+}
+
+# Compatibility admission needs one uncached observation from the current app. Keeping this distinct
+# from routine status rendering makes the freshness requirement visible at both the call site and in
+# the HTTP trace used by the cross-entry-point tests.
+read_storage_health_refresh() {
+  local requested_nonce="$1" status flat_status nonce_count schema_count quick_count
+  STORAGE_HEALTH_RESULT="transport"
+  STORAGE_HEALTH_STATE=""
+  STORAGE_HEALTH_SCHEMA_VERSION=""
+  STORAGE_HEALTH_QUICK_CHECK=""
+  STORAGE_HEALTH_OBSERVATION_NONCE=""
+  if ! status="$(curl -fsS --max-time 15 "$URL/api/v1/status?database_observation_nonce=$requested_nonce" 2>/dev/null)"; then return 0; fi
+  flat_status="$(printf '%s' "$status" | tr '\n' ' ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  [ "$(printf '%s' "$flat_status" | grep -o '"storage_health"[[:space:]]*:' | wc -l | tr -d ' ')" = 1 ] || { STORAGE_HEALTH_RESULT="malformed"; return 0; }
+  nonce_count="$(printf '%s' "$flat_status" | grep -o '"database_observation_nonce"[[:space:]]*:' | wc -l | tr -d ' ')"
+  [ "$nonce_count" = 1 ] || { STORAGE_HEALTH_RESULT="malformed"; return 0; }
+  schema_count="$(printf '%s' "$flat_status" | grep -o '"schema_version"[[:space:]]*:' | wc -l | tr -d ' ')"
+  quick_count="$(printf '%s' "$flat_status" | grep -o '"quick_check"[[:space:]]*:' | wc -l | tr -d ' ')"
+  [ "$schema_count" = 1 ] && [ "$quick_count" = 1 ] || { STORAGE_HEALTH_RESULT="malformed"; return 0; }
+  STORAGE_HEALTH_STATE="$(printf '%s' "$flat_status" | sed -n 's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  STORAGE_HEALTH_SCHEMA_VERSION="$(printf '%s' "$flat_status" | sed -n 's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"schema_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  STORAGE_HEALTH_QUICK_CHECK="$(printf '%s' "$flat_status" | sed -n 's/.*"storage_health"[[:space:]]*:[[:space:]]*{[^}]*"quick_check"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  STORAGE_HEALTH_OBSERVATION_NONCE="$(printf '%s' "$flat_status" | sed -n 's/.*"database_observation_nonce"[[:space:]]*:[[:space:]]*"\([0-9a-f]*\)".*/\1/p')"
+  STORAGE_HEALTH_RESULT="valid"
 }
 
 # Package replacement and process startup are asynchronous. Poll incomplete results after mutation,
@@ -841,6 +889,76 @@ classify_package_presence() {
     present|absent) PACKAGE_PRESENCE="$verdict" ;;
   esac
   return 0
+}
+
+# `pm uninstall -k` removes the installed path while retaining a package-manager record and app
+# data for a later reinstall. Rootless hosts cannot inspect /data/data directly, so `pm path` absence
+# alone is never fresh-install proof. This second nonce-bound observation includes uninstalled
+# records (`-u`) and accepts fresh only when the exact filtered listing is empty and the command and
+# package manager both completed normally.
+classify_package_data_record() {
+  local seconds="$1" nonce out verdict status=0
+  PACKAGE_DATA_RECORD="unknown"
+  nonce="$(host_transaction_id)" || return 0
+  out="$(run_with_deadline "$seconds" "$ADB_COMMAND" -s "$TARGET" shell \
+    "echo HAPANELD_DATA_BEGIN:$nonce; pm list packages -u $PKG; echo HAPANELD_DATA_TARGET:$nonce:\$?; \
+     pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_DATA_LIVE:$nonce:\$?; echo HAPANELD_DATA_END:$nonce" 2>/dev/null)" || status=$?
+  [ "$status" -eq 0 ] || return 0
+  verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" -v p="$PKG" '
+    /^HAPANELD_DATA_BEGIN:/  { split($0,a,":"); if (a[2]!=n || seg!=0) bad=1; else seg=1; next }
+    /^HAPANELD_DATA_TARGET:/ { split($0,a,":"); if (a[2]!=n || seg!=1 || a[3]!~/^[0-9]+$/) bad=1; else { trc=a[3]; seg=2 }; next }
+    /^HAPANELD_DATA_LIVE:/   { split($0,a,":"); if (a[2]!=n || seg!=2 || a[3]!~/^[0-9]+$/) bad=1; else { lrc=a[3]; seg=3 }; next }
+    /^HAPANELD_DATA_END:/    { split($0,a,":"); if (a[2]!=n || seg!=3) bad=1; else seg=4; next }
+    seg==1 && /^package:/    { if ($0=="package:" p) retained=1; else bad=1; next }
+    seg==1 && NF             { bad=1; next }
+    seg==2 && /^package:/    { if ($0~/^package:\/[^ \t]+$/) live=1; else bad=1; next }
+    END {
+      if (bad || seg!=4 || trc+0!=0 || lrc+0!=0 || !live) print "unknown"
+      else print retained ? "retained" : "absent"
+    }')"
+  case "$verdict" in retained|absent) PACKAGE_DATA_RECORD="$verdict" ;; esac
+}
+
+# `pm clear` atomically deletes app data and places the package in Android's stopped state, but the
+# successful command is only evidence about that instant. Before replacing a rootless package we
+# must prove that the old app stayed stopped: if it ran again, it could already have recreated a
+# database whose schema the candidate cannot read. The package dump, its child exit status, and a
+# same-command package-manager liveness query are bound to this run's nonce so silence or a partial
+# reply can never be mistaken for `stopped=true`.
+classify_reset_package_stopped() {
+  local seconds="$1" nonce out verdict status=0
+  RESET_PACKAGE_STOPPED="unknown"
+  nonce="$(host_transaction_id)" || return 0
+  out="$(run_with_deadline "$seconds" "$ADB_COMMAND" -s "$TARGET" shell \
+    "echo HAPANELD_RESET_STOP_BEGIN:$nonce; dumpsys package $PKG; echo HAPANELD_RESET_STOP_TARGET:$nonce:\$?; \
+     pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_RESET_STOP_LIVE:$nonce:\$?; \
+     echo HAPANELD_RESET_STOP_END:$nonce" 2>/dev/null)" || status=$?
+  [ "$status" -eq 0 ] || return 0
+  verdict="$(printf '%s\n' "$out" | tr -d '\r' | awk -v n="$nonce" '
+    /^HAPANELD_RESET_STOP_BEGIN:/  { split($0,a,":"); if (a[2]!=n || seg!=0) bad=1; else seg=1; next }
+    /^HAPANELD_RESET_STOP_TARGET:/ { split($0,a,":"); if (a[2]!=n || seg!=1 || a[3]!~/^[0-9]+$/) bad=1; else { trc=a[3]; seg=2 }; next }
+    /^HAPANELD_RESET_STOP_LIVE:/   { split($0,a,":"); if (a[2]!=n || seg!=2 || a[3]!~/^[0-9]+$/) bad=1; else { lrc=a[3]; seg=3 }; next }
+    /^HAPANELD_RESET_STOP_END:/    { split($0,a,":"); if (a[2]!=n || seg!=3) bad=1; else seg=4; next }
+    seg==1 && /^[ \t]*User 0:/     { user0=1; user0_count++
+                                      for (i=1; i<=NF; i++) {
+                                        if ($i ~ /^stopped=/) { stopped_count++; stopped=$i }
+                                        if ($i ~ /^notLaunched=/) { not_launched_count++; not_launched=$i }
+                                      }
+                                      next }
+    seg==1 && /^[ \t]*User [0-9]+:/ { user0=0; next }
+    seg==1 && user0 {
+      for (i=1; i<=NF; i++) if ($i ~ /^stopped=/) { stopped_count++; stopped=$i }
+      next
+    }
+    seg==2 && /^package:/ { if ($0~/^package:\/[^ \t]+$/) live=1; else bad=1; next }
+    END {
+      if (bad || seg!=4 || trc+0!=0 || lrc+0!=0 || !live || user0_count!=1 || stopped_count!=1 || not_launched_count!=1) print "unknown"
+      else if (stopped=="stopped=true" && not_launched=="notLaunched=true") print "stopped"
+      else if ((stopped=="stopped=true" || stopped=="stopped=false") &&
+               (not_launched=="notLaunched=true" || not_launched=="notLaunched=false")) print "running"
+      else print "unknown"
+    }')"
+  case "$verdict" in stopped|running) RESET_PACKAGE_STOPPED="$verdict" ;; esac
 }
 
 # Storage health classifies the panel; it does not admit or refuse the replacement.
@@ -1555,11 +1673,25 @@ download_latest() {
 
 # Pick the APK: explicit --apk wins; else the local development build (unless --latest); else download the latest release.
 resolve_apk() {
+  local source_apk staged_apk
   if [ -n "$APK" ]; then :
   elif [ "$LATEST" = 1 ]; then download_latest
   elif [ -f "$LOCAL_APK" ]; then APK="$LOCAL_APK"; step "📂 using local build" "${D}$APK${X}"
   else download_latest; fi
   [ -f "$APK" ] || { echo "${RED}APK not found: $APK${X}" >&2; exit 1; }
+  # Every subsequent verifier and Android install opens one owner-only snapshot, not a mutable
+  # caller/download path. Digest assertions remain mandatory around meaningful reads so even an
+  # accidental in-process replacement of this snapshot fails closed.
+  source_apk="$APK"
+  CANDIDATE_APK_DIR="$(mktemp -d)" || fail "could not create a private candidate APK directory" \
+    "No panel changes were made. Free host disk space, then retry."
+  chmod 700 "$CANDIDATE_APK_DIR" 2>/dev/null || fail "could not protect the private candidate APK directory" \
+    "No panel changes were made. Check host filesystem permissions, then retry."
+  staged_apk="$CANDIDATE_APK_DIR/$(basename "$source_apk")"
+  cp "$source_apk" "$staged_apk" 2>/dev/null && chmod 600 "$staged_apk" 2>/dev/null || \
+    fail "could not snapshot the candidate APK into private storage" \
+      "No panel changes were made. Check that the APK is readable and host temporary storage is writable."
+  APK="$staged_apk"
   if [ -z "$TOINSTALL_VER" ]; then  # local/--apk: read the version via aapt if available (else the guard is skipped)
     for t in aapt aapt2; do
       if command -v "$t" >/dev/null 2>&1; then
@@ -1717,12 +1849,14 @@ verify_release_apk() {
         "Self-built APKs may use their developer signer; official-release deployments add --require-release-signer."
     fi
   else
+    assert_candidate_apk_unchanged
     if signer_output="$("$signer_tool" verify --print-certs "$APK" 2>&1)"; then :; else
       signer_error="$(printf '%s\n' "$signer_output" | head -2 | LC_ALL=C tr -d '\000-\037\177' || true)"
       fail "release APK signature verification failed" \
         "The APK was not installed. Check that it is a valid signed APK and retry." \
         "${signer_error:-apksigner reported no reason}"
     fi
+    assert_candidate_apk_unchanged
     signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p')"
     signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
     [ "$signer_count" = 1 ] || fail "release APK signer count mismatch" \
@@ -1734,13 +1868,16 @@ verify_release_apk() {
         "This run requires the official release signer. Nothing was installed, started, or privileged." \
         "No configuration backup or helper transaction was started."
     fi
+    CANDIDATE_SIGNER_SHA256="$signer"
   fi
   package_tool="$(find_android_build_tool aapt || true)"
   [ -n "$package_tool" ] || package_tool="$(find_android_build_tool aapt2 || true)"
   package_tool_problem="$(android_build_tool_failure aapt || true)"
   [ -n "$package_tool_problem" ] || package_tool_problem="$(android_build_tool_failure aapt2 || true)"
   if [ -n "$package_tool" ]; then
+    assert_candidate_apk_unchanged
     package_name="$("$package_tool" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
+    assert_candidate_apk_unchanged
     [ "$package_name" = "$PKG" ] || fail "release APK package mismatch" \
       "Expected $PKG" "Got      ${package_name:-unavailable}" "Nothing was installed, started, or privileged."
   elif [ -z "$APK_RELEASE_TAG" ] || [ "$REQUIRE_RELEASE_SIGNER" = 1 ]; then
@@ -1748,6 +1885,34 @@ verify_release_apk() {
       "${package_tool_problem:-Install aapt or aapt2 and retry.} Nothing was backed up, installed, started, or privileged."
   fi
   step "🛡️  verified" "${D}$artifact_label · package ${package_name:-authenticated release asset} · signer ${signer:-$RELEASE_CERT_SHA256}${X}"
+}
+
+verify_incumbent_signer_for_replacement() {
+  local signer_tool installed_path installed_apk output signer_lines signer_count installed_signer candidate_signer
+  [ "$PACKAGE_PRESENCE" = present ] || return 0
+  signer_tool="$(find_android_build_tool apksigner || true)"
+  [ -n "$signer_tool" ] || host_database_gate_refuse "Android Build-Tools are required to compare the installed and candidate signers"
+  installed_path="$(run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell pm path "$PKG" 2>/dev/null \
+    | sed -n 's/^package://p' | head -1 | tr -d '\r' || true)"
+  case "$installed_path" in /*) ;; *) host_database_gate_refuse "the installed APK path could not be re-read for signer comparison" ;; esac
+  case "$installed_path" in *[!0-9A-Za-z._/+,:=@~-]*) host_database_gate_refuse "the installed APK path is malformed" ;; esac
+  installed_apk="$(mktemp "${TMPDIR:-/tmp}/hapaneld-installed-apk-XXXXXX.apk")" || \
+    host_database_gate_refuse "a private working file for signer comparison could not be created"
+  if ! run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" pull "$installed_path" "$installed_apk" >/dev/null 2>&1; then
+    rm -f "$installed_apk"
+    host_database_gate_refuse "the installed APK could not be read for signer comparison"
+  fi
+  output="$("$signer_tool" verify --print-certs "$installed_apk" 2>/dev/null || true)"
+  rm -f "$installed_apk"
+  signer_lines="$(printf '%s\n' "$output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p')"
+  signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { n++ } END { print n + 0 }')"
+  [ "$signer_count" = 1 ] || host_database_gate_refuse "the installed APK signer could not be proven uniquely"
+  installed_signer="$(printf '%s\n' "$signer_lines" | head -1 | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
+  assert_candidate_apk_unchanged
+  candidate_signer="$CANDIDATE_SIGNER_SHA256"
+  printf '%s\n' "$candidate_signer" | grep -Eq '^[0-9a-f]{64}$' || \
+    host_database_gate_refuse "the candidate APK signer could not be proven uniquely"
+  [ "$candidate_signer" = "$installed_signer" ] || host_database_gate_refuse "the candidate APK signer differs from the installed package signer"
 }
 
 verify_release_helper() {
@@ -1872,6 +2037,29 @@ host_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
   else fail "cannot authenticate helper staging" "Install sha256sum (or shasum), then re-run."
+  fi
+}
+
+bind_candidate_apk_bytes() {
+  TARGET_APK_SHA256="$(host_sha256 "$APK" 2>/dev/null || true)"
+  printf '%s\n' "$TARGET_APK_SHA256" | grep -Eq '^[0-9a-f]{64}$' || fail "could not bind the authenticated candidate APK bytes" \
+    "No panel mutation was started. Check that the APK is a readable regular file, then retry."
+}
+
+assert_candidate_apk_unchanged() {
+  local observed
+  [ -n "$TARGET_APK_SHA256" ] || fail "the candidate APK has no authenticated byte binding" \
+    "No panel mutation was started. Re-run the same provisioning command."
+  observed="$(host_sha256 "$APK" 2>/dev/null || true)"
+  if [ "$observed" != "$TARGET_APK_SHA256" ]; then
+    if { [ "${DB_GATE_PHASE:-}" = consume ] || [ "${DB_GATE_PHASE:-}" = package ]; } && \
+       type host_database_gate_refuse >/dev/null 2>&1; then
+      host_database_gate_refuse "the candidate APK bytes changed after authentication (expected $TARGET_APK_SHA256, observed ${observed:-unreadable})"
+    fi
+    fail "the candidate APK bytes changed after authentication" \
+      "Expected SHA-256 $TARGET_APK_SHA256" \
+      "Observed       ${observed:-unreadable}" \
+      "No settings backup, database snapshot, reset, helper, Shizuku, APK, permission or configuration mutation was started. Use an APK path that cannot be replaced during provisioning, then retry."
   fi
 }
 
@@ -2001,16 +2189,15 @@ resolve_root_route() {
 
 helper_daemon_reply() {
   local command="$1" install_kind="$2" helper_path="${3:-}"
-  case "$command" in PING|COMPANIONCAPS|BUILDID) ;; *) return 1 ;; esac
+  case "$command" in PING|COMPANIONCAPS|BUILDID|GUARDCAPS|GUARDSTATUS) ;; *) return 1 ;; esac
   if [ -z "$helper_path" ]; then
     case "$install_kind" in
-      system) helper_path=/system/bin/hapaneld-helper ;;
-      systemless|hybrid) helper_path=/data/adb/hapaneld/hapaneld-helper ;;
+      system|systemless|hybrid) helper_path=/data/local/hapaneld-helper ;;
       *) return 1 ;;
     esac
   fi
   case "$helper_path" in
-    /system/bin/hapaneld-helper|/data/adb/hapaneld/hapaneld-helper|/data/adb/hapaneld/.helper-probe-[0-9a-f]*) ;;
+    /data/local/hapaneld-helper|/system/bin/hapaneld-helper|/data/adb/hapaneld/hapaneld-helper|/data/adb/hapaneld/.helper-probe-[0-9a-f]*) ;;
     *) return 1 ;;
   esac
   if [ -n "${HAPANELD_HELPER_PROBE:-}" ]; then
@@ -2125,6 +2312,17 @@ commit_root_helper_upgrade() {
   printf '%s\n' "$committed" | grep -qx COMMIT_OK
 }
 
+cancel_root_helper_external_change() {
+  local install_kind="$1" transaction_id="$2" target_apk="$3" target_build="$4" target_helper="$5" canceled
+  case "$install_kind" in
+    system) canceled="$(run_root_helper_transaction cancel-external-system "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true ;;
+    systemless) canceled="$(run_root_helper_transaction cancel-external-systemless "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true ;;
+    hybrid) canceled="$(run_root_helper_transaction cancel-external-hybrid "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>&1)" || true ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$canceled" | grep -qx EXTERNAL_CANONICAL_RETRY
+}
+
 renew_root_helper_lease() {
   local install_kind="$1" renewed
   case "$install_kind" in
@@ -2207,6 +2405,7 @@ terminate_root_helper_apk_install() {
 
 run_adb_install_attempt() {
   local status deadline
+  assert_candidate_apk_unchanged
   ROOT_HELPER_APK_INSTALL_OUTPUT_FILE="$(mktemp)"
   # The only adb execution that does not route through adb_exec, because this one is backgrounded and
   # `terminate_root_helper_apk_install` signals a single PID rather than a process group: a shell
@@ -2216,6 +2415,9 @@ run_adb_install_attempt() {
   MSYS2_ARG_CONV_EXCL="$ADB_MSYS_ARG_CONV_EXCL" \
     "$ADB_COMMAND" -s "$TARGET" install "$@" "$APK" > "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE" 2>&1 &
   ROOT_HELPER_APK_INSTALL_PID=$!
+  # Android has now begun consuming the already-bound path. Compatibility-phase rollback ownership
+  # covered the final assertion and this start boundary; later install outcomes use reconciliation.
+  DB_GATE_PHASE=""
   deadline=$((SECONDS + APK_INSTALL_TIMEOUT_SECONDS))
   while kill -0 "$ROOT_HELPER_APK_INSTALL_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.1
@@ -2243,7 +2445,7 @@ run_root_helper_transaction() {
   local action="$1" transaction_id="${2:-$ROOT_HELPER_TRANSACTION_ID}" target_apk="${3:-$TARGET_APK_SHA256}"
   local target_build="${4:-$ROOT_HELPER_TARGET_BUILD_ID}" target_helper="${5:-$ROOT_HELPER_TARGET_SHA256}"
   case "$action" in
-    install-system|install-systemless|install-hybrid|discover-system|discover-systemless|discover-hybrid|status-system|status-systemless|status-hybrid|lease-system|lease-systemless|lease-hybrid|rollback-system|rollback-systemless|rollback-hybrid|finalize-rollback-system|finalize-rollback-systemless|finalize-rollback-hybrid|commit-system|commit-systemless|commit-hybrid) ;;
+    install-system|install-systemless|install-hybrid|discover-system|discover-systemless|discover-hybrid|status-system|status-systemless|status-hybrid|lease-system|lease-systemless|lease-hybrid|rollback-system|rollback-systemless|rollback-hybrid|cancel-external-system|cancel-external-systemless|cancel-external-hybrid|finalize-rollback-system|finalize-rollback-systemless|finalize-rollback-hybrid|commit-system|commit-systemless|commit-hybrid) ;;
     *) return 1 ;;
   esac
   printf '%s\n' "$ROOT_HELPER_TRANSACTION_SHA256" | grep -Eq '^[0-9a-f]{64}$' || return 1
@@ -2274,13 +2476,14 @@ cleanup_root_helper_staging() {
       "$ROOT_HELPER_STAGED_SERVICE" "$ROOT_HELPER_STAGED_TRANSACTION" "$ROOT_HELPER_TRANSACTION_PATH"; do
     case "$candidate" in
       "/data/local/tmp/hapaneld-helper-$id"|"/data/local/tmp/hapaneld-helper-$id."*) ;;
+      "/data/local/.hapaneld-helper.provision-$id") ;;
       "/data/adb/hapaneld/.helper-transaction-$id-"*) ;;
       *) continue ;;
     esac
     paths="$paths $candidate"
   done
   [ -n "$paths" ] || return 0
-  paths="$paths /data/adb/hapaneld/.helper-probe-$id"
+  paths="$paths /data/adb/hapaneld/.helper-probe-$id /data/local/.hapaneld-helper.provision-$id"
   # A promotion interrupted between the copy and the rename leaves `<transaction>.new` behind and
   # nothing else names it — but append it only when the transaction path is the one this identity
   # owns: unguarded, an exit before that path is set would put a relative `.new` into a privileged
@@ -2336,7 +2539,7 @@ installed_apk_matches_hash() {
 }
 
 reconcile_stale_root_helper() {
-  local install_kind="$1" record authenticated journal_version journal_scope transaction_id target_apk target_build target_helper live_state outcome
+  local install_kind="$1" record authenticated journal_version journal_scope transaction_id target_apk target_build target_helper live_state outcome helper_path="" resume_state latest
   record="$(root_helper_transaction_record "$install_kind" || true)"
   journal_version="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_VERSION=//p')"
   journal_scope="$(printf '%s\n' "$record" | sed -n 's/^JOURNAL_SCOPE=//p')"
@@ -2345,7 +2548,8 @@ reconcile_stale_root_helper() {
   target_build="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_BUILD_ID=([0-9a-f]{64})$/\1/p')"
   target_helper="$(printf '%s\n' "$record" | sed -nE 's/^TARGET_HELPER_SHA256=([0-9a-f]{64})$/\1/p')"
   live_state="$(printf '%s\n' "$record" | sed -n 's/^LIVE_STATE=//p')"
-  if [ "$journal_version" != 1 ] || [ "$journal_scope" != APK_HELPER ] || \
+  case "$journal_version" in 1|2) ;; *) return 2 ;; esac
+  if [ "$journal_scope" != APK_HELPER ] || \
      ! printf '%s\n' "$transaction_id" | grep -Eq '^[0-9a-f]{32}$' || \
      ! printf '%s\n' "$target_apk" | grep -Eq '^[0-9a-f]{64}$' || \
      ! printf '%s\n' "$target_build" | grep -Eq '^[0-9a-f]{64}$' || \
@@ -2358,21 +2562,60 @@ reconcile_stale_root_helper() {
     hybrid) authenticated="$(run_root_helper_transaction status-hybrid "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
   esac
   [ "$authenticated" = "$record" ] || return 2
+  if [ "$journal_version" = 2 ]; then
+    case "$live_state" in
+      EXTERNAL_CANONICAL_CHANGE|CANCEL_EXTERNAL)
+        cancel_root_helper_external_change "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 2
+        return 0 ;;
+    esac
+  fi
   if installed_apk_matches_hash "$target_apk"; then
-    wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" "$install_kind" || return 2
-    wait_for_helper_reply BUILDID "BUILDID $target_build" "$install_kind" || return 2
+    if [ "$journal_version" = 1 ]; then
+      case "$install_kind" in
+        system) helper_path=/system/bin/hapaneld-helper ;;
+        systemless|hybrid) helper_path=/data/adb/hapaneld/hapaneld-helper ;;
+      esac
+    else
+      [ "$live_state" = TARGET ] || return 2
+      resume_state="$(run_root '
+        if pidof hapaneld-helper >/dev/null 2>&1 || pidof hapaneld-ledd >/dev/null 2>&1; then
+          echo HELPER_PROCESSES_PRESENT
+        else
+          echo NO_HELPER_PROCESSES
+        fi
+      ' 2>/dev/null || true)"
+      case "$resume_state" in
+        NO_HELPER_PROCESSES)
+          case "$install_kind" in
+            system) latest="$(run_root_helper_transaction status-system "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
+            systemless) latest="$(run_root_helper_transaction status-systemless "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
+            hybrid) latest="$(run_root_helper_transaction status-hybrid "$transaction_id" "$target_apk" "$target_build" "$target_helper" 2>/dev/null || true)" ;;
+          esac
+          [ "$latest" = "$record" ] || return 2
+          run_root '/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &' >/dev/null 2>&1 || return 2 ;;
+        HELPER_PROCESSES_PRESENT) ;;
+        *) return 2 ;;
+      esac
+    fi
+    wait_for_helper_reply PING OK "$install_kind" "$helper_path" || return 2
+    wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" "$install_kind" "$helper_path" || return 2
+    wait_for_helper_reply BUILDID "BUILDID $target_build" "$install_kind" "$helper_path" || return 2
+    if [ "$journal_version" = 2 ]; then
+      wait_for_helper_reply GUARDCAPS "OK GUARDCAPS 1 PREPARE DEFINE STREAM ACTION HEALTH REFUSAL STATUS EVIDENCE CANCEL RETIRE JOURNAL AUTONOMOUS SUPERVISED TERMINAL_RETIRE" "$install_kind" || return 2
+      wait_for_helper_reply GUARDSTATUS "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0" "$install_kind" || return 2
+    fi
     commit_root_helper_upgrade "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 2
     return 0
   else
     outcome=$?
   fi
   [ "$outcome" -eq 1 ] || return 2
-  case "$live_state" in PRE_SWAP|TARGET|TRANSITION) ;; *) return 2 ;; esac
+  case "$live_state" in PRE_SWAP|CANONICAL_SWAPPED|BOOT_SWITCHED|TARGET|TRANSITION) ;; *) return 2 ;; esac
   rollback_root_helper "$install_kind" "$transaction_id" "$target_apk" "$target_build" "$target_helper"
 }
 
 resolve_root_helper_install_state() {
-  local selected_kind="$1" stale_kind=""
+  local selected_kind="$1" stale_kind="" external_retry=0
   case "$out2" in
     STALE_SYSTEM_TRANSACTION) stale_kind=system ;;
     STALE_SYSTEMLESS_TRANSACTION) stale_kind=systemless ;;
@@ -2398,8 +2641,12 @@ resolve_root_helper_install_state() {
       "Restore adb connectivity, then re-run this command to reconcile the retained $stale_kind recovery journal."
     out2="$(run_root_helper_transaction "install-$selected_kind" 2>&1)" || true
   fi
+  while printf '%s\n' "$out2" | grep -qx EXTERNAL_CANONICAL_RETRY && [ "$external_retry" -lt 3 ]; do
+    external_retry=$((external_retry + 1))
+    out2="$(run_root_helper_transaction "install-$selected_kind" 2>&1)" || true
+  done
   case "$out2" in
-    STALE_SYSTEM_TRANSACTION|STALE_SYSTEMLESS_TRANSACTION|STALE_HYBRID_TRANSACTION|MULTIPLE_STALE_TRANSACTIONS|FOREIGN_MANUAL_TRANSACTION|TRANSACTION_BUSY|ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION|ACTIVE_HYBRID_TRANSACTION)
+    EXTERNAL_CANONICAL_RETRY|STALE_SYSTEM_TRANSACTION|STALE_SYSTEMLESS_TRANSACTION|STALE_HYBRID_TRANSACTION|MULTIPLE_STALE_TRANSACTIONS|FOREIGN_MANUAL_TRANSACTION|TRANSACTION_BUSY|ACTIVE_SYSTEM_TRANSACTION|ACTIVE_SYSTEMLESS_TRANSACTION|ACTIVE_HYBRID_TRANSACTION)
       fail "root-helper journal state changed while provisioning" \
         "No helper files were replaced by the conflicting transaction attempt." \
         "Wait for any other installer to finish, then re-run this command to reconcile the retained journal." ;;
@@ -2408,7 +2655,9 @@ resolve_root_helper_install_state() {
 
 install_root_helper() {
   local abi helper_dir="" helper="" helper_name="" helper_asset="" rc_file="" hybrid_rc_file="" service_file="" transaction_file=""
+  local legacy_rc_file="" legacy_rc_supervised_file="" legacy_hybrid_rc_file="" legacy_hybrid_rc_supervised_file="" legacy_service_file="" legacy_service_supervised_file=""
   local bin_sha256 rc_sha256 hybrid_rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" staged_build_id="" out out2 root_ready=0 install_kind=""
+  local legacy_rc_sha256 legacy_rc_supervised_sha256 legacy_hybrid_rc_sha256 legacy_hybrid_rc_supervised_sha256 legacy_service_sha256 legacy_service_supervised_sha256
   local system_avail_kb="" system_need_kb="" vendor_probe=""
   local access_timeout="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}" access_status
 
@@ -2513,12 +2762,14 @@ install_root_helper() {
         "Install unzip, then re-run this provisioning command." \
         "No helper or APK was replaced, so the panel remains on its previous working version."
     fi
+    assert_candidate_apk_unchanged
     if ! unzip -p "$APK" "$helper_asset" > "$helper" 2>/dev/null || [ ! -s "$helper" ]; then
       rm -rf "$helper_dir"
       fail "the local APK does not contain its $abi root helper" \
         "Build the complete APK again, then re-run this provisioning command." \
         "No helper or APK was replaced, so the panel remains on its previous working version."
     fi
+    assert_candidate_apk_unchanged
     if ! staged_build_id="$(extract_helper_build_id "$helper")"; then
       rm -rf "$helper_dir"
       fail "the root helper embedded in the local APK has an invalid build identity" \
@@ -2581,15 +2832,21 @@ install_root_helper() {
   rc_file="$(mktemp)"
   hybrid_rc_file="$(mktemp)"
   service_file="$(mktemp)"
+  legacy_rc_file="$(mktemp)"
+  legacy_rc_supervised_file="$(mktemp)"
+  legacy_hybrid_rc_file="$(mktemp)"
+  legacy_hybrid_rc_supervised_file="$(mktemp)"
+  legacy_service_file="$(mktemp)"
+  legacy_service_supervised_file="$(mktemp)"
   cat > "$rc_file" <<'EOF'
-service hapaneld_helper /system/bin/hapaneld-helper
+service hapaneld_helper /data/local/hapaneld-helper --supervise
     class main
     user root
     group root
     seclabel u:r:su:s0
 EOF
   cat > "$hybrid_rc_file" <<'EOF'
-service hapaneld_helper /data/adb/hapaneld/hapaneld-helper
+service hapaneld_helper /data/local/hapaneld-helper --supervise
     class main
     user root
     group root
@@ -2602,8 +2859,63 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
 /system/bin/stop hapaneld_ledd 2>/dev/null
 /system/bin/pkill -x hapaneld-helper 2>/dev/null
 /system/bin/pkill -x hapaneld-ledd 2>/dev/null
+/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+EOF
+  cat > "$legacy_rc_file" <<'EOF'
+service hapaneld_helper /system/bin/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+  cat > "$legacy_rc_supervised_file" <<'EOF'
+service hapaneld_helper /system/bin/hapaneld-helper --supervise
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+  cat > "$legacy_hybrid_rc_file" <<'EOF'
+service hapaneld_helper /data/adb/hapaneld/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+  cat > "$legacy_hybrid_rc_supervised_file" <<'EOF'
+service hapaneld_helper /data/adb/hapaneld/hapaneld-helper --supervise
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+  cat > "$legacy_service_file" <<'EOF'
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
+/system/bin/stop hapaneld_helper 2>/dev/null
+/system/bin/stop hapaneld_ledd 2>/dev/null
+/system/bin/pkill -x hapaneld-helper 2>/dev/null
+/system/bin/pkill -x hapaneld-ledd 2>/dev/null
 /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
 EOF
+  cat > "$legacy_service_supervised_file" <<'EOF'
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
+/system/bin/stop hapaneld_helper 2>/dev/null
+/system/bin/stop hapaneld_ledd 2>/dev/null
+/system/bin/pkill -x hapaneld-helper 2>/dev/null
+/system/bin/pkill -x hapaneld-ledd 2>/dev/null
+/data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
+EOF
+  legacy_rc_sha256="$(host_sha256 "$legacy_rc_file")"
+  legacy_rc_supervised_sha256="$(host_sha256 "$legacy_rc_supervised_file")"
+  legacy_hybrid_rc_sha256="$(host_sha256 "$legacy_hybrid_rc_file")"
+  legacy_hybrid_rc_supervised_sha256="$(host_sha256 "$legacy_hybrid_rc_supervised_file")"
+  legacy_service_sha256="$(host_sha256 "$legacy_service_file")"
+  legacy_service_supervised_sha256="$(host_sha256 "$legacy_service_supervised_file")"
+  rm -f "$legacy_rc_file" "$legacy_rc_supervised_file" \
+    "$legacy_hybrid_rc_file" "$legacy_hybrid_rc_supervised_file" \
+    "$legacy_service_file" "$legacy_service_supervised_file"
   transaction_file="$(mktemp)"
   cat > "$transaction_file" <<'EOF'
 #!/system/bin/sh
@@ -2670,10 +2982,11 @@ refresh_lease() {
 snapshot() {
   live=$1 recovery=$2 mode=$3
   rm -f "$recovery" || return 1
-  if [ ! -f "$live" ]; then
+  if [ ! -e "$live" ] && [ ! -L "$live" ]; then
     echo "0 -"
     return 0
   fi
+  [ -f "$live" ] && [ ! -L "$live" ] || return 1
   cp -p "$live" "$recovery" || return 1
   chown 0:0 "$recovery" || return 1
   chmod "$mode" "$recovery" || return 1
@@ -2701,7 +3014,7 @@ live_matches_recorded() {
     expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
     [ -f "$live" ] && root_owned "$live" && [ "$(file_sha256 "$live")" = "$expected" ]
   else
-    [ ! -e "$live" ]
+    [ ! -e "$live" ] && [ ! -L "$live" ]
   fi
 }
 
@@ -2711,13 +3024,25 @@ live_matches_recorded_or_target() {
     return 0
   fi
   if [ "$target_sha" = - ]; then
-    [ ! -e "$live" ]
+    [ ! -e "$live" ] && [ ! -L "$live" ]
   else
     [ -f "$live" ] && root_owned "$live" && hash_matches "$target_sha" "$live"
   fi
 }
 
-system_matches_recorded() {
+file_exact() {
+  file_exact_expected=$1 file_exact_path=$2 file_exact_mode=$3
+  [ -f "$file_exact_path" ] && [ ! -L "$file_exact_path" ] && root_owned "$file_exact_path" || return 1
+  file_exact_metadata=$(stat -c %a:%h "$file_exact_path" 2>/dev/null || toybox stat -c %a:%h "$file_exact_path" 2>/dev/null) || return 1
+  [ "$file_exact_metadata" = "$file_exact_mode:1" ] && hash_matches "$file_exact_expected" "$file_exact_path"
+}
+
+hash_matches_known_legacy() {
+  live=$1 first=$2 second=$3
+  hash_matches "$first" "$live" || hash_matches "$second" "$live"
+}
+
+system_matches_recorded_v1() {
   marker=/system/bin/.hapaneld-helper-upgrade
   live_matches_recorded OLD_BIN /system/bin/hapaneld-helper "$marker" &&
     live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" &&
@@ -2727,41 +3052,72 @@ system_matches_recorded() {
     live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"
 }
 
-classify_system() {
+v1_rollback_intent() {
+  [ "$(grep -c '^V1_ROLLBACK_IN_PROGRESS=1$' "$1" 2>/dev/null || true)" = 1 ]
+}
+
+system_transition_v1() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  live_matches_recorded_or_target OLD_BIN /system/bin/hapaneld-helper "$target_helper" "$marker" &&
+    { live_matches_recorded OLD_SERVICE /system/etc/init/hapaneld-helper.rc "$marker" ||
+      hash_matches_known_legacy /system/etc/init/hapaneld-helper.rc @LEGACY_RC_SHA256@ @LEGACY_RC_SUPERVISED_SHA256@; } &&
+    live_matches_recorded_or_target LEGACY_BIN /system/bin/hapaneld-ledd - "$marker" &&
+    live_matches_recorded_or_target LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc - "$marker" &&
+    live_matches_recorded_or_target ALT_BIN /data/adb/hapaneld/hapaneld-helper - "$marker" &&
+    live_matches_recorded_or_target ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh - "$marker" &&
+    [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ]
+}
+
+classify_system_v1() {
+  marker=/system/bin/.hapaneld-helper-upgrade
   # A no-op helper upgrade can match both the recorded old state and the desired target. Prefer
   # TARGET so a successful APK install can commit instead of stranding its recovery journal.
-  if hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper &&
-       hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc &&
-       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
-       [ ! -e /vendor/etc/init/hapaneld-helper.rc ] &&
-       [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
+  if hash_matches "$target_helper" /system/bin/hapaneld-helper &&
+       hash_matches_known_legacy /system/etc/init/hapaneld-helper.rc @LEGACY_RC_SHA256@ @LEGACY_RC_SUPERVISED_SHA256@ &&
+       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+       [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] &&
+       [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+       [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+       [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ]; then
     echo TARGET
-  elif system_matches_recorded; then
+  elif system_matches_recorded_v1; then
     echo PRE_SWAP
+  elif v1_rollback_intent "$marker" && system_transition_v1; then
+    echo TRANSITION
   else
     echo UNKNOWN
   fi
 }
 
-systemless_matches_recorded() {
+systemless_matches_recorded_v1() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
     live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"
 }
 
-classify_systemless() {
-  if hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
-       hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh &&
-       [ ! -e /vendor/etc/init/hapaneld-helper.rc ]; then
+systemless_transition_v1() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  live_matches_recorded_or_target OLD_BIN /data/adb/hapaneld/hapaneld-helper "$target_helper" "$marker" &&
+    { live_matches_recorded OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker" ||
+      hash_matches_known_legacy /data/adb/service.d/hapaneld-helper.sh @LEGACY_SERVICE_SHA256@ @LEGACY_SERVICE_SUPERVISED_SHA256@; } &&
+    [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ]
+}
+
+classify_systemless_v1() {
+  if hash_matches "$target_helper" /data/adb/hapaneld/hapaneld-helper &&
+       hash_matches_known_legacy /data/adb/service.d/hapaneld-helper.sh @LEGACY_SERVICE_SHA256@ @LEGACY_SERVICE_SUPERVISED_SHA256@ &&
+       [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ]; then
     echo TARGET
-  elif systemless_matches_recorded; then
+  elif systemless_matches_recorded_v1; then
     echo PRE_SWAP
+  elif v1_rollback_intent "$marker" && systemless_transition_v1; then
+    echo TRANSITION
   else
     echo UNKNOWN
   fi
 }
 
-hybrid_matches_recorded() {
+hybrid_matches_recorded_v1() {
   marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
   live_matches_recorded OLD_BIN /data/adb/hapaneld/hapaneld-helper "$marker" &&
     live_matches_recorded OLD_RC /vendor/etc/init/hapaneld-helper.rc "$marker" &&
@@ -2772,20 +3128,23 @@ hybrid_matches_recorded() {
     live_matches_recorded ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh "$marker"
 }
 
-classify_hybrid() {
+classify_hybrid_v1() {
   marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
-  if hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper &&
+  if hash_matches "$target_helper" /data/adb/hapaneld/hapaneld-helper &&
        root_owned /data/adb/hapaneld/hapaneld-helper &&
-       hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc &&
+       hash_matches_known_legacy /vendor/etc/init/hapaneld-helper.rc @LEGACY_HYBRID_RC_SHA256@ @LEGACY_HYBRID_RC_SUPERVISED_SHA256@ &&
        root_owned /vendor/etc/init/hapaneld-helper.rc &&
-       [ ! -e /system/bin/hapaneld-helper ] && [ ! -e /system/etc/init/hapaneld-helper.rc ] &&
-       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] &&
-       [ ! -e /data/adb/service.d/hapaneld-helper.sh ]; then
+       [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+       [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+       [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+       [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] &&
+       [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ]; then
     echo TARGET
-  elif hybrid_matches_recorded; then
+  elif hybrid_matches_recorded_v1; then
     echo PRE_SWAP
-  elif live_matches_recorded_or_target OLD_BIN /data/adb/hapaneld/hapaneld-helper @BIN_SHA256@ "$marker" &&
-     live_matches_recorded_or_target OLD_RC /vendor/etc/init/hapaneld-helper.rc @HYBRID_RC_SHA256@ "$marker" &&
+  elif live_matches_recorded_or_target OLD_BIN /data/adb/hapaneld/hapaneld-helper "$target_helper" "$marker" &&
+     (live_matches_recorded OLD_RC /vendor/etc/init/hapaneld-helper.rc "$marker" ||
+       hash_matches_known_legacy /vendor/etc/init/hapaneld-helper.rc @LEGACY_HYBRID_RC_SHA256@ @LEGACY_HYBRID_RC_SUPERVISED_SHA256@) &&
      live_matches_recorded_or_target SYS_RC /system/etc/init/hapaneld-helper.rc - "$marker" &&
      live_matches_recorded_or_target SYS_BIN /system/bin/hapaneld-helper - "$marker" &&
      live_matches_recorded_or_target LEGACY_BIN /system/bin/hapaneld-ledd - "$marker" &&
@@ -2797,16 +3156,465 @@ classify_hybrid() {
   fi
 }
 
-restore_or_remove() {
-  name=$1 recovery=$2 live=$3 mode=$4 marker=$5
+v2_recovery_path() {
+  printf '/data/adb/hapaneld/.helper-recovery-%s.%s\n' "$transaction_id" "$1"
+}
+
+v2_live_matches_recorded() {
+  name=$1 live=$2 mode=$3 marker=$4
   if flag "$name" "$marker"; then
-    cp -p "$recovery" "$live" || return 1
-    chown 0:0 "$live" || return 1
-    chmod "$mode" "$live" || return 1
-    cmp -s "$recovery" "$live" || return 1
+    expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+    file_exact "$expected" "$live" "$mode"
+  else
+    [ ! -e "$live" ] && [ ! -L "$live" ]
+  fi
+}
+
+valid_v2_marker_record() {
+  marker=$1 name=$2
+  [ "$(grep -c "^${name}=" "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  [ "$(grep -c "^${name}_SHA256=" "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  value=$(sed -n "s/^${name}=//p" "$marker")
+  expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+  case "$value:$expected" in
+    0:-) ;;
+    1:*)
+      case "$expected" in ''|*[!0-9a-f]*) return 1 ;; esac
+      [ "${#expected}" -eq 64 ] || return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+valid_v2_marker() {
+  kind=$1 marker=$2
+  [ "$(grep -c '^JOURNAL_VERSION=2$' "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  [ "$(grep -c '^JOURNAL_SCOPE=APK_HELPER$' "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  [ "$(grep -c "^BOOT_KIND=$kind$" "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  for name in TARGET_HELPER_SHA256 TARGET_BOOT_SHA256; do
+    [ "$(grep -c "^${name}=" "$marker" 2>/dev/null || true)" = 1 ] || return 1
+    expected=$(sed -n "s/^${name}=//p" "$marker")
+    case "$expected" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#expected}" -eq 64 ] || return 1
+  done
+  for name in LIVE_BIN SYS_BIN SYS_RC DATA_BIN DATA_SERVICE VENDOR_RC LEGACY_BIN LEGACY_SERVICE; do
+    valid_v2_marker_record "$marker" "$name" || return 1
+  done
+}
+
+v2_recorded() {
+  marker=$1
+  v2_live_matches_recorded LIVE_BIN /data/local/hapaneld-helper 700 "$marker" &&
+    v2_live_matches_recorded SYS_BIN /system/bin/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded SYS_RC /system/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded DATA_BIN /data/adb/hapaneld/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded DATA_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 "$marker" &&
+    v2_live_matches_recorded VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd 755 "$marker" &&
+    v2_live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc 644 "$marker"
+}
+
+v2_noncanonical_recorded() {
+  marker=$1
+  v2_live_matches_recorded SYS_BIN /system/bin/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded SYS_RC /system/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded DATA_BIN /data/adb/hapaneld/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded DATA_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 "$marker" &&
+    v2_live_matches_recorded VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd 755 "$marker" &&
+    v2_live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc 644 "$marker"
+}
+
+app_replacement_custody_present() {
+  for custody in \
+      /data/local/.hapaneld-helper.new \
+      /data/local/.hapaneld-helper.previous \
+      /data/local/.hapaneld-helper.previous.tmp \
+      /data/local/.hapaneld-guard-db/replacement.v1 \
+      /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+    if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
+  done
+  return 1
+}
+
+v2_external_canonical_change() {
+  marker=$1
+  ! app_replacement_custody_present || return 1
+  v2_noncanonical_recorded "$marker" || return 1
+  [ -f /data/local/hapaneld-helper ] && [ ! -L /data/local/hapaneld-helper ] || return 1
+  external_observed_sha=$(file_sha256 /data/local/hapaneld-helper) || return 1
+  case "$external_observed_sha" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#external_observed_sha}" -eq 64 ] || return 1
+  file_exact "$external_observed_sha" /data/local/hapaneld-helper 700 || return 1
+  ! v2_live_matches_recorded LIVE_BIN /data/local/hapaneld-helper 700 "$marker"
+}
+
+v2_cancel_external() {
+  marker=$1
+  [ "$(grep -c '^CANCEL_EXTERNAL=1$' "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  [ "$(grep -c '^EXTERNAL_HELPER_SHA256=' "$marker" 2>/dev/null || true)" = 1 ] || return 1
+  external_expected_sha=$(sed -n 's/^EXTERNAL_HELPER_SHA256=//p' "$marker")
+  case "$external_expected_sha" in ''|*[!0-9a-f]*) return 1 ;; esac
+  [ "${#external_expected_sha}" -eq 64 ] || return 1
+  v2_noncanonical_recorded "$marker" || return 1
+  file_exact "$external_expected_sha" /data/local/hapaneld-helper 700 || return 1
+  ! v2_live_matches_recorded LIVE_BIN /data/local/hapaneld-helper 700 "$marker" || return 1
+  ! app_replacement_custody_present
+}
+
+v2_cancel_marker_present() {
+  grep -q '^CANCEL_EXTERNAL=' "$1" 2>/dev/null ||
+    grep -q '^EXTERNAL_HELPER_SHA256=' "$1" 2>/dev/null
+}
+
+publish_cancel_external_v2() {
+  kind=$1 marker=$2
+  valid_v2_marker "$kind" "$marker" || return 1
+  ! v2_cancel_marker_present "$marker" || return 1
+  ! app_replacement_custody_present || return 1
+  v2_external_canonical_change "$marker" || return 1
+  external_sha=$external_observed_sha
+  cancel_staging="$marker.cancel-$transaction_id"
+  rm -f "$cancel_staging" || return 1
+  sed '/^CANCEL_EXTERNAL=/d; /^EXTERNAL_HELPER_SHA256=/d' "$marker" > "$cancel_staging" || return 1
+  echo CANCEL_EXTERNAL=1 >> "$cancel_staging"
+  echo EXTERNAL_HELPER_SHA256=$external_sha >> "$cancel_staging"
+  chown 0:0 "$cancel_staging" || return 1
+  chmod 600 "$cancel_staging" || return 1
+  sync || return 1
+  ! app_replacement_custody_present || return 1
+  v2_external_canonical_change "$marker" || return 1
+  [ "$external_observed_sha" = "$external_sha" ] || return 1
+  mv -f "$cancel_staging" "$marker" || return 1
+  sync || return 1
+  v2_cancel_external "$marker"
+}
+
+retire_cancel_external_v2() {
+  marker=$1
+  v2_cancel_external "$marker" || return 4
+  rm -f "$marker" || return 4
+  sync || return 4
+  cleanup_v2_recoveries
+  rm -f \
+    /system/etc/init/hapaneld-helper.rc.new \
+    /data/adb/service.d/hapaneld-helper.sh.new \
+    /vendor/etc/init/hapaneld-helper.rc.new 2>/dev/null || true
+  sync 2>/dev/null || true
+  echo EXTERNAL_CANONICAL_RETRY
+  return 5
+}
+
+replacement_safe_after_retirement() {
+  kind=$1 marker=$2 candidate=$3
+  attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    if app_replacement_custody_present; then
+      echo TOPOLOGY_HOLD
+      return 4
+    fi
+    if ! v2_recorded "$marker"; then
+      if v2_external_canonical_change "$marker" && publish_cancel_external_v2 "$kind" "$marker"; then
+        retire_cancel_external_v2 "$marker"
+        return $?
+      fi
+      echo TOPOLOGY_HOLD
+      return 4
+    fi
+    replacement=$($candidate --replacement-safe 2>/dev/null); replacement_status=$?
+    if app_replacement_custody_present; then
+      echo TOPOLOGY_HOLD
+      return 4
+    fi
+    if ! v2_recorded "$marker"; then
+      attempt=$((attempt + 1))
+      continue
+    fi
+    if [ "$replacement_status" -ne 0 ]; then
+      [ "$replacement_status" -eq 3 ] && [ "$replacement" = GUARD_ARMED ] && { echo GUARD_ARMED; return 3; }
+      return 1
+    fi
+    [ "$replacement" = REPLACE_SAFE ] || return 1
+    return 0
+  done
+  echo TOPOLOGY_HOLD
+  return 4
+}
+
+v2_recorded_or_absent() {
+  name=$1 live=$2 mode=$3 marker=$4
+  v2_live_matches_recorded "$name" "$live" "$mode" "$marker" ||
+    { [ ! -e "$live" ] && [ ! -L "$live" ]; }
+}
+
+v2_canonical_exact() {
+  marker=$1
+  expected=$(sed -n 's/^TARGET_HELPER_SHA256=//p' "$marker")
+  file_exact "$expected" /data/local/hapaneld-helper 700
+}
+
+v2_target() {
+  kind=$1 marker=$2
+  expected_boot=$(sed -n 's/^TARGET_BOOT_SHA256=//p' "$marker")
+  v2_canonical_exact "$marker" &&
+    [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+    [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -L /data/adb/hapaneld/hapaneld-helper ] &&
+    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+    [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] || return 1
+  case "$kind" in
+    system)
+      file_exact "$expected_boot" /system/etc/init/hapaneld-helper.rc 644 &&
+        [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] ;;
+    systemless)
+      file_exact "$expected_boot" /data/adb/service.d/hapaneld-helper.sh 755 &&
+        [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] ;;
+    hybrid)
+      file_exact "$expected_boot" /vendor/etc/init/hapaneld-helper.rc 644 &&
+        [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+        [ ! -e /data/adb/service.d/hapaneld-helper.sh ] && [ ! -L /data/adb/service.d/hapaneld-helper.sh ] ;;
+    *) return 1 ;;
+  esac
+}
+
+v2_canonical_swapped() {
+  marker=$1
+  v2_canonical_exact "$marker" &&
+    v2_live_matches_recorded SYS_BIN /system/bin/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded SYS_RC /system/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded DATA_BIN /data/adb/hapaneld/hapaneld-helper 755 "$marker" &&
+    v2_live_matches_recorded DATA_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 "$marker" &&
+    v2_live_matches_recorded VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 "$marker" &&
+    v2_live_matches_recorded LEGACY_BIN /system/bin/hapaneld-ledd 755 "$marker" &&
+    v2_live_matches_recorded LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc 644 "$marker"
+}
+
+v2_boot_switched() {
+  kind=$1 marker=$2
+  expected_boot=$(sed -n 's/^TARGET_BOOT_SHA256=//p' "$marker")
+  v2_canonical_exact "$marker" || return 1
+  case "$kind" in
+    system) file_exact "$expected_boot" /system/etc/init/hapaneld-helper.rc 644 || return 1 ;;
+    systemless) file_exact "$expected_boot" /data/adb/service.d/hapaneld-helper.sh 755 || return 1 ;;
+    hybrid) file_exact "$expected_boot" /vendor/etc/init/hapaneld-helper.rc 644 || return 1 ;;
+    *) return 1 ;;
+  esac
+  v2_recorded_or_absent SYS_BIN /system/bin/hapaneld-helper 755 "$marker" &&
+    v2_recorded_or_absent DATA_BIN /data/adb/hapaneld/hapaneld-helper 755 "$marker" &&
+    v2_recorded_or_absent LEGACY_BIN /system/bin/hapaneld-ledd 755 "$marker" &&
+    v2_recorded_or_absent LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
+  case "$kind" in
+    system)
+      v2_recorded_or_absent DATA_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 "$marker" &&
+        v2_recorded_or_absent VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 "$marker" ;;
+    systemless)
+      v2_recorded_or_absent SYS_RC /system/etc/init/hapaneld-helper.rc 644 "$marker" &&
+        v2_recorded_or_absent VENDOR_RC /vendor/etc/init/hapaneld-helper.rc 644 "$marker" ;;
+    hybrid)
+      v2_recorded_or_absent SYS_RC /system/etc/init/hapaneld-helper.rc 644 "$marker" &&
+        v2_recorded_or_absent DATA_SERVICE /data/adb/service.d/hapaneld-helper.sh 755 "$marker" ;;
+  esac
+}
+
+classify_v2() {
+  kind=$1 marker=$2
+  valid_v2_marker "$kind" "$marker" || { echo UNKNOWN; return; }
+  if app_replacement_custody_present; then echo TOPOLOGY_HOLD
+  elif v2_cancel_external "$marker"; then echo CANCEL_EXTERNAL
+  elif v2_cancel_marker_present "$marker"; then echo UNKNOWN
+  elif v2_target "$kind" "$marker"; then echo TARGET
+  elif v2_recorded "$marker"; then echo PRE_SWAP
+  elif v2_canonical_swapped "$marker"; then echo CANONICAL_SWAPPED
+  elif v2_boot_switched "$kind" "$marker"; then echo BOOT_SWITCHED
+  elif v2_external_canonical_change "$marker"; then echo EXTERNAL_CANONICAL_CHANGE
+  else echo UNKNOWN
+  fi
+}
+
+classify_system() {
+  marker=/system/bin/.hapaneld-helper-upgrade
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then classify_v2 system "$marker"; else classify_system_v1; fi
+}
+
+classify_systemless() {
+  marker=/data/adb/hapaneld/.helper-upgrade.marker
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then classify_v2 systemless "$marker"; else classify_systemless_v1; fi
+}
+
+classify_hybrid() {
+  marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then classify_v2 hybrid "$marker"; else classify_hybrid_v1; fi
+}
+
+publish_v1_rollback_intent() {
+  marker=$1
+  grep -q '^JOURNAL_VERSION=1$' "$marker" || return 1
+  if v1_rollback_intent "$marker"; then return 0; fi
+  intent_staging="$marker.rollback-intent-$transaction_id"
+  rm -f "$intent_staging" || return 1
+  sed '/^V1_ROLLBACK_IN_PROGRESS=/d' "$marker" > "$intent_staging" || return 1
+  echo V1_ROLLBACK_IN_PROGRESS=1 >> "$intent_staging"
+  chown 0:0 "$intent_staging" || return 1
+  chmod 600 "$intent_staging" || return 1
+  sync || return 1
+  mv -f "$intent_staging" "$marker" || return 1
+  sync || return 1
+  v1_rollback_intent "$marker"
+}
+
+restore_or_remove() {
+  v1_restore_name=$1 v1_restore_recovery=$2 v1_restore_live=$3 v1_restore_mode=$4 v1_restore_marker=$5
+  v1_restore_staging="$v1_restore_live.rollback-v1-$transaction_id"
+  rm -f "$v1_restore_staging" || return 1
+  if flag "$v1_restore_name" "$v1_restore_marker"; then
+    v1_restore_expected=$(sed -n "s/^${v1_restore_name}_SHA256=//p" "$v1_restore_marker")
+    cp -p "$v1_restore_recovery" "$v1_restore_staging" || return 1
+    chown 0:0 "$v1_restore_staging" || return 1
+    chmod "$v1_restore_mode" "$v1_restore_staging" || return 1
+    file_exact "$v1_restore_expected" "$v1_restore_staging" "$v1_restore_mode" || return 1
+    sync || return 1
+    mv -f "$v1_restore_staging" "$v1_restore_live" || return 1
+    sync || return 1
+    file_exact "$v1_restore_expected" "$v1_restore_live" "$v1_restore_mode" || return 1
+  else
+    rm -f "$v1_restore_live" || return 1
+    sync || return 1
+    [ ! -e "$v1_restore_live" ] && [ ! -L "$v1_restore_live" ] || return 1
+  fi
+}
+
+valid_v2_recoveries() {
+  marker=$1
+  for entry in \
+      'LIVE_BIN live 700' 'SYS_BIN sysbin 755' 'SYS_RC sysrc 644' 'DATA_BIN databin 755' \
+      'DATA_SERVICE datasvc 755' 'VENDOR_RC vendorrc 644' 'LEGACY_BIN legacybin 755' \
+      'LEGACY_SERVICE legacyrc 644'; do
+    set -- $entry
+    name=$1 recovery=$(v2_recovery_path "$2")
+    if flag "$name" "$marker"; then
+      expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+      file_exact "$expected" "$recovery" "$3" || return 1
+    else
+      [ ! -e "$recovery" ] && [ ! -L "$recovery" ] || return 1
+    fi
+  done
+}
+
+cleanup_v2_recoveries() {
+  rm -f \
+    "$(v2_recovery_path live)" "$(v2_recovery_path sysbin)" \
+    "$(v2_recovery_path sysrc)" "$(v2_recovery_path databin)" \
+    "$(v2_recovery_path datasvc)" "$(v2_recovery_path vendorrc)" \
+    "$(v2_recovery_path legacybin)" "$(v2_recovery_path legacyrc)" \
+    "/data/local/.hapaneld-helper.provision-$transaction_id" \
+    "/data/local/hapaneld-helper.rollback-$transaction_id" \
+    "/system/bin/hapaneld-helper.rollback-$transaction_id" \
+    "/system/etc/init/hapaneld-helper.rc.rollback-$transaction_id" \
+    "/data/adb/hapaneld/hapaneld-helper.rollback-$transaction_id" \
+    "/data/adb/service.d/hapaneld-helper.sh.rollback-$transaction_id" \
+    "/vendor/etc/init/hapaneld-helper.rc.rollback-$transaction_id" \
+    "/system/bin/hapaneld-ledd.rollback-$transaction_id" \
+    "/system/etc/init/hapaneld-ledd.rc.rollback-$transaction_id" \
+    "/system/bin/.hapaneld-helper-upgrade.cancel-$transaction_id" \
+    "/data/adb/hapaneld/.helper-upgrade.marker.cancel-$transaction_id" \
+    "/data/adb/hapaneld/.helper-hybrid-upgrade.marker.cancel-$transaction_id" 2>/dev/null || true
+}
+
+cleanup_v1_rollback_staging() {
+  rm -f \
+    "/system/bin/.hapaneld-helper-upgrade.rollback-intent-$transaction_id" \
+    "/data/adb/hapaneld/.helper-upgrade.marker.rollback-intent-$transaction_id" \
+    "/data/adb/hapaneld/.helper-hybrid-upgrade.marker.rollback-intent-$transaction_id" \
+    "/data/local/hapaneld-helper.rollback-v1-$transaction_id" \
+    "/system/bin/hapaneld-helper.rollback-v1-$transaction_id" \
+    "/system/etc/init/hapaneld-helper.rc.rollback-v1-$transaction_id" \
+    "/data/adb/hapaneld/hapaneld-helper.rollback-v1-$transaction_id" \
+    "/data/adb/service.d/hapaneld-helper.sh.rollback-v1-$transaction_id" \
+    "/vendor/etc/init/hapaneld-helper.rc.rollback-v1-$transaction_id" \
+    "/system/bin/hapaneld-ledd.rollback-v1-$transaction_id" \
+    "/system/etc/init/hapaneld-ledd.rc.rollback-v1-$transaction_id" 2>/dev/null || true
+}
+
+restore_or_remove_v2() {
+  name=$1 recovery=$2 live=$3 mode=$4 marker=$5
+  staging="$live.rollback-$transaction_id"
+  rm -f "$staging" || return 1
+  if flag "$name" "$marker"; then
+    expected=$(sed -n "s/^${name}_SHA256=//p" "$marker")
+    cp -p "$recovery" "$staging" || return 1
+    chown 0:0 "$staging" || return 1
+    chmod "$mode" "$staging" || return 1
+    file_exact "$expected" "$staging" "$mode" || return 1
+    sync || return 1
+    mv -f "$staging" "$live" || return 1
+    sync || return 1
+    file_exact "$expected" "$live" "$mode" || return 1
   else
     rm -f "$live" || return 1
+    sync || return 1
+    [ ! -e "$live" ] && [ ! -L "$live" ] || return 1
   fi
+}
+
+rollback_v2() {
+  kind=$1 marker=$2
+  state=$3
+  case "$state" in PRE_SWAP|CANONICAL_SWAPPED|BOOT_SWITCHED|TARGET) ;; *) return 1 ;; esac
+  valid_v2_recoveries "$marker" || return 1
+
+  probe=/data/adb/hapaneld/.helper-probe-$transaction_id
+  rm -f "$probe"
+  hash_matches @BIN_SHA256@ @STAGED_HELPER@ || return 1
+  cp @STAGED_HELPER@ "$probe" || return 1
+  chown 0:0 "$probe" || return 1
+  chmod 700 "$probe" || return 1
+  hash_matches @BIN_SHA256@ "$probe" || return 1
+
+  retire_helpers || return 1
+
+  # Keep the target canonical binary and selected target boot registration in place while every
+  # non-authoritative incumbent path is restored. Each completed cut therefore remains
+  # BOOT_SWITCHED. Restore the selected boot slot next (CANONICAL_SWAPPED), then restore/remove the
+  # canonical binary last (PRE_SWAP). Per-path staging makes the individual restores atomic too.
+  restore_or_remove_v2 SYS_BIN "$(v2_recovery_path sysbin)" /system/bin/hapaneld-helper 755 "$marker" || return 1
+  restore_or_remove_v2 DATA_BIN "$(v2_recovery_path databin)" /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
+  restore_or_remove_v2 LEGACY_BIN "$(v2_recovery_path legacybin)" /system/bin/hapaneld-ledd 755 "$marker" || return 1
+  restore_or_remove_v2 LEGACY_SERVICE "$(v2_recovery_path legacyrc)" /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
+  case "$kind" in
+    system)
+      restore_or_remove_v2 DATA_SERVICE "$(v2_recovery_path datasvc)" /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+      restore_or_remove_v2 VENDOR_RC "$(v2_recovery_path vendorrc)" /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+      restore_or_remove_v2 SYS_RC "$(v2_recovery_path sysrc)" /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1 ;;
+    systemless)
+      restore_or_remove_v2 SYS_RC "$(v2_recovery_path sysrc)" /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+      restore_or_remove_v2 VENDOR_RC "$(v2_recovery_path vendorrc)" /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+      restore_or_remove_v2 DATA_SERVICE "$(v2_recovery_path datasvc)" /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1 ;;
+    hybrid)
+      restore_or_remove_v2 SYS_RC "$(v2_recovery_path sysrc)" /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+      restore_or_remove_v2 DATA_SERVICE "$(v2_recovery_path datasvc)" /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+      restore_or_remove_v2 VENDOR_RC "$(v2_recovery_path vendorrc)" /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1 ;;
+    *) return 1 ;;
+  esac
+  restore_or_remove_v2 LIVE_BIN "$(v2_recovery_path live)" /data/local/hapaneld-helper 700 "$marker" || return 1
+  sync || return 1
+  v2_recorded "$marker" || return 1
+
+  if flag LIVE_BIN "$marker" && [ -x /data/local/hapaneld-helper ]; then
+    /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif flag SYS_BIN "$marker" && [ -x /system/bin/hapaneld-helper ]; then
+    /system/bin/hapaneld-helper --supervise >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif flag DATA_BIN "$marker" && [ -x /data/adb/hapaneld/hapaneld-helper ]; then
+    /data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
+    result=ROLLBACK_RESTARTED
+  elif flag LEGACY_BIN "$marker" && [ -x /system/bin/hapaneld-ledd ]; then
+    start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
+    result=ROLLBACK_LEGACY
+  else
+    result=ROLLBACK_EMPTY
+  fi
+  echo "$result"
 }
 
 acquire_helper_lock() {
@@ -2827,10 +3635,10 @@ acquire_helper_lock() {
 # Issue #76: a run that failed between staging and commit left its id-named staging behind forever,
 # one protected transaction script plus one staged bundle per attempt, and the host's exit-path
 # reclamation cannot reach a panel whose transport already died. So, first thing under the
-# transaction lock, remove every id-named staging artifact that is not owned by this transaction,
+# transaction lock, remove every id-named staging or recovery artifact that is not owned by this transaction,
 # not named by the verb argument, and not referenced by a recovery journal. Staged files are only
 # ever read by the script instance that owns or names them — a later reconcile reads the journal and
-# the .hapaneld-recovery copies together with its OWN freshly staged files — so everything else is
+# its transaction-unique recovery copies together with its OWN freshly staged files — so everything else is
 # disposable by definition, including staging this same fix could not reclaim on earlier runs.
 #
 # The lock serializes this against every managed and standalone-manual transaction (both use
@@ -2858,12 +3666,32 @@ sweep_disposable_staging() {
     [ "${#journaled}" -eq 32 ] || return 0
     keep="$keep$journaled "
   done
-  for staged in /data/local/tmp/hapaneld-helper-* /data/adb/hapaneld/.helper-probe-* \
-      /data/adb/hapaneld/.helper-transaction-*; do
+  for staged in /data/local/tmp/hapaneld-helper-* /data/local/.hapaneld-helper.provision-* /data/adb/hapaneld/.helper-probe-* \
+      /data/adb/hapaneld/.helper-recovery-*.* /data/adb/hapaneld/.helper-transaction-* \
+      /system/bin/.hapaneld-helper-upgrade.cancel-* \
+      /data/adb/hapaneld/.helper-upgrade.marker.cancel-* \
+      /data/adb/hapaneld/.helper-hybrid-upgrade.marker.cancel-* \
+      /system/bin/.hapaneld-helper-upgrade.rollback-intent-* \
+      /data/adb/hapaneld/.helper-upgrade.marker.rollback-intent-* \
+      /data/adb/hapaneld/.helper-hybrid-upgrade.marker.rollback-intent-* \
+      /data/local/hapaneld-helper.rollback-* \
+      /system/bin/hapaneld-helper.rollback-* /system/bin/hapaneld-ledd.rollback-* \
+      /system/etc/init/hapaneld-helper.rc.rollback-* /system/etc/init/hapaneld-ledd.rc.rollback-* \
+      /data/adb/hapaneld/hapaneld-helper.rollback-* \
+      /data/adb/service.d/hapaneld-helper.sh.rollback-* \
+      /vendor/etc/init/hapaneld-helper.rc.rollback-*; do
     [ -e "$staged" ] || [ -L "$staged" ] || continue
     case "$staged" in
       /data/local/tmp/hapaneld-helper-*) id=${staged#/data/local/tmp/hapaneld-helper-}; id=${id%%.*} ;;
+      /data/local/.hapaneld-helper.provision-*) id=${staged#/data/local/.hapaneld-helper.provision-} ;;
       /data/adb/hapaneld/.helper-probe-*) id=${staged#/data/adb/hapaneld/.helper-probe-} ;;
+      /data/adb/hapaneld/.helper-recovery-*) id=${staged#/data/adb/hapaneld/.helper-recovery-}; id=${id%%.*} ;;
+      /system/bin/.hapaneld-helper-upgrade.cancel-*) id=${staged#/system/bin/.hapaneld-helper-upgrade.cancel-} ;;
+      /data/adb/hapaneld/.helper-upgrade.marker.cancel-*) id=${staged#/data/adb/hapaneld/.helper-upgrade.marker.cancel-} ;;
+      /data/adb/hapaneld/.helper-hybrid-upgrade.marker.cancel-*) id=${staged#/data/adb/hapaneld/.helper-hybrid-upgrade.marker.cancel-} ;;
+      *.rollback-intent-*) id=${staged##*.rollback-intent-} ;;
+      *.rollback-v1-*) id=${staged##*.rollback-v1-} ;;
+      *.rollback-*) id=${staged##*.rollback-} ;;
       *) id=${staged#/data/adb/hapaneld/.helper-transaction-}; id=${id%%-*} ;;
     esac
     case "$id" in ''|*[!0-9a-f]*) continue ;; esac
@@ -2881,8 +3709,9 @@ helper_journal_state() {
   [ ! -f /system/bin/.hapaneld-helper-upgrade ] || system=1
   [ ! -f /data/adb/hapaneld/.helper-upgrade.marker ] || systemless=1
   [ ! -f /data/adb/hapaneld/.helper-hybrid-upgrade.marker ] || hybrid=1
-  if [ -f /system/bin/.hapaneld-helper-manual-upgrade ] || \
-     [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
+  if [ -e /data/local/.hapaneld-helper-manual-upgrade ] || [ -L /data/local/.hapaneld-helper-manual-upgrade ] || \
+     [ -e /system/bin/.hapaneld-helper-manual-upgrade ] || [ -L /system/bin/.hapaneld-helper-manual-upgrade ] || \
+     [ -e /data/adb/hapaneld/.helper-manual-upgrade.marker ] || [ -L /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
     echo FOREIGN_MANUAL_TRANSACTION
   elif [ $((system + systemless + hybrid)) -gt 1 ]; then
     echo MULTIPLE_STALE_TRANSACTIONS
@@ -2904,59 +3733,66 @@ install_system() {
   state=$(helper_journal_state)
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
   [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo "INSTALL_STEP_FAILED install_system vendor_rc_present"; return 1; }
-  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
-    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
-    /system/bin/hapaneld-ledd.hapaneld-recovery \
-    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
-
-  cp @STAGED_HELPER@ /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new"; return 1; }
-  hash_matches @BIN_SHA256@ /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper_new"; return 1; }
-  chown 0:0 /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper_new"; return 1; }
-  chmod 755 /system/bin/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper_new"; return 1; }
-  chcon u:object_r:system_file:s0 /system/bin/hapaneld-helper.new 2>/dev/null
+  mkdir -p /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system mkdir_hapaneld"; return 1; }
+  chown 0:0 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld"; return 1; }
+  chmod 700 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld"; return 1; }
+  candidate=/data/local/.hapaneld-helper.provision-$transaction_id
+  rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_system rm_candidate"; return 1; }
+  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new"; return 1; }
+  chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper_new"; return 1; }
+  chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper_new"; return 1; }
+  file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper_new"; return 1; }
   cp @STAGED_RC@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper.rc_new"; return 1; }
   hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper.rc_new"; return 1; }
   chown 0:0 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper.rc_new"; return 1; }
   chmod 644 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper.rc_new"; return 1; }
   chcon u:object_r:system_file:s0 /system/etc/init/hapaneld-helper.rc.new 2>/dev/null
 
-  old_bin_record=$(snapshot /system/bin/hapaneld-helper /system/bin/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_bin_record"; return 1; }
-  old_service_record=$(snapshot /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-helper.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_service_record"; return 1; }
-  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /system/bin/hapaneld-ledd.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_bin_record"; return 1; }
-  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_service_record"; return 1; }
-  alt_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_bin_record"; return 1; }
-  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_service_record"; return 1; }
+  live_bin_record=$(snapshot /data/local/hapaneld-helper "$(v2_recovery_path live)" 700) || { echo "INSTALL_STEP_FAILED install_system snapshot_live_bin_record"; return 1; }
+  old_bin_record=$(snapshot /system/bin/hapaneld-helper "$(v2_recovery_path sysbin)" 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_bin_record"; return 1; }
+  old_service_record=$(snapshot /system/etc/init/hapaneld-helper.rc "$(v2_recovery_path sysrc)" 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_old_service_record"; return 1; }
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd "$(v2_recovery_path legacybin)" 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_bin_record"; return 1; }
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc "$(v2_recovery_path legacyrc)" 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_legacy_service_record"; return 1; }
+  alt_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper "$(v2_recovery_path databin)" 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_bin_record"; return 1; }
+  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh "$(v2_recovery_path datasvc)" 755) || { echo "INSTALL_STEP_FAILED install_system snapshot_alt_service_record"; return 1; }
+  vendor_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc "$(v2_recovery_path vendorrc)" 644) || { echo "INSTALL_STEP_FAILED install_system snapshot_vendor_rc_record"; return 1; }
+  live_bin=${live_bin_record%% *}; live_bin_sha=${live_bin_record#* }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
   legacy_bin=${legacy_bin_record%% *}; legacy_bin_sha=${legacy_bin_record#* }
   legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
   alt_bin=${alt_bin_record%% *}; alt_bin_sha=${alt_bin_record#* }
   alt_service=${alt_service_record%% *}; alt_service_sha=${alt_service_record#* }
+  vendor_rc=${vendor_rc_record%% *}; vendor_rc_sha=${vendor_rc_record#* }
   current_boot=$(boot_id) || { echo "INSTALL_STEP_FAILED install_system boot_id_current_boot"; return 1; }
   now=$(uptime_seconds) || { echo "INSTALL_STEP_FAILED install_system uptime_seconds_now"; return 1; }
   lease_until=$((now + 600))
 
   {
-    echo JOURNAL_VERSION=1
+    echo JOURNAL_VERSION=2
     echo JOURNAL_SCOPE=APK_HELPER
     echo TRANSACTION_ID=@TRANSACTION_ID@
     echo TARGET_APK_SHA256=@APK_SHA256@
     echo TARGET_BUILD_ID=@BUILD_ID@
     echo TARGET_HELPER_SHA256=@BIN_SHA256@
-    echo OLD_BIN=$old_bin
-    echo OLD_BIN_SHA256=$old_bin_sha
-    echo OLD_SERVICE=$old_service
-    echo OLD_SERVICE_SHA256=$old_service_sha
+    echo TARGET_BOOT_SHA256=@RC_SHA256@
+    echo BOOT_KIND=system
+    echo LIVE_BIN=$live_bin
+    echo LIVE_BIN_SHA256=$live_bin_sha
+    echo SYS_BIN=$old_bin
+    echo SYS_BIN_SHA256=$old_bin_sha
+    echo SYS_RC=$old_service
+    echo SYS_RC_SHA256=$old_service_sha
+    echo DATA_BIN=$alt_bin
+    echo DATA_BIN_SHA256=$alt_bin_sha
+    echo DATA_SERVICE=$alt_service
+    echo DATA_SERVICE_SHA256=$alt_service_sha
+    echo VENDOR_RC=$vendor_rc
+    echo VENDOR_RC_SHA256=$vendor_rc_sha
     echo LEGACY_BIN=$legacy_bin
     echo LEGACY_BIN_SHA256=$legacy_bin_sha
     echo LEGACY_SERVICE=$legacy_service
     echo LEGACY_SERVICE_SHA256=$legacy_service_sha
-    echo ALT_BIN=$alt_bin
-    echo ALT_BIN_SHA256=$alt_bin_sha
-    echo ALT_SERVICE=$alt_service
-    echo ALT_SERVICE_SHA256=$alt_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
   } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_system _"; return 1; }
@@ -2970,12 +3806,17 @@ install_system() {
   # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
   # was never changed, nor tell its owner to repair a helper that is still the one they had.
   retire_helpers || { echo "INSTALL_UNCHANGED install_system helper_retirement"; return 1; }
-  rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc \
-    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
-    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
-  mv -f /system/bin/hapaneld-helper.new /system/bin/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_system mv_hapaneld-helper"; return 1; }
+  replacement_safe_after_retirement system "$marker" "$candidate" || return $?
+  mv -f "$candidate" /data/local/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_system mv_hapaneld-helper"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
   mv -f /system/etc/init/hapaneld-helper.rc.new /system/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_system mv_hapaneld-helper.rc"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
+  rm -f /system/bin/hapaneld-helper \
+    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh \
+    /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_system remove_noncanonical_helpers"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
+  v2_target system "$marker" || { echo "INSTALL_STEP_FAILED install_system v2_target"; return 1; }
   echo INSTALL_OK
 }
 
@@ -2986,37 +3827,66 @@ install_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   state=$(helper_journal_state)
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
-  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] || { echo "INSTALL_STEP_FAILED install_systemless vendor_rc_present"; return 1; }
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery
-
-  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper_new"; return 1; }
-  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper_new"; return 1; }
-  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper_new"; return 1; }
-  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper_new"; return 1; }
+  [ ! -e /vendor/etc/init/hapaneld-helper.rc ] && [ ! -L /vendor/etc/init/hapaneld-helper.rc ] &&
+    [ ! -e /system/bin/hapaneld-helper ] && [ ! -L /system/bin/hapaneld-helper ] &&
+    [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
+    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
+    [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] || { echo "INSTALL_STEP_FAILED install_systemless noncanonical_paths_present"; return 1; }
+  candidate=/data/local/.hapaneld-helper.provision-$transaction_id
+  rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless rm_candidate"; return 1; }
+  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper_new"; return 1; }
+  chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper_new"; return 1; }
+  chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper_new"; return 1; }
+  file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper_new"; return 1; }
   cp @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper.sh_new"; return 1; }
   hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper.sh_new"; return 1; }
   chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper.sh_new"; return 1; }
   chmod 755 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper.sh_new"; return 1; }
 
-  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_bin_record"; return 1; }
-  old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_service_record"; return 1; }
+  live_bin_record=$(snapshot /data/local/hapaneld-helper "$(v2_recovery_path live)" 700) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_live_bin_record"; return 1; }
+  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper "$(v2_recovery_path databin)" 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_bin_record"; return 1; }
+  old_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh "$(v2_recovery_path datasvc)" 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_old_service_record"; return 1; }
+  sys_bin_record=$(snapshot /system/bin/hapaneld-helper "$(v2_recovery_path sysbin)" 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_sys_bin_record"; return 1; }
+  sys_rc_record=$(snapshot /system/etc/init/hapaneld-helper.rc "$(v2_recovery_path sysrc)" 644) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_sys_rc_record"; return 1; }
+  vendor_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc "$(v2_recovery_path vendorrc)" 644) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_vendor_rc_record"; return 1; }
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd "$(v2_recovery_path legacybin)" 755) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_legacy_bin_record"; return 1; }
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc "$(v2_recovery_path legacyrc)" 644) || { echo "INSTALL_STEP_FAILED install_systemless snapshot_legacy_service_record"; return 1; }
+  live_bin=${live_bin_record%% *}; live_bin_sha=${live_bin_record#* }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_service=${old_service_record%% *}; old_service_sha=${old_service_record#* }
+  sys_bin=${sys_bin_record%% *}; sys_bin_sha=${sys_bin_record#* }
+  sys_rc=${sys_rc_record%% *}; sys_rc_sha=${sys_rc_record#* }
+  vendor_rc=${vendor_rc_record%% *}; vendor_rc_sha=${vendor_rc_record#* }
+  legacy_bin=${legacy_bin_record%% *}; legacy_bin_sha=${legacy_bin_record#* }
+  legacy_service=${legacy_service_record%% *}; legacy_service_sha=${legacy_service_record#* }
   current_boot=$(boot_id) || { echo "INSTALL_STEP_FAILED install_systemless boot_id_current_boot"; return 1; }
   now=$(uptime_seconds) || { echo "INSTALL_STEP_FAILED install_systemless uptime_seconds_now"; return 1; }
   lease_until=$((now + 600))
   {
-    echo JOURNAL_VERSION=1
+    echo JOURNAL_VERSION=2
     echo JOURNAL_SCOPE=APK_HELPER
     echo TRANSACTION_ID=@TRANSACTION_ID@
     echo TARGET_APK_SHA256=@APK_SHA256@
     echo TARGET_BUILD_ID=@BUILD_ID@
     echo TARGET_HELPER_SHA256=@BIN_SHA256@
-    echo OLD_BIN=$old_bin
-    echo OLD_BIN_SHA256=$old_bin_sha
-    echo OLD_SERVICE=$old_service
-    echo OLD_SERVICE_SHA256=$old_service_sha
+    echo TARGET_BOOT_SHA256=@SERVICE_SHA256@
+    echo BOOT_KIND=systemless
+    echo LIVE_BIN=$live_bin
+    echo LIVE_BIN_SHA256=$live_bin_sha
+    echo SYS_BIN=$sys_bin
+    echo SYS_BIN_SHA256=$sys_bin_sha
+    echo SYS_RC=$sys_rc
+    echo SYS_RC_SHA256=$sys_rc_sha
+    echo DATA_BIN=$old_bin
+    echo DATA_BIN_SHA256=$old_bin_sha
+    echo DATA_SERVICE=$old_service
+    echo DATA_SERVICE_SHA256=$old_service_sha
+    echo VENDOR_RC=$vendor_rc
+    echo VENDOR_RC_SHA256=$vendor_rc_sha
+    echo LEGACY_BIN=$legacy_bin
+    echo LEGACY_BIN_SHA256=$legacy_bin_sha
+    echo LEGACY_SERVICE=$legacy_service
+    echo LEGACY_SERVICE_SHA256=$legacy_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
   } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_systemless _"; return 1; }
@@ -3030,16 +3900,20 @@ install_systemless() {
   # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
   # was never changed, nor tell its owner to repair a helper that is still the one they had.
   retire_helpers || { echo "INSTALL_UNCHANGED install_systemless helper_retirement"; return 1; }
-  rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
-  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper"; return 1; }
+  replacement_safe_after_retirement systemless "$marker" "$candidate" || return $?
+  mv -f "$candidate" /data/local/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
   mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper.sh"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
+  rm -f /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_systemless remove_noncanonical_helpers"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
+  v2_target systemless "$marker" || { echo "INSTALL_STEP_FAILED install_systemless v2_target"; return 1; }
   echo INSTALL_OK
 }
 
-# Keep the init-owned boot vector on /vendor while the sealed helper binary and every recovery
-# artifact live on /data. This is used on stock panels whose writable /system cannot allocate the
-# helper bytes. An existing vendor vector must already be the exact managed definition; unknown
+# Keep the init-owned boot vector on /vendor while the sealed helper binary lives at the canonical
+# /data/local path and every recovery artifact lives under /data. An existing vendor vector must
+# already be an exact recognized definition; unknown
 # content is never adopted or overwritten.
 install_hybrid() {
   mount -o rw,remount / 2>/dev/null
@@ -3053,33 +3927,30 @@ install_hybrid() {
   [ "$state" = NO_STALE_TRANSACTION ] || { echo "$state"; return 2; }
   if [ -e /vendor/etc/init/hapaneld-helper.rc ]; then
     root_owned /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid root_owned_hapaneld-helper.rc"; return 1; }
-    hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc"; return 1; }
+    hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc ||
+      hash_matches_known_legacy /vendor/etc/init/hapaneld-helper.rc @LEGACY_HYBRID_RC_SHA256@ @LEGACY_HYBRID_RC_SUPERVISED_SHA256@ || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc"; return 1; }
   fi
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery || { echo "INSTALL_STEP_FAILED install_hybrid _data_adb_service.d_hapaneld-helper.sh.hapaneld-recovery_hapaneld-helper.sh.hapaneld-recovery"; return 1; }
-
-  cp @STAGED_HELPER@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper_new"; return 1; }
-  hash_matches @BIN_SHA256@ /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper_new"; return 1; }
-  chown 0:0 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper_new"; return 1; }
-  chmod 755 /data/adb/hapaneld/hapaneld-helper.new || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper_new"; return 1; }
+  candidate=/data/local/.hapaneld-helper.provision-$transaction_id
+  rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid rm_candidate"; return 1; }
+  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper_new"; return 1; }
+  chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper_new"; return 1; }
+  chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper_new"; return 1; }
+  file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper_new"; return 1; }
   cp @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper.rc_new"; return 1; }
   hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc_new"; return 1; }
   chown 0:0 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper.rc_new"; return 1; }
   chmod 644 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper.rc_new"; return 1; }
   chcon u:object_r:vendor_configs_file:s0 /vendor/etc/init/hapaneld-helper.rc.new 2>/dev/null
 
-  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_bin_record"; return 1; }
-  old_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_rc_record"; return 1; }
-  sys_rc_record=$(snapshot /system/etc/init/hapaneld-helper.rc /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_rc_record"; return 1; }
-  sys_bin_record=$(snapshot /system/bin/hapaneld-helper /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_bin_record"; return 1; }
-  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_bin_record"; return 1; }
-  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_service_record"; return 1; }
-  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_alt_service_record"; return 1; }
+  live_bin_record=$(snapshot /data/local/hapaneld-helper "$(v2_recovery_path live)" 700) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_live_bin_record"; return 1; }
+  old_bin_record=$(snapshot /data/adb/hapaneld/hapaneld-helper "$(v2_recovery_path databin)" 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_bin_record"; return 1; }
+  old_rc_record=$(snapshot /vendor/etc/init/hapaneld-helper.rc "$(v2_recovery_path vendorrc)" 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_old_rc_record"; return 1; }
+  sys_rc_record=$(snapshot /system/etc/init/hapaneld-helper.rc "$(v2_recovery_path sysrc)" 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_rc_record"; return 1; }
+  sys_bin_record=$(snapshot /system/bin/hapaneld-helper "$(v2_recovery_path sysbin)" 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_sys_bin_record"; return 1; }
+  legacy_bin_record=$(snapshot /system/bin/hapaneld-ledd "$(v2_recovery_path legacybin)" 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_bin_record"; return 1; }
+  legacy_service_record=$(snapshot /system/etc/init/hapaneld-ledd.rc "$(v2_recovery_path legacyrc)" 644) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_legacy_service_record"; return 1; }
+  alt_service_record=$(snapshot /data/adb/service.d/hapaneld-helper.sh "$(v2_recovery_path datasvc)" 755) || { echo "INSTALL_STEP_FAILED install_hybrid snapshot_alt_service_record"; return 1; }
+  live_bin=${live_bin_record%% *}; live_bin_sha=${live_bin_record#* }
   old_bin=${old_bin_record%% *}; old_bin_sha=${old_bin_record#* }
   old_rc=${old_rc_record%% *}; old_rc_sha=${old_rc_record#* }
   sys_rc=${sys_rc_record%% *}; sys_rc_sha=${sys_rc_record#* }
@@ -3092,26 +3963,30 @@ install_hybrid() {
   lease_until=$((now + 600))
 
   {
-    echo JOURNAL_VERSION=1
+    echo JOURNAL_VERSION=2
     echo JOURNAL_SCOPE=APK_HELPER
     echo TRANSACTION_ID=@TRANSACTION_ID@
     echo TARGET_APK_SHA256=@APK_SHA256@
     echo TARGET_BUILD_ID=@BUILD_ID@
     echo TARGET_HELPER_SHA256=@BIN_SHA256@
-    echo OLD_BIN=$old_bin
-    echo OLD_BIN_SHA256=$old_bin_sha
-    echo OLD_RC=$old_rc
-    echo OLD_RC_SHA256=$old_rc_sha
+    echo TARGET_BOOT_SHA256=@HYBRID_RC_SHA256@
+    echo BOOT_KIND=hybrid
+    echo LIVE_BIN=$live_bin
+    echo LIVE_BIN_SHA256=$live_bin_sha
     echo SYS_RC=$sys_rc
     echo SYS_RC_SHA256=$sys_rc_sha
     echo SYS_BIN=$sys_bin
     echo SYS_BIN_SHA256=$sys_bin_sha
+    echo DATA_BIN=$old_bin
+    echo DATA_BIN_SHA256=$old_bin_sha
+    echo DATA_SERVICE=$alt_service
+    echo DATA_SERVICE_SHA256=$alt_service_sha
+    echo VENDOR_RC=$old_rc
+    echo VENDOR_RC_SHA256=$old_rc_sha
     echo LEGACY_BIN=$legacy_bin
     echo LEGACY_BIN_SHA256=$legacy_bin_sha
     echo LEGACY_SERVICE=$legacy_service
     echo LEGACY_SERVICE_SHA256=$legacy_service_sha
-    echo ALT_SERVICE=$alt_service
-    echo ALT_SERVICE_SHA256=$alt_service_sha
     echo LEASE_BOOT_ID=$current_boot
     echo LEASE_UNTIL_UPTIME=$lease_until
   } > "$marker.new" || { echo "INSTALL_STEP_FAILED install_hybrid _"; return 1; }
@@ -3125,15 +4000,19 @@ install_hybrid() {
   # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
   # was never changed, nor tell its owner to repair a helper that is still the one they had.
   retire_helpers || { echo "INSTALL_UNCHANGED install_hybrid helper_retirement"; return 1; }
-  rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
-    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
-    /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_hybrid _data_adb_service.d_hapaneld-helper.sh_hapaneld-helper.sh"; return 1; }
-  [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -e /system/bin/hapaneld-helper ] && \
-    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] && \
-    [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || { echo "INSTALL_STEP_FAILED install_hybrid __hapaneld-helper.sh"; return 1; }
-  mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper"; return 1; }
+  replacement_safe_after_retirement hybrid "$marker" "$candidate" || return $?
+  mv -f "$candidate" /data/local/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
   mv -f /vendor/etc/init/hapaneld-helper.rc.new /vendor/etc/init/hapaneld-helper.rc || { echo "INSTALL_STEP_FAILED install_hybrid mv_hapaneld-helper.rc"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
+  rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
+    /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_hybrid remove_noncanonical_helpers"; return 1; }
+  [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -e /system/bin/hapaneld-helper ] && \
+    [ ! -e /system/bin/hapaneld-ledd ] && [ ! -e /system/etc/init/hapaneld-ledd.rc ] && \
+    [ ! -e /data/adb/hapaneld/hapaneld-helper ] && [ ! -e /data/adb/service.d/hapaneld-helper.sh ] || { echo "INSTALL_STEP_FAILED install_hybrid verify_noncanonical_helpers_absent"; return 1; }
+  sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
+  v2_target hybrid "$marker" || { echo "INSTALL_STEP_FAILED install_hybrid v2_target"; return 1; }
   echo INSTALL_OK
 }
 
@@ -3171,11 +4050,15 @@ rollback_system() {
   mount -o rw,remount /system 2>/dev/null
   marker=/system/bin/.hapaneld-helper-upgrade
   [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
-  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   state=$(classify_system)
-  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || return 1
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    rollback_v2 system "$marker" "$state"
+    return
+  fi
+  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
   flag OLD_BIN "$marker" && valid_recovery OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
   flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
   flag LEGACY_BIN "$marker" && valid_recovery LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery "$marker" || ! flag LEGACY_BIN "$marker" || return 1
@@ -3192,21 +4075,22 @@ rollback_system() {
   hash_matches @BIN_SHA256@ "$probe" || return 1
 
   retire_helpers || return 1
-  restore_or_remove OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
-  restore_or_remove OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
-  restore_or_remove LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
-  restore_or_remove LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
+  state=$(classify_system)
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
+  publish_v1_rollback_intent "$marker" || return 1
   restore_or_remove ALT_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+  restore_or_remove LEGACY_BIN /system/bin/hapaneld-ledd.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
+  restore_or_remove LEGACY_SERVICE /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
+  restore_or_remove OLD_SERVICE /system/etc/init/hapaneld-helper.rc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+  restore_or_remove OLD_BIN /system/bin/hapaneld-helper.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
   sync || return 1
 
   if [ -x /system/bin/hapaneld-helper ] && [ -f /system/bin/hapaneld-helper.hapaneld-recovery ]; then
-    start hapaneld_helper 2>/dev/null
-    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+    /system/bin/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
-    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    /data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -3220,11 +4104,15 @@ rollback_system() {
 rollback_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
-  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   state=$(classify_systemless)
-  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || return 1
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    rollback_v2 systemless "$marker" "$state"
+    return
+  fi
+  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
   flag OLD_BIN "$marker" && valid_recovery OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
   flag OLD_SERVICE "$marker" && valid_recovery OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery "$marker" || ! flag OLD_SERVICE "$marker" || return 1
   probe=/data/adb/hapaneld/.helper-probe-$transaction_id
@@ -3235,16 +4123,17 @@ rollback_systemless() {
   chmod 700 "$probe" || return 1
   hash_matches @BIN_SHA256@ "$probe" || return 1
   retire_helpers || return 1
-  restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
+  state=$(classify_systemless)
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
+  publish_v1_rollback_intent "$marker" || return 1
   restore_or_remove OLD_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+  restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   sync || return 1
   if [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
-    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    /data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null
-    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+    /system/bin/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -3261,10 +4150,14 @@ rollback_hybrid() {
   mount -o rw,remount /vendor 2>/dev/null
   marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
   [ -f "$marker" ] || { echo ROLLBACK_UNNEEDED; return 0; }
-  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   grep -q ^JOURNAL_SCOPE=APK_HELPER$ "$marker" || return 1
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   state=$(classify_hybrid)
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    rollback_v2 hybrid "$marker" "$state"
+    return
+  fi
+  grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
   [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
   flag OLD_BIN "$marker" && valid_recovery OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery "$marker" || ! flag OLD_BIN "$marker" || return 1
   flag OLD_RC "$marker" && valid_recovery OLD_RC /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery "$marker" || ! flag OLD_RC "$marker" || return 1
@@ -3283,22 +4176,23 @@ rollback_hybrid() {
   hash_matches @BIN_SHA256@ "$probe" || return 1
 
   retire_helpers || return 1
-  restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
-  restore_or_remove OLD_RC /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+  state=$(classify_hybrid)
+  [ "$state" = PRE_SWAP ] || [ "$state" = TARGET ] || [ "$state" = TRANSITION ] || return 1
+  publish_v1_rollback_intent "$marker" || return 1
   restore_or_remove SYS_RC /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery /system/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
   restore_or_remove SYS_BIN /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery /system/bin/hapaneld-helper 755 "$marker" || return 1
   restore_or_remove LEGACY_BIN /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery /system/bin/hapaneld-ledd 755 "$marker" || return 1
   restore_or_remove LEGACY_SERVICE /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery /system/etc/init/hapaneld-ledd.rc 644 "$marker" || return 1
   restore_or_remove ALT_SERVICE /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery /data/adb/service.d/hapaneld-helper.sh 755 "$marker" || return 1
+  restore_or_remove OLD_RC /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery /vendor/etc/init/hapaneld-helper.rc 644 "$marker" || return 1
+  restore_or_remove OLD_BIN /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery /data/adb/hapaneld/hapaneld-helper 755 "$marker" || return 1
   sync || return 1
 
   if [ -x /data/adb/hapaneld/hapaneld-helper ] && [ -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery ]; then
-    /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+    /data/adb/hapaneld/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-helper ]; then
-    start hapaneld_helper 2>/dev/null
-    /system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||
-      ( /system/bin/hapaneld-helper >/dev/null 2>&1 & )
+    /system/bin/hapaneld-helper --supervise >/dev/null 2>&1 &
     result=ROLLBACK_RESTARTED
   elif [ -x /system/bin/hapaneld-ledd ]; then
     start hapaneld_ledd 2>/dev/null || /system/bin/hapaneld-ledd >/dev/null 2>&1 &
@@ -3307,6 +4201,38 @@ rollback_hybrid() {
     result=ROLLBACK_EMPTY
   fi
   echo "$result"
+}
+
+cancel_external_v2() {
+  kind=$1 marker=$2
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+  valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
+  valid_v2_marker "$kind" "$marker" || return 1
+  state=$(classify_v2 "$kind" "$marker")
+  case "$state" in
+    EXTERNAL_CANONICAL_CHANGE)
+      publish_cancel_external_v2 "$kind" "$marker" || { echo TOPOLOGY_HOLD; return 4; } ;;
+    CANCEL_EXTERNAL) ;;
+    *) echo TOPOLOGY_HOLD; return 4 ;;
+  esac
+  retire_cancel_external_v2 "$marker"
+}
+
+cancel_external_system() {
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  cancel_external_v2 system /system/bin/.hapaneld-helper-upgrade
+}
+
+cancel_external_systemless() {
+  cancel_external_v2 systemless /data/adb/hapaneld/.helper-upgrade.marker
+}
+
+cancel_external_hybrid() {
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  mount -o rw,remount /vendor 2>/dev/null
+  cancel_external_v2 hybrid /data/adb/hapaneld/.helper-hybrid-upgrade.marker
 }
 
 finalize_rollback_system() {
@@ -3319,15 +4245,27 @@ finalize_rollback_system() {
   # install can commit. Demanding PRE_SWAP from it meant a rollback of a same-helper upgrade could
   # never be finalized — the device rolled back, the journal survived, and every retry repeated it
   # until the panel could not be provisioned at all. Finalization proves the pre-swap state directly.
-  system_matches_recorded || return 1
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    valid_v2_marker system "$marker" || return 1
+    v2_recorded "$marker" || return 1
+  else
+    grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+    system_matches_recorded_v1 || return 1
+  fi
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
-    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
-    /system/bin/hapaneld-ledd.hapaneld-recovery \
-    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
+      /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
+      /system/bin/hapaneld-ledd.hapaneld-recovery \
+      /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo ROLLBACK_FINALIZED
 }
@@ -3337,11 +4275,23 @@ finalize_rollback_systemless() {
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   # Same reasoning as finalize_rollback_system: prove the journaled pre-swap state directly rather
   # than through a classifier that resolves the no-op-upgrade tie in favour of TARGET.
-  systemless_matches_recorded || return 1
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    valid_v2_marker systemless "$marker" || return 1
+    v2_recorded "$marker" || return 1
+  else
+    grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+    systemless_matches_recorded_v1 || return 1
+  fi
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo ROLLBACK_FINALIZED
 }
@@ -3351,16 +4301,28 @@ finalize_rollback_hybrid() {
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   # Do not use classify_hybrid here: a no-op helper update can be both TARGET and the exact
   # journaled pre-swap state. Finalization is safe only after the latter is proved directly.
-  hybrid_matches_recorded || return 1
+  if grep -q ^JOURNAL_VERSION=2$ "$marker"; then
+    valid_v2_marker hybrid "$marker" || return 1
+    v2_recorded "$marker" || return 1
+  else
+    grep -q ^JOURNAL_VERSION=1$ "$marker" || return 1
+    hybrid_matches_recorded_v1 || return 1
+  fi
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo ROLLBACK_FINALIZED
 }
@@ -3371,14 +4333,21 @@ commit_system() {
   mount -o rw,remount /system 2>/dev/null
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   [ "$(classify_system)" = TARGET ] || return 1
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
+  case "$journal_version" in 1|2) ;; *) return 1 ;; esac
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
-    /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
-    /system/bin/hapaneld-ledd.hapaneld-recovery \
-    /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /system/bin/hapaneld-helper.hapaneld-recovery \
+      /system/etc/init/hapaneld-helper.rc.hapaneld-recovery \
+      /system/bin/hapaneld-ledd.hapaneld-recovery \
+      /system/etc/init/hapaneld-ledd.rc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo COMMIT_OK
 }
@@ -3387,10 +4356,17 @@ commit_systemless() {
   marker=/data/adb/hapaneld/.helper-upgrade.marker
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   [ "$(classify_systemless)" = TARGET ] || return 1
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
+  case "$journal_version" in 1|2) ;; *) return 1 ;; esac
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo COMMIT_OK
 }
@@ -3399,15 +4375,22 @@ commit_hybrid() {
   marker=/data/adb/hapaneld/.helper-hybrid-upgrade.marker
   valid_transaction_identity "$marker" "$transaction_id" "$target_apk" "$target_build" "$target_helper" || return 1
   [ "$(classify_hybrid)" = TARGET ] || return 1
+  journal_version=$(sed -n 's/^JOURNAL_VERSION=//p' "$marker")
+  case "$journal_version" in 1|2) ;; *) return 1 ;; esac
   rm -f "$marker" || return 1
   sync || return 1
-  rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
-    /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
-    /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+  if [ "$journal_version" = 2 ]; then
+    cleanup_v2_recoveries
+  else
+    rm -f /data/adb/hapaneld/hapaneld-helper.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.vrc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.sysrc.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-helper.sysbin.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-ledd.sysbin.hapaneld-recovery \
+      /data/adb/hapaneld/hapaneld-ledd.rc.hapaneld-recovery \
+      /data/adb/service.d/hapaneld-helper.sh.hapaneld-recovery 2>/dev/null || true
+    cleanup_v1_rollback_staging
+  fi
   sync 2>/dev/null || true
   echo COMMIT_OK
 }
@@ -3484,6 +4467,9 @@ case "${1:-}" in
   rollback-system) rollback_system ;;
   rollback-systemless) rollback_systemless ;;
   rollback-hybrid) rollback_hybrid ;;
+  cancel-external-system) cancel_external_system ;;
+  cancel-external-systemless) cancel_external_systemless ;;
+  cancel-external-hybrid) cancel_external_hybrid ;;
   finalize-rollback-system) finalize_rollback_system ;;
   finalize-rollback-systemless) finalize_rollback_systemless ;;
   finalize-rollback-hybrid) finalize_rollback_hybrid ;;
@@ -3510,6 +4496,12 @@ EOF
       -e "s/@RC_SHA256@/$rc_sha256/g" \
       -e "s/@HYBRID_RC_SHA256@/$hybrid_rc_sha256/g" \
       -e "s/@SERVICE_SHA256@/$service_sha256/g" \
+      -e "s/@LEGACY_RC_SHA256@/$legacy_rc_sha256/g" \
+      -e "s/@LEGACY_RC_SUPERVISED_SHA256@/$legacy_rc_supervised_sha256/g" \
+      -e "s/@LEGACY_HYBRID_RC_SHA256@/$legacy_hybrid_rc_sha256/g" \
+      -e "s/@LEGACY_HYBRID_RC_SUPERVISED_SHA256@/$legacy_hybrid_rc_supervised_sha256/g" \
+      -e "s/@LEGACY_SERVICE_SHA256@/$legacy_service_sha256/g" \
+      -e "s/@LEGACY_SERVICE_SUPERVISED_SHA256@/$legacy_service_supervised_sha256/g" \
       -e "s/@APK_SHA256@/$TARGET_APK_SHA256/g" \
       -e "s/@BUILD_ID@/$expected_build_id/g" \
       -e "s/@TRANSACTION_ID@/$ROOT_HELPER_TRANSACTION_ID/g" \
@@ -3524,7 +4516,9 @@ EOF
   ROOT_HELPER_TRANSACTION_SHA256="$transaction_sha256"
   ROOT_HELPER_TRANSACTION_PATH="/data/adb/hapaneld/.helper-transaction-$ROOT_HELPER_TRANSACTION_ID-$transaction_sha256"
 
-  if run_root '[ ! -f /system/bin/.hapaneld-helper-manual-upgrade ] && [ ! -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]' \
+  if run_root '[ ! -e /data/local/.hapaneld-helper-manual-upgrade ] && [ ! -L /data/local/.hapaneld-helper-manual-upgrade ] && \
+      [ ! -e /system/bin/.hapaneld-helper-manual-upgrade ] && [ ! -L /system/bin/.hapaneld-helper-manual-upgrade ] && \
+      [ ! -e /data/adb/hapaneld/.helper-manual-upgrade.marker ] && [ ! -L /data/adb/hapaneld/.helper-manual-upgrade.marker ]' \
       >/dev/null 2>&1; then
     :
   else
@@ -3540,11 +4534,14 @@ EOF
   # is never overwritten. Capacity must be an unambiguous numeric value before selecting /system.
   out="$(run_root '
     expected='"$hybrid_rc_sha256"'
+    legacy='"$legacy_hybrid_rc_sha256"'
+    legacy_supervised='"$legacy_hybrid_rc_supervised_sha256"'
     vendor_rc=/vendor/etc/init/hapaneld-helper.rc
-    if [ -e $vendor_rc ]; then
+    if [ -e $vendor_rc ] || [ -L $vendor_rc ]; then
       owner=$(stat -c %u:%g $vendor_rc 2>/dev/null || toybox stat -c %u:%g $vendor_rc 2>/dev/null) || owner=
       actual=$(sha256sum $vendor_rc 2>/dev/null || toybox sha256sum $vendor_rc 2>/dev/null) || actual=
-      if [ "$owner" = 0:0 ] && [ "${actual%% *}" = "$expected" ]; then
+      if [ "$owner" = 0:0 ] && { [ "${actual%% *}" = "$expected" ] || \
+          [ "${actual%% *}" = "$legacy" ] || [ "${actual%% *}" = "$legacy_supervised" ]; }; then
         echo VENDOR_RC_MANAGED
       else
         echo VENDOR_RC_UNEXPECTED
@@ -3605,8 +4602,10 @@ EOF
       fail "system capacity could not be determined safely" \
         "The helper and APK were left unchanged. Check the panel's df output, then re-run."
     fi
-    system_need_kb=$(( ( $(wc -c < "$helper") * 2 + 1023 ) / 1024 + 64 ))
-    [ "$system_need_kb" -ge 1024 ] || system_need_kb=1024
+    # The live binary and every recovery now live on /data. /system only needs the target rc,
+    # its temporary publish copy, and a small journal margin.
+    system_need_kb=$(( ( $(wc -c < "$rc_file") * 2 + 1023 ) / 1024 + 64 ))
+    [ "$system_need_kb" -ge 128 ] || system_need_kb=128
     if [ "$system_avail_kb" -lt "$system_need_kb" ]; then
       install_kind=hybrid
     else
@@ -3654,7 +4653,7 @@ EOF
     else
       echo "   ${YEL}ℹ${X} keeping the existing hybrid root-helper layout"
     fi
-    echo "     ${D}init service in /vendor/etc/init; sealed helper in /data/adb/hapaneld${X}"
+    echo "     ${D}init service in /vendor/etc/init; sealed helper at /data/local/hapaneld-helper${X}"
   fi
 
   step "🧰 root helper" "${D}installing or upgrading $abi privileged service${X}"
@@ -3701,6 +4700,18 @@ EOF
             ${install_detail:+"The panel reported: $install_detail"} \
             "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
         fi
+        if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
+          fail "root-helper topology changed concurrently after its recovery snapshot" \
+            "No stale rollback or candidate replacement was attempted. The retained v2 journal blocks further managed changes until the concurrent installer state is reconciled."
+        fi
+        if printf '%s\n' "$out2" | grep -qx GUARD_ARMED; then
+          if rollback_root_helper "$install_kind"; then
+            fail "the incumbent root helper refused replacement while Guard maintenance was armed" \
+              "The prior helper was restored and the APK was not replaced. Finish or cancel Guard maintenance, then re-run."
+          fi
+          fail "the incumbent root helper refused replacement and rollback could not be verified" \
+            "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "/system root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions." \
@@ -3709,14 +4720,6 @@ EOF
         fail "/system root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
           ${install_detail:+"The panel reported: $install_detail"}
-      fi
-      run_root '
-        stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
-        pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
-        start hapaneld_helper 2>/dev/null
-      ' >/dev/null 2>&1 || true
-      if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then
-        run_root '/system/bin/hapaneld-helper >/dev/null 2>&1 &' >/dev/null 2>&1 || true
       fi
       ;;
     hybrid)
@@ -3731,6 +4734,18 @@ EOF
             ${install_detail:+"The panel reported: $install_detail"} \
             "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
         fi
+        if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
+          fail "root-helper topology changed concurrently after its recovery snapshot" \
+            "No stale rollback or candidate replacement was attempted. The retained v2 journal blocks further managed changes until the concurrent installer state is reconciled."
+        fi
+        if printf '%s\n' "$out2" | grep -qx GUARD_ARMED; then
+          if rollback_root_helper "$install_kind"; then
+            fail "the incumbent root helper refused replacement while Guard maintenance was armed" \
+              "The prior helper was restored and the APK was not replaced. Finish or cancel Guard maintenance, then re-run."
+          fi
+          fail "the incumbent root helper refused replacement and rollback could not be verified" \
+            "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "hybrid root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb." \
@@ -3740,13 +4755,6 @@ EOF
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
           ${install_detail:+"The panel reported: $install_detail"}
       fi
-      # A newly written init definition is loaded on the next boot. Launch the exact data helper for
-      # this session instead of trusting `start`, which can report success for an unknown service.
-      run_root '
-        stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
-        pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
-        /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
-      ' >/dev/null 2>&1 || true
       ;;
     systemless)
       out2="$(run_root_helper_transaction install-systemless 2>&1)" || true
@@ -3760,6 +4768,18 @@ EOF
             ${install_detail:+"The panel reported: $install_detail"} \
             "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
         fi
+        if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
+          fail "root-helper topology changed concurrently after its recovery snapshot" \
+            "No stale rollback or candidate replacement was attempted. The retained v2 journal blocks further managed changes until the concurrent installer state is reconciled."
+        fi
+        if printf '%s\n' "$out2" | grep -qx GUARD_ARMED; then
+          if rollback_root_helper "$install_kind"; then
+            fail "the incumbent root helper refused replacement while Guard maintenance was armed" \
+              "The prior helper was restored and the APK was not replaced. Finish or cancel Guard maintenance, then re-run."
+          fi
+          fail "the incumbent root helper refused replacement and rollback could not be verified" \
+            "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "systemless root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions." \
@@ -3769,14 +4789,27 @@ EOF
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
           ${install_detail:+"The panel reported: $install_detail"}
       fi
-      run_root '
-        stop hapaneld_helper 2>/dev/null
-        pkill -x hapaneld-helper 2>/dev/null
-        /data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
-      ' >/dev/null 2>&1 || true
       ;;
   esac
 
+  # All boot mechanisms only register the canonical authority; launch that exact sealed binary once
+  # for this session instead of relying on an init definition that is not loaded until next boot.
+  run_root '
+    stop hapaneld_ledd 2>/dev/null; stop hapaneld_helper 2>/dev/null
+    pkill -x hapaneld-ledd 2>/dev/null; pkill -x hapaneld-helper 2>/dev/null
+    /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+  ' >/dev/null 2>&1 || true
+
+  if ! wait_for_helper_reply PING OK "$install_kind"; then
+    if rollback_root_helper "$install_kind"; then
+      [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+      fail "new root helper failed its liveness check; the prior helper was restored" \
+        "The previous APK and helper remain active. Re-run after checking the helper logs."
+    fi
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "new root helper failed its liveness check and rollback could not be verified" \
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+  fi
   if ! wait_for_helper_reply COMPANIONCAPS "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL" "$install_kind"; then
     if rollback_root_helper "$install_kind"; then
       [ -z "$helper_dir" ] || rm -rf "$helper_dir"
@@ -3797,6 +4830,26 @@ EOF
     fail "new root helper failed its exact build-identity check and rollback could not be verified" \
       "The APK was not replaced. Restore the helper manually before relying on privileged operations."
   fi
+  if ! wait_for_helper_reply GUARDCAPS "OK GUARDCAPS 1 PREPARE DEFINE STREAM ACTION HEALTH REFUSAL STATUS EVIDENCE CANCEL RETIRE JOURNAL AUTONOMOUS SUPERVISED TERMINAL_RETIRE" "$install_kind"; then
+    if rollback_root_helper "$install_kind"; then
+      [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+      fail "new root helper failed its exact Guard capability check; the prior helper was restored" \
+        "The previous APK and helper remain active. Rebuild or re-download the matching helper, then retry."
+    fi
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "new root helper failed its exact Guard capability check and rollback could not be verified" \
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+  fi
+  if ! wait_for_helper_reply GUARDSTATUS "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0" "$install_kind"; then
+    if rollback_root_helper "$install_kind"; then
+      [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+      fail "new root helper did not report exact empty Guard state; the prior helper was restored" \
+        "The previous APK and helper remain active. Finish or cancel Guard maintenance, then re-run."
+    fi
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "new root helper did not report exact empty Guard state and rollback could not be verified" \
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
+  fi
   renew_root_helper_lease "$install_kind" || fail "the root-helper transaction lease could not be renewed after validation" \
     "The APK was not replaced. Re-run after any competing provisioner finishes; this journal remains recoverable."
   ROOT_HELPER_TRANSACTION_KIND="$install_kind"
@@ -3804,9 +4857,500 @@ EOF
   echo "   ${GRN}✓${X} root helper running with Companion-data protocol 1; recovery retained until APK installation succeeds"
 }
 
+# DB_COMPAT_MUTATION_ANCHOR: HOST_GATE / HAPANELD_HOST_DB_GATE_V1
+#
+# This is the one host-side authority for database replacement admission. The candidate boundary is
+# read from the exact authenticated APK, while the primary database (and, only for a too-new primary,
+# the exact recovery file the app would select) is inspected from this run's actual panel state.
+# Version prompts, --force, snapshots, reset and helper paths do not participate in this decision.
+read_candidate_database_contract() {
+  local tool tool_name xml contracts count family contract_version database minimum maximum extra
+  DB_COMPATIBILITY_CONTRACT=""
+  DB_CANDIDATE_MIN=""
+  DB_CANDIDATE_MAX=""
+  tool="$(find_android_build_tool aapt || true)"
+  [ -n "$tool" ] || tool="$(find_android_build_tool aapt2 || true)"
+  [ -n "$tool" ] || return 1
+  tool_name="${tool##*/}"
+  assert_candidate_apk_unchanged
+  if [ "$tool_name" = aapt2 ]; then
+    xml="$("$tool" dump xmltree "$APK" --file AndroidManifest.xml 2>/dev/null || true)"
+  else
+    xml="$("$tool" dump xmltree "$APK" AndroidManifest.xml 2>/dev/null || true)"
+  fi
+  assert_candidate_apk_unchanged
+  contracts="$(printf '%s\n' "$xml" | awk -v wanted="$DB_COMPATIBILITY_METADATA_KEY" '
+    function quoted(line, start, rest, stop) {
+      start = index(line, "=\"")
+      if (!start) return ""
+      rest = substr(line, start + 2)
+      stop = index(rest, "\"")
+      return stop ? substr(rest, 1, stop - 1) : ""
+    }
+    function indentation(line, copy) { copy=line; sub(/[^ ].*/, "", copy); return length(copy) }
+    function flush_meta() {
+      if (!inside) return
+      if (name == wanted) {
+        if (direct_meta) print value
+        else wrong_scope=1
+      }
+      inside=0
+    }
+    /^[[:space:]]*E:/ {
+      flush_meta()
+      indent=indentation($0)
+      entity=$0; sub(/^[[:space:]]*E:[[:space:]]*/, "", entity); sub(/[[:space:](].*/, "", entity)
+      parent=""; parent_indent=-1
+      for (level in stack) if ((level + 0) < indent && (level + 0) > parent_indent) {
+        parent=stack[level]; parent_indent=level + 0
+      }
+      for (level in stack) if ((level + 0) >= indent) delete stack[level]
+      stack[indent]=entity
+      if (entity == "application" && parent == "manifest") application_count++
+      if (entity == "meta-data") {
+        inside=1; name=""; value=""; direct_meta=(parent == "application")
+      }
+      next
+    }
+    inside && /A: (android:|http:\/\/schemas\.android\.com\/apk\/res\/android:)name/  { name=quoted($0) }
+    inside && /A: (android:|http:\/\/schemas\.android\.com\/apk\/res\/android:)value/ { value=quoted($0) }
+    END {
+      flush_meta()
+      if (application_count != 1 || wrong_scope) print "__INVALID_APPLICATION_METADATA__"
+    }
+  ')"
+  count="$(printf '%s\n' "$contracts" | awk 'NF { n++ } END { print n + 0 }')"
+  [ "$count" = 1 ] || return 1
+  DB_COMPATIBILITY_CONTRACT="$(printf '%s\n' "$contracts" | awk 'NF { print; exit }')"
+  IFS=: read -r family contract_version database minimum maximum extra <<< "$DB_COMPATIBILITY_CONTRACT"
+  [ "$family" = hapaneld-db ] && [ "$contract_version" = v1 ] && [ "$database" = ha-paneld.db ] && [ -z "${extra:-}" ] || return 1
+  case "$minimum" in [1-9]|[1-9][0-9]*) ;; *) return 1 ;; esac
+  case "$maximum" in [1-9]|[1-9][0-9]*) ;; *) return 1 ;; esac
+  [ "${#minimum}" -le 10 ] && [ "${#maximum}" -le 10 ] || return 1
+  [ "$minimum" -le 2147483647 ] && [ "$maximum" -le 2147483647 ] || return 1
+  [ "$minimum" -ge 1 ] && [ "$minimum" -le "$maximum" ] || return 1
+  DB_CANDIDATE_MIN="$minimum"
+  DB_CANDIDATE_MAX="$maximum"
+  return 0
+}
+
+inspect_root_database_compatibility() {
+  local command out begin end primary primary_fingerprint recovery retained inventory inventory_fingerprint observation_nonce
+  observation_nonce="$(host_transaction_id)" || return 1
+  command='set -u
+# HAPANELD_DB_COMPAT_OBSERVER_BEGIN
+db=/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db
+minimum=@MINIMUM@
+maximum=@MAXIMUM@
+sqlite3_bin=""
+if [ -x /system/bin/sqlite3 ]; then sqlite3_bin=/system/bin/sqlite3
+else sqlite3_bin=$(command -v sqlite3 2>/dev/null) || sqlite3_bin=""; fi
+observer_tmp=$(mktemp -d /data/local/tmp/.hapaneld-db-observer.XXXXXX 2>/dev/null) || observer_tmp=""
+source_digest() {
+  digest_path=$1
+  digest_line=$(sha256sum "$digest_path" 2>/dev/null || toybox sha256sum "$digest_path" 2>/dev/null || busybox sha256sum "$digest_path" 2>/dev/null) || return 1
+  digest=${digest_line%% *}
+  case "$digest" in ""|*[!0-9A-Fa-f]* ) return 1 ;; esac
+  [ ${#digest} = 64 ] || return 1
+  printf "%s" "$digest"
+}
+source_fingerprint() {
+  fingerprint_path=$1
+  fingerprint=""
+  for fingerprint_suffix in "" -wal -shm -journal; do
+    fingerprint_file=$fingerprint_path$fingerprint_suffix
+    if [ -L "$fingerprint_file" ]; then return 1
+    elif [ -e "$fingerprint_file" ]; then
+      [ -f "$fingerprint_file" ] || return 1
+      fingerprint_hash=$(source_digest "$fingerprint_file") || return 1
+      fingerprint="$fingerprint|$fingerprint_suffix:$fingerprint_hash"
+    fi
+  done
+  [ -n "$fingerprint" ] || return 1
+  printf "%s\n" "$fingerprint"
+}
+inspect_database() {
+  inspected_path=$1
+  [ ! -L "$inspected_path" ] || { echo not_regular; return; }
+  [ -f "$inspected_path" ] || { echo not_regular; return; }
+  [ -n "$sqlite3_bin" ] && [ -n "$observer_tmp" ] || { echo unreadable; return; }
+  inspected_before=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+  inspected_copy=$observer_tmp/observed.db
+  rm -f "$inspected_copy" "$inspected_copy"-wal "$inspected_copy"-shm "$inspected_copy"-journal
+  cp "$inspected_path" "$inspected_copy" 2>/dev/null || { echo unreadable; return; }
+  for inspected_suffix in -wal -shm -journal; do
+    if [ -e "$inspected_path$inspected_suffix" ]; then
+      cp "$inspected_path$inspected_suffix" "$inspected_copy$inspected_suffix" 2>/dev/null || { echo unreadable; return; }
+    fi
+  done
+  inspected_after=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+  [ "$inspected_before" = "$inspected_after" ] || { echo changed; return; }
+  inspected=$($sqlite3_bin -readonly "$inspected_copy" "PRAGMA query_only=ON; PRAGMA user_version; PRAGMA quick_check;" 2>/dev/null) || { echo unreadable; return; }
+  inspected_final=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+  [ "$inspected_before" = "$inspected_final" ] || { echo changed; return; }
+  inspected_lines=$(printf "%s\n" "$inspected" | awk "NF { n++ } END { print n + 0 }")
+  inspected_version=$(printf "%s\n" "$inspected" | sed -n "1p")
+  inspected_quick=$(printf "%s\n" "$inspected" | sed -n "2p")
+  case "$inspected_version" in ""|*[!0-9]*) echo unreadable; return ;; esac
+  [ "$inspected_lines" = 2 ] || { echo "readable:$inspected_version:bad"; return; }
+  [ "$inspected_quick" = ok ] && echo "readable:$inspected_version:ok" || echo "readable:$inspected_version:bad"
+}
+database_parent=${db%/*}
+app_data=${database_parent%/*}
+data_root=${app_data%/*}
+inventory=unreadable
+inventory_fingerprint=""
+if data_entries=$(ls -1A "$data_root" 2>/dev/null); then
+  if ! printf "%s\n" "$data_entries" | grep -Fxq io.github.maxlyth.hapaneld; then inventory=absent
+  elif [ -L "$app_data" ] || [ ! -d "$app_data" ]; then inventory=unreadable
+  elif app_entries=$(ls -1A "$app_data" 2>/dev/null); then
+    if ! printf "%s\n" "$app_entries" | grep -Fxq databases; then inventory=readable
+    elif [ -L "$database_parent" ] || [ ! -d "$database_parent" ]; then inventory=unreadable
+    elif find "$database_parent" -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1; then
+      inventory=readable
+      for inventory_path in \
+        "$db".restore.tmp "$db".v*.premigrate "$db".v*.superseded \
+        "$db".v*.premigrate.tmp "$db".v*.superseded.tmp \
+        "$db".v*.premigrate-wal "$db".v*.premigrate-shm "$db".v*.premigrate-journal \
+        "$db".v*.superseded-wal "$db".v*.superseded-shm "$db".v*.superseded-journal; do
+        [ -e "$inventory_path" ] || [ -L "$inventory_path" ] || continue
+        inventory_name=${inventory_path##*/}
+        if [ -L "$inventory_path" ]; then
+          inventory_fingerprint="$inventory_fingerprint|$inventory_name:link"
+        elif [ -f "$inventory_path" ]; then
+          inventory_hash=$(source_digest "$inventory_path") || { inventory=unreadable; break; }
+          inventory_fingerprint="$inventory_fingerprint|$inventory_name:file:$inventory_hash"
+        else
+          inventory_fingerprint="$inventory_fingerprint|$inventory_name:other"
+        fi
+      done
+    fi
+  fi
+fi
+[ -n "$inventory_fingerprint" ] || inventory_fingerprint=none
+retained=0
+for retained_path in \
+  "$db" "$db"-wal "$db"-shm "$db"-journal "$db".restore.tmp \
+  "$db".v*.premigrate "$db".v*.superseded \
+  "$db".v*.premigrate.tmp "$db".v*.superseded.tmp \
+  "$db".v*.premigrate-wal "$db".v*.premigrate-shm "$db".v*.premigrate-journal \
+  "$db".v*.superseded-wal "$db".v*.superseded-shm "$db".v*.superseded-journal; do
+  if [ -e "$retained_path" ] || [ -L "$retained_path" ]; then retained=1; break; fi
+done
+if [ -L "$db" ] || { [ -e "$db" ] && [ ! -f "$db" ]; }; then primary=not_regular
+elif [ ! -e "$db" ]; then primary=missing
+else primary=$(inspect_database "$db"); fi
+primary_fingerprint=none
+case "$primary" in
+  readable:*)
+    primary_fingerprint=$(source_fingerprint "$db") || { primary=changed; primary_fingerprint=unreadable; }
+    ;;
+  unreadable|changed|not_regular) primary_fingerprint=unreadable ;;
+esac
+best_path=""
+best_version=-1
+for recovery_artifact in "$db".v*.premigrate "$db".v*.premigrate.tmp \
+  "$db".v*.premigrate-wal "$db".v*.premigrate-shm "$db".v*.premigrate-journal; do
+  [ -e "$recovery_artifact" ] || [ -L "$recovery_artifact" ] || continue
+  case "$recovery_artifact" in
+    *.premigrate) recovery_path=$recovery_artifact ;;
+    *.premigrate.tmp) recovery_path=${recovery_artifact%.tmp} ;;
+    *.premigrate-wal) recovery_path=${recovery_artifact%-wal} ;;
+    *.premigrate-shm) recovery_path=${recovery_artifact%-shm} ;;
+    *.premigrate-journal) recovery_path=${recovery_artifact%-journal} ;;
+    *) continue ;;
+  esac
+  suffix=${recovery_path#"$db".v}
+  recovery_version=${suffix%.premigrate}
+  case "$recovery_version" in ""|*[!0-9]*) continue ;; esac
+  recovery_named_schema=$(printf "%s\n" "$recovery_version" | sed "s/^0*//")
+  [ -n "$recovery_named_schema" ] || recovery_named_schema=0
+  [ "$recovery_named_schema" -le "$maximum" ] || continue
+  if [ "$recovery_named_schema" -gt "$best_version" ] || \
+     { [ "$recovery_named_schema" -eq "$best_version" ] && [ "$recovery_path" \> "$best_path" ]; }; then
+    best_version=$recovery_named_schema
+    best_path=$recovery_path
+  fi
+done
+if [ -z "$best_path" ]; then recovery=none
+elif [ ! -e "$best_path" ] && [ ! -L "$best_path" ]; then recovery="v$best_version:incomplete"
+elif [ -e "$best_path".tmp ] || [ -L "$best_path".tmp ] || \
+     [ -e "$best_path"-wal ] || [ -L "$best_path"-wal ] || \
+     [ -e "$best_path"-shm ] || [ -L "$best_path"-shm ] || \
+     [ -e "$best_path"-journal ] || [ -L "$best_path"-journal ]; then
+  recovery="v$best_version:sidecar"
+else recovery="v$best_version:$(inspect_database "$best_path")"; fi
+echo HOSTDB_BEGIN:@NONCE@
+echo "HOSTDB_PRIMARY=$primary"
+echo "HOSTDB_PRIMARY_FINGERPRINT=$primary_fingerprint"
+echo "HOSTDB_RECOVERY=$recovery"
+echo "HOSTDB_RETAINED=$retained"
+echo "HOSTDB_INVENTORY=$inventory"
+echo "HOSTDB_INVENTORY_FINGERPRINT=$inventory_fingerprint"
+echo HOSTDB_END:@NONCE@
+[ -z "$observer_tmp" ] || rm -rf "$observer_tmp"
+# HAPANELD_DB_COMPAT_OBSERVER_END'
+  command="${command//@MINIMUM@/$DB_CANDIDATE_MIN}"
+  command="${command//@MAXIMUM@/$DB_CANDIDATE_MAX}"
+  command="${command//@NONCE@/$observation_nonce}"
+  out="$(run_root "$command" 2>/dev/null | tr -d '\r')" || return 1
+  begin="$(printf '%s\n' "$out" | grep -c "^HOSTDB_BEGIN:$observation_nonce$" || true)"
+  end="$(printf '%s\n' "$out" | grep -c "^HOSTDB_END:$observation_nonce$" || true)"
+  [ "$begin" = 1 ] && [ "$end" = 1 ] || return 1
+  primary="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_PRIMARY=//p')"
+  primary_fingerprint="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_PRIMARY_FINGERPRINT=//p')"
+  recovery="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_RECOVERY=//p')"
+  retained="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_RETAINED=//p')"
+  inventory="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_INVENTORY=//p')"
+  inventory_fingerprint="$(printf '%s\n' "$out" | sed -n 's/^HOSTDB_INVENTORY_FINGERPRINT=//p')"
+  [ "$(printf '%s\n' "$primary" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || return 1
+  [ "$(printf '%s\n' "$primary_fingerprint" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || return 1
+  [ "$(printf '%s\n' "$recovery" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || return 1
+  case "$retained" in 0|1) ;; *) return 1 ;; esac
+  case "$inventory" in absent|readable|unreadable) ;; *) return 1 ;; esac
+  [ "$(printf '%s\n' "$inventory_fingerprint" | awk 'NF { n++ } END { print n + 0 }')" = 1 ] || return 1
+  HOST_DB_PRIMARY="$primary"
+  HOST_DB_PRIMARY_FINGERPRINT="$primary_fingerprint"
+  HOST_DB_RECOVERY="$recovery"
+  HOST_DB_RETAINED="$retained"
+  HOST_DB_INVENTORY="$inventory"
+  HOST_DB_INVENTORY_FINGERPRINT="$inventory_fingerprint"
+  return 0
+}
+
+host_database_gate_refuse() {
+  local phase="${DB_GATE_PHASE:-initial}" helper_kind="" helper_recovery=""
+  if [ "$phase" = package ] && [ -n "${ROOT_HELPER_TRANSACTION_KIND:-}" ]; then
+    helper_kind="$ROOT_HELPER_TRANSACTION_KIND"
+    stop_root_helper_lease_guard
+    cleanup_root_helper_lease_guard
+    if rollback_root_helper "$helper_kind"; then
+      cleanup_root_helper_staging
+      ROOT_HELPER_TRANSACTION_KIND=""
+      helper_recovery="The task-owned root-helper transaction was rolled back and verified before refusal."
+    else
+      helper_recovery="The APK was not replaced, but root-helper rollback could not be verified; preserve the recovery journal and repair the helper before retrying."
+    fi
+  fi
+  if [ "$phase" = consume ] || [ "$phase" = package ]; then
+    if [ "$phase" = package ]; then
+      fail "database compatibility could not be proven at the package-time recheck: $1" \
+        "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
+        "$helper_recovery" \
+        "Backup/quiescence and requested helper or Shizuku preparation may already have completed, but the ha-paneld APK, permissions and configuration were not changed." \
+        "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
+    fi
+    fail "database compatibility could not be proven at the consume-time recheck: $1" \
+      "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
+      "A read-only backup or app quiescence may already have completed, but no reset, helper, Shizuku, APK, permission or configuration mutation was started." \
+      "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
+  fi
+  fail "database compatibility could not be proven: $1" \
+    "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
+    "No settings backup, database quiescence, reset, helper, Shizuku, APK, permission or configuration mutation was started." \
+    "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
+}
+
+host_database_compatibility_decision() {
+  local primary_version primary_quick recovery_file_version recovery_state recovery_version recovery_quick observation_nonce
+  DB_GATE_RECOVERY=""
+  DB_GATE_DECISION_KIND=""
+  DB_GATE_RESET_FRESH=0
+  HOST_DB_PRIMARY=""; HOST_DB_RECOVERY=""; HOST_DB_RETAINED=""; HOST_DB_INVENTORY=""; HOST_DB_INVENTORY_FINGERPRINT=""
+  classify_package_presence "$ADB_COMMAND_TIMEOUT_SECONDS"
+  case "$PACKAGE_PRESENCE" in
+    present|absent) ;;
+    *) host_database_gate_refuse "the installed-package state is unknown" ;;
+  esac
+  if [ "$PACKAGE_PRESENCE" = absent ]; then
+    classify_package_data_record "$ADB_COMMAND_TIMEOUT_SECONDS"
+    case "$PACKAGE_DATA_RECORD" in
+      absent) ;;
+      retained) host_database_gate_refuse "Android retains an uninstalled ha-paneld package/data record" ;;
+      *) host_database_gate_refuse "Android could not prove the absence of an uninstalled retained-data record" ;;
+    esac
+  fi
+  verify_incumbent_signer_for_replacement
+
+  if ! read_candidate_database_contract; then
+    if [ "$PACKAGE_PRESENCE" = absent ]; then
+      # Legacy APKs without the signed contract remain valid only for a positively proven first
+      # installation. Android package removal owns and removes app-private data on rootless devices;
+      # rooted devices receive the stronger retained-file check below.
+      DB_COMPATIBILITY_CONTRACT="legacy candidate without database metadata"
+      DB_CANDIDATE_MIN=1
+      DB_CANDIDATE_MAX=2147483647
+    else
+      host_database_gate_refuse "the authenticated APK has missing, duplicate or malformed database metadata"
+    fi
+  fi
+
+  case "$ROOT_ROUTE_VERDICT" in
+    rooted)
+      HOST_DB_PRIMARY=""; HOST_DB_PRIMARY_FINGERPRINT=""; HOST_DB_RECOVERY=""; HOST_DB_RETAINED=""; HOST_DB_INVENTORY=""; HOST_DB_INVENTORY_FINGERPRINT=""
+      inspect_root_database_compatibility || host_database_gate_refuse "the canonical database observation was unreadable"
+      if [ "$PACKAGE_PRESENCE" = absent ]; then
+        [ "$HOST_DB_INVENTORY" != unreadable ] || \
+          host_database_gate_refuse "the app-data database inventory could not be traversed"
+        [ "$HOST_DB_PRIMARY" = missing ] && [ "$HOST_DB_RETAINED" = 0 ] || \
+          host_database_gate_refuse "the package is absent but retained database or recovery state still exists"
+        step "🛡️  database compatible" "${D}proven fresh install · no retained database state${X}"
+        DB_GATE_DECISION_KIND=FRESH
+        return 0
+      fi
+      if [ "${DB_GATE_PHASE:-}" = package ] && [ "${RESET_CONFIG_COMPLETED:-0}" = 1 ]; then
+        [ "$HOST_DB_INVENTORY" != unreadable ] && [ "$HOST_DB_PRIMARY" = missing ] && \
+          [ "$HOST_DB_RETAINED" = 0 ] || \
+          host_database_gate_refuse "the confirmed reset did not leave a provably empty database and recovery inventory"
+        DB_GATE_RESET_FRESH=1
+        DB_GATE_DECISION_KIND=RESET_FRESH
+        step "🛡️  database compatible" "${D}confirmed reset · package retained · database and recovery state proven empty${X}"
+        return 0
+      fi
+      case "$HOST_DB_PRIMARY" in
+        readable:*:*)
+          primary_version="${HOST_DB_PRIMARY#readable:}"; primary_version="${primary_version%%:*}"
+          primary_quick="${HOST_DB_PRIMARY##*:}"
+          [ "$primary_quick" = ok ] || host_database_gate_refuse "the canonical database failed quick_check"
+          ;;
+        missing) host_database_gate_refuse "ha-paneld is installed but its canonical database is missing" ;;
+        *) host_database_gate_refuse "the canonical database is unreadable or is not a regular file" ;;
+      esac
+      [ "$primary_version" -ge "$DB_CANDIDATE_MIN" ] || \
+        host_database_gate_refuse "database schema $primary_version is below candidate minimum $DB_CANDIDATE_MIN"
+      if [ "$primary_version" -le "$DB_CANDIDATE_MAX" ]; then
+        DB_GATE_DECISION_KIND=DIRECT
+        step "🛡️  database compatible" "${D}schema $primary_version is inside candidate boundary $DB_CANDIDATE_MIN..$DB_CANDIDATE_MAX${X}"
+        return 0
+      fi
+      # DB_COMPAT_MUTATION_ANCHOR: HOST_RECOVERY_INVENTORY — recovery is authoritative only when
+      # the complete database/recovery namespace was traversed successfully.
+      [ "$HOST_DB_INVENTORY" = readable ] || \
+        host_database_gate_refuse "the complete premigration recovery inventory could not be traversed"
+      [ "$HOST_DB_RECOVERY" != none ] || \
+        host_database_gate_refuse "database schema $primary_version is newer than candidate maximum $DB_CANDIDATE_MAX and no selectable premigration recovery exists"
+      recovery_file_version="${HOST_DB_RECOVERY#v}"; recovery_file_version="${recovery_file_version%%:*}"
+      recovery_state="${HOST_DB_RECOVERY#*:}"
+      case "$recovery_state" in
+        readable:*:*)
+          recovery_version="${recovery_state#readable:}"; recovery_version="${recovery_version%%:*}"
+          recovery_quick="${recovery_state##*:}"
+          ;;
+        not_regular) host_database_gate_refuse "the newest selectable premigration recovery is not a regular file" ;;
+        incomplete) host_database_gate_refuse "the newest selectable premigration recovery is incomplete" ;;
+        sidecar) host_database_gate_refuse "the newest selectable premigration recovery has a SQLite sidecar or temporary file" ;;
+        changed) host_database_gate_refuse "the newest selectable premigration recovery changed during observation" ;;
+        *) host_database_gate_refuse "the newest selectable premigration recovery is unreadable" ;;
+      esac
+      [ "$recovery_version" = "$recovery_file_version" ] || \
+        host_database_gate_refuse "the newest selectable premigration recovery filename and schema disagree"
+      [ "$recovery_version" -ge "$DB_CANDIDATE_MIN" ] || \
+        host_database_gate_refuse "the newest selectable premigration recovery is below candidate minimum $DB_CANDIDATE_MIN"
+      [ "$recovery_quick" = ok ] || \
+        host_database_gate_refuse "the newest selectable premigration recovery failed quick_check"
+      DB_GATE_RECOVERY="ha-paneld.db.v${recovery_file_version}.premigrate"
+      DB_GATE_DECISION_KIND=RECOVER
+      step "🛡️  database recovery proven" "${D}schema $primary_version → $DB_GATE_RECOVERY within $DB_CANDIDATE_MIN..$DB_CANDIDATE_MAX${X}"
+      return 0
+      ;;
+    unrooted)
+      if [ "$PACKAGE_PRESENCE" = absent ]; then
+        HOST_DB_PRIMARY=missing; HOST_DB_RECOVERY=none; HOST_DB_RETAINED=0
+        HOST_DB_PRIMARY_FINGERPRINT=android-absent
+        HOST_DB_INVENTORY=android-absent; HOST_DB_INVENTORY_FINGERPRINT=android-absent
+        DB_GATE_DECISION_KIND=FRESH
+        step "🛡️  database compatible" "${D}proven fresh install · Android owns no installed app data${X}"
+        return 0
+      fi
+      if [ "${DB_GATE_PHASE:-}" = package ] && [ "${RESET_CONFIG_COMPLETED:-0}" = 1 ]; then
+        classify_reset_package_stopped "$ADB_COMMAND_TIMEOUT_SECONDS"
+        case "$RESET_PACKAGE_STOPPED" in
+          stopped) ;;
+          running) host_database_gate_refuse "the reset package ran again after pm clear, so app data may have been recreated" ;;
+          *) host_database_gate_refuse "Android could not prove that the reset package remained stopped after pm clear" ;;
+        esac
+        HOST_DB_PRIMARY=missing; HOST_DB_PRIMARY_FINGERPRINT=android-cleared-stopped
+        HOST_DB_RECOVERY=none; HOST_DB_RETAINED=0
+        HOST_DB_INVENTORY=android-cleared-stopped; HOST_DB_INVENTORY_FINGERPRINT=android-cleared-stopped
+        DB_GATE_RESET_FRESH=1
+        DB_GATE_DECISION_KIND=RESET_FRESH
+        step "🛡️  database compatible" "${D}confirmed Android package-data clear · package remained stopped · fresh database state${X}"
+        return 0
+      fi
+      # A rootless in-place install may proceed only from a fresh same-run app status observation.
+      # Recovery files are app-private and therefore cannot be proven from this route.
+      observation_nonce="$(host_transaction_id)" || host_database_gate_refuse "a fresh rootless observation nonce could not be created"
+      read_storage_health_refresh "$observation_nonce"
+      [ "$STORAGE_HEALTH_OBSERVATION_NONCE" = "$observation_nonce" ] || \
+        host_database_gate_refuse "rootless status did not echo this run's database observation nonce"
+      case "$STORAGE_HEALTH_SCHEMA_VERSION" in ""|*[!0-9]*) host_database_gate_refuse "rootless status did not report a concrete schema" ;; esac
+      [ "$STORAGE_HEALTH_QUICK_CHECK" = ok ] || host_database_gate_refuse "rootless status did not prove quick_check=ok"
+      primary_version="$STORAGE_HEALTH_SCHEMA_VERSION"
+      [ "$primary_version" -ge "$DB_CANDIDATE_MIN" ] || \
+        host_database_gate_refuse "database schema $primary_version is below candidate minimum $DB_CANDIDATE_MIN"
+      [ "$primary_version" -le "$DB_CANDIDATE_MAX" ] || \
+        host_database_gate_refuse "database schema $primary_version is newer than candidate maximum $DB_CANDIDATE_MAX; rootless recovery cannot be proven"
+      HOST_DB_PRIMARY="readable:$primary_version:ok"; HOST_DB_RECOVERY=unobservable
+      HOST_DB_PRIMARY_FINGERPRINT=unobservable
+      HOST_DB_RETAINED=unobservable; HOST_DB_INVENTORY=unobservable
+      HOST_DB_INVENTORY_FINGERPRINT=unobservable
+      DB_GATE_DECISION_KIND=DIRECT
+      step "🛡️  database compatible" "${D}rootless status proves schema $primary_version · quick_check ok · boundary $DB_CANDIDATE_MIN..$DB_CANDIDATE_MAX${X}"
+      return 0
+      ;;
+    *) host_database_gate_refuse "the panel root route is unknown" ;;
+  esac
+}
+
+host_database_compatibility_gate() {
+  local phase="${1:-initial}" semantic evidence
+  DB_GATE_PHASE="$phase"
+  host_database_compatibility_decision
+  semantic="package=$PACKAGE_PRESENCE;contract=$DB_COMPATIBILITY_CONTRACT;root=$ROOT_ROUTE_VERDICT;decision=$DB_GATE_DECISION_KIND;primary=$HOST_DB_PRIMARY"
+  case "$DB_GATE_DECISION_KIND" in
+    DIRECT)
+      evidence="$semantic;primary_fingerprint=$HOST_DB_PRIMARY_FINGERPRINT"
+      ;;
+    RECOVER)
+      semantic="$semantic;recovery=$HOST_DB_RECOVERY;retained=$HOST_DB_RETAINED;inventory=$HOST_DB_INVENTORY;selected=$DB_GATE_RECOVERY"
+      evidence="$semantic;primary_fingerprint=$HOST_DB_PRIMARY_FINGERPRINT;inventory_fingerprint=$HOST_DB_INVENTORY_FINGERPRINT"
+      ;;
+    FRESH|RESET_FRESH)
+      semantic="$semantic;recovery=$HOST_DB_RECOVERY;retained=$HOST_DB_RETAINED;inventory=$HOST_DB_INVENTORY"
+      evidence="$semantic;primary_fingerprint=$HOST_DB_PRIMARY_FINGERPRINT;inventory_fingerprint=$HOST_DB_INVENTORY_FINGERPRINT"
+      ;;
+    *) host_database_gate_refuse "the compatibility decision kind is missing or invalid" ;;
+  esac
+  case "$phase" in
+    initial) DB_GATE_INITIAL_EVIDENCE="$semantic" ;;
+    consume)
+      [ -n "$DB_GATE_INITIAL_EVIDENCE" ] || host_database_gate_refuse "the initial compatibility evidence is missing"
+      [ "$semantic" = "$DB_GATE_INITIAL_EVIDENCE" ] || \
+        host_database_gate_refuse "the package, database or recovery inventory changed after its initial observation"
+      DB_GATE_CONSUME_EVIDENCE="$evidence"
+      ;;
+    package)
+      [ -n "$DB_GATE_CONSUME_EVIDENCE" ] || host_database_gate_refuse "the consume-time compatibility evidence is missing"
+      if [ "$DB_GATE_RESET_FRESH" != 1 ]; then
+        [ "$evidence" = "$DB_GATE_CONSUME_EVIDENCE" ] || \
+          host_database_gate_refuse "the package, database or recovery inventory changed after the consume-time observation"
+      fi
+      ;;
+    *) host_database_gate_refuse "the compatibility gate phase is invalid" ;;
+  esac
+  # Keep the candidate byte binding inside the same phase so consume/package failures use the same
+  # cleanup and task-owned-helper rollback semantics as database-evidence failures.
+  assert_candidate_apk_unchanged
+  # Package phase remains owned until run_adb_install_attempt performs its final byte assertion and
+  # starts package-manager consumption. A lease renewal between this gate and that assertion must
+  # not turn candidate drift into a plain failure that strands a task-owned helper transaction.
+  [ "$phase" = package ] || DB_GATE_PHASE=""
+}
+
 # Give a useful version transition before install. Android's package manager remains the portable,
 # authoritative downgrade guard; avoiding GNU `sort -V` keeps the supported macOS path working.
 version_guard() {
+  # DB_COMPAT_MUTATION_ANCHOR: HOST_FORCE_POLICY — --force suppresses only the version prompt; it never bypasses HOST_GATE.
   [ "$FORCE" = 1 ] && return 0
   [ -n "$TOINSTALL_VER" ] || return 0
   local installed raw status timeout="${VERSION_INSPECTION_TIMEOUT_SECONDS:-20}"
@@ -4756,6 +6300,7 @@ reset_panel_config() {
     package_status=$?
   fi
   if [ "$package_status" -eq 0 ] && [ "$out" = "Success" ]; then
+    RESET_CONFIG_COMPLETED=1
     echo "   ${GRN}✓${X} configuration erased — this panel will start guided setup fresh"
   else
     fail "could not erase the panel configuration" \
@@ -4802,14 +6347,14 @@ preflight_storage_health
 
 resolve_apk
 
+# Bind the private snapshot before any authenticator opens it. Every signature, manifest, helper and
+# package-manager read below is bracketed by this exact-byte assertion, so the authenticated object
+# and the installed object cannot diverge through a path replacement.
+bind_candidate_apk_bytes
+
 verify_release_apk
 
 version_guard
-
-# Emergency upgrade safety window: try to persist a unique, owner-only config export before an
-# ordinary helper/APK mutation. Best effort — a failure warns, withdraws the partial artifact and
-# lets the replacement continue. Reset is intentionally irreversible and creates no automatic backup.
-[ "$RESET_CONFIG" = 1 ] || auto_export_before_upgrade
 
 # Decide the panel's root capability ONCE, before anything consumes it: the capture gate below and
 # the helper/APK mutation later act on this same verdict, so a "no" that lets the capture skip is
@@ -4817,9 +6362,26 @@ version_guard
 # panels this performs the run's only `adb root` escalation.
 resolve_root_route
 
+# The authenticated candidate and actual panel state must agree before any backup/quiescence,
+# reset, helper, Shizuku, package, grant or configuration mutation can begin.
+host_database_compatibility_gate
+
+# DB_COMPAT_MUTATION_ANCHOR: HOST_FIRST_MUTATION — everything above is artifact authentication or read-only panel inspection.
+# Emergency upgrade safety window: try to persist a unique, owner-only config export before an
+# ordinary helper/APK mutation. Best effort — a failure warns, withdraws the partial artifact and
+# lets the replacement continue. Reset is intentionally irreversible and creates no automatic backup.
+[ "$RESET_CONFIG" = 1 ] || auto_export_before_upgrade
+
 # Then the canonical store itself, where a root route allows it. Ordinary in-place upgrades warn and
 # continue if no valid snapshot can be produced. Reset deliberately bypasses database capture.
 [ "$RESET_CONFIG" = 1 ] || snapshot_panel_database
+
+# Backups and quiescence deliberately sit between two observations. Re-run the complete authority
+# now, at the consume boundary, so package, candidate, primary-schema or recovery-inventory drift
+# cannot license reset/helper/Shizuku/APK/configuration mutation. The final digest assertion binds
+# this re-observation to the exact candidate bytes Android will receive.
+# DB_COMPAT_MUTATION_ANCHOR: HOST_CONSUME_REVALIDATION
+host_database_compatibility_gate consume
 
 # THE mutation gate for an undecided route. The capture above may refuse on an unknown verdict and
 # an ordinary backup failure may be advisory, but neither condition authorises mutating a panel whose
@@ -4835,10 +6397,6 @@ case "$ROOT_ROUTE_VERDICT" in
 esac
 
 reset_panel_config
-
-TARGET_APK_SHA256="$(host_sha256 "$APK")"
-printf '%s\n' "$TARGET_APK_SHA256" | grep -Eq '^[0-9a-f]{64}$' || fail "could not identify the target APK bytes" \
-  "The helper and APK transaction was not started. Check that the APK is readable, then retry."
 
 # Current app releases and the root helper are one compatibility unit. On every panel where a root
 # path is available, install or upgrade the matching helper before replacing the APK. A helper
@@ -4862,6 +6420,9 @@ install_apk() {
   if run_adb_install_attempt -r -g; then install_status=0; else install_status=$?; fi
   out="$ADB_INSTALL_OUTPUT"
   if [ "$install_status" -ne 0 ] && printf '%s\n' "$out" | grep -Eqi '(^|[[:space:]])(Error:[[:space:]]*)?Unknown option:? -g([[:space:]]|$)'; then
+    # The first attempt was rejected before a package-manager transaction. Restore package-phase
+    # rollback ownership for the fallback's own final candidate-byte assertion/start boundary.
+    DB_GATE_PHASE=package
     if run_adb_install_attempt -r; then install_status=0; else install_status=$?; fi
     out="$ADB_INSTALL_OUTPUT"
   fi
@@ -5076,6 +6637,11 @@ if [ -n "$ROOT_HELPER_TRANSACTION_KIND" ]; then
   fi
   cleanup_root_helper_lease_guard
 fi
+# Helper/Shizuku preparation can be slow and may let an external writer change the database after the
+# consume-time check. Re-observe one final time immediately beside ha-paneld package replacement. A
+# refusal rolls back this run's uncommitted helper transaction before exiting.
+# DB_COMPAT_MUTATION_ANCHOR: HOST_PACKAGE_REVALIDATION
+host_database_compatibility_gate package
 step "📦 installing" "${D}$APK${X}"
 install_apk
 # Successful package replacement terminates the old quiesced process. A later failure belongs to

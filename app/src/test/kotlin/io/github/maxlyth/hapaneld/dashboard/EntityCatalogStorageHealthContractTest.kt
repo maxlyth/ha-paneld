@@ -222,6 +222,20 @@ class EntityCatalogStorageHealthContractTest {
             "retry.admitRetry(busy)" in checkpoint && "retry.admitRetry(failure)" in checkpoint)
     }
 
+    @Test fun sqliteDowngradeCallbackIsAFailClosedMutationFreeTripwire() {
+        val downgrade = functionBody("onDowngrade")
+        assertTrue(
+            "a post-observation downgrade race must cross the schema failure authority",
+            "observedSchemaWrite(\"database-downgrade-tripwire\")" in downgrade,
+        )
+        assertTrue(
+            "the callback must refuse rather than let SQLiteOpenHelper version-stamp the newer store",
+            "throw DatabaseCompatibilityException(" in downgrade &&
+                "DATABASE_CHANGED_AFTER_OBSERVATION" in downgrade,
+        )
+        assertFalse("the tripwire must not mutate the database", Regex("\\bdb\\.").containsMatchIn(downgrade))
+    }
+
     @Test fun managerForwardsTheCancellationSignalWithoutOwningAnotherProbe() {
         val manager = listOf(
             File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),

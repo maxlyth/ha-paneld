@@ -39,10 +39,13 @@ import io.github.maxlyth.hapaneld.util.localIpv6
  */
 class MainActivity : AppCompatActivity() {
 
+    private val maintenanceFence = GuardDbActivityMaintenanceFence()
     private val requestNotif =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
-        ) { startServiceAndChooseDestination() }
+        ) {
+            if (!maintenanceFence.stop(this)) startServiceAndChooseDestination()
+        }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private val config by lazy { Config(this) }
@@ -190,6 +193,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (maintenanceFence.stop(this)) return
         supportActionBar?.hide()
         restoredIntroState = savedInstanceState?.takeIf { it.getBoolean(STATE_INTRO_PRESENTED, false) }?.let {
             SavedLaunchIntroState(
@@ -475,6 +479,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        if (maintenanceFence.stop(this)) return
         // Returning from the dashboard or the config page can arrive after the panel's theme changed,
         // and recomputing the palette only helps views built AFTER that point — the installed screen
         // kept the colours it was born with. Rebuild only when the theme actually moved, so an

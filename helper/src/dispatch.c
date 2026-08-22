@@ -11,17 +11,16 @@
 #include "cht8305.h"
 #include "vi530x.h"
 #include "companion.h"
+#include "guard_maintenance.h"
 #include "util.h"
 #include "version.h"
-
-#ifndef HAPANELD_BUILD_ID
-#define HAPANELD_BUILD_ID "development"
-#endif
 
 static void cmd_ping(conn_ctx *ctx, const char *args) { (void)args; reply(ctx->fd, "OK\n"); }
 static void cmd_buildid(conn_ctx *ctx, const char *args) {
     (void)args;
-    reply(ctx->fd, "BUILDID " HAPANELD_BUILD_ID "\n");
+    reply(ctx->fd, "BUILDID ");
+    reply(ctx->fd, helper_build_id());
+    reply(ctx->fd, "\n");
 }
 
 // Handlers live in the capability module that owns the verb (led.c, screen.c, …). commands.def is the

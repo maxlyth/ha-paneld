@@ -24,9 +24,12 @@ BUILD   := build
 # the unit tests, so coverage can never silently drop a module. main.c (accept loop) and sysexec.c
 # (real exec/pipe/thread/reboot) are deliberately NOT here: the fuzz and test builds swap in a stub
 # sysexec and never run main, so a valid REBOOT/RELOAD/WATCH/GPIOWATCH can't exec or spawn on the build host.
-CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c gpio.c sysctl.c perf.c cht8305.c vi530x.c version.c companion.c server.c dispatch.c)
+CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c sha256.c led.c screen.c input.c gpio.c sysctl.c perf.c cht8305.c vi530x.c version.c companion.c guard_maintenance.c server.c dispatch.c)
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
+TEST_BUILD_ID := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+REPLACEMENT_OLD_BUILD_ID := eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+REPLACEMENT_NEW_BUILD_ID := dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 
 .PHONY: all daemon test peer-auth-test request-timeout-test replacement-identity-test install-security-test standalone-identity-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
@@ -37,10 +40,13 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
-test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/bounded-exec $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/guard-maintenance-boundary $(BUILD)/replacement-lease-old $(BUILD)/replacement-lease-new $(BUILD)/sysexec-fd-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/bounded-exec $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	$(BUILD)/unit
-	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.2.0 proto=1.2"
+	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.3.0 proto=1.3"
 	$(BUILD)/companion-boundary
+	$(BUILD)/guard-maintenance-boundary
+	$(BUILD)/replacement-lease-old $(BUILD)/replacement-lease-old $(BUILD)/replacement-lease-new
+	$(BUILD)/sysexec-fd-boundary
 	$(BUILD)/peer-auth
 	$(BUILD)/request-timeout
 	$(BUILD)/bounded-exec
@@ -59,6 +65,21 @@ $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)
 $(BUILD)/companion-boundary: $(CORE_SRCS) $(STUB) test/companion_boundary.c | $(BUILD)
 	$(CC) $(CFLAGS) -DHAPANELD_TEST -I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) \
 		test/companion_boundary.c $(LDLIBS) -Wl,--wrap=renameat -o $@
+
+$(BUILD)/guard-maintenance-boundary: $(CORE_SRCS) $(STUB) test/guard_maintenance_boundary.c | $(BUILD)
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -DHAPANELD_TEST_SKIP_SELF_BINDING -DHAPANELD_BUILD_ID='"$(TEST_BUILD_ID)"' -I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) \
+		test/guard_maintenance_boundary.c $(LDLIBS) -o $@
+
+$(BUILD)/replacement-lease-old: $(CORE_SRCS) $(STUB) test/replacement_lease_process.c | $(BUILD)
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -DHAPANELD_BUILD_ID='"$(REPLACEMENT_OLD_BUILD_ID)"' \
+		-I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) test/replacement_lease_process.c $(LDLIBS) -o $@
+
+$(BUILD)/replacement-lease-new: $(CORE_SRCS) $(STUB) test/replacement_lease_process.c | $(BUILD)
+	$(CC) $(CFLAGS) -DHAPANELD_TEST -DHAPANELD_BUILD_ID='"$(REPLACEMENT_NEW_BUILD_ID)"' \
+		-I$(SRC_DIR) -Itest $(CORE_SRCS) $(STUB) test/replacement_lease_process.c $(LDLIBS) -o $@
+
+$(BUILD)/sysexec-fd-boundary: $(SRC_DIR)/sysexec.c test/sysexec_fd_boundary.c | $(BUILD)
+	$(CC) $(CFLAGS) -I$(SRC_DIR) $(SRC_DIR)/sysexec.c test/sysexec_fd_boundary.c $(LDLIBS) -o $@
 
 # Peer-credential policy is owned by main.c rather than CORE_SRCS. The white-box test includes that
 # production implementation and supplies inert module stubs; it never opens a socket or executes a verb.
@@ -85,7 +106,8 @@ REPLACEMENT_SOCKET := hapaneld-helper-replacement-test
 OLD_BUILD_ID := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 NEW_BUILD_ID := bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 REPLACEMENT_FLAGS := -DSOCK_NAME=\"$(REPLACEMENT_SOCKET)\" -DAPP_DATA=\"/proc/self\" \
-	-DREPLACEMENT_RETIRE_ATTEMPTS=40 -DREPLACEMENT_RETIRE_DELAY_MS=10
+	-DREPLACEMENT_RETIRE_ATTEMPTS=40 -DREPLACEMENT_RETIRE_DELAY_MS=10 \
+	-DHAPANELD_TEST_ALLOW_STALE_OWNER_RETIREMENT=1
 replacement-identity-test: $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
 	bash ./test/replacement_identity_test.sh $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
 $(BUILD)/hapaneld-helper-old: $(DAEMON_SRCS) | $(BUILD)

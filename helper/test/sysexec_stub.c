@@ -32,6 +32,7 @@ typedef struct {
 
 static char run_fail_needle[128];
 static int run_fail_status;
+static char run_timeout_needle[128];
 static char run_block_needle[128];
 static int run_blocked;
 static int run_released;
@@ -56,6 +57,7 @@ static unsigned deadline_elapsed_ms;
 void sysexec_stub_reset(void) {
     memset(run_fail_needle, 0, sizeof run_fail_needle);
     run_fail_status = 0;
+    memset(run_timeout_needle, 0, sizeof run_timeout_needle);
     pthread_mutex_lock(&run_block_lock);
     memset(run_block_needle, 0, sizeof run_block_needle);
     run_blocked = 0;
@@ -108,6 +110,12 @@ void sysexec_stub_fail_run(const char *needle, int status) {
     pthread_mutex_unlock(&run_block_lock);
 }
 
+void sysexec_stub_timeout_run(const char *needle) {
+    pthread_mutex_lock(&run_block_lock);
+    snprintf(run_timeout_needle, sizeof run_timeout_needle, "%s", needle);
+    pthread_mutex_unlock(&run_block_lock);
+}
+
 int sysexec_stub_count_run(const char *needle) {
     int count = 0;
     pthread_mutex_lock(&run_block_lock);
@@ -152,6 +160,11 @@ void sysexec_stub_add_popen(const char *needle, const char *output, int close_st
     snprintf(rule->needle, sizeof rule->needle, "%s", needle);
     snprintf(rule->output, sizeof rule->output, "%s", output);
     rule->close_status = close_status;
+}
+
+void sysexec_stub_clear_popen_rules(void) {
+    memset(popen_rules, 0, sizeof popen_rules);
+    popen_rule_count = 0;
 }
 
 int sysexec_run_constant(const char *cmd) {
@@ -204,6 +217,33 @@ int sysexec_run_argv(const char *path, const char *const argv[], int quiet) {
     return 0;
 }
 
+int sysexec_run_argv_timeout(const char *path, const char *const argv[], int quiet,
+                             unsigned timeout_ms, int *timed_out) {
+    (void)timeout_ms;
+    if (timed_out) *timed_out = 0;
+    char display[600] = {0};
+    for (int i = 0; argv[i]; i++) {
+        size_t used = strlen(display);
+        if (used + 1 >= sizeof display) break;
+        snprintf(display + used, sizeof display - used, "%s%s", i ? " " : "", argv[i]);
+    }
+    if (run_timeout_needle[0] && strstr(display, run_timeout_needle)) {
+        (void)sysexec_run_argv(path, argv, quiet);
+        if (timed_out) *timed_out = 1;
+        return -2;
+    }
+    return sysexec_run_argv(path, argv, quiet);
+}
+
+int sysexec_start_argv(const char *path, const char *const argv[], int quiet, pid_t *pid) {
+    if (!pid || sysexec_run_argv(path, argv, quiet) != 0) return -1;
+    *pid = 4242;
+    return 0;
+}
+
+int sysexec_poll_argv(pid_t pid, int *status) { (void)pid; (void)status; return -1; }
+int sysexec_terminate_argv(pid_t pid, int *status) { (void)pid; (void)status; return -1; }
+
 static const popen_rule *find_argv_rule(const char *const argv[]) {
     char display[600] = {0};
     for (int i = 0; argv[i]; i++) {
@@ -224,6 +264,25 @@ int sysexec_capture_argv(const char *path, const char *const argv[], char *outpu
     snprintf(output, capacity, "%s", rule->output);
     last_pclose_offset = (long)strlen(output);
     return rule->close_status;
+}
+
+int sysexec_capture_argv_timeout(const char *path, const char *const argv[], char *output,
+                                 size_t capacity, unsigned timeout_ms, int *timed_out) {
+    (void)timeout_ms;
+    if (timed_out) *timed_out = 0;
+    char display[600] = {0};
+    for (int i = 0; argv[i]; i++) {
+        size_t used = strlen(display);
+        if (used + 1 >= sizeof display) break;
+        snprintf(display + used, sizeof display - used, "%s%s", i ? " " : "", argv[i]);
+    }
+    if (run_timeout_needle[0] && strstr(display, run_timeout_needle)) {
+        (void)sysexec_run_argv(path, argv, 0);
+        if (output && capacity) output[0] = '\0';
+        if (timed_out) *timed_out = 1;
+        return -2;
+    }
+    return sysexec_capture_argv(path, argv, output, capacity);
 }
 
 int sysexec_stream_argv(const char *path, const char *const argv[], int output_fd) {

@@ -17,7 +17,7 @@ Newline-terminated ASCII on the abstract UNIX socket `@hapaneld-helper`. One or 
 
 | Command | Effect | Reply |
 | --- | --- | --- |
-| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.2.0 proto=1.2` / `ERR` when arguments are supplied |
+| `VERSION` | read the helper identity without touching hardware | `HELPER version=1.3.0 proto=1.3` / `ERR` when arguments are supplied |
 | `RGB <r> <g> <b>` | set LED colour (each 0..255) | `OK` / `ERR` |
 | `OFF` | LED off | `OK` / `ERR` |
 | `BTN <0..255>` | button-backlight brightness | `OK` / `ERR` |
@@ -156,13 +156,16 @@ Install or upgrade the daemon on every rooted supported panel. Sandbox-walled pa
 ./helper/install-daemon.sh <ip:5555>
 ```
 
-Do not execute the adb/shell-owned staging copy from `/data/local/tmp` as root. The installer hashes the staged input, selects a verified boot-persistence runner before stopping the previous helper, publishes only a root-owned copy, verifies the exact Companion protocol response, and rolls back to the prior binary/service if the replacement does not start correctly. The main provisioner performs the same helper migration automatically when installing a current app release.
+Do not execute the adb/shell-owned staging copy from `/data/local/tmp` as root. The installer hashes it, copies it to a transaction-unique root-owned candidate, and installs the one canonical live binary as `root:root` mode `0700` at `/data/local/hapaneld-helper`. After stopping the prior daemon it revalidates the complete live topology against its recorded snapshot, then asks the staged candidate for the exact `--replacement-safe` verdict before the live rename. Post-snapshot topology drift is a fail-closed hold: no live file is overwritten and the stale snapshots are never rolled back over the other writer. Native `GUARD_ARMED` is disambiguated through the fixed APK-coupled R1 custody records: present R1 custody retains the prepared journal without rollback, while ordinary armed Guard state with no R1 custody immediately restores and restarts the exact prior helper topology. After a safe swap, the installer launches one supervisor and requires the exact Companion capabilities, autonomous supervised Guard DB capabilities, empty Guard DB status, and build identity before committing.
+
+The standalone transaction journal is version 3 and records the canonical binary, the selected boot registration, every historical helper binary/registration, and authenticated recovery snapshots. Its prepared/mutating/target phases make an interrupted migration recoverable without treating unknown live bytes as this installer's output. A stale v3 rollback checks the same five fixed native R1 custody paths before publishing rollback intent and again before every live restore; custody retains the journal and leaves all helper paths untouched. Existing version 1 and 2 standalone journals retain their original, explicitly version-dispatched topology semantics; because version 1 did not record its target-registration hash, post-swap v1 recovery admits only the exact two registration byte streams that v1 ever published. Across every journal version, an absent record means neither a directory entry nor a broken symlink. Every version publishes rollback bytes through an authenticated same-directory temporary whose hash, ownership, and mode are verified and synced before atomic rename and parent-directory durability, so a power cut during copy leaves either the previous live file or the complete recovery file—not a partial authoritative binary.
 
 ## Boot persistence (init service)
 
-The daemon must (re)start in a root domain after every reboot, and the app cannot bootstrap that service itself. `helper/install-daemon.sh` probes the panel and chooses one of two authenticated, rollback-capable paths:
+The daemon must (re)start in a root domain after every reboot, and the app cannot bootstrap that service itself. Every supported route executes `/data/local/hapaneld-helper --supervise`; system, vendor, and systemless storage contain boot registrations only. `helper/install-daemon.sh` chooses the first verified registration route:
 
-- A writable-system/userdebug panel receives `/system/bin/hapaneld-helper` plus the init service in `/system/etc/init`.
-- A read-only-system panel is accepted only when a supported Magisk, KernelSU, or APatch service runner is detected; it receives a root-owned binary under `/data/adb/hapaneld` and a `service.d` launcher.
+- A writable-system/userdebug panel receives the init registration in `/system/etc/init`.
+- Otherwise, a writable vendor init directory receives the same registration in `/vendor/etc/init`.
+- Otherwise, a read-only-system panel is accepted only when a supported Magisk, KernelSU, or APatch service runner is detected; it receives a `service.d` launcher under `/data/adb/service.d`.
 
-If neither persistence path is verified, installation stops without replacing or stopping the existing helper. Reboot the panel when convenient after installation to confirm boot persistence.
+The transaction snapshots and removes historical `/system/bin/hapaneld-helper`, `/data/adb/hapaneld/hapaneld-helper`, old init/service.d registrations, and the former `hapaneld-ledd` layout. They are restored byte-for-byte if migration fails. If no registration route is verified, installation stops without replacing or stopping the existing helper. Reboot the panel when convenient after installation to confirm boot persistence.

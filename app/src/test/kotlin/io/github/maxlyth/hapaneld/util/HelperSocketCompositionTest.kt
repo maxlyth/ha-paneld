@@ -51,7 +51,7 @@ class HelperSocketCompositionTest {
         val daemon = SocketDaemon(socketPath)
 
         assertTrue(daemon.available())
-        assertEquals("HELPER version=1.2.0 proto=1.2", daemon.send("VERSION"))
+        assertEquals("HELPER version=1.3.0 proto=1.3", daemon.send("VERSION"))
         assertEquals("ERR", daemon.send("PINGEXTRA"))
         assertEquals("OK", daemon.sendLong("RELOAD io.example.dashboard", 5_000).replyValue())
     }
@@ -66,7 +66,7 @@ class HelperSocketCompositionTest {
     fun appWireCompatibilityCorpusCrossesKotlinAndNativeHelper() {
         val daemon = SocketDaemon(socketPath)
         listOf(
-            WireTranscript("VERSION", "HELPER version=1.2.0 proto=1.2"),
+            WireTranscript("VERSION", "HELPER version=1.3.0 proto=1.3"),
             WireTranscript("PING", "OK"),
             WireTranscript("BUILDID", "BUILDID development"),
             WireTranscript("COMPANIONCAPS", "COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL"),

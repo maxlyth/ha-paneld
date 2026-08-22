@@ -4,6 +4,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import io.github.maxlyth.hapaneld.dashboard.DatabaseCompatibility
+import io.github.maxlyth.hapaneld.dashboard.DatabaseCompatibilityBoundary
+import io.github.maxlyth.hapaneld.dashboard.DatabaseCompatibilityDecision
+import io.github.maxlyth.hapaneld.dashboard.DatabaseOwnerState
 import io.github.maxlyth.hapaneld.control.Su
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
@@ -13,6 +17,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Shared privileged APK installer with a **pinned signer + package allowlist**. This is NOT a generic
@@ -32,6 +37,7 @@ import java.security.MessageDigest
 object AppInstaller {
     data class Pin(val pkg: String, val certSha256: String, val apkSha256: String? = null)
     internal enum class InstallRoute { SU, DAEMON, SHIZUKU, NONE }
+    internal enum class SelfInstallDatabaseDisposition { DIRECT, RECOVER }
 
     // Pinned signers (public certificate fingerprints — NOT secrets).
     val HA_PANELD = Pin("io.github.maxlyth.hapaneld", "ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339")
@@ -40,6 +46,43 @@ object AppInstaller {
     private const val TAG = "ha-paneld/install"
     private const val MAX_APK_DOWNLOAD_BYTES = 512L * 1024L * 1024L
     private const val SELF_REPLACE_STATE_FLUSH_MS = 10_000L
+
+    /** Exact, authenticated and database-admitted self APK. Owns [apk] until consumed or closed. */
+    internal class PreparedSelfInstall internal constructor(
+        private val apk: File,
+        private val expectedSha256: String,
+        internal val version: String,
+        internal val boundary: DatabaseCompatibilityApkContract.Boundary,
+        internal val databaseDisposition: SelfInstallDatabaseDisposition,
+        internal val allowShizuku: Boolean,
+    ) : AutoCloseable {
+        private val consumed = AtomicBoolean(false)
+        private val requireDirectAtConsumption = AtomicBoolean(false)
+
+        internal fun restrictToDirectConsumption() {
+            check(!consumed.get()) { "prepared install already consumed" }
+            requireDirectAtConsumption.set(true)
+        }
+
+        internal fun requiresDirectAtConsumption(): Boolean = requireDirectAtConsumption.get()
+
+        internal fun isAvailable(): Boolean = !consumed.get()
+
+        internal fun apkPath(): String = apk.absolutePath
+
+        internal fun consume(): File? = if (consumed.compareAndSet(false, true)) apk else null
+
+        internal fun bytesUnchanged(): Boolean = apk.isFile && sha256(apk) == expectedSha256
+
+        override fun close() {
+            if (consumed.compareAndSet(false, true)) apk.delete()
+        }
+    }
+
+    internal sealed interface SelfInstallPreparation {
+        data class Ready(val prepared: PreparedSelfInstall) : SelfInstallPreparation
+        data class Failed(val outcome: InstallOutcome.Failure) : SelfInstallPreparation
+    }
     fun installedVersion(context: Context, pkg: String): String =
         runCatching { context.packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrElse { "" }
 
@@ -55,6 +98,9 @@ object AppInstaller {
         pin: Pin,
         allowShizuku: Boolean = false,
     ): InstallOutcome = withContext(Dispatchers.IO) {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+            return@withContext guardDbInstallBlocked()
+        }
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
@@ -93,29 +139,310 @@ object AppInstaller {
         }
     }
 
-    /** Metadata read from an APK file (no install) — for the Install-tab "upload an APK" preview. */
-    data class ApkInfo(val pkg: String, val version: String, val signerSha256: String?)
+    /**
+     * Stage one exact self-update candidate and prove its package, signer, database contract and live
+     * database compatibility without mutating configuration, helpers or packages. The returned owned
+     * capability is bound to the candidate digest and may be consumed exactly once by [installPrepared].
+     */
+    internal suspend fun prepareSelfInstall(
+        context: Context,
+        url: String,
+        allowShizuku: Boolean = true,
+    ): SelfInstallPreparation = withContext(Dispatchers.IO) {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+            return@withContext SelfInstallPreparation.Failed(guardDbInstallBlocked())
+        }
+        if (selectInstallRoute(Su.available(), HelperClient.available(), ShizukuBridge.available(), allowShizuku) ==
+            InstallRoute.NONE
+        ) {
+            return@withContext SelfInstallPreparation.Failed(
+                InstallOutcome.Retryable("skipped: no permitted installer"),
+            )
+        }
+        val size = contentLength(url)
+        if (size > MAX_APK_DOWNLOAD_BYTES) {
+            return@withContext SelfInstallPreparation.Failed(InstallOutcome.Retryable("download too large"))
+        }
+        val limit = downloadCeiling(size, context.cacheDir.usableSpace)
+        if (limit <= 0L) {
+            return@withContext SelfInstallPreparation.Failed(InstallOutcome.Retryable("insufficient storage"))
+        }
+        val apk = runCatching { File.createTempFile("hapaneld-prepared-", ".apk", context.cacheDir) }
+            .getOrElse {
+                return@withContext SelfInstallPreparation.Failed(
+                    InstallOutcome.Retryable("download staging failed"),
+                )
+            }
+        withStagedFiles { staged ->
+            staged.stage(apk)
+            if (download(url, apk, limit) != DownloadResult.Succeeded) {
+                return@withStagedFiles SelfInstallPreparation.Failed(
+                    InstallOutcome.Retryable("download failed"),
+                )
+            }
+            verifyApk(context, apk.absolutePath, HA_PANELD)?.let { why ->
+                return@withStagedFiles SelfInstallPreparation.Failed(
+                    InstallOutcome.Rejected("refused ($why)"),
+                )
+            }
+            val info = inspect(context, apk.absolutePath)
+            var admittedBoundary: DatabaseCompatibilityApkContract.Boundary? = null
+            var admittedDisposition: SelfInstallDatabaseDisposition? = null
+            val refusal = selfReplacementRefusal(info) { boundary ->
+                val decision = compatibilityDecision(context, boundary)
+                compatibilityDecisionRefusal(decision).also { why ->
+                    if (why == null) {
+                        admittedBoundary = boundary
+                        admittedDisposition = when (decision) {
+                            is DatabaseCompatibilityDecision.Direct -> SelfInstallDatabaseDisposition.DIRECT
+                            is DatabaseCompatibilityDecision.Recover -> SelfInstallDatabaseDisposition.RECOVER
+                            else -> null
+                        }
+                    }
+                }
+            }
+            if (refusal != null || admittedBoundary == null || admittedDisposition == null) {
+                return@withStagedFiles SelfInstallPreparation.Failed(
+                    InstallOutcome.Rejected("refused (${refusal ?: "database compatibility could not be proven"})"),
+                )
+            }
+            val prepared = PreparedSelfInstall(
+                apk = apk,
+                expectedSha256 = sha256(apk),
+                version = requireNotNull(info).version,
+                boundary = requireNotNull(admittedBoundary),
+                databaseDisposition = requireNotNull(admittedDisposition),
+                allowShizuku = allowShizuku,
+            )
+            staged.commit()
+            SelfInstallPreparation.Ready(prepared)
+        }
+    }
+
+    /** Consume the exact staged capability without resolving, downloading or observing a second APK. */
+    internal suspend fun installPrepared(
+        context: Context,
+        prepared: PreparedSelfInstall,
+    ): InstallOutcome = withContext(Dispatchers.IO) {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+            return@withContext guardDbInstallBlocked()
+        }
+        val apk = prepared.consume()
+            ?: return@withContext InstallOutcome.Rejected("refused (prepared install already consumed)")
+        try {
+            if (!prepared.bytesUnchanged()) {
+                return@withContext InstallOutcome.Rejected("refused (prepared APK changed after admission)")
+            }
+            installLocalApkAdmitted(
+                context = context,
+                apk = apk,
+                allowShizuku = prepared.allowShizuku,
+                admittedBoundary = prepared.boundary,
+                requireDirectDatabase = prepared.requiresDirectAtConsumption(),
+            )
+        } finally {
+            // The capability is already consumed, so close() cannot own exceptional cleanup now.
+            apk.delete()
+        }
+    }
+
+    /** Metadata read from an exact APK file (no install), including its signed database boundary. */
+    internal data class ApkInfo(
+        val pkg: String,
+        val version: String,
+        val signerSha256: String?,
+        val databaseCompatibility: DatabaseCompatibilityApkContract.Parsed,
+        internal val signerSha256s: Set<String> = setOfNotNull(signerSha256),
+        val versionCode: Long = 0L,
+    )
 
     /** Parse an APK's package name, versionName and signer SHA-256 without installing it. Null if the file
      *  isn't a readable APK. Used to show the user WHAT they're about to install before they confirm. */
     @Suppress("DEPRECATION") // GET_SIGNATURES / PackageInfo.signatures for API < 28
-    fun inspect(context: Context, apkPath: String): ApkInfo? {
+    internal fun inspect(context: Context, apkPath: String): ApkInfo? {
         val pm = context.packageManager
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+        val flags = PackageManager.GET_META_DATA or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
             PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
         val info = pm.getPackageArchiveInfo(apkPath, flags) ?: return null
         val sigs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
             info.signingInfo?.apkContentsSigners else info.signatures
-        val md = MessageDigest.getInstance("SHA-256")
-        val sha = sigs?.firstOrNull()?.let { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }
-        return ApkInfo(info.packageName ?: "?", info.versionName ?: "?", sha)
+        val signerHashes = sigs.orEmpty().mapTo(linkedSetOf()) { signature ->
+            MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+                .joinToString("") { byte -> "%02x".format(byte) }
+        }
+        val metadata = info.applicationInfo?.metaData
+        val databaseCompatibility = if (metadata?.containsKey(DatabaseCompatibilityApkContract.METADATA_NAME) == true) {
+            when (val raw = metadata.get(DatabaseCompatibilityApkContract.METADATA_NAME)) {
+                is String -> DatabaseCompatibilityApkContract.parse(raw)
+                else -> DatabaseCompatibilityApkContract.Parsed.Malformed(
+                    "database compatibility metadata is not a string",
+                )
+            }
+        } else {
+            DatabaseCompatibilityApkContract.Parsed.Missing
+        }
+        return ApkInfo(
+            info.packageName,
+            info.versionName ?: "?",
+            signerHashes.firstOrNull(),
+            databaseCompatibility,
+            signerHashes,
+            info.versionCode.toLong(),
+        )
     }
 
     /**
+     * Authenticate and parse an exact self-replacement candidate before consulting database state.
+     * The caller supplies the final compatibility decision so this pure ordering seam is testable
+     * without an Android filesystem. Null means admitted; a non-null value is the refusal reason.
+     */
+    internal fun selfReplacementRefusal(
+        info: ApkInfo?,
+        decideCompatibility: (DatabaseCompatibilityApkContract.Boundary) -> String?,
+    ): String? {
+        if (info == null) return "unreadable candidate APK"
+        if (info.pkg != HA_PANELD.pkg) return "candidate is not the running package"
+        if (info.signerSha256s.size != 1 ||
+            !info.signerSha256s.single().equals(HA_PANELD.certSha256, ignoreCase = true)
+        ) {
+            return "candidate must have exactly the pinned running-package signer"
+        }
+        val boundary = when (val parsed = info.databaseCompatibility) {
+            DatabaseCompatibilityApkContract.Parsed.Missing -> return "candidate database compatibility metadata is missing"
+            is DatabaseCompatibilityApkContract.Parsed.Malformed -> return parsed.reason
+            is DatabaseCompatibilityApkContract.Parsed.Valid -> parsed.boundary
+        }
+        return decideCompatibility(boundary)
+    }
+
+    /** Re-authenticate the exact candidate and re-run current database observation at consumption. */
+    internal fun preparedSelfReplacementRefusal(
+        info: ApkInfo?,
+        admittedBoundary: DatabaseCompatibilityApkContract.Boundary,
+        decideCurrentCompatibility: (DatabaseCompatibilityApkContract.Boundary) -> String?,
+    ): String? = selfReplacementRefusal(info) { exactBoundary ->
+        if (exactBoundary != admittedBoundary) {
+            "prepared APK database boundary changed after admission"
+        } else {
+            decideCurrentCompatibility(exactBoundary)
+        }
+    }
+
+    /**
+     * Decide whether a local candidate may reach installer-route selection. An admitted boundary is an
+     * assertion that this exact file is a prepared self replacement, so unreadable or wrong-package
+     * metadata can never silently demote it to the unrestricted non-self upload path. Unprepared files
+     * must still be readable APKs before any privileged installer is selected.
+     */
+    internal fun localInstallCandidateRefusal(
+        info: ApkInfo?,
+        runningPackage: String,
+        admittedBoundary: DatabaseCompatibilityApkContract.Boundary?,
+        decideCurrentCompatibility: (DatabaseCompatibilityApkContract.Boundary) -> String?,
+    ): String? {
+        if (info == null) return "unreadable candidate APK"
+        if (admittedBoundary != null) {
+            if (info.pkg != runningPackage) return "prepared candidate is not the running package"
+            return preparedSelfReplacementRefusal(
+                info,
+                admittedBoundary,
+                decideCurrentCompatibility,
+            )
+        }
+        if (info.pkg != runningPackage) return null
+        return selfReplacementRefusal(info, decideCurrentCompatibility)
+    }
+
+    /** Pure fail-closed seam for the final config-commit admission of a prepared candidate. */
+    internal fun preparedDirectConfigCommitRefusal(
+        available: Boolean,
+        bytesUnchanged: Boolean,
+        info: ApkInfo?,
+        admittedBoundary: DatabaseCompatibilityApkContract.Boundary,
+        decideCurrentCompatibility: (DatabaseCompatibilityApkContract.Boundary) -> String?,
+    ): String? {
+        if (!available) return "prepared install already consumed"
+        if (!bytesUnchanged) return "prepared APK changed after admission"
+        return preparedSelfReplacementRefusal(
+            info,
+            admittedBoundary,
+            decideCurrentCompatibility,
+        )
+    }
+
+    /**
+     * Re-hash and re-authenticate the exact staged APK, then observe the current database and require a
+     * DIRECT decision. This is deliberately synchronous so a config transaction can call it immediately
+     * before its atomic commit. The install-consumption gate repeats the same proof later.
+     */
+    internal fun revalidatePreparedDirectForConfigCommit(
+        context: Context,
+        prepared: PreparedSelfInstall,
+    ): String? = try {
+        if (!prepared.requiresDirectAtConsumption()) {
+            "prepared install is not restricted to direct database consumption"
+        } else {
+            val available = prepared.isAvailable()
+            val bytesUnchanged = available && prepared.bytesUnchanged()
+            val info = if (bytesUnchanged) inspect(context, prepared.apkPath()) else null
+            // DB_COMPAT_MUTATION_ANCHOR: CONFIG_COMMIT_REVALIDATE
+            preparedDirectConfigCommitRefusal(
+                available = available,
+                bytesUnchanged = bytesUnchanged,
+                info = info,
+                admittedBoundary = prepared.boundary,
+            ) { exactBoundary ->
+                compatibilityRefusal(context, exactBoundary, requireDirect = true)
+            }
+        }
+    } catch (_: Exception) {
+        "prepared APK and database compatibility could not be proven"
+    }
+
+    private fun compatibilityRefusal(
+        context: Context,
+        boundary: DatabaseCompatibilityApkContract.Boundary,
+        requireDirect: Boolean = false,
+    ): String? = compatibilityDecisionRefusal(
+        compatibilityDecision(context, boundary),
+        requireDirect = requireDirect,
+    )
+
+    private fun compatibilityDecision(
+        context: Context,
+        boundary: DatabaseCompatibilityApkContract.Boundary,
+    ): DatabaseCompatibilityDecision =
+        DatabaseCompatibility.observeAndDecide(
+            context,
+            DatabaseCompatibilityBoundary(
+                boundary.formatVersion,
+                boundary.databaseName,
+                boundary.minimumSchema,
+                boundary.maximumSchema,
+            ),
+            DatabaseOwnerState.PACKAGE_PRESENT,
+        )
+
+    internal fun compatibilityDecisionRefusal(
+        decision: DatabaseCompatibilityDecision,
+        requireDirect: Boolean = false,
+    ): String? =
+        when (decision) {
+            is DatabaseCompatibilityDecision.Direct -> null
+            is DatabaseCompatibilityDecision.Recover -> if (requireDirect) {
+                "database compatibility changed from direct to recovery after configuration admission"
+            } else null
+            DatabaseCompatibilityDecision.Fresh -> "installed package database is not proven present"
+            is DatabaseCompatibilityDecision.Refuse ->
+                "database compatibility ${decision.reason.name.lowercase().replace('_', ' ')}"
+        }
+
+    /**
      * Install an APK already on local disk through one permitted route, then delete it. Shared install tail used by both the
-     * pinned-download path ([install]) and the Install-tab APK upload. **No signer pin is applied here** —
-     * [install] verifies BEFORE calling this; the upload path installs whatever the user explicitly chose
-     * (surfaced package/version/signer + confirmed first). Streams straight into `pm install -S` or over
+     * pinned-download path ([install]) and the Install-tab APK upload. [install] applies its selected pin
+     * before calling this. An uploaded candidate for the running package is independently
+     * signer-authenticated and database-admitted here before any mutation; non-self uploads retain their
+     * explicit user-confirmation policy. Streams straight into `pm install -S` or over
      * the peer-uid-locked daemon socket; an older daemon falls back to its path-based `INSTALL` verb.
      * Shizuku is considered only when [allowShizuku] is explicitly true; arbitrary upload callers keep
      * the default false.
@@ -125,7 +452,44 @@ object AppInstaller {
         context: Context,
         apk: File,
         allowShizuku: Boolean = false,
+    ): InstallOutcome = if (GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+        installLocalApkAdmitted(context, apk, allowShizuku, admittedBoundary = null)
+    } else {
+        guardDbInstallBlocked()
+    }
+
+    private suspend fun installLocalApkAdmitted(
+        context: Context,
+        apk: File,
+        allowShizuku: Boolean,
+        admittedBoundary: DatabaseCompatibilityApkContract.Boundary? = null,
+        requireDirectDatabase: Boolean = false,
     ): InstallOutcome = withContext(Dispatchers.IO) {
+        if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
+            return@withContext guardDbInstallBlocked()
+        }
+        val info = inspect(context, apk.absolutePath)
+        // DB_COMPAT_MUTATION_ANCHOR: IN_APP_GATE
+        val refusal = localInstallCandidateRefusal(
+            info = info,
+            runningPackage = context.packageName,
+            admittedBoundary = admittedBoundary,
+        ) { exactBoundary ->
+            // Preparation protects configuration commit ordering, but database/recovery state
+            // can change while the staged capability is held. Re-observe immediately before
+            // the first self-replacement mutation; matching APK bytes are not current DB proof.
+            compatibilityRefusal(
+                context,
+                exactBoundary,
+                requireDirect = admittedBoundary != null && requireDirectDatabase,
+            )
+        }
+        if (refusal != null) {
+            apk.delete()
+            Log.w(TAG, "refused local install: $refusal")
+            return@withContext InstallOutcome.Rejected("refused ($refusal)")
+        }
+        val replacingSelf = requireNotNull(info).pkg == context.packageName
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
@@ -134,7 +498,7 @@ object AppInstaller {
             apk.delete()
             return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
         }
-        val replacingSelf = inspect(context, apk.absolutePath)?.pkg == context.packageName
+        // DB_COMPAT_MUTATION_ANCHOR: IN_APP_FIRST_MUTATION
         val stateQuiescence = if (replacingSelf) {
             prepareSelfReplace(
                 snapshot = { ConfigUpgradeBackup.snapshot(context) },
@@ -195,6 +559,9 @@ object AppInstaller {
             finishSelfReplaceQuiescence(stateQuiescence, installSucceeded)
         }
     }
+
+    private fun guardDbInstallBlocked(): InstallOutcome.Retryable =
+        InstallOutcome.Retryable("blocked: Guard DB maintenance owns package mutations")
 
     /**
      * Classify a `pm install` failure [output] line into a typed [InstallOutcome.Failure]. A

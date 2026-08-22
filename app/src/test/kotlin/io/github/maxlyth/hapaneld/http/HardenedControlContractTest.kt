@@ -109,10 +109,49 @@ class HardenedControlContractTest {
         assertTrue(enableHardened.contains("classic network ADB"))
         assertTrue(enableHardened.contains("Android Wireless debugging"))
         assertTrue(enableHardened.contains("withContext(Dispatchers.IO)"))
+        assertTrue(enableHardened.contains("RemoteDebugSecurityTransitionGate.mutate"))
         assertTrue(enableHardened.contains("CdpRelay.stopAndVerifyThen(this@ConfigActivity)"))
-        assertTrue(enableHardened.contains("WebView.setWebContentsDebuggingEnabled(false)"))
-        assertTrue(enableHardened.indexOf("CdpRelay.stopAndVerifyThen") < enableHardened.indexOf("setSecurityMode"))
+        assertTrue(enableHardened.contains("commitHardenedWhenRemoteAdbInactive"))
+        assertTrue(
+            enableHardened.indexOf("RemoteDebugSecurityTransitionGate.mutate") <
+                enableHardened.indexOf("CdpRelay.stopAndVerifyThen"),
+        )
+        assertTrue(
+            enableHardened.indexOf("CdpRelay.stopAndVerifyThen") <
+                enableHardened.indexOf("commitHardenedWhenRemoteAdbInactive"),
+        )
+        assertTrue(
+            enableHardened.indexOf("commitHardenedWhenRemoteAdbInactive") <
+                enableHardened.indexOf("setSecurityMode"),
+        )
         assertFalse(enableHardened.contains("port 5555"))
+
+        val adb = source("control/AdbController.kt")
+        assertTrue(adb.contains("noBackupFilesDir.resolve(NETWORK_ADB_DISABLE_MARKER_FILE)"))
+        assertTrue(adb.contains("NETWORK_ADB_DISABLE_MARKER_FILE = \"network-adb-disable.v1\""))
+        val set = adb.substring(adb.indexOf("fun set(on: Boolean)"), adb.indexOf("fun reassert()"))
+        assertTrue(set.contains("RemoteDebugSecurityTransitionGate.mutate"))
+        assertTrue(set.contains("if (disableMarker.isPending())"))
+        assertTrue(set.indexOf("if (disableMarker.isPending())") < set.indexOf("apply()"))
+        val reassert = adb.substring(adb.indexOf("fun reassert()"), adb.indexOf("private fun apply()"))
+        assertTrue(reassert.contains("RemoteDebugSecurityTransitionGate.mutate"))
+        assertTrue(reassert.contains("if (disableMarker.isPending())"))
+        assertTrue(reassert.indexOf("completeDisableTransition()") < reassert.indexOf("apply()"))
+        val hardenedStart = adb.indexOf("internal fun commitHardenedWhenRemoteAdbInactive")
+        val hardened = adb.substring(
+            hardenedStart,
+            adb.indexOf("private fun completeDisableTransition", hardenedStart),
+        )
+        assertTrue(hardened.contains("RemoteDebugSecurityTransitionGate.mutate"))
+        val admission = adb.substring(
+            adb.indexOf("internal fun completeHardenedNetworkAdbAdmission"),
+            adb.indexOf("internal fun shouldReassertNetworkAdb"),
+        )
+        assertTrue(admission.contains("ownershipEnabled() || !disableAbsentDurably()"))
+        assertTrue(
+            admission.indexOf("ownershipEnabled() || !disableAbsentDurably()") <
+                admission.indexOf("commitHardened()"),
+        )
 
         val dashboard = source("DashboardActivity.kt")
         assertTrue(
@@ -121,7 +160,7 @@ class HardenedControlContractTest {
             ),
         )
         val relay = source("control/CdpRelay.kt")
-        assertTrue(relay.contains("if (Config(ctx).hardenedSecurityEnabled) return \"failed\""))
+        assertTrue(relay.contains("if (Config(ctx).hardenedSecurityEnabled) return@mutate \"failed\""))
     }
 
     @Test fun powerSafetyReductionsAuthorizeBeforeConfigMutationAndMqttCannotBypassApproval() {

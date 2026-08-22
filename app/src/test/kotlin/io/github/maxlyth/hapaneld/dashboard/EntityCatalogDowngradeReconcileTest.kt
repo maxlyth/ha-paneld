@@ -39,11 +39,231 @@ class EntityCatalogDowngradeReconcileTest {
     private fun superseded(version: Int) = supersededFile(target, version)
     private fun premigFiles() = dir.listFiles()!!.filter { it.name.contains(".$PREMIGRATE_TAG") }
 
+    /** Legacy-shaped test adapter; every call still crosses the new finite compatibility authority. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun reconcilePreOpen(
+        target: File,
+        currentVersion: Int,
+        onDiskVersion: Int?,
+        keepBackups: Int = 2,
+        maxBackupBytes: Long = 64L * 1024 * 1024,
+        freeSpace: (File) -> Long = { it.usableSpace },
+        checkpoint: (File) -> Boolean = { true },
+        minimumSupportedVersion: Int = 11,
+        minimumCompatibleVersion: Int = 14,
+        vaultConfig: (File) -> Unit = {},
+        revalidateObservation: ((DatabaseCompatibilityObservation) -> DatabaseCompatibilityObservation)? = null,
+    ): SchemaReconcile {
+        val files = target.parentFile?.listFiles() ?: emptyArray()
+        val recoveriesWithMain = files.mapNotNull { file ->
+            val match = Regex("^${Regex.escape(target.name)}\\.v(\\d+)\\.(premigrate|superseded)$")
+                .matchEntire(file.name) ?: return@mapNotNull null
+            val named = match.groupValues[1].toInt()
+            val valid = file.isFile && runCatching {
+                file.inputStream().use { input ->
+                    ByteArray(magic.size).also { input.read(it) }.contentEquals(magic)
+                }
+            }.getOrDefault(false)
+            RecoveryDatabaseObservation(
+                file,
+                if (match.groupValues[2] == "premigrate") {
+                    RecoveryDatabaseKind.PREMIGRATE
+                } else {
+                    RecoveryDatabaseKind.SUPERSEDED
+                },
+                named,
+                named.takeIf { valid },
+                valid,
+                file.isFile,
+                standalone = listOf("-wal", "-shm", "-journal", ".tmp")
+                    .none { suffix -> File(file.path + suffix).exists() },
+                sourceSha256 = file.takeIf { it.isFile }?.readBytes()?.contentHashCode()?.toString(),
+                sourceBytes = file.takeIf { it.isFile }?.length(),
+            )
+        }
+        val mainNames = recoveriesWithMain.mapTo(mutableSetOf()) { it.file.name }
+        val companionPattern = Regex(
+            "^(${Regex.escape(target.name)}\\.v([^.]+)\\.(premigrate|superseded))" +
+                "(?:\\.tmp|-wal|-shm|-journal)$",
+        )
+        val incompleteClaims = files.mapNotNull { companion ->
+            val match = companionPattern.matchEntire(companion.name) ?: return@mapNotNull null
+            if (match.groupValues[1] in mainNames) return@mapNotNull null
+            RecoveryDatabaseObservation(
+                file = File(target.parentFile, match.groupValues[1]),
+                kind = if (match.groupValues[3] == "premigrate") {
+                    RecoveryDatabaseKind.PREMIGRATE
+                } else {
+                    RecoveryDatabaseKind.SUPERSEDED
+                },
+                namedSchema = match.groupValues[2].toIntOrNull(),
+                actualSchema = null,
+                integrityValid = false,
+                regularFile = false,
+                standalone = false,
+                incompleteClaim = true,
+            )
+        }.distinctBy { Triple(it.file.name, it.kind, it.namedSchema) }
+        val recoveries = recoveriesWithMain + incompleteClaims
+        val observation = DatabaseCompatibilityObservation(
+            onDiskVersion?.let(PrimaryDatabaseObservation::Readable)
+                ?: PrimaryDatabaseObservation.Missing,
+            recoveries,
+        )
+        return io.github.maxlyth.hapaneld.dashboard.reconcilePreOpen(
+            target = target,
+            boundary = DatabaseCompatibilityBoundary(1, target.name, minimumSupportedVersion, currentVersion),
+            observation = observation,
+            keepBackups = keepBackups,
+            maxBackupBytes = maxBackupBytes,
+            freeSpace = freeSpace,
+            checkpoint = checkpoint,
+            vaultConfig = vaultConfig,
+            revalidateObservation = { revalidateObservation?.invoke(observation) ?: observation },
+        )
+    }
+
+    private inline fun expectCompatibilityRefusal(block: () -> Unit): DatabaseCompatibilityException =
+        try {
+            block()
+            throw AssertionError("expected database compatibility refusal")
+        } catch (expected: DatabaseCompatibilityException) {
+            expected
+        }
+
+    private fun assertFreshRevalidationRefusesBeforeMutation(
+        label: String,
+        revealChangedState: () -> DatabaseCompatibilityObservation,
+        assertUnchanged: () -> Unit,
+    ) {
+        val mutationCalls = mutableListOf<String>()
+        var revalidations = 0
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = null,
+                checkpoint = { mutationCalls += "checkpoint"; true },
+                vaultConfig = { mutationCalls += "vault" },
+                revalidateObservation = {
+                    revalidations++
+                    revealChangedState()
+                },
+            )
+        }
+
+        assertEquals(label, DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION, refusal.refusal)
+        assertEquals("$label must be observed once at the last pre-open gate", 1, revalidations)
+        assertTrue("$label must refuse before compatibility helpers run", mutationCalls.isEmpty())
+        assertUnchanged()
+    }
+
     @Test fun freshInstallNoFileIsNoOp() {
-        val result = reconcilePreOpen(target, currentVersion = 11, onDiskVersion = null)
+        var revalidations = 0
+        val result = reconcilePreOpen(
+            target,
+            currentVersion = 11,
+            onDiskVersion = null,
+            revalidateObservation = { observed ->
+                revalidations++
+                observed
+            },
+        )
+
         assertEquals(SchemaReconcileAction.NONE, result.action)
+        assertEquals("fresh startup must cross the last pre-open observation gate exactly once", 1, revalidations)
         assertFalse(target.exists())
         assertTrue(dir.listFiles()!!.isEmpty())
+    }
+
+    @Test fun freshStartupRefusesUnreadablePrimaryBeforeOpenOrCreate() {
+        assertFreshRevalidationRefusesBeforeMutation(
+            label = "unreadable primary",
+            revealChangedState = {
+                target.writeText("unreadable")
+                DatabaseCompatibilityObservation(
+                    PrimaryDatabaseObservation.Unreadable("synthetic inspection failure"),
+                    emptyList(),
+                )
+            },
+            assertUnchanged = { assertEquals("unreadable", target.readText()) },
+        )
+    }
+
+    @Test fun freshStartupRefusesTooNewPrimaryBeforeOpenOrCreate() {
+        assertFreshRevalidationRefusesBeforeMutation(
+            label = "too-new primary",
+            revealChangedState = {
+                writeDb(target, "schema15-live")
+                DatabaseCompatibilityObservation(PrimaryDatabaseObservation.Readable(15), emptyList())
+            },
+            assertUnchanged = { assertEquals("schema15-live", markerOf(target)) },
+        )
+    }
+
+    @Test fun freshStartupRefusesRecoveryDatabaseBeforeOpenOrCreate() {
+        assertFreshRevalidationRefusesBeforeMutation(
+            label = "recovery database",
+            revealChangedState = {
+                writeDb(premig(14), "schema14-recovery")
+                DatabaseCompatibilityObservation(
+                    PrimaryDatabaseObservation.Missing,
+                    listOf(
+                        RecoveryDatabaseObservation(
+                            file = premig(14),
+                            kind = RecoveryDatabaseKind.PREMIGRATE,
+                            namedSchema = 14,
+                            actualSchema = 14,
+                            integrityValid = true,
+                            regularFile = true,
+                        ),
+                    ),
+                )
+            },
+            assertUnchanged = {
+                assertFalse(target.exists())
+                assertEquals("schema14-recovery", markerOf(premig(14)))
+            },
+        )
+    }
+
+    @Test fun freshStartupRefusesRetainedRecoveryStateBeforeOpenOrCreate() {
+        val retained = File(dir, "ha-paneld.db.restore.tmp")
+        assertFreshRevalidationRefusesBeforeMutation(
+            label = "retained recovery state",
+            revealChangedState = {
+                write(retained, "retained")
+                DatabaseCompatibilityObservation(
+                    PrimaryDatabaseObservation.Missing,
+                    emptyList(),
+                    retainedStateFiles = listOf(retained),
+                )
+            },
+            assertUnchanged = {
+                assertFalse(target.exists())
+                assertEquals("retained", retained.readText())
+            },
+        )
+    }
+
+    @Test fun freshStartupRefusesOrphanedSqliteSidecarBeforeOpenOrCreate() {
+        val sidecar = File(target.path + "-wal")
+        assertFreshRevalidationRefusesBeforeMutation(
+            label = "orphaned SQLite sidecar",
+            revealChangedState = {
+                write(sidecar, "orphaned-wal")
+                DatabaseCompatibilityObservation(
+                    PrimaryDatabaseObservation.Unreadable(
+                        "canonical database is missing beside a SQLite sidecar",
+                    ),
+                    emptyList(),
+                )
+            },
+            assertUnchanged = {
+                assertFalse(target.exists())
+                assertEquals("orphaned-wal", sidecar.readText())
+            },
+        )
     }
 
     @Test fun sameVersionIsNoOpAndTakesNoBackup() {
@@ -157,35 +377,48 @@ class EntityCatalogDowngradeReconcileTest {
      * the owner's configuration, so this is what stops every future version bump from being a latent
      * config-reset event. Sound only because SchemaAdditivePolicy enforces additivity.
      */
-    @Test fun aNewerButAdditivelyCompatibleDatabaseIsOpenedUntouched() {
+    @Test fun aNewerDatabaseIsNeverOpenedThroughAnOpenEndedAdditiveShortcut() {
         writeDb(target, "written-by-a-newer-build")
-        val result = reconcilePreOpen(
-            target, currentVersion = 12, onDiskVersion = 14, minimumCompatibleVersion = 11,
-        )
-        assertEquals(SchemaReconcileAction.NONE, result.action)
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(target, currentVersion = 12, onDiskVersion = 14)
+        }
+        assertEquals(DatabaseCompatibilityRefusal.PRIMARY_ABOVE_MAXIMUM_WITHOUT_PREMIGRATE, refusal.refusal)
         assertEquals("the live database must be left in place", "written-by-a-newer-build", markerOf(target))
         assertFalse("nothing may be set aside", superseded(14).exists())
-        assertTrue("no health warning: configuration was not reset", result.action == SchemaReconcileAction.NONE)
     }
 
-    @Test fun aNewerDatabaseBelowTheCompatibleBaselineStillFallsBackToTheNet() {
+    @Test fun aNewerDatabaseWithoutRecoveryRefusesWithoutMutation() {
         writeDb(target, "incompatible")
-        val result = reconcilePreOpen(
-            target, currentVersion = 12, onDiskVersion = 14, minimumCompatibleVersion = 20,
-        )
-        assertEquals(SchemaReconcileAction.PRESERVED_FRESH, result.action)
-        assertTrue("must remain recoverable", superseded(14).isFile)
+        expectCompatibilityRefusal { reconcilePreOpen(target, currentVersion = 12, onDiskVersion = 14) }
+        assertEquals("incompatible", markerOf(target))
+        assertFalse(superseded(14).exists())
     }
 
-    /** Even a tolerated open is an unusual moment, and a copy costs a fraction of a percent. */
-    @Test fun aToleratedDowngradeStillVaultsConfiguration() {
+    @Test fun runtimeRefusalStopsBeforeVaultCheckpointOrFileMutation() {
+        writeDb(target, "schema15-live")
+        val calls = mutableListOf<String>()
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = 15,
+                checkpoint = { calls += "checkpoint"; true },
+                vaultConfig = { calls += "vault" },
+            )
+        }
+        assertEquals(DatabaseCompatibilityRefusal.PRIMARY_ABOVE_MAXIMUM_WITHOUT_PREMIGRATE, refusal.refusal)
+        assertTrue(calls.isEmpty())
+        assertEquals("schema15-live", markerOf(target))
+        assertFalse(superseded(15).exists())
+    }
+
+    @Test fun aRefusedDowngradeDoesNotMutateTheConfigurationVault() {
         writeDb(target, "newer")
         val seen = mutableListOf<File>()
-        reconcilePreOpen(
-            target, currentVersion = 12, onDiskVersion = 14, minimumCompatibleVersion = 11,
-            vaultConfig = { seen += it },
-        )
-        assertEquals(listOf(target), seen)
+        expectCompatibilityRefusal {
+            reconcilePreOpen(target, currentVersion = 12, onDiskVersion = 14, vaultConfig = { seen += it })
+        }
+        assertTrue(seen.isEmpty())
     }
 
     /**
@@ -220,14 +453,16 @@ class EntityCatalogDowngradeReconcileTest {
         assertEquals("configuration must still be vaulted", listOf(target), noRoom)
     }
 
-    @Test fun configurationIsVaultedBeforeAnOutOfContractDatabaseIsSetAside() {
+    @Test fun outOfContractDatabaseRefusesBeforeVaultMutation() {
         writeDb(target, "ancient")
         val seen = mutableListOf<File>()
-        reconcilePreOpen(
-            target, currentVersion = 13, onDiskVersion = 8, minimumSupportedVersion = 11,
-            vaultConfig = { seen += it },
-        )
-        assertEquals("must run while the database is still readable", listOf(target), seen)
+        expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target, currentVersion = 13, onDiskVersion = 8, minimumSupportedVersion = 11,
+                vaultConfig = { seen += it },
+            )
+        }
+        assertTrue(seen.isEmpty())
     }
 
     @Test fun anUnchangedSchemaDoesNotRewriteTheVault() {
@@ -242,17 +477,15 @@ class EntityCatalogDowngradeReconcileTest {
      * handed to onUpgrade: its migration steps no longer exist, and a throw inside onUpgrade aborts the
      * open and takes configuration down with it.
      */
-    @Test fun belowTheSupportedFloorThePreviousDatabaseIsPreservedAndAFreshOneStarts() {
+    @Test fun belowTheSupportedFloorRefusesWithoutPreservingFresh() {
         writeDb(target, "ancient")
         write(File(target.path + "-wal"), "wal")
-        val result = reconcilePreOpen(target, currentVersion = 13, onDiskVersion = 8, minimumSupportedVersion = 11)
-        assertEquals(SchemaReconcileAction.PRESERVED_FRESH, result.action)
-        assertEquals(8, result.fromVersion)
-        assertEquals(13, result.toVersion)
-        assertFalse("live database must be moved aside so a fresh one is created", target.exists())
-        assertTrue("the old database must be recoverable", superseded(8).isFile)
-        assertEquals("ancient", markerOf(superseded(8)))
-        assertFalse("sidecars must not be left pointing at a removed database", File(target.path + "-wal").exists())
+        expectCompatibilityRefusal {
+            reconcilePreOpen(target, currentVersion = 13, onDiskVersion = 8, minimumSupportedVersion = 11)
+        }
+        assertEquals("ancient", markerOf(target))
+        assertEquals("wal", File(target.path + "-wal").readText())
+        assertFalse(superseded(8).exists())
     }
 
     @Test fun atTheSupportedFloorTheOrdinaryUpgradePathStillRuns() {
@@ -277,69 +510,215 @@ class EntityCatalogDowngradeReconcileTest {
         assertEquals("v13-live", markerOf(superseded(13))) // newer database preserved for recovery
     }
 
-    @Test fun downgradeWithNoCompatibleBackupPreservesNewerAndStartsFresh() {
+    @Test fun schema15ToSchema14CanaryUsesRecoveryRatherThanOpenEndedTolerance() {
+        writeDb(premig(14), "schema14-canary-snapshot")
+        writeDb(target, "schema15-canary-live")
+
+        val result = reconcilePreOpen(target, currentVersion = 14, onDiskVersion = 15)
+
+        assertEquals(SchemaReconcileAction.RESTORED, result.action)
+        assertEquals(15, result.fromVersion)
+        assertEquals(14, result.toVersion)
+        assertEquals(14, result.restoredVersion)
+        assertEquals("schema14-canary-snapshot", markerOf(target))
+        assertEquals("schema15-canary-live", markerOf(superseded(15)))
+    }
+
+    @Test fun recoveryWithWalVisibleSchemaRefusesBeforeAnyRuntimeMutation() {
+        writeDb(premig(14), "schema14-main")
+        write(File(premig(14).path + "-wal"), "schema15-wal")
+        writeDb(target, "schema15-live")
+        val calls = mutableListOf<String>()
+
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = 15,
+                checkpoint = { calls += "checkpoint"; true },
+                vaultConfig = { calls += "vault" },
+            )
+        }
+
+        assertEquals(DatabaseCompatibilityRefusal.NEWEST_PREMIGRATE_NOT_STANDALONE, refusal.refusal)
+        assertTrue(calls.isEmpty())
+        assertEquals("schema15-live", markerOf(target))
+        assertFalse(superseded(15).exists())
+        assertEquals("schema14-main", markerOf(premig(14)))
+        assertEquals("schema15-wal", File(premig(14).path + "-wal").readText())
+    }
+
+    @Test fun orphanedNewerPremigrateCompanionBlocksRuntimeFallbackWithoutMutation() {
+        writeDb(premig(13), "schema13-valid")
+        val orphan = File(premig(14).path + "-wal")
+        write(orphan, "orphan-schema14-wal")
+        writeDb(target, "schema15-live")
+        val calls = mutableListOf<String>()
+
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = 15,
+                checkpoint = { calls += "checkpoint"; true },
+                vaultConfig = { calls += "vault" },
+            )
+        }
+
+        assertEquals(DatabaseCompatibilityRefusal.NEWEST_PREMIGRATE_INCOMPLETE, refusal.refusal)
+        assertTrue(calls.isEmpty())
+        assertEquals("schema15-live", markerOf(target))
+        assertEquals("schema13-valid", markerOf(premig(13)))
+        assertEquals("orphan-schema14-wal", orphan.readText())
+        assertFalse(premig(14).exists())
+        assertFalse(superseded(15).exists())
+    }
+
+    @Test fun recoverySwapAfterObservationRefusesBeforeRuntimeMutation() {
+        writeDb(premig(14), "schema14-observed")
+        writeDb(target, "schema15-live")
+        val calls = mutableListOf<String>()
+
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = 15,
+                checkpoint = { calls += "checkpoint"; true },
+                vaultConfig = { calls += "vault" },
+                revalidateObservation = { observed ->
+                    writeDb(premig(14), "schema14-swapped")
+                    observed.copy(
+                        recoveries = observed.recoveries.map { recovery ->
+                            recovery.copy(
+                                sourceSha256 = premig(14).readBytes().contentHashCode().toString(),
+                                sourceBytes = premig(14).length(),
+                            )
+                        },
+                    )
+                },
+            )
+        }
+
+        assertEquals(DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION, refusal.refusal)
+        assertTrue(calls.isEmpty())
+        assertEquals("schema15-live", markerOf(target))
+        assertEquals("schema14-swapped", markerOf(premig(14)))
+        assertFalse(superseded(15).exists())
+    }
+
+    @Test fun primarySchemaChangeAfterObservationRefusesBeforeRuntimeMutation() {
+        writeDb(premig(14), "schema14-recovery")
+        writeDb(target, "schema15-live")
+        val calls = mutableListOf<String>()
+
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(
+                target,
+                currentVersion = 14,
+                onDiskVersion = 15,
+                checkpoint = { calls += "checkpoint"; true },
+                vaultConfig = { calls += "vault" },
+                revalidateObservation = { observed ->
+                    observed.copy(primary = PrimaryDatabaseObservation.Readable(16))
+                },
+            )
+        }
+
+        assertEquals(DatabaseCompatibilityRefusal.DATABASE_CHANGED_AFTER_OBSERVATION, refusal.refusal)
+        assertTrue(calls.isEmpty())
+        assertEquals("schema15-live", markerOf(target))
+        assertEquals("schema14-recovery", markerOf(premig(14)))
+        assertFalse(superseded(15).exists())
+    }
+
+    @Test fun downgradeWithNoCompatibleBackupRefusesWithoutMutation() {
         writeDb(premig(12), "snap12") // only a newer-than-current snapshot exists
         writeDb(target, "v13-live")
-        val result = reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
-        assertEquals(SchemaReconcileAction.PRESERVED_FRESH, result.action)
-        assertFalse(target.exists())
-        assertTrue(superseded(13).isFile)
-        assertEquals("v13-live", markerOf(superseded(13)))
+        expectCompatibilityRefusal {
+            reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13)
+        }
+        assertEquals("v13-live", markerOf(target))
+        assertFalse(superseded(13).exists())
         assertTrue(premig(12).isFile)
     }
 
-    @Test fun downgradeSkipsCorruptSnapshotAndPreservesFresh() {
+    @Test fun downgradeRefusesCorruptNewestSnapshotWithoutMutation() {
         premig(11).writeText("not-a-sqlite-database") // no SQLite header
         writeDb(target, "v13-live")
-        val result = reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
-        assertEquals(SchemaReconcileAction.PRESERVED_FRESH, result.action) // corrupt snapshot never restored
-        assertFalse(target.exists())
-        assertTrue(superseded(13).isFile)
-        assertEquals("v13-live", markerOf(superseded(13)))
+        val refusal = expectCompatibilityRefusal {
+            reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13)
+        }
+        assertEquals(DatabaseCompatibilityRefusal.NEWEST_PREMIGRATE_UNREADABLE, refusal.refusal)
+        assertEquals("v13-live", markerOf(target))
+        assertFalse(superseded(13).exists())
     }
 
-    @Test fun downgradePreservesDatabaseSidecarsWithTheNewerDatabase() {
+    @Test fun downgradeRefusesNonCanonicalSidecarsBeforeMovingTheMainDatabase() {
         writeDb(premig(11), "snap11")
         writeDb(target, "v13")
         write(File(target.path + "-wal"), "wal")
         write(File(target.path + "-shm"), "shm")
-        reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
-        assertEquals("snap11", markerOf(target))
-        assertFalse(File(target.path + "-wal").exists())
-        assertFalse(File(target.path + "-shm").exists())
-        assertEquals("wal", File(superseded(13).path + "-wal").readText())
-        assertEquals("shm", File(superseded(13).path + "-shm").readText())
+        try {
+            reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
+            throw AssertionError("expected canonical-sidecar hold")
+        } catch (_: DatabaseRestoreHoldException) {
+            // Exact Guard recovery never carries live SQLite sidecars into the superseded artifact.
+        }
+        assertEquals("v13", markerOf(target))
+        assertEquals("wal", File(target.path + "-wal").readText())
+        assertEquals("shm", File(target.path + "-shm").readText())
+        assertFalse(superseded(13).exists())
+        assertFalse(File(superseded(13).path + "-wal").exists())
+        assertFalse(File(superseded(13).path + "-shm").exists())
     }
 
-    @Test fun failedCheckpointStillPreservesDatabaseSidecars() {
+    @Test fun failedCheckpointRefusesBeforeAnyCanonicalMutation() {
         writeDb(premig(11), "snap11")
         writeDb(target, "v13")
         write(File(target.path + "-wal"), "wal")
-        val result = reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20, checkpoint = { false })
-        assertEquals(SchemaReconcileAction.RESTORED, result.action)
-        assertEquals("v13", markerOf(superseded(13)))
-        assertEquals("wal", File(superseded(13).path + "-wal").readText())
+        try {
+            reconcilePreOpen(
+                target, currentVersion = 11, onDiskVersion = 13,
+                minimumCompatibleVersion = 20, checkpoint = { false },
+            )
+            throw AssertionError("expected checkpoint hold")
+        } catch (_: DatabaseRestoreHoldException) {
+            // A failed checkpoint cannot authorize a main-only move.
+        }
+        assertEquals("v13", markerOf(target))
+        assertEquals("wal", File(target.path + "-wal").readText())
+        assertFalse(superseded(13).exists())
     }
 
-    @Test fun supersededPreservationIsBoundedToNewest() {
+    @Test fun preexistingSupersededArtifactHoldsWithoutPruning() {
         writeDb(superseded(12), "old-superseded")
         writeDb(premig(11), "snap11")
         writeDb(target, "v13")
-        reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
-        assertTrue(superseded(13).isFile) // newest kept
-        assertFalse(superseded(12).exists()) // older pruned
+        try {
+            reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
+            throw AssertionError("expected retained-state hold")
+        } catch (_: DatabaseRestoreHoldException) {
+            // Unknown retained data is never silently pruned by the final-A transaction.
+        }
+        assertEquals("v13", markerOf(target))
+        assertEquals("old-superseded", markerOf(superseded(12)))
+        assertFalse(superseded(13).exists())
     }
 
-    @Test fun downgradePruningNeverDeletesJustMovedLiveData() {
+    @Test fun staleHigherSupersededArtifactAlsoHoldsWithoutMutation() {
         writeDb(superseded(14), "stale-v14") // stale HIGHER-version recovery copy from an earlier downgrade
         writeDb(premig(11), "snap11")
         writeDb(target, "v13-live") // current live DB, lower version than the stale aside
-        val result = reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
-        assertEquals(SchemaReconcileAction.RESTORED, result.action)
-        assertTrue(superseded(13).isFile)
-        assertEquals("v13-live", markerOf(superseded(13))) // current live data preserved...
-        assertFalse(superseded(14).exists()) // ...and the stale higher-version copy pruned, not the live one
-        assertEquals("snap11", markerOf(target))
+        try {
+            reconcilePreOpen(target, currentVersion = 11, onDiskVersion = 13, minimumCompatibleVersion = 20)
+            throw AssertionError("expected retained-state hold")
+        } catch (_: DatabaseRestoreHoldException) {
+            // The app cannot establish which superseded artifact owns rollback authority.
+        }
+        assertEquals("v13-live", markerOf(target))
+        assertEquals("stale-v14", markerOf(superseded(14)))
+        assertFalse(superseded(13).exists())
     }
 
     @Test fun downgradeCheckpointsTooNewDbBeforePreserving() {
