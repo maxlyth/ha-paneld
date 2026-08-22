@@ -130,15 +130,15 @@ class ControlPlaneRoutesTest {
         fun artifact(bytes: ByteArray): PanelBackup.Artifact = PanelBackup.Artifact(
             temporary.newFile("backup-${++artifactId}.hpb").apply { writeBytes(bytes) },
         )
-        var build: suspend (Boolean, String) -> PanelBackup.Artifact = { _, _ -> artifact(byteArrayOf(1, 2, 3)) }
-        val buildCalls = mutableListOf<Pair<Boolean, String>>()
+        var build: suspend (CompanionBackupRequest, String) -> PanelBackup.Artifact = { _, _ -> artifact(byteArrayOf(1, 2, 3)) }
+        val buildCalls = mutableListOf<Pair<CompanionBackupRequest, String>>()
         application {
             routing {
                 controlPlaneRoutes(
                     dependencies(
-                        buildBackup = { includeCompanion, passphrase ->
-                            buildCalls += includeCompanion to passphrase
-                            build(includeCompanion, passphrase)
+                        buildBackup = { request, passphrase ->
+                            buildCalls += request to passphrase
+                            build(request, passphrase)
                         },
                     ),
                 )
@@ -151,7 +151,7 @@ class ControlPlaneRoutesTest {
             """{"ok":false,"error":"passphrase-required","message":"A backup contains credentials. Supply a passphrase, or explicitly acknowledge plaintext export with allow_plaintext=1."}""",
             path = "/api/v1/backup",
         )
-        assertEquals(emptyList<Pair<Boolean, String>>(), buildCalls)
+        assertEquals(emptyList<Pair<CompanionBackupRequest, String>>(), buildCalls)
 
         val held = assertNotNullTicket(InstallProgress.start("held"))
         try {
@@ -167,7 +167,7 @@ class ControlPlaneRoutesTest {
                 """{"ok":false,"error":"busy"}""",
                 path = "/api/v1/backup",
             )
-            assertEquals(emptyList<Pair<Boolean, String>>(), buildCalls)
+            assertEquals(emptyList<Pair<CompanionBackupRequest, String>>(), buildCalls)
         } finally {
             InstallProgress.finish(held, "released")
         }
@@ -243,8 +243,8 @@ class ControlPlaneRoutesTest {
 
         var laneHeldWhenArtifactDeleted = false
         var deliveryHeldWhenArtifactDeleted = false
-        build = { includeCompanion, passphrase ->
-            assertEquals(true, includeCompanion)
+        build = { request, passphrase ->
+            assertEquals(CompanionBackupRequest.REQUIRED, request)
             assertEquals("secret", passphrase)
             val source = temporary.newFile("tracked-backup.hpb").apply { writeBytes(byteArrayOf(7, 8, 9)) }
             val tracked = object : java.io.File(source.path) {
@@ -268,8 +268,8 @@ class ControlPlaneRoutesTest {
         assertTrue("artifact lifetime remains inside the single-delivery gate", deliveryHeldWhenArtifactDeleted)
         assertOperationLaneReleased()
 
-        build = { includeCompanion, passphrase ->
-            assertFalse(includeCompanion)
+        build = { request, passphrase ->
+            assertEquals(CompanionBackupRequest.EXCLUDED, request)
             assertEquals("", passphrase)
             PanelBackup.Artifact(
                 temporary.newFile("plaintext-backup.zip").apply { writeBytes(byteArrayOf(4, 5, 6)) },
@@ -284,6 +284,98 @@ class ControlPlaneRoutesTest {
         assertEquals("attachment; filename=\"test-panel-backup.zip\"", plaintext.headers[HttpHeaders.ContentDisposition])
         assertArrayEquals(byteArrayOf(4, 5, 6), plaintext.bodyAsBytes())
         assertOperationLaneReleased()
+    }
+
+    /**
+     * The route's whole job here is to stop guessing. An omitted `include_companion` used to arrive at the
+     * builder as `true`, so the simplest possible backup request refused with 422 on every panel that has
+     * no HA Companion installed; an unrecognised value arrived as `false`, so a caller who typed something
+     * they believed meant yes was handed a config-only archive without being told. Both are now carried
+     * through as distinct facts, and the second is refused outright.
+     */
+    @Test
+    fun backupRouteCarriesAnOmittedCompanionRequestApartFromExplicitOnesAndRefusesUninterpretableValues() = testApplication {
+        val buildCalls = mutableListOf<CompanionBackupRequest>()
+        val authorized = mutableListOf<SensitiveOperation>()
+        application {
+            routing {
+                controlPlaneRoutes(
+                    dependencies(
+                        buildBackup = { request, _ ->
+                            buildCalls += request
+                            PanelBackup.Artifact(
+                                temporary.newFile("companion-request-${buildCalls.size}.zip").apply {
+                                    writeBytes(byteArrayOf(9))
+                                },
+                                "zip",
+                            )
+                        },
+                        authorize = { _, operation, _, _ ->
+                            authorized += operation
+                            true
+                        },
+                    ),
+                )
+            }
+        }
+
+        suspend fun requestBackup(companionParameter: String?): io.ktor.client.statement.HttpResponse =
+            client.post("/api/v1/backup") {
+                contentType(ContentType.Application.FormUrlEncoded)
+                setBody("allow_plaintext=1" + (companionParameter?.let { "&include_companion=$it" } ?: ""))
+            }
+
+        // Omission is its own answer, not a synonym for either explicit value. This is the reported defect:
+        // the caller asked for "this panel's backup" and never mentioned the Companion.
+        assertEquals(HttpStatusCode.OK, requestBackup(null).status)
+        assertEquals(listOf(CompanionBackupRequest.OMITTED), buildCalls)
+        assertOperationLaneReleased()
+
+        buildCalls.clear()
+        listOf("true", "1").forEach { raw ->
+            assertEquals("include_companion=$raw must reach the builder", HttpStatusCode.OK, requestBackup(raw).status)
+            assertOperationLaneReleased()
+        }
+        assertEquals(
+            "an explicit request for the Companion login must never be downgraded in transit",
+            listOf(CompanionBackupRequest.REQUIRED, CompanionBackupRequest.REQUIRED),
+            buildCalls,
+        )
+
+        buildCalls.clear()
+        listOf("false", "0").forEach { raw ->
+            assertEquals("include_companion=$raw must reach the builder", HttpStatusCode.OK, requestBackup(raw).status)
+            assertOperationLaneReleased()
+        }
+        assertEquals(
+            listOf(CompanionBackupRequest.EXCLUDED, CompanionBackupRequest.EXCLUDED),
+            buildCalls,
+        )
+
+        buildCalls.clear()
+        authorized.clear()
+        // "yes"/"TRUE" are the values a caller reaches for when they mean the login is wanted, and "" is
+        // what a half-built form submits. Reading any of them as "exclude" is the silent downgrade.
+        listOf("yes", "TRUE", "", "no", "on", "2").forEach { raw ->
+            val response = requestBackup(raw)
+            assertEquals("include_companion=$raw must be refused", HttpStatusCode.BadRequest, response.status)
+            assertEquals(
+                """{"ok":false,"error":"invalid-include-companion","message":"include_companion must be true, 1, false or 0. Omit it to include the HA Companion login only when it is installed."}""",
+                response.bodyAsText(),
+            )
+            assertOperationLaneReleased()
+        }
+        assertEquals(
+            "no archive may be built from a request that was not understood",
+            emptyList<CompanionBackupRequest>(),
+            buildCalls,
+        )
+        assertEquals(
+            "an uninterpretable request must not spend an approval challenge",
+            emptyList<SensitiveOperation>(),
+            authorized,
+        )
+        assertFalse(BackupDeliveryGate.occupied())
     }
 
     @Test
@@ -949,7 +1041,7 @@ class ControlPlaneRoutesTest {
         playAudio: (String) -> Boolean = { true },
         installComponent: (String, String, String) -> Boolean = { _, _, _ -> true },
         installedComponentVersion: (String) -> String? = { null },
-        buildBackup: suspend (Boolean, String) -> PanelBackup.Artifact = { _, _ ->
+        buildBackup: suspend (CompanionBackupRequest, String) -> PanelBackup.Artifact = { _, _ ->
             PanelBackup.Artifact(temporary.newFile("unused-backup.hpb"))
         },
         apkUpload: ApkUploadRouteDependencies = unusedApkUpload(),

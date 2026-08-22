@@ -37,11 +37,35 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal class CompanionBackupUnavailable(val reason: String) : Exception(reason)
 
+/**
+ * What the caller said about the HA Companion login, kept distinct from what the panel will do about it.
+ *
+ * The distinction that matters is [OMITTED] versus [REQUIRED]. A caller who never mentioned the Companion
+ * asked for "this panel's backup", and a panel without the app installed has one of those; a caller who
+ * typed `include_companion=true` asked for the login specifically and has to be told when it cannot be
+ * captured. Collapsing the two into one Boolean defaulted to true is what made the simplest possible
+ * backup request fail on every panel with no Companion registration.
+ */
+internal enum class CompanionBackupRequest { OMITTED, EXCLUDED, REQUIRED }
+
+/**
+ * `true`/`1` and `false`/`0` are the only values the browser and the documented API send. Anything else is
+ * a caller who meant something that cannot be inferred, so this returns null and the route refuses: reading
+ * an unrecognised value as "exclude" is how `include_companion=yes` used to hand back a config-only archive
+ * while the caller believed the login was inside it.
+ */
+internal fun parseCompanionBackupRequest(raw: String?): CompanionBackupRequest? = when (raw) {
+    null -> CompanionBackupRequest.OMITTED
+    "true", "1" -> CompanionBackupRequest.REQUIRED
+    "false", "0" -> CompanionBackupRequest.EXCLUDED
+    else -> null
+}
+
 internal data class ControlPlaneRouteDependencies(
     val playAudio: (String) -> Boolean,
     val installComponent: (String, String, String) -> Boolean,
     val installedComponentVersion: (String) -> String?,
-    val buildBackup: suspend (includeCompanion: Boolean, passphrase: String) -> PanelBackup.Artifact,
+    val buildBackup: suspend (request: CompanionBackupRequest, passphrase: String) -> PanelBackup.Artifact,
     val backupFileStem: () -> String,
     val apkUpload: ApkUploadRouteDependencies,
     val authorize: suspend (ApplicationCall, SensitiveOperation, String, String) -> Boolean = { _, _, _, _ -> true },
@@ -784,7 +808,19 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
     val parameters = receiveBoundedFormParameters(call) ?: return
     val passphrase = parameters["passphrase"].orEmpty()
     val allowPlaintext = parameters["allow_plaintext"]?.let { it == "true" || it == "1" } ?: false
-    val includeCompanion = parameters["include_companion"]?.let { it == "true" || it == "1" } ?: true
+    // Refuse an uninterpretable request before the policy checks below: those answer a request that was
+    // understood, and this one was not. `allow_plaintext` above stays lenient on purpose — an unrecognised
+    // value there falls to the safe side and only costs the caller an extra explicit acknowledgement,
+    // whereas falling to a side here would quietly decide what the backup contains.
+    val companionRequest = parseCompanionBackupRequest(parameters["include_companion"])
+    if (companionRequest == null) {
+        call.respondText(
+            """{"ok":false,"error":"invalid-include-companion","message":"include_companion must be true, 1, false or 0. Omit it to include the HA Companion login only when it is installed."}""",
+            ContentType.Application.Json,
+            HttpStatusCode.BadRequest,
+        )
+        return
+    }
     if (passphrase.isEmpty() && !allowPlaintext) {
         call.respondText(
             """{"ok":false,"error":"passphrase-required","message":"A backup contains credentials. Supply a passphrase, or explicitly acknowledge plaintext export with allow_plaintext=1."}""",
@@ -833,7 +869,7 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         }
     }
     try {
-        val built = dependencies.buildBackup(includeCompanion, passphrase)
+        val built = dependencies.buildBackup(companionRequest, passphrase)
         artifact = built
         progressResult = "backup ready"
         InstallProgress.finish(progress, progressResult)

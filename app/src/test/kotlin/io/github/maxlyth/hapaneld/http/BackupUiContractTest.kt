@@ -78,4 +78,28 @@ class BackupUiContractTest {
     @Test fun theBrowserTreatsAnAbsentCompanionCheckboxAsOff() {
         assertTrue("include_companion must be null-safe", "comp && comp.checked" in script)
     }
+
+    /**
+     * The card is truthful about the Companion by construction, and that is worth pinning rather than
+     * rewording. The checkbox only renders on a panel that has the app and a current helper, and the
+     * browser always sends `include_companion` as an explicit `1` or `0` — so no UI copy ever claims a
+     * default, and the request the browser sends is never the omitted one whose meaning depends on what
+     * the panel happens to have installed. The conditional path exists for API callers, not for this page.
+     */
+    @Test fun theBrowserAlwaysStatesItsCompanionChoiceRatherThanRelyingOnAServerDefault() {
+        val backup = script.substring(script.indexOf("window.doBackup"), script.indexOf("// Pick a bundle"))
+        assertTrue("the choice must be sent on every request", "'&include_companion=' + (comp && comp.checked ? '1' : '0')" in backup)
+        assertTrue("the parameter must never be conditionally omitted", "include_companion" in backup)
+        assertEquals("exactly one include_companion parameter belongs in the request", 1, backup.split("include_companion").size - 1)
+        // Nothing on the card may promise behaviour the server no longer has.
+        listOf("by default", "defaults to").forEach { claim ->
+            assertTrue(
+                "the Companion copy must not claim a server default ($claim)",
+                listOf(
+                    backupCompanionCopy(installed = true, helper = true),
+                    backupCompanionCopy(installed = true, helper = false),
+                ).none { copy -> claim in (copy.row + copy.restoreWarning + copy.bundleSuffix) },
+            )
+        }
+    }
 }

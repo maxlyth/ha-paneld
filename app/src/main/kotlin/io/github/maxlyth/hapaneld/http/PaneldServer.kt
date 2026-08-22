@@ -727,6 +727,26 @@ internal fun normalizeConfigPostParameters(
     return ConfigPostParameters.Ok(normalized)
 }
 
+/**
+ * Turn what the caller said about the Companion into what this panel will actually put in the archive.
+ *
+ * [CompanionBackupRequest.REQUIRED] and [CompanionBackupRequest.EXCLUDED] are answered exactly and never
+ * consult [companionInstalled], so no probe result can quietly downgrade a request that named the login:
+ * an explicit `true` on a Companion-free panel still reaches the capture path and still refuses there,
+ * with the reason the operator needs. Only an omitted request asks whether there is anything to include,
+ * and it asks about installation alone. A panel that *has* the Companion but cannot capture it — a stale
+ * helper, a busy helper, a database that will not checkpoint — is not a panel with nothing to include, so
+ * omission keeps failing loudly there rather than handing back an archive that silently lacks the login.
+ */
+internal fun resolveCompanionInclusion(
+    request: CompanionBackupRequest,
+    companionInstalled: () -> Boolean,
+): Boolean = when (request) {
+    CompanionBackupRequest.REQUIRED -> true
+    CompanionBackupRequest.EXCLUDED -> false
+    CompanionBackupRequest.OMITTED -> companionInstalled()
+}
+
 /** Conservative disk peak while source entries, archive plaintext and optional ciphertext overlap. */
 internal fun backupStagingRequirement(includeCompanion: Boolean, encrypted: Boolean): Long {
     val sources = PaneldServer.MAX_BACKUP_MANIFEST_BYTES +
@@ -1409,9 +1429,9 @@ class PaneldServer internal constructor(
                                 else -> null
                             }
                         },
-                        buildBackup = { includeCompanion, passphrase ->
+                        buildBackup = { request, passphrase ->
                             withContext(Dispatchers.IO) {
-                                buildBackupArtifact(includeCompanion, passphrase)
+                                buildBackupArtifact(request, passphrase)
                             }
                         },
                         backupFileStem = { config.panelId },
@@ -6889,7 +6909,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     )
 
     /** Build a file-backed v2 container. Companion bytes are raw ZIP entries, not base64 JSON. */
-    private fun buildBackupArtifact(includeCompanion: Boolean, passphrase: String): PanelBackup.Artifact {
+    private fun buildBackupArtifact(request: CompanionBackupRequest, passphrase: String): PanelBackup.Artifact {
+        // Resolve before reserving: the staging bound has to describe the backup this panel is going to
+        // build, not the largest one the request could have meant. An omitted request on a Companion-free
+        // panel would otherwise reserve room for a capture that never happens, and could be refused for
+        // storage the archive never needed.
+        val includeCompanion = resolveCompanionInclusion(request) {
+            CompanionInstaller.installedPkg(appContext) != null
+        }
         if (cacheDir.usableSpace < backupStagingRequirement(includeCompanion, passphrase.isNotEmpty())) {
             throw CompanionBackupUnavailable("Insufficient storage to stage a backup safely")
         }
