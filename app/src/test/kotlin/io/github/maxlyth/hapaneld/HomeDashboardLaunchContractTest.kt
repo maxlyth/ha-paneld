@@ -42,7 +42,7 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `the selecting screen shows only when nothing provisional is rendering`() {
-        val screen = resolver.indexOf("\"Choosing a dashboard\"")
+        val screen = resolver.indexOf("\"Choosing the Home Assistant dashboard\"")
         val gate = resolver.indexOf("if (provisionalPath == null)")
         assertTrue(gate in 0 until screen)
     }
@@ -151,7 +151,7 @@ class HomeDashboardLaunchContractTest {
         assertTrue(confirmedNone.contains("if (!currentConfig.clearHomeDashboardLaunchPathIfOwned(launchOwner))"))
         assertTrue(confirmedNone.contains("showBlockedAdmissionScreen("))
         assertTrue(confirmedNone.contains("AdmissionOutcome.DASHBOARD_LIST_UNREADABLE"))
-        assertTrue(confirmedNone.contains("could not clear the one it had saved"))
+        assertTrue(confirmedNone.contains("could not clear the dashboard it had saved"))
     }
 
     @Test fun `the resolver protocol itself never emits the cached source`() {

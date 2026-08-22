@@ -51,7 +51,7 @@ class DashboardScreenPolicyTest {
         // The refusal title must name the SIGN-IN, not the version check. A panel reported on
         // 2026-08-17 showing "Home Assistant version check rejected" sent diagnosis after a version
         // problem that did not exist; the body had always said authentication.
-        assertTrue(block.contains("\"Home Assistant turned down this panel's sign-in\""))
+        assertTrue(block.contains("\"Home Assistant refused this panel's sign-in\""))
         assertFalse(block.contains("version check rejected"))
         // The two situations must reach DIFFERENT outcomes so a diagnostic surface can tell them
         // apart, even though both are person-repaired.
@@ -104,9 +104,9 @@ class DashboardScreenPolicyTest {
         }
         assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("The panel cannot reach Home Assistant"))
         assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("The panel could not read the dashboard list"))
-        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("The sign-in page would not load"))
+        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("The Home Assistant sign-in page would not load"))
         assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Home Assistant opened but will not respond"))
-        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant did not say which version it is"))
+        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant did not report a usable version"))
         assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant is too old for this panel"))
         assertEquals(
             listOf("NO_LEGAL_DASHBOARD", "DASHBOARD_LIST_UNREADABLE", "NO_LEGAL_DASHBOARD"),

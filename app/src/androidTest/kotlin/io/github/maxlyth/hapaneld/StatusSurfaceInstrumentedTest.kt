@@ -102,11 +102,11 @@ class StatusSurfaceInstrumentedTest {
 
     /** The phase used for the overflow measurements: the tallest real screen the frame has to draw. */
     private fun StatusSurface.tallestPhase(): List<View> = listOf(
-        heading("Some entities need your decision"),
+        heading("Some entities need a decision"),
         detail(
-            "Nothing is wrong with Home Assistant. More entities were flagged than can be reviewed " +
-                "here. Open entity settings and simplify the dashboard, or switch the entity " +
-                "filter off.",
+            "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the " +
+                "panel. Open the Entities page in panel settings and simplify the dashboard, or turn " +
+                "the entity filter off.",
         ),
         action("Ignore flagged entities and continue", fullWidth = true) {},
         action("Disable entity filter", fullWidth = true) {},
@@ -163,12 +163,12 @@ class StatusSurfaceInstrumentedTest {
         onFrame { activity, surface ->
             val positions = mutableListOf<Int>()
             listOf(
-                arrayOf(surface.heading("Checking Home Assistant")),
+                arrayOf(surface.heading("Checking Home Assistant compatibility")),
                 arrayOf(
-                    surface.heading("Some entities need your decision"),
+                    surface.heading("Some entities need a decision"),
                     surface.detail(
-                        "Nothing is wrong with Home Assistant. More entities were flagged than can " +
-                            "be reviewed here.",
+                        "Nothing is wrong with Home Assistant. Too many entities were flagged to " +
+                            "review on the panel.",
                     ),
                     surface.action("Ignore flagged entities and continue", fullWidth = true) {},
                     surface.action("Disable entity filter", fullWidth = true) {},
@@ -209,14 +209,14 @@ class StatusSurfaceInstrumentedTest {
     fun aPhaseChangeReturnsToTheTopOfTheNewContent() {
         onFrame { activity, surface ->
             surface.setBody(
-                surface.heading("Some entities need your decision"),
+                surface.heading("Some entities need a decision"),
                 *(1..12).map { surface.detail("Filler row $it so the body genuinely overflows") }
                     .toTypedArray(),
             )
             activity.settle()
             surface.scroller().scrollTo(0, 400)
             assertNotEquals("the fixture must actually scroll", 0, surface.scroller().scrollY)
-            surface.setBody(surface.heading("Home Assistant turned down this panel's sign-in"))
+            surface.setBody(surface.heading("Home Assistant refused this panel's sign-in"))
             activity.settle()
             assertEquals("a new phase must start at its own top", 0, surface.scroller().scrollY)
         }
