@@ -415,8 +415,18 @@ internal class DatabaseRestoreTransaction(
         return exactStandaloneSuperseded(retained)
     }
 
-    private fun exactStandaloneSuperseded(file: File): Boolean = identity(file) != null &&
-        RECOVERY_COMPANIONS.none { entryExists(File(file.path + it)) }
+    private fun exactStandaloneSuperseded(file: File): Boolean {
+        // Android's lstat is authoritative in production. Robolectric's StructStat does not retain
+        // st_nlink, so the host regression uses the equivalent no-follow Unix NIO attribute.
+        val links = runCatching { Os.lstat(file.absolutePath).st_nlink }.getOrNull()
+            ?.takeIf { it > 0L }
+            ?: runCatching {
+                (Files.getAttribute(file.toPath(), "unix:nlink", LinkOption.NOFOLLOW_LINKS) as Number).toLong()
+            }.getOrNull()
+        val singleLink = exactRegularFile(file) && links == 1L
+        return singleLink && identity(file) != null &&
+            RECOVERY_COMPANIONS.none { entryExists(File(file.path + it)) }
+    }
 
     private fun readRecord(file: File): DatabaseRestoreRecord? {
         if (!exactRegularFile(file) || file.length() !in 1..MAX_RECORD_BYTES) return null

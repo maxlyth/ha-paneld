@@ -202,6 +202,9 @@ class DatabaseRestoreTransactionTest {
         assertHeld("expected destination is a symbolic link") { _, target, staged ->
             Files.createSymbolicLink(supersededFile(target, 15).toPath(), staged.toPath())
         }
+        assertHeld("expected destination is a hard link to the canonical database") { _, target, _ ->
+            Files.createLink(supersededFile(target, 15).toPath(), target.toPath())
+        }
         assertHeld("expected destination is empty") { _, target, _ ->
             supersededFile(target, 15).writeBytes(byteArrayOf())
         }
