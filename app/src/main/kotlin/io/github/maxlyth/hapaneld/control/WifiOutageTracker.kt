@@ -113,16 +113,33 @@ internal fun wifiOutageStatusText(counts: WifiOutageCounts): String? {
     // A zero count with dropped evidence still in-window is not a clean panel: the cap threw
     // away episodes we can no longer place. Saying nothing there would hide the worst case.
     if (counts.last24h <= 0 && !counts.saturated) return null
-    val noun = if (counts.last24h == 1 && !counts.saturated) "outage" else "outages"
-    // A capped day is a floor, and says so rather than presenting the cap as the total.
-    val floor = if (counts.saturated) "at least " else ""
-    val base = "$floor${counts.last24h} $noun in the last 24 h"
-    return if (wifiOutageAttention(counts.last24h)) {
+    val base = if (counts.saturated) {
+        // Saturated: the retention bound evicted episodes still inside the window, or their
+        // provenance was unreadable and failed closed. The surviving number is a STRICT floor —
+        // the window held more than this — so it is phrased as a lower bound and never as a rate.
+        // "at least 1 outage" was the trap: truthful arithmetic that still reads as a quiet day
+        // once a compacted history is all that reaches the reader.
+        if (counts.last24h <= 0) {
+            "more outages in the last 24 h than the panel kept records for"
+        } else {
+            "more than ${counts.last24h} ${outageNoun(counts.last24h)} in the last 24 h"
+        }
+    } else {
+        "${counts.last24h} ${outageNoun(counts.last24h)} in the last 24 h"
+    }
+    // ONE classification drives both surfaces. Deriving the note from the raw count is what let a
+    // saturated panel show a bare low number on its own card while `/diag`, which reads
+    // [wifiOutageChronic], called the same moment chronic — two surfaces, one moment, opposite
+    // readings. Saturation is chronic on its own, so a compacted history always carries the note.
+    return if (wifiOutageChronic(counts)) {
         "$base — repeated drops; the Wi-Fi link needs attention"
     } else {
         base
     }
 }
+
+/** Agrees with the number actually printed, so a floor phrasing cannot produce "1 outages". */
+private fun outageNoun(count: Int): String = if (count == 1) "outage" else "outages"
 
 /**
  * Counts default-network Wi-Fi outages in the last 24 hours, so repeated short dropouts become a

@@ -367,7 +367,7 @@ class WifiOutageTrackerTest {
         assertTrue("the count is a floor once the cap drops an in-window episode", counts.saturated)
         assertTrue(
             "the row must say the number is a floor",
-            t.statusText()!!.startsWith("at least "),
+            t.statusText()!!.startsWith("more than "),
         )
     }
 
@@ -378,7 +378,7 @@ class WifiOutageTrackerTest {
         clock.blip(t)
         assertFalse(t.counts().saturated)
         assertFalse(t.counts().saturated)
-        assertFalse(t.statusText()!!.startsWith("at least "))
+        assertFalse(t.statusText()!!.startsWith("more than "))
     }
 
     @Test fun saturationClearsOnceEveryDroppedEpisodeHasLeftTheWindow() {
@@ -547,7 +547,13 @@ class WifiOutageTrackerTest {
         // with an NPE, which the mutation session correctly refuses to credit as a kill.
         val row = t.statusText()
         assertNotNull("a saturated zero must still be reported", row)
-        assertTrue("it is reported as a floor", row.orEmpty().startsWith("at least 0"))
+        // Never "0 outages" and never "at least 0": with nothing left in the window the only
+        // truthful statement is that the panel dropped more than it can still account for.
+        assertEquals(
+            "more outages in the last 24 h than the panel kept records for" +
+                " — repeated drops; the Wi-Fi link needs attention",
+            row,
+        )
     }
 
     @Test fun unreadableDropProvenanceFailsClosedThenAgesOutEvenAcrossRestarts() {
@@ -657,6 +663,116 @@ class WifiOutageTrackerTest {
         // count would omit the line from precisely the panel whose report most needs it.
         assertTrue(wifiOutageChronic(WifiOutageCounts(last24h = 0, saturated = true)))
         assertTrue(wifiOutageChronic(WifiOutageCounts(last24h = 1, saturated = true)))
+    }
+
+    // ---- one classification behind both surfaces ---------------------------------------------------
+    //
+    // The defect these cover: the row derived its attention note from the raw 24-hour count while
+    // `/diag` derived its gate from wifiOutageChronic. A saturated panel could therefore print a
+    // bare low number on its own card at the same instant the pasted report called it chronic.
+
+    @Test fun anOrdinaryQuietDayIsSilentOrExactAndCarriesNoNote() {
+        assertNull(
+            "a clean window is a silent row, not a permanent zero",
+            wifiOutageStatusText(WifiOutageCounts(last24h = 0, saturated = false)),
+        )
+        assertEquals(
+            "1 outage in the last 24 h",
+            wifiOutageStatusText(WifiOutageCounts(last24h = 1, saturated = false)),
+        )
+        assertEquals(
+            "2 outages in the last 24 h",
+            wifiOutageStatusText(WifiOutageCounts(last24h = 2, saturated = false)),
+        )
+    }
+
+    @Test fun aSaturatedLowCountIsAFloorAndNeverReadsAsAQuietDay() {
+        // The count survived compaction; the window held more. Stating it as "1 outage" — or even
+        // as the arithmetically-true "at least 1 outage" — hands the reader a quiet day.
+        for (surviving in 0..2) {
+            val text = wifiOutageStatusText(WifiOutageCounts(last24h = surviving, saturated = true))
+            assertNotNull("a compacted window must still be reported", text)
+            val row = text.orEmpty()
+            assertTrue(
+                "$surviving surviving must carry the attention note, exactly as /diag would",
+                row.endsWith(" — repeated drops; the Wi-Fi link needs attention"),
+            )
+            assertFalse(
+                "$surviving surviving must not be stated as the incident rate",
+                row.startsWith("$surviving outage"),
+            )
+            assertEquals(
+                "both surfaces classify one moment identically",
+                wifiOutageChronic(WifiOutageCounts(last24h = surviving, saturated = true)),
+                row.contains("needs attention"),
+            )
+        }
+        assertEquals(
+            "more than 1 outage in the last 24 h — repeated drops; the Wi-Fi link needs attention",
+            wifiOutageStatusText(WifiOutageCounts(last24h = 1, saturated = true)),
+        )
+        assertEquals(
+            "more than 2 outages in the last 24 h — repeated drops; the Wi-Fi link needs attention",
+            wifiOutageStatusText(WifiOutageCounts(last24h = 2, saturated = true)),
+        )
+    }
+
+    @Test fun aSaturatedCappedCountKeepsTheNumberBecauseItIsTheStrongestSignalHere() {
+        // Dropping the number to fix the low-count case would throw away the loudest reading the
+        // tracker can produce.
+        assertEquals(
+            "more than ${WifiOutageTracker.MAX_RETAINED_EPISODES} outages in the last 24 h" +
+                " — repeated drops; the Wi-Fi link needs attention",
+            wifiOutageStatusText(
+                WifiOutageCounts(last24h = WifiOutageTracker.MAX_RETAINED_EPISODES, saturated = true),
+            ),
+        )
+    }
+
+    @Test fun anUnsaturatedChronicHistoryStaysExactAndStillCarriesTheNote() {
+        // Nothing was compacted, so the number IS the rate — the wording must not hedge it — but
+        // the count alone already reaches the chronic bar.
+        for (count in WifiOutageTracker.ATTENTION_24H..(WifiOutageTracker.ATTENTION_24H + 5)) {
+            val counts = WifiOutageCounts(last24h = count, saturated = false)
+            assertTrue("$count must be chronic on the count alone", wifiOutageChronic(counts))
+            assertEquals(
+                "$count outages in the last 24 h — repeated drops; the Wi-Fi link needs attention",
+                wifiOutageStatusText(counts),
+            )
+        }
+        // And the count immediately below the bar stays a bare exact statement.
+        assertEquals(
+            "${WifiOutageTracker.ATTENTION_24H - 1} outages in the last 24 h",
+            wifiOutageStatusText(
+                WifiOutageCounts(last24h = WifiOutageTracker.ATTENTION_24H - 1, saturated = false),
+            ),
+        )
+    }
+
+    @Test fun theRowReturnsToAnExactStatementOnceTheDroppedEvidenceAgesOut() {
+        // The counter "resets" by the window moving on, not by anything being deleted: once every
+        // evicted instant is older than 24 h the surviving number is a total again, and the floor
+        // wording — and the note it guaranteed — must both go away.
+        val clock = Clock()
+        val store = FakeStore(
+            WifiOutageRecord(
+                episodeStartsWallMs = listOf(clock.wallMs - 60_000L),
+                newestDroppedWallMs = clock.wallMs - 60_000L,
+            ),
+        )
+        val t = tracker(clock, store)
+        assertTrue("a dropped in-window instant saturates", t.counts().saturated)
+        assertEquals(
+            "more than 1 outage in the last 24 h — repeated drops; the Wi-Fi link needs attention",
+            t.statusText(),
+        )
+
+        // Move just past the surviving episode and the dropped marker together.
+        clock.advance(WifiOutageTracker.WINDOW_MS)
+        val after = t.counts()
+        assertFalse("the dropped marker has left the window", after.saturated)
+        assertEquals("and so has the surviving episode", 0, after.last24h)
+        assertNull("a quiet window is silent again", t.statusText())
     }
 
 
