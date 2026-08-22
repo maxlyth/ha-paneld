@@ -22,6 +22,7 @@ import io.github.maxlyth.hapaneld.PanelStatus
 import io.github.maxlyth.hapaneld.RendererAdmissionPresentation
 import io.github.maxlyth.hapaneld.RendererAdmissionRuntime
 import io.github.maxlyth.hapaneld.RendererMode
+import io.github.maxlyth.hapaneld.RendererResolver
 import io.github.maxlyth.hapaneld.haSignInPending
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
@@ -6462,7 +6463,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // hides its numbered-journey framing and says "nothing has been reset" instead of starting over.
         // `entity_filter` carries its own step's facts — the live count, the panel's tier and the resulting
         // recommendation — so the page can render the whole question without ever reading GET /api/v1/config.
-        val builtinRenderer = system.resolveDashboard(config.dashboardPackage) == SystemController.BUILTIN_DASHBOARD
+        val resolvedRenderer = system.resolveDashboard(config.dashboardPackage)
+        val builtinRenderer = resolvedRenderer == SystemController.BUILTIN_DASHBOARD
         val verdict = entityFilterVerdict()
         val entityFilter = "{\"relevant\":$builtinRenderer," +
             "\"enabled\":${config.dashboardEntityLearningEnabled}," +
@@ -6488,10 +6490,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // must never ride along on this poll (SetupStateEndpointContractTest pins the expense rule).
         val homeDashboard = "{\"value\":${jsonStr(config.homeDashboard)}," +
             "\"answered\":${config.setupHomeDashboardChosen}}"
+        // `renderer` is the panel's own answer to which renderer its stored selection RESOLVES to, from the
+        // same resolver the launcher uses. It exists because a client cannot derive it: a blank
+        // `dashboard_package` selects the built-in renderer, so reading the stored value answers a
+        // different question. The installer's dashboard seeds are the first caller — they apply only to the
+        // built-in renderer, and used to gate on the literal stored string, which refused a blank panel that
+        // was in fact running the built-in renderer. `package` is empty when the selection resolves to
+        // nothing usable, which a caller must be able to refuse on separately from a foreign renderer.
+        val renderer = "{\"builtin\":$builtinRenderer," +
+            "\"package\":${jsonStr(RendererResolver.reportedRenderer(resolvedRenderer))}}"
         return "{\"complete\":${journey.complete}," +
             "\"repair\":${config.setupEverCompleted && !journey.complete}," +
             "\"entity_filter\":$entityFilter," +
             "\"home_dashboard\":$homeDashboard," +
+            "\"renderer\":$renderer," +
             "\"next\":$next," +
             "\"panel\":{\"id\":${jsonStr(config.panelId)},\"name\":${jsonStr(config.friendlyName)}}," +
             "\"steps\":[$steps]," +

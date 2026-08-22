@@ -55,6 +55,47 @@ class RendererResolverTest {
         assertEquals("builtin", RendererResolver.resolveControlPackage("") { false })
     }
 
+    // --- reported resolution (what an API client reads instead of re-deriving the rule) -------------
+    //
+    // The installer's dashboard-seed gate is the first client. It cannot derive this: a blank
+    // `dashboard_package` selects the built-in renderer, so the stored value answers a different
+    // question, and gating on it refused panels that were running the built-in renderer all along.
+
+    @Test fun `reported resolution passes the builtin sentinel through`() {
+        // Also the guard on the sentinel's own spelling: the projection publishes it because it satisfies
+        // the package grammar, so a sentinel changed to something shaped like `<builtin>` would silently
+        // start reporting "no renderer" and every client would read the panel as unresolvable.
+        assertEquals("builtin", RendererResolver.reportedRenderer(RendererResolver.BUILTIN))
+    }
+
+    @Test fun `reported resolution of an automatic selection is the built-in renderer`() {
+        // The whole point of the projection: blank in, built-in out, with no client-side interpretation.
+        assertEquals("builtin", RendererResolver.reportedRenderer(RendererResolver.resolveControlPackage("") { false }))
+    }
+
+    @Test fun `reported resolution passes a foreign package through`() {
+        assertEquals(MINIMAL, RendererResolver.reportedRenderer(RendererResolver.resolveControlPackage(MINIMAL) { true }))
+    }
+
+    @Test fun `reported resolution of a structurally invalid selection names no renderer`() {
+        // Distinct from a foreign renderer on purpose: "running something else" and "cannot resolve what
+        // it runs" need different answers from the caller, so they must not share a representation.
+        assertEquals("", RendererResolver.reportedRenderer(RendererResolver.resolveControlPackage("not a package!") { true }))
+    }
+
+    @Test fun `reported resolution of the invalid-dashboard sentinel names no renderer`() {
+        // SystemController.resolveDashboard reports a corrupt stored selection with its own sentinel
+        // rather than an empty string; that is not a package and must not be published as one.
+        assertEquals("", RendererResolver.reportedRenderer("<invalid-dashboard>"))
+    }
+
+    @Test fun `reported resolution mirrors the resolver rather than the selection rule`() {
+        // The own-package alias counts as a built-in SELECTION, but control resolution keeps it as the
+        // package it is, and every other consumer of the resolved value treats it that way. The report
+        // says what the panel resolved, so a client and the panel can never disagree about the renderer.
+        assertEquals(OWN, RendererResolver.reportedRenderer(RendererResolver.resolveControlPackage(OWN) { true }))
+    }
+
     // --- launchable resolution (what Main/Admin can open now) ---------------------------------------
 
     @Test fun `launchable ready builtin is available without a Companion`() {

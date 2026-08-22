@@ -433,31 +433,44 @@ JSON
   */api/v1/setup)
     # The panel's own setup journey. `missing` models a build older than the endpoint, which must
     # send the provisioner down its legacy guidance path rather than leaving it silent.
+    #
+    # `renderer` is the panel's RESOLVED renderer, which is a different fact from the stored
+    # `dashboard_package` above: blank resolves to the built-in renderer, so the two disagree on exactly
+    # the panel the seed gate used to refuse. MOCK_RENDERER models that answer — `builtin` (default), an
+    # unresolvable selection, an ha-paneld too old to report one at all, or any other value as the
+    # foreign package the panel resolves to.
+    renderer_field='"renderer":{"builtin":true,"package":"builtin"},'
+    case "${MOCK_RENDERER:-builtin}" in
+      builtin) ;;
+      absent) renderer_field='' ;;
+      unresolved) renderer_field='"renderer":{"builtin":false,"package":""},' ;;
+      *) renderer_field="$(printf '"renderer":{"builtin":false,"package":"%s"},' "$MOCK_RENDERER")" ;;
+    esac
     case "${MOCK_SETUP:-complete}" in
       missing) exit 22 ;;
       complete)
-        printf '{"complete":true,"repair":false,"next":null,"panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"}]}\n'
+        printf '{%s"complete":true,"repair":false,"next":null,"panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"}]}\n' "$renderer_field"
         ;;
       identity)
-        printf '{"complete":false,"repair":false,"next":"identity","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"blocked","blocking":true,"detail":"test-panel"},{"stage":"mqtt_broker","status":"blocked","blocking":false,"detail":""}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"identity","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"blocked","blocking":true,"detail":"test-panel"},{"stage":"mqtt_broker","status":"blocked","blocking":false,"detail":""}]}\n' "$renderer_field"
         ;;
       home_dashboard)
-        printf '{"complete":false,"repair":false,"next":"home_dashboard","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"home_dashboard","status":"blocked","blocking":true,"detail":""}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"home_dashboard","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"home_dashboard","status":"blocked","blocking":true,"detail":""}]}\n' "$renderer_field"
         ;;
       ha_credentials)
-        printf '{"complete":false,"repair":false,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"},{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"identity","status":"satisfied","blocking":true,"detail":"test-panel"},{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n' "$renderer_field"
         ;;
       mqtt_auth_failed)
-        printf '{"complete":false,"repair":false,"next":"mqtt_connection","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"mqtt_broker","status":"satisfied","blocking":false,"detail":"tcp://broker.test:1883"},{"stage":"mqtt_connection","status":"blocked","blocking":false,"detail":"auth-failed"}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"mqtt_connection","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"mqtt_broker","status":"satisfied","blocking":false,"detail":"tcp://broker.test:1883"},{"stage":"mqtt_connection","status":"blocked","blocking":false,"detail":"auth-failed"}]}\n' "$renderer_field"
         ;;
       in_flight)
-        printf '{"complete":false,"repair":false,"next":"render_proof","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"render_proof","status":"in_flight","blocking":true,"detail":"awaiting_frontend"}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"render_proof","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"satisfied","blocking":true,"detail":"https://ha.test"},{"stage":"render_proof","status":"in_flight","blocking":true,"detail":"awaiting_frontend"}]}\n' "$renderer_field"
         ;;
       repair)
-        printf '{"complete":false,"repair":true,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n'
+        printf '{%s"complete":false,"repair":true,"next":"ha_credentials","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"ha_credentials","status":"blocked","blocking":true,"detail":"https://ha.test"}]}\n' "$renderer_field"
         ;;
       unknown_stage)
-        printf '{"complete":false,"repair":false,"next":"future_stage","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"future_stage","status":"blocked","blocking":true,"detail":"opaque_token"}]}\n'
+        printf '{%s"complete":false,"repair":false,"next":"future_stage","panel":{"id":"test-panel","name":"Test"},"steps":[{"stage":"future_stage","status":"blocked","blocking":true,"detail":"opaque_token"}]}\n' "$renderer_field"
         ;;
       *) exit 22 ;;
     esac

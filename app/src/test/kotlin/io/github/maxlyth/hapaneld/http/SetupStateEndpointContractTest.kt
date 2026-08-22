@@ -112,4 +112,20 @@ class SetupStateEndpointContractTest {
         }
         assertTrue(fingerprint.contains("ha_client_id"))
     }
+
+    @Test fun theResolvedRendererIsPublishedFromTheOneResolutionTheJourneyActsOn() {
+        // The installer's dashboard seeds gate on this field, because a client cannot derive it: a blank
+        // `dashboard_package` selects the built-in renderer, so the stored value answers a different
+        // question. That makes drift the danger — a second resolution here could disagree with the one
+        // `entity_filter.relevant` and the journey use, and the gate would then admit a seed for a
+        // renderer the panel is not going to run.
+        val json = body("private fun setupJourneyJson()", "private fun renderConfigConcurrencyHash()")
+        assertTrue("""the endpoint must publish the resolved renderer""", json.contains("""\"renderer\":${'$'}renderer"""))
+        assertTrue(json.contains("RendererResolver.reportedRenderer(resolvedRenderer)"))
+        assertEquals(
+            "the renderer is resolved once and shared, never re-derived",
+            1,
+            Regex("system\\.resolveDashboard").findAll(json).count(),
+        )
+    }
 }

@@ -2218,17 +2218,84 @@ assert_contains 'applied but not recorded as answered' "an unrecorded answer is 
 assert_contains 'Re-run the same command' "an unrecorded answer names the idempotent recovery"
 unset MOCK_SETUP_ANSWER
 
-# Both options configure ha-paneld's OWN renderer, so they are refused against a foreign dashboard app.
-run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
-assert_failure "seeding a panel that is not on the built-in renderer fails"
-assert_contains 'built-in renderer, which this panel is not set to use' "the refusal names the renderer requirement"
-assert_contains 'Add --builtin' "the refusal names the fix"
-assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "a refused seed writes nothing"
+# Both options configure ha-paneld's OWN renderer, so admission asks the panel which renderer its stored
+# selection RESOLVES to rather than reading the stored string. The two are different facts: a blank
+# `dashboard_package` resolves to the built-in renderer, and gating on the literal string refused exactly
+# those panels — telling the operator they were "not set to use" a renderer they were in fact using.
+# Every state below is fail-closed except a positive built-in resolution, and each refuses with its own
+# reason: "running something else" and "nobody could confirm what it runs" must not be reported alike.
+
+# A blank stored selection that the panel resolves to the built-in renderer. This is the live-hardware
+# case the literal gate got wrong.
+MOCK_DASHBOARD_PACKAGE='' MOCK_RENDERER=builtin \
+  run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_success "a blank dashboard selection the panel resolves to the built-in renderer accepts a seed"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "a blank-but-built-in panel is seeded"
+assert_not_contains 'not set to use|could not confirm' "$LAST_OUTPUT" \
+  "a panel using the built-in renderer is never told it is not"
 
 MOCK_DASHBOARD_PACKAGE=builtin run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
 assert_success "a panel already on the built-in renderer accepts a seed without --builtin"
 assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "an already-built-in panel is seeded"
 unset MOCK_DASHBOARD_PACKAGE
+
+# A genuinely foreign renderer: refused, and named, because the operator's next move depends on which app
+# the panel actually resolves to.
+MOCK_RENDERER=io.homeassistant.companion.android.minimal \
+  run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --entity-filter on --no-tame
+assert_failure "seeding a panel that resolves to a foreign renderer fails"
+assert_contains 'resolves to io.homeassistant.companion.android.minimal' "the refusal names the renderer the panel resolves to"
+assert_contains 'Add --builtin' "the refusal names the fix"
+assert_not_contains 'home_dashboard=/office|dashboard_entity_learning=' "$MOCK_CALL_LOG" \
+  "a refused seed mutates neither the dashboard nor the filter"
+assert_not_contains 'api/v1/setup/(home-dashboard|entity-filter)' "$MOCK_CALL_LOG" \
+  "a refused seed records no wizard answer"
+
+# The panel answered, and its answer is that it cannot resolve its own selection. Distinct from a foreign
+# renderer: there is no app to name, and the stored value itself is what needs correcting.
+MOCK_RENDERER=unresolved run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_failure "seeding a panel that cannot resolve its renderer fails"
+assert_contains 'cannot resolve which renderer it is set to use' "the refusal reports an unresolvable selection as its own state"
+assert_not_contains 'resolves to ' "$LAST_OUTPUT" "an unresolvable selection names no renderer"
+assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "an unresolvable selection is not seeded"
+assert_not_contains 'api/v1/setup/(home-dashboard|entity-filter)' "$MOCK_CALL_LOG" \
+  "an unresolvable selection records no wizard answer"
+
+# An ha-paneld too old to report a resolution. A LITERAL stored `builtin` still means the same thing on
+# every version, so it is admitted; blank is exactly the value only the panel can interpret, so without an
+# answer it stays ambiguous and is refused — as "could not confirm", never as "not set to use".
+MOCK_RENDERER=absent MOCK_DASHBOARD_PACKAGE=builtin \
+  run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_success "a literal built-in selection is admitted by a panel too old to report a resolution"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "the literal fallback seeds the panel"
+
+MOCK_RENDERER=absent MOCK_DASHBOARD_PACKAGE='' \
+  run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_failure "a blank selection no panel can resolve fails closed"
+assert_contains 'could not confirm this panel uses' "an unobtainable resolution is reported as unconfirmed"
+assert_not_contains 'not set to use|resolves to ' "$LAST_OUTPUT" \
+  "an unconfirmed panel is never described as running something else"
+assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "an unconfirmed renderer is not seeded"
+assert_not_contains 'api/v1/setup/(home-dashboard|entity-filter)' "$MOCK_CALL_LOG" \
+  "an unconfirmed renderer records no wizard answer"
+
+# An unreadable setup endpoint is the same fail-closed answer as an absent field, reached by a different
+# route: a swallowed transport error must never become an assumed yes.
+MOCK_SETUP=missing MOCK_DASHBOARD_PACKAGE='' \
+  run_provision "$MOCK_TARGET" --apk "$APK" --home-dashboard /office --no-tame
+assert_failure "an unreadable renderer answer fails closed"
+assert_contains 'could not confirm this panel uses' "an unreadable answer is reported as unconfirmed"
+assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "an unreadable answer is not seeded"
+unset MOCK_SETUP
+
+# --builtin selects the built-in renderer in the same command, so it is an override rather than a claim to
+# be checked: the seed proceeds even when the panel currently resolves to something else.
+MOCK_RENDERER=io.homeassistant.companion.android.minimal \
+  run_provision "$MOCK_TARGET" --apk "$APK" "${SEED_BUILTIN[@]}" --home-dashboard /office --no-tame
+assert_success "--builtin admits the seed whatever the panel currently resolves to"
+assert_log_contains 'curl .*-X POST .*dashboard_package=builtin.*api/v1/config' "--builtin selects the built-in renderer first"
+assert_log_contains 'curl .*-X POST .*home_dashboard=/office.*api/v1/config' "the override seeds the panel"
+unset MOCK_RENDERER MOCK_DASHBOARD_PACKAGE
 
 # Usage refusals happen before the panel is contacted at all.
 run_provision "$MOCK_TARGET" --entity-filter maybe

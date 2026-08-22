@@ -80,6 +80,23 @@ internal object RendererResolver {
     }
 
     /**
+     * REPORTED resolution — an already-resolved control package as the stable token API clients read
+     * when they must not re-derive the built-in rule for themselves. The installer's dashboard-seed gate
+     * is the first such client, and it cannot derive the answer: a blank `dashboard_package` selects the
+     * built-in renderer, which no amount of reading the stored value tells you, and a gate that guessed
+     * either way would refuse a panel that is using the built-in renderer or seed one that is not.
+     *
+     * A real package passes through, and so does the [BUILTIN] sentinel — it satisfies the package
+     * grammar, which is what the test named for it pins. Anything else reports as `""`: an internal
+     * marker such as `SystemController`'s invalid-dashboard sentinel is not a renderer anyone can act
+     * on, and publishing it would read as a foreign package. That distinction is the point — "this
+     * panel runs something else" and "this panel cannot resolve what it runs" are different facts, and
+     * a caller that cannot tell them apart cannot refuse with an honest reason.
+     */
+    fun reportedRenderer(resolvedPackage: String): String =
+        resolvedPackage.takeIf(AndroidInput::isPackage).orEmpty()
+
+    /**
      * The resolved control target as a [RendererTarget]: the [BUILTIN] sentinel → [RendererTarget.Builtin],
      * none (`""`) → `null`, any other resolved package → [RendererTarget.Foreign]. The service resolves
      * this once, off the sampling path, and hands the immutable value to diagnostics.

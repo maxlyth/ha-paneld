@@ -5265,6 +5265,44 @@ fi
 # renders whatever Home Assistant calls the account default — which on a large account is precisely
 # the dashboard a slow panel cannot draw. These options are the headless equivalent of the two
 # questions the wizard asks a human BEFORE the first load.
+# Which renderer the panel's stored selection actually RESOLVES to, asked of the panel instead of
+# inferred here. A blank `dashboard_package` selects ha-paneld's built-in renderer, so the stored string
+# answers a different question than the seeds need: reading it directly refused panels that were running
+# the built-in renderer all along, telling the operator it "is not set to use" a renderer it was using.
+# Echoes exactly one of:
+#   builtin           the panel resolves to ha-paneld's built-in renderer
+#   foreign <package> the panel resolves to a different dashboard app
+#   unresolved        the panel's stored selection resolves to nothing usable
+#   unavailable       no resolution could be obtained (an ha-paneld older than the field, or unreadable)
+# `unavailable` falls back to the one stored value that needs no resolving — a LITERAL `builtin`, which
+# means the same thing on every version. Blank deliberately does not fall back, because blank is exactly
+# the value only the panel can interpret; without an answer it stays ambiguous and the caller refuses.
+read_effective_renderer() {
+  local body renderer pkg cfg
+  # Both reads swallow their transport error deliberately: an empty body falls through to `unavailable`,
+  # which the caller refuses on. Nothing here can turn a failed read into an admission.
+  body="$(curl -fsS --max-time 5 "$URL/api/v1/setup" 2>/dev/null || true)"
+  # Isolate the renderer object before matching anything inside it, so a `"builtin":true` belonging to
+  # another object can never be read as this one's answer. It carries no nested braces, so the first
+  # closing brace ends it.
+  renderer="$(printf '%s' "$body" | tr '\n' ' ' | sed -n 's/.*"renderer"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p')"
+  if [ -n "$renderer" ]; then
+    if printf '%s' "$renderer" | grep -Eq '"builtin"[[:space:]]*:[[:space:]]*true'; then
+      echo builtin
+      return 0
+    fi
+    pkg="$(printf '%s' "$renderer" | sed -n 's/.*"package"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [ -n "$pkg" ]; then echo "foreign $pkg"; else echo unresolved; fi
+    return 0
+  fi
+  cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
+  if printf '%s' "$cfg" | grep -Eq '"dashboard_package"[[:space:]]*:[[:space:]]*"builtin"'; then
+    echo builtin
+    return 0
+  fi
+  echo unavailable
+}
+
 seed_builtin_renderer_preferences() {
   if [ "$HOME_DASHBOARD_SET" = 0 ] && [ "$ENTITY_FILTER_SET" = 0 ]; then return 0; fi
   # A seed configures the renderer's connection to Home Assistant. With no working login there is
@@ -5275,17 +5313,37 @@ seed_builtin_renderer_preferences() {
   fi
   require_healthy_agent "seed the built-in renderer's dashboard preferences"
 
+  # --builtin selects the built-in renderer in this same command, and an explicitly supplied value is the
+  # most specific statement of intent in the run, so it needs no second opinion from the panel.
   if [ "$BUILTIN" != 1 ]; then
-    local current_cfg
-    # Fail CLOSED on an unreadable answer: the grep below refuses unless the panel positively reports
-    # the built-in renderer, so a swallowed transport error becomes a refusal, never an assumed yes.
-    current_cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
-    if ! printf '%s' "$current_cfg" | grep -Eq '"dashboard_package"[[:space:]]*:[[:space:]]*"builtin"'; then
-      echo "   ${RED}✗ --home-dashboard/--entity-filter apply to ha-paneld's built-in renderer, which this panel is not set to use.${X}"
-      echo "   ${D}Add --builtin to select it in the same command, or run guided setup and choose the Built-in renderer first.${X}"
-      PROVISION_FAILED=1
-      return 0
-    fi
+    local renderer_state renderer_pkg
+    # Fail CLOSED: only a positive built-in resolution admits, so an unreadable answer, an unresolvable
+    # selection or a panel too old to answer all become refusals, never an assumed yes. Each refuses with
+    # its own reason — none of them may claim the panel is running something else when the truth is that
+    # nobody could confirm what it is running.
+    renderer_state="$(read_effective_renderer)"
+    renderer_pkg="$(printf '%s' "$renderer_state" | cut -s -d' ' -f2- | sanitize_terminal)"
+    case "$renderer_state" in
+      builtin) : ;;
+      foreign*)
+        echo "   ${RED}✗ --home-dashboard/--entity-filter apply to ha-paneld's built-in renderer, and this panel resolves to ${renderer_pkg}.${X}"
+        echo "   ${D}Add --builtin to select the built-in renderer in the same command, or run guided setup and choose it first.${X}"
+        PROVISION_FAILED=1
+        return 0
+        ;;
+      unresolved)
+        echo "   ${RED}✗ --home-dashboard/--entity-filter apply to ha-paneld's built-in renderer, and this panel cannot resolve which renderer it is set to use.${X}"
+        echo "   ${D}Its stored dashboard selection does not name a usable app. Add --builtin to select the built-in renderer in the same command, or run guided setup and choose a renderer.${X}"
+        PROVISION_FAILED=1
+        return 0
+        ;;
+      *)
+        echo "   ${RED}✗ could not confirm this panel uses ha-paneld's built-in renderer, which --home-dashboard/--entity-filter apply to.${X}"
+        echo "   ${D}This ha-paneld does not report which renderer it resolves to, or could not be read just now. Add --builtin to select the built-in renderer in the same command.${X}"
+        PROVISION_FAILED=1
+        return 0
+        ;;
+    esac
   fi
 
   local seed_args=() seed_err seeded_path=""
