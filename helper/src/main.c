@@ -203,6 +203,7 @@ static int probe_command_allowed(const char *command) {
            strcmp(command, "COMPANIONCAPS") == 0 ||
            strcmp(command, "BUILDID") == 0 ||
            strcmp(command, "GUARDCAPS") == 0 ||
+           strcmp(command, "GUARDSELF") == 0 ||
            strcmp(command, "GUARDSTATUS") == 0;
 }
 

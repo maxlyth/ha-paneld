@@ -24,6 +24,9 @@ internal class GuardDbMaintenanceClient(
     fun capabilities(): GuardDbMaintenanceProtocol.Capabilities? =
         GuardDbMaintenanceProtocol.parseCapabilities(transport.send("GUARDCAPS"))
 
+    fun selfIdentity(): GuardDbMaintenanceProtocol.SelfIdentity? =
+        GuardDbMaintenanceProtocol.parseSelfIdentity(transport.send("GUARDSELF"))
+
     /** ARM requires the same-session crash supervisor; a valid one-shot v1 helper stays observable
      *  for status/retirement but is not sufficient custody authority. */
     fun supported(): Boolean = capabilities()?.let {

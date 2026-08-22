@@ -17,6 +17,37 @@ class GuardDbMaintenanceProtocolTest {
     private val aSha = "a".repeat(64)
     private val bSha = "b".repeat(64)
 
+    @Test fun `live helper identity parser and client require the exact v1 tuple`() {
+        val sha = "c".repeat(64)
+        val build = "d".repeat(64)
+        val reply = "OK GUARDSELF 1 4096 $sha $build"
+        val expected = GuardDbMaintenanceProtocol.SelfIdentity(4096L, sha, build)
+        assertEquals(expected, GuardDbMaintenanceProtocol.parseSelfIdentity(reply))
+
+        listOf<String?>(
+            null,
+            "",
+            "OK GUARDSELF 1 0 $sha $build",
+            "OK GUARDSELF 1 04096 $sha $build",
+            "OK GUARDSELF 1 ${GuardDbMaintenanceProtocol.MAX_SELF_BYTES + 1L} $sha $build",
+            "OK GUARDSELF 2 4096 $sha $build",
+            "OK GUARDSTATUS 1 4096 $sha $build",
+            "OK GUARDSELF 1 4096 ${"C".repeat(64)} $build",
+            "OK GUARDSELF 1 4096 $sha development",
+            "OK GUARDSELF 1 4096 $sha $build EXTRA",
+            "OK  GUARDSELF 1 4096 $sha $build",
+            "OK GUARDSELF 1 4096 $sha $build\n",
+        ).forEach { malformed ->
+            assertNull(malformed, GuardDbMaintenanceProtocol.parseSelfIdentity(malformed))
+        }
+
+        val transport = FakeTransport().apply { short = reply }
+        assertEquals(expected, GuardDbMaintenanceClient(transport).selfIdentity())
+        assertEquals(listOf("GUARDSELF"), transport.shortCommands)
+        transport.short = "ERR HOLD self"
+        assertNull(GuardDbMaintenanceClient(transport).selfIdentity())
+    }
+
     @Test fun `capabilities distinguish supervision autonomy and terminal retirement`() {
         assertEquals(
             GuardDbMaintenanceProtocol.Capabilities(supervised = false, autonomous = false),
@@ -531,8 +562,12 @@ class GuardDbMaintenanceProtocolTest {
         var short: String? = null
         var long: DaemonLongResult = DaemonLongResult.NotSubmitted
         var stream: DaemonStreamResult = DaemonStreamResult.NotSubmitted
+        val shortCommands = mutableListOf<String>()
         val longCommands = mutableListOf<String>()
-        override fun send(command: String): String? = short
+        override fun send(command: String): String? {
+            shortCommands += command
+            return short
+        }
         override fun sendLong(command: String, timeoutMs: Long): DaemonLongResult {
             longCommands += command
             return long

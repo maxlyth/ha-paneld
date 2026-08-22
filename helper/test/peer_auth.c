@@ -92,6 +92,7 @@ int main(void) {
     CHECK(probe_command_allowed("COMPANIONCAPS"), "root probe mode must allow capability discovery");
     CHECK(probe_command_allowed("BUILDID"), "root probe mode must allow build identity");
     CHECK(probe_command_allowed("GUARDCAPS"), "root probe mode must allow Guard capability discovery");
+    CHECK(probe_command_allowed("GUARDSELF"), "root probe mode must allow live helper byte identity");
     CHECK(probe_command_allowed("GUARDSTATUS"), "root probe mode must allow Guard status observation");
     const char *guard_mutation_verbs[] = {
         "GUARDPREPARE", "GUARDDEFINE", "GUARDSTREAM", "GUARDACTION", "GUARDHEALTH",
@@ -107,6 +108,8 @@ int main(void) {
     CHECK(!probe_command_allowed("PING extra"), "root probe mode must require an exact verb");
     CHECK(!probe_command_allowed("GUARDCAPS extra"),
           "root probe mode must require an exact Guard capability verb");
+    CHECK(!probe_command_allowed("GUARDSELF extra"),
+          "root probe mode must require an exact live helper identity verb");
     CHECK(!probe_command_allowed("GUARDSTATUS extra"),
           "root probe mode must require an exact Guard status verb");
 

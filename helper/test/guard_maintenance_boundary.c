@@ -159,6 +159,86 @@ static void hash_bytes(const void *bytes, size_t size, char output[65]) {
     hapaneld_sha256_hex(digest, output);
 }
 
+static void exec_from_canonical_helper(void) {
+    if (getenv("GUARD_TEST_CANONICAL_HELPER")) return;
+    (void)unlink(HELPER_LIVE);
+    (void)unlink(HELPER_STAGE);
+    int source = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    int output = open(HELPER_LIVE,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0700);
+    unsigned char buffer[65536];
+    int copied = source >= 0 && output >= 0;
+    for (;;) {
+        ssize_t count = copied ? read(source, buffer, sizeof buffer) : -1;
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) copied = 0;
+        if (count <= 0) break;
+        if (write_all(output, buffer, (size_t)count) != 0) {
+            copied = 0;
+            break;
+        }
+    }
+    copied = copied && fchmod(output, 0700) == 0 && fsync(output) == 0;
+    if (source >= 0) close(source);
+    if (output >= 0 && close(output) != 0) copied = 0;
+    if (!copied || setenv("GUARD_TEST_CANONICAL_HELPER", "1", 1) != 0) {
+        perror("prepare canonical helper test executable");
+        exit(2);
+    }
+    char *const canonical_argv[] = { (char *)HELPER_LIVE, NULL };
+    execv(HELPER_LIVE, canonical_argv);
+    perror("exec canonical helper test executable");
+    exit(2);
+}
+
+static void test_guardself_live_helper_identity(void) {
+    char sha[65] = "", reply_line[256], expected[256];
+    int fd = open(HELPER_LIVE, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st = {0};
+    int hashed = fd >= 0 && fstat(fd, &st) == 0 && st.st_size > 0 &&
+        hapaneld_sha256_fd(fd, (uint64_t)st.st_size, sha) == 0;
+    CHECK(hashed, "hash canonical live helper fixture\n");
+    if (fd >= 0) close(fd);
+    if (!hashed) return;
+    snprintf(expected, sizeof expected, "OK GUARDSELF 1 %llu %s %s\n",
+        (unsigned long long)st.st_size, sha, REPLACEMENT_BUILD);
+    dispatch_once("GUARDSELF", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, expected) == 0,
+        "GUARDSELF binds exact live bytes, hash and build identity (got %s)\n", reply_line);
+    dispatch_once("GUARDSELF extra", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, "ERR ARGS self\n") == 0,
+        "GUARDSELF rejects arguments (got %s)\n", reply_line);
+
+    CHECK(rename(HELPER_LIVE, HELPER_STAGE) == 0,
+        "move executing helper away from canonical live name\n");
+    static const char wrong_inode[] = "not-the-running-helper";
+    write_file_mode(HELPER_LIVE, wrong_inode, sizeof wrong_inode - 1, 0700);
+    dispatch_once("GUARDSELF", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, "ERR HOLD self\n") == 0,
+        "GUARDSELF rejects a canonical name pointing at the wrong inode (got %s)\n", reply_line);
+    CHECK(unlink(HELPER_LIVE) == 0 && rename(HELPER_STAGE, HELPER_LIVE) == 0,
+        "restore executing helper to canonical live name\n");
+
+    CHECK(link(HELPER_LIVE, HELPER_STAGE) == 0,
+        "create non-authoritative multiply-linked live helper fixture\n");
+    dispatch_once("GUARDSELF", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, "ERR HOLD self\n") == 0,
+        "GUARDSELF rejects a multiply-linked live helper (got %s)\n", reply_line);
+    CHECK(unlink(HELPER_STAGE) == 0, "remove helper hard-link fixture\n");
+
+    CHECK(rename(HELPER_LIVE, HELPER_STAGE) == 0 &&
+          symlink(HELPER_STAGE, HELPER_LIVE) == 0,
+        "create non-authoritative symlinked helper fixture\n");
+    dispatch_once("GUARDSELF", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, "ERR HOLD self\n") == 0,
+        "GUARDSELF rejects a symlinked canonical helper name (got %s)\n", reply_line);
+    CHECK(unlink(HELPER_LIVE) == 0 && rename(HELPER_STAGE, HELPER_LIVE) == 0,
+        "restore helper after symlink refusal\n");
+    dispatch_once("GUARDSELF", reply_line, sizeof reply_line);
+    CHECK(strcmp(reply_line, expected) == 0,
+        "GUARDSELF recovers only after exact live topology is restored (got %s)\n", reply_line);
+}
+
 static void ascii_hex_bytes(const char *input, char *output, size_t capacity) {
     static const char digits[] = "0123456789abcdef";
     size_t size = strlen(input);
@@ -2456,12 +2536,14 @@ static void test_pm_nonzero_target_and_uncertain_target_matrix(void) {
 }
 
 int main(void) {
+    exec_from_canonical_helper();
     signal(SIGPIPE, SIG_IGN);
     if (getenv("GUARD_TEST_PLAN_ONLY")) {
         test_plan_stream_restart_roundtrip();
         return failures ? 1 : 0;
     }
     test_sha256_vectors();
+    test_guardself_live_helper_identity();
     test_caps_supervision_and_empty_status();
     test_plan_stream_restart_roundtrip();
     test_stream_rejects_wrong_short_and_extra_bytes();

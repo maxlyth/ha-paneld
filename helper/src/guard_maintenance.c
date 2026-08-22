@@ -5090,6 +5090,57 @@ static int app_helper_identity_matches(int dir, const char *name, uint64_t bytes
         strcmp(actual_sha, sha) == 0 ? 0 : -1;
 }
 
+/* Report bytes from the fixed live name only when this worker is executing that exact inode. The
+ * second metadata/name check prevents a concurrent rename or in-place rewrite from turning the
+ * opened file into a stale authority while it is being hashed. */
+static int app_helper_self_identity(uint64_t *bytes, char sha[65]) {
+    int parent = open_app_helper_parent();
+    int fd = parent >= 0
+        ? openat(parent, GUARD_APP_HELPER_LIVE, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) : -1;
+    struct stat before, after, self, named;
+    int exact = bytes && sha && lower_hex_64(helper_build_id()) && fd >= 0 &&
+        fstat(fd, &before) == 0 && stat("/proc/self/exe", &self) == 0 &&
+        S_ISREG(before.st_mode) && before.st_uid == geteuid() && before.st_gid == getegid() &&
+        before.st_nlink == 1 &&
+        (before.st_mode & 0777) == 0700 && before.st_size > 0 &&
+        (uint64_t)before.st_size <= GUARD_REPLACEMENT_MAX_BINARY_BYTES &&
+        before.st_dev == self.st_dev && before.st_ino == self.st_ino;
+    if (exact) {
+        *bytes = (uint64_t)before.st_size;
+        exact = hapaneld_sha256_fd(fd, *bytes, sha) == 0 && fstat(fd, &after) == 0 &&
+            fstatat(parent, GUARD_APP_HELPER_LIVE, &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+            S_ISREG(named.st_mode) && before.st_dev == after.st_dev &&
+            before.st_ino == after.st_ino && before.st_size == after.st_size &&
+            before.st_mode == after.st_mode && before.st_uid == after.st_uid &&
+            before.st_gid == after.st_gid && before.st_nlink == after.st_nlink &&
+            before.st_mtime == after.st_mtime && before.st_ctime == after.st_ctime &&
+            before.st_dev == named.st_dev && before.st_ino == named.st_ino &&
+            before.st_mode == named.st_mode && before.st_uid == named.st_uid &&
+            before.st_gid == named.st_gid && before.st_nlink == named.st_nlink &&
+            before.st_size == named.st_size;
+    }
+    if (fd >= 0) close(fd);
+    if (parent >= 0) close(parent);
+    return exact ? 0 : -1;
+}
+
+void cmd_guardself(conn_ctx *ctx, const char *args) {
+    if (*args) {
+        error_reply(ctx, "ARGS", "self");
+        return;
+    }
+    uint64_t bytes = 0;
+    char sha[65];
+    if (app_helper_self_identity(&bytes, sha) != 0) {
+        error_reply(ctx, "HOLD", "self");
+        return;
+    }
+    char line[192];
+    snprintf(line, sizeof line, "OK GUARDSELF 1 %" PRIu64 " %s %s\n",
+             bytes, sha, helper_build_id());
+    reply(ctx->fd, line);
+}
+
 static int seal_app_helper_stage_at(int parent, uint64_t bytes, const char *sha,
                                     uint64_t dev, uint64_t ino) {
     int fd = openat(parent, GUARD_APP_HELPER_STAGE,

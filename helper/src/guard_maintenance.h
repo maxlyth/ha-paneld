@@ -73,6 +73,7 @@ int guard_maintenance_supervisor_complete(enum guard_supervisor_work work,
                                           enum guard_execution_result result, int wait_status);
 
 void cmd_guardcaps(conn_ctx *ctx, const char *args);
+void cmd_guardself(conn_ctx *ctx, const char *args);
 void cmd_guardprepare(conn_ctx *ctx, const char *args);
 void cmd_guarddefine(conn_ctx *ctx, const char *args);
 void cmd_guardstream(conn_ctx *ctx, const char *args);

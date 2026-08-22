@@ -6,6 +6,7 @@ import java.io.File
 /** Strict v1 wire contract for the helper-owned Guard DB transaction. */
 internal object GuardDbMaintenanceProtocol {
     const val MAX_EVIDENCE_BYTES = 4096L
+    const val MAX_SELF_BYTES = 16L * 1024L * 1024L
     const val STREAM_TIMEOUT_MS = 120_000L
     const val MUTATION_TIMEOUT_MS = 30_000L
     const val LONG_ACTION_TIMEOUT_MS = 180_000L
@@ -129,6 +130,12 @@ internal object GuardDbMaintenanceProtocol {
         val terminalRetire: Boolean = false,
     )
 
+    data class SelfIdentity(
+        val bytes: Long,
+        val sha256: String,
+        val buildId: String,
+    )
+
     sealed interface Result {
         data class Accepted(val generation: Long, val phase: Phase) : Result
         data class Rejected(val code: String, val token: String) : Result
@@ -170,6 +177,17 @@ internal object GuardDbMaintenanceProtocol {
         "$CAPS_REPLY AUTONOMOUS SUPERVISED TERMINAL_RETIRE" ->
             Capabilities(supervised = true, autonomous = true, terminalRetire = true)
         else -> null
+    }
+
+    fun parseSelfIdentity(raw: String?): SelfIdentity? {
+        if (raw == null || raw.length !in 1..512 || raw.any { it.code !in 0x20..0x7e }) return null
+        val fields = raw.split(' ')
+        if (fields.size != 6 || fields.any(String::isEmpty) ||
+            fields[0] != "OK" || fields[1] != "GUARDSELF" || fields[2] != "1"
+        ) return null
+        val bytes = fields[3].strictPositiveLong()?.takeIf { it <= MAX_SELF_BYTES } ?: return null
+        if (!validSha256(fields[4]) || !validSha256(fields[5])) return null
+        return SelfIdentity(bytes = bytes, sha256 = fields[4], buildId = fields[5])
     }
 
     fun prepare(plan: Plan): String {
