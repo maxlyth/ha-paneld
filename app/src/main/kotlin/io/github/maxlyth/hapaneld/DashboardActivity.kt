@@ -2518,10 +2518,13 @@ class DashboardActivity : AppCompatActivity() {
             }
             return
         }
-        // Cached reconstruction comes BEFORE the in-flight-job early return. A renderer crash while
-        // the authenticated resolution is running would otherwise leave the panel blank until that
-        // resolution finishes or fails — defeating the immediate cached fallback at the one moment
-        // it is most needed.
+        // Launch accelerator, no-renderer branch. This is the ordinary cold-start route — a fresh
+        // process (and a genuine activity recreation, which brings a new instance with a null `web`)
+        // arrives here, not at the still-held-renderer branch below. It also carries every rebuild
+        // that tore the renderer down first, which is why it comes BEFORE the in-flight-job early
+        // return: a renderer crash while the authenticated resolution is running would otherwise
+        // leave the panel blank until that resolution finishes or fails, defeating the immediate
+        // cached fallback at the one moment it is most needed.
         if (web == null) {
             (owned?.resolution?.path ?: config.cachedHomeDashboardLaunchPath())?.let { path ->
                 if (owned == null) {
@@ -2533,7 +2536,11 @@ class DashboardActivity : AppCompatActivity() {
                         confirmed = false,
                     )
                 }
-                Log.i(TAG, "home dashboard rebuilt from cache path=$path while a resolution was pending")
+                Log.i(
+                    TAG,
+                    "home dashboard cache-accelerated launch path=$path renderer=none " +
+                        "(cold start or rebuild) — the authenticated resolution refreshes behind it",
+                )
                 buildCompatibleAndLoad(config)
                 provisionalHomeDashboardEpoch = dashboardNavigationEpoch
             }
@@ -2542,10 +2549,16 @@ class DashboardActivity : AppCompatActivity() {
         homeDashboardJob?.cancel()
         val ticket = homeDashboardAttempts.start(owner)
         homeDashboardCheckingOwner = owner
-        // Launch accelerator: the last path a live resolution produced for this exact owner (endpoint +
-        // credential + configured home_dashboard) navigates immediately, and the authenticated
-        // resolution below re-runs behind the rendering page. Its answer always wins — the same path
-        // confirms the page, a different one corrects it, a confirmed empty list clears the cache.
+        // Launch accelerator, still-held-renderer branch: the last path a live resolution produced for
+        // this exact owner (endpoint + credential + configured home_dashboard) navigates immediately,
+        // and the authenticated resolution below re-runs behind the rendering page. Its answer always
+        // wins — the same path confirms the page, a different one corrects it, a confirmed empty list
+        // clears the cache.
+        //
+        // Reachable only when this activity instance still holds a renderer from an earlier load (an
+        // in-process relaunch or admission retry, where no teardown intervened). The branch above has
+        // already accelerated every launch that started with no renderer, and its provisional
+        // resolution makes `provisionalPath` non-null, so the two sites are mutually exclusive.
         var provisionalPath = homeDashboardResolution?.takeIf { it.owner == owner && !it.confirmed }
             ?.resolution?.path
         if (provisionalPath == null && owned == null) {
@@ -2558,7 +2571,12 @@ class DashboardActivity : AppCompatActivity() {
                     ),
                     confirmed = false,
                 )
-                Log.i(TAG, "home dashboard launched from cache path=$cached — refreshing the authenticated list")
+                Log.i(
+                    TAG,
+                    "home dashboard cache-accelerated launch path=$cached renderer=held " +
+                        "(relaunch over the renderer this activity still holds) — " +
+                        "the authenticated resolution refreshes behind it",
+                )
                 buildCompatibleAndLoad(config)
                 provisionalHomeDashboardEpoch = dashboardNavigationEpoch
             }

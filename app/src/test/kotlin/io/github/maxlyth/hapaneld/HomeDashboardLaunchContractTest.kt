@@ -217,7 +217,7 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `a lost WebView rebuilds from cache before the in-flight job short-circuits`() {
-        val rebuild = resolver.indexOf("home dashboard rebuilt from cache")
+        val rebuild = resolver.indexOf(NO_RENDERER_LOG)
         val earlyReturn = resolver.indexOf("if (homeDashboardCheckingOwner == owner && homeDashboardJob?.isActive == true) return")
         assertTrue(rebuild in 0 until earlyReturn)
         val block = resolver.substring(resolver.indexOf("if (web == null) {"), earlyReturn)
@@ -229,7 +229,61 @@ class HomeDashboardLaunchContractTest {
         assertTrue(block.contains("HomeDashboardSource.CACHED"))
         assertTrue(block.contains("confirmed = false"))
         assertTrue(block.contains("provisionalHomeDashboardEpoch = dashboardNavigationEpoch"))
-        // Both provisional sites (first launch and post-crash rebuild) mark it unconfirmed.
+        // Both provisional sites — this one, which serves a cold start and any rebuild that tore the
+        // renderer down first, and the still-held-renderer site below it — mark it unconfirmed.
         assertEquals(2, Regex("confirmed = false").findAll(resolver).count())
+    }
+
+    /**
+     * Both cached launches announce themselves with one phrase, and each says which branch it is.
+     *
+     * The two lines used to carry unrelated wording (`rebuilt from cache` / `launched from cache`),
+     * so there was no single phrase to grep for the accelerator, and the more launch-sounding of the
+     * two is the one a cold start never prints. Someone checking a healthy panel for it saw nothing
+     * and read the feature as broken.
+     */
+    @Test fun `both cached launches share one phrase and name their own branch`() {
+        assertEquals(2, Regex(Regex.escape(SHARED_PHRASE)).findAll(resolver).count())
+        assertEquals(2, Regex(Regex.escape(REFRESH_NOTE)).findAll(resolver).count())
+        assertEquals(1, Regex(Regex.escape(NO_RENDERER_LOG)).findAll(resolver).count())
+        assertEquals(1, Regex(Regex.escape(HELD_RENDERER_LOG)).findAll(resolver).count())
+        // The qualifier is the whole point of the rename: one line must be findable without the
+        // other, and neither may claim the branch it does not serve.
+        assertTrue(resolver.contains("(cold start or rebuild)"))
+        assertTrue(resolver.contains("(relaunch over the renderer this activity still holds)"))
+    }
+
+    /**
+     * Each message is pinned to the branch it describes.
+     *
+     * The two are mutually exclusive at runtime: with no renderer the first branch accelerates the
+     * launch and leaves an unconfirmed resolution behind, which makes `provisionalPath` non-null and
+     * closes the second. A qualifier on the wrong branch would therefore name a situation its own
+     * line can never print for — which is exactly how the previous wording misled.
+     *
+     * Only the qualifier is asserted, because only the qualifier can drift. The two messages capture
+     * different lambda parameters (`path` and `cached`), so copying one into the other's block does
+     * not compile; an absence assertion there would be enforced by the compiler and never by this
+     * test, and was removed rather than kept as decoration.
+     */
+    @Test fun `each cached-launch message belongs to its own branch`() {
+        val earlyReturn = resolver.indexOf("if (homeDashboardCheckingOwner == owner && homeDashboardJob?.isActive == true) return")
+
+        // `renderer=none` sits inside `if (web == null) { … }`, ahead of the early return.
+        val noRendererBlock = resolver.substring(resolver.indexOf("if (web == null) {"), earlyReturn)
+        assertTrue(noRendererBlock.contains(NO_RENDERER_LOG))
+
+        // `renderer=held` sits inside the cache read that runs only once the first branch declined,
+        // which is only ever when a renderer from an earlier load is still held.
+        val heldStart = resolver.indexOf("if (provisionalPath == null && owned == null) {", earlyReturn)
+        val heldBlock = resolver.substring(heldStart, resolver.indexOf("if (provisionalPath == null) {", heldStart))
+        assertTrue(heldBlock.contains(HELD_RENDERER_LOG))
+    }
+
+    private companion object {
+        const val SHARED_PHRASE = "home dashboard cache-accelerated launch"
+        const val REFRESH_NOTE = "the authenticated resolution refreshes behind it"
+        const val NO_RENDERER_LOG = "$SHARED_PHRASE path=\$path renderer=none"
+        const val HELD_RENDERER_LOG = "$SHARED_PHRASE path=\$cached renderer=held"
     }
 }
