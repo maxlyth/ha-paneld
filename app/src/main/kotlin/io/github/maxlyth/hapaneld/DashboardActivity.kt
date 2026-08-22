@@ -1497,9 +1497,9 @@ class DashboardActivity : AppCompatActivity() {
                min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
                ${statusBrandHtmlHeader(this, dark, palette)}
-               <h1 style="color:${palette.error}">Home Assistant sign-in rejected</h1>
-               <p style="font-size:1.3em">This panel's saved Home Assistant login settings were rejected,
-               so the dashboard has stopped retrying.</p>
+               <h1 style="color:${palette.error}">Home Assistant refused this panel's sign-in</h1>
+               <p style="font-size:1.3em">The saved Home Assistant login stopped working, so the panel has
+               stopped retrying it.</p>
                <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Home Assistant connection,
                then use Browser sign-in. The dashboard reloads automatically when the login changes.</p>
                </div></body></html>""",
@@ -2300,10 +2300,14 @@ class DashboardActivity : AppCompatActivity() {
                                 "Home Assistant refused this panel's sign-in"
                             },
                             if (neverSignedIn) {
-                                "Tap Configure, connect the panel to Home Assistant, then tap Retry."
+                                "Nothing can load until the panel has a Home Assistant login. Configure " +
+                                    "opens this panel's settings, where Home Assistant connection holds " +
+                                    "the sign-in. The dashboard opens on its own once the sign-in works."
                             } else {
-                                "The saved sign-in no longer works. Tap Configure to sign in again, or " +
-                                    "tap Retry once the account has been restored on the Home Assistant server."
+                                "The saved sign-in stopped working, so the dashboard has not opened. " +
+                                    "Configure opens this panel's settings: sign in again under Home " +
+                                    "Assistant connection and the dashboard returns on its own. Tap Retry " +
+                                    "instead if the account has been restored on the Home Assistant server."
                             },
                             if (neverSignedIn) {
                                 AdmissionOutcome.SIGN_IN_REQUIRED
@@ -2393,8 +2397,8 @@ class DashboardActivity : AppCompatActivity() {
                     }
                     showBlockedAdmissionScreen(
                         "The Home Assistant sign-in page would not load",
-                        "Check the Home Assistant address under Configure, or use Browser sign-in on the " +
-                            "same page.",
+                        "Configure opens this panel's settings. Check the Home Assistant address there, " +
+                            "or use Browser sign-in on the same page.",
                         AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
                     )
                 }
@@ -2952,7 +2956,7 @@ class DashboardActivity : AppCompatActivity() {
                         "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open the Entities page in panel settings and simplify the dashboard, or turn the entity filter off."
                     }
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
-                    "Home Assistant rejected this panel's sign-in when it asked which entities to show. The dashboard has not been opened. Check this panel's Home Assistant connection under Configure, then try again."
+                    "Home Assistant rejected this panel's sign-in when it asked which entities to show. The dashboard has not been opened. Configure opens this panel's settings, where Home Assistant connection holds the sign-in; the dashboard returns on its own once it works."
                 } else if (bootstrapProblem != null) {
                     "The scan of your entities did not finish, so the dashboard has not been opened. Check that Home Assistant is running and that the panel is on the network, then try again."
                 } else {

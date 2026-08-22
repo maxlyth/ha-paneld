@@ -76,8 +76,17 @@ class DashboardScreenPolicyTest {
         listOf("keep checking", "keep trying", "will retry automatically", "retrying automatically").forEach {
             assertFalse("credential copy must not promise an automatic retry: $it", block.contains(it))
         }
-        // It must still name a route back, or the screen is a dead end.
-        assertTrue(block.contains("Configure"))
+        // Saying the dashboard RETURNS once the sign-in works is a different claim, and a true one:
+        // PaneldServer relaunches the renderer on a changed Home Assistant credential or URL
+        // (`relaunchForHa`, change-gated). What these outcomes never do is run a timer against a
+        // credential nothing has changed, which is what the strings above would promise.
+        assertTrue(
+            "a credential screen must say the dashboard comes back once the sign-in works",
+            block.contains("on its own"),
+        )
+        // It must still name a route back, or the screen is a dead end, and it must say what that
+        // route OPENS: "Configure" is a button name, not an explanation of where it goes.
+        assertTrue(block.contains("Configure opens this panel's settings"))
         assertTrue(block.contains("Retry"))
         // The pairing this test exists to protect: neither credential outcome runs a timer.
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
