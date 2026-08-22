@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
@@ -350,6 +351,12 @@ internal class StatusSurface(
         onClick: (Button) -> Unit,
     ): Button = Button(activity).apply {
         text = label
+        // The standing screen's label treatment, which is the one already accepted on these panels.
+        // Left to the platform the label arrives upper-cased, because the theme's button style DOES
+        // reach this control — observed at vc595, where it reads OPEN PANEL SETTINGS while the same
+        // action on the standing screen reads as a sentence.
+        isAllCaps = false
+        textSize = spec.actionLabelSp
         // EVERY action is coloured from the panel's palette, not only the primary one.
         //
         // A default AppCompat button takes its colours from the Activity theme, which follows the
@@ -377,6 +384,15 @@ internal class StatusSurface(
             // fall through: both branches are state-aware
         }
         setOnClickListener { onClick(this) }
+        // AFTER the background, always. A background whose drawable reports padding replaces the
+        // view's, so padding set first can be silently discarded — which is the mechanism that left
+        // this control on the platform's residual inset in the first place, never a chosen value.
+        setPadding(
+            dp(spec.actionPaddingHorizontalDp),
+            dp(spec.actionPaddingVerticalDp),
+            dp(spec.actionPaddingHorizontalDp),
+            dp(spec.actionPaddingVerticalDp),
+        )
         // The height the layout model charges for an action has to be the height the button actually
         // gets, or the model is measuring a screen nobody sees. It is a floor, not a fixed size, so a
         // label that wraps at a large font scale still grows rather than being clipped.
@@ -398,23 +414,52 @@ internal class StatusSurface(
     fun actionRow(vararg buttons: Button): LinearLayout = LinearLayout(activity).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
-        buttons.forEach { addView(it) }
+        // Separated first, so the fit decision below sees the gaps. They had never been applied on
+        // this branch at all: two actions side by side were added flush and met at their borders.
+        buttons.forEachIndexed { index, button ->
+            (button.layoutParams as? LinearLayout.LayoutParams)
+                ?.marginStart = if (index == 0) 0 else dp(spec.actionSideGapDp)
+            addView(button)
+        }
         val columnPx = dp(spec.columnWidthDp)
         val unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         measure(unspecified, unspecified)
         if (measuredWidth > columnPx) {
             orientation = LinearLayout.VERTICAL
-            buttons.forEach { button ->
+            buttons.forEachIndexed { index, button ->
                 (button.layoutParams as? LinearLayout.LayoutParams)?.apply {
                     width = dp(spec.actionWidthDp)
-                    topMargin = dp(spec.actionGapDp)
+                    weight = 0f
+                    // The horizontal gap has to go, or every stacked action is indented by it.
+                    marginStart = 0
+                    // The first stacked action already sits a row gap below what precedes it; adding
+                    // the action gap on top of that put it further from its own explanation than the
+                    // actions are from each other.
+                    topMargin = if (index == 0) 0 else dp(spec.actionGapDp)
                     gravity = Gravity.CENTER_HORIZONTAL
                 }
             }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        } else {
+            // Equal shares of one row, which is what the standing screen does with its own pair. A
+            // short label beside a long one otherwise renders as a stub, and the two read as different
+            // kinds of thing rather than as two choices.
+            buttons.forEach { button ->
+                (button.layoutParams as? LinearLayout.LayoutParams)?.apply {
+                    width = 0
+                    weight = 1f
+                }
+            }
+            // Weights only ever grow a button here, because this branch already established that the
+            // natural widths fit. The row itself takes the same footprint a stacked action would, so
+            // the two orientations occupy the same width on the panel.
+            layoutParams = LinearLayout.LayoutParams(
+                measuredWidth.coerceAtLeast(dp(spec.actionWidthDp)).coerceAtMost(columnPx),
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { gravity = Gravity.CENTER_HORIZONTAL }
         }
-        layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { gravity = Gravity.CENTER_HORIZONTAL }
     }
 
     companion object {

@@ -28,8 +28,34 @@ internal const val STATUS_COLUMN_MAX_DP = 512
 /** Widest a full-width recovery action is allowed to get. */
 internal const val STATUS_ACTION_MAX_DP = 360
 
+/** The touch target every action is at least as tall as. */
+internal const val STATUS_ACTION_HEIGHT_DP = 48
+
+/**
+ * The corner, padding, label size and separation of an action, all taken from the standing screen.
+ *
+ * These are not new numbers. `MainActivity.button` has drawn every control on the QR standing screen
+ * this way since before this frame existed, on the same panels, and that screen is the one the
+ * maintainer points at as correct. The status screens went their own way instead, and every attempt to
+ * re-derive the right values here — including a stadium corner, rejected on sight — was an attempt to
+ * invent something the project had already settled.
+ *
+ * Change these only alongside `MainActivity.button`, or the two screens drift apart again.
+ */
+internal const val STATUS_ACTION_CORNER_DP = 10
+internal const val STATUS_ACTION_PADDING_H_DP = 24
+internal const val STATUS_ACTION_PADDING_V_DP = 14
+internal const val STATUS_ACTION_LABEL_SP = 16f
+
+/** Between two actions side by side; the standing screen spends 4dp on each of their facing edges. */
+internal const val STATUS_ACTION_SIDE_GAP_DP = 8
+
+/** Between two stacked actions; the standing screen spends 8dp above and below each one. */
+internal const val STATUS_ACTION_STACK_GAP_DP = 16
+
 /** Horizontal breathing room reserved either side of the column and of a full-width action. */
 internal const val STATUS_SIDE_INSET_DP = 48
+
 
 /**
  * Resolved sizes for one panel. Every value is dp except the `Sp` fields, which are scaled text
@@ -53,10 +79,14 @@ internal data class StatusSurfaceSpec(
     val brandCaptionSp: Float,
     val rowGapDp: Int,
     val actionGapDp: Int,
+    val actionSideGapDp: Int,
     val actionHeightDp: Int,
     val actionWidthDp: Int,
+    val actionPaddingHorizontalDp: Int,
+    val actionPaddingVerticalDp: Int,
     val actionCornerDp: Int,
     val actionBorderDp: Int,
+    val actionLabelSp: Float,
     val progressWidthDp: Int,
     val progressHeightDp: Int,
 ) {
@@ -87,12 +117,21 @@ internal fun statusSurfaceSpec(widthDp: Int, heightDp: Int): StatusSurfaceSpec {
         captionSp = if (compact) 12f else 13f,
         brandCaptionSp = 12f,
         rowGapDp = if (compact) 10 else 14,
-        actionGapDp = if (compact) 10 else 14,
+        actionGapDp = STATUS_ACTION_STACK_GAP_DP,
+        actionSideGapDp = STATUS_ACTION_SIDE_GAP_DP,
         // Android's default button is 48dp of touch target plus its own vertical padding.
-        actionHeightDp = 48,
+        actionHeightDp = STATUS_ACTION_HEIGHT_DP,
         actionWidthDp = (widthDp - STATUS_SIDE_INSET_DP).coerceAtMost(STATUS_ACTION_MAX_DP).coerceAtLeast(1),
-        actionCornerDp = 4,
+        // Observed on a panel at vc595: the label touches the border on both sides. Setting a
+        // background takes the replaced drawable's padding with it and nothing here ever put any back,
+        // so until now these controls had no horizontal room at all.
+        actionPaddingHorizontalDp = STATUS_ACTION_PADDING_H_DP,
+        actionPaddingVerticalDp = STATUS_ACTION_PADDING_V_DP,
+        actionCornerDp = STATUS_ACTION_CORNER_DP,
         actionBorderDp = 1,
+        // Not tier-derived, because the standing screen is not: it draws the same control on a 480x480
+        // panel and on a 1920x1200 one, and that is the control being matched.
+        actionLabelSp = STATUS_ACTION_LABEL_SP,
         progressWidthDp = if (compact) 220 else 280,
         progressHeightDp = 5,
     )

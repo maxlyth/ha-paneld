@@ -157,6 +157,75 @@ class StatusSurfaceSpecTest {
     }
 
 
+    // --- the action control -----------------------------------------------------------------------
+
+    /** Both tiers, since a control that only reads as one on a single panel size is not fixed. */
+    private val bothTiers get() = listOf(statusSurfaceSpec(480, 480), statusSurfaceSpec(1_920, 1_200))
+
+    /**
+     * An action is the standing screen's control, on every panel size.
+     *
+     * Asserted against the shared constants rather than against repeated numbers, because the point of
+     * the change is that there is now one control and not two. A tier split here would be the first
+     * step back toward the divergence: the standing screen draws the same button on a 480x480 panel and
+     * on a 1920x1200 one, and that screen is the accepted one.
+     */
+    @Test
+    fun anActionIsTheStandingScreensControlOnEveryPanelSize() {
+        bothTiers.forEach { spec ->
+            assertEquals(STATUS_ACTION_CORNER_DP, spec.actionCornerDp)
+            assertEquals(STATUS_ACTION_PADDING_H_DP, spec.actionPaddingHorizontalDp)
+            assertEquals(STATUS_ACTION_PADDING_V_DP, spec.actionPaddingVerticalDp)
+            assertEquals(STATUS_ACTION_LABEL_SP, spec.actionLabelSp, 0f)
+            assertEquals(STATUS_ACTION_SIDE_GAP_DP, spec.actionSideGapDp)
+            assertEquals(STATUS_ACTION_STACK_GAP_DP, spec.actionGapDp)
+        }
+    }
+
+    /**
+     * The control has room around its label, because on the panel it had none.
+     *
+     * Observed at vc595 on a 480x480 panel: the label touches the border on both sides. Reasoning had
+     * said the replaced drawable would leave about 12dp of its padding behind; reasoning was wrong.
+     * These are the properties that make it a control rather than a word with a line drawn round it.
+     */
+    @Test
+    fun theControlIsBigEnoughToReadAsOne() {
+        bothTiers.forEach { spec ->
+            assertTrue("the label must be held off the border", spec.actionPaddingHorizontalDp > 0)
+            assertTrue("vertical padding must be positive", spec.actionPaddingVerticalDp > 0)
+            // The touch target still governs at a normal font scale. If padding alone made the control
+            // tall, the 48dp floor would have stopped meaning anything.
+            assertTrue(
+                "padding alone must not exceed the touch target",
+                2 * spec.actionPaddingVerticalDp < spec.actionHeightDp,
+            )
+            // A stadium was built here and rejected on sight; this is what stops the corner drifting
+            // back toward one.
+            assertTrue(
+                "a corner of ${spec.actionCornerDp}dp against a ${spec.actionHeightDp}dp control is a pill",
+                spec.actionCornerDp * 4 < spec.actionHeightDp,
+            )
+            assertTrue("two actions side by side must be separated", spec.actionSideGapDp > 0)
+            // Stacked, they are separated by more than two lines of prose are, or a column of actions
+            // reads as one block.
+            assertTrue(
+                "actions ${spec.actionGapDp}dp apart against rows ${spec.rowGapDp}dp apart",
+                spec.actionGapDp > spec.rowGapDp,
+            )
+        }
+    }
+
+    /** The label is sized by the frame, between the running commentary and the heading. */
+    @Test
+    fun theActionLabelIsSizedByTheFrame() {
+        bothTiers.forEach { spec ->
+            assertTrue("${spec.actionLabelSp} must read above the detail line", spec.actionLabelSp > spec.detailSp)
+            assertTrue("${spec.actionLabelSp} must not compete with the heading", spec.actionLabelSp < spec.headingSp)
+        }
+    }
+
+
     // --- theme ------------------------------------------------------------------------------------
 
     /** A configured dashboard theme is the panel's decision and outranks both fallbacks. */

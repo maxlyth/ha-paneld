@@ -356,6 +356,114 @@ class StatusSurfaceWiringContractTest {
         assertTrue("the action must use them", action.contains("statusActionBackground(") && action.contains("statusActionTextColours("))
     }
 
+    /**
+     * Two actions side by side are separated, and stacking clears that separation again.
+     *
+     * The gap had only ever been applied on the stacked branch, so a horizontal pair was added flush
+     * and met at its borders. Both directions are asserted because the fix is a margin that is correct
+     * in one orientation and wrong in the other.
+     */
+    @Test
+    fun sideBySideActionsAreSeparatedAndStackingClearsThatSeparation() {
+        val row = surface.substringAfter("fun actionRow(").substringBefore("\n    companion object")
+        // The source order is: separate, measure, then the stacked branch, then the side-by-side one.
+        val beforeMeasure = row.substringBefore("measure(unspecified, unspecified)")
+        val stacked = row.substringAfter("orientation = LinearLayout.VERTICAL").substringBefore("} else {")
+        val sideBySide = row.substringAfter("} else {")
+        assertTrue(
+            "a pair must be separated by the side gap",
+            beforeMeasure.contains("marginStart = if (index == 0) 0 else dp(spec.actionSideGapDp)"),
+        )
+        // The stack decision has to see the gaps, or a pair that only just overflows stays side by
+        // side and clips.
+        assertTrue(
+            "the gaps must be applied before the row measures itself",
+            beforeMeasure.contains("addView(button)"),
+        )
+        assertTrue(
+            "a side-by-side pair must take equal shares, or a short label renders as a stub",
+            sideBySide.contains("weight = 1f"),
+        )
+        assertTrue(
+            "stacking must clear the horizontal gap, or every stacked action is indented by it",
+            stacked.contains("marginStart = 0"),
+        )
+        assertTrue(
+            "stacking must clear the weight, or a stacked action ignores its own width",
+            stacked.contains("weight = 0f"),
+        )
+        assertTrue(
+            "the first stacked action must not carry a gap it has nothing to be separated from",
+            stacked.contains("topMargin = if (index == 0) 0 else dp(spec.actionGapDp)"),
+        )
+    }
+
+    /**
+     * The control's own look is set here, not inherited from the platform button style.
+     *
+     * Theme inheritance is the mechanism behind every defect this frame has had: the artwork, the
+     * cached palette, the secondary colours, and then the label itself, which arrived upper-cased and
+     * widely tracked from a style nothing in this project chose.
+     */
+    @Test
+    fun theActionSetsItsOwnLabelTreatmentRatherThanInheritingIt() {
+        val action = surface.substringAfter("\n    fun action(").substringBefore("\n    fun ")
+        assertTrue("the label must not be upper-cased by the platform style", action.contains("isAllCaps = false"))
+        assertTrue("the label size must come from the spec", action.contains("textSize = spec.actionLabelSp"))
+    }
+
+    /**
+     * Padding is applied after the background, because a background can replace it.
+     *
+     * `View.setBackground` adopts the new drawable's padding when it reports any, so padding set first
+     * is silently discarded by a drawable that does. Ordering is the whole guarantee here, which is
+     * why it is asserted as an ordering rather than as the presence of a call.
+     */
+    @Test
+    fun theActionsPaddingIsAppliedAfterItsBackground() {
+        val action = surface.substringAfter("\n    fun action(").substringBefore("\n    fun ")
+        val lastBackground = action.lastIndexOf("background = statusActionBackground(")
+        val padding = action.indexOf("setPadding(")
+        assertTrue("the action must set its own padding", padding >= 0)
+        assertTrue("every background must be installed before the padding", lastBackground >= 0)
+        assertTrue("a background installed after the padding can discard it", lastBackground < padding)
+    }
+
+    /**
+     * The standing screen and the status screens draw ONE control, not two that resemble each other.
+     *
+     * They diverged silently: the standing screen's button was accepted on hardware while the status
+     * screens' actions lost their padding, kept an upper-cased label, and were added to their row
+     * flush against each other. Nothing could see it, because each screen spelled its own numbers out.
+     * Naming the shared constants is the fix, and this is what holds it.
+     */
+    @Test
+    fun theStandingScreenAndTheStatusScreensDrawTheSameControl() {
+        val builder = standing.substringAfter("private fun button(").substringBefore("\n    }")
+        listOf(
+            "STATUS_ACTION_LABEL_SP",
+            "STATUS_ACTION_CORNER_DP",
+            "STATUS_ACTION_PADDING_H_DP",
+            "STATUS_ACTION_PADDING_V_DP",
+        ).forEach { shared ->
+            assertTrue(
+                "the standing screen's button must take $shared from the shared control",
+                builder.contains(shared),
+            )
+        }
+        // Only the SHARED dimensions are forbidden as literals. The standing screen's own 260dp width
+        // and its 8dp stack margins are that screen's layout, not the control, and re-spelling them
+        // here would be inventing a shared value where none exists.
+        val respelled = listOf(
+            "dp($STATUS_ACTION_CORNER_DP)",
+            "dp($STATUS_ACTION_PADDING_H_DP)",
+            "dp($STATUS_ACTION_PADDING_V_DP)",
+            "textSize = ${STATUS_ACTION_LABEL_SP.toInt()}f",
+        ).filter { builder.contains(it) }
+        assertEquals("the standing screen re-spells a shared value: $respelled", emptyList<String>(), respelled)
+        assertTrue("the label must not be upper-cased", builder.contains("isAllCaps = false"))
+    }
+
     /** One timer chain, owned by the screen that starts it. */
     @Test
     fun theNetworkWaitCancelsItsPreviousTimerBeforeStartingAnother() {

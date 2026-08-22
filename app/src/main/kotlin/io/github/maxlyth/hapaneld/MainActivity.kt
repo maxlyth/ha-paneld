@@ -650,15 +650,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun button(label: String, onClick: () -> Unit): Button = Button(this).apply {
+        // The shape, padding and label size are shared with the status screens' actions rather than
+        // spelled out here. They were spelled out here, and the status screens quietly grew a
+        // different control: no padding at all, an upper-cased label and no separation between a pair.
+        // Naming the same constants is what stops that happening again; the drawn result is unchanged.
         text = label
         isAllCaps = false
-        textSize = 16f
+        textSize = STATUS_ACTION_LABEL_SP
         setTextColor(Color.parseColor(pal.actionText))
         background = GradientDrawable().apply {
-            cornerRadius = dp(10).toFloat()
+            cornerRadius = dp(STATUS_ACTION_CORNER_DP).toFloat()
             setColor(Color.parseColor(pal.actionBackground))
         }
-        setPadding(dp(24), dp(14), dp(24), dp(14))
+        setPadding(
+            dp(STATUS_ACTION_PADDING_H_DP), dp(STATUS_ACTION_PADDING_V_DP),
+            dp(STATUS_ACTION_PADDING_H_DP), dp(STATUS_ACTION_PADDING_V_DP),
+        )
         layoutParams = LinearLayout.LayoutParams(dp(260), ViewGroup.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(8); bottomMargin = dp(8) }
         setOnClickListener { onClick() }
