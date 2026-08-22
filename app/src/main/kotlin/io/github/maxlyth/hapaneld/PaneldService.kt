@@ -25,6 +25,8 @@ import android.os.OperationCanceledException
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.pm.PackageInfoCompat
+import androidx.webkit.WebViewCompat
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.probe.AndroidPassiveProfileProbe
@@ -807,6 +809,7 @@ class PaneldService : Service() {
     // idempotent and generation-guarded, so a dropped duplicate costs nothing.
     private val screenWakeWorker = SingleFlightExecutor("ha-paneld-screen-reconcile")
     @Volatile private var screenOnReceiver: BroadcastReceiver? = null
+    @Volatile private var webViewRebindReceiver: BroadcastReceiver? = null
     private val lightMqttPublisher = SensorLightPublisher(
         publish = { lux ->
             if (!teardownBoundary.isStopping) {
@@ -862,6 +865,7 @@ class PaneldService : Service() {
     private lateinit var passiveProfileProbe: AndroidPassiveProfileProbe
     private lateinit var profileRestart: ProfileRestartCoordinator
     private lateinit var recoveryRestart: ProfileRestartCoordinator
+    private lateinit var webViewRebindRestart: ProfileRestartCoordinator
     private lateinit var activeProfileIdentity: String
     private var profileActivationGeneration: Long? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
@@ -931,6 +935,21 @@ class PaneldService : Service() {
                 !GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime()) },
             shouldAbandon = { teardownBoundary.isStopping },
             responseGraceMs = RECOVERY_RESTART_GRACE_MS,
+        )
+        // A WebView provider binds once per process, so the only way a panel parked on "Secure dashboard
+        // bridge unavailable" can ever see a newly installed engine is on the far side of a process
+        // boundary — the same route activateWebView already takes for the installs ha-paneld performs
+        // itself. Single-flight, so one provider install asks exactly once; abandoned if the panel stops
+        // being blocked on a provider-repairable verdict before the boundary is safe to take, because by
+        // then the restart would be killing a working panel for a screen that is no longer there.
+        webViewRebindRestart = ProfileRestartCoordinator(
+            schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
+            restartProcess = {
+                requestSafeProcessBoundary("binding a newly installed WebView provider")
+            },
+            safeToRestart = { !InstallProgress.running &&
+                !GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime()) },
+            shouldAbandon = { teardownBoundary.isStopping || blockedProviderRepairableAdmission() == null },
         )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
         appliedNetworkConfiguration = currentNetworkConfigurationSnapshot()
@@ -2690,6 +2709,7 @@ class PaneldService : Service() {
             // re-apply it when ha-paneld is persisting it (no-op otherwise). See AdbController.reassert.
             runCatching { adb.reassert() }
             startScreenOnReconciliation()
+            startWebViewRebindWatch()
             sensors.start(
                 onLux = { lux ->
                     submitIlluminanceIfExposed(
@@ -3486,6 +3506,7 @@ class PaneldService : Service() {
             // then join the worker so a reconciliation already in flight cannot publish through a
             // retired client. Ordered before the retirement fence below for exactly that reason.
             closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
+            closeOwner("WebView rebind watch") { stopWebViewRebindWatch() }
             closeOwnerResult("screen reconcile worker") {
                 screenWakeWorker.closeAndJoin(
                     minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
@@ -3819,6 +3840,118 @@ class PaneldService : Service() {
     private fun stopScreenOnReconciliation() {
         screenOnReceiver?.let { runCatching { unregisterReceiver(it) } }
         screenOnReceiver = null
+    }
+
+    /**
+     * The blocking admission verdict the LIVE renderer generation is parked on, when a WebView provider
+     * change could repair it; null in every other case, including a healthy dashboard and a panel blocked
+     * on something a new engine cannot fix.
+     *
+     * [RendererAdmissionRuntime] is the authority rather than anything held here, and that is the whole
+     * answer to stale generations: it is never persisted, it refuses a write from a renderer that no
+     * longer owns the activity, and it re-applies that ownership test on every read — so a destroyed or
+     * replaced activity's verdict stops being visible without a teardown hook to forget.
+     */
+    private fun blockedProviderRepairableAdmission(): AdmissionOutcome? {
+        val record = RendererAdmissionRuntime.current()?.record ?: return null
+        if (record.state != RendererAdmissionState.BLOCKED) return null
+        return record.outcome?.takeIf { providerRepairableAdmission(it) }
+    }
+
+    /** The package that provides this panel's WebView right now, or null when none resolves. */
+    private fun resolveWebViewProviderIdentity(): WebViewProviderIdentity? = runCatching {
+        WebViewCompat.getCurrentWebViewPackage(this)?.let {
+            WebViewProviderIdentity(
+                packageName = it.packageName,
+                versionCode = PackageInfoCompat.getLongVersionCode(it),
+                versionName = it.versionName,
+            )
+        }
+    }.getOrNull()
+
+    /**
+     * Notice a WebView provider being installed, updated or repaired while the built-in renderer is
+     * parked on "Secure dashboard bridge unavailable", and take the one action that can clear it.
+     *
+     * That screen is deliberately terminal on a timer ([admissionRetryClass] gives it
+     * [AdmissionRetryClass.MANUAL_ONLY]) because a missing WebView capability is not time-dependent, and
+     * this does not change that: no cadence, no ladder, no polling, and every other blocked verdict keeps
+     * the network and Home Assistant-version recovery it already had. The trigger is the install event
+     * itself, and the panel asks nothing in between.
+     *
+     * Registration is paired with the service's own lifetime rather than with the screen, so the receiver
+     * cannot outlive an activity or be registered twice by a repaint; the decision is cheap, and it asks
+     * the panel-local questions before it ever queries the provider.
+     */
+    private fun startWebViewRebindWatch() {
+        if (webViewRebindReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (teardownBoundary.isStopping) return
+                // Resolved at most once per broadcast, and only if the cheap questions did not already
+                // answer: an app updating in the background on a healthy panel costs nothing here.
+                val provider = lazy { resolveWebViewProviderIdentity() }
+                val blocked = blockedProviderRepairableAdmission()
+                val decision = webViewRebindDecision(
+                    action = intent?.action,
+                    changedPackage = intent?.data?.schemeSpecificPart,
+                    replacingExistingInstall = intent?.getBooleanExtra(Intent.EXTRA_REPLACING, false) == true,
+                    blockedOutcome = blocked,
+                    resolveProvider = provider::value,
+                )
+                when (decision) {
+                    WebViewRebindDecision.REBIND ->
+                        if (webViewRebindRestart.request()) {
+                            Log.i(
+                                TAG,
+                                "WebView provider installed while the dashboard bridge was unavailable " +
+                                    "(${provider.value?.describe() ?: "unresolved"}) — restarting to bind it",
+                            )
+                        } else {
+                            Log.i(TAG, "a WebView provider rebind is already pending in this process")
+                        }
+                    // A panel that is not parked on a bridge screen has nothing to say about an install,
+                    // and a broadcast this rule does not observe is not an event. Everything else is a
+                    // decision taken WHILE the dashboard was unavailable, which is worth naming: it is
+                    // the difference between "the engine was replaced and nothing happened" and "what
+                    // was installed was not the engine".
+                    WebViewRebindDecision.NOT_BLOCKED,
+                    WebViewRebindDecision.UNRELATED_ACTION,
+                    -> Unit
+
+                    else -> if (blocked != null) {
+                        Log.i(
+                            TAG,
+                            "package install ignored while the dashboard bridge was unavailable: " +
+                                decision.name.lowercase(),
+                        )
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            // Package broadcasts carry the subject as a `package:` URI; without the scheme the filter
+            // matches nothing at all rather than matching everything.
+            addDataScheme("package")
+        }
+        // Both are protected system broadcasts, so — as with the screen-on receiver — the tighter
+        // NOT_EXPORTED flag still receives them.
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
+            }
+        }.onSuccess { webViewRebindReceiver = receiver }
+            .onFailure { Log.w(TAG, "WebView rebind watch could not be registered", it) }
+    }
+
+    private fun stopWebViewRebindWatch() {
+        webViewRebindReceiver?.let { runCatching { unregisterReceiver(it) } }
+        webViewRebindReceiver = null
     }
 
     private fun runFinalizerStep(deadline: MonotonicDeadline, block: () -> Unit): Boolean {

@@ -389,6 +389,146 @@ class DashboardRecoveryTest {
         AdmissionOutcome.entries.forEach { assertNotNull(it.name, admissionRetryClass(it)) }
     }
 
+    // --- a WebView provider install as the one event that can clear a terminal bridge screen ---
+
+    private companion object {
+        const val ADDED = "android.intent.action.PACKAGE_ADDED"
+        const val REPLACED = "android.intent.action.PACKAGE_REPLACED"
+        val PROVIDER = WebViewProviderIdentity("com.android.webview", 4110, "41.1.0")
+    }
+
+    /** Counts provider lookups so a decision can be proved to have declined BEFORE querying one. */
+    private class Resolver(private val identity: WebViewProviderIdentity?) : () -> WebViewProviderIdentity? {
+        var calls = 0
+        override fun invoke(): WebViewProviderIdentity? {
+            calls++
+            return identity
+        }
+    }
+
+    private fun decide(
+        action: String? = REPLACED,
+        changed: String? = PROVIDER.packageName,
+        replacing: Boolean = false,
+        blocked: AdmissionOutcome? = AdmissionOutcome.BRIDGE_UNAVAILABLE,
+        resolver: Resolver = Resolver(PROVIDER),
+    ): WebViewRebindDecision = webViewRebindDecision(action, changed, replacing, blocked, resolver)
+
+    @Test fun `the actions observed are exactly the platform's package install broadcasts`() {
+        // Compile-time constants, so a JVM test can hold the framework to its own spelling. A silent
+        // divergence here would register a filter that never matches and fail as permanent silence.
+        assertEquals(android.content.Intent.ACTION_PACKAGE_ADDED, ADDED)
+        assertEquals(android.content.Intent.ACTION_PACKAGE_REPLACED, REPLACED)
+    }
+
+    @Test fun `replacing the panel's WebView provider rebinds it`() {
+        assertEquals(WebViewRebindDecision.REBIND, decide())
+    }
+
+    @Test fun `a provider arriving for the first time rebinds it too`() {
+        // The added-package route is not decoration: a provider that never loaded leaves nothing bound,
+        // so the panel resolves whichever package the system has just adopted.
+        assertEquals(WebViewRebindDecision.REBIND, decide(action = ADDED))
+    }
+
+    @Test fun `a repair that reinstalls the same build still rebinds`() {
+        // The screen tells the person to update OR repair. A same-version reinstall is the repair, and a
+        // rule keyed on a version difference would sit out the remedy it just recommended.
+        val resolver = Resolver(PROVIDER.copy())
+        assertEquals(WebViewRebindDecision.REBIND, decide(resolver = resolver))
+    }
+
+    @Test fun `a stale pinned version does not hide a replacement of the same package`() {
+        // Once an engine is bound, the resolvable version keeps naming the build that was bound, however
+        // many times the APK is replaced underneath. Keying on the package name is what survives that.
+        val stale = Resolver(PROVIDER.copy(versionCode = 1, versionName = "1.0.0"))
+        assertEquals(WebViewRebindDecision.REBIND, decide(resolver = stale))
+    }
+
+    @Test fun `an unrelated app updating is ignored without even asking who the provider is`() {
+        val resolver = Resolver(PROVIDER)
+        assertEquals(WebViewRebindDecision.OTHER_PACKAGE, decide(changed = "com.example.thermostat", resolver = resolver))
+        // It had to ask once to know the package was unrelated...
+        assertEquals(1, resolver.calls)
+
+        // ...but a panel that is not blocked never pays for the lookup at all.
+        val quiet = Resolver(PROVIDER)
+        assertEquals(WebViewRebindDecision.NOT_BLOCKED, decide(changed = "com.example.thermostat", blocked = null, resolver = quiet))
+        assertEquals(0, quiet.calls)
+    }
+
+    @Test fun `a package name that never arrived is not treated as the provider`() {
+        assertEquals(WebViewRebindDecision.OTHER_PACKAGE, decide(changed = null))
+        assertEquals(WebViewRebindDecision.OTHER_PACKAGE, decide(changed = "  "))
+        // The case the emptiness guard actually defends, which plain inequality would wave through:
+        // a degenerate resolution answering with a blank package would otherwise MATCH a broadcast
+        // that named nothing, and restart the panel over an install it never identified.
+        assertEquals(
+            WebViewRebindDecision.OTHER_PACKAGE,
+            decide(changed = "", resolver = Resolver(WebViewProviderIdentity("", 0L, null))),
+        )
+    }
+
+    @Test fun `the added half of a replace is dropped, so one install decides once`() {
+        // Android announces a replace as an add carrying EXTRA_REPLACING as well as its own broadcast.
+        assertEquals(WebViewRebindDecision.DUPLICATE_INSTALL, decide(action = ADDED, replacing = true))
+        // The replaced broadcast is the one that is sent exactly once, and it still decides.
+        assertEquals(WebViewRebindDecision.REBIND, decide(action = REPLACED, replacing = true))
+    }
+
+    @Test fun `broadcasts this rule does not observe decide nothing`() {
+        assertEquals(WebViewRebindDecision.UNRELATED_ACTION, decide(action = "android.intent.action.PACKAGE_REMOVED"))
+        assertEquals(WebViewRebindDecision.UNRELATED_ACTION, decide(action = null))
+    }
+
+    @Test fun `a dashboard that is not parked on a provider verdict is left alone`() {
+        // No renderer generation is blocked at all — a healthy panel, or one whose activity was destroyed
+        // or replaced, which is the same answer because the runtime stops reporting a retired generation.
+        assertEquals(WebViewRebindDecision.NOT_BLOCKED, decide(blocked = null))
+
+        // Blocked, but on verdicts a new engine cannot repair. These keep the recovery they already have.
+        listOf(
+            AdmissionOutcome.TRANSPORT_FAILED,
+            AdmissionOutcome.UNSUPPORTED_HA,
+            AdmissionOutcome.CREDENTIAL_REFUSED,
+            AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
+            AdmissionOutcome.BRIDGE_ATTACH_FAILED,
+        ).forEach {
+            assertEquals(it.name, WebViewRebindDecision.NOT_BLOCKED, decide(blocked = it))
+        }
+    }
+
+    @Test fun `an install with no resolvable provider has nothing to rebind to`() {
+        assertEquals(WebViewRebindDecision.NO_PROVIDER, decide(resolver = Resolver(null)))
+    }
+
+    @Test fun `a replacement that is still incapable decides again only on the next real install`() {
+        // The rebind happens, the panel comes back on a fresh engine, and the engine is STILL incapable —
+        // so the same screen returns. Nothing here re-decides on its own: the identical inputs are only
+        // re-examined because another install event arrived, which is the whole point of an event trigger.
+        assertEquals(WebViewRebindDecision.REBIND, decide())
+        assertEquals(WebViewRebindDecision.REBIND, decide())
+        // Between those installs the panel asks nothing at all: with no broadcast there is no decision,
+        // which is what "no polling" means here rather than a cadence set to a long interval.
+        assertEquals(WebViewRebindDecision.UNRELATED_ACTION, decide(action = null))
+    }
+
+    @Test fun `only a missing WebView capability is treated as provider-repairable`() {
+        // Exhaustive by size, like the retry classification above: a new outcome must answer here rather
+        // than inherit `false`, because inheriting silently re-makes the terminal-screen decision.
+        assertEquals(11, AdmissionOutcome.entries.size)
+        AdmissionOutcome.entries.forEach {
+            assertEquals(it.name, it == AdmissionOutcome.BRIDGE_UNAVAILABLE, providerRepairableAdmission(it))
+        }
+        // And it is precisely the verdict that no timer will ever re-ask, which is why it needs an event.
+        assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.BRIDGE_UNAVAILABLE))
+    }
+
+    @Test fun `a provider description carries the build without carrying a path or a host`() {
+        assertEquals("com.android.webview 41.1.0 (4110)", PROVIDER.describe())
+        assertEquals("com.android.webview ? (4110)", PROVIDER.copy(versionName = null).describe())
+    }
+
     // --- the visible countdown, driven as a lifecycle rather than asserted from source ---
 
     private class Clock(var now: Long = 0L) : () -> Long { override fun invoke() = now }

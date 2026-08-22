@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import android.content.Intent
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.http.HA_OAUTH_CALLBACK_PATH
 import java.net.URI
@@ -426,6 +427,133 @@ internal fun admissionRetryClass(outcome: AdmissionOutcome): AdmissionRetryClass
     AdmissionOutcome.UNSUPPORTED_HA,
     AdmissionOutcome.BRIDGE_UNAVAILABLE,
     -> AdmissionRetryClass.MANUAL_ONLY
+}
+
+/**
+ * Which package currently provides this panel's WebView, as resolved through
+ * `WebViewCompat.getCurrentWebViewPackage`.
+ *
+ * **What counts as a provider identity change, and what deliberately does not.** The identity is the
+ * whole triple, but the only part this panel can act on is [packageName], and the version fields exist
+ * to say WHICH build a decision was taken against rather than to take it. Two facts force that:
+ *
+ *  - **The resolvable version is stale by construction once a provider is loaded.** The platform call
+ *    answers with the provider loaded INTO THIS PROCESS when there is one, falling back to the system's
+ *    current choice only when nothing has been loaded. A process that has already bound an engine
+ *    therefore keeps reporting the build it bound, however many times the APK on disk is replaced — so
+ *    "the version changed" is a signal this panel structurally cannot observe from inside, and treating
+ *    its absence as "nothing happened" would ignore exactly the event worth acting on.
+ *  - **A repair is a same-version install.** Reinstalling the identical build is the documented remedy
+ *    for a damaged WebView, so a rule keyed on a version difference would sit out the case the screen
+ *    itself tells the user to try.
+ *
+ *  A replace preserves the package name, which is what makes the surviving half sufficient: the install
+ *  event names the package, and the question "is that the package that provides our WebView?" is
+ *  answerable from a pinned identity and a fresh one alike.
+ */
+internal data class WebViewProviderIdentity(
+    val packageName: String,
+    val versionCode: Long,
+    val versionName: String?,
+) {
+    /** For the log line that records which build a rebind was decided against. Never a path or a host. */
+    fun describe(): String = "$packageName ${versionName ?: "?"} ($versionCode)"
+}
+
+/**
+ * Whether a blocked admission verdict is one that installing, updating or repairing the WebView
+ * provider can actually repair.
+ *
+ * Exhaustive on purpose, exactly like [admissionRetryClass]: a new outcome must be given an answer here
+ * rather than inheriting `false` from an `else`, because inheriting silently is how the terminal-screen
+ * decision this rule exists to soften gets re-made by accident.
+ *
+ * Only [AdmissionOutcome.BRIDGE_UNAVAILABLE] qualifies. It is the one verdict that is BOTH about the
+ * provider's capability and never armed a timer, so nothing else in the panel will ever ask again.
+ * [AdmissionOutcome.BRIDGE_ATTACH_FAILED] was considered and deliberately excluded: it describes a
+ * capable provider whose bridge failed to attach, it already recovers on the fast ladder, and pointing
+ * a process boundary at a screen that is recovering on its own is a larger behaviour change than this
+ * rule's premise supports. Everything else — transport, credentials, dashboards, server version — is
+ * untouched, so network and Home Assistant-version recovery keep the classification [admissionRetryClass]
+ * gives them.
+ */
+internal fun providerRepairableAdmission(outcome: AdmissionOutcome): Boolean = when (outcome) {
+    AdmissionOutcome.BRIDGE_UNAVAILABLE -> true
+
+    AdmissionOutcome.TRANSPORT_FAILED,
+    AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
+    AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
+    AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
+    AdmissionOutcome.BRIDGE_ATTACH_FAILED,
+    AdmissionOutcome.VERSION_UNVERIFIABLE,
+    AdmissionOutcome.NO_LEGAL_DASHBOARD,
+    AdmissionOutcome.CREDENTIAL_REFUSED,
+    AdmissionOutcome.SIGN_IN_REQUIRED,
+    AdmissionOutcome.UNSUPPORTED_HA,
+    -> false
+}
+
+/** What a package install event means for a panel parked on a provider-repairable admission screen.
+ *  Every declining answer names its own reason so the log says why nothing happened. */
+internal enum class WebViewRebindDecision {
+    /** Bind the newly installed provider — which only a fresh process can do. */
+    REBIND,
+
+    /** Not an install event this rule observes. */
+    UNRELATED_ACTION,
+
+    /** The added-package half of a replace; the replaced-package broadcast owns the same event. */
+    DUPLICATE_INSTALL,
+
+    /** No live renderer generation is parked on a verdict a provider change could repair. */
+    NOT_BLOCKED,
+
+    /** Something was installed, but it is not the package that provides this panel's WebView. */
+    OTHER_PACKAGE,
+
+    /** Nothing resolves as the WebView provider, so there is no engine to rebind to. */
+    NO_PROVIDER,
+}
+
+/**
+ * Decide whether a package install should hand the panel a fresh WebView engine.
+ *
+ * **Why a re-check cannot be the answer, and a new process must be.** A WebView provider binds once per
+ * process — the same fact `PaneldService.activateWebView` already restarts on after ha-paneld installs an
+ * engine itself. The capability verdict behind "Secure dashboard bridge unavailable" is read from the
+ * bound engine's feature set, which is resolved once and held for the life of the process, so asking
+ * again in the same process returns the same answer no matter what has since been installed on disk.
+ * That is also why the manual Retry button cannot clear this particular screen. The only re-run that can
+ * produce a different verdict is one that happens after a fresh bind, so the recovery this decides is a
+ * gated process boundary and the admission sequence then runs normally on the other side of it.
+ *
+ * Android usually gets there first: replacing a provider kills the processes that have bound it, and a
+ * START_STICKY service comes straight back. This rule covers what that leaves — a provider ARRIVING
+ * rather than being replaced, and OEM builds whose update service does not kill dependents — so it is a
+ * second route to the same place, never the only one.
+ *
+ * [resolveProvider] is a function rather than a value so that the cheap, panel-local questions are asked
+ * first: an unrelated app updating in the background must not cost a provider lookup, and a test can
+ * prove that it did not.
+ */
+internal fun webViewRebindDecision(
+    action: String?,
+    changedPackage: String?,
+    replacingExistingInstall: Boolean,
+    blockedOutcome: AdmissionOutcome?,
+    resolveProvider: () -> WebViewProviderIdentity?,
+): WebViewRebindDecision {
+    if (action != Intent.ACTION_PACKAGE_ADDED && action != Intent.ACTION_PACKAGE_REPLACED) {
+        return WebViewRebindDecision.UNRELATED_ACTION
+    }
+    // Android announces a replace twice: once as a removal/addition pair carrying EXTRA_REPLACING, and
+    // once as ACTION_PACKAGE_REPLACED. Answering the addition as well would decide the same install
+    // twice; the replaced broadcast is the one that is only ever sent once per event.
+    if (action == Intent.ACTION_PACKAGE_ADDED && replacingExistingInstall) return WebViewRebindDecision.DUPLICATE_INSTALL
+    if (blockedOutcome == null || !providerRepairableAdmission(blockedOutcome)) return WebViewRebindDecision.NOT_BLOCKED
+    val provider = resolveProvider() ?: return WebViewRebindDecision.NO_PROVIDER
+    if (changedPackage.isNullOrBlank() || changedPackage != provider.packageName) return WebViewRebindDecision.OTHER_PACKAGE
+    return WebViewRebindDecision.REBIND
 }
 
 /**
