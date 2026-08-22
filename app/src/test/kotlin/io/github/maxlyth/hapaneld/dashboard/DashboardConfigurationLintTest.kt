@@ -195,6 +195,73 @@ class DashboardConfigurationLintTest {
         assertFalse(issue.toJson().toString().contains(secretMarker))
     }
 
+    @Test fun templateFilterAdvisorySeparatesReturnedEntitiesFromServerEvaluatedReads() {
+        // The card from issue #113, verbatim in shape: a filter template whose *condition* reads one
+        // entity and whose *result* names another. The reporter's complaint was that allowing the check
+        // still did not add sensor.hourly_tick. It never should: Home Assistant renders the template and
+        // delivers the result over a render_template subscription, which EntityFilterProtocol does not
+        // mutate, so that entity is supposed to be absent. Advising a pin for it would inflate the very
+        // list the filter exists to shrink, which is the asymmetry these assertions hold.
+        val config = """{"views":[{"title":"Cameras","cards":[{
+          "type":"custom:auto-entities",
+          "card":{"type":"picture-entity","entity":"camera.driveway_medium_resolution_channel"},
+          "filter":{"template":"{% if states('sensor.hourly_tick') %}\n  {{ [{'entity': 'camera.driveway_medium_resolution_channel'}] }}\n{% endif %}"},
+          "sort":{"method":"unused"},"show_empty":true
+        }]}]}"""
+
+        val result = DashboardConfigurationLint.analyze(
+            config,
+            listOf("sensor.hourly_tick", "camera.driveway_medium_resolution_channel"),
+            emptyMap(),
+        )
+        val issue = result.issues.single()
+        val payload = issue.toJson().toString()
+
+        assertTrue(result.blocking)
+        assertEquals(DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR, issue.type)
+        assertEquals("Unbounded template entity selector", issue.ruleSummary)
+
+        // Neither the entity the template returns nor the entity it only tests is inferred. Promoting
+        // either would mean reading the template, which is the boundary this check exists to hold.
+        assertEquals(emptySet<String>(), result.safeEntityIds)
+
+        // The explanation separates the two kinds and gives them opposite advice: what the template
+        // returns can need a pin, what it only reads never does.
+        val reason = requireNotNull(issue.reason)
+        assertTrue(reason, reason.contains("does not evaluate templates"))
+        assertTrue(reason, reason.contains("which entities this filter returns"))
+        assertTrue(reason, reason.contains("delivered outside this filter"))
+        assertTrue(reason, reason.contains("they need nothing"))
+        val recommendation = requireNotNull(issue.recommendation)
+        assertTrue(recommendation, recommendation.contains("pin only the entities the template returns"))
+        // The advice a reader could act on wrongly: never tell anyone to pin what the template reads.
+        assertFalse(recommendation, recommendation.contains("only tests"))
+        assertFalse(reason, reason.contains("is a dependency too"))
+
+        // The advisory record carries no template text and no entity ID lifted out of one.
+        assertFalse(payload, payload.contains("hourly_tick"))
+        assertFalse(payload, payload.contains("driveway_medium_resolution_channel"))
+        assertFalse(payload, payload.contains("{%"))
+        assertFalse(payload, payload.contains("{{"))
+    }
+
+    @Test fun templateFilterConditionEntityIsNeverPromotedByTheScanner() {
+        // The other half of the same report: the dashboard scanner records the expression as evidence
+        // for the operator but contributes no entity ID from inside it.
+        val config = """{"views":[{"cards":[{
+          "type":"custom:auto-entities",
+          "filter":{"template":"{% if states('sensor.hourly_tick') %}{{ [{'entity': 'camera.driveway'}] }}{% endif %}"}
+        }]}]}"""
+
+        val scan = EntityLearningProtocol.scanDashboard(config)
+
+        assertFalse(scan.entityIds.contains("sensor.hourly_tick"))
+        assertFalse(scan.entityIds.contains("camera.driveway"))
+        val expression = scan.dynamicExpressions.single()
+        assertTrue(expression.literal.contains("sensor.hourly_tick"))
+        assertEquals("dashboard.views[0].cards[0].filter.template", expression.sourceLocation)
+    }
+
     @Test fun cardLevelTemplateBlocksEvenWhenIncludeRulesAreOtherwiseBounded() {
         val secretMarker = "private_template_marker"
         val config = """{"views":[{"title":"Overview","cards":[{
@@ -1102,6 +1169,45 @@ class DashboardConfigurationLintTest {
             it.type == DashboardConfigurationLint.IssueType.COMPATIBILITY_GAP
         })
         assertFalse(saturated.blocking)
+    }
+
+    @Test fun everyTemplateSelectorGroupSurvivesTheBoundedIssuePayload() {
+        // The largest shape the diagnostics can carry: MAX_ISSUE_GROUPS views, each saturating
+        // MAX_SOURCES_PER_GROUP with templated auto-entities cards behind long titles and paths.
+        // Per-issue copy that pushes this past MAX_PAYLOAD_BYTES does not truncate a string, it drops
+        // whole issues from the tail — and the blocking count is derived from the bounded payload, so
+        // a dropped check would also stop blocking automatic activation. This is the size budget for
+        // the template-specific reason and recommendation.
+        val views = (0 until EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS).joinToString(",") { view ->
+            val cards = (0 until EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP).joinToString(",") {
+                """{"type":"custom:auto-entities","filter":{"template":"{{ states('sensor.hourly_tick') }}"}}"""
+            }
+            """{"path":"a-deliberately-long-dashboard-view-path-$view",""" +
+                """"title":"A deliberately long dashboard view title $view","cards":[$cards]}"""
+        }
+        val result = DashboardConfigurationLint.analyze("""{"views":[$views]}""", emptyList(), emptyMap())
+        val templateIssues = result.issues.filter {
+            it.type == DashboardConfigurationLint.IssueType.UNBOUNDED_SELECTOR
+        }
+        assertEquals(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS, templateIssues.size)
+        assertEquals(
+            EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP,
+            templateIssues.first().sourceLocations.size,
+        )
+
+        val bounded = JSONArray(
+            EntityCatalogIssuePersistence.boundedJson(
+                result.issues.map(DashboardConfigurationLint.Issue::toJson),
+            ),
+        )
+
+        val bytes = bounded.toString().toByteArray(Charsets.UTF_8).size
+        assertEquals(
+            "the bounded diagnostics payload dropped issues at $bytes bytes; shorten the per-issue copy",
+            result.issues.size,
+            bounded.length(),
+        )
+        assertTrue("payload is $bytes bytes", bytes <= EntityCatalogIssuePersistence.MAX_PAYLOAD_BYTES)
     }
 
     @Test fun blockingDiagnosticOverflowCannotBeIgnored() {

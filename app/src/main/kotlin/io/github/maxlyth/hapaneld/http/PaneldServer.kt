@@ -3134,7 +3134,7 @@ class PaneldServer internal constructor(
             <div id="entity-issues-list" class="entity-issues-list"></div>
             <section id="entity-dynamic" class="entity-dynamic" hidden>
               <h3>Dynamic expressions to exercise</h3>
-              <p class="muted">These expressions are not configuration errors. Exercise the relevant dashboard state so runtime observation can reveal concrete entity IDs.</p>
+              <p class="muted">These expressions are not configuration errors. Exercise the relevant dashboard state so runtime observation can reveal concrete entity IDs. Templates that Home Assistant renders on the server, such as <code>{{ ... }}</code> and <code>{% ... %}</code>, are evaluated before the dashboard sees them, so exercising never reveals the entities they read. It does not need to: Home Assistant sends the rendered result over a separate subscription this filter does not touch, so those entities need nothing. Only an entity such a template produces as a card reference has to be added, by hand.</p>
               <div id="entity-dynamic-list" class="entity-dynamic-list"></div>
             </section>
             <button class="pbtn" id="entity-issues-rescan" type="button">Re-scan after editing dashboard</button>

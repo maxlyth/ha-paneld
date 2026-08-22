@@ -244,6 +244,8 @@ object DashboardConfigurationLint {
                 findings += Finding(
                     IssueType.UNBOUNDED_SELECTOR, view, source, "filter-template",
                     "Unbounded template entity selector", null, SELECTOR_ENTITY_LIMIT,
+                    reason = TEMPLATE_SELECTOR_REASON,
+                    recommendation = TEMPLATE_SELECTOR_RECOMMENDATION,
                 )
             }
             fun reportUnsafeGeneratedRows(rows: Collection<JSONObject>, location: String, summary: String) {
@@ -1052,6 +1054,32 @@ object DashboardConfigurationLint {
     }
     private val REGISTRY_SELECTOR_KEYS = setOf("area", "area_id", "floor", "floor_id", "label", "label_id")
     private val UNSAFE_GLOB_META = setOf('\\', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '/')
+    /**
+     * A template filter is refused without being read, so this text can neither quote the template nor
+     * name anything inside it. It replaces the generic unbounded-selector wording because the recurring
+     * report is the opposite of a bug: an entity the template only *tests* never appears, and the
+     * generic copy gives the reader no way to tell that apart from a discovery failure.
+     *
+     * The two halves are deliberately not symmetric, and getting that wrong is the failure this text
+     * exists to prevent. Home Assistant renders the template itself and delivers the result over a
+     * `render_template` subscription, which [EntityFilterProtocol] never touches: it mutates only
+     * `subscribe_entities`. So an entity the template merely reads needs nothing, and telling anyone to
+     * pin it would inflate the very list the filter exists to shrink. Only what the template *returns*
+     * becomes a card dependency read back through `hass.states`, and only that can need a pin.
+     *
+     * Deliberately terse. Every issue carries its own copy into a payload bounded at
+     * [EntityCatalogIssuePersistence.MAX_PAYLOAD_BYTES], where overflow drops whole issues rather than
+     * truncating a string. The route to catalogue search and manual pinning is presentation, so it
+     * lives in the Entities page instead of in every record.
+     */
+    private const val TEMPLATE_SELECTOR_REASON =
+        "ha-paneld does not evaluate templates, so it cannot tell which entities this filter returns. " +
+            "Entities it only reads are Home Assistant's own, delivered outside this filter, so their " +
+            "absence here is correct and they need nothing."
+
+    private const val TEMPLATE_SELECTOR_RECOMMENDATION =
+        "Bound the filter structurally, or pin only the entities the template returns."
+
     private const val MAX_PATTERN_LENGTH = 160
     private const val MAX_SUMMARY_LENGTH = 240
 }
