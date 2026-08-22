@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.9.7-rc2 - 2026-08-23
+
+### Added
+
+- **Rooted panels now guard the configuration database.** The root helper supervises the panel's database, refuses a replacement that would strand the configuration store, and recovers automatically after a crash or an interrupted upgrade, restoring the exact prior state rather than guessing. The API gains guard-db bootstrap export routes that hand back the verified database bytes together with a proof of what they are, under a short-lived lease.
+
+### Fixed
+
+- **Updating Android System WebView now takes effect without reinstalling ha-paneld.** A WebView provider binds once per process, so a panel showing "Secure dashboard bridge unavailable" stayed on that screen however many times WebView was updated or Retry was pressed. The panel now notices the newly installed provider and restarts its renderer to bind it, and no longer abandons that pending restart while the verdict is briefly out of view during the switch.
+
+- **Rooted upgrades no longer stall on a helper that will not exit.** The installer now stops the old helper through Android's own service control, escalates if the process ignores the first request, and if it still cannot retire it reports exactly which process survived and what Android believes the service state to be. Every other step of a helper replacement that used to fail with one generic message now names itself, so a failed install tells you what failed. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
+
+- **A release's helper asset must match what the release says it is.** The installer reads the identity stamped inside the downloaded helper and refuses to stage it if it disagrees with the identity the signed provisioner records, so a mismatch is caught before any privileged command runs rather than discovered after the swap and rolled back. The standalone helper installer reads the staged binary's own identity the same way, so a helper staged from a different build can no longer fail a good install afterwards.
+
+- **Scripted installs no longer refuse `--home-dashboard` on a panel already using the built-in renderer.** The check used to require the renderer to be named explicitly, so a panel on the default selection was told it was not using a renderer it was in fact using. The panel now reports which renderer it resolves to and the installer asks that instead.
+
+- **Entity catalog search tells you what it found.** Typing in the search box on the Entities page used to change the tables silently, and the matches often sat below the fold, so a search that worked looked like it had done nothing. A status line now acknowledges each keystroke and reports the match count for every section, and the first section with matches scrolls into view once. [Issue #114](https://github.com/maxlyth/ha-paneld/issues/114)
+
+- **Backups no longer assume a Companion login exists.** `POST /api/v1/backup` read a missing `include_companion` as `true`, so the simplest backup request failed on any panel without the Home Assistant Companion. Omitting the parameter now means "include it if a supported Companion is installed"; asking for it explicitly on a panel with none still refuses, and an unrecognised value is now rejected instead of quietly producing a config-only archive.
+
+- **Dashboard filter advisories no longer treat a template as a missing entity.** ha-paneld deliberately does not evaluate filter templates; Home Assistant renders them itself. The advisory now says exactly that, and which entities a template does and does not add, instead of reporting the template's own condition entities as a discovery failure. [Issue #113](https://github.com/maxlyth/ha-paneld/issues/113)
+
+- **Status screen actions look like the buttons they are.** Actions on the panel's own status screens now use the same control style as the standing screen, with real padding and spacing between a pair of actions and clear separation from the surrounding text.
+
+- **The Wi-Fi stability row and the diagnostics dump agree.** The Dashboard row derived its wording from the raw outage count while `/diag` used the chronic classification, so a panel whose history had been compacted could show a low number on its own card while a pasted report called it chronic. Both now use the same classification, and a saturated count reads as the floor it is.
+
+### Changed
+
+- **Build toolchain and libraries updated.** Android Gradle Plugin is now 9.3.1, Kotlin is now 2.4.10, and the YAML parser used for device profiles has moved to version 3.1.1. The full test suite including every profile and YAML security case passes on the new versions, but a profile import that behaves differently on rc2 than on 0.9.6 is worth a report.
+
+### Docs
+
+- **The Shizuku guide is now a short section of the provisioning guide.** It is a last resort for a genuinely unrooted panel and had grown a page of its own; what remains states the four things that matter: it is not root, approval happens only on the panel, the consent is never exported, and it is for panels with no other route. Links from the panel's own Profile page and from older release notes still resolve.
+
+- **Two hardware-page corrections.** The ZHICAI SMT1019 ships with Google Play, so its WebView updates from the Play Store rather than by sideload; the page previously said the opposite. The Smatek S9E is `arm64-v8a` and its WebView entry now points at the matching build, and notes that the 2025-12 firmware already ships a current WebView.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
+
+
 ## v0.9.7-rc1 - 2026-08-19
 
 ### Panels reach their dashboards faster and recover from Home Assistant outages
