@@ -59,7 +59,18 @@ case "$url" in
     ;;
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-helper-v*-*)
     [ -n "$output_file" ] || exit 2
-    printf 'mock release helper\n' > "$output_file"
+    # The served helper carries an embedded build identity exactly as a real helper binary does,
+    # so the installer's asset-versus-provisioner cross-check has something falsifiable to read.
+    # The signed-checksum branch above hashes this same body through RELEASE_HELPER_SOURCE, so
+    # every flavour below stays authentically signed and only the identity record varies.
+    case "${MOCK_RELEASE_HELPER_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" in
+      missing) printf 'mock release helper\n' > "$output_file" ;;
+      malformed) printf 'mock release helper\nBUILDID not-a-valid-build-identity\n' > "$output_file" ;;
+      duplicate) printf 'mock release helper\nBUILDID %s\nBUILDID %s\n' "${MOCK_HELPER_BUILD_ID:?}" \
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$output_file" ;;
+      *) printf 'mock release helper\nBUILDID %s\n' \
+        "${MOCK_RELEASE_HELPER_BUILD_ID:-${MOCK_HELPER_BUILD_ID:?}}" > "$output_file" ;;
+    esac
     ;;
   https://github.com/maxlyth/ha-paneld/releases/download/v*/ha-paneld-provision-v*.sh.sha256.sig)
     [ -n "$output_file" ] || exit 2

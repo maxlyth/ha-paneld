@@ -1763,6 +1763,22 @@ verify_release_helper() {
   step "🔐 authenticated" "${D}$tag helper · $abi · signed SHA-256 ${actual_hash:0:12}…${X}"
 }
 
+# A helper binary stamps its own build identity into its bytes, so the identity of the helper that
+# is about to serve the socket can be read from the artifact itself rather than inferred from
+# whatever tree, tag or checkout the installer happens to be running from. Exactly one well-formed
+# record must be present: none means the artifact cannot state who it is, and more than one means it
+# states two contradictory answers. Both are refusals, never a guess.
+extract_helper_build_id() {
+  local file="$1" records ids
+  # No match and an unreadable file are both "cannot state an identity", which the count check
+  # below turns into a refusal; the tolerated statuses here only stop `set -e` from aborting the
+  # run before that refusal can be reported with its own message.
+  records="$(grep -aoE 'BUILDID [0-9a-f]{64}' "$file" 2>/dev/null || true)"
+  ids="$(printf '%s\n' "$records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
+  [ "$(printf '%s\n' "$ids" | grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
+  printf '%s\n' "$ids"
+}
+
 fetch_release_helper_build_id() {
   local tag="$1" proof_dir provisioner checksum_file signature_file public_key expected_name
   local record expected_hash actual_hash build_id
@@ -2337,7 +2353,7 @@ resolve_root_helper_install_state() {
 }
 
 install_root_helper() {
-  local abi helper_dir="" helper="" helper_name="" helper_asset="" build_records="" rc_file="" hybrid_rc_file="" service_file="" transaction_file=""
+  local abi helper_dir="" helper="" helper_name="" helper_asset="" rc_file="" hybrid_rc_file="" service_file="" transaction_file=""
   local bin_sha256 rc_sha256 hybrid_rc_sha256 service_sha256 transaction_sha256 transaction_ready="" expected_build_id="" staged_build_id="" out out2 root_ready=0 install_kind=""
   local system_avail_kb="" system_need_kb="" vendor_probe=""
   local access_timeout="${PRIVILEGE_INSPECTION_TIMEOUT_SECONDS:-45}" access_status
@@ -2392,6 +2408,12 @@ install_root_helper() {
         "The release may be incomplete or GitHub may be unavailable. No panel changes were made."
     fi
     verify_release_helper "$helper" "$APK_RELEASE_TAG" "$abi"
+    if ! staged_build_id="$(extract_helper_build_id "$helper")"; then
+      rm -rf "$helper_dir"
+      fail "the $APK_RELEASE_TAG root helper for $abi does not state a single valid build identity" \
+        "The authenticated asset carries no usable build-identity record, so it cannot be matched against the release's own metadata." \
+        "Nothing was installed, started, or privileged. Report this release as incompletely packaged."
+    fi
   elif [ -n "$APK_RELEASE_TAG" ]; then
     # Releases before the helper became a sealed release asset retain their historical direct-su
     # behaviour. Current releases always enter the authenticated branch above.
@@ -2443,9 +2465,7 @@ install_root_helper() {
         "Build the complete APK again, then re-run this provisioning command." \
         "No helper or APK was replaced, so the panel remains on its previous working version."
     fi
-    build_records="$(grep -aoE 'BUILDID [0-9a-f]{64}' "$helper" 2>/dev/null || true)"
-    staged_build_id="$(printf '%s\n' "$build_records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
-    if [ "$(printf '%s\n' "$staged_build_id" | grep -Ec '^[0-9a-f]{64}$')" -ne 1 ]; then
+    if ! staged_build_id="$(extract_helper_build_id "$helper")"; then
       rm -rf "$helper_dir"
       fail "the root helper embedded in the local APK has an invalid build identity" \
         "Build the complete APK again, then re-run. No helper or APK was replaced."
@@ -2482,6 +2502,18 @@ install_root_helper() {
     fi
     fail "the expected root-helper build identity is unavailable" \
       "Rebuild the APK from a complete checkout, then retry. No APK or helper was replaced."
+  fi
+  # Two independent authorities now describe the same release: the signed versioned provisioner says
+  # which helper the release ships, and the authenticated helper asset says which helper it actually
+  # is. Each is verified on its own, so a disagreement is not a damaged download — it is a release
+  # whose metadata and payload were built from different trees, and installing either one would make
+  # the panel's helper something other than what the release claims. Refuse before anything is staged
+  # or replaced; the local-APK path has no second authority to consult and keeps its single one.
+  if [ -n "$APK_RELEASE_TAG" ] && [ "$staged_build_id" != "$expected_build_id" ]; then
+    [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+    fail "the $APK_RELEASE_TAG root helper does not match the identity its signed provisioner records" \
+      "Release metadata expects ${expected_build_id:0:12}…, but the authenticated helper asset is ${staged_build_id:0:12}…." \
+      "Nothing was installed, started, or privileged. Report this release as internally inconsistent, or install a release whose assets agree."
   fi
   ROOT_HELPER_TRANSACTION_ID="$(host_transaction_id)" || fail "could not create a unique root-helper transaction identity" \
     "No helper or APK files were changed. Check host access to /dev/urandom, then retry."

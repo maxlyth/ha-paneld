@@ -312,6 +312,7 @@ run_provision() {
   MOCK_HELPER_BUILD_ID="${MOCK_HELPER_BUILD_ID}" \
   MOCK_HELPER_BUILD_ID_MATCH="${MOCK_HELPER_BUILD_ID_MATCH:-ok}" \
   MOCK_RELEASE_PROVISION_BUILD_ID="${MOCK_RELEASE_PROVISION_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
+  MOCK_RELEASE_HELPER_BUILD_ID="${MOCK_RELEASE_HELPER_BUILD_ID:-$MOCK_HELPER_BUILD_ID}" \
   MOCK_APK_INSTALL="${MOCK_APK_INSTALL:-ok}" \
   MOCK_APK_QUERY="${MOCK_APK_QUERY:-ok}" \
   HAPANELD_SKIP_AUTO_EXPORT="${HAPANELD_SKIP_AUTO_EXPORT:-1}" \
@@ -1930,6 +1931,56 @@ MOCK_RELEASE_PROVISION_BUILD_ID=missing \
 assert_failure "signed provisioner without an exact helper identity fails closed"
 assert_contains 'expected root-helper build identity is unavailable' "missing release helper identity names the packaging failure"
 assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "missing release helper identity stops before privileged staging or APK replacement"
+
+# A release describes its helper twice: the signed versioned provisioner records which helper the
+# release ships, and the authenticated helper asset carries its own stamped identity. Both are
+# verified independently, so the installer must require them to agree before anything privileged
+# happens — and must refuse when the asset cannot state an identity at all.
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "a release whose helper asset and signed provisioner agree installs normally"
+assert_not_contains 'does not match the identity its signed provisioner records' "$LAST_OUTPUT" "agreeing release identities raise no cross-check failure"
+assert_log_contains 'helper-probe BUILDID' "an agreeing release still proves the running daemon identity"
+
+asset_provisioner_mismatch_id=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+MOCK_RELEASE_HELPER_BUILD_ID="$asset_provisioner_mismatch_id" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a helper asset that disagrees with its signed provisioner fails closed"
+assert_contains 'does not match the identity its signed provisioner records' "disagreeing release identities name the inconsistency"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "disagreeing release identities stop before privileged staging or APK replacement"
+assert_not_contains 'helper-transaction-[0-9a-f]+' "$MOCK_CALL_LOG" "disagreeing release identities never open a helper transaction"
+
+MOCK_RELEASE_HELPER_BUILD_ID=missing \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a release helper asset with no build identity fails closed"
+assert_contains 'does not state a single valid build identity' "an identity-less release helper names the packaging failure"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "an identity-less release helper stops before privileged staging or APK replacement"
+
+MOCK_RELEASE_HELPER_BUILD_ID=malformed \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a release helper asset with a malformed build identity fails closed"
+assert_contains 'does not state a single valid build identity' "a malformed release helper identity is refused rather than parsed loosely"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "a malformed release helper identity stops before privileged staging or APK replacement"
+
+MOCK_RELEASE_HELPER_BUILD_ID=duplicate \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a release helper asset stating two build identities fails closed"
+assert_contains 'does not state a single valid build identity' "contradictory release helper identities are refused rather than guessed between"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "contradictory release helper identities stop before privileged staging or APK replacement"
+
+# A provisioner still naming the helper of an earlier build is the stale-expectation case the
+# post-swap probe used to discover only after the privileged swap had already happened.
+stale_provisioner_id=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+MOCK_RELEASE_PROVISION_BUILD_ID="$stale_provisioner_id" \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a signed provisioner naming a stale helper identity fails closed"
+assert_contains 'does not match the identity its signed provisioner records' "a stale release expectation names the inconsistency"
+assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "a stale release expectation stops before privileged staging or APK replacement"
+
+# The local-APK path has only one authority and must keep using it: its own staged helper. The
+# release cross-check must not leak into it and must not reintroduce an installer-checkout source.
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a local APK is still verified against its own staged helper identity alone"
+assert_not_contains 'signed provisioner records' "$LAST_OUTPUT" "the local-APK path consults no release provisioner identity"
 
 MOCK_SU_DIALECT=shc \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
