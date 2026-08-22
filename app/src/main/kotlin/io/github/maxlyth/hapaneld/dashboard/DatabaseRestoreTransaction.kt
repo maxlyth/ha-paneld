@@ -167,10 +167,8 @@ internal class DatabaseRestoreTransaction(
         val recovery = identity(staged)
             ?: return DatabaseRestoreResult.Hold("database recovery identity unavailable")
         val superseded = supersededFile(normalizedTarget, sourceSchema)
-        if (entryExists(superseded) || DB_SIDECARS.any { entryExists(File(superseded.path + it)) } ||
-            hasSupersededObjects()
-        ) {
-            return DatabaseRestoreResult.Hold("superseded destination already exists")
+        if (!replaceableSupersededTopology(superseded)) {
+            return DatabaseRestoreResult.Hold("superseded destination is not exactly replaceable")
         }
         if (!copyPrepared(staged, recovery)) {
             return DatabaseRestoreResult.Hold("database recovery preparation failed")
@@ -230,8 +228,11 @@ internal class DatabaseRestoreTransaction(
             val preparedIsStaged = matches(preparedFile, record.stagedBytes, record.stagedSha256)
             when (record.state) {
                 DatabaseRestoreState.PREPARED -> when {
-                    targetIsSource && !entryExists(aside) && preparedIsStaged -> {
-                        if (!noCanonicalSidecars() || !atomicMove(normalizedTarget, aside, replace = false)) {
+                    targetIsSource && preparedIsStaged && replaceableSupersededTopology(aside) -> {
+                        // PREPARED durably binds the current source before this latest-wins rotation.
+                        // Replacing the one exact prior aside in the same atomic rename means the current
+                        // source is always either canonical or retained here, never absent from both names.
+                        if (!noCanonicalSidecars() || !atomicMove(normalizedTarget, aside, replace = true)) {
                             return DatabaseRestoreResult.Hold("database source rename failed")
                         }
                         cut(DatabaseRestoreCut.SOURCE_RENAME)
@@ -371,26 +372,51 @@ internal class DatabaseRestoreTransaction(
 
     /**
      * The prepared copy precedes the first record publication, but no canonical mutation has happened.
-     * Only that exact topology is safe to abandon; a missing source or any superseded object remains a
-     * physical-recovery hold.
+     * Only that exact topology is safe to abandon. One exact standalone superseded database can predate
+     * this attempted transaction: deleting the private prepared copy still changes neither canonical nor
+     * retained data. A missing source or ambiguous superseded topology remains a physical-recovery hold.
      */
     private fun discardExactPreMutationPreparedOrphan(): Boolean {
         if (!exactRegularFile(normalizedTarget) || !exactRegularFile(preparedFile) || !noCanonicalSidecars()) {
             return false
         }
-        if (hasSupersededObjects()) return false
+        if (!safePreMutationSupersededTopology()) return false
         return runCatching {
             Files.delete(preparedFile.toPath())
             syncDirectory()
         }.getOrDefault(false)
     }
 
-    private fun hasSupersededObjects(): Boolean {
+    private fun supersededObjects(): List<File>? {
         val prefix = "${normalizedTarget.name}.v"
-        return directory.listFiles()?.any { file ->
+        return directory.listFiles()?.filter { file ->
             file.name.startsWith(prefix) && file.name.contains(".superseded")
-        } == true
+        }
     }
+
+    private fun replaceableSupersededTopology(expected: File): Boolean {
+        val objects = supersededObjects() ?: return false
+        return when (objects.size) {
+            0 -> true
+            1 -> objects.single().name == expected.name && exactStandaloneSuperseded(expected)
+            else -> false
+        }
+    }
+
+    private fun safePreMutationSupersededTopology(): Boolean {
+        val objects = supersededObjects() ?: return false
+        if (objects.isEmpty()) return true
+        if (objects.size != 1) return false
+        val retained = objects.single()
+        val match = Regex(
+            "^${Regex.escape(normalizedTarget.name)}\\.v([1-9][0-9]*)\\.superseded$",
+        ).matchEntire(retained.name) ?: return false
+        if (match.groupValues[1].toIntOrNull() == null) return false
+        return exactStandaloneSuperseded(retained)
+    }
+
+    private fun exactStandaloneSuperseded(file: File): Boolean = identity(file) != null &&
+        RECOVERY_COMPANIONS.none { entryExists(File(file.path + it)) }
 
     private fun readRecord(file: File): DatabaseRestoreRecord? {
         if (!exactRegularFile(file) || file.length() !in 1..MAX_RECORD_BYTES) return null
@@ -466,6 +492,7 @@ internal class DatabaseRestoreTransaction(
     private companion object {
         const val MAX_RECORD_BYTES = 2048L
         val DB_SIDECARS = listOf("-wal", "-shm", "-journal")
+        val RECOVERY_COMPANIONS = DB_SIDECARS + ".tmp"
     }
 }
 

@@ -359,26 +359,15 @@ RC_SHA256="$(host_sha256 "$HERE/hapaneld-helper.rc")"
 # through the environment rather than through the pattern. Bytes, not characters, is in any case the
 # right reading for an ELF artifact.
 extract_helper_build_id() {
-  local file="$1" records ids bare_ids
+  local file="$1" records ids
   # No match and an unreadable file are both "cannot state an identity", which the count checks below
   # turn into a refusal; the tolerated statuses here only stop `set -e` from aborting the run before
   # that refusal can be reported with its own message.
   records="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null | LC_ALL=C grep -aoE 'BUILDID .*' || true)"
   [ "$(printf '%s\n' "$records" | LC_ALL=C grep -c '^BUILDID ')" -eq 1 ] || return 1
   ids="$(printf '%s\n' "$records" | LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
-  if [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ]; then
-    printf '%s\n' "$ids"
-    return 0
-  fi
-  # The current helper writes the reply in three calls, so its ELF contains a marker-only
-  # "BUILDID " string and a separate NUL-terminated identity. Accept that layout only when the
-  # marker is exact and the artifact contains exactly one whole bare identity record; an invalid or
-  # ambiguous prefixed record must never fall through and borrow an unrelated hash.
-  [ "$records" = 'BUILDID ' ] || return 1
-  bare_ids="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null |
-    LC_ALL=C grep -aoE '^[0-9a-f]{64}$' || true)"
-  [ "$(printf '%s\n' "$bare_ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
-  printf '%s\n' "$bare_ids"
+  [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
+  printf '%s\n' "$ids"
 }
 if ! BUILD_ID="$(extract_helper_build_id "$BIN")"; then
   fail "the helper at $BIN does not state a single valid build identity" \

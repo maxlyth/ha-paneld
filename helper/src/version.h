@@ -13,6 +13,7 @@
 
 const char *helper_identity(void);
 const char *helper_build_id(void);
+const char *helper_build_id_record(void);
 void cmd_version(conn_ctx *ctx, const char *args);
 
 #endif

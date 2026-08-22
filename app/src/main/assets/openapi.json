@@ -699,7 +699,7 @@
     "/api/v1/guard-db/status": {
       "get": {
         "summary": "Read typed Guard DB helper status",
-        "description": "Direct-LAN read available from both the ordinary bootstrap server and the same-boot writer-free maintenance successor. It reports typed helper generation, phase, durable error/hold state, terminal outcome and elapsed-realtime deadlines; the successor also reports installed candidate identity and same_boot_only. Callers use status to reconcile accepted, malformed or indeterminate mutation replies without replay.",
+        "description": "Direct-LAN read available from both the ordinary bootstrap server and the same-boot writer-free maintenance successor. It reports typed helper generation, phase, durable error/hold state, terminal outcome and elapsed-realtime deadlines; the successor also reports installed candidate identity and same_boot_only. Callers use status to reconcile accepted, malformed or indeterminate helper mutation replies without replay. The sole HTTP orchestration exception is an acknowledged /arm/commit receipt with retry_policy fresh-approval-after-exact-empty: only this same-boot successor reporting exact typed EMPTY generation zero permits a fresh /arm/commit HTTP request for the receipt session, and that request requires a fresh one-shot physical approval. Any non-empty, unavailable, malformed or otherwise unknown status forbids replay.",
         "tags": ["install"],
         "responses": {
           "200": { "description": "Typed Guard DB status, or an explicit indeterminate status receipt" },
@@ -781,13 +781,14 @@
           }
         } } } },
         "responses": {
-          "202": { "description": "Either approval-required for this exact writer-free custody commit, or accepted {ok:true,state:submitting-custody,session,settlement:poll-status}. The response pipeline completes before helper custody submission can force-stop the successor; reconcile only through /api/v1/guard-db/status and do not replay.", "content": { "application/json": { "schema": { "oneOf": [
+          "202": { "description": "Either approval-required for this exact writer-free custody commit, or accepted {ok:true,state:submitting-custody,session,settlement:poll-status,retry_policy:fresh-approval-after-exact-empty}. The response pipeline completes before helper custody submission can force-stop the successor. Reconcile helper mutations only through /api/v1/guard-db/status and never replay an individual helper command. If and only if this same-boot successor reports exact typed EMPTY generation zero, the acknowledged receipt permits a fresh /arm/commit HTTP request for the same session; the consumed approval cannot be reused, so that request requires a fresh one-shot physical approval. Any non-empty, unavailable, malformed or otherwise unknown status forbids replay.", "content": { "application/json": { "schema": { "oneOf": [
             { "$ref": "#/components/schemas/ApprovalRequired" },
-            { "type": "object", "required": ["ok", "state", "session", "settlement"], "properties": {
+            { "type": "object", "required": ["ok", "state", "session", "settlement", "retry_policy"], "properties": {
               "ok": { "type": "boolean", "enum": [true] },
               "state": { "type": "string", "enum": ["submitting-custody"] },
               "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "settlement": { "type": "string", "enum": ["poll-status"] }
+              "settlement": { "type": "string", "enum": ["poll-status"] },
+              "retry_policy": { "type": "string", "enum": ["fresh-approval-after-exact-empty"] }
             } }
           ] } } } },
           "400": { "description": "Malformed, oversized, unreadable or non-exact JSON request" },

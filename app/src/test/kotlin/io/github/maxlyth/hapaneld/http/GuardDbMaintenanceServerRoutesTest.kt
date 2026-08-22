@@ -139,15 +139,45 @@ class GuardDbMaintenanceServerRoutesTest {
             install(fixture)
             val body = generationBody(fixture.session, 0L)
             assertEquals(HttpStatusCode.Accepted, postArmCommit(body, DIRECT_PEER).status)
-            assertTrue(fixture.broker.approve(fixture.broker.pending().single().id))
+            val consumedApproval = fixture.broker.pending().single().id
+            assertTrue(fixture.broker.approve(consumedApproval))
             fixture.security.mode = SecurityMode.CHANGED
 
             val held = postArmCommit(body, DIRECT_PEER)
             assertEquals(HttpStatusCode.Accepted, held.status)
+            assertTrue(held.bodyAsText().contains(
+                "\"retry_policy\":\"fresh-approval-after-exact-empty\"",
+            ))
             withTimeout(1_000L) { fixture.security.commitObserved.await() }
             assertEquals(3, fixture.exactManifestCalls)
             assertTrue(fixture.transport.commands.none { it.startsWith("GUARDPREPARE ") })
             assertTrue(fixture.promotedSessions.isEmpty())
+
+            fixture.security.mode = SecurityMode.VALUE
+            val freshApprovalRequired = postArmCommit(body, DIRECT_PEER)
+            assertEquals(HttpStatusCode.Accepted, freshApprovalRequired.status)
+            assertTrue(freshApprovalRequired.bodyAsText().contains("approval-required"))
+            val freshApproval = fixture.broker.pending().single().id
+            assertNotEquals(consumedApproval, freshApproval)
+            assertTrue(fixture.broker.approve(freshApproval))
+            repeat(3) { fixture.transport.statusReplies.add(fixture.empty()) }
+            fixture.transport.statusReplies.add(fixture.waitBHealth())
+            fixture.transport.longReplies.add(DaemonLongResult.Reply("OK GUARDPREPARE 1 STAGING"))
+            fixture.transport.longReplies.add(DaemonLongResult.Reply("OK GUARDDEFINE 2 STAGING"))
+            fixture.transport.longReplies.add(DaemonLongResult.Reply("OK GUARDDEFINE 3 STAGING"))
+            fixture.transport.longReplies.add(DaemonLongResult.Indeterminate)
+            fixture.transport.streamReplies.add(DaemonStreamResult.Reply("OK GUARDSTREAM 4 STAGING"))
+            fixture.transport.streamReplies.add(DaemonStreamResult.Reply("OK GUARDSTREAM 5 STAGING"))
+            fixture.transport.streamReplies.add(DaemonStreamResult.Reply("OK GUARDSTREAM 6 STAGING"))
+
+            val retried = postArmCommit(body, DIRECT_PEER)
+            assertEquals(HttpStatusCode.Accepted, retried.status)
+            assertTrue(retried.bodyAsText().contains(
+                "\"retry_policy\":\"fresh-approval-after-exact-empty\"",
+            ))
+            withTimeout(1_000L) { fixture.promoted.await() }
+            assertEquals(1, fixture.transport.commands.count { it.startsWith("GUARDPREPARE ") })
+            assertEquals(listOf(fixture.session), fixture.promotedSessions)
         }
 
         testApplication {
@@ -172,6 +202,9 @@ class GuardDbMaintenanceServerRoutesTest {
             val accepted = postArmCommit(body, DIRECT_PEER)
             assertEquals(HttpStatusCode.Accepted, accepted.status)
             assertTrue(accepted.bodyAsText().contains("submitting-custody"))
+            assertTrue(accepted.bodyAsText().contains(
+                "\"retry_policy\":\"fresh-approval-after-exact-empty\"",
+            ))
             withTimeout(1_000L) { fixture.promoted.await() }
             assertEquals(4, fixture.exactManifestCalls)
             assertEquals(1, fixture.transport.commands.count { it.startsWith("GUARDPREPARE ") })

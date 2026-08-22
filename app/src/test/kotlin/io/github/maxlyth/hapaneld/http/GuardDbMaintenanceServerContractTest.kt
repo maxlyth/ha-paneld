@@ -63,6 +63,9 @@ class GuardDbMaintenanceServerContractTest {
             afterApproval.indexOf("GuardDbArmCoordinator.submitPrepared"))
         assertTrue(afterApproval.contains("HttpStatusCode.Accepted"))
         assertTrue(afterApproval.contains("\\\"settlement\\\":\\\"poll-status\\\""))
+        assertTrue(afterApproval.contains(
+            "\\\"retry_policy\\\":\\\"fresh-approval-after-exact-empty\\\"",
+        ))
     }
 
     @Test fun `every successor mutation binds and atomically reproves exact security authority`() {
@@ -319,6 +322,30 @@ class GuardDbMaintenanceServerContractTest {
         val accepted = commit.getJSONObject("responses").getJSONObject("202").getString("description")
         assertTrue(accepted.contains("approval-required"))
         assertTrue(accepted.contains("poll-status"))
+        assertTrue(accepted.contains("exact typed EMPTY generation zero"))
+        assertTrue(accepted.contains("fresh one-shot physical approval"))
+        assertTrue(accepted.contains(
+            "Any non-empty, unavailable, malformed or otherwise unknown status forbids replay",
+        ))
+        val acceptedSchema = commit.getJSONObject("responses").getJSONObject("202")
+            .getJSONObject("content").getJSONObject("application/json").getJSONObject("schema")
+            .getJSONArray("oneOf").getJSONObject(1)
+        assertEquals(
+            setOf("ok", "state", "session", "settlement", "retry_policy"),
+            acceptedSchema.getJSONArray("required").toSet(),
+        )
+        assertEquals(
+            "fresh-approval-after-exact-empty",
+            acceptedSchema.getJSONObject("properties").getJSONObject("retry_policy")
+                .getJSONArray("enum").getString(0),
+        )
+
+        val statusDescription = paths.getJSONObject("/api/v1/guard-db/status").getJSONObject("get")
+            .getString("description")
+        assertTrue(statusDescription.contains("fresh-approval-after-exact-empty"))
+        assertTrue(statusDescription.contains(
+            "Any non-empty, unavailable, malformed or otherwise unknown status forbids replay",
+        ))
     }
 
     private fun org.json.JSONArray.toSet(): Set<String> =

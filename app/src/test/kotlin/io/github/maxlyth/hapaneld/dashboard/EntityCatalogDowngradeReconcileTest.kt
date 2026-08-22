@@ -524,6 +524,35 @@ class EntityCatalogDowngradeReconcileTest {
         assertEquals("schema15-canary-live", markerOf(superseded(15)))
     }
 
+    @Test fun aSecondSupportedRollbackAtomicallyRetainsOnlyTheLatestNewerDatabase() {
+        writeDb(premig(14), "schema14-original-snapshot")
+        writeDb(target, "schema15-first-cycle")
+
+        val first = reconcilePreOpen(target, currentVersion = 14, onDiskVersion = 15)
+        assertEquals(SchemaReconcileAction.RESTORED, first.action)
+        assertEquals("schema14-original-snapshot", markerOf(target))
+        assertEquals("schema15-first-cycle", markerOf(superseded(15)))
+        assertTrue(DatabaseRestoreTransaction(target).consumeOrdinaryRestored())
+
+        // Pre-open prepares the rollback snapshot; SQLiteOpenHelper performs the actual upgrade afterward.
+        val upgrade = reconcilePreOpen(target, currentVersion = 15, onDiskVersion = 14)
+        assertTrue(upgrade.action == SchemaReconcileAction.BACKED_UP || upgrade.action == SchemaReconcileAction.NONE)
+        writeDb(target, "schema15-second-cycle")
+
+        val second = reconcilePreOpen(target, currentVersion = 14, onDiskVersion = 15)
+
+        assertEquals(SchemaReconcileAction.RESTORED, second.action)
+        assertEquals(15, second.fromVersion)
+        assertEquals(14, second.restoredVersion)
+        assertEquals("schema14-original-snapshot", markerOf(target))
+        assertEquals("schema15-second-cycle", markerOf(superseded(15)))
+        assertEquals(
+            listOf(superseded(15).name),
+            dir.listFiles()!!.filter { it.name.contains(".superseded") }.map { it.name },
+        )
+        assertTrue(DatabaseRestoreTransaction(target).consumeOrdinaryRestored())
+    }
+
     @Test fun recoveryWithWalVisibleSchemaRefusesBeforeAnyRuntimeMutation() {
         writeDb(premig(14), "schema14-main")
         write(File(premig(14).path + "-wal"), "schema15-wal")

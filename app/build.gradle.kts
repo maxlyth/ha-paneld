@@ -298,43 +298,65 @@ val compileCdpRelay = tasks.register("compileCdpRelay") {
 // the durable installation path; after an in-app self-update, direct-su panels can atomically launch the
 // new helper before exposing helper-versioned features. API 26 matches the app's supported floor.
 val bundledRootHelperSources = rootProject.fileTree("helper/src") { include("*.c") }
+val bundledRootHelperArm64 = file("src/main/assets/hapaneld-helper-arm64")
+val bundledRootHelperArm32 = file("src/main/assets/hapaneld-helper-arm")
 
 val compileBundledRootHelperArm64 = tasks.register<Exec>("compileBundledRootHelperArm64") {
-    val output = file("src/main/assets/hapaneld-helper-arm64")
     val sourcePaths = bundledRootHelperSources.files.sortedBy(File::getName)
     inputs.files(helperIdentityFiles)
     inputs.file(rootProject.file("helper/source-id.sh"))
     inputs.dir(ndkDirectory)
     inputs.property("helperBuildId", helperBuildId)
     inputs.property("ndkVersion", android.ndkVersion)
-    outputs.file(output)
+    outputs.file(bundledRootHelperArm64)
     commandLine(
         ndkToolchainBin.resolve("aarch64-linux-android26-clang"), "-O2", "-s", "-I${rootProject.file("helper/src").path}",
         "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
-        "-o", output, *sourcePaths.toTypedArray(),
+        "-o", bundledRootHelperArm64, *sourcePaths.toTypedArray(),
     )
 }
 
 val compileBundledRootHelperArm32 = tasks.register<Exec>("compileBundledRootHelperArm32") {
-    val output = file("src/main/assets/hapaneld-helper-arm")
     val sourcePaths = bundledRootHelperSources.files.sortedBy(File::getName)
     inputs.files(helperIdentityFiles)
     inputs.file(rootProject.file("helper/source-id.sh"))
     inputs.dir(ndkDirectory)
     inputs.property("helperBuildId", helperBuildId)
     inputs.property("ndkVersion", android.ndkVersion)
-    outputs.file(output)
+    outputs.file(bundledRootHelperArm32)
     commandLine(
         ndkToolchainBin.resolve("armv7a-linux-androideabi26-clang"), "-O2", "-s", "-I${rootProject.file("helper/src").path}",
         "-DHAPANELD_BUILD_ID=\"$helperBuildId\"",
-        "-o", output, *sourcePaths.toTypedArray(),
+        "-o", bundledRootHelperArm32, *sourcePaths.toTypedArray(),
     )
 }
 
 val compileBundledRootHelper = tasks.register("compileBundledRootHelper") {
     dependsOn(compileBundledRootHelperArm64, compileBundledRootHelperArm32)
 }
-tasks.named("preBuild") { dependsOn(compileCdpRelay, compileBundledRootHelper) }
+val verifyBundledRootHelperBuildIdentity = tasks.register("verifyBundledRootHelperBuildIdentity") {
+    dependsOn(compileBundledRootHelper)
+    inputs.files(bundledRootHelperArm64, bundledRootHelperArm32)
+    inputs.property("helperBuildId", helperBuildId)
+    doLast {
+        val expectedRecord = "BUILDID $helperBuildId"
+        val recordPattern = Regex("""BUILDID [0-9a-f]{64}""")
+        listOf(bundledRootHelperArm64, bundledRootHelperArm32).forEach { binary ->
+            val bytes = binary.readBytes()
+            check(
+                bytes.size >= 4 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
+                    bytes[2] == 'L'.code.toByte() && bytes[3] == 'F'.code.toByte(),
+            ) { "${binary.name} is not an ELF binary" }
+            val records = recordPattern.findAll(bytes.toString(Charsets.ISO_8859_1))
+                .map { it.value }
+                .toList()
+            check(records == listOf(expectedRecord)) {
+                "${binary.name} must contain exactly one '$expectedRecord' record; found $records"
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(compileCdpRelay, verifyBundledRootHelperBuildIdentity) }
 
 val helperSocketTestServer = rootProject.file("helper/build/socket-test-server")
 val buildHelperSocketTestServer = tasks.register<Exec>("buildHelperSocketTestServer") {

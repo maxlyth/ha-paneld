@@ -12,47 +12,52 @@ class DatabaseRestoreTransactionTest {
     private val guard = DatabaseRestoreGuardBinding(session, 16L)
 
     @Test fun `every durable cut either resumes or safely restarts before canonical mutation`() {
-        DatabaseRestoreCut.values().forEach { selected ->
-            withFiles { directory, target, staged ->
-                var fired = false
-                val first = DatabaseRestoreTransaction(target, guard) { cut ->
-                    if (!fired && cut == selected) {
-                        fired = true
-                        throw SimulatedProcessDeath
+        listOf(false, true).forEach { withPriorAside ->
+            DatabaseRestoreCut.values().forEach { selected ->
+                withFiles { directory, target, staged ->
+                    val label = "$selected priorAside=$withPriorAside"
+                    if (withPriorAside) supersededFile(target, 15).writeText("prior-schema15")
+                    var fired = false
+                    val first = DatabaseRestoreTransaction(target, guard) { cut ->
+                        if (!fired && cut == selected) {
+                            fired = true
+                            throw SimulatedProcessDeath
+                        }
                     }
-                }
-                try {
-                    first.restore(staged, sourceSchema = 15, stagedSchema = 14, checkpoint = { true })
-                    throw AssertionError("cut $selected was not reached")
-                } catch (_: SimulatedProcessDeath) {
-                    // New process below owns all reconciliation.
-                }
-                assertTrue("cut $selected must fire", fired)
+                    try {
+                        first.restore(staged, sourceSchema = 15, stagedSchema = 14, checkpoint = { true })
+                        throw AssertionError("cut $label was not reached")
+                    } catch (_: SimulatedProcessDeath) {
+                        // New process below owns all reconciliation.
+                    }
+                    assertTrue("cut $label must fire", fired)
 
-                val restarted = DatabaseRestoreTransaction(target, guard)
-                val initial = restarted.reconcile()
-                val result = if (initial is DatabaseRestoreResult.Absent) {
-                    // Before PREPARED publication, the exact orphan copy is discarded because the
-                    // canonical source was never moved. Retrying creates a fresh bound transaction.
-                    restarted.restore(staged, 15, 14, checkpoint = { true })
-                } else initial
-                val restored = result as? DatabaseRestoreResult.Restored
-                    ?: throw AssertionError("cut $selected settled as $result")
-                assertEquals(selected.name, SchemaReconcileAction.RESTORED, restored.reconcile.action)
-                assertEquals(selected.name, 15, restored.reconcile.fromVersion)
-                assertEquals(selected.name, 14, restored.reconcile.toVersion)
-                assertEquals(selected.name, guard, restored.record.guard)
-                assertEquals(selected.name, "schema14", target.readText())
-                assertEquals(
-                    selected.name,
-                    "schema15",
-                    supersededFile(target, 15).readText(),
-                )
-                listOf("-wal", "-shm", "-journal").forEach { suffix ->
-                    assertFalse(selected.name, File(target.path + suffix).exists())
-                    assertFalse(selected.name, File(supersededFile(target, 15).path + suffix).exists())
+                    val restarted = DatabaseRestoreTransaction(target, guard)
+                    val initial = restarted.reconcile()
+                    val result = if (initial is DatabaseRestoreResult.Absent) {
+                        // Before PREPARED publication, the exact orphan copy is discarded because the
+                        // canonical source was never moved. Retrying creates a fresh bound transaction.
+                        restarted.restore(staged, 15, 14, checkpoint = { true })
+                    } else initial
+                    val restored = result as? DatabaseRestoreResult.Restored
+                        ?: throw AssertionError("cut $label settled as $result")
+                    assertEquals(label, SchemaReconcileAction.RESTORED, restored.reconcile.action)
+                    assertEquals(label, 15, restored.reconcile.fromVersion)
+                    assertEquals(label, 14, restored.reconcile.toVersion)
+                    assertEquals(label, guard, restored.record.guard)
+                    assertEquals(label, "schema14", target.readText())
+                    assertEquals(label, "schema15", supersededFile(target, 15).readText())
+                    listOf("-wal", "-shm", "-journal", ".tmp").forEach { suffix ->
+                        assertFalse(label, File(target.path + suffix).exists())
+                        assertFalse(label, File(supersededFile(target, 15).path + suffix).exists())
+                    }
+                    assertEquals(
+                        label,
+                        listOf(supersededFile(target, 15).name),
+                        directory.listFiles()!!.filter { it.name.contains(".superseded") }.map { it.name },
+                    )
+                    assertTrue(label, File(directory, ".ha-paneld.db.restore.v1").isFile)
                 }
-                assertTrue(selected.name, File(directory, ".ha-paneld.db.restore.v1").isFile)
             }
         }
     }
@@ -177,6 +182,42 @@ class DatabaseRestoreTransactionTest {
         assertEquals("foreign", supersededFile(target, 16).readText())
     }
 
+    @Test fun `malformed companion and multiple superseded topologies remain fail closed`() {
+        fun assertHeld(label: String, arrange: (File, File, File) -> Unit) =
+            withFiles { directory, target, staged ->
+                arrange(directory, target, staged)
+                val before = directory.listFiles()!!.associate { it.name to it.readSafeBytes() }
+
+                val result = DatabaseRestoreTransaction(target, guard)
+                    .restore(staged, 15, 14, checkpoint = { true })
+
+                assertTrue(label, result is DatabaseRestoreResult.Hold)
+                assertEquals(label, "schema15", target.readText())
+                assertEquals(label, before, directory.listFiles()!!.associate { it.name to it.readSafeBytes() })
+            }
+
+        assertHeld("expected destination is a directory") { _, target, _ ->
+            assertTrue(supersededFile(target, 15).mkdir())
+        }
+        assertHeld("expected destination is a symbolic link") { _, target, staged ->
+            Files.createSymbolicLink(supersededFile(target, 15).toPath(), staged.toPath())
+        }
+        assertHeld("expected destination is empty") { _, target, _ ->
+            supersededFile(target, 15).writeBytes(byteArrayOf())
+        }
+        assertHeld("expected destination has a SQLite companion") { _, target, _ ->
+            supersededFile(target, 15).writeText("prior")
+            File(supersededFile(target, 15).path + "-wal").writeText("retained-wal")
+        }
+        assertHeld("expected and foreign destinations both exist") { _, target, _ ->
+            supersededFile(target, 15).writeText("prior")
+            supersededFile(target, 16).writeText("foreign")
+        }
+        assertHeld("malformed superseded name exists") { directory, target, _ ->
+            File(directory, "${target.name}.vbad.superseded").writeText("malformed")
+        }
+    }
+
     @Test fun `fixed restore entries fail closed for corrupt directory live link and dangling link`() =
         withFiles { directory, target, staged ->
             val names = listOf(
@@ -245,6 +286,10 @@ class DatabaseRestoreTransactionTest {
             directory.deleteRecursively()
         }
     }
+
+    private fun File.readSafeBytes(): List<Byte>? =
+        takeIf { Files.isRegularFile(toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) }
+            ?.readBytes()?.toList()
 
     private data object SimulatedProcessDeath : Error()
 }

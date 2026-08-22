@@ -465,11 +465,14 @@ internal class GuardDbMaintenanceServer(
             ) {
                 return@withLock call.respondJsonError(HttpStatusCode.Conflict, "arm-commit-authority-changed")
             }
-            // This response is the durable public operation receipt. Only after its pipeline completes
-            // may CAPTURE force-stop this process and submit B.
+            // This acknowledged public receipt is not proof that helper custody already exists. Only
+            // after its pipeline completes may CAPTURE force-stop this process and submit B. A fresh
+            // HTTP request remains safe only when typed status later proves exact EMPTY generation zero;
+            // its one-shot physical approval has already been consumed and cannot be reused.
             call.respondText(
                 "{\"ok\":true,\"state\":\"submitting-custody\",\"session\":${Json.str(sentinel.session)}," +
-                    "\"settlement\":\"poll-status\"}",
+                    "\"settlement\":\"poll-status\"," +
+                    "\"retry_policy\":\"fresh-approval-after-exact-empty\"}",
                 ContentType.Application.Json,
                 HttpStatusCode.Accepted,
             )
