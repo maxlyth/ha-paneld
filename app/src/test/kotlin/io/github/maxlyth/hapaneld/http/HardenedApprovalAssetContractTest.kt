@@ -58,6 +58,7 @@ class HardenedApprovalAssetContractTest {
             "POST /api/v1/guard-db/stage",
             "POST /api/v1/guard-db/discard",
             "POST /api/v1/guard-db/arm",
+            "POST /api/v1/guard-db/bootstrap/export",
             "POST /api/v1/guard-db/arm/commit",
             "POST /api/v1/guard-db/refusal",
             "POST /api/v1/guard-db/cancel",

@@ -629,6 +629,73 @@
         }
       }
     },
+    "/api/v1/guard-db/bootstrap/export": {
+      "post": {
+        "summary": "Create a short-lived exact prepared-baseline export lease",
+        "description": "Writer-free maintenance-successor route available only while the first ARM phase is durably BASELINE_READY and the helper remains generation-zero EMPTY. A direct-LAN caller supplies the exact ARM session and a fresh lowercase 64-hex capture ID. Physical approval binds the raw request, peer, method/path, prepared clean proof, installed A, live helper identity, Hardened security authority and exact closed database. Every authority is rechecked under the security epoch before the database is read. Success returns a 120-second peer/session/capture/token-bound in-memory lease; the token is returned only in this response and never in an error.",
+        "tags": ["install"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": {
+          "type": "object", "additionalProperties": false, "required": ["session", "capture_id"], "properties": {
+            "session": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "capture_id": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Fresh caller-minted identity for this one prepared-baseline capture" }
+          }
+        } } } },
+        "responses": {
+          "200": { "description": "Canonical {capture_id,database_path,expires_elapsed_realtime_ms,ok,proof_path,token} JSON with one trailing newline", "content": { "application/json": { "schema": {
+            "type": "object", "additionalProperties": false, "required": ["capture_id", "database_path", "expires_elapsed_realtime_ms", "ok", "proof_path", "token"], "properties": {
+              "capture_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "database_path": { "type": "string", "enum": ["/api/v1/guard-db/bootstrap/database"] },
+              "expires_elapsed_realtime_ms": { "type": "integer", "format": "int64", "minimum": 1 },
+              "ok": { "type": "boolean", "enum": [true] },
+              "proof_path": { "type": "string", "enum": ["/api/v1/guard-db/bootstrap/proof"] },
+              "token": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          } } } },
+          "202": { "$ref": "#/components/responses/ApprovalRequired" },
+          "400": { "description": "Malformed, oversized, duplicate-member, escaped-key or non-exact JSON request" },
+          "403": { "description": "Direct-LAN source and allowed request origin required" },
+          "409": { "description": "The successor is not exact BASELINE_READY, the session or prepared/app/helper/database authority mismatched, or authority changed across approval" },
+          "412": { "description": "Hardened mode, stopped DevTools relay and settled-inactive network debugging were not all proved at the bound security epoch" },
+          "413": { "description": "Request body or the prepared baseline database exceeds its fixed bound" }
+        }
+      }
+    },
+    "/api/v1/guard-db/bootstrap/proof": {
+      "get": {
+        "summary": "Download the canonical prepared-baseline proof for one active export lease",
+        "description": "Requires the exact direct-LAN peer and all three lease headers. The lease and complete prepared/app/helper/database/Hardened authority are revalidated under the original security epoch and immediately before the response boundary. Missing, expired, mixed or changed credentials all return the same secret-free error and do not disclose which field failed.",
+        "tags": ["install"],
+        "parameters": [
+          { "name": "X-Guard-Db-Session", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          { "name": "X-Guard-Db-Capture-Id", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          { "name": "X-Guard-Db-Bootstrap-Token", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+        ],
+        "responses": {
+          "200": { "description": "Canonical sorted/minified hapaneld-guard-db-bootstrap-proof-v2 JSON with one trailing newline", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "403": { "description": "bootstrap-export-unavailable — generic secret-free refusal for absent, mixed, expired or changed lease authority" }
+        }
+      }
+    },
+    "/api/v1/guard-db/bootstrap/database": {
+      "get": {
+        "summary": "Download the exact closed database bytes for one active export lease",
+        "description": "Uses the same exact peer and three-header lease authority as the proof route. The response is the in-memory database already verified byte-for-byte against the prepared clean proof. Response headers repeat the capture ID, session and database SHA-256; any lease or authority failure is generic and secret-free.",
+        "tags": ["install"],
+        "parameters": [
+          { "name": "X-Guard-Db-Session", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          { "name": "X-Guard-Db-Capture-Id", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+          { "name": "X-Guard-Db-Bootstrap-Token", "in": "header", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+        ],
+        "responses": {
+          "200": { "description": "application/octet-stream exact prepared database; X-Guard-Db-Capture-Id, X-Guard-Db-Session and X-Guard-Db-Database-Sha256 bind the bytes", "headers": {
+            "X-Guard-Db-Capture-Id": { "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+            "X-Guard-Db-Session": { "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
+            "X-Guard-Db-Database-Sha256": { "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+          }, "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "403": { "description": "bootstrap-export-unavailable — generic secret-free refusal for absent, mixed, expired or changed lease authority" }
+        }
+      }
+    },
     "/api/v1/guard-db/status": {
       "get": {
         "summary": "Read typed Guard DB helper status",
