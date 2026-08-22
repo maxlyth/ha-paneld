@@ -686,7 +686,7 @@ class DashboardActivity : AppCompatActivity() {
         showBlockedAdmissionScreen(
             "Home Assistant stopped loading",
             "The panel's web viewer dropped it part-way through a page change. The panel keeps trying " +
-                "on its own. If it keeps failing, update that viewer: it is called Android System WebView in the Play Store.",
+                "on its own. If it keeps failing, the viewer needs updating: it is called Android System WebView.",
             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
         )
         false
@@ -955,7 +955,7 @@ class DashboardActivity : AppCompatActivity() {
                 EntityFilterTelemetry.held(lease, "document_start_unsupported")
                 entityFilterNativeHold = EntityFilterNativeHold(
                     error = "document_start_unsupported",
-                    detail = "This panel's web viewer is too old for that. Update it from the Play Store: look for Android System WebView.",
+                    detail = "This panel's web viewer is too old for that. Update Android System WebView, then try again.",
                 )
             } else {
                 EntityFilterTelemetry.failed(lease, "document_start_unsupported")
@@ -1362,8 +1362,8 @@ class DashboardActivity : AppCompatActivity() {
             showBlockedAdmissionScreen(
                 "Home Assistant opened but will not respond",
                 "The page loaded, but the panel cannot drive it, so nothing on the dashboard would work. " +
-                    "The panel keeps trying on its own. If it keeps failing, update the panel's web viewer: " +
-                    "it is called Android System WebView in the Play Store.",
+                    "The panel keeps trying on its own. If it keeps failing, the panel's web viewer needs " +
+                    "updating: it is called Android System WebView.",
                 AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
             )
             return
@@ -2197,8 +2197,8 @@ class DashboardActivity : AppCompatActivity() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
-                "Home Assistant cannot open until it is updated. Install the newest Android System WebView " +
-                    "from the Play Store, then tap Retry.",
+                "Home Assistant cannot open until the panel's web viewer is updated. It is called Android " +
+                    "System WebView. Update it, then tap Retry.",
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return
@@ -2782,7 +2782,7 @@ class DashboardActivity : AppCompatActivity() {
                 showBlockedAdmissionScreen(
                     "Home Assistant could not open",
                     "The panel's web viewer would not start it. The panel keeps trying on its own. " +
-                        "If it keeps failing, update that viewer: it is called Android System WebView in the Play Store.",
+                        "If it keeps failing, the viewer needs updating: it is called Android System WebView.",
                     AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                 )
                 return
@@ -3216,7 +3216,8 @@ class DashboardActivity : AppCompatActivity() {
                         showBlockedAdmissionScreen(
                             "Home Assistant stopped loading",
                             "The panel's web viewer dropped it part-way through a page change. The panel " +
-                                "keeps trying on its own. If it keeps failing, update that viewer: it is called Android System WebView in the Play Store.",
+                                "keeps trying on its own. If it keeps failing, the viewer needs updating: it is " +
+                                "called Android System WebView.",
                             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )
                     }

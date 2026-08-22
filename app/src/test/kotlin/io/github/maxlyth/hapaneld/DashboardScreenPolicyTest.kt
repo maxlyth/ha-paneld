@@ -407,24 +407,32 @@ class DashboardScreenPolicyTest {
     }
 
     /**
-     * Android System WebView is the one component a person has to go and find, so it is named exactly
-     * where they have to find it, and never as a bare component name they would have to already know.
-     * Every screen that names it also says what it is or where it lives.
+     * Android System WebView is the one component somebody has to go and update, so it is named in
+     * full where that is the repair, and never as a bare component name they would have to already
+     * know. What the screen must NOT do is send them to a particular shop: a large part of this
+     * project's fleet runs vendor Android with no Google Play at all, and a panel that tells its owner
+     * to open the Play Store has given them an instruction their device cannot follow. Name the thing,
+     * say it needs updating, and leave how to the person who knows their own panel.
      */
-    @Test fun theWebViewIsNamedOnlyWhereSomebodyMustGoAndFindIt() {
-        val naming = renderedStrings(dashboardSource()).filter { it.contains("WebView") }
+    @Test fun theWebViewIsNamedInFullAndNeverSendsAnybodyToAParticularShop() {
+        val rendered = renderedStrings(dashboardSource())
+        val naming = rendered.filter { it.contains("WebView") }
         assertTrue("fixture sanity: some screen must still name it", naming.isNotEmpty())
         naming.forEach { text ->
             assertTrue(
-                "naming Android System WebView without saying what it is: $text",
+                "naming Android System WebView without its full name: $text",
                 text.contains("Android System WebView"),
             )
-            assertTrue(
-                "naming Android System WebView without saying where to get it: $text",
-                text.contains("Play Store"),
-            )
         }
-        // And it is explained in ordinary language on every screen that sends someone after it.
+        listOf("Play Store", "Google Play", "app store", "App Store", "Play store").forEach { shop ->
+            rendered.forEach { text ->
+                assertFalse(
+                    "a full-screen message sends somebody to \"$shop\", which many panels do not have: $text",
+                    text.contains(shop),
+                )
+            }
+        }
+        // And it is explained in ordinary language on at least one screen that sends someone after it.
         assertTrue(
             "no screen explains the thing it is sending somebody to update",
             naming.any { it.contains("web viewer") },
