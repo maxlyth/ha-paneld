@@ -102,15 +102,15 @@ class StatusSurfaceInstrumentedTest {
 
     /** The phase used for the overflow measurements: the tallest real screen the frame has to draw. */
     private fun StatusSurface.tallestPhase(): List<View> = listOf(
-        heading("Entity filter needs attention"),
+        heading("Some entities need your decision"),
         detail(
-            "The Home Assistant dashboard is not broken. Its entity-discovery checks exceed what can " +
-                "be safely reviewed at once. Open entity-discovery settings and simplify the " +
-                "dashboard, or disable the entity filter.",
+            "Nothing is wrong with Home Assistant. More entities were flagged than can be reviewed " +
+                "here. Open entity settings and simplify the dashboard, or switch the entity " +
+                "filter off.",
         ),
         action("Ignore flagged entities and continue", fullWidth = true) {},
         action("Disable entity filter", fullWidth = true) {},
-        action("Open entity-discovery settings", fullWidth = true) {},
+        action("Open entity settings", fullWidth = true) {},
     )
 
     /**
@@ -163,16 +163,16 @@ class StatusSurfaceInstrumentedTest {
         onFrame { activity, surface ->
             val positions = mutableListOf<Int>()
             listOf(
-                arrayOf(surface.heading("Checking Home Assistant compatibility")),
+                arrayOf(surface.heading("Checking Home Assistant")),
                 arrayOf(
-                    surface.heading("Entity filter needs attention"),
+                    surface.heading("Some entities need your decision"),
                     surface.detail(
-                        "The Home Assistant dashboard is not broken. Its entity-discovery checks " +
-                            "exceed what can be safely reviewed at once.",
+                        "Nothing is wrong with Home Assistant. More entities were flagged than can " +
+                            "be reviewed here.",
                     ),
                     surface.action("Ignore flagged entities and continue", fullWidth = true) {},
                     surface.action("Disable entity filter", fullWidth = true) {},
-                    surface.action("Open entity-discovery settings", fullWidth = true) {},
+                    surface.action("Open entity settings", fullWidth = true) {},
                 ),
                 arrayOf(surface.caption("waiting 12s")),
             ).forEach { rows ->
@@ -209,14 +209,14 @@ class StatusSurfaceInstrumentedTest {
     fun aPhaseChangeReturnsToTheTopOfTheNewContent() {
         onFrame { activity, surface ->
             surface.setBody(
-                surface.heading("Entity filter needs attention"),
+                surface.heading("Some entities need your decision"),
                 *(1..12).map { surface.detail("Filler row $it so the body genuinely overflows") }
                     .toTypedArray(),
             )
             activity.settle()
             surface.scroller().scrollTo(0, 400)
             assertNotEquals("the fixture must actually scroll", 0, surface.scroller().scrollY)
-            surface.setBody(surface.heading("Home Assistant version check rejected"))
+            surface.setBody(surface.heading("Home Assistant turned down this panel's sign-in"))
             activity.settle()
             assertEquals("a new phase must start at its own top", 0, surface.scroller().scrollY)
         }

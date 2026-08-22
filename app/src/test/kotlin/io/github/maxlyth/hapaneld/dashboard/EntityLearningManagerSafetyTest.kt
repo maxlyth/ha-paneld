@@ -53,7 +53,7 @@ class EntityLearningManagerSafetyTest {
 
         val dashboard = source("DashboardActivity.kt").substringAfter(
             "if (filterHold == null && blockingIssues > 0)",
-        ).substringBefore("text = if (blockingIssues > 0) \"Open entity-discovery settings\"")
+        ).substringBefore("if (blockingIssues > 0) \"Open entity settings\"")
         assertTrue(dashboard.contains("if (canIgnoreBlockingIssues)"))
         assertTrue(dashboard.indexOf("if (canIgnoreBlockingIssues)") < dashboard.indexOf("Ignore flagged entities and continue"))
     }

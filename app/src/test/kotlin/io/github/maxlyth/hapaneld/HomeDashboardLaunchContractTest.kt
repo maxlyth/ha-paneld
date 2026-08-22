@@ -42,7 +42,7 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `the selecting screen shows only when nothing provisional is rendering`() {
-        val screen = resolver.indexOf("\"Selecting the Home Assistant dashboard\"")
+        val screen = resolver.indexOf("\"Choosing a dashboard\"")
         val gate = resolver.indexOf("if (provisionalPath == null)")
         assertTrue(gate in 0 until screen)
     }
@@ -56,7 +56,7 @@ class HomeDashboardLaunchContractTest {
         // teardown screen is gated on nothing rendering.
         assertTrue(failure.contains("showBlockedAdmissionScreen("))
         assertTrue(failure.contains("armAdmissionAutoRetry(it"))
-        val screen = failure.indexOf("\"Home Assistant dashboard list unavailable\"")
+        val screen = failure.indexOf("\"The panel could not read the dashboard list\"")
         val gate = failure.indexOf("if (shownPath == null || web == null)")
         assertTrue(gate in 0 until screen)
         // The transient branch never touches the persisted cache, in either direction.
@@ -70,7 +70,7 @@ class HomeDashboardLaunchContractTest {
             resolver.indexOf("setHomeDashboardLaunchPathIfOwned"),
         )
         assertTrue(confirmedNone.contains("clearHomeDashboardLaunchPathIfOwned(launchOwner)"))
-        assertTrue(confirmedNone.contains("\"No Home Assistant dashboards available\""))
+        assertTrue(confirmedNone.contains("\"This account has no dashboard to open\""))
     }
 
     @Test fun `every successful live resolution is the only writer of the cache`() {
@@ -151,7 +151,7 @@ class HomeDashboardLaunchContractTest {
         assertTrue(confirmedNone.contains("if (!currentConfig.clearHomeDashboardLaunchPathIfOwned(launchOwner))"))
         assertTrue(confirmedNone.contains("showBlockedAdmissionScreen("))
         assertTrue(confirmedNone.contains("AdmissionOutcome.DASHBOARD_LIST_UNREADABLE"))
-        assertTrue(confirmedNone.contains("clear its stored dashboard"))
+        assertTrue(confirmedNone.contains("could not clear the one it had saved"))
     }
 
     @Test fun `the resolver protocol itself never emits the cached source`() {

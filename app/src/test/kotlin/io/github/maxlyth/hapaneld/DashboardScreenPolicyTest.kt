@@ -47,11 +47,11 @@ class DashboardScreenPolicyTest {
         )
 
         assertTrue(block.contains("config.haToken.isBlank() && config.haRefreshToken.isBlank()"))
-        assertTrue(block.contains("\"Home Assistant sign-in needed\""))
+        assertTrue(block.contains("\"This panel is not signed in to Home Assistant\""))
         // The refusal title must name the SIGN-IN, not the version check. A panel reported on
         // 2026-08-17 showing "Home Assistant version check rejected" sent diagnosis after a version
         // problem that did not exist; the body had always said authentication.
-        assertTrue(block.contains("\"Home Assistant sign-in rejected\""))
+        assertTrue(block.contains("\"Home Assistant turned down this panel's sign-in\""))
         assertFalse(block.contains("version check rejected"))
         // The two situations must reach DIFFERENT outcomes so a diagnostic surface can tell them
         // apart, even though both are person-repaired.
@@ -102,19 +102,22 @@ class DashboardScreenPolicyTest {
         fun outcomeOf(title: String) = callWindows(source, title).map { w ->
             Regex("""AdmissionOutcome\.([A-Z_]+)""").find(w)?.groupValues?.get(1)
         }
-        assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("Home Assistant version unavailable"))
-        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("Home Assistant dashboard list unavailable"))
-        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("Home Assistant sign-in unavailable"))
-        assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Secure external bridge not detected"))
-        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant version unverifiable"))
-        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant upgrade required"))
+        assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("The panel cannot reach Home Assistant"))
+        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("The panel could not read the dashboard list"))
+        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("The sign-in page would not load"))
+        assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Home Assistant opened but will not respond"))
+        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant did not say which version it is"))
+        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant is too old for this panel"))
         assertEquals(
             listOf("NO_LEGAL_DASHBOARD", "DASHBOARD_LIST_UNREADABLE", "NO_LEGAL_DASHBOARD"),
-            outcomeOf("No Home Assistant dashboards available"),
+            outcomeOf("This account has no dashboard to open"),
         )
-        // One permanent-incapability screen; the three attachment failures are separate, retryable evidence.
-        assertEquals(listOf("BRIDGE_UNAVAILABLE"), outcomeOf("Secure dashboard bridge unavailable"))
-        assertEquals(List(3) { "BRIDGE_ATTACH_FAILED" }, outcomeOf("Secure dashboard bridge interrupted"))
+        // One permanent-incapability screen. The three attachment failures are separate, retryable
+        // evidence, and they split by what the person actually lost: one never opened Home Assistant,
+        // the other two dropped it part-way through a page change.
+        assertEquals(listOf("BRIDGE_UNAVAILABLE"), outcomeOf("This panel's web viewer is too old"))
+        assertEquals(listOf("BRIDGE_ATTACH_FAILED"), outcomeOf("Home Assistant could not open"))
+        assertEquals(List(2) { "BRIDGE_ATTACH_FAILED" }, outcomeOf("Home Assistant stopped loading"))
         // The credential branch chooses its title inside one call, so read the branch itself.
         val authBranch = source.substring(
             source.indexOf("DashboardV2ProbeResult.AuthenticationFailed ->"),
@@ -245,7 +248,7 @@ class DashboardScreenPolicyTest {
             source.indexOf("private fun navigateAfterHomeDashboardCorrection"),
         )
         assertTrue(resolver.contains("admissionRetryPolicy.nextDelayMs("))
-        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"Home Assistant dashboard list unavailable\")"))
+        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"The panel could not read the dashboard list\")"))
     }
 
     @Test fun theCountdownAndTheRetryCallbackShareTheHandlerClock() {
@@ -293,5 +296,138 @@ class DashboardScreenPolicyTest {
         assertTrue(skip.contains("config.setupEntityFilterAnswered = true"))
         assertFalse(skip.contains("dashboardEntityLearning"))
         assertTrue(skip.contains("buildAndLoad(config)"))
+    }
+
+    // --- the prose contract for every full-screen message this activity draws ---
+
+    /**
+     * The text between one call's parentheses, with nested calls and string literals handled, so a
+     * window ends at the call's own closing paren rather than the first one inside it.
+     */
+    private fun argumentWindows(source: String, call: String): List<String> {
+        val windows = mutableListOf<String>()
+        var from = source.indexOf(call)
+        while (from >= 0) {
+            var i = from + call.length
+            var depth = 1
+            var inString = false
+            while (i < source.length && depth > 0) {
+                val c = source[i]
+                when {
+                    inString && c == '\\' -> i++
+                    inString && c == '"' -> inString = false
+                    !inString && c == '"' -> inString = true
+                    !inString && c == '(' -> depth++
+                    !inString && c == ')' -> depth--
+                }
+                i++
+            }
+            windows += source.substring(from + call.length, (i - 1).coerceAtMost(source.length))
+            from = source.indexOf(call, i)
+        }
+        return windows
+    }
+
+    /**
+     * Every literal this activity hands to the shared status frame, i.e. everything a person standing
+     * at the panel can be shown. Titles and details reach the frame through the two admission helpers;
+     * the entity-bootstrap phases call the frame directly; a native hold's reason is interpolated into
+     * a detail; and two labels are written straight onto a view.
+     */
+    private fun renderedStrings(source: String): List<String> {
+        val lit = "\"(?:\\\\.|[^\"\\\\\\n])*\""
+        val literal = Regex(lit)
+        // A message is what the panel DISPLAYS, so `+`-joined fragments are rejoined first. Checking
+        // fragments would have passed a screen whose repair instruction was split across the line
+        // break that made it fit under 120 columns.
+        val message = Regex("$lit(?:\\s*\\+\\s*$lit)*")
+        val windows = listOf(
+            "showBlockedAdmissionScreen(",
+            "showAdmissionProgressScreen(",
+            "surface.heading(",
+            "surface.detail(",
+            "surface.action(",
+            "surface.caption(",
+            "EntityFilterNativeHold(",
+        ).flatMap { argumentWindows(source, it) }
+        val assigned = Regex("\\.text = ($lit(?:\\s*\\+\\s*$lit)*)")
+            .findAll(source).map { it.groupValues[1] }
+        return (windows.asSequence() + assigned)
+            .flatMap { region ->
+                message.findAll(region).map { m ->
+                    literal.findAll(m.value).joinToString("") { it.value.drop(1).dropLast(1) }
+                }
+            }
+            .filter { it.isNotBlank() }
+            .toList()
+    }
+
+    /**
+     * Fixing one screen was never the fix.
+     *
+     * Two closed renderer-admission lanes each wrote their screens in the vocabulary of the mechanism
+     * they had just built, and nothing in the project ever read the result from outside: the panel
+     * told whoever walked up to it about a "secure V2 native bridge", a "V2 native-host handshake",
+     * "WebMessageListener support", a "V2-only renderer" and "legal dashboards". This test is the
+     * reader those lanes did not have. It reads what the frame is actually given, not what any one
+     * screen function says, so a new screen inherits the contract instead of rediscovering it.
+     */
+    @Test fun noFullScreenMessageNamesTheMachineryBehindIt() {
+        val rendered = renderedStrings(dashboardSource())
+        assertTrue("fixture sanity: the screens must have been found at all", rendered.size > 25)
+
+        // Internal component and protocol names. Each of these was on a panel; none of them tells
+        // somebody standing in front of it what they lost or what to do about it.
+        listOf(
+            "bridge", "handshake", "native-host", "WebMessageListener", "interceptor",
+            "renderer", "subscription", "legal dashboard", "entity-discovery", "unfiltered",
+        ).forEach { word ->
+            rendered.forEach { text ->
+                assertFalse(
+                    "a full-screen message names \"$word\", which is machinery: $text",
+                    text.contains(word, ignoreCase = true),
+                )
+            }
+        }
+    }
+
+    /**
+     * A protocol version is never actionable: nobody can install one. The Home Assistant version is
+     * the deliberate exception, because upgrading Home Assistant is exactly the repair the screen that
+     * carries it is asking for.
+     */
+    @Test fun noFullScreenMessageShowsAProtocolVersion() {
+        val protocolVersion = Regex("""\bV\d""", RegexOption.IGNORE_CASE)
+        renderedStrings(dashboardSource()).forEach { text ->
+            assertFalse(
+                "a full-screen message shows a protocol version: $text",
+                protocolVersion.containsMatchIn(text),
+            )
+        }
+    }
+
+    /**
+     * Android System WebView is the one component a person has to go and find, so it is named exactly
+     * where they have to find it, and never as a bare component name they would have to already know.
+     * Every screen that names it also says what it is or where it lives.
+     */
+    @Test fun theWebViewIsNamedOnlyWhereSomebodyMustGoAndFindIt() {
+        val naming = renderedStrings(dashboardSource()).filter { it.contains("WebView") }
+        assertTrue("fixture sanity: some screen must still name it", naming.isNotEmpty())
+        naming.forEach { text ->
+            assertTrue(
+                "naming Android System WebView without saying what it is: $text",
+                text.contains("Android System WebView"),
+            )
+            assertTrue(
+                "naming Android System WebView without saying where to get it: $text",
+                text.contains("Play Store"),
+            )
+        }
+        // And it is explained in ordinary language on every screen that sends someone after it.
+        assertTrue(
+            "no screen explains the thing it is sending somebody to update",
+            naming.any { it.contains("web viewer") },
+        )
     }
 }
