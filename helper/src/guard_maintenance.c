@@ -5109,15 +5109,8 @@ static int app_helper_self_identity(uint64_t *bytes, char sha[65]) {
         *bytes = (uint64_t)before.st_size;
         exact = hapaneld_sha256_fd(fd, *bytes, sha) == 0 && fstat(fd, &after) == 0 &&
             fstatat(parent, GUARD_APP_HELPER_LIVE, &named, AT_SYMLINK_NOFOLLOW) == 0 &&
-            S_ISREG(named.st_mode) && before.st_dev == after.st_dev &&
-            before.st_ino == after.st_ino && before.st_size == after.st_size &&
-            before.st_mode == after.st_mode && before.st_uid == after.st_uid &&
-            before.st_gid == after.st_gid && before.st_nlink == after.st_nlink &&
-            before.st_mtime == after.st_mtime && before.st_ctime == after.st_ctime &&
-            before.st_dev == named.st_dev && before.st_ino == named.st_ino &&
-            before.st_mode == named.st_mode && before.st_uid == named.st_uid &&
-            before.st_gid == named.st_gid && before.st_nlink == named.st_nlink &&
-            before.st_size == named.st_size;
+            S_ISREG(named.st_mode) && stat_identity_unchanged_strict(&before, &after) &&
+            stat_identity_unchanged_strict(&before, &named);
     }
     if (fd >= 0) close(fd);
     if (parent >= 0) close(parent);
