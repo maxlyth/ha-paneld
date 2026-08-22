@@ -3123,7 +3123,11 @@ class PaneldServer internal constructor(
               <label><input type="checkbox" id="entity-auto-runtime"> Add missing entities accessed through <code>hass.states</code></label>
               <p class="muted">Turn either source off to keep collecting its evidence without changing the live subscription.</p>
             </fieldset>
-            <div style="margin-top:12px"><input id="entity-search" placeholder="Search the complete Home Assistant entity catalogue"></div>
+            <div class="entity-search-row">
+              <label class="sr-only" for="entity-search">Search the complete Home Assistant entity catalogue</label>
+              <input id="entity-search" type="search" autocomplete="off" placeholder="Search the complete Home Assistant entity catalogue" aria-describedby="entity-search-status">
+              <div id="entity-search-status" class="entity-search-status muted" role="status" aria-live="polite"></div>
+            </div>
           </div>
           <div class="card entity-issues" id="entity-issues"><h2>Entity-discovery compatibility</h2>
             <div id="entity-issues-summary" class="muted" role="status" aria-live="polite">Checking the dashboard configuration…</div>
@@ -3135,15 +3139,21 @@ class PaneldServer internal constructor(
             </section>
             <button class="pbtn" id="entity-issues-rescan" type="button">Re-scan after editing dashboard</button>
           </div>
-          ${entityTableHtml("current", "Current subscribed entities", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
-          ${entityTableHtml("suggested", "Suggested dashboard entities", "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue.", "candidate")}
-          ${entityTableHtml("review", "Stale or noisy entities", "Current-stream entities missing from Home Assistant, receiving updates without being observed as dashboard dependencies, or pinned by hand without this dashboard using them. Review only; a manual pin or exclusion is never removed automatically \u2014 unpin it here when you want it gone.", "review")}
+          ${entityTableHtml("current", "Current subscribed entities", "Current", "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalog.", "subscribed")}
+          ${entityTableHtml("suggested", "Suggested dashboard entities", "Suggested", "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue.", "candidate")}
+          ${entityTableHtml("review", "Stale or noisy entities", "Stale or noisy", "Current-stream entities missing from Home Assistant, receiving updates without being observed as dashboard dependencies, or pinned by hand without this dashboard using them. Review only; a manual pin or exclusion is never removed automatically \u2014 unpin it here when you want it gone.", "review")}
         </div>
         <script src="/assets/entities.js"></script>
     """.trimIndent()
 
-    private fun entityTableHtml(id: String, title: String, note: String, filter: String): String = """
-      <div class="card entity-list" data-filter="$filter" data-table="$id"><h2>$title</h2>
+    private fun entityTableHtml(
+        id: String,
+        title: String,
+        shortTitle: String,
+        note: String,
+        filter: String,
+    ): String = """
+      <div class="card entity-list" data-filter="$filter" data-table="$id" data-short="$shortTitle"><h2>$title</h2>
         <p class="muted">$note</p>
         <div class="entity-bulk" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
           <button class="pbtn" data-bulk="pinned">Pin selected</button><button class="pbtn" data-bulk="auto">Auto selected</button><button class="pbtn" data-bulk="forced_exclude">Exclude selected</button>

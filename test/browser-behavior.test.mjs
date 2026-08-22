@@ -3402,3 +3402,195 @@ browserTest('The client never refuses a dashboard route the server would accept'
   }
   assert.deepEqual(admitted, [], 'client admitted routes it must catch before the round trip');
 });
+
+// --- Entities page: catalogue search feedback (issue #114) -----------------------------------------
+//
+// The reporter's page was tall enough that a working search looked broken: the matches land in the
+// fourth card, and nothing near the box said so. These run against the real entities.js and info.css
+// in a real viewport, because the thing under test is where the page ends up, not what a shim recorded.
+
+// Mirrors entitiesBody() in PaneldServer.kt. The server markup is pinned separately by
+// EntitySearchFeedbackUiContractTest; this fixture only has to be a faithful stand-in for it.
+function entitiesFixture() {
+  const table = (id, title, short, filter) => `
+    <div class="card entity-list" data-filter="${filter}" data-table="${id}" data-short="${short}"><h2>${title}</h2>
+      <div class="entity-bulk"><button class="pbtn" data-bulk="pinned">Pin selected</button><span class="muted entity-selected">0 selected</span></div>
+      <div class="tablewrap"><table class="entity-table"><thead><tr>
+        <th class="col-select"><input type="checkbox" class="entity-select-page" aria-label="Select this page"></th>
+        <th class="col-entity"><button data-sort="entity_id">Entity</button></th>
+        <th class="col-access"><button data-sort="access_1h">Accesses</button></th>
+        <th class="col-rate"><button data-sort="rate_1h_bps">Data rate</button></th>
+        <th class="col-reason"><button data-sort="reasons">Reason</button></th>
+        <th class="col-last"><button data-sort="last_access_at">Last access</button></th>
+        <th class="col-override"><button data-sort="override">Override</button></th>
+      </tr></thead><tbody></tbody></table></div>
+      <div><button class="pbtn entity-prev">Previous</button><button class="pbtn entity-next">Next</button><span class="muted entity-msg">Loading…</span></div>
+    </div>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="/info.css"></head><body>
+    <div class="cards entity-cards">
+      <div class="card"><h2>Entity subscription filter</h2>
+        <div id="entity-status">Loading…</div>
+        <div><button class="pbtn" id="entity-sync">Scan dashboard now</button><button class="pbtn" id="entity-activate" disabled>Checking…</button><button class="pbtn" id="entity-reset" type="button">Reset learned data</button></div>
+        <div id="entity-action-result" class="entity-action-result muted" role="status" aria-live="polite"></div>
+        <fieldset class="entity-policy"><legend>Automatic promotion</legend>
+          <label><input type="checkbox" id="entity-auto-static"> Static</label>
+          <label><input type="checkbox" id="entity-auto-runtime"> Runtime</label>
+        </fieldset>
+        <div class="entity-search-row">
+          <label class="sr-only" for="entity-search">Search the complete Home Assistant entity catalogue</label>
+          <input id="entity-search" type="search" autocomplete="off" placeholder="Search the complete Home Assistant entity catalogue" aria-describedby="entity-search-status">
+          <div id="entity-search-status" class="entity-search-status muted" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="card entity-issues" id="entity-issues"><h2>Entity-discovery compatibility</h2>
+        <div id="entity-issues-summary" class="muted" role="status" aria-live="polite"></div>
+        <div id="entity-issues-list" class="entity-issues-list"></div>
+        <section id="entity-dynamic" class="entity-dynamic" hidden><h3>Dynamic expressions</h3><div id="entity-dynamic-list"></div></section>
+        <button class="pbtn" id="entity-issues-rescan" type="button">Re-scan</button>
+      </div>
+      ${table('current', 'Current subscribed entities', 'Current', 'subscribed')}
+      ${table('suggested', 'Suggested dashboard entities', 'Suggested', 'candidate')}
+      ${table('review', 'Stale or noisy entities', 'Stale or noisy', 'review')}
+    </div>
+    <script src="/assets/entities.js"></script>
+  </body></html>`;
+}
+
+function entityRows(count, prefix) {
+  return Array.from({ length: count }, (_, index) => ({
+    entity_id: `${prefix}.entity_${index}`, reasons: 'dashboard', static: true,
+    access_1m: 0, access_1h: 1, access_1d: 2, rate_1m_bps: 0, rate_1h_bps: 0, rate_1d_bps: 0, last_access: Date.now(),
+  }));
+}
+
+async function startEntitiesHarness(t, { matches = { subscribed: 60, candidate: 3, review: 0 } } = {}) {
+  const harness = await startHarness((path, request) => {
+    if (path === '/api/v1/dashboard/entities/sync') {
+      return json({
+        state: 'active', sync_running: false, stream_entity_count: 120, stream_mode: 'filtered',
+        catalog_count: 3769, suggested_count: 3, last_sync_at: Date.now(), db_bytes: 1024,
+        auto_static: true, auto_runtime: true, apply_required: false,
+        blocking_issue_count: 0, ignored_issue_count: 0, unresolved_count: 0,
+      });
+    }
+    if (path === '/api/v1/dashboard/entities/issues') {
+      return json({ items: [], dashboard_issue_count: 0, blocking_issue_count: 0, ignored_issue_count: 0, dynamic_expressions: [] });
+    }
+    if (path === '/api/v1/dashboard/entities') {
+      const params = new URL(request.url, 'http://panel.test').searchParams;
+      const filter = params.get('filter');
+      const query = (params.get('q') || '').trim();
+      // Without a query the Current table is long — the tall page the reporter actually had.
+      const total = query ? matches[filter] : (filter === 'subscribed' ? 120 : 0);
+      return json({ items: entityRows(Math.min(total, 100), filter === 'candidate' ? 'light' : 'sensor'), total });
+    }
+    if (path === '/api/v1/dashboard/entities/policy') return json({ ok: true });
+  }, entitiesFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 900 } });
+  page.setDefaultTimeout(4_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('[data-table="current"] tbody tr').first().waitFor();
+  return page;
+}
+
+const suggestedTop = (page) => page.locator('[data-table="suggested"]').evaluate((node) => node.getBoundingClientRect().top);
+
+// A smooth scroll runs on the compositor, during which headless Chromium stops servicing
+// requestAnimationFrame — Playwright's default polling. Every wait that straddles one polls on a timer.
+const settled = (page, predicate) => page.waitForFunction(predicate, null, { polling: 100 });
+const suggestedTopIn = (page) => page.evaluate(() =>
+  document.querySelector('[data-table="suggested"]').getBoundingClientRect().top);
+// A smooth scroll is still travelling when scrollY first becomes non-zero. Anything that then asserts
+// on a scroll position has to let the animation land first, or it measures a moving target.
+async function scrollRest(page) {
+  let previous = -1;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const now = await page.evaluate(() => window.scrollY);
+    if (now === previous) return now;
+    previous = now;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return previous;
+}
+
+browserTest('Catalogue search reports its per-section counts and brings Suggested into view', async (t) => {
+  const page = await startEntitiesHarness(t);
+  const viewport = await page.evaluate(() => window.innerHeight);
+
+  assert.equal(await page.evaluate(() => window.scrollY), 0);
+  assert.equal(await suggestedTopIn(page) >= viewport, true, 'Suggested must start below the fold for this to mean anything');
+  assert.equal(await page.locator('#entity-search-status').textContent(), '');
+
+  await page.locator('#entity-search').fill('kitchen');
+  // The acknowledgement is immediate, ahead of the 250ms debounce and any request.
+  await page.locator('#entity-search-status').getByText('Searching…').waitFor();
+
+  await settled(page, () => document.getElementById('entity-search-status').textContent.startsWith('Matches:'));
+  assert.equal(
+    await page.locator('#entity-search-status').textContent(),
+    'Matches: Current 60 · Suggested 3 · Stale or noisy 0',
+  );
+
+  await settled(page, () => {
+    const rect = document.querySelector('[data-table="suggested"]').getBoundingClientRect();
+    return rect.top < window.innerHeight && rect.bottom > 0;
+  });
+  assert.equal(await scrollRest(page) > 0, true, 'the page moved to reach Suggested');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'entity-search', 'focus must stay in the search box');
+});
+
+browserTest('Only a typed query moves the Entities page', async (t) => {
+  const page = await startEntitiesHarness(t);
+  const viewport = await page.evaluate(() => window.innerHeight);
+  const belowFold = async () => (await suggestedTopIn(page)) >= viewport;
+
+  // Repainting a section empties its tbody before refilling it, so the page briefly collapses and the
+  // browser clamps the scroll offset. That predates this change — it is what render() has always done —
+  // and it is asserted here so the negative cases below cannot be credited to it.
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await page.evaluate(() => document.querySelectorAll('.entity-list tbody').forEach((body) => { body.innerHTML = ''; }));
+  assert.equal(await page.evaluate(() => window.scrollY) < 400, true, 'clearing the tables alone already clamps the scroll');
+
+  // A mutation refresh repaints every section — refilling the tables emptied above — and must never
+  // carry the viewport to Suggested.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.locator('#entity-auto-static').uncheck();
+  await settled(page, () => !document.getElementById('entity-auto-static').disabled
+    && document.querySelectorAll('[data-table="current"] tbody tr').length === 100);
+  assert.equal(await page.evaluate(() => window.scrollY), 0, 'a policy save must not move the page');
+  assert.equal(await belowFold(), true, 'a policy save must leave Suggested below the fold');
+
+  // The positive control: a typed query does move the page, so the negatives are not passing vacuously.
+  await page.locator('#entity-search').fill('kitchen');
+  await settled(page, () => document.getElementById('entity-search-status').textContent.startsWith('Matches:'));
+  await settled(page, () => window.scrollY > 0);
+  await scrollRest(page);
+  assert.equal(await belowFold(), false, 'a typed query brings Suggested into view');
+
+  // Clearing restores the unfiltered lists without chasing anything.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await scrollRest(page);
+  await page.locator('#entity-search').fill('');
+  await settled(page, () => document.getElementById('entity-search-status').textContent === ''
+    && document.querySelectorAll('[data-table="current"] tbody tr').length === 100);
+  assert.equal(await scrollRest(page), 0, 'clearing the box must not move the page');
+  assert.equal(await belowFold(), true, 'clearing the box must leave Suggested below the fold');
+});
+
+browserTest('The search status line reserves its height, so feedback shifts nothing below it', async (t) => {
+  const page = await startEntitiesHarness(t);
+  const issuesTop = () => page.locator('#entity-issues').evaluate((node) => node.getBoundingClientRect().top);
+
+  const before = await issuesTop();
+  await page.locator('#entity-search').fill('kitchen');
+  await page.locator('#entity-search-status').getByText('Searching…').waitFor();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  assert.equal(Math.abs((await issuesTop()) - before) < 1, true, 'the appearing status line must not move the card below it');
+
+  await page.waitForFunction(() => document.getElementById('entity-search-status').textContent.startsWith('Matches:'));
+  await page.evaluate(() => window.scrollTo(0, 0));
+  assert.equal(Math.abs((await issuesTop()) - before) < 1, true, 'the counts line must not move the card below it');
+});

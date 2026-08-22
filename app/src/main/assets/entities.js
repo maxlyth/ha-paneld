@@ -2,6 +2,7 @@
 (function(){
   'use strict';
   var status=document.getElementById('entity-status'),search=document.getElementById('entity-search'),timer,pageSize=100,suggestedCount=0;
+  var searchStatus=document.getElementById('entity-search-status'),queryGeneration=0,activeGeneration=0,generationResults=null,generationSettled=0,revealGeneration=0,settledQuery='',announcedText=null;
   var syncButton=document.getElementById('entity-sync'),applyButton=document.getElementById('entity-activate'),resetButton=document.getElementById('entity-reset'),actionResult=document.getElementById('entity-action-result'),mutationOwner=null,mutationSequence=0,lastStatus=null;
   var issuesCard=document.getElementById('entity-issues'),issuesSummary=document.getElementById('entity-issues-summary'),issuesList=document.getElementById('entity-issues-list'),issuesRescan=document.getElementById('entity-issues-rescan');
   var dynamicSection=document.getElementById('entity-dynamic'),dynamicList=document.getElementById('entity-dynamic-list');
@@ -12,6 +13,55 @@
   function rate(n){n=Number(n)||0;if(n<0.01)return '0';if(n<1)return n.toFixed(2);if(n<10)return n.toFixed(1);return n.toFixed(0)}
   function ranked(value,rankValue,format){var r=Number(rankValue)||0,level=r<=1/3?'low':r<=2/3?'mid':'high';return '<span class="metric-rank rank-'+level+'">'+format(value)+'</span>'}
   function reasonIcons(e,reason){var out=[];function add(glyph,label){out.push('<span class="reason-icon" title="'+esc(label)+'" aria-label="'+esc(label)+'">'+glyph+'</span>')}if(e.static||reason.indexOf('dashboard')>=0)add('▦','Dashboard configuration');if(e.runtime||reason.indexOf('runtime')>=0)add('↯','Runtime hass.states access');if(e.pinned||reason.indexOf('manual')>=0)add('●','Manual override');if(e.excluded)add('⊘','Excluded but still detected');if(!out.length&&search.value.trim())add('⌕','Catalogue search');return out.join('')}
+  // The search line is one live region written only with a changed string, so a background poll
+  // that finds the same counts does not re-announce them to a screen reader.
+  function announce(text){if(!searchStatus)return;if(announcedText===text)return;announcedText=text;searchStatus.textContent=text}
+  // Minimal and one-shot. A section already showing its heading and some content is left alone, and
+  // reduced-motion users get an instant jump rather than a long smooth scroll.
+  function revealNode(node){
+    if(!node||typeof node.scrollIntoView!=='function')return;
+    var viewport=window.innerHeight||(document.documentElement&&document.documentElement.clientHeight)||0;
+    var rect=typeof node.getBoundingClientRect==='function'?node.getBoundingClientRect():null;
+    if(rect&&rect.top>=0&&rect.top<=Math.max(0,viewport-120))return;
+    var reduced=!!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    try{node.scrollIntoView({behavior:reduced?'auto':'smooth',block:'start'})}catch(e){node.scrollIntoView(true)}
+  }
+  function focusCatalogSearch(){if(!search)return;revealNode(search.closest?(search.closest('.card')||search):search);try{search.focus()}catch(e){}}
+  // Every dispatch gets one page-level generation. A section reports into it once, the counts are
+  // rendered only when that whole generation has settled, and a response belonging to an earlier
+  // generation is discarded rather than mixed into the line.
+  // A keystroke supersedes whatever is in flight on the spot, not 250ms later when the debounce
+  // fires: otherwise the old query's answers can land inside that window and replace the
+  // acknowledgement with stale counts, render stale rows and scroll while the user is still typing.
+  function invalidateAll(){tables.forEach(function(t){t.invalidate()});generationResults=null;revealGeneration=0}
+  function beginQuery(options){
+    var generation=++queryGeneration;
+    activeGeneration=generation;generationResults=new Array(tables.length);generationSettled=0;
+    revealGeneration=options&&options.reveal?generation:0;
+    settledQuery=search?search.value.trim():'';
+    var reset=!!(options&&options.reset);
+    if(!tables.length){settleAll(generation);return Promise.resolve([])}
+    return Promise.all(tables.map(function(t){return reset?t.reset(generation):t.load(generation)}));
+  }
+  function settleAll(generation){if(generation!==activeGeneration||!generationResults)return;var reveal=revealGeneration===generation;generationResults=null;revealGeneration=0;finishQuery(settledQuery,[],reveal)}
+  function settleSection(generation,index,result){
+    if(!generation||!generationResults||generationResults[index])return;
+    generationResults[index]=result;
+    if(++generationSettled<tables.length)return;
+    var results=generationResults,reveal=revealGeneration===generation;
+    generationResults=null;revealGeneration=0;
+    finishQuery(settledQuery,results,reveal);
+  }
+  function finishQuery(query,results,reveal){
+    if(!query){announce('');return}
+    if(results.some(function(r){return !r.ok})){announce('Search results are temporarily unavailable.');return}
+    var matched=results.filter(function(r){return r.total>0});
+    if(!matched.length){announce('No entities match this search.');return}
+    announce('Matches: '+results.map(function(r){return r.label+' '+r.total}).join(' \u00b7 '));
+    if(!reveal)return;
+    var target=null;matched.forEach(function(r){if(!target&&r.table==='suggested')target=r});
+    revealNode((target||matched[0]).card);
+  }
   function ownsMutation(claim){return mutationOwner===claim}
   function refreshMutationControls(){var owner=mutationOwner&&mutationOwner.name,busy=!!mutationOwner,s=lastStatus||{};syncButton.disabled=busy||!!s.sync_running;syncButton.textContent=owner==='scan'?'Scanning…':(s.sync_running?'Scanning…':'Scan dashboard now');resetButton.disabled=busy||!!s.sync_running;resetButton.textContent=owner==='reset'?'Resetting…':(s.sync_running?'Reset available after scan':'Reset learned data');autoStatic.disabled=autoRuntime.disabled=busy;issuesRescan.disabled=busy||!!s.sync_running;if(owner==='reset'){applyButton.disabled=true;applyButton.textContent='Reset in progress…'}else if(busy||s.sync_running){applyButton.disabled=true;applyButton.textContent=owner==='apply'?'Applying…':((owner==='scan'||s.sync_running)?'Scan in progress…':'Update in progress…')}else if(s.automatic_activation_blocked){applyButton.disabled=true;applyButton.textContent='Choose how to handle entity-discovery checks'}else if(!s.apply_required){applyButton.disabled=true;applyButton.textContent='Subscription up to date'}else if(s.activation_required&&!s.stream_change_required){applyButton.disabled=false;applyButton.textContent='Enable automatic updates'}else{applyButton.disabled=false;applyButton.textContent='Apply policy set ('+s.stream_entity_count+' → '+s.desired_count+')'}document.querySelectorAll('.entity-list select[data-id],.entity-list button[data-bulk],.entity-list button[data-all-candidates],.entity-issue-toggle').forEach(function(control){control.disabled=busy})}
   function claimMutation(name){if(mutationOwner)return null;var claim={name:name,id:++mutationSequence};mutationOwner=claim;refreshMutationControls();return claim}
@@ -24,7 +74,8 @@
       return s;
     }catch(e){status.textContent='Status unavailable';return null}
   }
-  function controller(card){
+  function controller(card,index){
+    var sectionLabel=card.dataset.short||card.dataset.table||'',sectionTable=card.dataset.table||'';
     var body=card.querySelector('tbody'),msg=card.querySelector('.entity-msg'),prev=card.querySelector('.entity-prev'),next=card.querySelector('.entity-next');
     var selectPage=card.querySelector('.entity-select-page'),selectedMsg=card.querySelector('.entity-selected');
     var state={items:[],total:0,offset:0,sortKey:'entity_id',sortDir:1,request:0,selected:new Set()};
@@ -37,18 +88,20 @@
       prev.disabled=state.offset===0;next.disabled=state.offset+state.items.length>=state.total;
       selectPage.checked=state.items.length>0&&state.items.every(function(e){return state.selected.has(e.entity_id)});selectPage.indeterminate=!selectPage.checked&&state.items.some(function(e){return state.selected.has(e.entity_id)});selectedMsg.textContent=state.selected.size+' selected';refreshMutationControls();
     }
-    async function load(){var request=++state.request;try{var u='/api/v1/dashboard/entities?limit='+pageSize+'&offset='+state.offset+'&filter='+encodeURIComponent(card.dataset.filter)+'&q='+encodeURIComponent(search.value.trim())+'&sort='+encodeURIComponent(state.sortKey)+'&dir='+(state.sortDir>0?'asc':'desc');var d=await fetch(u,{cache:'no-store'}).then(function(r){return r.json()});if(request!==state.request)return;state.items=d.items||[];state.total=Number(d.total)||0;render()}catch(e){if(request===state.request)msg.textContent='Entity list unavailable'}}
+    function report(generation,ok){settleSection(generation,index,{ok:ok,total:ok?state.total:0,label:sectionLabel,table:sectionTable,card:card})}
+    async function load(generation){var request=++state.request;try{var u='/api/v1/dashboard/entities?limit='+pageSize+'&offset='+state.offset+'&filter='+encodeURIComponent(card.dataset.filter)+'&q='+encodeURIComponent(search.value.trim())+'&sort='+encodeURIComponent(state.sortKey)+'&dir='+(state.sortDir>0?'asc':'desc');var d=await fetch(u,{cache:'no-store'}).then(function(r){return r.json()});if(request!==state.request)return;state.items=d.items||[];state.total=Number(d.total)||0;render();report(generation,true)}catch(e){if(request!==state.request)return;msg.textContent='Entity list unavailable';report(generation,false)}}
     body.addEventListener('change',async function(ev){var sel=ev.target;if(sel.matches('.entity-select')){if(sel.checked)state.selected.add(sel.dataset.id);else state.selected.delete(sel.dataset.id);render();return}if(!sel.matches('select[data-id]'))return;var claim=claimMutation('override');if(!claim){loadAll();return}try{var id=sel.getAttribute('data-id'),choice=sel.value,force=choice==='forced_exclude'&&confirm('Exclude '+id+' even if the dashboard depends on it?');if(choice==='forced_exclude'&&!force){await loadAll();return}var r=await mutationRequest(claim,'/api/v1/dashboard/entities/override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entity_id:id,override:choice,force:force})});if(!r.ok)alert(await r.text());await Promise.all([loadStatus(),loadAll()])}catch(e){alert(e&&e.message?e.message:'Entity override failed')}finally{releaseMutation(claim)}});
     selectPage.addEventListener('change',function(){state.items.forEach(function(e){if(selectPage.checked)state.selected.add(e.entity_id);else state.selected.delete(e.entity_id)});render()});
     async function bulk(choice,allCandidates){var ids=Array.from(state.selected);if(!allCandidates&&!ids.length){alert('Select at least one entity first.');return}var claim=claimMutation('bulk-override');if(!claim)return;try{var label=allCandidates?'all '+suggestedCount+' suggested entities':ids.length+' selected entities',force=false;if(choice==='forced_exclude'){force=confirm('Exclude '+label+'? This can break dashboard cards.');if(!force)return}else if(allCandidates&&!confirm('Pin '+label+'?'))return;var r=await mutationRequest(claim,'/api/v1/dashboard/entities/overrides',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entity_ids:ids,all_candidates:!!allCandidates,override:choice,force:force})});if(!r.ok){alert(await r.text());return}state.selected.clear();await Promise.all([loadStatus(),loadAll()])}catch(e){alert(e&&e.message?e.message:'Bulk override failed')}finally{releaseMutation(claim)}}
     card.querySelectorAll('button[data-bulk]').forEach(function(b){b.addEventListener('click',function(){bulk(b.dataset.bulk,false)})});var all=card.querySelector('button[data-all-candidates]');if(all)all.addEventListener('click',function(){bulk('pinned',true)});
-    card.querySelector('thead').addEventListener('click',function(ev){var b=ev.target.closest('button[data-sort]');if(!b)return;var key=b.dataset.sort;if(state.sortKey===key)state.sortDir=-state.sortDir;else{state.sortKey=key;state.sortDir=(key==='entity_id'||key==='reasons'||key==='override')?1:-1}state.offset=0;load()});
-    prev.addEventListener('click',function(){state.offset=Math.max(0,state.offset-pageSize);load()});next.addEventListener('click',function(){state.offset+=pageSize;load()});
-    return {load:load,reset:function(){state.offset=0;return load()}};
+    card.querySelector('thead').addEventListener('click',function(ev){var b=ev.target.closest('button[data-sort]');if(!b)return;var key=b.dataset.sort;if(state.sortKey===key)state.sortDir=-state.sortDir;else{state.sortKey=key;state.sortDir=(key==='entity_id'||key==='reasons'||key==='override')?1:-1}state.offset=0;load(activeGeneration)});
+    prev.addEventListener('click',function(){state.offset=Math.max(0,state.offset-pageSize);load(activeGeneration)});next.addEventListener('click',function(){state.offset+=pageSize;load(activeGeneration)});
+    return {load:load,reset:function(generation){state.offset=0;return load(generation)},invalidate:function(){state.request++}};
   }
   var tables=Array.prototype.map.call(document.querySelectorAll('.entity-list'),controller);
-  function loadAll(){return Promise.all(tables.map(function(t){return t.load()}))}
-  function resetAll(){return Promise.all(tables.map(function(t){return t.reset()}))}
+  function loadAll(){return beginQuery({})}
+  function resetAll(){return beginQuery({reset:true})}
+  function searchAll(){return beginQuery({reset:true,reveal:true})}
   function issueSources(issue){var sources=Array.isArray(issue.source_locations)?issue.source_locations:(Array.isArray(issue.sources)?issue.sources:[]);if(!sources.length&&issue.source_location)sources=[issue.source_location];return sources}
   function loadIssues(){return fetch('/api/v1/dashboard/entities/issues',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('issues unavailable');return r.json()}).then(function(d){
     var items=Array.isArray(d)?d:(d.items||[]),blocking=Number(d.blocking_issue_count)||items.filter(function(i){return !!i.blocking}).length,ignored=Number(d.ignored_issue_count)||items.filter(function(i){return !!i.ignored}).length,total=Number(d.dashboard_issue_count);if(!Number.isFinite(total)||total<items.length)total=items.length;
@@ -66,6 +119,6 @@
   async function savePolicy(){var claim=claimMutation('policy');if(!claim){await loadStatus();return}try{var r=await mutationRequest(claim,'/api/v1/dashboard/entities/policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auto_static:autoStatic.checked,auto_runtime:autoRuntime.checked})});if(!r.ok)alert(await r.text());await Promise.all([loadStatus(),loadIssues(),resetAll()])}catch(e){alert(e&&e.message?e.message:'Policy update failed')}finally{releaseMutation(claim)}}
   autoStatic.addEventListener('change',savePolicy);autoRuntime.addEventListener('change',savePolicy);
   issuesRescan.addEventListener('click',function(){syncButton.click()});
-  search.addEventListener('input',function(){clearTimeout(timer);timer=setTimeout(resetAll,250)});
+  search.addEventListener('input',function(){clearTimeout(timer);invalidateAll();announce(search.value.trim()?'Searching\u2026':'');timer=setTimeout(searchAll,250)});
   loadStatus();loadIssues();loadAll();setInterval(function(){if(!document.hidden){loadStatus();loadIssues()}},5000);setInterval(function(){if(!document.hidden&&!document.querySelector('.entity-list select:focus'))loadAll()},10000);
 })();

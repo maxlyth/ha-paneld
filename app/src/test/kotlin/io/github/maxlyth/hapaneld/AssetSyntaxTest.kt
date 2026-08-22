@@ -308,7 +308,7 @@ class AssetSyntaxTest {
             const fs=require('fs'),vm=require('vm');
             const ignoredMode=process.argv[2]==='ignored';
             function el(){return {dataset:{},className:'',textContent:'',innerHTML:'',checked:false,disabled:false,value:'',classList:{toggle(){},remove(){}},addEventListener(){},querySelector(){return el()},querySelectorAll(){return []},appendChild(v){this.child=v}}}
-            const ids={};['entity-status','entity-search','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
+            const ids={};['entity-status','entity-search','entity-search-status','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
             const issue='<img src=x onerror=alert(1)>';
             global.document={hidden:false,getElementById:k=>ids[k],querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>el()};
             global.setInterval=()=>0;global.confirm=()=>false;global.alert=()=>{};
@@ -329,7 +329,7 @@ class AssetSyntaxTest {
         val script = """
             const fs=require('fs'),vm=require('vm');
             function el(){return {dataset:{},className:'',textContent:'',innerHTML:'',checked:false,disabled:false,value:'',children:[],classList:{toggle(){},remove(){}},addEventListener(){},querySelector(){return el()},querySelectorAll(){return []},appendChild(v){this.child=v;this.children.push(v)}}}
-            const ids={};['entity-status','entity-search','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
+            const ids={};['entity-status','entity-search','entity-search-status','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(k=>ids[k]=el());
             global.document={hidden:false,getElementById:k=>ids[k],querySelectorAll:()=>[],querySelector:()=>null,createElement:()=>el()};
             global.setInterval=()=>0;global.confirm=()=>false;global.alert=()=>{};
             const notice={type:'limited_support',blocking:false,ignored:false,fingerprint:'notice-1',severity:'warning',view_title:'Overview',source_locations:['dashboard.views[0].cards[0]'],rule_summary:'Button Card has limited entity discovery support',candidate_count:null,limit:null,reason:'Static IDs are scanned.',recommendation:'Keep dependencies explicit.'};

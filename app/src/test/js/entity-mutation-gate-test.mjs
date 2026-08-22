@@ -21,7 +21,7 @@ function element() {
 }
 
 const ids = {};
-['entity-status','entity-search','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(id => { ids[id] = element(); });
+['entity-status','entity-search','entity-search-status','entity-sync','entity-activate','entity-reset','entity-action-result','entity-auto-static','entity-auto-runtime','entity-issues','entity-issues-summary','entity-issues-list','entity-issues-rescan','entity-dynamic','entity-dynamic-list'].forEach(id => { ids[id] = element(); });
 const body = element(), message = element(), previous = element(), next = element(), selectPage = element(), selected = element(), thead = element();
 const bulk = element(), allCandidates = element(), overrideSelect = element();
 bulk.dataset.bulk = 'pinned';
