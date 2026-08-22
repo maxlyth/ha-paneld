@@ -69,9 +69,13 @@ internal class GuardDbMaintenanceServer(
     private val exactFinalStatus: (GuardDbMaintenanceProtocol.Status) -> Boolean = { status ->
         exactGuardDbFinalStatus(requireNotNull(context), status, sentinel)
     },
+    private val bootstrapExport: GuardDbBootstrapExportDependencies? = null,
     private val onFinalized: () -> Unit,
 ) {
     private val mutation = Mutex()
+    private val bootstrapLeases = bootstrapExport?.let {
+        GuardDbBootstrapExportLeaseStore(it.monotonicMs, it.leaseLifetimeMs)
+    }
     @Volatile private var stopEngine: (() -> Unit)? = null
 
     fun start() {
@@ -123,6 +127,11 @@ internal class GuardDbMaintenanceServer(
                         val evidence = client.evidence(sentinel.session)
                             ?: return@get call.respondJsonError(HttpStatusCode.ServiceUnavailable, "evidence-unavailable")
                         call.respondBytes(evidence, ContentType.Text.Plain)
+                    }
+                    if (bootstrapExport != null) {
+                        post("/bootstrap/export") { createBootstrapExport(call, bootstrapExport) }
+                        get("/bootstrap/proof") { serveBootstrapProof(call, bootstrapExport) }
+                        get("/bootstrap/database") { serveBootstrapDatabase(call, bootstrapExport) }
                     }
                     post("/arm/commit") { commitPreparedArm(call) }
                     post("/refusal") { submitExactARefusal(call) }
@@ -219,6 +228,181 @@ internal class GuardDbMaintenanceServer(
         stopEngine?.invoke()
         stopEngine = null
     }
+
+    private suspend fun createBootstrapExport(
+        call: ApplicationCall,
+        dependencies: GuardDbBootstrapExportDependencies,
+    ) {
+        if (sentinel.state != io.github.maxlyth.hapaneld.util.GuardDbSentinelState.BASELINE_READY) {
+            return call.respondJsonError(HttpStatusCode.Conflict, "clean-baseline-not-ready")
+        }
+        val body = try {
+            BoundedStreams.readBytes(call.receiveStream(), MAX_ACTION_BODY_BYTES).toString(Charsets.UTF_8)
+        } catch (_: ByteLimitExceeded) {
+            return call.respondJsonError(HttpStatusCode.PayloadTooLarge, "body-too-large")
+        }
+        val request = parseBootstrapExport(body)
+            ?: return call.respondJsonError(HttpStatusCode.BadRequest, "invalid-bootstrap-export")
+        if (request.session != sentinel.session) {
+            return call.respondJsonError(HttpStatusCode.Conflict, "session-mismatch")
+        }
+        val securityEpoch = security.readyEpoch()
+            ?: return call.respondJsonError(
+                HttpStatusCode.PreconditionFailed,
+                "hardened-debug-off-proof-required",
+            )
+        val preview = dependencies.snapshot(securityEpoch)?.takeIf { it.exactFor(sentinel) }
+            ?: return call.respondJsonError(HttpStatusCode.Conflict, "bootstrap-authority-unavailable")
+        if (preview.prepared.databaseBytes > MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES) {
+            return call.respondJsonError(HttpStatusCode.PayloadTooLarge, "baseline-database-too-large")
+        }
+        val payload = exactHttpApprovalPayload(call, sha256Hex(
+            (body + "\u0000BOOTSTRAP_EXPORT\u0000" + preview.approvalBinding())
+                .toByteArray(Charsets.UTF_8),
+        ))
+        val peer = call.request.origin.remoteAddress
+        val (decision, id) = broker.request(
+            SensitiveOperation.GUARD_DB_MAINTENANCE,
+            peer,
+            payload,
+            "Export exact prepared baseline ${preview.prepared.databaseSha256.take(12)} for bootstrap sealing",
+        )
+        if (decision != ApprovalBroker.Decision.APPROVED) {
+            return call.respondText(
+                "{\"ok\":false,\"error\":\"approval-required\",\"approval_id\":${Json.str(id)}}",
+                ContentType.Application.Json,
+                HttpStatusCode.Accepted,
+            )
+        }
+        mutation.withLock {
+            val secured = security.commit(securityEpoch) {
+                val current = dependencies.snapshot(securityEpoch)
+                    ?.takeIf { it == preview && it.exactFor(sentinel) }
+                    ?: return@commit GuardDbBootstrapExportBuild.AuthorityChanged
+                val read = dependencies.readDatabase(current.prepared)
+                val database = when (read) {
+                    is GuardDbBootstrapDatabaseRead.Exact -> read.bytes
+                    GuardDbBootstrapDatabaseRead.TooLarge ->
+                        return@commit GuardDbBootstrapExportBuild.TooLarge
+                    GuardDbBootstrapDatabaseRead.Mismatch ->
+                        return@commit GuardDbBootstrapExportBuild.DatabaseMismatch
+                }
+                if (database.size.toLong() > MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES) {
+                    return@commit GuardDbBootstrapExportBuild.TooLarge
+                }
+                if (database.size.toLong() != current.prepared.databaseBytes ||
+                    sha256Hex(database) != current.prepared.databaseSha256
+                ) return@commit GuardDbBootstrapExportBuild.DatabaseMismatch
+                if (dependencies.snapshot(securityEpoch) != current ||
+                    !dependencies.databaseStillExact(current.prepared)
+                ) return@commit GuardDbBootstrapExportBuild.AuthorityChanged
+                val receipt = requireNotNull(bootstrapLeases).issue(
+                    snapshot = current,
+                    peer = peer,
+                    captureId = request.captureId,
+                    token = dependencies.freshToken(),
+                    database = database,
+                ) ?: return@commit GuardDbBootstrapExportBuild.AuthorityChanged
+                GuardDbBootstrapExportBuild.Created(receipt)
+            }
+            val result = when (secured) {
+                GuardDbMaintenanceSecurityResult.Changed ->
+                    return@withLock call.respondJsonError(
+                        HttpStatusCode.Conflict,
+                        "security-authority-changed",
+                    )
+                GuardDbMaintenanceSecurityResult.Refused ->
+                    return@withLock call.respondJsonError(
+                        HttpStatusCode.PreconditionFailed,
+                        "hardened-debug-off-proof-required",
+                    )
+                is GuardDbMaintenanceSecurityResult.Value -> secured.value
+            }
+            when (result) {
+                GuardDbBootstrapExportBuild.AuthorityChanged -> call.respondJsonError(
+                    HttpStatusCode.Conflict,
+                    "bootstrap-authority-changed",
+                )
+                GuardDbBootstrapExportBuild.DatabaseMismatch -> call.respondJsonError(
+                    HttpStatusCode.Conflict,
+                    "baseline-database-mismatch",
+                )
+                GuardDbBootstrapExportBuild.TooLarge -> call.respondJsonError(
+                    HttpStatusCode.PayloadTooLarge,
+                    "baseline-database-too-large",
+                )
+                is GuardDbBootstrapExportBuild.Created -> call.respondText(
+                    result.receipt.canonical(),
+                    ContentType.Application.Json,
+                )
+            }
+        }
+    }
+
+    private suspend fun serveBootstrapProof(
+        call: ApplicationCall,
+        dependencies: GuardDbBootstrapExportDependencies,
+    ) {
+        val expectedEpoch = sentinel.securityAuthorityEpoch
+        val secured = security.commit(expectedEpoch) {
+            requireNotNull(bootstrapLeases).proof(bootstrapCredentials(call)) { bound ->
+                bootstrapLeaseStillExact(dependencies, bound, expectedEpoch)
+            }
+        }
+        if (secured !is GuardDbMaintenanceSecurityResult.Value) {
+            bootstrapLeases?.invalidate()
+            return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        }
+        val proof = secured.value
+            ?: return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        if (security.readyEpoch() != expectedEpoch) {
+            bootstrapLeases?.invalidate()
+            return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        }
+        call.respondBytes(proof, ContentType.Application.Json)
+    }
+
+    private suspend fun serveBootstrapDatabase(
+        call: ApplicationCall,
+        dependencies: GuardDbBootstrapExportDependencies,
+    ) {
+        val expectedEpoch = sentinel.securityAuthorityEpoch
+        val secured = security.commit(expectedEpoch) {
+            requireNotNull(bootstrapLeases).database(bootstrapCredentials(call)) { bound ->
+                bootstrapLeaseStillExact(dependencies, bound, expectedEpoch)
+            }
+        }
+        if (secured !is GuardDbMaintenanceSecurityResult.Value) {
+            bootstrapLeases?.invalidate()
+            return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        }
+        val database = secured.value
+            ?: return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        if (security.readyEpoch() != expectedEpoch) {
+            bootstrapLeases?.invalidate()
+            return call.respondJsonError(HttpStatusCode.Forbidden, "bootstrap-export-unavailable")
+        }
+        call.response.headers.append(GUARD_DB_BOOTSTRAP_CAPTURE_HEADER, database.captureId)
+        call.response.headers.append(GUARD_DB_BOOTSTRAP_DATABASE_SHA256_HEADER, database.databaseSha256)
+        call.response.headers.append(GUARD_DB_BOOTSTRAP_SESSION_HEADER, database.session)
+        call.respondBytes(database.bytes, ContentType.Application.OctetStream)
+    }
+
+    private fun bootstrapLeaseStillExact(
+        dependencies: GuardDbBootstrapExportDependencies,
+        bound: GuardDbBootstrapExportSnapshot,
+        expectedEpoch: Long,
+    ): Boolean {
+        return expectedEpoch == bound.security.epoch && dependencies.snapshot(expectedEpoch) == bound &&
+            dependencies.databaseStillExact(bound.prepared)
+    }
+
+    private fun bootstrapCredentials(call: ApplicationCall) = GuardDbBootstrapExportCredentials(
+        peer = call.request.origin.remoteAddress,
+        session = call.request.headers[GUARD_DB_BOOTSTRAP_SESSION_HEADER],
+        captureId = call.request.headers[GUARD_DB_BOOTSTRAP_CAPTURE_HEADER],
+        token = call.request.headers[GUARD_DB_BOOTSTRAP_TOKEN_HEADER],
+    )
 
     private suspend fun commitPreparedArm(call: ApplicationCall) {
         if (sentinel.state != io.github.maxlyth.hapaneld.util.GuardDbSentinelState.BASELINE_READY) {
@@ -632,6 +816,15 @@ internal fun guardDbActionSettlementPhases(
 
 private data class GuardDbPreparedCommitRequest(val session: String, val generation: Long)
 
+private data class GuardDbBootstrapExportRequest(val session: String, val captureId: String)
+
+private sealed interface GuardDbBootstrapExportBuild {
+    data object AuthorityChanged : GuardDbBootstrapExportBuild
+    data object DatabaseMismatch : GuardDbBootstrapExportBuild
+    data object TooLarge : GuardDbBootstrapExportBuild
+    data class Created(val receipt: GuardDbBootstrapExportReceipt) : GuardDbBootstrapExportBuild
+}
+
 private fun GuardDbExactARefusalProof.canonical(): String = listOf(
     aSha256, aVersionCode, installedBSha256, installedBVersionCode, databaseInventorySha256,
 ).joinToString("\u0000")
@@ -695,6 +888,31 @@ private fun parsePreparedCommit(body: String): GuardDbPreparedCommitRequest? = r
     if (!GuardDbMaintenanceProtocol.validSession(session) || generation < 0L) return null
     GuardDbPreparedCommitRequest(session, generation)
 }.getOrNull()
+
+private fun parseBootstrapExport(body: String): GuardDbBootstrapExportRequest? = runCatching {
+    BOOTSTRAP_EXPORT_SESSION_FIRST.matchEntire(body)?.let {
+        return GuardDbBootstrapExportRequest(requireNotNull(it.groups[1]).value, requireNotNull(it.groups[2]).value)
+    }
+    BOOTSTRAP_EXPORT_CAPTURE_FIRST.matchEntire(body)?.let {
+        return GuardDbBootstrapExportRequest(requireNotNull(it.groups[2]).value, requireNotNull(it.groups[1]).value)
+    }
+    null
+}.getOrNull()
+
+private const val JSON_ASCII_SPACE = "[ \\t\\r\\n]*"
+private const val JSON_HEX_64 = "[0-9a-f]{64}"
+private val BOOTSTRAP_EXPORT_SESSION_FIRST = Regex(
+    "^$JSON_ASCII_SPACE\\{$JSON_ASCII_SPACE\"session\"$JSON_ASCII_SPACE:$JSON_ASCII_SPACE" +
+        "\"($JSON_HEX_64)\"$JSON_ASCII_SPACE,$JSON_ASCII_SPACE" +
+        "\"capture_id\"$JSON_ASCII_SPACE:$JSON_ASCII_SPACE\"($JSON_HEX_64)\"" +
+        "$JSON_ASCII_SPACE\\}$JSON_ASCII_SPACE$",
+)
+private val BOOTSTRAP_EXPORT_CAPTURE_FIRST = Regex(
+    "^$JSON_ASCII_SPACE\\{$JSON_ASCII_SPACE\"capture_id\"$JSON_ASCII_SPACE:$JSON_ASCII_SPACE" +
+        "\"($JSON_HEX_64)\"$JSON_ASCII_SPACE,$JSON_ASCII_SPACE" +
+        "\"session\"$JSON_ASCII_SPACE:$JSON_ASCII_SPACE\"($JSON_HEX_64)\"" +
+        "$JSON_ASCII_SPACE\\}$JSON_ASCII_SPACE$",
+)
 
 private fun parseAction(body: String): GuardDbActionRequest? = runCatching {
     val json = JSONObject(body)

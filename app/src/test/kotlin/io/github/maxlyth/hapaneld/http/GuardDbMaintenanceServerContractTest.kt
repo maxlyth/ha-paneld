@@ -16,8 +16,9 @@ class GuardDbMaintenanceServerContractTest {
         val routes = source.substring(source.indexOf("routing {"), source.indexOf("fun stop()"))
         assertEquals(
             listOf(
-                "GET /health", "GET /status", "GET /evidence", "POST /arm/commit", "POST /refusal",
-                "POST /cancel", "POST /action",
+                "GET /health", "GET /status", "GET /evidence", "POST /bootstrap/export",
+                "GET /bootstrap/proof", "GET /bootstrap/database", "POST /arm/commit",
+                "POST /refusal", "POST /cancel", "POST /action",
             ),
             Regex("(get|post)\\(\"([^\"]+)\"\\)").findAll(routes)
                 .map { "${it.groupValues[1].uppercase()} ${it.groupValues[2]}" }.toList(),
@@ -126,6 +127,31 @@ class GuardDbMaintenanceServerContractTest {
         assertTrue(adbProof.contains("marker.isAbsentDurably()"))
         assertTrue(adbProof.contains("proveSettledNetworkAdbInactive("))
         assertTrue(adbProof.contains("networkAdbListenerActiveState("))
+    }
+
+    @Test fun `bootstrap export wiring observes exact authorities without opening the database`() {
+        val export = service.substring(
+            service.indexOf("internal fun guardDbBootstrapExportSnapshot"),
+            service.indexOf("internal fun readGuardDbBootstrapDatabase"),
+        )
+        listOf(
+            "guardDbBootNonce()", "it.matches(sentinel)", "exactManifest(it)",
+            "inspectGuardDbCandidate(context, source)", "Config.VERSION", "client.capabilities()",
+            "client.statusProbe()", "client.selfIdentity()", "RemoteDebugSecurityAuthorityStore",
+            "encodeRemoteDebugSecurityAuthority(authority)", "remoteDebugOff()", "cdpRelayAbsent()",
+        ).forEach { authority -> assertTrue("bootstrap export omits $authority", export.contains(authority)) }
+        assertFalse(export.contains("Config("))
+        assertFalse(export.contains("AppState("))
+        assertFalse(export.contains("SQLiteDatabase"))
+
+        val route = source.substring(
+            source.indexOf("private suspend fun createBootstrapExport"),
+            source.indexOf("private suspend fun serveBootstrapProof"),
+        )
+        assertTrue(route.contains("SensitiveOperation.GUARD_DB_MAINTENANCE"))
+        assertTrue(route.indexOf("ApprovalBroker.Decision.APPROVED") < route.indexOf("readDatabase("))
+        assertTrue(route.contains("security.commit(securityEpoch)"))
+        assertTrue(route.contains("dependencies.snapshot(securityEpoch) != current"))
     }
 
     @Test fun `action challenge and commit replay the complete canonical preview status`() {

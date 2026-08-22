@@ -10,20 +10,46 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapDatabaseRead
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapExportDependencies
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapExportSnapshot
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapHelper
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapInstalledApp
+import io.github.maxlyth.hapaneld.http.GuardDbBootstrapSecurity
 import io.github.maxlyth.hapaneld.http.GuardDbMaintenanceServer
 import io.github.maxlyth.hapaneld.http.GuardDbMaintenanceSecurityAuthority
 import io.github.maxlyth.hapaneld.http.GuardDbMaintenanceSecurityResult
+import io.github.maxlyth.hapaneld.http.MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.RemoteDebugAuthorityResult
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityAuthorityLoad
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityAuthorityStore
+import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityState
 import io.github.maxlyth.hapaneld.control.RemoteDebugSecurityTransitionGate
+import io.github.maxlyth.hapaneld.control.encodeRemoteDebugSecurityAuthority
+import io.github.maxlyth.hapaneld.util.AppInstaller
+import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.GuardDbMaintenance
+import io.github.maxlyth.hapaneld.util.GuardDbMaintenanceClient
+import io.github.maxlyth.hapaneld.util.GuardDbMaintenanceProtocol
+import io.github.maxlyth.hapaneld.util.GuardDbPreparedArm
+import io.github.maxlyth.hapaneld.util.GuardDbPreparedArmLoad
 import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
 import io.github.maxlyth.hapaneld.util.GuardDbSentinelLoad
+import io.github.maxlyth.hapaneld.util.GuardDbSentinelState
+import io.github.maxlyth.hapaneld.util.GuardDbStartupSentinel
+import io.github.maxlyth.hapaneld.util.guardDbBootNonce
 import io.github.maxlyth.hapaneld.util.guardDbAppStaging
 import io.github.maxlyth.hapaneld.util.guardDbPreparedArmStore
 import io.github.maxlyth.hapaneld.util.guardDbSentinelStore
+import io.github.maxlyth.hapaneld.util.inspectGuardDbCandidate
+import io.github.maxlyth.hapaneld.util.stableGuardDbCanonicalMain
+import java.io.File
+import java.security.MessageDigest
 
 /** Foreground, writer-free successor used only while root owns the Guard DB transaction. */
 class GuardDbMaintenanceService : Service() {
@@ -37,6 +63,9 @@ class GuardDbMaintenanceService : Service() {
             stopSelf()
             return
         }
+        val staging = guardDbAppStaging(applicationContext)
+        val preparedStore = guardDbPreparedArmStore(applicationContext)
+        val sentinelStore = guardDbSentinelStore(applicationContext)
         fun securityReady(): Boolean = guardDbMaintenanceSecurityReady(
             expectedEpoch = sentinel.securityAuthorityEpoch,
             durableHardenedEpoch = RemoteDebugSecurityTransitionGate::hardenedAuthorityEpoch,
@@ -64,10 +93,34 @@ class GuardDbMaintenanceService : Service() {
             context = applicationContext,
             sentinel = sentinel,
             client = GuardDbMaintenance.client,
-            staging = guardDbAppStaging(applicationContext),
-            preparedStore = guardDbPreparedArmStore(applicationContext),
-            sentinelStore = guardDbSentinelStore(applicationContext),
+            staging = staging,
+            preparedStore = preparedStore,
+            sentinelStore = sentinelStore,
             security = security,
+            bootstrapExport = GuardDbBootstrapExportDependencies(
+                snapshot = { expectedEpoch ->
+                    guardDbBootstrapExportSnapshot(
+                        context = applicationContext,
+                        expectedSentinel = sentinel,
+                        expectedSecurityEpoch = expectedEpoch,
+                        client = GuardDbMaintenance.client,
+                        loadSentinel = sentinelStore::load,
+                        loadPrepared = preparedStore::load,
+                        exactManifest = { prepared -> prepared.exactManifest(staging) != null },
+                        remoteDebugOff = {
+                            AdbController.proveMaintenanceRemoteDebugOff(applicationContext)
+                        },
+                        cdpRelayAbsent = { !CdpRelay.running },
+                    )
+                },
+                readDatabase = { prepared ->
+                    readGuardDbBootstrapDatabase(applicationContext, prepared)
+                },
+                databaseStillExact = { prepared ->
+                    guardDbBootstrapDatabaseStillExact(applicationContext, prepared)
+                },
+                monotonicMs = SystemClock::elapsedRealtime,
+            ),
         ) {
             // Let the accepted HTTP response flush before crossing the process boundary. The explicit
             // PaneldService intent survives this process; Application startup clears exact FINALIZED.
@@ -127,6 +180,120 @@ class GuardDbMaintenanceService : Service() {
         }
     }
 }
+
+/** DB-free authority composition for bootstrap export. This must never instantiate Config/AppState/SQLite. */
+internal fun guardDbBootstrapExportSnapshot(
+    context: Context,
+    expectedSentinel: GuardDbStartupSentinel,
+    expectedSecurityEpoch: Long,
+    client: GuardDbMaintenanceClient,
+    loadSentinel: () -> GuardDbSentinelLoad,
+    loadPrepared: () -> GuardDbPreparedArmLoad,
+    exactManifest: (GuardDbPreparedArm) -> Boolean,
+    remoteDebugOff: () -> Boolean,
+    cdpRelayAbsent: () -> Boolean,
+): GuardDbBootstrapExportSnapshot? {
+    val sentinel = (loadSentinel() as? GuardDbSentinelLoad.Valid)?.sentinel
+        ?.takeIf { it == expectedSentinel && it.state == GuardDbSentinelState.BASELINE_READY }
+        ?: return null
+    if (guardDbBootNonce() != sentinel.bootNonce || expectedSecurityEpoch != sentinel.securityAuthorityEpoch) {
+        return null
+    }
+    val prepared = (loadPrepared() as? GuardDbPreparedArmLoad.Valid)?.prepared
+        ?.takeIf { it.matches(sentinel) && exactManifest(it) }
+        ?: return null
+    val source = File(context.applicationInfo.sourceDir)
+    val installed = inspectGuardDbCandidate(context, source) ?: return null
+    if (installed.bytes != prepared.aBytes || installed.sha256 != prepared.aSha256 ||
+        installed.versionCode != prepared.aVersionCode || installed.contractMinimum != prepared.aContractMinimum ||
+        installed.contractMaximum != prepared.aContractMaximum || installed.expectedSchema != prepared.aSchema
+    ) return null
+    if (client.capabilities()?.let { it.autonomous && it.supervised && it.terminalRetire } != true) return null
+    if ((client.statusProbe() as? GuardDbMaintenanceClient.StatusProbe.Valid)?.status
+            ?.let(::exactEmptyGuardDbStatus) != true
+    ) return null
+    val helper = client.selfIdentity() ?: return null
+    val authority = (RemoteDebugSecurityAuthorityStore(context.noBackupFilesDir).load()
+        as? RemoteDebugSecurityAuthorityLoad.Valid)?.authority
+        ?.takeIf { it.state == RemoteDebugSecurityState.HARDENED && it.epoch == expectedSecurityEpoch }
+        ?: return null
+    val authoritySha256 = sha256(encodeRemoteDebugSecurityAuthority(authority))
+    val remoteOff = remoteDebugOff()
+    val relayAbsent = cdpRelayAbsent()
+    if (!remoteOff || !relayAbsent) return null
+    return GuardDbBootstrapExportSnapshot(
+        sentinel = sentinel,
+        prepared = prepared,
+        installedA = GuardDbBootstrapInstalledApp(
+            bytes = installed.bytes,
+            sha256 = installed.sha256,
+            signerSha256 = installed.signerSha256,
+            versionCode = installed.versionCode,
+            versionName = Config.VERSION,
+            contractMinimum = installed.contractMinimum,
+            contractMaximum = installed.contractMaximum,
+            schema = installed.expectedSchema,
+        ),
+        helper = GuardDbBootstrapHelper(
+            bytes = helper.bytes,
+            sha256 = helper.sha256,
+            buildId = helper.buildId,
+            capabilitiesReply = GuardDbBootstrapExportSnapshot.SUPPORTED_CAPABILITIES_REPLY,
+            statusReply = GuardDbBootstrapExportSnapshot.EMPTY_STATUS_REPLY,
+        ),
+        security = GuardDbBootstrapSecurity(
+            state = authority.state.name,
+            epoch = authority.epoch,
+            authoritySha256 = authoritySha256,
+            remoteDebugOff = true,
+            cdpRelayAbsent = true,
+        ),
+    ).takeIf { it.exactFor(expectedSentinel) }
+}
+
+internal fun readGuardDbBootstrapDatabase(
+    context: Context,
+    prepared: GuardDbPreparedArm,
+): GuardDbBootstrapDatabaseRead {
+    if (prepared.databaseBytes > MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES) {
+        return GuardDbBootstrapDatabaseRead.TooLarge
+    }
+    val database = context.getDatabasePath("ha-paneld.db")
+    if (!guardDbBootstrapDatabaseStillExact(context, prepared)) {
+        return GuardDbBootstrapDatabaseRead.Mismatch
+    }
+    val bytes = try {
+        database.inputStream().use { BoundedStreams.readBytes(it, MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES) }
+    } catch (_: ByteLimitExceeded) {
+        return GuardDbBootstrapDatabaseRead.TooLarge
+    } catch (_: Exception) {
+        return GuardDbBootstrapDatabaseRead.Mismatch
+    }
+    if (bytes.size.toLong() != prepared.databaseBytes || sha256(bytes) != prepared.databaseSha256 ||
+        !guardDbBootstrapDatabaseStillExact(context, prepared)
+    ) return GuardDbBootstrapDatabaseRead.Mismatch
+    return GuardDbBootstrapDatabaseRead.Exact(bytes)
+}
+
+internal fun guardDbBootstrapDatabaseStillExact(
+    context: Context,
+    prepared: GuardDbPreparedArm,
+): Boolean {
+    val database = context.getDatabasePath("ha-paneld.db")
+    return prepared.databaseBytes in 1..MAX_GUARD_DB_BOOTSTRAP_DATABASE_BYTES &&
+        stableGuardDbCanonicalMain(context.applicationContext) && database.length() == prepared.databaseBytes &&
+        runCatching { AppInstaller.sha256(database) == prepared.databaseSha256 }.getOrDefault(false)
+}
+
+private fun exactEmptyGuardDbStatus(status: GuardDbMaintenanceProtocol.Status): Boolean =
+    status.generation == 0L && status.phase == GuardDbMaintenanceProtocol.Phase.EMPTY &&
+        status.session == null && status.bootNonce == null && status.role == null && status.apkSha256 == null &&
+        status.versionCode == null && status.schema == null && status.baselineAppStateCount == 0L &&
+        status.error == null && status.outcome == null && status.overallDeadlineElapsedMs == 0L &&
+        status.forwardDeadlineElapsedMs == 0L
+
+private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+    .digest(bytes).joinToString("") { "%02x".format(it) }
 
 /** Pure ordering seam used by the maintenance service: no Config/AppState/SQLite owner is permitted. */
 internal fun guardDbMaintenanceSecurityReady(
