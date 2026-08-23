@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 
@@ -527,6 +528,103 @@ class DashboardRecoveryTest {
     @Test fun `a provider description carries the build without carrying a path or a host`() {
         assertEquals("com.android.webview 41.1.0 (4110)", PROVIDER.describe())
         assertEquals("com.android.webview ? (4110)", PROVIDER.copy(versionName = null).describe())
+    }
+
+    // --- the pending rebind, driven across the wait rather than asserted from source ---
+
+    /** Hand-driven scheduler: nothing runs until the test fires it, so the interleaving is exact. */
+    private class Pending {
+        val queue = mutableListOf<Pair<Long, () -> Unit>>()
+        fun accept(delayMs: Long, action: () -> Unit): Boolean { queue += delayMs to action; return true }
+        fun fire(): Long { val (delay, action) = queue.removeAt(0); action(); return delay }
+        val idle: Boolean get() = queue.isEmpty()
+    }
+
+    @Test fun `a rebind deferred by a busy panel is still taken when the panel settles`() {
+        // THE REGRESSION. The rule acts on ONE broadcast and no second one is coming, so a wait must
+        // never be spelled as an abandon: the deadline lands mid-install, the panel stays busy across
+        // several rounds — long enough for Android to replace the dashboard activity and for the
+        // renderer's verdict to be invisible throughout — and the restart must still happen afterwards.
+        // The revision this replaces discarded the request at the first deadline in exactly that state,
+        // losing the panel's only route back permanently.
+        val pending = Pending()
+        var installing = true
+        var walking = false
+        var restarts = 0
+        val coordinator = webViewRebindRestartCoordinator(
+            schedule = pending::accept,
+            restartProcess = { restarts++ },
+            destructiveOperationRunning = { installing },
+            guidedSetupBeingWalked = { walking },
+            serviceStopping = { false },
+        )
+
+        assertTrue(coordinator.request())
+
+        // Every wait must leave the request alive AND re-armed. Asserting survival explicitly is what
+        // makes a discarded request fail as an assertion rather than as an empty-queue crash later.
+        fun waitOneRound(expectedDelayMs: Long, note: String) {
+            assertEquals(note, expectedDelayMs, pending.fire())
+            assertEquals("the boundary must not be taken yet: $note", 0, restarts)
+            assertFalse("the pending rebind must survive: $note", pending.idle)
+        }
+
+        waitOneRound(ProfileRestartCoordinator.RESPONSE_GRACE_MS, "the deadline lands mid-install")
+        // Round after round of ordinary panel busyness — long enough for Android to have replaced the
+        // dashboard activity, which is exactly when the renderer's verdict is invisible.
+        repeat(4) { round -> waitOneRound(ProfileRestartCoordinator.BUSY_RETRY_MS, "install running, round $round") }
+
+        // Guided setup takes over from the install; still a wait, still not a discard.
+        installing = false
+        walking = true
+        waitOneRound(ProfileRestartCoordinator.BUSY_RETRY_MS, "guided setup took over")
+
+        walking = false
+        pending.fire()
+        assertEquals("the panel settled, so the boundary is finally taken", 1, restarts)
+        assertTrue(pending.idle)
+    }
+
+    @Test fun `only the service going away discards a pending rebind`() {
+        val pending = Pending()
+        var stopping = false
+        var restarts = 0
+        fun build() = webViewRebindRestartCoordinator(
+            schedule = pending::accept,
+            restartProcess = { restarts++ },
+            destructiveOperationRunning = { false },
+            guidedSetupBeingWalked = { false },
+            serviceStopping = { stopping },
+        )
+
+        val coordinator = build()
+        assertTrue(coordinator.request())
+        stopping = true
+        pending.fire()
+        assertEquals("a process that is already leaving does not need a boundary", 0, restarts)
+
+        // And the admission is released rather than burnt, so a later healthy owner may ask again.
+        stopping = false
+        assertTrue(coordinator.request())
+        pending.fire()
+        assertEquals(1, restarts)
+    }
+
+    @Test fun `one provider install asks for exactly one boundary`() {
+        val pending = Pending()
+        var restarts = 0
+        val coordinator = webViewRebindRestartCoordinator(
+            schedule = pending::accept,
+            restartProcess = { restarts++ },
+            destructiveOperationRunning = { false },
+            guidedSetupBeingWalked = { false },
+            serviceStopping = { false },
+        )
+
+        assertTrue(coordinator.request())
+        assertFalse("a duplicate broadcast cannot queue a second restart", coordinator.request())
+        pending.fire()
+        assertEquals(1, restarts)
     }
 
     // --- the visible countdown, driven as a lifecycle rather than asserted from source ---

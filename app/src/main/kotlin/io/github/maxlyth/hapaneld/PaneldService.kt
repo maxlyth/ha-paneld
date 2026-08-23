@@ -939,17 +939,18 @@ class PaneldService : Service() {
         // A WebView provider binds once per process, so the only way a panel parked on "Secure dashboard
         // bridge unavailable" can ever see a newly installed engine is on the far side of a process
         // boundary — the same route activateWebView already takes for the installs ha-paneld performs
-        // itself. Single-flight, so one provider install asks exactly once; abandoned if the panel stops
-        // being blocked on a provider-repairable verdict before the boundary is safe to take, because by
-        // then the restart would be killing a working panel for a screen that is no longer there.
-        webViewRebindRestart = ProfileRestartCoordinator(
+        // itself. Single-flight, so one provider install asks exactly once, and it survives the wait:
+        // see webViewRebindRestartCoordinator for why nothing except teardown may discard it.
+        webViewRebindRestart = webViewRebindRestartCoordinator(
             schedule = { delayMs, action -> mainHandler.postDelayed(action, delayMs) },
             restartProcess = {
                 requestSafeProcessBoundary("binding a newly installed WebView provider")
             },
-            safeToRestart = { !InstallProgress.running &&
-                !GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime()) },
-            shouldAbandon = { teardownBoundary.isStopping || blockedProviderRepairableAdmission() == null },
+            destructiveOperationRunning = { InstallProgress.running },
+            guidedSetupBeingWalked = {
+                GuidedSetupPresence.activelyWalked(android.os.SystemClock.elapsedRealtime())
+            },
+            serviceStopping = { teardownBoundary.isStopping },
         )
         config.attachProfile(profile)   // supplies per-panel manufacturer/model defaults
         appliedNetworkConfiguration = currentNetworkConfigurationSnapshot()

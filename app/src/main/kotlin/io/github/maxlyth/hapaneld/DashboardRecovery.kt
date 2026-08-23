@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld
 import android.content.Intent
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.http.HA_OAUTH_CALLBACK_PATH
+import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
 import java.net.URI
 import java.net.URLEncoder
 
@@ -555,6 +556,49 @@ internal fun webViewRebindDecision(
     if (changedPackage.isNullOrBlank() || changedPackage != provider.packageName) return WebViewRebindDecision.OTHER_PACKAGE
     return WebViewRebindDecision.REBIND
 }
+
+/**
+ * The restart owner for a WebView provider rebind: single-flight, deferred while the panel is busy, and
+ * **abandoned only when the service itself is going away.**
+ *
+ * The abandon condition is the whole point of this being written down. An earlier revision also
+ * abandoned when the renderer's blocking verdict was no longer visible, reasoning that a restart
+ * scheduled behind a running install should not land on a panel that had since recovered. That was a
+ * category error, and a costly one: the verdict is read again on a DELAY, and it is legitimately
+ * invisible for a while whenever Android is replacing the activity —
+ * [io.github.maxlyth.hapaneld.control.BuiltinDashboard.acquireActivityOwner] retires the previous
+ * generation's record immediately, and the replacement writes nothing until `buildAndLoad` runs. The
+ * absence of a verdict is the absence of evidence, not evidence of recovery, and treating it as the
+ * latter discarded the single package event that the whole rule exists to act on — permanently, because
+ * no second broadcast is coming.
+ *
+ * There is also nothing this process could ever observe that WOULD prove the rebind unnecessary, which
+ * is the same fact the rule is built on: the capability verdict is frozen for the life of the process,
+ * so a renderer that answered "no secure bridge" cannot answer anything else here, whatever screen it is
+ * showing meanwhile. A branch for that state would be a branch that never runs.
+ *
+ * So the cost is accepted explicitly instead: if the panel has moved to an external renderer, or the
+ * dashboard activity is gone, by the time the boundary is safe to take, ha-paneld restarts its own
+ * process once for nothing — START_STICKY brings it straight back, a foreign renderer is a different
+ * process and never notices, and single-flight bounds it to one. That is a blip on a panel whose
+ * dashboard was already down, weighed against silently losing its only route back.
+ *
+ * The screen condition still gates the decision — it is asked synchronously in the broadcast receiver,
+ * where the verdict is on the display in front of somebody and cannot be transiently absent.
+ */
+internal fun webViewRebindRestartCoordinator(
+    schedule: (Long, () -> Unit) -> Boolean,
+    restartProcess: () -> Unit,
+    destructiveOperationRunning: () -> Boolean,
+    guidedSetupBeingWalked: () -> Boolean,
+    serviceStopping: () -> Boolean,
+): ProfileRestartCoordinator = ProfileRestartCoordinator(
+    schedule = schedule,
+    restartProcess = restartProcess,
+    // Reasons to WAIT, never reasons to give up: both lapse on their own, so the retry terminates.
+    safeToRestart = { !destructiveOperationRunning() && !guidedSetupBeingWalked() },
+    shouldAbandon = serviceStopping,
+)
 
 /**
  * Retry cadence for blocked renderer-admission screens. A wall panel has nobody standing at it to
