@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Rooted panels now guard the configuration database.** The root helper supervises the panel's database, refuses a replacement that would strand the configuration store, and recovers automatically after a crash or an interrupted upgrade, restoring the exact prior state rather than guessing. The API gains guard-db bootstrap export routes that hand back the verified database bytes together with a proof of what they are, under a short-lived lease.
+- **Rooted upgrade tooling can guard a planned database replacement.** When the installer explicitly arms a Guard DB transaction and its safety checks pass, the root helper verifies the replacement and retains the prior database for rollback rather than swapping blindly. The API gains short-lived bootstrap export routes that return the verified database bytes together with proof of their identity.
 
 ### Fixed
 
@@ -12,7 +12,7 @@
 
 - **Rooted upgrades no longer stall on a helper that will not exit.** The installer now stops the old helper through Android's own service control, escalates if the process ignores the first request, and if it still cannot retire it reports exactly which process survived and what Android believes the service state to be. Every other step of a helper replacement that used to fail with one generic message now names itself, so a failed install tells you what failed. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
 
-- **A release's helper asset must match what the release says it is.** The installer reads the identity stamped inside the downloaded helper and refuses to stage it if it disagrees with the identity the signed provisioner records, so a mismatch is caught before any privileged command runs rather than discovered after the swap and rolled back. The standalone helper installer reads the staged binary's own identity the same way, so a helper staged from a different build can no longer fail a good install afterwards.
+- **A release's helper asset must match what the release says it is.** The installer reads the identity stamped inside the downloaded helper and refuses to stage it if it disagrees with the identity the signed provisioner records, so a mismatch is caught before the helper is staged or replaced rather than discovered after the swap and rolled back. The standalone helper installer reads the staged binary's own identity the same way, so a helper staged from a different build can no longer fail a good install afterwards.
 
 - **Scripted installs no longer refuse `--home-dashboard` on a panel already using the built-in renderer.** The check used to require the renderer to be named explicitly, so a panel on the default selection was told it was not using a renderer it was in fact using. The panel now reports which renderer it resolves to and the installer asks that instead.
 
@@ -23,6 +23,8 @@
 - **Dashboard filter advisories no longer treat a template as a missing entity.** ha-paneld deliberately does not evaluate filter templates; Home Assistant renders them itself. The advisory now says exactly that, and which entities a template does and does not add, instead of reporting the template's own condition entities as a discovery failure. [Issue #113](https://github.com/maxlyth/ha-paneld/issues/113)
 
 - **Status screen actions look like the buttons they are.** Actions on the panel's own status screens now use the same control style as the standing screen, with real padding and spacing between a pair of actions and clear separation from the surrounding text.
+
+- **Recovery screens now say what went wrong and where to fix it.** Setup, sign-in, WebView, dashboard-selection, and entity-filter failures now distinguish automatic retries from repairs in Configure, Entities, Home Assistant, or Android System WebView, so Retry is only shown where it can help.
 
 - **The Wi-Fi stability row and the diagnostics dump agree.** The Dashboard row derived its wording from the raw outage count while `/diag` used the chronic classification, so a panel whose history had been compacted could show a low number on its own card while a pasted report called it chronic. Both now use the same classification, and a saturated count reads as the floor it is.
 
