@@ -312,6 +312,14 @@
    "ts": 1785442407,
    "wb": "20260730200517"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/30/CK_4.5.1_4.8.0V228-diff.zip": {
+   "ts": 1787461437,
+   "wb": "20260819134417"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom-diff/30/CK_4.5.3_4.8.0V228-diff.zip": {
+   "ts": 1787461437,
+   "wb": "20260819134456"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro-ver120/rom/21/SN_3326S_750X1334_4lan_V4.0.12_20251031-ota.zip": {
    "ts": 1781777076,
    "wb": "20260618095402"
@@ -347,6 +355,10 @@
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/130/app4.7.0.apk": {
    "ts": 1785763510,
    "wb": "20260730213423"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/131/app4.8.0.apk": {
+   "ts": 1787461437,
+   "wb": "20260819134645"
   },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/apk/19/app1.5.0.apk": {
    "ts": 1785050009,
@@ -848,6 +860,14 @@
    "ts": 1785442412,
    "wb": "20260730200731"
   },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/52/CK_4.0.12_4.8.0-diff.zip": {
+   "ts": 1787461437,
+   "wb": "20260819134644"
+  },
+  "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom-diff/52/CK_4.6.0_4.8.0-diff.zip": {
+   "ts": 1787461437,
+   "wb": "20260819134646"
+  },
   "https://global-otadl2bsy.coolkit.cc/nspanel-pro/rom/14/NSPanel86P_CoolKit_480P_20221213_1.5.0-ota.zip": {
    "ts": 1783422458,
    "wb": "20260707104924"
@@ -892,6 +912,6 @@
  "page": {
   "job": "spn2-8cd254f2322be3b3631531d76097c1dde396b6e6",
   "ok": true,
-  "ts": 1787147047
+  "ts": 1787461436
  }
 }
