@@ -2196,8 +2196,8 @@ class DashboardActivity : AppCompatActivity() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
-                "Nothing on this panel can show the dashboard until Android System WebView is updated, " +
-                    "because every dashboard app on Android draws through it. Update it, then tap Retry.",
+                "The built-in dashboard and Home Assistant Companion cannot show the dashboard until " +
+                    "Android System WebView is updated, because both draw through it. Update it, then tap Retry.",
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return

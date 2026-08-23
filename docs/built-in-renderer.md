@@ -30,7 +30,7 @@ Starting with ha-paneld 0.9.6, the built-in renderer requires both:
 - **Home Assistant 2026.4.2 or newer**; and
 - an Android System WebView that supports the secure WebMessage listener used by Home Assistant's native-host interface.
 
-Most users only need to install a current Android System WebView. ha-paneld checks the required WebView capability and verifies Home Assistant compatibility before it loads the dashboard. If the panel shows **Home Assistant is too old for this panel** or **This panel's web viewer is too old**, update the thing it names and select **Retry**. How Android System WebView is updated depends on the panel: some take it from Google Play, others only from a vendor firmware update or a manually installed build.
+Most users only need to install a current Android System WebView. ha-paneld checks the required WebView capability and verifies Home Assistant compatibility before it loads the dashboard. If the panel shows **Home Assistant upgrade required** or **This panel's web viewer is too old**, update the thing it names and select **Retry**. How Android System WebView is updated depends on the panel: some take it from Google Play, others only from a vendor firmware update or a manually installed build.
 
 The built-in renderer does not fall back to the older, less isolated bridge. Another renderer may help when Home Assistant itself cannot be upgraded. The Companion app uses the same system WebView, so it cannot bypass an obsolete WebView on the panel.
 
