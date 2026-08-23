@@ -145,6 +145,8 @@ class EntityCatalogUpgradeTest {
         EntityCatalogStore(context).use { store ->
             val restored = store.writableDatabase
             assertTrue(restored.isWriteAheadLoggingEnabled)
+            assertEquals(0L, java.io.File(target.path + "-wal").length())
+            assertTrue(java.io.File(target.path + "-shm").isFile)
             assertEquals(EntityCatalogSchema.CURRENT_VERSION, restored.version)
             assertEquals("baseline", scalar(restored, "SELECT value FROM guard_restore_marker"))
             assertFalse(tableExists(restored, "db_compatibility_canary_v15"))

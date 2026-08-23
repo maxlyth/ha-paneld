@@ -152,7 +152,7 @@ class DatabaseRestoreTransactionTest {
         assertTrue(DatabaseRestoreTransaction(target).reconcile() is DatabaseRestoreResult.Absent)
     }
 
-    @Test fun `ordinary receipt rejects a nonempty or unproved open WAL`() = withFiles { directory, target, staged ->
+    @Test fun `ordinary receipt rejects a nonempty open WAL`() = withFiles { directory, target, staged ->
         val transaction = DatabaseRestoreTransaction(
             target,
             guard = null,
@@ -165,6 +165,31 @@ class DatabaseRestoreTransactionTest {
         assertEquals("live-frame", wal.readText())
         assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
         assertEquals("schema14", target.readText())
+        assertEquals("schema15", supersededFile(target, 15).readText())
+    }
+
+    @Test fun `ordinary receipt rejects an unproved empty open WAL`() = withFiles { directory, target, staged ->
+        val transaction = DatabaseRestoreTransaction(
+            target,
+            guard = null,
+            ownedStableSidecar = { _, _ -> false },
+        )
+        assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+        val wal = File(target.path + "-wal").apply { writeBytes(byteArrayOf()) }
+
+        assertFalse(transaction.consumeOrdinaryRestored())
+        assertTrue(wal.exists())
+        assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+    }
+
+    @Test fun `ordinary receipt retains proof when restored topology drifts`() = withFiles { directory, target, staged ->
+        val transaction = DatabaseRestoreTransaction(target, guard = null)
+        assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+        target.writeText("changed-after-open")
+
+        assertFalse(transaction.consumeOrdinaryRestored())
+        assertEquals("changed-after-open", target.readText())
+        assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
         assertEquals("schema15", supersededFile(target, 15).readText())
     }
 
