@@ -220,6 +220,8 @@ class EntityCatalogStorageHealthContractTest {
             "recordDatabaseFailure(" in checkpoint && "\"database-checkpoint\"" in checkpoint)
         assertTrue("the checkpoint's own raw connection is a routine BUSY victim and must bounded-retry",
             "retry.admitRetry(busy)" in checkpoint && "retry.admitRetry(failure)" in checkpoint)
+        assertTrue("API-27 checkpoint raw open must stay in WAL mode",
+            "SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING" in checkpoint)
     }
 
     @Test fun sqliteDowngradeCallbackIsAFailClosedMutationFreeTripwire() {

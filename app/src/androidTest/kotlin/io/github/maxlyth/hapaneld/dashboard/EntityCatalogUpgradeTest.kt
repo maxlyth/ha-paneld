@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.maxlyth.hapaneld.CoreInstrumentation
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -50,6 +51,7 @@ class EntityCatalogUpgradeTest {
 
     @Test fun publicV095DatabaseUpgradePreservesConfigInOneStep() {
         legacyDatabase(11).use { db ->
+            assertFalse("the fixture must exercise the API-27 non-WAL pre-open path", db.isWriteAheadLoggingEnabled)
             db.execSQL(
                 "CREATE TABLE dashboard(" +
                     "instance TEXT NOT NULL, path TEXT NOT NULL, config_hash TEXT NOT NULL DEFAULT ''," +
@@ -84,6 +86,75 @@ class EntityCatalogUpgradeTest {
             assertEquals("2", scalar(db, "SELECT value_text FROM app_state WHERE namespace='config' AND state_key='config_schema'"))
             assertEquals("0", scalar(db, "SELECT analyzer_policy_version FROM dashboard"))
         }
+
+        val target = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
+        val premigration = preMigrationBackupFile(target, 11)
+        assertTrue("upgrade must retain the exact pre-migration database", premigration.isFile)
+        assertWalHeader(premigration)
+        SQLiteDatabase.openDatabase(
+            premigration.path,
+            null,
+            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+        ).use { snapshot ->
+            assertEquals(11, snapshot.version)
+            assertEquals("ok", scalar(snapshot, "PRAGMA quick_check(1)"))
+            assertEquals(
+                "https://ha.example.test",
+                scalar(snapshot, "SELECT value_text FROM app_state WHERE namespace='config' AND state_key='ha_url'"),
+            )
+        }
+        assertEquals(
+            EntityCatalogSchema.CURRENT_VERSION,
+            SQLiteDatabase.openDatabase(
+                target.path,
+                null,
+                SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+            ).use { it.version },
+        )
+        listOf("-wal", "-shm", "-journal", ".tmp").forEach { suffix ->
+            assertFalse("pre-migration snapshot must be standalone: $suffix", java.io.File(premigration.path + suffix).exists())
+        }
+    }
+
+    @Test fun newerDatabaseRestoresStandaloneCurrentSnapshotWithoutCanonicalSidecars() {
+        val target = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
+        EntityCatalogStore(context).use { store ->
+            store.writableDatabase.execSQL("CREATE TABLE guard_restore_marker(value TEXT NOT NULL)")
+            store.writableDatabase.execSQL("INSERT INTO guard_restore_marker(value) VALUES('baseline')")
+        }
+        assertWalHeader(target)
+        assertStandalone(target)
+
+        val premigration = preMigrationBackupFile(target, EntityCatalogSchema.CURRENT_VERSION)
+        target.copyTo(premigration, overwrite = true)
+        assertWalHeader(premigration)
+        assertStandalone(premigration)
+
+        SQLiteDatabase.openDatabase(
+            target.path,
+            null,
+            SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
+                SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING,
+        ).use { future ->
+            future.execSQL("CREATE TABLE db_compatibility_canary_v15(value TEXT NOT NULL)")
+            future.execSQL("INSERT INTO db_compatibility_canary_v15(value) VALUES('future')")
+            future.version = EntityCatalogSchema.CURRENT_VERSION + 1
+        }
+        assertWalHeader(target)
+
+        EntityCatalogStore(context).use { store ->
+            val restored = store.writableDatabase
+            assertEquals(EntityCatalogSchema.CURRENT_VERSION, restored.version)
+            assertEquals("baseline", scalar(restored, "SELECT value FROM guard_restore_marker"))
+            assertFalse(tableExists(restored, "db_compatibility_canary_v15"))
+        }
+
+        assertWalHeader(target)
+        assertStandalone(target)
+        assertTrue(
+            "the newer primary must remain recoverable",
+            supersededFile(target, EntityCatalogSchema.CURRENT_VERSION + 1).isFile,
+        )
     }
 
     /**
@@ -129,6 +200,18 @@ class EntityCatalogUpgradeTest {
 
     private fun tableExists(db: SQLiteDatabase, table: String): Boolean =
         scalar(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='$table'") == table
+
+    private fun assertWalHeader(database: java.io.File) {
+        val header = database.inputStream().use { input -> ByteArray(20).also { assertEquals(20, input.read(it)) } }
+        assertEquals("SQLite read version must remain WAL", 2, header[18].toInt())
+        assertEquals("SQLite write version must remain WAL", 2, header[19].toInt())
+    }
+
+    private fun assertStandalone(database: java.io.File) {
+        listOf("-wal", "-shm", "-journal", ".tmp").forEach { suffix ->
+            assertFalse("database must be standalone: $suffix", java.io.File(database.path + suffix).exists())
+        }
+    }
 
     private fun indexExists(db: SQLiteDatabase, index: String): Boolean =
         scalar(db, "SELECT name FROM sqlite_master WHERE type='index' AND name='$index'") == index

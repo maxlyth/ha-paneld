@@ -2247,7 +2247,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                     val completed = SQLiteDatabase.openDatabase(
                         database.path,
                         null,
-                        SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+                        SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
+                            SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING,
                     ).use { opened ->
                         opened.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { cursor ->
                             cursor.moveToFirst() && cursor.columnCount == 3 &&

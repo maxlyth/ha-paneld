@@ -113,6 +113,21 @@ class DatabaseRestoreTransactionTest {
         assertFalse(supersededFile(target, 15).exists())
     }
 
+    @Test fun `even an empty rollback journal remains fail closed`() = withFiles { _, target, staged ->
+        val journal = File(target.path + "-journal").apply { writeBytes(byteArrayOf()) }
+
+        val result = DatabaseRestoreTransaction(
+            target,
+            guard,
+            ownedStableSidecar = { _, _ -> true },
+        ).restore(staged, 15, 14, checkpoint = { true })
+
+        assertTrue(result is DatabaseRestoreResult.Hold)
+        assertTrue(journal.exists())
+        assertEquals("schema15", target.readText())
+        assertFalse(supersededFile(target, 15).exists())
+    }
+
     @Test fun `ordinary receipt is consumed only after successful owned open`() = withFiles { directory, target, staged ->
         val transaction = DatabaseRestoreTransaction(target, guard = null)
         assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
