@@ -128,23 +128,59 @@ class DatabaseRestoreTransactionTest {
         assertFalse(supersededFile(target, 15).exists())
     }
 
-    @Test fun `ordinary receipt is consumed only after successful owned open`() = withFiles { directory, target, staged ->
-        val transaction = DatabaseRestoreTransaction(target, guard = null)
+    @Test fun `ordinary receipt is consumed after successful owned WAL open`() = withFiles { directory, target, staged ->
+        val sidecarChecks = mutableListOf<Pair<String, Boolean>>()
+        val transaction = DatabaseRestoreTransaction(
+            target,
+            guard = null,
+            ownedStableSidecar = { file, requireEmpty ->
+                sidecarChecks += file.name to requireEmpty
+                !requireEmpty || file.length() == 0L
+            },
+        )
         assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
         assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+        File(target.path + "-wal").writeBytes(byteArrayOf())
+        File(target.path + "-shm").writeText("owned-open-shm")
 
         assertTrue(transaction.consumeOrdinaryRestored())
+        assertEquals(
+            listOf("${target.name}-wal" to true, "${target.name}-shm" to false),
+            sidecarChecks,
+        )
         assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
         assertTrue(DatabaseRestoreTransaction(target).reconcile() is DatabaseRestoreResult.Absent)
     }
 
-    @Test fun `ordinary consumer never clears a Guard receipt`() = withFiles { directory, target, staged ->
-        val transaction = DatabaseRestoreTransaction(target, guard)
+    @Test fun `ordinary receipt rejects a nonempty or unproved open WAL`() = withFiles { directory, target, staged ->
+        val transaction = DatabaseRestoreTransaction(
+            target,
+            guard = null,
+            ownedStableSidecar = { file, requireEmpty -> !requireEmpty || file.length() == 0L },
+        )
         assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+        val wal = File(target.path + "-wal").apply { writeText("live-frame") }
+
+        assertFalse(transaction.consumeOrdinaryRestored())
+        assertEquals("live-frame", wal.readText())
+        assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+        assertEquals("schema14", target.readText())
+        assertEquals("schema15", supersededFile(target, 15).readText())
+    }
+
+    @Test fun `ordinary consumer never clears a Guard receipt`() = withFiles { directory, target, staged ->
+        val transaction = DatabaseRestoreTransaction(
+            target,
+            guard,
+            ownedStableSidecar = { file, requireEmpty -> !requireEmpty || file.length() == 0L },
+        )
+        assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+        File(target.path + "-wal").writeBytes(byteArrayOf())
+        File(target.path + "-shm").writeText("owned-open-shm")
 
         assertTrue(transaction.consumeOrdinaryRestored())
         assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
-        assertTrue(transaction.reconcile() is DatabaseRestoreResult.Restored)
+        assertTrue(transaction.reconcile() is DatabaseRestoreResult.Hold)
         assertFalse(transaction.clearRestored("2".repeat(64)))
         assertTrue(transaction.clearRestored(session))
         assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())

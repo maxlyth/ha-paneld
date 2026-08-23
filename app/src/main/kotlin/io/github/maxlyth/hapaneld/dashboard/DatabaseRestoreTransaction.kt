@@ -205,17 +205,21 @@ internal class DatabaseRestoreTransaction(
 
     /** A non-Guard receipt is consumed only after SQLiteOpenHelper has successfully opened the owner. */
     fun consumeOrdinaryRestored(): Boolean {
-        return when (val result = reconcile()) {
-            DatabaseRestoreResult.Absent -> true
-            is DatabaseRestoreResult.Hold -> false
-            is DatabaseRestoreResult.Restored -> {
-                if (result.record.guard != null) true else runCatching {
-                    Files.deleteIfExists(recordTemporary.toPath())
-                    Files.delete(recordFile.toPath())
-                    syncDirectory()
-                }.getOrDefault(false)
-            }
-        }
+        val record = loadAuthoritativeRecord() ?: return !entryExists(recordFile) &&
+            !entryExists(recordTemporary) && !entryExists(preparedFile)
+        val aside = File(directory, record.supersededName)
+        if (!recordBindsTarget(record) || record.state != DatabaseRestoreState.RESTORED ||
+            !matches(normalizedTarget, record.stagedBytes, record.stagedSha256) ||
+            !matches(aside, record.sourceBytes, record.sourceSha256) ||
+            !exactStandaloneSuperseded(aside) || entryExists(preparedFile) ||
+            !exactOpenCanonicalSidecars()
+        ) return false
+        if (record.guard != null) return true
+        return runCatching {
+            Files.deleteIfExists(recordTemporary.toPath())
+            Files.delete(recordFile.toPath())
+            syncDirectory()
+        }.getOrDefault(false)
     }
 
     private fun resume(initial: DatabaseRestoreRecord): DatabaseRestoreResult {
@@ -312,6 +316,15 @@ internal class DatabaseRestoreTransaction(
         if (deletionFailed) return false
         if ((entryExists(wal) || entryExists(shm)) || !syncDirectory()) return false
         return noCanonicalSidecars()
+    }
+
+    /** SQLiteOpenHelper has opened the restored owner, so its proven inert WAL/SHM may now exist. */
+    private fun exactOpenCanonicalSidecars(): Boolean {
+        if (entryExists(File(normalizedTarget.path + "-journal"))) return false
+        val wal = File(normalizedTarget.path + "-wal")
+        if (entryExists(wal) && !ownedStableSidecar(wal, true)) return false
+        val shm = File(normalizedTarget.path + "-shm")
+        return !entryExists(shm) || ownedStableSidecar(shm, false)
     }
 
     private fun noCanonicalSidecars(): Boolean = DB_SIDECARS.none { entryExists(File(normalizedTarget.path + it)) }

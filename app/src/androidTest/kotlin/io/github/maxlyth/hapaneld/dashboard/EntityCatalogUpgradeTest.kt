@@ -144,9 +144,14 @@ class EntityCatalogUpgradeTest {
 
         EntityCatalogStore(context).use { store ->
             val restored = store.writableDatabase
+            assertTrue(restored.isWriteAheadLoggingEnabled)
             assertEquals(EntityCatalogSchema.CURRENT_VERSION, restored.version)
             assertEquals("baseline", scalar(restored, "SELECT value FROM guard_restore_marker"))
             assertFalse(tableExists(restored, "db_compatibility_canary_v15"))
+            assertFalse(
+                "ordinary restore receipt must be consumed during the successful owned open",
+                java.io.File(target.parentFile, ".${target.name}.restore.v1").exists(),
+            )
         }
 
         assertWalHeader(target)
