@@ -42,7 +42,7 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `the selecting screen shows only when nothing provisional is rendering`() {
-        val screen = resolver.indexOf("\"Choosing the Home Assistant dashboard\"")
+        val screen = resolver.indexOf("\"Selecting the Home Assistant dashboard\"")
         val gate = resolver.indexOf("if (provisionalPath == null)")
         assertTrue(gate in 0 until screen)
     }
@@ -56,7 +56,7 @@ class HomeDashboardLaunchContractTest {
         // teardown screen is gated on nothing rendering.
         assertTrue(failure.contains("showBlockedAdmissionScreen("))
         assertTrue(failure.contains("armAdmissionAutoRetry(it"))
-        val screen = failure.indexOf("\"The panel could not read the dashboard list\"")
+        val screen = failure.indexOf("\"Home Assistant dashboard list unavailable\"")
         val gate = failure.indexOf("if (shownPath == null || web == null)")
         assertTrue(gate in 0 until screen)
         // The transient branch never touches the persisted cache, in either direction.

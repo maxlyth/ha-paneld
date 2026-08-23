@@ -102,7 +102,7 @@ class StatusSurfaceInstrumentedTest {
 
     /** The phase used for the overflow measurements: the tallest real screen the frame has to draw. */
     private fun StatusSurface.tallestPhase(): List<View> = listOf(
-        heading("Some entities need a decision"),
+        heading("Entity filter needs attention"),
         detail(
             "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the " +
                 "panel. Open the Entities page in panel settings and simplify the dashboard, or turn " +
@@ -165,7 +165,7 @@ class StatusSurfaceInstrumentedTest {
             listOf(
                 arrayOf(surface.heading("Checking Home Assistant compatibility")),
                 arrayOf(
-                    surface.heading("Some entities need a decision"),
+                    surface.heading("Entity filter needs attention"),
                     surface.detail(
                         "Nothing is wrong with Home Assistant. Too many entities were flagged to " +
                             "review on the panel.",
@@ -209,14 +209,14 @@ class StatusSurfaceInstrumentedTest {
     fun aPhaseChangeReturnsToTheTopOfTheNewContent() {
         onFrame { activity, surface ->
             surface.setBody(
-                surface.heading("Some entities need a decision"),
+                surface.heading("Entity filter needs attention"),
                 *(1..12).map { surface.detail("Filler row $it so the body genuinely overflows") }
                     .toTypedArray(),
             )
             activity.settle()
             surface.scroller().scrollTo(0, 400)
             assertNotEquals("the fixture must actually scroll", 0, surface.scroller().scrollY)
-            surface.setBody(surface.heading("Home Assistant refused this panel's sign-in"))
+            surface.setBody(surface.heading("Home Assistant sign-in rejected"))
             activity.settle()
             assertEquals("a new phase must start at its own top", 0, surface.scroller().scrollY)
         }

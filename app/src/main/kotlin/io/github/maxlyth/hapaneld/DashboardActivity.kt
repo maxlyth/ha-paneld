@@ -685,7 +685,7 @@ class DashboardActivity : AppCompatActivity() {
         Log.e(TAG, "secure V2 listener attachment failed", error)
         showBlockedAdmissionScreen(
             "Home Assistant stopped loading",
-            "The panel's web viewer dropped it during a page change. The panel keeps trying. " +
+            "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
                 "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
         )
@@ -978,7 +978,7 @@ class DashboardActivity : AppCompatActivity() {
             EntityFilterTelemetry.held(lease, "document_start_install")
             entityFilterNativeHold = EntityFilterNativeHold(
                 error = "document_start_install",
-                detail = "The panel could not set up that filtering this time.",
+                detail = "The panel could not set up the entity filtering this time.",
             )
         } else {
             EntityFilterTelemetry.failed(lease, "document_start_install")
@@ -1497,7 +1497,7 @@ class DashboardActivity : AppCompatActivity() {
                min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
                ${statusBrandHtmlHeader(this, dark, palette)}
-               <h1 style="color:${palette.error}">Home Assistant refused this panel's sign-in</h1>
+               <h1 style="color:${palette.error}">Home Assistant sign-in rejected</h1>
                <p style="font-size:1.3em">The saved Home Assistant login stopped working, so the panel has
                stopped retrying it.</p>
                <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Home Assistant connection,
@@ -2196,9 +2196,8 @@ class DashboardActivity : AppCompatActivity() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
-                "The panel's built-in dashboard cannot run until Android System WebView is updated on this " +
-                    "panel. Other dashboard apps, such as the Home Assistant Companion app, still work. " +
-                    "Update the web viewer, then tap Retry.",
+                "Nothing on this panel can show the dashboard until Android System WebView is updated, " +
+                    "because every dashboard app on Android draws through it. Update it, then tap Retry.",
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return
@@ -2257,17 +2256,18 @@ class DashboardActivity : AppCompatActivity() {
                     is DashboardV2ProbeResult.UnsupportedHa -> {
                         config.setHaServerVersionIfOwned(url, blocked.version)
                         showBlockedAdmissionScreen(
-                            "Home Assistant is too old for this panel",
+                            "Home Assistant upgrade required",
                             "The panel's built-in dashboard needs Home Assistant 2026.4.2 or newer, and this " +
                                 "server reports ${blocked.version}. Update Home Assistant, then tap Retry. " +
-                                "Another dashboard app on the panel may still work.",
+                                "Only the built-in dashboard needs that version, so another dashboard app on " +
+                                "the panel may still work.",
                             AdmissionOutcome.UNSUPPORTED_HA,
                         )
                     }
                     // A degraded proxy or captive-portal response lands here too, so probe again at
                     // the ceiling cadence rather than never.
                     is DashboardV2ProbeResult.Unverifiable -> showBlockedAdmissionScreen(
-                        "Home Assistant did not report a usable version",
+                        "Home Assistant version unverifiable",
                         "The panel checks the version before it opens a dashboard, and the answer" +
                             blocked.version?.let { " (“$it”)" }.orEmpty() +
                             " was not one it recognises. A proxy or a captive portal answering in Home " +
@@ -2295,9 +2295,9 @@ class DashboardActivity : AppCompatActivity() {
                         )
                         showBlockedAdmissionScreen(
                             if (neverSignedIn) {
-                                "This panel is not signed in to Home Assistant"
+                                "Home Assistant sign-in needed"
                             } else {
-                                "Home Assistant refused this panel's sign-in"
+                                "Home Assistant sign-in rejected"
                             },
                             if (neverSignedIn) {
                                 "Nothing can load until the panel has a Home Assistant login. Configure " +
@@ -2318,9 +2318,9 @@ class DashboardActivity : AppCompatActivity() {
                     }
                     is DashboardV2ProbeResult.Unavailable -> showBlockedAdmissionScreen(
                         "The panel cannot reach Home Assistant",
-                        "It could not read the Home Assistant version, so it has not opened a dashboard. " +
-                            "Check that Home Assistant is running and that this panel is on the network. " +
-                            "The panel keeps trying. ${blocked.detail}",
+                        "The panel could not read the Home Assistant version, so it has not opened a " +
+                            "dashboard. Check that Home Assistant is running and that this panel is on the " +
+                            "network. The panel keeps trying. ${blocked.detail}",
                         AdmissionOutcome.TRANSPORT_FAILED,
                         blocked.evidence,
                     )
@@ -2590,7 +2590,7 @@ class DashboardActivity : AppCompatActivity() {
         }
         if (provisionalPath == null) {
             showAdmissionProgressScreen(
-                "Choosing the Home Assistant dashboard",
+                "Selecting the Home Assistant dashboard",
                 "Reading which dashboards this Home Assistant account can open, and which one it starts on.",
             )
         }
@@ -2623,7 +2623,7 @@ class DashboardActivity : AppCompatActivity() {
                 // admitted: with the provisional dashboard rendering, retry quietly behind it.
                 if (shownPath == null || web == null) {
                     showBlockedAdmissionScreen(
-                        "The panel could not read the dashboard list",
+                        "Home Assistant dashboard list unavailable",
                         "Home Assistant did not answer when the panel asked which dashboards its account " +
                             "can open. Check that Home Assistant is running and that the panel is still " +
                             "signed in. The panel keeps trying.",
@@ -2633,7 +2633,7 @@ class DashboardActivity : AppCompatActivity() {
                     cancelAdmissionAutoRetry()
                     admissionRetryPolicy.nextDelayMs(
                         admissionRetryClass(AdmissionOutcome.DASHBOARD_LIST_UNREADABLE),
-                    )?.let { armAdmissionAutoRetry(it, "The panel could not read the dashboard list") }
+                    )?.let { armAdmissionAutoRetry(it, "Home Assistant dashboard list unavailable") }
                 }
                 return@launch
             }
@@ -2789,7 +2789,7 @@ class DashboardActivity : AppCompatActivity() {
             if (e is ExternalV2BridgeUnavailable) {
                 showBlockedAdmissionScreen(
                     "Home Assistant could not open",
-                    "The panel's web viewer would not start it. The panel keeps trying. " +
+                    "The panel's web viewer would not start Home Assistant. The panel keeps trying. " +
                         "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
                     AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                 )
@@ -2935,32 +2935,32 @@ class DashboardActivity : AppCompatActivity() {
             }
             rows += surface.heading(
                 if (filterHold != null) {
-                    "The panel cannot filter what Home Assistant sends"
+                    "Optimized dashboard subscription unavailable"
                 } else if (blockingIssues > 0) {
-                    "Some entities need a decision"
+                    "Entity filter needs attention"
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
                     "Home Assistant refused the entity scan"
                 } else if (bootstrapProblem != null) {
-                    "The panel could not finish reading your entities"
+                    "Dashboard scan could not finish"
                 } else {
-                    "Preparing this dashboard's entity list"
+                    "Preparing optimized dashboard subscription"
                 },
             )
             val bootstrapHint = surface.detail(
                 if (filterHold != null) {
-                    "${filterHold.detail} Home Assistant has not been opened, because loading every entity would make this panel slow. Try again, or review the Entities page in panel settings."
+                    "${filterHold.detail} Home Assistant has not been opened, because loading every entity would make this panel slow. Try again, or turn the entity filter off under Configure, in the Dashboard settings."
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
                         "Nothing is wrong with Home Assistant. The panel flagged $blockingIssues safety ${if (blockingIssues == 1) "check" else "checks"} while reading your entities, and needs an answer before it can open the dashboard."
                     } else {
-                        "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open the Entities page in panel settings and simplify the dashboard, or turn the entity filter off."
+                        "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open entity settings to simplify the dashboard, or tap Disable entity filter."
                     }
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
-                    "Home Assistant rejected this panel's sign-in when it asked which entities to show. The dashboard has not been opened. Configure opens this panel's settings, where Home Assistant connection holds the sign-in; the dashboard returns on its own once it works."
+                    "Home Assistant rejected this panel's sign-in when the panel asked which entities to show. The dashboard has not been opened. Configure opens this panel's settings, where Home Assistant connection holds the sign-in; the dashboard returns on its own once it works."
                 } else if (bootstrapProblem != null) {
                     "The scan of your entities did not finish, so the dashboard has not been opened. Check that Home Assistant is running and that the panel is on the network, then try again."
                 } else {
-                    "Home Assistant opens when the first filtered entity list is ready."
+                    "Home Assistant will open when the first filtered entity set is ready."
                 },
             )
             rows += bootstrapHint
@@ -2971,9 +2971,8 @@ class DashboardActivity : AppCompatActivity() {
                 // slow path appears. Text only — the settings escape below is already on screen.
                 main.postDelayed({
                     if (!destroyed && bootstrapHint.isAttachedToWindow) {
-                        bootstrapHint.text = "This is taking longer than usual, and the panel is still " +
-                            "working. If it does not finish, the entity filter can be turned off on the " +
-                            "Entities page in panel settings."
+                        bootstrapHint.text = "Taking longer than usual \u2014 the panel is still working on it. " +
+                            "If this doesn\u2019t finish, the entity filter can be turned off from panel settings."
                     }
                 }, BOOTSTRAP_HOLD_HONESTY_MS)
             }
@@ -3009,10 +3008,21 @@ class DashboardActivity : AppCompatActivity() {
                 }
             }
             rows += surface.action(
-                if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "Configure" else "Open entity settings",
+                if (filterHold != null || bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
+                    "Configure"
+                } else {
+                    "Open entity settings"
+                },
                 fullWidth = blockingIssues > 0,
             ) {
-                val path = if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) "/configure" else "/entities"
+                // Configure for both repairs that live there — the sign-in, and the entity-filter switch
+                // (`dashboard_entity_learning`), which an Entities reset preserves. Entities only where
+                // the task really is reviewing flagged entities.
+                val path = if (filterHold != null || bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
+                    "/configure"
+                } else {
+                    "/entities"
+                }
                 startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", path))
             }
         }
@@ -3223,7 +3233,7 @@ class DashboardActivity : AppCompatActivity() {
                         Log.e(TAG, "secure V2 document rotation failed", it)
                         showBlockedAdmissionScreen(
                             "Home Assistant stopped loading",
-                            "The panel's web viewer dropped it during a page change. The panel keeps trying. " +
+                            "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
                                 "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
                             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )

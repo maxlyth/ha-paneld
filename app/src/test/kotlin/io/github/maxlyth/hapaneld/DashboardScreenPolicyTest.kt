@@ -47,11 +47,11 @@ class DashboardScreenPolicyTest {
         )
 
         assertTrue(block.contains("config.haToken.isBlank() && config.haRefreshToken.isBlank()"))
-        assertTrue(block.contains("\"This panel is not signed in to Home Assistant\""))
+        assertTrue(block.contains("\"Home Assistant sign-in needed\""))
         // The refusal title must name the SIGN-IN, not the version check. A panel reported on
         // 2026-08-17 showing "Home Assistant version check rejected" sent diagnosis after a version
         // problem that did not exist; the body had always said authentication.
-        assertTrue(block.contains("\"Home Assistant refused this panel's sign-in\""))
+        assertTrue(block.contains("\"Home Assistant sign-in rejected\""))
         assertFalse(block.contains("version check rejected"))
         // The two situations must reach DIFFERENT outcomes so a diagnostic surface can tell them
         // apart, even though both are person-repaired.
@@ -112,11 +112,11 @@ class DashboardScreenPolicyTest {
             Regex("""AdmissionOutcome\.([A-Z_]+)""").find(w)?.groupValues?.get(1)
         }
         assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("The panel cannot reach Home Assistant"))
-        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("The panel could not read the dashboard list"))
+        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("Home Assistant dashboard list unavailable"))
         assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("The Home Assistant sign-in page would not load"))
         assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Home Assistant opened but will not respond"))
-        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant did not report a usable version"))
-        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant is too old for this panel"))
+        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant version unverifiable"))
+        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant upgrade required"))
         assertEquals(
             listOf("NO_LEGAL_DASHBOARD", "DASHBOARD_LIST_UNREADABLE", "NO_LEGAL_DASHBOARD"),
             outcomeOf("This account has no dashboard to open"),
@@ -257,7 +257,7 @@ class DashboardScreenPolicyTest {
             source.indexOf("private fun navigateAfterHomeDashboardCorrection"),
         )
         assertTrue(resolver.contains("admissionRetryPolicy.nextDelayMs("))
-        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"The panel could not read the dashboard list\")"))
+        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"Home Assistant dashboard list unavailable\")"))
     }
 
     @Test fun theCountdownAndTheRetryCallbackShareTheHandlerClock() {
@@ -387,9 +387,13 @@ class DashboardScreenPolicyTest {
 
         // Internal component and protocol names. Each of these was on a panel; none of them tells
         // somebody standing in front of it what they lost or what to do about it.
+        // "subscription" is deliberately NOT here. It names the wait on the entity-bootstrap screen,
+        // and that is informative: the defect this test guards is a word the reader can do nothing
+        // with, not every technical noun. A list that rejects an informative name would be a worse
+        // contract than no list.
         listOf(
             "bridge", "handshake", "native-host", "WebMessageListener", "interceptor",
-            "renderer", "subscription", "legal dashboard", "entity-discovery", "unfiltered",
+            "renderer", "legal dashboard", "entity-discovery", "unfiltered",
         ).forEach { word ->
             rendered.forEach { text ->
                 assertFalse(
@@ -405,6 +409,26 @@ class DashboardScreenPolicyTest {
      * the deliberate exception, because upgrading Home Assistant is exactly the repair the screen that
      * carries it is asking for.
      */
+    /**
+     * A message must carry its own subject.
+     *
+     * The heading and the detail are two separate views with a gap between them, and a detail that
+     * opens with a pronoun is borrowing a noun the reader has to go back for: "The panel cannot reach
+     * Home Assistant" over "It could not read the Home Assistant version" makes "it" mean the panel
+     * while the nearer noun in its own sentence is Home Assistant. Naming the subject costs one word.
+     */
+    @Test fun noMessageOpensWithAPronounItHasNotIntroduced() {
+        // Personal pronouns only. A demonstrative carrying its own noun ("This account has no
+        // dashboard to open") is self-contained; a bare "It" or "They" is not.
+        val borrowed = Regex("""^(It|Its|They|Their|He|She)\b""")
+        renderedStrings(dashboardSource()).forEach { text ->
+            assertFalse(
+                "a message opens with a pronoun whose subject is only in the heading: $text",
+                borrowed.containsMatchIn(text.trimStart()),
+            )
+        }
+    }
+
     @Test fun noFullScreenMessageShowsAProtocolVersion() {
         val protocolVersion = Regex("""\bV\d""", RegexOption.IGNORE_CASE)
         renderedStrings(dashboardSource()).forEach { text ->
