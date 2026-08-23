@@ -53,6 +53,17 @@ internal const val STATUS_ACTION_SIDE_GAP_DP = 8
 /** Between two stacked actions; the standing screen spends 8dp above and below each one. */
 internal const val STATUS_ACTION_STACK_GAP_DP = 16
 
+/**
+ * Above the first action of a group and below the last.
+ *
+ * A different quantity from the gap BETWEEN two actions, and the two were conflated: the controls
+ * were separated from the sentence that explains them, and from the countdown under them, by less
+ * than they were separated from each other, so the group read as part of the text rather than as the
+ * thing to press. Larger than the stack gap for that reason, and affordable — the tallest screen the
+ * frame draws still clears a 480x480 panel with room over.
+ */
+internal const val STATUS_ACTION_GROUP_GAP_DP = 24
+
 /** Horizontal breathing room reserved either side of the column and of a full-width action. */
 internal const val STATUS_SIDE_INSET_DP = 48
 
@@ -79,6 +90,7 @@ internal data class StatusSurfaceSpec(
     val brandCaptionSp: Float,
     val rowGapDp: Int,
     val actionGapDp: Int,
+    val actionGroupGapDp: Int,
     val actionSideGapDp: Int,
     val actionHeightDp: Int,
     val actionWidthDp: Int,
@@ -118,6 +130,7 @@ internal fun statusSurfaceSpec(widthDp: Int, heightDp: Int): StatusSurfaceSpec {
         brandCaptionSp = 12f,
         rowGapDp = if (compact) 10 else 14,
         actionGapDp = STATUS_ACTION_STACK_GAP_DP,
+        actionGroupGapDp = STATUS_ACTION_GROUP_GAP_DP,
         actionSideGapDp = STATUS_ACTION_SIDE_GAP_DP,
         // Android's default button is 48dp of touch target plus its own vertical padding.
         actionHeightDp = STATUS_ACTION_HEIGHT_DP,

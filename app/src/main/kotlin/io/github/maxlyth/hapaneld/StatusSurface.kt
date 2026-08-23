@@ -294,8 +294,18 @@ internal class StatusSurface(
         // the previous offset dropped a reader into the middle of a replacement message.
         bodyScroll.scrollTo(0, 0)
         body.removeAllViews()
+        fun isActionGroup(view: View) = view is Button || view.tag == ACTION_ROW_TAG
         rows.forEachIndexed { index, view ->
-            val gap = if (index == 0) 0 else if (view is Button) spec.actionGapDp else spec.rowGapDp
+            val gap = when {
+                index == 0 -> 0
+                // Between two actions of the same group: the tighter of the two, because they belong
+                // together.
+                isActionGroup(view) && isActionGroup(rows[index - 1]) -> spec.actionGapDp
+                // Entering or leaving a group: the wider one, which is what puts air above the
+                // controls and below them.
+                isActionGroup(view) || isActionGroup(rows[index - 1]) -> spec.actionGroupGapDp
+                else -> spec.rowGapDp
+            }
             val existing = view.layoutParams as? LinearLayout.LayoutParams
             body.addView(
                 view,
@@ -412,6 +422,9 @@ internal class StatusSurface(
      * column and stacks instead, which is always legible.
      */
     fun actionRow(vararg buttons: Button): LinearLayout = LinearLayout(activity).apply {
+        // Marks the row as a group of actions so [setBody] spaces it like one. A type check would
+        // have been quieter and wrong: any future row built from a LinearLayout would inherit it.
+        tag = ACTION_ROW_TAG
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
         // Separated first, so the fit decision below sees the gaps. They had never been applied on
@@ -463,6 +476,9 @@ internal class StatusSurface(
     }
 
     companion object {
+        /** Identifies an [actionRow] to [setBody], which spaces an action group by the action gap. */
+        internal const val ACTION_ROW_TAG = "statusActionRow"
+
         /** Progress bars report per-mille so a learned estimate moves smoothly rather than in steps. */
         const val PROGRESS_RESOLUTION = 1_000
 

@@ -179,6 +179,7 @@ class StatusSurfaceSpecTest {
             assertEquals(STATUS_ACTION_LABEL_SP, spec.actionLabelSp, 0f)
             assertEquals(STATUS_ACTION_SIDE_GAP_DP, spec.actionSideGapDp)
             assertEquals(STATUS_ACTION_STACK_GAP_DP, spec.actionGapDp)
+            assertEquals(STATUS_ACTION_GROUP_GAP_DP, spec.actionGroupGapDp)
         }
     }
 
@@ -212,6 +213,15 @@ class StatusSurfaceSpecTest {
             assertTrue(
                 "actions ${spec.actionGapDp}dp apart against rows ${spec.rowGapDp}dp apart",
                 spec.actionGapDp > spec.rowGapDp,
+            )
+            // And the group is separated from what surrounds it by MORE than its members are from
+            // each other. With the two conflated, the controls sat closer to the sentence explaining
+            // them than to one another, so they read as part of the text instead of as the thing to
+            // press. This is the ordering that makes a group look like a group.
+            assertTrue(
+                "a group ${spec.actionGroupGapDp}dp from its surroundings against " +
+                    "${spec.actionGapDp}dp between its own actions",
+                spec.actionGroupGapDp > spec.actionGapDp,
             )
         }
     }

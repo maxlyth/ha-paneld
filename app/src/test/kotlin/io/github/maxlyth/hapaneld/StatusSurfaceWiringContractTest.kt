@@ -86,6 +86,22 @@ class StatusSurfaceWiringContractTest {
     fun changingThePhaseTouchesOnlyTheBody() {
         val body = surface.substringAfter("fun setBody(").substringBefore("\n    }")
         assertTrue("setBody must clear the body", body.contains("body.removeAllViews()"))
+        // Three distinct spacings, not two. A row of actions is an action GROUP: tight between its
+        // own members, wider where the group meets ordinary content on either side. Reading the row
+        // as ordinary content is what left the controls closer to their explanation than to each
+        // other, and it is only visible on a panel, so it is pinned here.
+        assertTrue(
+            "an action row must be recognised as a group, not by its view type",
+            body.contains("view.tag == ACTION_ROW_TAG"),
+        )
+        assertTrue(
+            "between two actions of one group: the tighter gap",
+            body.contains("isActionGroup(view) && isActionGroup(rows[index - 1]) -> spec.actionGapDp"),
+        )
+        assertTrue(
+            "entering or leaving a group: the wider gap, which is the air above and below it",
+            body.contains("isActionGroup(view) || isActionGroup(rows[index - 1]) -> spec.actionGroupGapDp"),
+        )
         listOf("header", "brandMark", "brandCaptionView").forEach { forbidden ->
             assertTrue("setBody must not touch $forbidden", !body.contains(forbidden))
         }
