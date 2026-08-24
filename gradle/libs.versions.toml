@@ -22,7 +22,7 @@ slf4jAndroid = "1.7.36"
 junit = "4.13.2"
 # Real org.json for JVM unit tests — the android.jar stub returns defaults (returnDefaultValues),
 # which would silently no-op any JSON-building code under test (e.g. the dashboard auth bridge).
-orgJson = "20260719"
+orgJson = "20260814"
 # Test-only real SQLite (JDBC): reproduces WAL writer-lock BUSY semantics between two connections
 # deterministically on the JVM (Issue #91). Never packaged in the APK.
 sqliteJdbc = "3.53.2.1"
