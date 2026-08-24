@@ -599,7 +599,7 @@ read_setup_journey() {
   [ -n "$SETUP_NEXT" ] || return 0
   # One step object per line, so the greedy field matches below cannot cross an object boundary.
   steps="$(printf '%s' "$body" | tr '\n' ' ' | sed 's/},[[:space:]]*{/}\n{/g')"
-  line="$(printf '%s\n' "$steps" | grep -F "\"stage\":\"$SETUP_NEXT\"" | head -1)"
+  line="$(printf '%s\n' "$steps" | grep -F "\"stage\":\"$SETUP_NEXT\"" | head -1 || true)"
   SETUP_NEXT_STATUS="$(printf '%s' "$line" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p')"
   SETUP_NEXT_DETAIL="$(printf '%s' "$line" | sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sanitize_terminal)"
   return 0
@@ -1077,8 +1077,8 @@ verify() {
   fi
   # panel_id + MQTT (informational — install-only is valid). grep/cut so no python (Git Bash-friendly).
   local broker pid
-  broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4)"
-  pid="$(printf '%s' "$cfg" | grep -o '"panel_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  broker="$(printf '%s' "$cfg" | grep -o '"mqtt_broker":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
+  pid="$(printf '%s' "$cfg" | grep -o '"panel_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)"
   broker="$(printf '%s' "$broker" | sanitize_terminal)"
   pid="$(printf '%s' "$pid" | sanitize_terminal)"
   if [ -n "$broker" ]; then echo "   ${GRN}✓${X} MQTT broker: ${B}$broker${X}"
@@ -2912,7 +2912,10 @@ install_system() {
   mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_system mv"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_system sync"; return 1; }
 
-  retire_helpers || return 1
+  # The swap has not started yet, so a failure here leaves every live file and the installed APK
+  # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
+  # was never changed, nor tell its owner to repair a helper that is still the one they had.
+  retire_helpers || { echo "INSTALL_UNCHANGED install_system helper_retirement"; return 1; }
   rm -f /system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc \
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
@@ -2969,7 +2972,10 @@ install_systemless() {
   mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_systemless mv"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_systemless sync"; return 1; }
 
-  retire_helpers || return 1
+  # The swap has not started yet, so a failure here leaves every live file and the installed APK
+  # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
+  # was never changed, nor tell its owner to repair a helper that is still the one they had.
+  retire_helpers || { echo "INSTALL_UNCHANGED install_systemless helper_retirement"; return 1; }
   rm -f /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh
   mv -f /data/adb/hapaneld/hapaneld-helper.new /data/adb/hapaneld/hapaneld-helper || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper"; return 1; }
   mv -f /data/adb/service.d/hapaneld-helper.sh.new /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_systemless mv_hapaneld-helper.sh"; return 1; }
@@ -3061,7 +3067,10 @@ install_hybrid() {
   mv -f "$marker.new" "$marker" || { echo "INSTALL_STEP_FAILED install_hybrid mv"; return 1; }
   sync || { echo "INSTALL_STEP_FAILED install_hybrid sync"; return 1; }
 
-  retire_helpers || return 1
+  # The swap has not started yet, so a failure here leaves every live file and the installed APK
+  # exactly as they were. Say so in the reply: the host must not offer to roll back a panel that
+  # was never changed, nor tell its owner to repair a helper that is still the one they had.
+  retire_helpers || { echo "INSTALL_UNCHANGED install_hybrid helper_retirement"; return 1; }
   rm -f /system/etc/init/hapaneld-helper.rc /system/bin/hapaneld-helper \
     /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc \
     /data/adb/service.d/hapaneld-helper.sh || { echo "INSTALL_STEP_FAILED install_hybrid _data_adb_service.d_hapaneld-helper.sh_hapaneld-helper.sh"; return 1; }
@@ -3631,6 +3640,27 @@ EOF
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
         install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
+          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+          fail "the old root helper could not be retired, so the upgrade did not start" \
+            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
+            ${install_detail:+"The panel reported: $install_detail"} \
+            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+        fi
+        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
+          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+          fail "the old root helper could not be retired, so the upgrade did not start" \
+            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
+            ${install_detail:+"The panel reported: $install_detail"} \
+            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+        fi
+        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
+          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+          fail "the old root helper could not be retired, so the upgrade did not start" \
+            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
+            ${install_detail:+"The panel reported: $install_detail"} \
+            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "/system root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions." \

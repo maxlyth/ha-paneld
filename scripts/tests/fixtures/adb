@@ -863,6 +863,7 @@ case "${1:-}" in
             esac
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = retirement ]; then
             printf 'RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running init_ledd=unset\n'
+            printf 'INSTALL_UNCHANGED install_system helper_retirement\n'
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed ]; then
             printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
           else
@@ -941,6 +942,7 @@ case "${1:-}" in
             esac
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = retirement ]; then
             printf 'RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running init_ledd=unset\n'
+            printf 'INSTALL_UNCHANGED install_system helper_retirement\n'
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed ]; then
             printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
           else

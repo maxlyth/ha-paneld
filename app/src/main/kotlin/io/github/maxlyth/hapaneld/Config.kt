@@ -2218,7 +2218,43 @@ class Config private constructor(
      * forward, not silently reset to its default. No-op (and cheap) while already current; call once at
      * startup before the store is read. Committed synchronously so a reboot can't race the write.
      */
+    /**
+     * Re-root the stored entity-filter owners onto the dashboard root.
+     *
+     * The owner key used to embed the whole configured route and now embeds only its root, so a panel
+     * that stored `…:key/lovelace/kiosk` computes `…:key/lovelace` after an upgrade, the ownership test
+     * fails, and the filter reads as unowned. The panel then opens Home Assistant with no interception
+     * and subscribes to the entire catalogue — the load the filter exists to prevent.
+     *
+     * The binding path already re-roots owners, but every route to it runs through entity learning, and
+     * committing a MANUAL filter sets `dashboard_entity_learning` false. So the repair could never run
+     * on exactly the panels that needed it.
+     *
+     * Shortening a stored owner to its own root is lossless and cannot adopt a different dashboard:
+     * learning fetches per dashboard root and extracts from the whole document, so a view and its
+     * dashboard yield the same set. A different root is left alone, because that is a genuine dashboard
+     * change and failing closed so it re-learns is the intended behaviour. Idempotent, so it runs on
+     * every start rather than only on a schema change — a panel that already booted an affected build
+     * is repaired too.
+     */
+    private fun rerootDashboardEntityOwners() = synchronized(CONFIG_LOCK) {
+        val editor = prefs.edit()
+        var changed = false
+        for (preference in listOf("dashboard_entity_filter_instance", "dashboard_entity_applied_instance")) {
+            val owner = prefs.getString(preference, "").orEmpty()
+            if (owner.isBlank()) continue
+            val instance = dashboardEntityInstanceOf(owner)
+            if (instance.isBlank()) continue
+            val rerooted = dashboardEntityTargetKey(instance, dashboardEntityPathOf(owner))
+            if (rerooted.isBlank() || rerooted == owner) continue
+            editor.putString(preference, rerooted)
+            changed = true
+        }
+        if (changed) editor.apply()
+    }
+
     fun migrateLiveStore(): Boolean {
+        rerootDashboardEntityOwners()
         val from = storedSchema
         if (from == SettingsRegistry.SCHEMA) return true
         val specs = SettingsRegistry.SPECS.filterNot { it.readOnly || it.transient }

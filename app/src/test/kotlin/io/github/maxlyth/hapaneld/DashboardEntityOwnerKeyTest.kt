@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
@@ -16,6 +17,36 @@ class DashboardEntityOwnerKeyTest {
         assertEquals("6:ha-abc/lovelace", key)
         assertEquals("ha-abc", dashboardEntityInstanceOf(key))
         assertEquals("/lovelace", dashboardEntityPathOf(key))
+    }
+
+    /**
+     * The upgrade repair, expressed as the rule it applies: rewrite a stored owner to embed the root of
+     * the path it already embeds. A panel that stored a full route under the old scheme reads as unowned
+     * under the new one, its filter reports empty, and it subscribes to the whole catalogue. The binding
+     * path re-roots owners already, but every route to it runs through entity learning, and committing a
+     * MANUAL filter turns learning off — so the repair could never reach the panels that needed it.
+     */
+    @Test fun `re-rooting a stored owner recovers the key the new scheme computes`() {
+        val stored = "6:ha-abc/lovelace/kiosk"
+        val rerooted = dashboardEntityTargetKey(dashboardEntityInstanceOf(stored), dashboardEntityPathOf(stored))
+        assertEquals(dashboardEntityTargetKey("ha-abc", "/lovelace/kiosk"), rerooted)
+        assertEquals("6:ha-abc/lovelace", rerooted)
+    }
+
+    @Test fun `re-rooting is idempotent, so it is safe on every start`() {
+        val rooted = dashboardEntityTargetKey("ha-abc", "/lovelace")
+        val again = dashboardEntityTargetKey(dashboardEntityInstanceOf(rooted), dashboardEntityPathOf(rooted))
+        assertEquals(rooted, again)
+    }
+
+    @Test fun `re-rooting never moves an owner onto a different dashboard`() {
+        // Shortening a route to its own root cannot adopt a neighbour: a genuinely different dashboard
+        // still fails the ownership test and re-learns, which is the intended behaviour.
+        val stored = "6:ha-abc/lovelace/kiosk"
+        val rerooted = dashboardEntityTargetKey(dashboardEntityInstanceOf(stored), dashboardEntityPathOf(stored))
+        assertEquals("ha-abc", dashboardEntityInstanceOf(rerooted))
+        assertEquals("/lovelace", dashboardEntityPathOf(rerooted))
+        assertNotEquals(dashboardEntityTargetKey("ha-abc", "/energy"), rerooted)
     }
 
     @Test fun `an instance whose own name contains the separator still splits correctly`() {

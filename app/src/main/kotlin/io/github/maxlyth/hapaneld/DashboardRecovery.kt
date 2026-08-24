@@ -746,3 +746,20 @@ internal fun startupNetworkStage(s: StartupNetworkSnapshot): String = when {
     !s.defaultNetwork -> "Network address received\nPreparing the connection"
     else -> "Network ready\nOpening Home Assistant"
 }
+
+/**
+ * How long to wait before the next entity-bootstrap watchdog resync.
+ *
+ * The hold's commonest cause is that Home Assistant is not up yet, so the recovery has to keep being
+ * offered rather than fired once and latched. Widening from [baseMs] and capping at [ceilingMs] keeps a
+ * long outage cheap while still converging within [ceilingMs] of HA answering.
+ *
+ * The step count is bounded and the result is range-checked because `shl` on a Long takes only the low
+ * six bits of its operand: an unbounded attempt count would wrap the shift and collapse the backoff
+ * straight back to [baseMs] after 64 attempts, which a multi-hour outage can reach.
+ */
+internal fun entityBootstrapRetryDelayMs(attempt: Int, baseMs: Long, ceilingMs: Long): Long {
+    if (attempt <= 1) return baseMs.coerceAtMost(ceilingMs)
+    val widened = baseMs shl (attempt - 1).coerceAtMost(32)
+    return if (widened <= 0L || widened > ceilingMs) ceilingMs else widened
+}

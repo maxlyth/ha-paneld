@@ -1527,12 +1527,21 @@ assert_contains 'root-helper install failed' "helper staging failure names the i
 assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "failed system transaction preserves or restores the prior helper"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "failed helper staging does not replace the APK"
 
+# The retirement gate runs before the swap, so a panel that fails it has not been touched: the old
+# helper, its boot registration and the installed APK are all still there. Reporting that as a failed
+# install with an unverified rollback told the owner to hand-repair a panel that was never changed,
+# and it sent the run through a rollback of nothing.
 MOCK_HELPER_INSTALL=retirement \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "a helper that cannot be retired fails the install"
-assert_contains 'root-helper install failed' "retirement timeout names the incomplete migration"
+assert_contains 'the upgrade did not start' "a pre-swap retirement failure says the upgrade never began"
+assert_contains 'Nothing on the panel changed' "an untouched panel is described as untouched"
 assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
   "retirement timeout surfaces the surviving pids and init state to the operator"
+assert_not_contains 'Restore the helper manually' "$LAST_OUTPUT" \
+  "an untouched panel is never told to repair its helper by hand"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" \
+  "a pre-swap failure does not roll back a panel that was never changed"
 
 # The whole point of the Issue #120 lane was that a failed helper install names itself. It did so on
 # the `system` arm only: the `hybrid` and `systemless` arms dropped the detail line on the ordinary
@@ -4959,14 +4968,21 @@ else
   fail_test "system helper init start gets an exact-BUILDID window before direct fallback"
 fi
 
+# Pins the invariant rather than one spelling of it: retirement is attempted exactly once, it ends the
+# function when it fails, and it happens before the first line that replaces anything. The gate also
+# has to name the panel as unchanged, because the host uses that to skip a rollback of nothing and to
+# avoid telling an owner to repair a helper that is still the one they had.
 assert_install_retirement_before_swap() {
-  local function_name="$1" body count
+  local function_name="$1" body gate swap gates
   body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
-  count="$(grep -Fxc '  retire_helpers || return 1' <<<"$body" || true)"
-  if [ "$count" = 1 ]; then
-    pass "$function_name retires the old daemon before replacing helper files"
+  gates="$(grep -c 'retire_helpers ||' <<<"$body" || true)"
+  gate="$(grep -n 'retire_helpers ||' <<<"$body" | head -1 | cut -d: -f1)"
+  swap="$(grep -nE '^  (rm -f|mv -f) ' <<<"$body" | tail -1 | cut -d: -f1)"
+  if [ "$gates" = 1 ] && [ -n "$gate" ] && [ -n "$swap" ] && [ "$gate" -lt "$swap" ] &&
+     grep -Fq "INSTALL_UNCHANGED ${function_name} helper_retirement" <<<"$body"; then
+    pass "$function_name retires the old daemon before the swap and names an untouched panel"
   else
-    fail_test "$function_name retires the old daemon before replacing helper files"
+    fail_test "$function_name retires the old daemon before the swap and names an untouched panel"
   fi
 }
 assert_install_retirement_before_swap install_system
@@ -5006,16 +5022,24 @@ STUB
 cat > "$RETIRE_STUBS/pidof" <<'STUB'
 #!/usr/bin/env bash
 echo "pidof $*" >> "$RETIRE_LOG"
+case "${RETIRE_SCENARIO:?}:$1" in
+  ledd_stuck:hapaneld-ledd) echo 4243; exit 0 ;;
+  ledd_stuck:*) exit 1 ;;
+esac
 [ "$1" = hapaneld-helper ] || exit 1
 case "${RETIRE_SCENARIO:?}" in
   normal) exit 1 ;;
   kill_needed) [ -e "$RETIRE_LOG.killed" ] && exit 1; echo 4242; exit 0 ;;
-  stuck_init) echo 4242; exit 0 ;;
+  stuck_init|no_init_service) echo 4242; exit 0 ;;
 esac
 STUB
 cat > "$RETIRE_STUBS/getprop" <<'STUB'
 #!/usr/bin/env bash
 echo "getprop $*" >> "$RETIRE_LOG"
+# A helper that was launched directly and has never been through a reboot has no init.svc property at
+# all. That is an ordinary state on a rooted panel rather than an exotic one, so the diagnostic has to
+# describe it instead of assuming a registered service.
+[ "${RETIRE_SCENARIO:?}" = no_init_service ] && exit 0
 [ "$1" = init.svc.hapaneld_helper ] && echo running
 STUB
 cat > "$RETIRE_STUBS/sleep" <<'STUB'
@@ -5053,6 +5077,27 @@ if ! run_retire_scenario stuck_init && \
   pass "an unkillable helper times out with surviving pids and init state in the diagnostic"
 else
   fail_test "an unkillable helper times out with surviving pids and init state in the diagnostic"
+fi
+
+# The signature the Issue #120 panel actually had: a live helper with no registered init service. The
+# diagnostic must say `unset` rather than inventing a state, because that word is what tells the next
+# reader that `stop` was never going to work on this panel.
+if ! run_retire_scenario no_init_service && \
+   grep -q '^RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=unset init_ledd=unset$' "$TMP/retire-out.txt"; then
+  pass "a helper with no registered init service reports init_helper=unset rather than a fabricated state"
+else
+  fail_test "a helper with no registered init service reports init_helper=unset rather than a fabricated state"
+fi
+
+# The ledd half of the retirement has never been exercised by any test. It is legacy, but it is still
+# stopped, killed and reported on every rooted panel, so it needs one test that fails if it is quietly
+# dropped.
+if ! run_retire_scenario ledd_stuck && \
+   grep -q '^RETIREMENT_TIMEOUT helper_pids=none ledd_pids=4243 ' "$TMP/retire-out.txt" && \
+   grep -q 'pkill -KILL -x hapaneld-ledd' "$RETIRE_LOG"; then
+  pass "a surviving LED daemon times out, is escalated to SIGKILL, and is named in the diagnostic"
+else
+  fail_test "a surviving LED daemon times out, is escalated to SIGKILL, and is named in the diagnostic"
 fi
 
 # `start` is successful even when Android init has not loaded the restored service. Every rollback

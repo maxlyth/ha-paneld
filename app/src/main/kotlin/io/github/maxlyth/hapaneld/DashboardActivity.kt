@@ -415,7 +415,9 @@ class DashboardActivity : AppCompatActivity() {
     private var entityBootstrapBlockedCount = -1
     private var entityBootstrapHoldSinceMs = 0L
     private var entityBootstrapMilestoneView: TextView? = null
-    private var entityBootstrapWatchdogFired = false
+    /** When the next watchdog resync may fire. Zero means the first deadline has not been reached. */
+    private var entityBootstrapNextRetryMs = 0L
+    private var entityBootstrapRetries = 0
     /** Past the give-up deadline the hold presents as a problem (retry/disable buttons) — see the check. */
     private var entityBootstrapWatchdogGaveUp = false
     private var entityBootstrapProblem: EntityBootstrapProblem? = null
@@ -451,9 +453,21 @@ class DashboardActivity : AppCompatActivity() {
                 val now = SystemClock.elapsedRealtime()
                 if (entityBootstrapHoldSinceMs == 0L) entityBootstrapHoldSinceMs = now
                 val heldMs = now - entityBootstrapHoldSinceMs
-                if (heldMs > BOOTSTRAP_WATCHDOG_RETRY_MS && !entityBootstrapWatchdogFired) {
-                    entityBootstrapWatchdogFired = true
-                    Log.w(TAG, "entity bootstrap held ${heldMs}ms — firing watchdog resync")
+                // Firing the recovery once was not enough. The commonest reason the scan cannot answer is
+                // that Home Assistant is not up yet — a power cut brings the panel back first — and a
+                // one-shot retry means the panel is still holding, or already on the problem screen, long
+                // after HA returned. Nothing else re-drives it: the periodic sync skips a freshly-synced
+                // catalogue and skips again while the screen is awake, and no HA-reconnect trigger exists.
+                // So keep retrying on a widening interval, capped, for as long as the hold lasts.
+                if (heldMs > BOOTSTRAP_WATCHDOG_RETRY_MS && now >= entityBootstrapNextRetryMs) {
+                    entityBootstrapRetries += 1
+                    val backoff = entityBootstrapRetryDelayMs(
+                        entityBootstrapRetries,
+                        BOOTSTRAP_WATCHDOG_RETRY_MS,
+                        BOOTSTRAP_WATCHDOG_RETRY_CEILING_MS,
+                    )
+                    entityBootstrapNextRetryMs = now + backoff
+                    Log.w(TAG, "entity bootstrap held ${heldMs}ms — watchdog resync ${entityBootstrapRetries}, next in ${backoff}ms")
                     EntityLearningRuntime.retryBootstrap()
                 }
                 if (heldMs > BOOTSTRAP_WATCHDOG_PROBLEM_MS && !entityBootstrapWatchdogGaveUp) {
@@ -476,7 +490,8 @@ class DashboardActivity : AppCompatActivity() {
                 return
             }
             entityBootstrapHoldSinceMs = 0L
-            entityBootstrapWatchdogFired = false
+            entityBootstrapNextRetryMs = 0L
+            entityBootstrapRetries = 0
             entityBootstrapWatchdogGaveUp = false
             // A sync may finish after the panel went dark. Do not create a WebView whose timers have no
             // connection callback or dark-settle owner; the next poll after a real wake will build it.
@@ -2983,7 +2998,8 @@ class DashboardActivity : AppCompatActivity() {
                 // A user-driven retry restores hope: the watchdog clock restarts and the screen
                 // returns to the progress presentation until the new deadline.
                 entityBootstrapWatchdogGaveUp = false
-                entityBootstrapWatchdogFired = false
+                entityBootstrapNextRetryMs = 0L
+                entityBootstrapRetries = 0
                 entityBootstrapHoldSinceMs = SystemClock.elapsedRealtime()
                 if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
             }
@@ -3359,6 +3375,8 @@ class DashboardActivity : AppCompatActivity() {
         private const val BOOTSTRAP_HOLD_HONESTY_MS = 20_000L
         private const val BOOTSTRAP_WATCHDOG_RETRY_MS = 30_000L
         private const val BOOTSTRAP_WATCHDOG_PROBLEM_MS = 90_000L
+        /** The widening retry never idles longer than this, so a panel converges once HA answers. */
+        private const val BOOTSTRAP_WATCHDOG_RETRY_CEILING_MS = 300_000L
         private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
         private const val RELOAD_INTERVAL_MS = 6 * 60 * 60 * 1000L   // shed WebView memory at a screen-off, ~6h
         private const val RELOAD_HARD_MS = 26 * 60 * 60 * 1000L      // force a visible reload if never idle-dark
