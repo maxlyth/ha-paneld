@@ -3656,7 +3656,8 @@ EOF
         install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
         if rollback_root_helper "$install_kind"; then
           fail "hybrid root-helper install failed; the prior helper was preserved or restored" \
-            "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb."
+            "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb." \
+            ${install_detail:+"The panel reported: $install_detail"}
         fi
         fail "hybrid root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
@@ -3677,7 +3678,8 @@ EOF
         install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
         if rollback_root_helper "$install_kind"; then
           fail "systemless root-helper install failed; the prior helper was preserved or restored" \
-            "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions."
+            "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions." \
+            ${install_detail:+"The panel reported: $install_detail"}
         fi
         fail "systemless root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \

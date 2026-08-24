@@ -1534,6 +1534,28 @@ assert_contains 'root-helper install failed' "retirement timeout names the incom
 assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
   "retirement timeout surfaces the surviving pids and init state to the operator"
 
+# The whole point of the Issue #120 lane was that a failed helper install names itself. It did so on
+# the `system` arm only: the `hybrid` and `systemless` arms dropped the detail line on the ordinary
+# path where rollback succeeds, which is exactly the path a real user lands on. Layout is chosen by
+# writability, so these two runs reach the other two arms without any new fixture.
+MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=retirement \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a systemless helper that cannot be retired fails the install"
+assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
+  "a systemless retirement timeout still reaches the operator"
+
+MOCK_VENDOR_RC_STATE=managed MOCK_HELPER_INSTALL=retirement \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a hybrid helper that cannot be retired fails the install"
+assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
+  "a hybrid retirement timeout still reaches the operator"
+
+MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=step_failed \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a failed systemless staging step fails the install"
+assert_contains 'The panel reported: INSTALL_STEP_FAILED' \
+  "a systemless staging failure names the step that failed"
+
 MOCK_HELPER_INSTALL=step_failed \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "a failed staging step fails the install"
