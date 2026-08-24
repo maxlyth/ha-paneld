@@ -4,7 +4,7 @@
 # build.gradle.kts selects Kotlin 2.4.0 explicitly.
 agp = "9.3.2"
 coreKtx = "1.19.0"
-appcompat = "1.7.0"
+appcompat = "1.8.0"
 swiperefresh = "1.2.0"
 # androidx.webkit — WebSettingsCompat force-dark for the pre-Android-13 panels' WebViews.
 webkit = "1.12.1"
