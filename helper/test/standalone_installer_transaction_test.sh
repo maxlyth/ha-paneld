@@ -14,7 +14,16 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$TMP/dist/arm64-v8a"
-printf 'mock helper\n' > "$TMP/dist/arm64-v8a/hapaneld-helper"
+# This dist is overridden, so it is a foreign build as far as the installer is concerned. Stamp it with
+# an identity that is deliberately NOT the checkout's: every transaction below then also proves that
+# the journal, the lease and the post-start identity check all follow the staged bytes.
+FOREIGN_BUILD_ID=facade00facade00facade00facade00facade00facade00facade00facade00
+CHECKOUT_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+if [ "$FOREIGN_BUILD_ID" = "$CHECKOUT_BUILD_ID" ]; then
+  echo "the foreign dist identity must differ from the checkout identity or this file proves nothing" >&2
+  exit 1
+fi
+printf 'mock helper\nBUILDID %s\n' "$FOREIGN_BUILD_ID" > "$TMP/dist/arm64-v8a/hapaneld-helper"
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/adb" <<'EOF'
 #!/usr/bin/env bash
@@ -59,7 +68,7 @@ export MOCK_ADB_ROOT=0
 export MOCK_SU_DIALECT=join
 export MOCK_ABI=arm64-v8a
 export MOCK_SYSTEM_WRITABLE=1
-export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+export MOCK_HELPER_BUILD_ID="$FOREIGN_BUILD_ID"
 export MOCK_HELPER_REQUEST_DELAY=2
 export MOCK_MANUAL_INSTALL_DELAY=2
 export HAPANELD_HELPER_DIST_DIR="$TMP/dist"

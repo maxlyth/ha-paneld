@@ -30,7 +30,18 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/dist/arm64-v8a" "$TMP/bin"
-printf 'mock helper\n' > "$TMP/dist/arm64-v8a/hapaneld-helper"
+# The staged binary is the only authority on which helper must be answering the socket afterwards, so
+# this mock dist stamps its own identity — deliberately NOT the checkout's. That is what makes every
+# run below a standing proof: `HAPANELD_HELPER_DIST_DIR` points at a foreign build, and when the two
+# identities agree (as they do under the documented ./helper/build.sh flow) a stale-expectation defect
+# is invisible.
+FOREIGN_BUILD_ID=facade00facade00facade00facade00facade00facade00facade00facade00
+CHECKOUT_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+if [ "$FOREIGN_BUILD_ID" = "$CHECKOUT_BUILD_ID" ]; then
+  echo "the foreign dist identity must differ from the checkout identity or this file proves nothing" >&2
+  exit 1
+fi
+printf 'mock helper\nBUILDID %s\n' "$FOREIGN_BUILD_ID" > "$TMP/dist/arm64-v8a/hapaneld-helper"
 
 # One wrapper, two jobs: inject answers the shared fixture has no reason to model (a journal reply
 # that is not a known state, a stale journal to recover), and otherwise delegate. Injected replies go
@@ -65,7 +76,7 @@ export MOCK_TARGET="panel.test:5555"
 export MOCK_CALL_LOG="$TMP/calls.log"
 export MOCK_STATE_DIR="$TMP/state"
 export MOCK_ABI=arm64-v8a
-export MOCK_HELPER_BUILD_ID="$(PATH=/usr/bin:/bin "$ROOT/helper/source-id.sh")"
+export MOCK_HELPER_BUILD_ID="$FOREIGN_BUILD_ID"
 export HAPANELD_HELPER_DIST_DIR="$TMP/dist"
 # A direct-root panel: adbd is already root, so probe_su resolves SU_FORM=shell and every privileged
 # block is sent bare rather than wrapped in su.
@@ -125,6 +136,14 @@ for transport in shell_v2 pty; do
   grep -Fq 'done. Reboot the panel' "$TMP/out.txt" &&
     check "tells the operator a reboot will confirm auto-start" ok ||
     check "tells the operator a reboot will confirm auto-start" bad
+  # The overridden dist is a foreign build. Its own stamped identity must be what the journal records
+  # and what the replacement daemon is required to answer; the checkout's identity must appear nowhere.
+  grep -Fq "TARGET_BUILD_ID=$FOREIGN_BUILD_ID" "$MOCK_CALL_LOG" &&
+    check "judges the foreign staged binary by its own stamped identity" ok ||
+    check "judges the foreign staged binary by its own stamped identity" bad
+  grep -Fq "$CHECKOUT_BUILD_ID" "$MOCK_CALL_LOG" &&
+    check "never carries the checkout's source identity onto the panel" bad ||
+    check "never carries the checkout's source identity onto the panel" ok
 
   # 2. Read-only /system with a real systemless runner must take the service.d route, not dead-end.
   export MOCK_SYSTEM_WRITABLE=0 MOCK_SYSTEMLESS_RUNNER=1

@@ -283,6 +283,83 @@ run_root_locked() {
 }
 
 adb_preflight
+
+# WHICH helper this run installs is decided entirely from local files plus one unprivileged property
+# read, so it is decided HERE, before the panel is asked for any privilege. A run that is going to be
+# refused because the bytes on this host cannot state one identity must not first restart adbd as root
+# or raise an on-screen root prompt on a wall panel; the refusal owes nothing to the panel's state and
+# should cost the panel nothing.
+ABI="${2:-$(adb -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')}"
+[ -n "$ABI" ] || fail "could not read the panel's ABI (getprop returned nothing)" \
+  "Pass it explicitly: ./helper/install-daemon.sh $TARGET arm64-v8a   (or armeabi-v7a)"
+BIN_ROOT="${HAPANELD_HELPER_DIST_DIR:-$HERE/dist}"
+BIN="$BIN_ROOT/$ABI/hapaneld-helper"
+[ -f "$BIN" ] || fail "missing $BIN" "Build it first: ./helper/build.sh   (builds every ABI into helper/dist/)"
+host_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
+  else fail "cannot authenticate helper staging" "Install sha256sum (or shasum), then re-run."
+  fi
+}
+BIN_SHA256="$(host_sha256 "$BIN")"
+RC_SHA256="$(host_sha256 "$HERE/hapaneld-helper.rc")"
+# A helper binary stamps its own build identity into its bytes, so the identity the replacement daemon
+# must answer with is read from the artifact this run is about to stage — never from the sources that
+# happen to sit beside this script. `HAPANELD_HELPER_DIST_DIR` can point the staged bytes at a foreign
+# build while `source-id.sh` keeps describing the local checkout; the two then disagree for a correctly
+# installed helper, and the transaction rolls a good install back and reports it as a build-identity
+# failure. Under the documented flow (./helper/build.sh writes helper/dist from these same sources) the
+# two answers are identical, so nothing about that path changes.
+#
+# Exactly one well-formed record must be present: none means the artifact cannot state who it is, and
+# more than one means it states two contradictory answers. Both are refusals, never a guess.
+#
+# THE RECORD'S TERMINATOR IS NOT FIXED ACROSS BUILDS, so do not assume one. Here `dispatch.c` replies
+# with `"BUILDID " HAPANELD_BUILD_ID "\n"`, one literal, so the artifact ends the record with a newline
+# and the NUL that terminates every C string. Store it instead as a bare `BUILD_ID_RECORD[]` and append
+# the newline at reply time and the newline disappears from the artifact entirely, leaving only the
+# NUL. Both forms have shipped in this project. Translating NUL to newline before the
+# line-oriented pass makes BOTH layouts a line, and it keeps binary bytes out of the shell: a NUL
+# cannot survive a Bash variable, so a record collected across one arrives silently mangled instead of
+# refused. That cost a review round on a tree where the record was NUL-only; this reading is
+# layout-independent so it cannot cost another.
+#
+# Each record is then collected WHOLE, to its terminator, and only then judged. Any pattern that stops
+# earlier reports a prefix of the record as the identity: `BUILDID [0-9a-f]{64}` truncates a longer hex
+# run, and stopping at the first character outside an identity alphabet truncates `…<64 hex>!garbage`
+# to the leading 64. Either way the answer is a record the artifact never stated, reached by
+# truncation, and afterwards indistinguishable from a correct one. Nothing bounds the match on the
+# left, because in a stripped binary the byte before the literal is arbitrary and may itself be a hex
+# digit. Bytes after the terminator are not part of the record and do not disqualify it; a NUL INSIDE
+# the identity ends the record early, so it never stated 64 hex and is refused.
+#
+# Every stage reads in the C locale, for the same reason `describe_observed_state` above does: this
+# code reads bytes that the operator's environment has opinions about. `.` is defined over CHARACTERS,
+# so a multibyte locale must decide what an invalid byte sequence is, and in a stripped binary those
+# are ordinary payload. This is not theoretical and the pin is not defensive: measured on a host whose
+# ambient locale is `en_US.UTF-8`, the unpinned collection returns 72 bytes where the C locale returns
+# 77 — it drops the trailing `\377junk` from `BUILDID <64 hex>\377junk` and the truncated prefix is
+# then accepted as the identity. That is the very defect the pattern was widened to close, arriving
+# through the environment rather than through the pattern. Bytes, not characters, is in any case the
+# right reading for an ELF artifact.
+extract_helper_build_id() {
+  local file="$1" records ids
+  # No match and an unreadable file are both "cannot state an identity", which the count checks below
+  # turn into a refusal; the tolerated statuses here only stop `set -e` from aborting the run before
+  # that refusal can be reported with its own message.
+  records="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null | LC_ALL=C grep -aoE 'BUILDID .*' || true)"
+  [ "$(printf '%s\n' "$records" | LC_ALL=C grep -c '^BUILDID ')" -eq 1 ] || return 1
+  ids="$(printf '%s\n' "$records" | LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
+  [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
+  printf '%s\n' "$ids"
+}
+if ! BUILD_ID="$(extract_helper_build_id "$BIN")"; then
+  fail "the helper at $BIN does not state a single valid build identity" \
+    "The binary carries no usable build-identity record, or carries more than one, so the daemon that replaces the running helper could not be recognised afterwards." \
+    "Rebuild it: ./helper/build.sh   (builds every ABI into helper/dist/)" \
+    "Nothing was installed, started, or privileged."
+fi
+
 # Try for a root adbd (userdebug builds) — harmless where unsupported. adbd restarts on success and
 # can drop the TCP session, so quietly re-verify the connection either way.
 adb -s "$TARGET" root >/dev/null 2>&1 || true
@@ -313,21 +390,6 @@ if ! run_root '[ ! -f /system/bin/.hapaneld-helper-upgrade ] && [ ! -f /data/adb
     "This standalone installer uses a separate journal and did not change helper files."
 fi
 
-ABI="${2:-$(adb -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r')}"
-[ -n "$ABI" ] || fail "could not read the panel's ABI (getprop returned nothing)" \
-  "Pass it explicitly: ./helper/install-daemon.sh $TARGET arm64-v8a   (or armeabi-v7a)"
-BIN_ROOT="${HAPANELD_HELPER_DIST_DIR:-$HERE/dist}"
-BIN="$BIN_ROOT/$ABI/hapaneld-helper"
-[ -f "$BIN" ] || fail "missing $BIN" "Build it first: ./helper/build.sh   (builds every ABI into helper/dist/)"
-host_sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
-  else fail "cannot authenticate helper staging" "Install sha256sum (or shasum), then re-run."
-  fi
-}
-BIN_SHA256="$(host_sha256 "$BIN")"
-RC_SHA256="$(host_sha256 "$HERE/hapaneld-helper.rc")"
-BUILD_ID="$("$HERE/source-id.sh")"
 TRANSACTION_ID="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
 printf '%s\n' "$TRANSACTION_ID" | grep -Eq '^[0-9a-f]{32}$' || fail "could not create a root-helper transaction nonce"
 PROBE_STAGING_PATH="/data/local/tmp/hapaneld-helper.probe-$TRANSACTION_ID"

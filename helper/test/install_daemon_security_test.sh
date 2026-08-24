@@ -59,6 +59,46 @@ grep -Fq 'both standalone root-helper recovery journals are present' "$SCRIPT"
 grep -Fq 'COMPANIONCAPS 1 BACKUP RESTORE STATUS JOURNAL' "$SCRIPT"
 grep -Fq 'wait_for_helper_reply COMPANIONCAPS' "$SCRIPT"
 grep -Fq 'wait_for_helper_reply BUILDID "BUILDID $BUILD_ID" "$INSTALL_KIND"' "$SCRIPT"
+# The identity the replacement daemon must answer with comes from the binary this run stages, so it is
+# read out of those bytes and never from the sources beside the running script — `HAPANELD_HELPER_DIST_DIR`
+# can point the two at different builds. That extraction must also be the thing that stops the run: it
+# has to happen before anything is pushed to the panel, or the refusal arrives after the mutation it
+# exists to prevent.
+grep -Fq 'if ! BUILD_ID="$(extract_helper_build_id "$BIN")"; then' "$SCRIPT"
+# Whole record first, validity second. The shipped record is newline-terminated, so collection must
+# run to the end of the line. Any narrower pattern reports a PREFIX of the record as the identity:
+# `BUILDID [0-9a-f]{64}` truncates a longer hex run, and an identity-alphabet class truncates
+# `…<64 hex>!garbage` to its leading 64. Both manufacture an answer the artifact never stated.
+#
+# Every stage reads in the C locale. `.` is defined over characters, so a multibyte locale decides
+# what an invalid byte sequence is, and in a stripped binary those are ordinary payload — a reader
+# that declines to match one ends the record early and truncates it exactly as a narrow pattern
+# would. Under a `.UTF-8` ambient locale the unpinned collection really does drop a trailing
+# `\377junk` and accept the leading 64, so the non-text-suffix fixture is what proves this
+# behaviourally; these lines pin the mechanism so it cannot be removed on a host that happens to
+# agree with the C locale.
+grep -Fq "LC_ALL=C tr '\\0' '\\n' < \"\$file\"" "$SCRIPT"
+grep -Fq "LC_ALL=C grep -aoE 'BUILDID .*'" "$SCRIPT"
+grep -Fq "LC_ALL=C grep -c '^BUILDID '" "$SCRIPT"
+grep -Fq "LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})\$/\\1/p'" "$SCRIPT"
+grep -Fq "LC_ALL=C grep -Ec '^[0-9a-f]{64}\$'" "$SCRIPT"
+if grep -Eq "grep -aoE 'BUILDID (\[[^]]*\][*+]?|\[0-9a-f\]\{64\})'" "$SCRIPT"; then
+  echo "installer collects the helper identity with a bounded match, which truncates a longer record" >&2
+  exit 1
+fi
+if grep -Fq '"$HERE/source-id.sh"' "$SCRIPT"; then
+  echo "installer takes its helper identity from checkout sources rather than the staged binary" >&2
+  exit 1
+fi
+identity_line="$(grep -nF 'if ! BUILD_ID="$(extract_helper_build_id "$BIN")"; then' "$SCRIPT" | head -1 | cut -d: -f1)"
+[ "$identity_line" -lt "$probe_stage_line" ]
+# The refusal must also precede every privilege transition. Which helper this run would install is a
+# pure function of local files plus one unprivileged property read, so a run that cannot state one
+# identity must never have restarted adbd as root or raised an on-panel root prompt to find that out.
+adb_root_line="$(grep -nF 'adb -s "$TARGET" root >/dev/null 2>&1 || true' "$SCRIPT" | head -1 | cut -d: -f1)"
+su_probe_line="$(grep -nF 'if ! probe_su; then' "$SCRIPT" | head -1 | cut -d: -f1)"
+[ "$identity_line" -lt "$adb_root_line" ]
+[ "$identity_line" -lt "$su_probe_line" ]
 grep -Fq '/system/bin/hapaneld-helper --request PING >/dev/null 2>&1 ||' "$SCRIPT"
 grep -Fq '( /system/bin/hapaneld-helper >/dev/null 2>&1 & )' "$SCRIPT"
 grep -Fq 'system) helper_path=/system/bin/hapaneld-helper' "$SCRIPT"

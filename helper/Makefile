@@ -28,7 +28,7 @@ CORE_SRCS := $(addprefix $(SRC_DIR)/, util.c led.c screen.c input.c gpio.c sysct
 DAEMON_SRCS := $(CORE_SRCS) $(SRC_DIR)/main.c $(SRC_DIR)/sysexec.c
 STUB := test/sysexec_stub.c
 
-.PHONY: all daemon test peer-auth-test request-timeout-test replacement-identity-test install-security-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
+.PHONY: all daemon test peer-auth-test request-timeout-test replacement-identity-test install-security-test standalone-identity-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -48,6 +48,7 @@ test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD
 	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	bash ./test/root_command_quote_test.sh
 	bash ./test/standalone_installer_transaction_test.sh
+	bash ./test/standalone_installer_identity_test.sh
 	bash ./test/install_daemon_security_test.sh
 	bash ./test/direct_root_transport_test.sh
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
@@ -94,6 +95,10 @@ $(BUILD)/hapaneld-helper-new: $(DAEMON_SRCS) | $(BUILD)
 
 install-security-test:
 	bash ./test/install_daemon_security_test.sh
+
+# Reads the identity out of real compiled ELF artifacts, so it needs them built first.
+standalone-identity-test: $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
+	bash ./test/standalone_installer_identity_test.sh
 
 # CDP relay resource regression. Tight test-only deadlines keep saturation/reaping/idle coverage fast;
 # production uses the conservative defaults compiled into cdprelay.c by Gradle.
