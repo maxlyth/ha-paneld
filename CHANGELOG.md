@@ -1,10 +1,6 @@
 # Changelog
 
-## v0.9.7-rc2 - 2026-08-23
-
-### Added
-
-- **Rooted upgrade tooling can guard a planned database replacement.** When the installer explicitly arms a Guard DB transaction and its safety checks pass, the root helper verifies the replacement and retains the prior database for rollback rather than swapping blindly. The API gains short-lived bootstrap export routes that return the verified database bytes together with proof of their identity.
+## v0.9.7-rc2 - 2026-08-24
 
 ### Fixed
 
