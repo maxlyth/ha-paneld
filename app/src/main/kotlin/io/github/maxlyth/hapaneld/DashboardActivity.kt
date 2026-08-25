@@ -229,6 +229,8 @@ class DashboardActivity : AppCompatActivity() {
     private val rendererGate = RendererGenerationGate()
     private val wakeMediaRecovery = WakeMediaRecoveryGate()
     private val entityFilterRetryPolicy = EntityFilterRetryPolicy()
+    /** When the pending entity-filter retry is due, so a redraw reschedules it rather than restarting it. */
+    private var entityFilterRetryDueAtMs = 0L
     private var rendererGeneration = 0L
     private var activityOwner = 0L
     private var conn: ConnectivityManager? = null
@@ -535,6 +537,7 @@ class DashboardActivity : AppCompatActivity() {
     }
     private val entityFilterRetry = Runnable {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner) || !screenAwake || entityFilterNativeHold == null) return@Runnable
+        entityFilterRetryDueAtMs = 0L
         entityFilterRetryPolicy.recordAttempt()
         retryEntityFilter(Config(this@DashboardActivity))
     }
@@ -701,7 +704,7 @@ class DashboardActivity : AppCompatActivity() {
         showBlockedAdmissionScreen(
             "Home Assistant stopped loading",
             "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
-                "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
+                "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
         )
         false
@@ -1012,8 +1015,20 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     private fun scheduleEntityFilterRetry() {
+        // Carry the deadline rather than the delay. This is re-entered by the status rerender, which a
+        // theme write or a rotation triggers, and re-posting at the FULL delay each time means a rung
+        // measured in minutes never elapses on a panel whose theme is being written. The same defect was
+        // fixed for the admission timer; it was not fixed here.
         main.removeCallbacks(entityFilterRetry)
-        val delay = entityFilterRetryPolicy.nextDelay(screenAwake) ?: return
+        val now = SystemClock.elapsedRealtime()
+        val remaining = entityFilterRetryDueAtMs - now
+        val delay = if (entityFilterRetryDueAtMs > 0L && remaining > 0L) {
+            remaining
+        } else {
+            val fresh = entityFilterRetryPolicy.nextDelay(screenAwake) ?: return
+            entityFilterRetryDueAtMs = now + fresh
+            fresh
+        }
         main.postDelayed(entityFilterRetry, delay)
     }
 
@@ -1377,7 +1392,7 @@ class DashboardActivity : AppCompatActivity() {
             showBlockedAdmissionScreen(
                 "Home Assistant opened but will not respond",
                 "The page loaded, but the panel cannot control it, so nothing on the dashboard would work. " +
-                    "The panel keeps trying. If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
+                    "The panel keeps trying. If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
                 AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
             )
             return
@@ -2211,8 +2226,9 @@ class DashboardActivity : AppCompatActivity() {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
-                "The built-in dashboard and Home Assistant Companion cannot show the dashboard until " +
-                    "Android System WebView is updated, because both draw through it. Update it, then tap Retry.",
+                "The built-in dashboard needs a newer Android System WebView than this panel has. " +
+                    "Update or repair it, then tap Retry — reinstalling the same build repairs a damaged one. " +
+                    "Another dashboard app on the panel may still work.",
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return
@@ -2805,7 +2821,7 @@ class DashboardActivity : AppCompatActivity() {
                 showBlockedAdmissionScreen(
                     "Home Assistant could not open",
                     "The panel's web viewer would not start Home Assistant. The panel keeps trying. " +
-                        "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
+                        "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
                     AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                 )
                 return
@@ -3250,7 +3266,7 @@ class DashboardActivity : AppCompatActivity() {
                         showBlockedAdmissionScreen(
                             "Home Assistant stopped loading",
                             "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
-                                "If it keeps failing, the web viewer needs updating; it is called Android System WebView.",
+                                "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
                             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )
                     }

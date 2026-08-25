@@ -1563,10 +1563,19 @@ android_build_tool_candidates() {
 }
 
 find_android_build_tool() {
-  local name="$1" candidate
+  local name="$1" candidate path newest=""
+  # Requiring the tool to actually run is right: a present-but-unrunnable apksigner used to fail the whole
+  # install. Taking the FIRST runnable candidate was not: the SDK glob is ascending, so it preferred the
+  # OLDEST build-tools, where v0.9.6 preferred the newest. An old aapt whose `dump badging` prints nothing
+  # then aborts a release install with "package mismatch / Got unavailable" on an APK that verified before.
+  # A tool on PATH stays the operator's explicit choice and still wins outright.
+  path="$(command -v "$name" 2>/dev/null || true)"
+  if [ -n "$path" ] && android_build_tool_runs "$path"; then printf '%s\n' "$path"; return 0; fi
   while IFS= read -r candidate; do
-    if android_build_tool_runs "$candidate"; then printf '%s\n' "$candidate"; return 0; fi
+    [ "$candidate" = "$path" ] && continue
+    if android_build_tool_runs "$candidate"; then newest="$candidate"; fi
   done < <(android_build_tool_candidates "$name")
+  [ -z "$newest" ] || printf '%s\n' "$newest"
   return 0
 }
 
