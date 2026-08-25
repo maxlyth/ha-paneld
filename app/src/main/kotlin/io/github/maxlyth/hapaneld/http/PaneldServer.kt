@@ -674,10 +674,21 @@ internal fun normalizeConfigPostParameters(
     caps: Capabilities = Capabilities(),
 ): ConfigPostParameters {
     val normalized = Parameters.build {
-        for (name in raw.names()) {
-            val all = raw.getAll(name).orEmpty()
-            if (all.size != 1) return ConfigPostParameters.Bad("$name: expected one value")
-            val value = all.single()
+        for (rawName in raw.names()) {
+            val all = raw.getAll(rawName).orEmpty()
+            if (all.size != 1) return ConfigPostParameters.Bad("$rawName: expected one value")
+            val rawValue = all.single()
+            // The retired sensitivity key is accepted on its old scale and carried onto the new one, the
+            // same way the migration carries a stored value. Without this a script or automation written
+            // against the previous release does not merely lose that key: this admission step is atomic,
+            // so the whole request is refused and every other setting in it is dropped too.
+            val renamed = rawName == SettingsRegistry.LEGACY_SENSITIVITY_KEY
+            val name = if (renamed) SettingsRegistry.RESPONSE_PERCENT_KEY else rawName
+            val value = if (renamed) {
+                rawValue.trim().toIntOrNull()?.let { Migrations.rescaleSensitivity(it).toString() } ?: rawValue
+            } else {
+                rawValue
+            }
             val spec = SettingsRegistry.spec(name)
             val accepted = when {
                 spec != null -> {
