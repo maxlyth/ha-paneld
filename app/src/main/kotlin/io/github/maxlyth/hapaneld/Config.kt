@@ -2270,13 +2270,22 @@ class Config private constructor(
     private fun canonicalizeStoredHomeDashboard() = synchronized(CONFIG_LOCK) {
         val stored = prefs.getString("home_dashboard", "").orEmpty()
         if (stored.isNotBlank()) {
-            val canonical = if (DashboardPath.followsAccountDefault(stored)) ""
-            else DashboardPath.canonical(stored, preserveRoute = true)
+            // An absolute route has to lose its origin before the path rule can read it — the canonicalizer
+            // refuses a URL scheme outright, which is correct for a WRITE and useless here, where the value
+            // is already stored and the alternative is leaving it broken. Only this panel's own Home
+            // Assistant is stripped. A route naming a DIFFERENT origin is left exactly as it is: rewriting
+            // it would silently retarget the panel at a dashboard on another server.
+            val candidate = sameOriginDashboardRoute(stored) ?: stored
+            val canonical = if (DashboardPath.followsAccountDefault(candidate)) ""
+            else DashboardPath.canonical(candidate, preserveRoute = true)
             if (canonical != null && canonical != stored) {
                 prefs.edit().putString("home_dashboard", canonical).apply()
             }
         }
     }
+
+    private fun sameOriginDashboardRoute(raw: String): String? =
+        sameOriginDashboardRoute(raw, canonicalHaOrigin(haUrl))
 
     fun migrateLiveStore(): Boolean {
         rerootDashboardEntityOwners()
@@ -2466,4 +2475,24 @@ internal fun dashboardEntityTargetKey(instanceKey: String, dashboardPath: String
     if (key.isEmpty()) return ""
     val path = dashboardEntityScopePath(dashboardPath)
     return "${key.length}:$key$path"
+}
+
+/**
+ * The path of an absolute dashboard route that names [configuredOrigin], or null for anything else.
+ *
+ * Exists only for values stored before `home_dashboard` was validated. The path canonicalizer refuses a
+ * URL scheme outright, which is right for a write and useless for a value already on disk, where the
+ * alternative is leaving the panel with a route its own reload cannot use. A route naming a DIFFERENT
+ * origin returns null and is left untouched: rewriting it would silently retarget the panel at a
+ * dashboard on someone else's server.
+ */
+internal fun sameOriginDashboardRoute(raw: String, configuredOrigin: String?): String? {
+    val trimmed = raw.trim()
+    val lower = trimmed.lowercase(Locale.ROOT)
+    if (!lower.startsWith("http://") && !lower.startsWith("https://")) return null
+    if (configuredOrigin == null) return null
+    if (canonicalHaOrigin(trimmed) != configuredOrigin) return null
+    val afterScheme = trimmed.substringAfter("://")
+    val slash = afterScheme.indexOf('/')
+    return if (slash < 0) "/" else afterScheme.substring(slash)
 }

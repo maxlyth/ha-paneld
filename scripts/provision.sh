@@ -3668,20 +3668,6 @@ EOF
             ${install_detail:+"The panel reported: $install_detail"} \
             "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
         fi
-        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
-          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
-          fail "the old root helper could not be retired, so the upgrade did not start" \
-            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
-            ${install_detail:+"The panel reported: $install_detail"} \
-            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
-        fi
-        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
-          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
-          fail "the old root helper could not be retired, so the upgrade did not start" \
-            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
-            ${install_detail:+"The panel reported: $install_detail"} \
-            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
-        fi
         if rollback_root_helper "$install_kind"; then
           fail "/system root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions." \
@@ -3705,6 +3691,13 @@ EOF
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
         install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
+          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+          fail "the old root helper could not be retired, so the upgrade did not start" \
+            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
+            ${install_detail:+"The panel reported: $install_detail"} \
+            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "hybrid root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb." \
@@ -3727,6 +3720,13 @@ EOF
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
         install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
+          [ -z "$helper_dir" ] || rm -rf "$helper_dir"
+          fail "the old root helper could not be retired, so the upgrade did not start" \
+            "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
+            ${install_detail:+"The panel reported: $install_detail"} \
+            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+        fi
         if rollback_root_helper "$install_kind"; then
           fail "systemless root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions." \

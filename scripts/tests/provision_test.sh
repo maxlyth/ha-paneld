@@ -1552,12 +1552,22 @@ MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=retirement \
 assert_failure "a systemless helper that cannot be retired fails the install"
 assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
   "a systemless retirement timeout still reaches the operator"
+assert_contains 'the upgrade did not start' "a systemless pre-swap retirement failure says the upgrade never began"
+assert_not_contains 'Restore the helper manually' "$LAST_OUTPUT" \
+  "a systemless panel that was never touched is not told to repair its helper by hand"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-systemless' "$MOCK_CALL_LOG" \
+  "a systemless pre-swap failure does not roll back a panel that was never changed"
 
 MOCK_VENDOR_RC_STATE=managed MOCK_HELPER_INSTALL=retirement \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
 assert_failure "a hybrid helper that cannot be retired fails the install"
 assert_contains 'The panel reported: RETIREMENT_TIMEOUT helper_pids=4242 ledd_pids=none init_helper=running' \
   "a hybrid retirement timeout still reaches the operator"
+assert_contains 'the upgrade did not start' "a hybrid pre-swap retirement failure says the upgrade never began"
+assert_not_contains 'Restore the helper manually' "$LAST_OUTPUT" \
+  "a hybrid panel that was never touched is not told to repair its helper by hand"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-hybrid' "$MOCK_CALL_LOG" \
+  "a hybrid pre-swap failure does not roll back a panel that was never changed"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=step_failed \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
