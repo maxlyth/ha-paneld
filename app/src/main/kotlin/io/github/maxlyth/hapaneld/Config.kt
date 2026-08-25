@@ -21,6 +21,7 @@ import io.github.maxlyth.hapaneld.dashboard.HomeDashboardLaunchCache
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.DurableVisibilityPreferences
+import io.github.maxlyth.hapaneld.util.DashboardPath
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
@@ -2253,8 +2254,33 @@ class Config private constructor(
         if (changed) editor.apply()
     }
 
+    /**
+     * Canonicalize a `home_dashboard` stored before the setting had a validator.
+     *
+     * v0.9.6 stored whatever it was given, so an upgraded panel can hold `https://ha.example/lovelace/0`.
+     * The renderer canonicalizes as it reads and never noticed, but the Companion reload path now uses the
+     * stored value verbatim, on the premise that it is canonical by construction — true of anything this
+     * build wrote, false of anything an earlier one did. It then builds `homeassistant://navigate` plus a
+     * whole URL, and the reload lands nowhere.
+     *
+     * Applies exactly the rule the validator applies, so a stored value becomes what saving it today would
+     * have produced. A value that cannot be canonicalized is left alone: it is no worse than it already
+     * is, and silently rewriting it would change which dashboard the panel opens.
+     */
+    private fun canonicalizeStoredHomeDashboard() = synchronized(CONFIG_LOCK) {
+        val stored = prefs.getString("home_dashboard", "").orEmpty()
+        if (stored.isNotBlank()) {
+            val canonical = if (DashboardPath.followsAccountDefault(stored)) ""
+            else DashboardPath.canonical(stored, preserveRoute = true)
+            if (canonical != null && canonical != stored) {
+                prefs.edit().putString("home_dashboard", canonical).apply()
+            }
+        }
+    }
+
     fun migrateLiveStore(): Boolean {
         rerootDashboardEntityOwners()
+        canonicalizeStoredHomeDashboard()
         val from = storedSchema
         if (from == SettingsRegistry.SCHEMA) return true
         val specs = SettingsRegistry.SPECS.filterNot { it.readOnly || it.transient }
