@@ -1289,7 +1289,12 @@ run_root() {
     # A form this dispatch does not know is a failure, never a silent success with empty output —
     # callers treat run_root's exit status as "the panel was asked".
     *)          return 1 ;;
-  esac
+  # An adbd without shell_v2 runs every reply through a PTY, so each line comes back with a trailing
+  # CR. This function's callers compare exact tokens — INSTALL_OK, TRANSACTION_READY, the classifier
+  # payloads — and a stray CR makes every one of those comparisons fail on a panel that answered
+  # correctly. helper/install-daemon.sh already normalises here and says to keep the two aligned; the
+  # user-facing script was the one left out.
+  esac | tr -d '\r'
 }
 
 # Tuya panels (TPA10) ship a closed vendor stack (launcher, system UI, Tuya IoT, hardware, diagnostics)
@@ -1782,9 +1787,16 @@ extract_helper_build_id() {
   # No match and an unreadable file are both "cannot state an identity", which the count check
   # below turns into a refusal; the tolerated statuses here only stop `set -e` from aborting the
   # run before that refusal can be reported with its own message.
-  records="$(grep -aoE 'BUILDID [0-9a-f]{64}' "$file" 2>/dev/null || true)"
-  ids="$(printf '%s\n' "$records" | sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
-  [ "$(printf '%s\n' "$ids" | grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
+  # Read the record as what it is, the same way helper/install-daemon.sh does. In the artifact the
+  # record is a C string ended by a NUL and by nothing else, so translating NUL to newline first is
+  # what makes it a line. The narrow pattern below used to accept a record that RUNS ON past the
+  # identity, because it matched the first 64 hex characters and ignored whatever followed; matching
+  # the whole record and then requiring exactly 64 hex refuses that. LC_ALL=C is pinned because `.`
+  # is defined over characters, and in a stripped binary an invalid byte sequence is ordinary payload.
+  records="$(LC_ALL=C tr '\0' '\n' < "$file" 2>/dev/null | LC_ALL=C grep -aoE 'BUILDID .*' || true)"
+  [ "$(printf '%s\n' "$records" | LC_ALL=C grep -c '^BUILDID ')" -eq 1 ] || return 1
+  ids="$(printf '%s\n' "$records" | LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})$/\1/p')"
+  [ "$(printf '%s\n' "$ids" | LC_ALL=C grep -Ec '^[0-9a-f]{64}$')" -eq 1 ] || return 1
   printf '%s\n' "$ids"
 }
 
@@ -3740,8 +3752,7 @@ EOF
     fi
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     fail "new root helper failed its capability check and rollback could not be verified" \
-      "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
-            ${install_detail:+"The panel reported: $install_detail"}
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
   fi
   if ! wait_for_helper_reply BUILDID "BUILDID $expected_build_id" "$install_kind"; then
     if rollback_root_helper "$install_kind"; then
@@ -3751,8 +3762,7 @@ EOF
     fi
     [ -z "$helper_dir" ] || rm -rf "$helper_dir"
     fail "new root helper failed its exact build-identity check and rollback could not be verified" \
-      "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
-            ${install_detail:+"The panel reported: $install_detail"}
+      "The APK was not replaced. Restore the helper manually before relying on privileged operations."
   fi
   renew_root_helper_lease "$install_kind" || fail "the root-helper transaction lease could not be renewed after validation" \
     "The APK was not replaced. Re-run after any competing provisioner finishes; this journal remains recoverable."

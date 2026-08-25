@@ -104,6 +104,7 @@ import io.github.maxlyth.hapaneld.sensors.HaCurrentUserClient
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
+import io.github.maxlyth.hapaneld.util.DashboardPath
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
@@ -7981,6 +7982,23 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         )
     }
 
+    /**
+     * A stored value from an older archive, in the form the current validator can read.
+     *
+     * `home_dashboard` had no validator before this release, so a backup taken then can hold anything the
+     * panel was given, including a whole URL. Validating it verbatim now fails, and because a restore is
+     * all-or-nothing that one historical value makes the entire archive unrestorable — precisely when the
+     * owner needs it. Canonicalizing first is the same rule the live store applies on upgrade, so an old
+     * archive restores to exactly what saving it today would produce. A value that cannot be canonicalized
+     * still fails, with its own reason.
+     */
+    private fun restorableValue(key: String, value: String): String = when (key) {
+        "home_dashboard" ->
+            if (DashboardPath.followsAccountDefault(value)) ""
+            else DashboardPath.canonical(value, preserveRoute = true) ?: value
+        else -> value
+    }
+
     private fun planRestoreConfig(cfgObj: org.json.JSONObject, schema: Int): RestoreConfigPlan {
         val raw = LinkedHashMap<String, String>()
         for (key in cfgObj.keys()) {
@@ -8003,7 +8021,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 }
                 spec == null -> errors += "$key: unknown setting"
                 spec.readOnly || spec.transient -> errors += "$key: setting cannot be restored"
-                else -> when (val validated = SettingValue.validate(spec, value)) {
+                else -> when (val validated = SettingValue.validate(spec, restorableValue(key, value))) {
                     is Validation.Ok -> accepted[key] = validated.normalized
                     is Validation.Bad -> errors += "$key: ${validated.reason}"
                 }
