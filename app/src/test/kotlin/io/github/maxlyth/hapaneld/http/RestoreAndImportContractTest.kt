@@ -164,4 +164,22 @@ class RestoreAndImportContractTest {
             "putAll(accepted)" !in apply,
         )
     }
+
+    /**
+     * Upgrade, restore and import must read a historical value the same way. They did not: a home
+     * dashboard stored as a whole address before the setting had a validator was converted on upgrade
+     * and on restore, and silently dropped on import — found by importing a real v0.9.6 export onto a
+     * panel running the candidate, where both a same-origin and a foreign address were refused alike.
+     */
+    @Test fun importReadsAHistoricalValueTheSameWayRestoreDoes() {
+        val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleConfigImport"),
+            source.indexOf("would skip (invalid)"),
+        )
+        assertTrue(
+            "import must normalize a historical value through the shared rule, not validate it verbatim",
+            "restorableSettingValue(key, raw, canonicalHaOrigin(config.haUrl))" in handler,
+        )
+    }
 }

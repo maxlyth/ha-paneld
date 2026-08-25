@@ -6659,7 +6659,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             if (spec == null) { warn.add("unknown key skipped: $key"); continue }
             if (spec.readOnly || spec.transient) { skipped.add(key); continue }
             if (fleet && (spec.scope != Scope.PORTABLE || spec.secret)) { skipped.add(key); continue }
-            when (val v = SettingValue.validate(spec, raw)) {
+            // Same rule the upgrade and the restore apply: a value an older release was allowed to store
+            // is read in the form the current validator understands, so an import of an older export
+            // carries it across instead of silently dropping it. A route naming a different server is
+            // still refused here, exactly as it is there.
+            when (val v = SettingValue.validate(spec, restorableSettingValue(key, raw, canonicalHaOrigin(config.haUrl)))) {
                 is Validation.Ok -> {
                     // A blank portable HA URL means “renderer not configured” on the source panel. In
                     // fleet mode it must not clear a target's URL and, through import dependencies, its
