@@ -3,6 +3,8 @@ package io.github.maxlyth.hapaneld.http
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import io.github.maxlyth.hapaneld.canonicalHaOrigin
+import io.github.maxlyth.hapaneld.sameOriginDashboardRoute
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.sensors.HaLifecycle
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
@@ -8003,12 +8005,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      * archive restores to exactly what saving it today would produce. A value that cannot be canonicalized
      * still fails, with its own reason.
      */
-    private fun restorableValue(key: String, value: String): String = when (key) {
-        "home_dashboard" ->
-            if (DashboardPath.followsAccountDefault(value)) ""
-            else DashboardPath.canonical(value, preserveRoute = true) ?: value
-        else -> value
-    }
 
     private fun planRestoreConfig(cfgObj: org.json.JSONObject, schema: Int): RestoreConfigPlan {
         val raw = LinkedHashMap<String, String>()
@@ -8020,24 +8016,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             raw[key] = value.toString()
         }
         val (migrated, warnings) = Migrations.migrate(schema, raw)
-        val accepted = LinkedHashMap<String, String>()
-        val errors = ArrayList<String>()
-        for ((key, value) in migrated) {
-            val spec = SettingsRegistry.spec(key)
-            val exposedSpec = SettingsRegistry.parseExposure(key)
-            when {
-                exposedSpec != null -> {
-                    val normalized = SettingValue.parseBool(value)?.toString()
-                    if (normalized == null) errors += "$key: expected a boolean" else accepted[key] = normalized
-                }
-                spec == null -> errors += "$key: unknown setting"
-                spec.readOnly || spec.transient -> errors += "$key: setting cannot be restored"
-                else -> when (val validated = SettingValue.validate(spec, restorableValue(key, value))) {
-                    is Validation.Ok -> accepted[key] = validated.normalized
-                    is Validation.Bad -> errors += "$key: ${validated.reason}"
-                }
-            }
-        }
+        val decided = planRestoreSettings(migrated, canonicalHaOrigin(config.haUrl))
+        val accepted = LinkedHashMap(decided.accepted)
+        val errors = ArrayList(decided.errors)
         val ownershipPreserved = preserveUnconfiguredZigbeeOwnership(
             accepted,
             config.zigbeeRouterConfigured,
@@ -8720,4 +8701,58 @@ internal data class RendererConfigEffects(
             return RendererConfigEffects(dashboardChanged, reload, relaunch, darkMode)
         }
     }
+}
+
+/** What an archive's settings would restore to, and why any of them cannot. */
+internal data class RestoreSettingsDecision(
+    val accepted: Map<String, String>,
+    val errors: List<String>,
+)
+
+/**
+ * A stored value from an older archive, in the form the current validator can read.
+ *
+ * `home_dashboard` had no validator before this release, so an archive can hold a whole address. The
+ * path canonicalizer refuses a URL scheme, so handing it one returns null and falls back to the
+ * original, which then fails validation — and because a restore is all or nothing, that single
+ * historical value takes the entire archive with it, precisely when its owner needs it. This panel's
+ * own origin is stripped first, exactly as the live store does on upgrade. A route naming a different
+ * server is left alone and still refused, rather than silently retargeted at someone else's dashboard.
+ */
+internal fun restorableSettingValue(key: String, value: String, configuredOrigin: String?): String =
+    when (key) {
+        "home_dashboard" -> {
+            val candidate = sameOriginDashboardRoute(value, configuredOrigin) ?: value
+            if (DashboardPath.followsAccountDefault(candidate)) ""
+            else DashboardPath.canonical(candidate, preserveRoute = true) ?: value
+        }
+        else -> value
+    }
+
+/** The restore plan's per-setting decision, separated from the transport so it can be asserted. */
+internal fun planRestoreSettings(
+    migrated: Map<String, String>,
+    configuredOrigin: String?,
+): RestoreSettingsDecision {
+    val accepted = LinkedHashMap<String, String>()
+    val errors = ArrayList<String>()
+    for ((key, value) in migrated) {
+        val spec = SettingsRegistry.spec(key)
+        val exposedSpec = SettingsRegistry.parseExposure(key)
+        when {
+            exposedSpec != null -> {
+                val normalized = SettingValue.parseBool(value)?.toString()
+                if (normalized == null) errors += "$key: expected a boolean" else accepted[key] = normalized
+            }
+            spec == null -> errors += "$key: unknown setting"
+            spec.readOnly || spec.transient -> errors += "$key: setting cannot be restored"
+            else -> when (
+                val validated = SettingValue.validate(spec, restorableSettingValue(key, value, configuredOrigin))
+            ) {
+                is Validation.Ok -> accepted[key] = validated.normalized
+                is Validation.Bad -> errors += "$key: ${validated.reason}"
+            }
+        }
+    }
+    return RestoreSettingsDecision(accepted, errors)
 }
