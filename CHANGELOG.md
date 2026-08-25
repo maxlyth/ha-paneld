@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **An entity filter you chose by hand keeps working after the upgrade.** The record that says which dashboard a filter belongs to now names the dashboard rather than the individual view, and a filter saved before this release named the view. On upgrade the filter read as belonging to nothing, reported itself as off, and the panel went back to subscribing to every entity Home Assistant would show it — the exact load the filter exists to avoid, with nothing on screen to say so. Stored filters are corrected on first start.
+
+- **A panel that restarts before Home Assistant no longer waits for you.** While it checks which entities your dashboard uses, the panel holds the dashboard rather than open it unfiltered. That check could not finish while Home Assistant was still starting, and it was only retried once, so a panel that came back first could sit on a waiting or problem screen long after Home Assistant returned. It now keeps retrying on a widening interval and opens as soon as the check succeeds.
+
+- **A failed helper replacement no longer tells you to repair a panel it never touched.** The installer stops the old helper before replacing anything, so a panel where that fails still has its previous helper and app exactly as they were. It used to report a failed install, attempt to undo work it had not done, and end by telling you to restore the helper by hand. It now says the upgrade did not start and that nothing changed.
+
+- **The reload button returns the panel to your dashboard again.** A home dashboard saved before this release could be stored as a full address rather than a path, because the setting accepted anything then. The reload command built a link out of the whole address and went nowhere. Stored values are corrected on first start, and a saved address pointing at a different server is left alone rather than silently repointed.
+
+- **A backup taken with an earlier release restores again.** A restore is all or nothing, so a single home dashboard saved in the older form failed the whole archive — precisely when you need it. That value is now read the same way an upgrade reads it.
+
+- **The screens that say your web viewer is too old name the fix that works.** They asked you to update Android System WebView, which is no help on a panel already carrying the newest build its vendor ships; reinstalling the same build is what repairs a damaged one, and the screens now say so. The screen you reach when nothing can render also stopped claiming that no dashboard app can work, which contradicted the screen beside it.
+
+- **Installing from a computer with more than one Android SDK build-tools version works again.** The installer picked the oldest usable one, and an older `aapt` that cannot read a modern APK made it report that the package could not be identified. It now prefers the newest that runs, and a tool you put on your PATH still wins.
+
+- **`auto_brightness_sensitivity` is accepted again by `POST /api/v1/config`.** The setting was replaced by one on a different scale, and because that request is applied as a whole, sending the old name discarded every other setting in the same call. The old name is now accepted and converted, so an automation written against an earlier release keeps working.
+
 - **Updating Android System WebView now takes effect without reinstalling ha-paneld.** A WebView provider binds once per process, so a panel showing "Secure dashboard bridge unavailable" stayed on that screen however many times WebView was updated or Retry was pressed. The panel now notices the newly installed provider and restarts its renderer to bind it, and no longer abandons that pending restart while the verdict is briefly out of view during the switch.
 
 - **Rooted upgrades no longer stall on a helper that will not exit.** The installer now stops the old helper through Android's own service control, escalates if the process ignores the first request, and if it still cannot retire it reports exactly which process survived and what Android believes the service state to be. Every other step of a helper replacement that used to fail with one generic message now names itself, so a failed install tells you what failed. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
