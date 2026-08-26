@@ -60,8 +60,10 @@
          <trusted-key id="0CFA413799E2464C7D7E26220A4B343F2A55FDAE" group="com.h2database" name="h2-mvstore" version="2.1.214"/>
          <trusted-key id="0D35D3F60078655126908E8AF3D1600878E85A3D" group="io.netty"/>
          <trusted-key id="0E225917414670F4442C250DFD533C07C264648F">
+            <trusting group="androidx.appcompat"/>
             <trusting group="androidx.databinding"/>
             <trusting group="androidx.test.uiautomator"/>
+            <trusting group="androidx.webkit"/>
             <trusting group="^com[.]android($|([.].*))" regex="true"/>
          </trusted-key>
          <trusted-key id="0F06FF86BEEAF4E71866EE5232EE5355A6BC6E42">
@@ -138,6 +140,7 @@
          <trusted-key id="7B121B76A7ED6CE6E60AD51784E913A8E3A748C0" group="org.bouncycastle"/>
          <trusted-key id="7E22D50A7EBD9D2CD269B2D4056ACA74D46000BF" group="io.netty"/>
          <trusted-key id="8461EFA0E74ABAE010DE66994EB27DB2A3B88B8B">
+            <trusting group="androidx.activity" name="activity" version="1.8.0"/>
             <trusting group="androidx.annotation"/>
             <trusting group="androidx.lifecycle"/>
             <trusting group="androidx.test.uiautomator"/>
@@ -170,6 +173,7 @@
             <trusting group="androidx.concurrent"/>
             <trusting group="androidx.core"/>
             <trusting group="androidx.databinding"/>
+            <trusting group="androidx.profileinstaller" name="profileinstaller" version="1.4.0"/>
             <trusting group="androidx.startup" name="startup-runtime" version="1.2.0"/>
             <trusting group="androidx.webkit"/>
             <trusting group="^androidx[.]test($|([.].*))" regex="true"/>
