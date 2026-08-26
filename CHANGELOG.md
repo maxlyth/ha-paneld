@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.7-rc2 - 2026-08-24
+## v0.9.7-rc2 - 2026-08-26
 
 ### Fixed
 
@@ -39,21 +39,6 @@
 - **Recovery screens now say what went wrong and where to fix it.** Setup, sign-in, WebView, dashboard-selection, and entity-filter failures now distinguish automatic retries from repairs in Configure, Entities, Home Assistant, or Android System WebView, so Retry is only shown where it can help.
 
 - **The Wi-Fi stability row and the diagnostics dump agree.** The Dashboard row derived its wording from the raw outage count while `/diag` used the chronic classification, so a panel whose history had been compacted could show a low number on its own card while a pasted report called it chronic. Both now use the same classification, and a saturated count reads as the floor it is.
-
-### Changed
-
-- **Build toolchain and libraries updated.** Android Gradle Plugin is now 9.3.1, Kotlin is now 2.4.10, and the YAML parser used for device profiles has moved to version 3.1.1. The full test suite including every profile and YAML security case passes on the new versions, but a profile import that behaves differently on rc2 than on 0.9.6 is worth a report.
-
-### Docs
-
-- **The Shizuku guide is now a short section of the provisioning guide.** It is a last resort for a genuinely unrooted panel and had grown a page of its own; what remains states the four things that matter: it is not root, approval happens only on the panel, the consent is never exported, and it is for panels with no other route. Links from the panel's own Profile page and from older release notes still resolve.
-
-- **Two hardware-page corrections.** The ZHICAI SMT1019 ships with Google Play, so its WebView updates from the Play Store rather than by sideload; the page previously said the opposite. The Smatek S9E is `arm64-v8a` and its WebView entry now points at the matching build, and notes that the 2025-12 firmware already ships a current WebView.
-
-### Upgrade notes
-
-- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected.
-
 
 ## v0.9.7-rc1 - 2026-08-19
 
