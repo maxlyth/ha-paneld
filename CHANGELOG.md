@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **An entity filter you chose by hand keeps working after the upgrade.** The record that says which dashboard a filter belongs to now names the dashboard rather than the individual view, and a filter saved before this release named the view. On upgrade the filter read as belonging to nothing, reported itself as off, and the panel went back to subscribing to every entity Home Assistant would show it — the exact load the filter exists to avoid, with nothing on screen to say so. Stored filters are corrected on first start.
+- **An entity filter you chose by hand keeps working after the upgrade.** The record that says which dashboard a filter belongs to now names the dashboard rather than the individual view, and a filter saved before this release named the view. On upgrade the filter read as belonging to nothing, reported itself as off, and the panel went back to subscribing to every entity Home Assistant would show it: the exact load the filter exists to avoid, with nothing on screen to say so. Stored filters are corrected on first start.
 
 - **A panel that restarts before Home Assistant no longer waits for you.** While it checks which entities your dashboard uses, the panel holds the dashboard rather than open it unfiltered. That check could not finish while Home Assistant was still starting, and it was only retried once, so a panel that came back first could sit on a waiting or problem screen long after Home Assistant returned. It now keeps retrying on a widening interval and opens as soon as the check succeeds.
 
@@ -12,7 +12,7 @@
 
 - **The reload button returns the panel to your dashboard again.** A home dashboard saved before this release could be stored as a full address rather than a path, because the setting accepted anything then. The reload command built a link out of the whole address and went nowhere. Stored values are corrected on first start, and a saved address pointing at a different server is left alone rather than silently repointed.
 
-- **A backup taken with an earlier release restores again.** A restore is all or nothing, so a single home dashboard saved in the older form failed the whole archive — precisely when you need it. That value is now read the same way an upgrade reads it.
+- **A backup taken with an earlier release restores again.** A restore is all or nothing, so a single home dashboard saved in the older form failed the whole archive, precisely when you need it. That value is now read the same way an upgrade reads it.
 
 - **The screens that say your web viewer is too old name the fix that works.** They asked you to update Android System WebView, which is no help on a panel already carrying the newest build its vendor ships; reinstalling the same build is what repairs a damaged one, and the screens now say so. The screen you reach when nothing can render also stopped claiming that no dashboard app can work, which contradicted the screen beside it.
 
