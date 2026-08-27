@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# Git for Windows argument-rewriting emulator, standing in front of the ordinary adb fixture.
+#
+# On Windows the rewrite happens in the CALLER, in the MSYS runtime's exec path, before adb.exe is
+# ever entered — so no mock running on Linux can observe it by being called. This fixture therefore
+# MODELS the rule instead: it applies the runtime's POSIX-to-Windows argument conversion to its own
+# argv, records the argv adb.exe would actually have received, and then delegates. That makes the
+# defect from #24 reproducible and assertable on a Linux CI runner.
+#
+# THE RULES ARE TAKEN FROM THE RUNTIME'S OWN SOURCE, `find_path_start_and_type` in
+# winsup/cygwin/msys2_path_conv.cc (git-for-windows/msys2-runtime), not from folklore, because the
+# guard this file exists to test is a list of prefixes and its adequacy depends on exactly which
+# arguments the runtime touches. Three rules there decide everything that matters here:
+#
+#   1. A whole-argument bail-out runs FIRST. If the argument contains a backtick, a single quote,
+#      `*`, `?`, `[`, `]`, `/~`, `::`, `:./`, `:../` or `@@`, or begins with `~` or `:`, the runtime
+#      converts NOTHING in it. This is why the multi-line device shell scripts this project sends —
+#      all of which contain at least one of those — were never at risk, and why the reporter's run
+#      got as far as the push before failing. Modelling this is not an optimisation: without it the
+#      emulator flags shell scripts the real runtime leaves alone.
+#   2. An argument beginning with `/` is a ROOTED_PATH and is prefixed with the installation root.
+#      `find_end_of_rooted_path` stops at the first space, so only the leading word is rewritten.
+#      Sub-forms this project never emits — `//host/share`, `/c:/…`, `/..`, `x:\…`, URLs — are not
+#      modelled, and are asserted against by the run itself: any argument taking one of those shapes
+#      would fail the "every rewritten argument is a real host path" contract rather than pass
+#      silently.
+#   3. Otherwise the scanner recurses past the first `=` (and past `"`), so `name=/path` converts its
+#      value. `-x/path` recurses at the slash. The exclusion list is prefix-matched against the WHOLE
+#      argument, so a device path arriving as `--name=/data/…` would NOT be excluded by `/data` and
+#      has to be caught here rather than by a grep somebody has to remember to run.
+#      Narrower than the source in one respect, stated so nobody reads more into a green run than it
+#      carries: the runtime recurses past the first `=` whatever precedes it, while this requires the
+#      name to hold no `/`. Neither script emits an argument of either shape — no `=/` argument
+#      survives rule 1 in a full run of either — so the gap is unreachable rather than tolerated.
+#      Widen it here, not with a grep, if one is ever added.
+#
+# `MSYS_NO_PATHCONV` set to anything non-empty disables conversion for the whole command line. It is
+# Git for Windows' own switch, checked at the top of the same function, and is modelled because the
+# fix deliberately rejects it in favour of the narrow list.
+#
+# MOCK_MSYS_IGNORE_EXCL=1 makes the emulator convert regardless of either variable. That is the
+# negative control: it reproduces the unguarded behaviour the reporter hit, so the assertions built
+# on this fixture are proven able to fail rather than merely observed passing.
+set -u
+
+MSYS_ROOT="${MOCK_MSYS_ROOT:?MOCK_MSYS_ROOT is required}"
+ARGV_LOG="${MOCK_MSYS_ARGV_LOG:?MOCK_MSYS_ARGV_LOG is required}"
+DELEGATE="${MOCK_MSYS_DELEGATE:?MOCK_MSYS_DELEGATE is required}"
+
+conversion_enabled=1
+if [ "${MOCK_MSYS_IGNORE_EXCL:-0}" != 1 ]; then
+  [ -z "${MSYS_NO_PATHCONV:-}" ] || conversion_enabled=0
+fi
+
+excluded() {
+  local candidate="$1" list="${MSYS2_ARG_CONV_EXCL:-}" entry
+  [ "${MOCK_MSYS_IGNORE_EXCL:-0}" != 1 ] || return 1
+  [ -n "$list" ] || return 1
+  while [ -n "$list" ]; do
+    entry="${list%%;*}"
+    if [ "$list" = "$entry" ]; then list=""; else list="${list#*;}"; fi
+    [ -n "$entry" ] || continue
+    [ "$entry" != '*' ] || return 0
+    case "$candidate" in "$entry"*) return 0 ;; esac
+  done
+  return 1
+}
+
+# Rule 1 above: the characters that make the runtime abandon the whole argument.
+conversion_refused() {
+  case "$1" in
+    '~'*|':'*) return 0 ;;
+    *\`*|*\'*|*'*'*|*'?'*|*'['*|*']'*) return 0 ;;
+    */'~'*|*'::'*|*':./'*|*':../'*|*'@@'*) return 0 ;;
+  esac
+  return 1
+}
+
+# Whether a converted argument is a genuine host path is decided HERE, while the call is happening.
+# It cannot be decided from the log afterwards: the provisioner deletes the capture script the moment
+# the push returns, so a real host path that was valid at call time is gone by the time a test looks.
+host_path_at_call_time() {
+  [ ! -e "$1" ] || return 0
+  # A pull destination does not exist yet; its directory does.
+  [ ! -d "${1%/*}" ] || return 0
+  return 1
+}
+
+# Sets CONVERTED_PATH rather than printing it: a command substitution would record the offending
+# argument in a subshell and lose it, leaving the contract silently unenforced.
+CONVERTED_PATH=""
+convert_rooted_path() {
+  local path="$1" head tail
+  # find_end_of_rooted_path stops at the first space, so a multi-word argument keeps its tail.
+  head="${path%% *}"
+  if [ "$head" = "$path" ]; then tail=""; else tail=" ${path#* }"; fi
+  CONVERTED_PATH="$MSYS_ROOT$head"
+  host_path_at_call_time "$CONVERTED_PATH" || rewritten_non_host+=("$CONVERTED_PATH")
+  CONVERTED_PATH="$CONVERTED_PATH$tail"
+}
+
+# A `:`-separated POSIX path list becomes a `;`-separated Windows one. Only a list whose every
+# element is an absolute path is one; `panel.test:5555` is not, and must cross untouched.
+is_posix_path_list() {
+  local rest="$1" element
+  case "$rest" in *:*) ;; *) return 1 ;; esac
+  while [ -n "$rest" ]; do
+    element="${rest%%:*}"
+    if [ "$rest" = "$element" ]; then rest=""; else rest="${rest#*:}"; fi
+    case "$element" in /?*) ;; *) return 1 ;; esac
+  done
+  return 0
+}
+
+convert_argument() {
+  local arg="$1" rest element name value
+  CONVERTED_PATH="$arg"
+  case "$arg" in
+    //*) return ;;
+    /*)
+      if is_posix_path_list "$arg"; then
+        rest="$arg"; value=""
+        while [ -n "$rest" ]; do
+          element="${rest%%:*}"
+          if [ "$rest" = "$element" ]; then rest=""; else rest="${rest#*:}"; fi
+          convert_rooted_path "$element"
+          value="${value:+$value;}$CONVERTED_PATH"
+        done
+        CONVERTED_PATH="$value"
+      else
+        convert_rooted_path "$arg"
+      fi
+      return ;;
+    # Rule 3: the scanner recurses past the first `=`, so `name=/path` converts its value.
+    *=/*)
+      name="${arg%%=*}"
+      value="${arg#*=}"
+      case "$name" in
+        */*) ;;
+        *) convert_argument "$value"; CONVERTED_PATH="$name=$CONVERTED_PATH" ;;
+      esac
+      return ;;
+  esac
+}
+
+converted=()
+rewritten_non_host=()
+for arg in "$@"; do
+  out="$arg"
+  if [ "$conversion_enabled" = 1 ] && ! excluded "$arg" && ! conversion_refused "$arg"; then
+    convert_argument "$arg"
+    out="$CONVERTED_PATH"
+  fi
+  converted+=("$out")
+done
+
+# One line per argument, so an assertion can pin an exact argv element rather than a flattened
+# command string in which a space-bearing Windows path is indistinguishable from two arguments.
+# Embedded newlines (the multi-line root command strings) are escaped so one argument stays one line.
+{
+  printf 'adb-argv-begin\n'
+  for arg in "${converted[@]}"; do
+    printf 'argv=%s\n' "${arg//$'\n'/\\n}"
+  done
+  # The contract in its general form: an argument the runtime rewrote must have been a real path on
+  # this computer. Anything else was a path inside the panel, and the panel never received it. One
+  # line here covers every boundary a run reaches without any test naming them.
+  for arg in ${rewritten_non_host+"${rewritten_non_host[@]}"}; do
+    printf 'rewritten-non-host=%s\n' "${arg//$'\n'/\\n}"
+  done
+  printf 'adb-argv-end\n'
+} >> "$ARGV_LOG"
+
+# Delegate with the CONVERTED argv, exactly as adb.exe would have been entered. The emulated root is
+# a real directory on the test host carrying the host filesystem roots and deliberately no Android
+# ones — so a converted HOST path still resolves to its file while a converted DEVICE path stops
+# being a device path, which is the failure the reporter saw.
+exec "$DELEGATE" "${converted[@]}"

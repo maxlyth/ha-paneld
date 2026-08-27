@@ -114,6 +114,32 @@ esac
 exec "$PROVISION_TEST_ADB_FIXTURE" "$@"
 ADB_WRAPPER
 chmod 755 "$ADB_WRAPPER_DIR/adb"
+
+# Git for Windows emulation, used only by the Git Bash section. `fixtures/msys-adb` models the MSYS
+# runtime's POSIX-to-Windows argument rewrite — the one that made `adb push … /data/local/tmp/…`
+# stage nothing on a reporter's panel (#24) — and records the argv adb.exe would have received before
+# delegating to the ordinary fixture. Its emulated installation root is a real directory holding the
+# host filesystem roots and deliberately none of the Android ones taken from the provisioner's own
+# exclusion list, so a converted HOST path still resolves to its file while a converted DEVICE path
+# does not. That asymmetry is what lets a Linux runner tell the two directions apart.
+MSYS_ROOT="$TMP/msys-root"
+MSYS_BIN_DIR="$TMP/msys-bin"
+MSYS_ARGV_LOG="$TMP/msys-argv.log"
+mkdir -p "$MSYS_ROOT" "$MSYS_BIN_DIR"
+MSYS_EXCL="$(grep -m1 '^ADB_MSYS_ARG_CONV_EXCL=' "$PROVISION")"
+MSYS_EXCL="${MSYS_EXCL#*=}"
+MSYS_EXCL="${MSYS_EXCL#\'}"
+MSYS_EXCL="${MSYS_EXCL%\'}"
+for msys_entry in /*; do
+  msys_base="${msys_entry#/}"
+  case ";$MSYS_EXCL;" in
+    *";/$msys_base;"*) continue ;;
+  esac
+  ln -s "$msys_entry" "$MSYS_ROOT/$msys_base" 2>/dev/null || true
+done
+cp "$FIXTURES/msys-adb" "$MSYS_BIN_DIR/adb"
+chmod 755 "$MSYS_BIN_DIR/adb"
+
 export PATH="$FIXTURES:/usr/bin:/bin"
 
 # The checked-in curl fixture predates Hardened mode. Keep its ordinary behavior intact while
@@ -201,6 +227,8 @@ run_provision() {
     source_not_regular|source_directory|manifest_missing_*|panel_digest_invalid|panel_digest_mismatch)
       provision_path="$ADB_WRAPPER_DIR:$provision_path" ;;
   esac
+  [ "${MOCK_MSYS_PATHCONV:-0}" != 1 ] || provision_path="$MSYS_BIN_DIR:$provision_path"
+  : > "$MSYS_ARGV_LOG"
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
@@ -337,6 +365,10 @@ run_provision() {
   MOCK_OPENSSL_DIGEST_FAIL="${MOCK_OPENSSL_DIGEST_FAIL:-0}" \
   HAPANELD_HELPER_DIST_DIR="${HAPANELD_HELPER_DIST_DIR:-$MOCK_HELPER_DIST}" \
   MOCK_STATE_DIR="$TMP" \
+  MOCK_MSYS_ROOT="$MSYS_ROOT" \
+  MOCK_MSYS_ARGV_LOG="$MSYS_ARGV_LOG" \
+  MOCK_MSYS_DELEGATE="$PROVISION_TEST_ADB_FIXTURE" \
+  MOCK_MSYS_IGNORE_EXCL="${MOCK_MSYS_IGNORE_EXCL:-0}" \
   PROVISIONING_PLAN_TIMEOUT_SECONDS="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-2}" \
   HA_AUTH_CONNECT_TIMEOUT_SECONDS="${HA_AUTH_CONNECT_TIMEOUT_SECONDS:-1}" \
   HA_AUTH_TIMEOUT_SECONDS="${HA_AUTH_TIMEOUT_SECONDS:-1}" \
@@ -5738,6 +5770,95 @@ for verb in install_system install_systemless install_hybrid rollback_system rol
     fail_test "$verb consumes its staged inputs before its first destructive step (read ${last_read:-none}, destroy ${first_destruct:-none})"
   fi
 done
+
+if [ "$PROVISION_TEST_SCOPE" = core ] || [ "$PROVISION_TEST_SCOPE" = all ]; then
+# --------------------------------------------------------------------------------------------------
+# Git Bash: every adb argument the provisioner sends, in both directions.
+#
+# A reporter on Git for Windows could not provision at all (#24). The MSYS runtime rewrites any
+# argument beginning with `/` into a Windows path before exec'ing a native program, so the helper was
+# pushed to `D:/Program Files/Git/data/local/tmp/hapaneld-helper` and the panel received nothing —
+# with adb, the provisioner and the reporter all seeing a successful command.
+#
+# The rewrite happens in the caller's exec, so no mock can observe it by being called. This section
+# runs a whole provisioning flow behind `fixtures/msys-adb`, which models the rule, records the argv
+# adb.exe would have received, and delegates. That covers every boundary the run touches — the helper
+# staging pushes, the capture-script push, the database pull, exec-out, install and every shell
+# command — rather than only the one call site the report happened to name.
+#
+# The contract has two directions, and a fix that forgot either would be worse than the defect:
+# device paths must arrive literally, and host paths must still be translated or adb.exe cannot open
+# them. Both are asserted, and each is paired with a negative control that re-runs the identical flow
+# with the guard ignored, so a silently broken emulator cannot report green forever.
+#
+# Every other test in this file runs with no emulation in the path, which is where the Linux and
+# macOS non-regression evidence comes from: the guard is an environment variable those platforms do
+# not read, and this suite's existing assertions on $MOCK_CALL_LOG are unchanged by it.
+# --------------------------------------------------------------------------------------------------
+
+# Nothing the runtime converted may be a device path. The emulator decides that while the call is
+# happening — a real host path can be gone by the time a test reads the log, because the provisioner
+# deletes the capture script as soon as its push returns — and records each offender on its own line.
+# This is the general form of the contract: it needs no list of the boundaries a run happens to reach.
+msys_converted_non_host_argument() {
+  grep -h '^rewritten-non-host=' "$MSYS_ARGV_LOG"
+}
+
+assert_msys_argv() {
+  if grep -Eq -- "$1" "$MSYS_ARGV_LOG"; then pass "$2"
+  else fail_test "$2 (missing argv pattern: $1)"; fi
+}
+refute_msys_argv() {
+  if grep -Eq -- "$1" "$MSYS_ARGV_LOG"; then fail_test "$2 (unexpected argv pattern: $1)"
+  else pass "$2"; fi
+}
+
+MOCK_MSYS_PATHCONV=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a full provisioning run completes under the emulated Git Bash runtime"
+if msys_converted_non_host_argument > "$TMP/msys-offender"; then
+  LAST_OUTPUT="$TMP/msys-offender"
+  fail_test "no adb argument is rewritten into the Windows tree"
+else
+  pass "no adb argument is rewritten into the Windows tree"
+fi
+assert_msys_argv '^argv=/data/local/tmp/hapaneld-helper-[0-9a-f]+$' \
+  "the staged helper path reaches adb literally"
+assert_msys_argv '^argv=/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+-script$' \
+  "the database capture script's destination reaches adb literally"
+assert_msys_argv '^argv=/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+/ha-paneld\.db$' \
+  "the database pull source reaches adb literally"
+refute_msys_argv "^argv=$MSYS_ROOT/(data|system|vendor|dev|proc|sys)" \
+  "no Android filesystem root is rewritten"
+# The other direction. The APK and the pulled database are host files; under Git Bash adb.exe cannot
+# open `/tmp/...`, so the runtime translating them is the only reason those operands work at all.
+assert_msys_argv "^argv=$MSYS_ROOT$APK\$" \
+  "the APK host path is still translated for adb.exe"
+assert_msys_argv "^argv=$MSYS_ROOT$TMP/" \
+  "host operands under the working directory are still translated"
+assert_msys_argv '^argv=panel\.test:5555$' \
+  "the panel serial crosses unchanged"
+
+MOCK_MSYS_PATHCONV=1 MOCK_MSYS_IGNORE_EXCL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+if msys_converted_non_host_argument >/dev/null; then
+  pass "the unguarded control rewrites a device path into the Windows tree"
+else
+  fail_test "the unguarded control rewrites a device path into the Windows tree"
+fi
+assert_msys_argv "^argv=$MSYS_ROOT/data/local/tmp/hapaneld-helper-[0-9a-f]+\$" \
+  "the unguarded control reproduces the reported staging failure"
+refute_msys_argv '^argv=/data/local/tmp/hapaneld-helper-[0-9a-f]+$' \
+  "the unguarded control sends no literal device path"
+
+run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "the same run completes with no emulation in the path"
+if [ -s "$MSYS_ARGV_LOG" ]; then
+  fail_test "an ordinary Linux run enters no conversion emulation"
+else
+  pass "an ordinary Linux run enters no conversion emulation"
+fi
+assert_log_contains '/data/local/tmp/hapaneld-helper-[0-9a-f]+' \
+  "the staged helper path is unchanged on Linux"
+fi
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then

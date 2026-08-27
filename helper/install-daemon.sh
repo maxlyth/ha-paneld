@@ -130,10 +130,26 @@ for timeout_name in ADB_COMMAND_TIMEOUT_SECONDS ADB_PREFLIGHT_TIMEOUT_SECONDS \
   esac
 done
 
+# Git for Windows runs this script on an MSYS runtime that rewrites any argument beginning with a
+# forward slash into a Windows path before a native program such as adb.exe is exec'd, which turned
+# `adb push <local> /data/local/tmp/...` into a push to `D:/Program Files/Git/data/local/tmp/...` and
+# staged nothing on the panel (#24). MSYS2_ARG_CONV_EXCL is the runtime's semicolon-separated list of
+# argument prefixes to hand over untouched, so every Android filesystem root this script can name in
+# an adb argument is listed. Deliberately not a blanket `*` or MSYS_NO_PATHCONV: this script also
+# hands adb genuine host paths (the push sources), and under Git Bash those must still be translated.
+# Inert outside MSYS/Cygwin, so it is set unconditionally. Keep aligned with scripts/provision.sh.
+ADB_MSYS_ARG_CONV_EXCL='/acct;/apex;/cache;/config;/data;/dev;/mnt;/odm;/oem;/proc;/product;/sbin;/sdcard;/storage;/sys;/system;/vendor'
+
+# Every adb execution in this script crosses this one boundary so a new call site cannot quietly
+# reintroduce the rewrite; helper/test/standalone_installer_identity_test.sh enforces that statically.
+adb_exec() {
+  MSYS2_ARG_CONV_EXCL="$ADB_MSYS_ARG_CONV_EXCL" "$ADB_COMMAND" "$@"
+}
+
 # Every ordinary adb operation crosses this one boundary. Compound operations that need one total
-# budget use the absolute executable inside their own run_with_deadline call instead of nesting owners.
+# budget use the guarded executable inside their own run_with_deadline call instead of nesting owners.
 adb() {
-  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" "$@"
+  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec "$@"
 }
 
 # `adb connect` exits 0 even when it fails, and a device can sit "unauthorized" (RSA dialog waiting on
@@ -141,14 +157,14 @@ adb() {
 # recovery steps, not as a raw abort at the first adb push. $1=quiet re-checks after an adbd restart.
 adb_preflight_raw() {
   local state="" i=0
-  "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+  adb_exec connect "$TARGET" >/dev/null 2>&1 || true
   while [ "$i" -lt 12 ]; do
     i=$((i + 1))
-    state="$("$ADB_COMMAND" devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    state="$(adb_exec devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
     if [ "$state" = "device" ]; then printf '%s\n' "$state"; return 0; fi
     if [ "$state" = "offline" ] && [ "$i" = 4 ]; then
-      "$ADB_COMMAND" disconnect "$TARGET" >/dev/null 2>&1 || true
-      "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+      adb_exec disconnect "$TARGET" >/dev/null 2>&1 || true
+      adb_exec connect "$TARGET" >/dev/null 2>&1 || true
     fi
     sleep 1
   done
@@ -191,16 +207,16 @@ SU_FORM=""
 SU_PROBE_TIMED_OUT=0
 probe_su_uncached() {
   local u key pre
-  u="$("$ADB_COMMAND" -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
+  u="$(adb_exec -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
   case "$u" in uid=0*) printf 'shell\n'; return 0 ;; esac
   for key in su0 suroot; do
     case "$key" in su0) pre="su 0" ;; suroot) pre="su root" ;; esac
-    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    u="$(adb_exec -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
     case "$u" in *uid=0*) printf '%sjoin\n' "$key"; return 0 ;; esac
-    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    u="$(adb_exec -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
     case "$u" in *uid=0*) printf '%sshc\n' "$key"; return 0 ;; esac
   done
-  u="$("$ADB_COMMAND" -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+  u="$(adb_exec -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
   case "$u" in *uid=0*) printf 'suc\n'; return 0 ;; esac
   printf 'none\n'
   return 1

@@ -803,7 +803,7 @@ classify_package_presence() {
   PACKAGE_PRESENCE="unknown"
   nonce="$(host_transaction_id)" || return 0
   # `\$?` is escaped so the PANEL's shell expands each child's status, not this one.
-  out="$(run_with_deadline "$seconds" "$ADB_COMMAND" -s "$TARGET" shell \
+  out="$(run_with_deadline "$seconds" adb_exec -s "$TARGET" shell \
     "echo HAPANELD_PKG_BEGIN:$nonce; pm path $PKG; echo HAPANELD_PKG_TARGET:$nonce:\$?; \
      pm path $PACKAGE_MANAGER_LIVENESS_PKG; echo HAPANELD_PKG_LIVE:$nonce:\$?; \
      echo HAPANELD_PKG_END:$nonce" 2>/dev/null)" || status=$?
@@ -917,11 +917,11 @@ verify() {
   # support report is therefore not the authority for post-install grant verification: read Android's
   # actual settings back directly, with a short independent bound on each host-side adb operation.
   if [ "$VERIFY_DIRECT_GRANTS" = 1 ]; then
-    write_settings_state="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell \
+    write_settings_state="$(run_with_deadline 5 adb_exec -s "$TARGET" shell \
       appops get "$PKG" WRITE_SETTINGS 2>/dev/null || true)"
-    a11y_state="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell \
+    a11y_state="$(run_with_deadline 5 adb_exec -s "$TARGET" shell \
       settings get secure enabled_accessibility_services 2>/dev/null || true)"
-    a11y_enabled_state="$(run_with_deadline 5 "$ADB_COMMAND" -s "$TARGET" shell \
+    a11y_enabled_state="$(run_with_deadline 5 adb_exec -s "$TARGET" shell \
       settings get secure accessibility_enabled 2>/dev/null || true)"
     a11y_state="${a11y_state//$'\r'/}"
     a11y_enabled_state="${a11y_enabled_state//$'\r'/}"
@@ -1093,15 +1093,15 @@ verify() {
 # hang) at the first real adb command.
 adb_preflight_raw() {
   local state="" i=0
-  "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+  adb_exec connect "$TARGET" >/dev/null 2>&1 || true
   while [ "$i" -lt 12 ]; do
     i=$((i + 1))
-    state="$("$ADB_COMMAND" devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
+    state="$(adb_exec devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')"
     if [ "$state" = "device" ]; then printf 'device\n'; return 0; fi
     # Stale session ("offline"): reset it once, then keep polling.
     if [ "$state" = "offline" ] && [ "$i" = 4 ]; then
-      "$ADB_COMMAND" disconnect "$TARGET" >/dev/null 2>&1 || true
-      "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+      adb_exec disconnect "$TARGET" >/dev/null 2>&1 || true
+      adb_exec connect "$TARGET" >/dev/null 2>&1 || true
     fi
     sleep 1
   done
@@ -1198,8 +1198,35 @@ ADB_COMMAND_TIMEOUT_SECONDS="${ADB_COMMAND_TIMEOUT_SECONDS:-120}"
 case "$ADB_COMMAND_TIMEOUT_SECONDS" in ''|*[!0-9]*|0)
   fail "ADB_COMMAND_TIMEOUT_SECONDS must be a positive whole number of seconds" ;;
 esac
+
+# Git for Windows runs this script on an MSYS runtime that rewrites any argument beginning with a
+# forward slash into a Windows path before a native program such as adb.exe is exec'd. That silently
+# turned `adb push <local> /data/local/tmp/hapaneld-helper` into a push to
+# `D:/Program Files/Git/data/local/tmp/hapaneld-helper`, so the helper never reached the panel and
+# provisioning failed with no indication of why (#24). The runtime honours MSYS2_ARG_CONV_EXCL, a
+# semicolon-separated list of argument prefixes it must hand over untouched, so every Android
+# filesystem root this script can name in an adb argument is listed here.
+#
+# Deliberately NOT `MSYS2_ARG_CONV_EXCL=*` and NOT `MSYS_NO_PATHCONV=1`: those switch conversion off
+# for the whole command line, and this script also hands adb genuine HOST paths — the push sources,
+# the pull destinations and the APK. Under Git Bash a `mktemp` file is `/tmp/...` and MUST still be
+# translated to `D:/Program Files/Git/tmp/...` before adb.exe can open it, so a blanket exclusion
+# would trade one broken direction for the other. Panel serials (`host:5555`), URLs, embedded spaces,
+# quoting and credential arguments carry no leading slash and are unaffected either way.
+#
+# The variable means nothing outside an MSYS/Cygwin runtime, so it is set unconditionally rather than
+# behind a `uname` branch that no Linux or macOS run could exercise. Keep this list aligned with the
+# identical one in helper/install-daemon.sh.
+ADB_MSYS_ARG_CONV_EXCL='/acct;/apex;/cache;/config;/data;/dev;/mnt;/odm;/oem;/proc;/product;/sbin;/sdcard;/storage;/sys;/system;/vendor'
+
+# Every adb execution in this script crosses this one boundary so a new call site cannot quietly
+# reintroduce the rewrite; scripts/tests/provision_test.sh enforces that statically.
+adb_exec() {
+  MSYS2_ARG_CONV_EXCL="$ADB_MSYS_ARG_CONV_EXCL" "$ADB_COMMAND" "$@"
+}
+
 adb() {
-  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" "$@"
+  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec "$@"
 }
 
 # Root-path probe — vendor root varies TWICE over: the prefix (`su 0`, `su root`, `su -c`) AND the
@@ -1214,16 +1241,16 @@ SU_FORM=""
 SU_PROBE_TIMED_OUT=0
 probe_su_uncached() {
   local u key pre
-  u="$("$ADB_COMMAND" -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
+  u="$(adb_exec -s "$TARGET" shell id 2>/dev/null | tr -d '\r')" || u=""
   case "$u" in uid=0*) printf 'shell\n'; return 0 ;; esac
   for key in su0 suroot; do
     case "$key" in su0) pre="su 0" ;; suroot) pre="su root" ;; esac
-    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    u="$(adb_exec -s "$TARGET" shell "$pre \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
     case "$u" in *uid=0*) printf '%sjoin\n' "$key"; return 0 ;; esac
-    u="$("$ADB_COMMAND" -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+    u="$(adb_exec -s "$TARGET" shell "$pre sh -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
     case "$u" in *uid=0*) printf '%sshc\n' "$key"; return 0 ;; esac
   done
-  u="$("$ADB_COMMAND" -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
+  u="$(adb_exec -s "$TARGET" shell "su -c \"id; id\"" 2>/dev/null | tr -d '\r')" || u=""
   case "$u" in *uid=0*) printf 'suc\n'; return 0 ;; esac
   printf 'none\n'
   return 1
@@ -1437,7 +1464,7 @@ host_timezone() {
 panel_timezone() {
   local value
   value="$(run_with_deadline "$TIMEZONE_PROBE_SECONDS" \
-    "$ADB_COMMAND" -s "$TARGET" shell getprop persist.sys.timezone 2>/dev/null || true)"
+    adb_exec -s "$TARGET" shell getprop persist.sys.timezone 2>/dev/null || true)"
   # A panel whose adbd has no shell protocol v2 returns every reply through a PTY, so strip the CR.
   value="$(printf '%s' "$value" | tr -d '\r' | head -n 1)"
   valid_timezone_name "$value" || return 1
@@ -1860,7 +1887,7 @@ host_transaction_id() {
 # unproven negative would treat an unknown capability as a decided one.
 probe_transport_alive() {
   local deadline="${1:-15}" probe_alive
-  probe_alive="$(run_with_deadline "$deadline" "$ADB_COMMAND" -s "$TARGET" shell echo HAPANELD_TRANSPORT_ALIVE 2>/dev/null | tr -d '\r')" || probe_alive=""
+  probe_alive="$(run_with_deadline "$deadline" adb_exec -s "$TARGET" shell echo HAPANELD_TRANSPORT_ALIVE 2>/dev/null | tr -d '\r')" || probe_alive=""
   case "$probe_alive" in
     *HAPANELD_TRANSPORT_ALIVE*) return 0 ;;
     *) return 1 ;;
@@ -1919,21 +1946,21 @@ resolve_root_route() {
     ROOT_ROUTE_VERDICT=unknown-timeout
     return 0
   fi
-  run_with_deadline "$remaining" "$ADB_COMMAND" -s "$TARGET" root >/dev/null 2>&1 || true
+  run_with_deadline "$remaining" adb_exec -s "$TARGET" root >/dev/null 2>&1 || true
   # A wait never STARTS past the deadline; a started one-second wait may overrun it by at most
   # that one quantum, which the resolver's unit contract asserts.
   remaining=$((budget - (SECONDS - start)))
   [ "$remaining" -le 0 ] || sleep 1
   remaining=$((budget - (SECONDS - start)))
   if [ "$remaining" -gt 0 ]; then
-    run_with_deadline "$remaining" "$ADB_COMMAND" connect "$TARGET" >/dev/null 2>&1 || true
+    run_with_deadline "$remaining" adb_exec connect "$TARGET" >/dev/null 2>&1 || true
   fi
   local state="" attempt=0
   while [ "$attempt" -lt 8 ]; do
     attempt=$((attempt + 1))
     remaining=$((budget - (SECONDS - start)))
     [ "$remaining" -gt 0 ] || break
-    state="$(run_with_deadline "$remaining" "$ADB_COMMAND" devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')" || state=""
+    state="$(run_with_deadline "$remaining" adb_exec devices 2>/dev/null | awk -v t="$TARGET" '$1==t {print $2}')" || state=""
     [ "$state" = device ] && break
     remaining=$((budget - (SECONDS - start)))
     [ "$remaining" -le 0 ] || sleep 1
@@ -2181,7 +2208,13 @@ terminate_root_helper_apk_install() {
 run_adb_install_attempt() {
   local status deadline
   ROOT_HELPER_APK_INSTALL_OUTPUT_FILE="$(mktemp)"
-  "$ADB_COMMAND" -s "$TARGET" install "$@" "$APK" > "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE" 2>&1 &
+  # The only adb execution that does not route through adb_exec, because this one is backgrounded and
+  # `terminate_root_helper_apk_install` signals a single PID rather than a process group: a shell
+  # function would put a subshell in `$!` and leave adb.exe orphaned on the deadline path. A variable
+  # assignment prefix carries the identical MSYS policy into adb's environment without forking an
+  # extra process, so `$!` is still adb itself. Keep this in step with adb_exec.
+  MSYS2_ARG_CONV_EXCL="$ADB_MSYS_ARG_CONV_EXCL" \
+    "$ADB_COMMAND" -s "$TARGET" install "$@" "$APK" > "$ROOT_HELPER_APK_INSTALL_OUTPUT_FILE" 2>&1 &
   ROOT_HELPER_APK_INSTALL_PID=$!
   deadline=$((SECONDS + APK_INSTALL_TIMEOUT_SECONDS))
   while kill -0 "$ROOT_HELPER_APK_INSTALL_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
@@ -2382,7 +2415,7 @@ install_root_helper() {
   case "$access_timeout" in ''|*[!0-9]*|0) access_timeout=45 ;; esac
   PRIVILEGE_INSPECTION_TIMEOUT_SECONDS="$access_timeout"
   step "🔎 inspecting access" "${D}panel ABI · root route · helper compatibility${X}"
-  if abi="$(run_with_deadline "$access_timeout" "$ADB_COMMAND" -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null)"; then
+  if abi="$(run_with_deadline "$access_timeout" adb_exec -s "$TARGET" shell getprop ro.product.cpu.abi 2>/dev/null)"; then
     abi="$(printf '%s' "$abi" | tr -d '\r')"
   else
     access_status=$?
@@ -3779,7 +3812,7 @@ version_guard() {
   local installed raw status timeout="${VERSION_INSPECTION_TIMEOUT_SECONDS:-20}"
   case "$timeout" in ''|*[!0-9]*|0) timeout=20 ;; esac
   step "🔎 inspecting version" "${D}reading the installed ha-paneld package${X}"
-  if raw="$(run_with_deadline "$timeout" "$ADB_COMMAND" -s "$TARGET" shell dumpsys package "$PKG" 2>/dev/null)"; then
+  if raw="$(run_with_deadline "$timeout" adb_exec -s "$TARGET" shell dumpsys package "$PKG" 2>/dev/null)"; then
     installed="$(printf '%s\n' "$raw" | grep -m1 versionName | sed 's/.*versionName=//' | tr -d '\r ' || true)"
   else
     status=$?
@@ -4076,7 +4109,7 @@ prepare_upgrade_quiescence() {
   UPGRADE_QUIESCE_NONCE="$nonce"
   timeout="${UPGRADE_PREPARE_TIMEOUT_SECONDS:-45}"
   case "$timeout" in ''|*[!0-9]*|0) timeout=45 ;; esac
-  output="$(run_with_deadline "$timeout" "$ADB_COMMAND" -s "$TARGET" shell am broadcast --user 0 \
+  output="$(run_with_deadline "$timeout" adb_exec -s "$TARGET" shell am broadcast --user 0 \
     -a io.github.maxlyth.hapaneld.action.PREPARE_UPGRADE \
     -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "$nonce" 2>/dev/null | tr -d '\r')" || output=""
   receipt="$(printf '%s\n' "$output" | sed -n 's/^Broadcast completed: result=-1, data="\([^"]*\)"$/\1/p')"
@@ -4114,7 +4147,7 @@ release_upgrade_quiescence() {
   case "$timeout" in ''|*[!0-9]*|0) timeout=10 ;; esac
   attempt=1
   while [ "$attempt" -le 2 ]; do
-    output="$(run_with_deadline "$timeout" "$ADB_COMMAND" -s "$TARGET" shell am broadcast --user 0 \
+    output="$(run_with_deadline "$timeout" adb_exec -s "$TARGET" shell am broadcast --user 0 \
       -a io.github.maxlyth.hapaneld.action.RELEASE_UPGRADE \
       -n io.github.maxlyth.hapaneld/.UpgradeControlReceiver --es nonce "$nonce" 2>/dev/null | tr -d '\r')" || output=""
     released_count="$(printf '%s\n' "$output" | grep -Fxc \
@@ -4150,12 +4183,12 @@ copy_root_file_binary() {
   command="cat $source"
   quoted="$(quote_root_command "$command")"
   case "$SU_FORM" in
-    shell)      run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out cat "$source" > "$destination" ;;
-    su0join)    run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su 0 "$quoted" > "$destination" ;;
-    su0shc)     run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su 0 sh -c "$quoted" > "$destination" ;;
-    surootjoin) run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su root "$quoted" > "$destination" ;;
-    surootshc)  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su root sh -c "$quoted" > "$destination" ;;
-    suc)        run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" exec-out su -c "$quoted" > "$destination" ;;
+    shell)      run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out cat "$source" > "$destination" ;;
+    su0join)    run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out su 0 "$quoted" > "$destination" ;;
+    su0shc)     run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out su 0 sh -c "$quoted" > "$destination" ;;
+    surootjoin) run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out su root "$quoted" > "$destination" ;;
+    surootshc)  run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out su root sh -c "$quoted" > "$destination" ;;
+    suc)        run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" exec-out su -c "$quoted" > "$destination" ;;
     *) return 1 ;;
   esac
 }
@@ -4529,7 +4562,7 @@ EOF2
     snapshot_txn_refuse "could not create a working file beside $base.db" "Check that the backup directory is writable."
     return 0
   fi
-  if ! run_with_deadline 60 "$ADB_COMMAND" -s "$TARGET" pull "$stage/ha-paneld.db" "$pull_tmp" >/dev/null 2>&1 || [ ! -s "$pull_tmp" ]; then
+  if ! run_with_deadline 60 adb_exec -s "$TARGET" pull "$stage/ha-paneld.db" "$pull_tmp" >/dev/null 2>&1 || [ ! -s "$pull_tmp" ]; then
     snapshot_txn_refuse "the verified snapshot could not be pulled from the panel" "Check adb connectivity to $TARGET, then re-run."
     return 0
   fi
@@ -4906,7 +4939,7 @@ if [ "$SHIZUKU" = 1 ]; then
   esac
   step "🪄 Shizuku" "${D}inspecting the installed manager and signer${X}"
   if SHIZUKU_INSPECT_OUTPUT="$(run_with_deadline "$SHIZUKU_INSPECT_TIMEOUT_SECONDS" \
-      "$ADB_COMMAND" -s "$TARGET" shell dumpsys package "$SHIZUKU_PKG" 2>/dev/null)"; then
+      adb_exec -s "$TARGET" shell dumpsys package "$SHIZUKU_PKG" 2>/dev/null)"; then
     SHIZUKU_CURRENT_CODE="$(printf '%s\n' "$SHIZUKU_INSPECT_OUTPUT" \
       | sed -nE 's/.*versionCode=([0-9]+).*/\1/p' | head -1 | tr -d '\r' || true)"
   else
@@ -4918,7 +4951,7 @@ if [ "$SHIZUKU" = 1 ]; then
     SHIZUKU_CURRENT_CODE=""
   fi
   if SHIZUKU_INSPECT_OUTPUT="$(run_with_deadline "$SHIZUKU_INSPECT_TIMEOUT_SECONDS" \
-      "$ADB_COMMAND" -s "$TARGET" shell pm path "$SHIZUKU_PKG" 2>/dev/null)"; then
+      adb_exec -s "$TARGET" shell pm path "$SHIZUKU_PKG" 2>/dev/null)"; then
     SHIZUKU_CURRENT_PATH="$(printf '%s\n' "$SHIZUKU_INSPECT_OUTPUT" \
       | sed -n 's/^package://p' | head -1 | tr -d '\r' || true)"
   else
@@ -4933,7 +4966,7 @@ if [ "$SHIZUKU" = 1 ]; then
   if [ -n "$SHIZUKU_CURRENT_PATH" ]; then
     SHIZUKU_CURRENT_APK="$SHIZUKU_DIR/installed-shizuku.apk"
     if run_with_deadline "$SHIZUKU_INSPECT_TIMEOUT_SECONDS" \
-        "$ADB_COMMAND" -s "$TARGET" pull "$SHIZUKU_CURRENT_PATH" "$SHIZUKU_CURRENT_APK" >/dev/null 2>&1; then
+        adb_exec -s "$TARGET" pull "$SHIZUKU_CURRENT_PATH" "$SHIZUKU_CURRENT_APK" >/dev/null 2>&1; then
       if command -v sha256sum >/dev/null 2>&1; then
         SHIZUKU_CURRENT_SHA="$(sha256sum "$SHIZUKU_CURRENT_APK" | awk '{print $1}')"
       elif command -v shasum >/dev/null 2>&1; then
@@ -4984,7 +5017,7 @@ if [ "$SHIZUKU" = 1 ]; then
       ''|*[!0-9]*|0) SHIZUKU_INSTALL_TIMEOUT_SECONDS=180 ;;
     esac
     if run_with_deadline "$SHIZUKU_INSTALL_TIMEOUT_SECONDS" \
-        "$ADB_COMMAND" -s "$TARGET" install -r "$SHIZUKU_APK" >/dev/null; then
+        adb_exec -s "$TARGET" install -r "$SHIZUKU_APK" >/dev/null; then
       :
     else
       SHIZUKU_INSTALL_STATUS=$?
@@ -5013,7 +5046,7 @@ if [ "$SHIZUKU" = 1 ]; then
   esac
   if [ -n "$SHIZUKU_STARTER" ] && adb -s "$TARGET" shell test -x "$SHIZUKU_STARTER" >/dev/null 2>&1 && \
       run_with_deadline "$SHIZUKU_START_TIMEOUT_SECONDS" \
-        "$ADB_COMMAND" -s "$TARGET" shell "$SHIZUKU_STARTER" >/dev/null 2>&1; then
+        adb_exec -s "$TARGET" shell "$SHIZUKU_STARTER" >/dev/null 2>&1; then
     echo "   ${GRN}✓${X} Shizuku service started"
   else
     SHIZUKU_START_STATUS=$?
@@ -5139,11 +5172,11 @@ wait_for_launch_health() {
 start_panel_agent() {
   case "$1" in
     launcher)
-      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell \
+      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" shell \
         monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || return 1
       ;;
     direct)
-      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" "$ADB_COMMAND" -s "$TARGET" shell \
+      run_with_deadline "$APP_LAUNCH_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" shell \
         am start -n "$PKG/.MainActivity" >/dev/null 2>&1 || return 1
       ;;
     *) return 2 ;;
