@@ -28,38 +28,46 @@ updates:
       timezone: Etc/UTC
     cooldown:
       default-days: 7
-    groups:
-      android-toolchain:
-        patterns:
-          - "com.android.application"
-          - "org.jetbrains.kotlin:kotlin-gradle-plugin"
-          - "androidx.core:*"
-          - "gradle"
-      kotlin-network-stack:
-        patterns:
-          - "io.ktor:*"
-          - "org.jetbrains.kotlinx:kotlinx-coroutines-*"
-      mqtt-stack:
-        patterns:
-          - "com.hivemq:*"
-          - "de.fraunhofer.iosb.io.moquette:*"
-      android-test:
-        patterns:
-          - "androidx.test:*"
-          - "androidx.test.ext:*"
-          - "androidx.test.uiautomator:*"
     ignore:
-      # Temporary: Kotlin 2.4.10's fully supported range ends at AGP 9.1. Remove these
-      # exclusions when a stable Kotlin release supports newer AGP and the migration gates pass.
-      - dependency-name: "com.android.application"
-        versions:
-          - "9.2.x"
-          - "9.3.x"
-      # Temporary: Engine 3 requires Java 11. Remove after its parser and emitter pass the
-      # oldest-supported Android runtime gate; review any security advisory independently.
-      - dependency-name: "org.snakeyaml:snakeyaml-engine"
-        versions:
-          - "3.x"
+      # Dependabot edits `gradle/libs.versions.toml` and nothing else, but every coordinate this
+      # build resolves is gated by three lock layers it cannot regenerate:
+      # `gradle/verification-metadata.xml`, `app/gradle.lockfile` and `settings-gradle.lockfile`.
+      # A library or plugin version proposal is therefore unmergeable the moment it is opened,
+      # rejected as "Dependency version enforced by Dependency Locking", and completing
+      # one means regenerating artifact-verification metadata, which bootstraps trust in whichever
+      # signing keys the new artifacts carry. That is a review step, not an automated one, so the
+      # proposals are switched off rather than repaired by a robot. SECURITY.md states the policy;
+      # a bump is landed by the documented local regeneration recipe instead.
+      #
+      # Two patterns, because a Gradle dependency name takes two shapes and no single glob can
+      # say "everything except the wrapper" (dependabot-core's matcher has no negation: it
+      # rewrites `*` to `.*`, quotes every other character and anchors the result):
+      #   `*:*`  every Maven coordinate, including dotless groups such as `junit:junit`
+      #   `*.*`  every Gradle plugin id, which is always dot-qualified (`com.android.application`)
+      # `gradle-wrapper` is dependabot-core's literal name for the Gradle distribution
+      # (gradle/lib/dependabot/gradle/file_parser/distributions_finder.rb). It contains neither a
+      # colon nor a dot, so it matches neither pattern and deliberately keeps proposing updates:
+      # it rewrites the wrapper JAR, `distributionUrl`, `distributionSha256Sum` and the wrapper's
+      # own verification-metadata entries, which is completable in place.
+      #
+      # `update-types` confines both rules to version updates. Security updates are unaffected:
+      # `Config::IgnoreCondition#ignored_versions` returns only the `versions` list once
+      # `security_updates_only` is set, and neither rule sets `versions`. A rule written with
+      # `versions:` instead would silence security proposals as well.
+      #
+      # `scripts/tests/dependabot_config_test.py` re-derives all of this from the real version
+      # catalog and build files, and fails if a declared dependency ever escapes both patterns or
+      # if the wrapper stops escaping them.
+      - dependency-name: "*:*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "*.*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
