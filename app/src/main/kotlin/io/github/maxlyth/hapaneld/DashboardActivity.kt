@@ -2301,18 +2301,24 @@ class DashboardActivity : AppCompatActivity() {
             if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return@postDelayed
             if (!button.isAttachedToWindow) return@postDelayed
             val progress = WebViewRepairRuntime.progress()
+            // A RUNNING install is deliberately not narrated by the installer's own words. Measured on a
+            // panel: it publishes the placeholder "Working…" for the whole download and never updates it,
+            // because the installer reports one terminal string and has no progress callback. Adopting
+            // that would replace a sentence that tells somebody what is happening and roughly how long
+            // with a word that tells them neither.
             if (progress.running) {
-                if (progress.message.isNotBlank()) note?.text = progress.message
                 pollWebViewRepair(button, note)
                 return@postDelayed
             }
-            // Still here, with nothing running: the install ended without replacing the engine, because
-            // replacing it would have taken this process with it.
+            // Nothing running and this screen is still here, so the engine was not replaced — replacing
+            // it takes this process with it. An EMPTY message is not a failure report: the installer's
+            // slot lives in this process and a restart clears it, so blank means "no information", and
+            // the honest sentence for that is not "it failed".
             releaseWebViewRepair(
                 button,
                 note,
                 progress.message.takeIf { it.isNotBlank() }
-                    ?: "The update did not finish, and nothing on this panel was changed.",
+                    ?: "The update stopped without saying why, and nothing on this panel was changed.",
             )
         }, WEB_VIEW_REPAIR_POLL_MS)
     }

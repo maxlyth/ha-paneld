@@ -696,6 +696,22 @@ class StatusSurfaceWiringContractTest {
             poll.contains("if (!button.isAttachedToWindow) return@postDelayed"),
         )
         assertTrue("the poll must re-arm itself rather than run on a fixed schedule", poll.contains("pollWebViewRepair(button, note)"))
+        // MEASURED ON A PANEL, not reasoned about: across a real 150-second repair the installer's slot
+        // read {"running":true,"message":"Working…"} on every single poll and never changed, because it
+        // reports one terminal string and has no progress callback. A screen that adopted that would
+        // trade its own sentence for a word within one tick. So the running branch must not touch the
+        // note at all — the absence of an assignment there IS the contract.
+        val running = poll.substringAfter("if (progress.running) {").substringBefore("}")
+        assertTrue(
+            "a running install must not overwrite the screen's own explanation",
+            !running.contains("note?.text"),
+        )
+        // And an empty terminal message is the tell that this process's slot was cleared by the restart
+        // a SUCCESSFUL repair causes — so it must not be reported as a failure.
+        assertTrue(
+            "a blank terminal message must not be narrated as a failure",
+            poll.contains("stopped without saying why"),
+        )
     }
 
     /**
