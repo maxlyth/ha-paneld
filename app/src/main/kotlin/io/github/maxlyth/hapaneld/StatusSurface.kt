@@ -354,6 +354,26 @@ internal class StatusSurface(
         ).apply { gravity = Gravity.CENTER_HORIZONTAL }
     }
 
+    /**
+     * A square QR of [text], or null when it cannot be encoded — in which case the caller shows the
+     * address on its own and loses a convenience rather than the instruction.
+     *
+     * The code is drawn black on white whatever the panel theme is, which looks deliberate beside a dark
+     * screen and is: a QR is read by a camera, not by a person, and inverting one costs scans on cheap
+     * phone decoders for the sake of matching a palette nothing else here has to match.
+     */
+    fun qr(text: String, description: CharSequence): ImageView? {
+        val bitmap = qrBitmap(text, dp(spec.qrSizeDp)) ?: return null
+        return ImageView(activity).apply {
+            setImageBitmap(bitmap)
+            contentDescription = description
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            layoutParams = LinearLayout.LayoutParams(dp(spec.qrSizeDp), dp(spec.qrSizeDp))
+                .apply { gravity = Gravity.CENTER_HORIZONTAL }
+        }
+    }
+
     fun action(
         label: CharSequence,
         primary: Boolean = false,

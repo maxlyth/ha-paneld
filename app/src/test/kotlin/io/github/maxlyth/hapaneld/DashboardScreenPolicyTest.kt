@@ -84,9 +84,20 @@ class DashboardScreenPolicyTest {
             "a credential screen must say the dashboard comes back once the sign-in works",
             block.contains("on its own"),
         )
-        // It must still name a route back, or the screen is a dead end, and it must say what that
-        // route OPENS: "Configure" is a button name, not an explanation of where it goes.
-        assertTrue(block.contains("Configure opens this panel's settings"))
+        // It must still name a route back, or the screen is a dead end, and it must name the
+        // DESTINATION rather than a control. These screens now sometimes replace the Configure button
+        // with a code that opens the same setting on a phone, so copy that explained the button was
+        // describing something the person could no longer see.
+        assertTrue(
+            "a credential screen must name where the sign-in lives, not which button to press",
+            block.contains("this panel's settings, under Home Assistant") ||
+                block.contains("this panel's settings, under Home\n") ||
+                block.contains("sign-in lives in this panel's settings"),
+        )
+        assertFalse(
+            "the copy must not name a button that a code may have replaced",
+            block.contains("Configure opens"),
+        )
         assertTrue(block.contains("Retry"))
         // The pairing this test exists to protect: neither credential outcome runs a timer.
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
@@ -143,7 +154,15 @@ class DashboardScreenPolicyTest {
         assertFalse("an outcome must never be defaulted", source.contains("outcome: AdmissionOutcome ="))
         assertFalse("call sites must not choose the retry class themselves", source.contains("autoRetry = AdmissionRetryClass."))
         assertEquals(2, Regex(Regex.escape("showAdmissionProgressScreen(")).findAll(source).count() - 1)
-        assertTrue(source.contains("showV2CompatibilityScreen(title, detail, \"Retry\", admissionRetryClass(outcome))"))
+        assertTrue(source.contains("showV2CompatibilityScreen(title, detail, \"Retry\", admissionRetryClass(outcome), outcome)"))
+        // The verdict itself reaches the painter, not just its retry class. Two screens now offer
+        // something the class cannot express — a repair the panel can perform, and a code that
+        // opens the exact setting on a phone — and both are decided from the outcome. Passing only
+        // the class would leave the painter guessing from the copy it was handed.
+        assertTrue(
+            "a progress screen has no verdict and must say so rather than borrow one",
+            source.contains("showV2CompatibilityScreen(title, detail, null, AdmissionRetryClass.MANUAL_ONLY, null)"),
+        )
     }
 
     @Test fun theActivityDelegatesCountdownVisibilityToTheTestedOwner() {

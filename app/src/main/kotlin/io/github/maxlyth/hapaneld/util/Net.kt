@@ -79,3 +79,25 @@ fun isLocalSource(host: String): Boolean = parseAddress(host)?.let(::isLanLocal)
  * [isLocalSource] for parseable input; both return false for unparseable input.
  */
 fun isRoutable(host: String): Boolean = parseAddress(host)?.let { !isLanLocal(it) } ?: false
+
+/**
+ * True if [host] is an address a phone on the same network could actually open.
+ *
+ * Deliberately NOT [isRoutable], which is its near-opposite here: that predicate exists to reject a
+ * request source that is not globally routable, so it turns away exactly the RFC1918 and ULA addresses
+ * every panel on a home network actually has. The question this one asks is different — "would printing
+ * this address on the screen give somebody something they can reach" — and only three families fail it:
+ * loopback, which resolves on the scanning phone instead of on the panel; link-local, which is what a
+ * panel shows after its DHCP lease failed and is unreachable from anywhere useful; and the wildcard.
+ *
+ * This matters because [io.github.maxlyth.hapaneld.util.LocalAdminEndpoint.externalUrl] falls back to
+ * `127.0.0.1` when it is handed nothing, so a panel with no network produces a plausible, scannable and
+ * completely useless URL rather than an obviously absent one.
+ */
+fun isScannableHost(host: String): Boolean = parseAddress(host)?.let {
+    !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isAnyLocalAddress
+} ?: false
+
+/** The first of [ipv4] then [ipv6] that somebody could actually reach, or null when neither is. */
+fun scannableHost(ipv4: String?, ipv6: String?): String? =
+    listOfNotNull(ipv4, ipv6).firstOrNull { it.isNotBlank() && isScannableHost(it) }

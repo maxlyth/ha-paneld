@@ -6,7 +6,6 @@ import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.SystemController
 import android.content.pm.PackageManager
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -635,18 +634,6 @@ class MainActivity : AppCompatActivity() {
         if (maxWidth > 0) this.maxWidth = dp(maxWidth)
         setPadding(0, dp(padTop), 0, dp(padBottom))
         text = s
-    }
-
-    // QR of the config URL via ZXing (pure-Java). Null on failure — the UI just omits the QR then.
-    private fun qrBitmap(text: String, size: Int): Bitmap? = try {
-        val bits = com.google.zxing.qrcode.QRCodeWriter()
-            .encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size)
-        Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { qr ->
-            for (x in 0 until size) for (y in 0 until size)
-                qr.setPixel(x, y, if (bits.get(x, y)) Color.BLACK else Color.WHITE)
-        }
-    } catch (e: Exception) {
-        null
     }
 
     private fun button(label: String, onClick: () -> Unit): Button = Button(this).apply {

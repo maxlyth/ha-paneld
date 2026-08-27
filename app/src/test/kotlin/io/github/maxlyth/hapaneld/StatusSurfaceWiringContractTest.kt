@@ -28,6 +28,7 @@ class StatusSurfaceWiringContractTest {
     private val spec by lazy { source("StatusSurfaceSpec.kt") }
     private val standing by lazy { source("MainActivity.kt") }
     private val admin by lazy { source("AdminLauncherActivity.kt") }
+    private val service by lazy { source("PaneldService.kt") }
 
     /**
      * Every screen the dashboard puts up in place of Home Assistant is built by [StatusSurface].
@@ -659,7 +660,113 @@ class StatusSurfaceWiringContractTest {
         )
         assertTrue(
             "the entry point remains a genuine failure, which does advance the ladder",
-            dashboard.contains("= paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = true)"),
+            dashboard.contains(
+                "= paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, outcome, rearm = true)",
+            ),
+        )
+        // The redraw must reproduce the WHOLE screen, and the offer is now part of it. A rotation that
+        // carried the deadline but dropped the verdict would repaint a panel that could repair itself as
+        // one that could only wait — the same class of loss the carried deadline exists to prevent, in
+        // the row above the countdown rather than in the countdown.
+        assertTrue(
+            "the redraw must carry the verdict, not just the pending retry",
+            painter.contains(
+                "paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, outcome, rearm = false)",
+            ),
+        )
+    }
+
+    /**
+     * A repair that outlives the screen it was started from must not write to it.
+     *
+     * The install runs for minutes. In that time the panel can be rotated, its theme can change, or the
+     * activity can be replaced outright — and the poll is a delayed callback holding two views from a
+     * view tree that no longer exists. This is the activity's existing idiom for exactly that hazard, and
+     * it is asserted here because there is no view instrumentation in this gate to execute it.
+     */
+    @Test
+    fun aRepairThatOutlivesItsScreenStopsRatherThanWritingToIt() {
+        val poll = dashboard.substringAfter("private fun pollWebViewRepair(").substringBefore("\n    }")
+        assertTrue(
+            "the poll must re-test the activity lease, not assume the screen it started on is still live",
+            poll.contains("if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return@postDelayed"),
+        )
+        assertTrue(
+            "a detached button belongs to a discarded tree and ends the poll",
+            poll.contains("if (!button.isAttachedToWindow) return@postDelayed"),
+        )
+        assertTrue("the poll must re-arm itself rather than run on a fixed schedule", poll.contains("pollWebViewRepair(button, note)"))
+    }
+
+    /**
+     * Nothing paints a finished repair, and that absence is load-bearing rather than accidental.
+     *
+     * Installing an engine only half-repairs the panel: a provider binds once per process, so the panel
+     * restarts to use what it installed. The ordinary end of a successful repair is this screen vanishing
+     * with the process that drew it. A "done" state would be a claim made by code that cannot observe it,
+     * on a screen that in the successful case is already gone.
+     */
+    @Test
+    fun aSuccessfulRepairIsNeverPainted() {
+        val driver = dashboard.substringAfter("private fun startWebViewRepair(").substringBefore("private fun buildAndLoad")
+        listOf("Installed", "Success", "succeeded", "Done", "Updated —", "Finished").forEach {
+            assertTrue("a repair must not announce an outcome it cannot observe: $it", !driver.contains(it))
+        }
+        assertTrue(
+            "every path out of a started install is the poll, which only ever reports a stop",
+            driver.contains("WebViewRepairRequest.STARTED ->") && driver.contains("pollWebViewRepair(button, note)"),
+        )
+    }
+
+    /**
+     * The panel asks the service what it can do rather than working it out beside the screen.
+     *
+     * Both inputs are privileged questions: a cold su probe forks a process and waits for it, and the
+     * caller here is the drawing thread of a panel that is already failing. A second derivation would
+     * also be free to disagree with the one the Install page shows, on the same panel, at the same moment.
+     */
+    @Test
+    fun theScreenAsksForTheCapabilityRatherThanDerivingIt() {
+        listOf("recommendedWebView", "Su.available", "HelperClient", "WebViewInstaller").forEach {
+            assertTrue("the activity must not re-derive repair capability: $it", !dashboard.contains(it))
+        }
+        assertTrue(dashboard.contains("WebViewRepairRuntime.capability()"))
+        assertTrue(dashboard.contains("WebViewRepairRuntime.request()"))
+        assertTrue(dashboard.contains("WebViewRepairRuntime.progress()"))
+        // And the service starts it through the SAME entry point the Install page posts to, so the two
+        // cannot end up with different ideas of what "already installing" means.
+        assertTrue(
+            "the repair must reuse the existing install lane, not open a second one",
+            service.contains("""start = { installComponent("webview", "reinstall", "") },"""),
+        )
+        assertTrue(
+            "the capability probe must not run on the caller's thread",
+            service.substringAfter("private fun refreshWebViewRepairCapability(").substringBefore("\n    }")
+                .contains("scope.launch"),
+        )
+    }
+
+    /**
+     * The code and the Configure button are the same repair, so a screen shows one or the other.
+     *
+     * Offering both would put two controls for one job on a 480-pixel screen, and the code exists
+     * precisely because that job is the one worth doing somewhere other than on the panel.
+     */
+    @Test
+    fun aCodeReplacesTheButtonItDuplicates() {
+        val painter = dashboard.substringAfter("private fun paintV2CompatibilityScreen(").substringBefore("\n    }")
+        assertTrue("the Configure action must be conditional on there being no code", painter.contains("if (qr == null) {"))
+        assertTrue(
+            "the repair action must be offered only where the panel can actually perform it",
+            painter.contains("if (repair == WebViewRepairOffer.OFFER) {"),
+        )
+        assertTrue(
+            "a code is only drawn for an address somebody could reach",
+            painter.contains("scannableHost(localIpv4(), localIpv6())"),
+        )
+        assertTrue(
+            "the address is printed beside the code, so a phone that cannot scan can still be typed into",
+            painter.contains("phoneAddress"),
         )
     }
 

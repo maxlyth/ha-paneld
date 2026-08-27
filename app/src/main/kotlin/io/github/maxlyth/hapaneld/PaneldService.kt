@@ -810,6 +810,16 @@ class PaneldService : Service() {
     private val screenWakeWorker = SingleFlightExecutor("ha-paneld-screen-reconcile")
     @Volatile private var screenOnReceiver: BroadcastReceiver? = null
     @Volatile private var webViewRebindReceiver: BroadcastReceiver? = null
+
+    /**
+     * Whether this panel could repair its own Android System WebView, computed away from the screen.
+     *
+     * Cached rather than asked for on demand because deciding it costs a privileged probe: a cold
+     * [Su.availableCachedIsolated] forks `su` and waits for it, and the caller is a blocked status screen
+     * being drawn on the main thread. Null until the first answer lands, which the screen renders as
+     * saying nothing rather than as a confident "this panel cannot".
+     */
+    @Volatile private var webViewRepairCapability: WebViewRepairCapability? = null
     private val lightMqttPublisher = SensorLightPublisher(
         publish = { lux ->
             if (!teardownBoundary.isStopping) {
@@ -2728,6 +2738,7 @@ class PaneldService : Service() {
             runCatching { adb.reassert() }
             startScreenOnReconciliation()
             startWebViewRebindWatch()
+            startWebViewRepairOffer()
             sensors.start(
                 onLux = { lux ->
                     submitIlluminanceIfExposed(
@@ -2797,7 +2808,8 @@ class PaneldService : Service() {
                 }
                 // System WebView auto-update (opt-in): advance to the profile's pinned build. BEFORE
                 // self-update because a successful WebView install also restarts the process.
-                if (config.webViewAutoUpdate) {
+                refreshWebViewRepairCapability()
+            if (config.webViewAutoUpdate) {
                     var webViewHeal: WebViewInstaller.HealResult? = null
                     runOperation(
                         component = "System WebView",
@@ -3546,6 +3558,7 @@ class PaneldService : Service() {
             // retired client. Ordered before the retirement fence below for exactly that reason.
             closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
             closeOwner("WebView rebind watch") { stopWebViewRebindWatch() }
+            closeOwner("WebView repair offer") { WebViewRepairRuntime.detach() }
             closeOwnerResult("screen reconcile worker") {
                 screenWakeWorker.closeAndJoin(
                     minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),
@@ -3922,6 +3935,49 @@ class PaneldService : Service() {
      * cannot outlive an activity or be registered twice by a repaint; the decision is cheap, and it asks
      * the panel-local questions before it ever queries the provider.
      */
+    /**
+     * Let a blocked status screen offer the repair this service already knows how to perform.
+     *
+     * The screen is handed three narrow questions rather than a reference to this service: what the panel
+     * can do, how to start it, and what the installer is saying. Nothing here is a second implementation
+     * of the repair — [installComponent] is the same entry point the Install page posts to, so a panel
+     * cannot end up with two ways to install an engine that disagree about what "busy" means.
+     *
+     * The capability is refreshed off the main thread and then cached. It is refreshed again on each
+     * update tick because both of its inputs can change while the panel sits on the blocked screen:
+     * a root helper can finish installing, and a profile can arrive with a build pinned for this model.
+     */
+    private fun startWebViewRepairOffer() {
+        refreshWebViewRepairCapability()
+        WebViewRepairRuntime.attach(
+            capability = { webViewRepairCapability },
+            start = { installComponent("webview", "reinstall", "") },
+            progress = {
+                WebViewRepairProgress(
+                    running = InstallProgress.running,
+                    message = InstallProgress.message,
+                )
+            },
+        )
+    }
+
+    /** Ask the two privileged questions once, off the drawing thread, and publish the answer. */
+    private fun refreshWebViewRepairCapability() {
+        scope.launch {
+            val capability = runCatching {
+                WebViewRepairCapability(
+                    hasKnownGoodBuild = profile.recommendedWebView != null,
+                    // The same route test the Install page's own offer uses, and deliberately not the
+                    // wider typed-shell one: `WebViewInstaller.heal` refuses Shizuku, so a panel with
+                    // only Shizuku would be offered a button that cannot finish.
+                    privileged = Su.availableCachedIsolated() || HelperClient.available(),
+                    managedElsewhere = PanelInfo.webViewPlayManaged(this@PaneldService),
+                )
+            }.getOrNull()
+            if (capability != null) webViewRepairCapability = capability
+        }
+    }
+
     private fun startWebViewRebindWatch() {
         if (webViewRebindReceiver != null) return
         val receiver = object : BroadcastReceiver() {

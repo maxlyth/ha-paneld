@@ -29,6 +29,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -59,6 +60,7 @@ import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
 import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
+import io.github.maxlyth.hapaneld.util.scannableHost
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -2113,7 +2115,7 @@ class DashboardActivity : AppCompatActivity() {
             outcome = outcome,
             evidence = evidence,
         )
-        showV2CompatibilityScreen(title, detail, "Retry", admissionRetryClass(outcome))
+        showV2CompatibilityScreen(title, detail, "Retry", admissionRetryClass(outcome), outcome)
     }
 
     /** A screen that reports work in flight; it is replaced by that work's outcome, so it never arms. */
@@ -2123,7 +2125,7 @@ class DashboardActivity : AppCompatActivity() {
             state = RendererAdmissionState.CHECKING,
             nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
         )
-        showV2CompatibilityScreen(title, detail, null, AdmissionRetryClass.MANUAL_ONLY)
+        showV2CompatibilityScreen(title, detail, null, AdmissionRetryClass.MANUAL_ONLY, null)
     }
 
     private fun showV2CompatibilityScreen(
@@ -2131,7 +2133,8 @@ class DashboardActivity : AppCompatActivity() {
         detail: String,
         retryLabel: String?,
         autoRetry: AdmissionRetryClass,
-    ) = paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = true)
+        outcome: AdmissionOutcome?,
+    ) = paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, outcome, rearm = true)
 
     /**
      * [rearm] is false only when the screen already on display is being redrawn for a panel-theme or
@@ -2146,6 +2149,7 @@ class DashboardActivity : AppCompatActivity() {
         detail: String,
         retryLabel: String?,
         autoRetry: AdmissionRetryClass,
+        outcome: AdmissionOutcome?,
         rearm: Boolean,
     ) {
         if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return
@@ -2155,15 +2159,38 @@ class DashboardActivity : AppCompatActivity() {
         val carriedDeadlineMs = if (rearm) null else admissionCountdown.deadlineAtMs
         if (web != null) teardownWeb()
         val surface = statusSurface()
+        // What this particular screen can offer beyond Retry, decided from the verdict it is showing
+        // rather than from the call site's copy. Both answers are pure and tested away from the views.
+        val repair = webViewRepairOffer(outcome, WebViewRepairRuntime.capability())
+        val phoneUrl = configureQrPath(outcome)?.let { path ->
+            scannableHost(localIpv4(), localIpv6())?.let { host ->
+                LocalAdminEndpoint.url(host, Config(this).httpPort, path)
+            }
+        }
+        val repairNote = webViewRepairNote(repair)?.let { surface.detail(it) }
+        val qr = phoneUrl?.let { surface.qr(it, getString(R.string.config_qr_description, it)) }
+        val phoneAddress = phoneUrl?.takeIf { qr != null }?.let { surface.caption(it, accent = true) }
+        // A code replaces the explanation as well as the button, because at this size it cannot sit
+        // under the full one without pushing the action off the panel. Measured, not assumed.
+        val shown = (if (qr != null) configureQrDetail(outcome) else null) ?: detail
         val buttons = buildList {
             retryLabel?.let { label ->
                 add(surface.action(label) {
                     retryAdmission(resetBackoff = true)
                 })
             }
-            add(surface.action("Configure") {
-                startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
-            })
+            if (repair == WebViewRepairOffer.OFFER) {
+                add(surface.action(WEB_VIEW_REPAIR_LABEL, primary = true) { button ->
+                    startWebViewRepair(button, repairNote)
+                })
+            }
+            // The code replaces Configure rather than joining it: both open the same page, and the
+            // whole reason the code is here is that this page is the one worth doing on a phone.
+            if (qr == null) {
+                add(surface.action("Configure") {
+                    startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
+                })
+            }
         }
         // The retry countdown is deliberately a real number under the actions, not a spinner. The
         // jittered delay is computed once, here, and this row counts down to that exact figure. A
@@ -2174,18 +2201,120 @@ class DashboardActivity : AppCompatActivity() {
         surface.setBody(
             *listOfNotNull(
                 surface.heading(title),
-                surface.detail(detail),
+                surface.detail(shown),
+                qr,
+                phoneAddress,
+                repairNote,
                 surface.actionRow(*buttons.toTypedArray()),
                 countdown,
             ).toTypedArray(),
         )
+        // The outcome travels with the redraw, so a rotation or a theme flip rebuilds the same offer
+        // rather than a bare Retry screen. An in-flight repair is deliberately NOT carried: the poll
+        // holds the views it updates, both die with the discarded tree, and the installer's own single
+        // slot is still the authority the redrawn screen reads.
         showStatusSurface(surface) {
-            paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, rearm = false)
+            paintV2CompatibilityScreen(title, detail, retryLabel, autoRetry, outcome, rearm = false)
         }
         admissionCountdownView = countdown
         if (carriedDeadlineMs != null) resumeAdmissionAutoRetry(carriedDeadlineMs, title)
         else if (autoRetryDelayMs != null) armAdmissionAutoRetry(autoRetryDelayMs, title)
         Log.w(TAG, "$title: $detail")
+    }
+
+    /**
+     * What the screen says about repairing itself, in the person's terms rather than the installer's.
+     *
+     * The copy lives here rather than beside the decision so that it stays inside the file the plain
+     * language gate reads; the decision it renders is pure and tested on its own.
+     */
+    private fun webViewRepairNote(offer: WebViewRepairOffer): String? = when (offer) {
+        WebViewRepairOffer.OFFER ->
+            "This panel has a known-good version and can install it now. It restarts once when it finishes."
+        WebViewRepairOffer.NEEDS_PRIVILEGE ->
+            "This panel has a known-good version but is not allowed to install it, so this one has to be " +
+                "done by hand. Update it, then tap Retry."
+        WebViewRepairOffer.NO_KNOWN_GOOD_BUILD ->
+            "No known-good version is bundled for this panel, so this one has to be updated by hand. " +
+                "Reinstalling the same version repairs a damaged one. Tap Retry afterwards."
+        WebViewRepairOffer.MANAGED_ELSEWHERE ->
+            "This panel gets its Android System WebView from a store, which will replace it more safely " +
+                "than this would. Update it there, then tap Retry."
+        // Nothing extra to say in either case: one is a screen about something else, and the other
+        // is a screen whose panel has not finished working out what it can do.
+        WebViewRepairOffer.NOT_REPAIRABLE,
+        WebViewRepairOffer.UNKNOWN_CAPABILITY,
+        -> null
+    }
+
+    /**
+     * Run the repair, and report it where the person is already looking.
+     *
+     * **There is no success branch, and its absence is the design.** Installing an engine is only half of
+     * the repair: a provider binds once per process, so the panel cannot use what it just installed until
+     * it restarts, and the service takes that restart a few seconds later. The ordinary end of a
+     * successful repair is therefore this screen disappearing with the process that drew it, and the
+     * panel returning through the normal admission sequence. Everything below describes the paths where
+     * nothing was installed.
+     */
+    private fun startWebViewRepair(button: Button, note: TextView?) {
+        button.isEnabled = false
+        button.text = "Installing…"
+        when (WebViewRepairRuntime.request()) {
+            WebViewRepairRequest.STARTED -> {
+                note?.text = "Downloading and installing. On a slow network this takes a few minutes."
+                pollWebViewRepair(button, note)
+            }
+            // Both refusals hand the button back, because both are states that lapse: another install
+            // finishes, and a service that has not attached yet attaches. A disabled button here would
+            // be a dead end on a screen whose whole purpose is to stop being one.
+            WebViewRepairRequest.BUSY -> releaseWebViewRepair(
+                button,
+                note,
+                "The panel is already installing something else. Try again when it has finished.",
+            )
+            WebViewRepairRequest.UNAVAILABLE -> releaseWebViewRepair(
+                button,
+                note,
+                "The panel's own service is not ready yet, so nothing was installed. Try again shortly.",
+            )
+        }
+    }
+
+    /** Hand the offer back after an attempt that installed nothing, saying why. */
+    private fun releaseWebViewRepair(button: Button, note: TextView?, reason: String) {
+        button.isEnabled = true
+        button.text = WEB_VIEW_REPAIR_LABEL
+        note?.text = reason
+    }
+
+    /**
+     * Follow the running install and retitle the note as it goes.
+     *
+     * The installer publishes one process-wide slot and no event, so this reads it on a timer — the same
+     * shape the Install page uses over HTTP. Both views are re-tested for attachment on every tick, which
+     * is this activity's existing idiom for a callback that outlives the screen it was created for: a
+     * replaced screen's poll finds a detached button and stops, without a teardown hook to forget.
+     */
+    private fun pollWebViewRepair(button: Button, note: TextView?) {
+        main.postDelayed({
+            if (destroyed || !BuiltinDashboard.ownsActivity(activityOwner)) return@postDelayed
+            if (!button.isAttachedToWindow) return@postDelayed
+            val progress = WebViewRepairRuntime.progress()
+            if (progress.running) {
+                if (progress.message.isNotBlank()) note?.text = progress.message
+                pollWebViewRepair(button, note)
+                return@postDelayed
+            }
+            // Still here, with nothing running: the install ended without replacing the engine, because
+            // replacing it would have taken this process with it.
+            releaseWebViewRepair(
+                button,
+                note,
+                progress.message.takeIf { it.isNotBlank() }
+                    ?: "The update did not finish, and nothing on this panel was changed.",
+            )
+        }, WEB_VIEW_REPAIR_POLL_MS)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -2227,7 +2356,6 @@ class DashboardActivity : AppCompatActivity() {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
                 "The built-in dashboard needs a newer Android System WebView than this panel has. " +
-                    "Update or repair it, then tap Retry — reinstalling the same build repairs a damaged one. " +
                     "Another dashboard app on the panel may still work.",
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
@@ -2331,14 +2459,14 @@ class DashboardActivity : AppCompatActivity() {
                                 "Home Assistant sign-in rejected"
                             },
                             if (neverSignedIn) {
-                                "Nothing can load until the panel has a Home Assistant login. Configure " +
-                                    "opens this panel's settings, where Home Assistant connection holds " +
-                                    "the sign-in. The dashboard opens on its own once the sign-in works."
+                                "Nothing can load until the panel has a Home Assistant login. The " +
+                                    "sign-in lives in this panel's settings, under Home Assistant " +
+                                    "connection. The dashboard opens on its own once the sign-in works."
                             } else {
                                 "The saved sign-in stopped working, so the dashboard has not opened. " +
-                                    "Configure opens this panel's settings: sign in again under Home " +
-                                    "Assistant connection and the dashboard returns on its own. Tap Retry " +
-                                    "instead if the account has been restored on the Home Assistant server."
+                                    "Sign in again in this panel's settings, under Home Assistant " +
+                                    "connection, and the dashboard returns on its own. Tap Retry instead " +
+                                    "if the account has been restored on the Home Assistant server."
                             },
                             if (neverSignedIn) {
                                 AdmissionOutcome.SIGN_IN_REQUIRED
@@ -3389,6 +3517,13 @@ class DashboardActivity : AppCompatActivity() {
         // Tightened once commit-from-catalog made the happy bootstrap take milliseconds (maintainer,
         // round-10): the net now assumes seconds are normal and anything past twenty is a fault.
         private const val BOOTSTRAP_HOLD_HONESTY_MS = 20_000L
+        /** Named once so the button that offers the repair and the button that is handed back
+         *  after a refusal cannot drift apart. */
+        private const val WEB_VIEW_REPAIR_LABEL = "Update the web viewer"
+        /** Slow on purpose: the installer publishes a string, not an event, and a download that
+         *  runs for minutes gains nothing from being asked about more often than the person
+         *  watching would notice. */
+        private const val WEB_VIEW_REPAIR_POLL_MS = 2_500L
         private const val BOOTSTRAP_WATCHDOG_RETRY_MS = 30_000L
         private const val BOOTSTRAP_WATCHDOG_PROBLEM_MS = 90_000L
         /** The widening retry never idles longer than this, so a panel converges once HA answers. */

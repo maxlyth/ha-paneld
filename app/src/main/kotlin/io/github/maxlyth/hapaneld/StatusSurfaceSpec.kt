@@ -101,6 +101,9 @@ internal data class StatusSurfaceSpec(
     val actionLabelSp: Float,
     val progressWidthDp: Int,
     val progressHeightDp: Int,
+    /** The side of the square QR a screen may offer. Sized so the code still scans from arm's
+     *  length on the smallest panel while leaving the address legible underneath it. */
+    val qrSizeDp: Int,
 ) {
 }
 
@@ -147,6 +150,7 @@ internal fun statusSurfaceSpec(widthDp: Int, heightDp: Int): StatusSurfaceSpec {
         actionLabelSp = STATUS_ACTION_LABEL_SP,
         progressWidthDp = if (compact) 220 else 280,
         progressHeightDp = 5,
+        qrSizeDp = if (compact) 132 else 192,
     )
 }
 
