@@ -554,13 +554,13 @@ run_capacity_probe_fixture() {
       ;;
     missing-sed)
       prelude='df() {
-        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system ] || return 2
+        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system/etc/init ] || return 2
         printf "%s\n" "$CAPACITY_DF_OUTPUT"
       }'
       ;;
     *)
       prelude='df() {
-        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system ] || return 2
+        [ "$#" -eq 3 ] && [ "$1" = -P ] && [ "$2" = -k ] && [ "$3" = /system/etc/init ] || return 2
         printf "%s\n" "$CAPACITY_DF_OUTPUT"
       }
       sed() { /bin/sed "$@"; }'
@@ -2152,7 +2152,10 @@ done
 
 MOCK_DEVICE_AWK=missing MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "an awk-less Android shell still determines writable-system capacity"
-assert_log_contains 'df -P -k /system' "capacity probing requests one portable POSIX-format row"
+assert_log_contains 'df -P -k /system/etc/init' \
+  "capacity is measured at the directory the transaction writes, not at its parent"
+assert_log_contains '/system/etc/init/\.hapaneld-rw-probe-' \
+  "writability is proven with real bytes at the directory the transaction writes, not at its parent"
 assert_not_contains 'df[^|]*/system[^|]*\|[[:space:]]*awk' "$MOCK_CALL_LOG" \
   "capacity probing has no device-side awk dependency"
 
@@ -2397,6 +2400,100 @@ MOCK_HELPER_INSTALL=step_failed \
 assert_failure "a failed staging step fails the install"
 assert_contains 'The panel reported: INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' \
   "a failed staging step names itself instead of one generic message"
+
+# Issue #120, reopened 2026-08-27. rc2 cleared the retirement wait and then failed at its first copy,
+# and the step name was all a report could carry: it cannot separate a read-only partition from a
+# full one, from exhausted inodes, from a directory mounted differently to its parent, from an
+# SELinux refusal, from staging that had been swept away. The helper now stages under /data/local
+# and only the boot file still goes to /system, so the destinations differ from that report; the
+# failure class does not. cp had already printed
+# its errno into the same capture both times and the marker grep dropped it, so the answer was in
+# the output twice and never reached anywhere it could be read.
+MOCK_HELPER_INSTALL=step_failed_diag \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a failed copy of the staged helper fails the install"
+assert_contains 'The panel reported: INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' \
+  "the failing copy still names the step it failed at"
+assert_contains 'No space left on device' \
+  "the errno the panel printed for the failing copy reaches the operator"
+assert_contains 'dir=/data/local mount=/data state=rw availkb=44' \
+  "the operator is told what the panel measured at the exact directory it could not write"
+assert_contains 'source=/data/local/tmp/hapaneld-helper-[0-9a-f]+ state=verified' \
+  "the report separates an authenticated staged file from a destination that refused it"
+# This copy happens after the transaction has removed stale recovery copies, so unlike a
+# pre-mutation refusal the panel HAS been touched and must be rolled back. The diagnostics have to
+# survive that path too, not only the untouched one.
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' \
+  "a copy that failed after staging began still rolls the panel back"
+assert_contains 'the prior helper was preserved or restored' \
+  "a rolled-back copy failure reports its rollback outcome"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" \
+  "a failed copy never replaces the APK"
+
+# The shape of an ordinary v0.9.6-to-rc2 rooted upgrade, with the preflight in place: a panel that
+# can take the replacement sees nothing new. A preflight that announced itself on the happy path
+# would be a regression in its own right.
+run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_success "an ordinary rooted upgrade still completes with the preflight in place"
+assert_not_contains 'INSTALL_DIAG' "$LAST_OUTPUT" "a successful upgrade prints no diagnostics"
+assert_not_contains 'INSTALL_UNCHANGED' "$LAST_OUTPUT" "a successful upgrade is never described as refused"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*install-system' "the ordinary upgrade still takes the system layout"
+
+# A refusal that happens before the transaction's first mutation must not be dressed as a wedged
+# helper. The retirement advice sends its reader after a stuck process; a panel whose /system is out
+# of room has no stuck process, and following that advice would waste their evening.
+MOCK_HELPER_INSTALL=preflight_space \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a panel without room for the replacement fails the install"
+assert_contains 'this panel cannot take the root-helper replacement, so the upgrade did not start' \
+  "a capacity refusal is described as a panel that cannot take the replacement"
+assert_contains 'Nothing on the panel changed' "a pre-mutation refusal is described as untouched"
+assert_contains 'The panel reported: INSTALL_UNCHANGED install_system target_insufficient_space' \
+  "a capacity refusal names its own reason"
+assert_contains 'does not have room for the replacement plus its recovery copy' \
+  "a capacity refusal explains what the panel ran out of"
+assert_not_contains 'Restarting the panel clears a wedged helper' "$LAST_OUTPUT" \
+  "a capacity refusal is never given the wedged-helper advice"
+assert_not_contains 'Restore the helper manually' "$LAST_OUTPUT" \
+  "a panel that was never touched is not told to repair its helper by hand"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-system' "$MOCK_CALL_LOG" \
+  "a capacity refusal does not roll back a panel that was never changed"
+
+MOCK_HELPER_INSTALL=preflight_readonly \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a read-only destination fails the install"
+assert_contains 'The panel reported: INSTALL_UNCHANGED install_system target_read_only' \
+  "a read-only destination names its own reason"
+assert_contains 'mounted read-only' "a read-only refusal says the partition is read-only"
+assert_contains 'remount' "a read-only refusal offers the reboot-free remount"
+assert_not_contains 'Restarting the panel clears a wedged helper' "$LAST_OUTPUT" \
+  "a read-only refusal is never given the wedged-helper advice"
+
+# Both other layouts reach the same refusal, and both used to answer with the retirement advice.
+MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_INSTALL=preflight_space \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a systemless panel without room for the replacement fails the install"
+assert_contains 'The panel reported: INSTALL_UNCHANGED install_systemless target_insufficient_space' \
+  "a systemless capacity refusal names its own reason"
+assert_not_contains 'Restarting the panel clears a wedged helper' "$LAST_OUTPUT" \
+  "a systemless capacity refusal is never given the wedged-helper advice"
+
+MOCK_VENDOR_RC_STATE=managed MOCK_HELPER_INSTALL=preflight_space \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a hybrid panel without room for the replacement fails the install"
+assert_contains 'The panel reported: INSTALL_UNCHANGED install_hybrid target_insufficient_space' \
+  "a hybrid capacity refusal names its own reason"
+assert_not_contains 'Restarting the panel clears a wedged helper' "$LAST_OUTPUT" \
+  "a hybrid capacity refusal is never given the wedged-helper advice"
+
+# The retirement case must keep its own advice: this is the one INSTALL_UNCHANGED reason where a
+# stuck process really is the blocker, and the split above is only correct if it did not take that
+# guidance away from the case that needs it.
+MOCK_HELPER_INSTALL=retirement \
+  run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
+assert_failure "a helper that cannot be retired still fails the install"
+assert_contains 'Restarting the panel clears a wedged helper' \
+  "the retirement refusal keeps the advice that belongs to it"
 
 MOCK_SYSTEM_WRITABLE=0 MOCK_HELPER_CAPABILITY=fail \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -6085,6 +6182,348 @@ if ! run_retire_scenario ledd_stuck && \
   pass "a surviving LED daemon times out, is escalated to SIGKILL, and is named in the diagnostic"
 else
   fail_test "a surviving LED daemon times out, is escalated to SIGKILL, and is named in the diagnostic"
+fi
+
+# ── Issue #120: the constrained /system replacement, executed rather than pattern-matched ────────
+#
+# The source-shape checks above cannot tell whether a refusal reason actually fires for its own
+# condition. These run the real functions out of the transaction script against real directories,
+# using a genuinely read-only mount that every Linux host has, so each reason is proven to fire for
+# the condition it names and for no other.
+PREFLIGHT_FN="$TMP/preflight-fn.sh"
+PREFLIGHT_ID=b7f3c1d4e5a6908172635445362718b9
+: > "$PREFLIGHT_FN"
+preflight_extract_failed=""
+for preflight_function in file_sha256 hash_matches file_bytes sum_bytes diag_reset describe_target \
+    emit_target_diag emit_source_diag write_probe preflight_target preflight_source copy_staged; do
+  preflight_body="$(sed -n "/^${preflight_function}() {$/,/^}$/p" "$PROVISION")"
+  # Absence is not evidence: an extraction that silently produced nothing would let every assertion
+  # below pass against an empty shell, so a missing or renamed function fails here and loudly.
+  if [ -z "$preflight_body" ]; then
+    preflight_extract_failed="$preflight_extract_failed $preflight_function"
+    continue
+  fi
+  printf '%s\n' "$preflight_body" >> "$PREFLIGHT_FN"
+done
+sed -i "s/@TRANSACTION_ID@/$PREFLIGHT_ID/g" "$PREFLIGHT_FN"
+if [ -z "$preflight_extract_failed" ]; then
+  pass "every preflight and copy function is present in the transaction script"
+else
+  fail_test "every preflight and copy function is present in the transaction script"
+fi
+
+# Deliberately NOT the suite's mock PATH. The sha256sum fixture answers 64 zeros for any path it
+# does not recognise, so running these functions under it would compare every digest against one
+# constant and call the result authentication. Real df, real dd, real cp, real sha256sum.
+run_preflight() {
+  PATH=/usr/bin:/bin /bin/sh -c ". '$PREFLIGHT_FN'
+$1" 2>&1
+}
+
+PREFLIGHT_DIR="$TMP/preflight"
+mkdir -p "$PREFLIGHT_DIR/target"
+printf 'staged helper bytes\n' > "$PREFLIGHT_DIR/staged"
+PREFLIGHT_SHA="$(/usr/bin/sha256sum "$PREFLIGHT_DIR/staged" | cut -d' ' -f1)"
+PREFLIGHT_WRONG_SHA="$(printf 'not the staged file\n' | /usr/bin/sha256sum | cut -d' ' -f1)"
+
+# A destination that can take the write says nothing at all. Silence is the contract: any output on
+# the success path would be parsed as a marker by the host.
+preflight_out="$(run_preflight "preflight_target install_system '$PREFLIGHT_DIR/target' 1024")"
+if [ -z "$preflight_out" ] && run_preflight "preflight_target install_system '$PREFLIGHT_DIR/target' 1024" >/dev/null; then
+  pass "a writable destination with headroom passes the preflight silently"
+else
+  fail_test "a writable destination with headroom passes the preflight silently"
+fi
+
+# The probe must leave nothing behind, or the very check for a full partition would consume the
+# last of it.
+if [ -z "$(ls -A "$PREFLIGHT_DIR/target")" ]; then
+  pass "the write probe removes its own file"
+else
+  fail_test "the write probe removes its own file"
+fi
+
+# A create that succeeds while writing nothing is exactly the probe this replaces: a zero-byte file
+# lands in an inode and never reaches the block allocator, so it cannot fail on a full partition.
+# The probe therefore has to check how many bytes actually arrived, and this proves that check is
+# load-bearing rather than decorative.
+preflight_out="$(run_preflight "dd() { : > \"\${2#of=}\"; }
+write_probe '$PREFLIGHT_DIR/target' && echo PROBE_PASSED || echo PROBE_REFUSED")"
+if printf '%s' "$preflight_out" | grep -Fqx PROBE_REFUSED; then
+  pass "a write that creates the file but stores no bytes does not pass the probe"
+else
+  fail_test "a write that creates the file but stores no bytes does not pass the probe"
+fi
+
+# And the control: the same stub writing the full block passes, so the assertion above is failing on
+# the byte count rather than on the stub merely existing.
+preflight_out="$(run_preflight "dd() { /bin/dd if=/dev/zero \"\$2\" bs=4096 count=1 2>/dev/null; }
+write_probe '$PREFLIGHT_DIR/target' && echo PROBE_PASSED || echo PROBE_REFUSED")"
+if printf '%s' "$preflight_out" | grep -Fqx PROBE_PASSED; then
+  pass "a write that stores the whole block passes the probe"
+else
+  fail_test "a write that stores the whole block passes the probe"
+fi
+
+preflight_out="$(run_preflight "preflight_target install_system '$PREFLIGHT_DIR/absent' 1024")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_directory_missing'; then
+  pass "a destination directory that does not exist refuses with its own reason"
+else
+  fail_test "a destination directory that does not exist refuses with its own reason"
+fi
+
+# Headroom is checked against what the transaction will actually write, so a requirement larger than
+# the filesystem refuses on capacity rather than reaching the copy and failing there.
+preflight_out="$(run_preflight "preflight_target install_system '$PREFLIGHT_DIR/target' 999999999999999")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_insufficient_space' &&
+   printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system target dir=.* availkb=[0-9]+ '; then
+  pass "a destination without headroom refuses on capacity and reports what it measured"
+else
+  fail_test "a destination without headroom refuses on capacity and reports what it measured"
+fi
+
+# /sys/firmware is read-only on every Linux host and small enough to stand in for a constrained
+# partition. This is the branch that the old zero-byte probe at the wrong directory could not reach.
+if [ -d /sys/firmware ] && grep -Eq ' /sys/firmware [a-z0-9]+ ro[, ]' /proc/mounts; then
+  preflight_out="$(run_preflight "preflight_target install_system /sys/firmware 64")"
+  if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_read_only' &&
+     printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system target dir=/sys/firmware .* state=ro '; then
+    pass "a read-only destination refuses as read-only rather than as a failed write"
+  else
+    fail_test "a read-only destination refuses as read-only rather than as a failed write"
+  fi
+
+  # And the same directory through the copy path: cp's own errno must survive to the caller.
+  preflight_out="$(run_preflight "copy_staged install_system cp_hapaneld-helper_new '$PREFLIGHT_DIR/staged' /sys/firmware/hapaneld-helper.new $PREFLIGHT_SHA")"
+  if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' &&
+     printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system cp_hapaneld-helper_new errno=.+' &&
+     printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system cp_hapaneld-helper_new source=.* state=verified '; then
+    pass "a refused copy reports the errno, the staged file's authenticity and the destination"
+  else
+    fail_test "a refused copy reports the errno, the staged file's authenticity and the destination"
+  fi
+else
+  fail_test "the read-only mount this fixture needs is present"
+fi
+
+# Exhausted inodes cannot be induced without mount privileges, so the panel's own reporting tool is
+# replaced instead. The assertion is about the classifier's ordering and wording, not about kernel
+# behaviour: a partition with blocks free and no inodes free must not be called full.
+preflight_out="$(run_preflight "df() {
+  case \" \$* \" in
+    *' -i '*) printf '%s\n' 'Filesystem Inodes IUsed IFree IUse% Mounted on'
+              printf '%s\n' \"tmpfs 65536 65536 0 100% $PREFLIGHT_DIR/target\" ;;
+    *) printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+       printf '%s\n' \"tmpfs 100000 1 99999 1% $PREFLIGHT_DIR/target\" ;;
+  esac
+}
+busybox() { return 127; }
+preflight_target install_system '$PREFLIGHT_DIR/target' 1024")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_insufficient_inodes'; then
+  pass "a destination out of inodes refuses on inodes rather than on capacity"
+else
+  fail_test "a destination out of inodes refuses on inodes rather than on capacity"
+fi
+
+# The same shape with zero inodes TOTAL is a filesystem that does not track them at all, which some
+# overlayfs and tmpfs mounts do. The free column cannot tell that apart from exhaustion, so reading
+# it alone turns a working upgrade into a refusal on a number that means "not applicable here".
+preflight_out="$(run_preflight "df() {
+  case \" \$* \" in
+    *' -i '*) printf '%s\n' 'Filesystem Inodes IUsed IFree IUse% Mounted on'
+              printf '%s\n' \"overlay 0 0 0 - $PREFLIGHT_DIR/target\" ;;
+    *) printf '%s\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+       printf '%s\n' \"overlay 100000 1 99999 1% $PREFLIGHT_DIR/target\" ;;
+  esac
+}
+busybox() { return 127; }
+preflight_target install_system '$PREFLIGHT_DIR/target' 1024")"
+if [ -z "$preflight_out" ]; then
+  pass "a filesystem that does not count inodes is not read as having run out of them"
+else
+  fail_test "a filesystem that does not count inodes is not read as having run out of them"
+fi
+
+# A destination the caller genuinely cannot write, on a filesystem that is not read-only and not
+# full. This is the catch-all, and it must stay distinguishable from the three named causes above.
+if [ "$(id -u)" = 0 ] && command -v setpriv >/dev/null 2>&1; then
+  mkdir -p "$PREFLIGHT_DIR/closed"
+  chmod 700 "$PREFLIGHT_DIR/closed"
+  # The dropped-privilege shell has to be able to read the extracted functions; only the destination
+  # under test may be closed to it.
+  PREFLIGHT_SHARED="$TMP/preflight-fn-readable.sh"
+  cp "$PREFLIGHT_FN" "$PREFLIGHT_SHARED"
+  chmod 755 "$TMP" "$PREFLIGHT_DIR" "$PREFLIGHT_SHARED"
+  preflight_out="$(setpriv --reuid=65534 --regid=65534 --clear-groups \
+    /bin/sh -c "PATH=/usr/bin:/bin; . '$PREFLIGHT_SHARED'; preflight_target install_system '$PREFLIGHT_DIR/closed' 1024" 2>&1 || true)"
+  if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_not_writable'; then
+    pass "a destination that refuses a real write refuses as unwritable"
+  else
+    fail_test "a destination that refuses a real write refuses as unwritable"
+  fi
+else
+  # Never silently skip: an unrunnable fixture is reported so the gap is visible in the log.
+  echo "   note: unprivileged write-refusal fixture needs root and setpriv; not run here"
+fi
+
+preflight_out="$(run_preflight "preflight_source install_system '$PREFLIGHT_DIR/absent' $PREFLIGHT_SHA")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system staged_source_unavailable' &&
+   printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system staged source=.* state=missing '; then
+  pass "staging that is no longer on the panel refuses as missing staging, not as a partition fault"
+else
+  fail_test "staging that is no longer on the panel refuses as missing staging, not as a partition fault"
+fi
+
+preflight_out="$(run_preflight "preflight_source install_system '$PREFLIGHT_DIR/staged' $PREFLIGHT_WRONG_SHA")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system staged_source_unauthenticated' &&
+   printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system staged source=.* state=mismatched '; then
+  pass "staging that does not match the signed checksum refuses before anything is replaced"
+else
+  fail_test "staging that does not match the signed checksum refuses before anything is replaced"
+fi
+
+preflight_out="$(run_preflight "preflight_source install_system '$PREFLIGHT_DIR/staged' $PREFLIGHT_SHA")"
+if [ -z "$preflight_out" ]; then
+  pass "authentic staging passes the source preflight silently"
+else
+  fail_test "authentic staging passes the source preflight silently"
+fi
+
+# The copy path's success case: silent, and the bytes actually arrive. Without this the errno
+# assertions above would still pass against a copy_staged that never copied anything.
+rm -f "$PREFLIGHT_DIR/target/copied"
+preflight_out="$(run_preflight "copy_staged install_system cp_hapaneld-helper_new '$PREFLIGHT_DIR/staged' '$PREFLIGHT_DIR/target/copied' $PREFLIGHT_SHA")"
+if [ -z "$preflight_out" ] && cmp -s "$PREFLIGHT_DIR/staged" "$PREFLIGHT_DIR/target/copied"; then
+  pass "a successful copy is silent and the destination is byte-identical to the staged file"
+else
+  fail_test "a successful copy is silent and the destination is byte-identical to the staged file"
+fi
+rm -f "$PREFLIGHT_DIR/target/copied"
+
+# Missing staging reaching the copy, rather than the preflight: the errno names it, and the source
+# line says the file is gone rather than blaming the destination.
+preflight_out="$(run_preflight "copy_staged install_system cp_hapaneld-helper_new '$PREFLIGHT_DIR/absent' '$PREFLIGHT_DIR/target/copied' $PREFLIGHT_SHA")"
+if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' &&
+   printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system cp_hapaneld-helper_new source=.* state=missing '; then
+  pass "a copy whose staged file has gone reports the source, not the destination"
+else
+  fail_test "a copy whose staged file has gone reports the source, not the destination"
+fi
+
+# Nothing this emits may carry anything but the fixed keys and the paths the transaction already
+# names in clear, because its whole purpose is to be pasted into a public issue.
+preflight_out="$(run_preflight "emit_target_diag install_system target '$PREFLIGHT_DIR/target'")"
+if [ "$(printf '%s\n' "$preflight_out" | grep -c .)" = 1 ] &&
+   printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system target dir=[^ ]+ mount=[^ ]+ state=[^ ]+ availkb=[^ ]+ inodesfree=[^ ]+ mode=[^ ]+ owner=[^ ]+ selinux=[^ ]+ context=[^ ]+$'; then
+  pass "a target diagnostic is one line of fixed keys with no free-form text"
+else
+  fail_test "a target diagnostic is one line of fixed keys with no free-form text"
+fi
+
+# Every field must degrade rather than fail. A host with no getenforce and no SELinux labels still
+# has to produce a complete line, because the diagnostic runs on the recovery path.
+preflight_out="$(run_preflight "getenforce() { return 127; }
+ls() { return 127; }
+emit_target_diag install_system target '$PREFLIGHT_DIR/target'")"
+if printf '%s' "$preflight_out" | grep -Eq 'selinux=unknown context=unknown$'; then
+  pass "unreadable diagnostic fields degrade to unknown instead of failing the report"
+else
+  fail_test "unreadable diagnostic fields degrade to unknown instead of failing the report"
+fi
+
+# Every install verb must refuse before it removes or replaces anything. A failing panel was told
+# its helper "was preserved or restored" by a transaction that had already deleted recovery copies
+# from the partition it then failed to write.
+#
+# Removal and replacement is the exact claim, and it is narrower than "before anything at all":
+# every verb creates /data/adb/hapaneld above the preflight, and install_systemless also creates
+# /data/adb/service.d. That is idempotent directory creation which changes no helper, no boot
+# registration and no installed package, so the host's "nothing on the panel changed" stays true;
+# the scan below is deliberately over the removing and replacing verbs for that reason.
+assert_preflight_precedes_mutation() {
+  local function_name="$1" body first_mutation first_preflight
+  body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
+  first_preflight="$(grep -nE '^  preflight_(source|target) ' <<<"$body" | head -1 | cut -d: -f1)"
+  first_mutation="$(grep -nE '^  (rm -f|cp |copy_staged|mv -f) ' <<<"$body" | head -1 | cut -d: -f1)"
+  if [ -n "$first_preflight" ] && [ -n "$first_mutation" ] && [ "$first_preflight" -lt "$first_mutation" ]; then
+    pass "$function_name refuses before its first mutation"
+  else
+    fail_test "$function_name refuses before its first mutation"
+  fi
+}
+assert_preflight_precedes_mutation install_system
+assert_preflight_precedes_mutation install_systemless
+assert_preflight_precedes_mutation install_hybrid
+
+# Every copy of a staged file goes through the reporting path. One raw `cp @STAGED_...@` left behind
+# is one more failure that can only ever report a step name.
+preflight_raw_copies=0
+for preflight_function in install_system install_systemless install_hybrid; do
+  if sed -n "/^${preflight_function}() {$/,/^}$/p" "$PROVISION" | grep -qE '^  cp @STAGED_[A-Z_]+@ '; then
+    preflight_raw_copies=$((preflight_raw_copies + 1))
+  fi
+done
+if [ "$preflight_raw_copies" = 0 ]; then
+  pass "no install verb copies staged content without the reporting path"
+else
+  fail_test "no install verb copies staged content without the reporting path"
+fi
+
+# The panel's /system/bin/sh does 32-bit signed arithmetic. Multiplying a df figure in KB by 1024 goes
+# negative past 2 GiB free, and a negative number is below every need, so the panel with the MOST
+# room was refused as having none - measured on hardware as 2652400 * 1024 = -1578909696. This host's
+# shell is 64-bit, so no runtime assertion here can fail for the right reason; the shape of the
+# comparison is asserted instead, and the hardware acceptance tool is what proves it live.
+preflight_target_code="$(sed -n '/^preflight_target() {$/,/^}$/p' "$PROVISION" | grep -vE '^[[:space:]]*#')"
+if printf '%s\n' "$preflight_target_code" | grep -qE 'availkb[[:space:]]*\*[[:space:]]*1024'; then
+  fail_test "the capacity comparison never multiplies the panel's free-space figure"
+else
+  pass "the capacity comparison never multiplies the panel's free-space figure"
+fi
+if printf '%s\n' "$preflight_target_code" | grep -qF '(preflight_need + 1023) / 1024'; then
+  pass "the capacity comparison divides the need into kilobytes instead"
+else
+  fail_test "the capacity comparison divides the need into kilobytes instead"
+fi
+
+# Host side: the diagnostics are bounded in both directions, and the advice is chosen by reason.
+HOST_DIAG_FN="$TMP/host-diag-fn.sh"
+{
+  printf '%s\n' "sanitize_terminal() { LC_ALL=C tr -d '\\000-\\010\\013\\014\\016-\\037\\177'; }"
+  sed -n '/^root_helper_install_diagnostics() {$/,/^}$/p' "$PROVISION"
+  sed -n '/^root_helper_install_marker() {$/,/^}$/p' "$PROVISION"
+  sed -n '/^root_helper_unchanged_advice() {$/,/^}$/p' "$PROVISION"
+} > "$HOST_DIAG_FN"
+
+host_diag_input="$(for i in 1 2 3 4 5 6 7 8 9; do printf 'INSTALL_DIAG install_system target line=%s\n' "$i"; done)"
+host_diag_lines="$(TARGET=panel.test:5555 bash -c ". '$HOST_DIAG_FN'; root_helper_install_diagnostics \"\$1\"" _ "$host_diag_input" | grep -c .)"
+if [ "$host_diag_lines" = 6 ]; then
+  pass "a panel cannot flood the operator's output through the diagnostic path"
+else
+  fail_test "a panel cannot flood the operator's output through the diagnostic path"
+fi
+
+host_diag_out="$(TARGET=panel.test:5555 bash -c ". '$HOST_DIAG_FN'; root_helper_unchanged_advice 'INSTALL_UNCHANGED install_system target_read_only'")"
+if printf '%s' "$host_diag_out" | grep -Fq 'mounted read-only' &&
+   ! printf '%s' "$host_diag_out" | grep -Fq 'wedged helper'; then
+  pass "a read-only refusal is advised about the mount, never about a wedged helper"
+else
+  fail_test "a read-only refusal is advised about the mount, never about a wedged helper"
+fi
+
+host_diag_out="$(TARGET=panel.test:5555 bash -c ". '$HOST_DIAG_FN'; root_helper_unchanged_advice 'INSTALL_UNCHANGED install_system helper_retirement'")"
+if printf '%s' "$host_diag_out" | grep -Fq 'wedged helper'; then
+  pass "the retirement refusal keeps its own advice after the split"
+else
+  fail_test "the retirement refusal keeps its own advice after the split"
+fi
+
+host_diag_out="$(TARGET=panel.test:5555 bash -c ". '$HOST_DIAG_FN'; root_helper_install_marker 'INSTALL_DIAG install_system target dir=/data/local
+INSTALL_UNCHANGED install_system target_read_only'")"
+if [ "$host_diag_out" = 'INSTALL_UNCHANGED install_system target_read_only' ]; then
+  pass "the marker extractor reads a pre-mutation refusal, which it used to drop"
+else
+  fail_test "the marker extractor reads a pre-mutation refusal, which it used to drop"
 fi
 
 managed_restart_body="$(awk '

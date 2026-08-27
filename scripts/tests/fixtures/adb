@@ -18,6 +18,7 @@ fi
 
 printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 STATE_DIR="${MOCK_STATE_DIR:-$(dirname "$MOCK_CALL_LOG")}"
+MOCK_DIAG_ID="${MOCK_DIAG_ID:-abcdef0123456789abcdef0123456789}"
 HELPER_STATE_FIXTURE="$(cd "$(dirname "$0")" && pwd)/helper-state"
 # A clean panel has no package at all. Without this the fixture would silently re-create one and a
 # genuine first installation could never be modelled.
@@ -1154,6 +1155,26 @@ case "${1:-}" in
               "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed ]; then
             printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed_diag ]; then
+            # The Issue #120 shape as a panel now answers it: the errno cp already printed, the two
+            # bounded fixed-key lines beside it, then the same step marker as before. The helper is
+            # staged under /data/local in this layout, so that is the directory a refused copy names.
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new errno=cp: /data/local/.hapaneld-helper.provision-%s: No space left on device\n' "$MOCK_DIAG_ID"
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new source=/data/local/tmp/hapaneld-helper-%s state=verified bytes=77848\n' "$MOCK_DIAG_ID"
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new dir=/data/local mount=/data state=rw availkb=44 inodesfree=unknown mode=771 owner=2000:2000 selinux=Enforcing context=u:object_r:shell_data_file:s0\n'
+            printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = preflight_space ]; then
+            printf 'INSTALL_DIAG install_%s target dir=/data/local mount=/data state=rw availkb=44 inodesfree=unknown mode=771 owner=2000:2000 selinux=Enforcing context=u:object_r:shell_data_file:s0\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+            printf 'INSTALL_UNCHANGED install_%s target_insufficient_space\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = preflight_readonly ]; then
+            # The read-only case is the boot-file directory: the one place this layout still writes
+            # on /system, and the mount a zero-byte probe at /system could never see.
+            printf 'INSTALL_DIAG install_%s target dir=/system/etc/init mount=/system/etc/init state=ro availkb=98668 inodesfree=unknown mode=755 owner=0:0 selinux=Enforcing context=u:object_r:system_file:s0\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+            printf 'INSTALL_UNCHANGED install_%s target_read_only\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"
@@ -1249,6 +1270,26 @@ case "${1:-}" in
               "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
           elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed ]; then
             printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = step_failed_diag ]; then
+            # The Issue #120 shape as a panel now answers it: the errno cp already printed, the two
+            # bounded fixed-key lines beside it, then the same step marker as before. The helper is
+            # staged under /data/local in this layout, so that is the directory a refused copy names.
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new errno=cp: /data/local/.hapaneld-helper.provision-%s: No space left on device\n' "$MOCK_DIAG_ID"
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new source=/data/local/tmp/hapaneld-helper-%s state=verified bytes=77848\n' "$MOCK_DIAG_ID"
+            printf 'INSTALL_DIAG install_system cp_hapaneld-helper_new dir=/data/local mount=/data state=rw availkb=44 inodesfree=unknown mode=771 owner=2000:2000 selinux=Enforcing context=u:object_r:shell_data_file:s0\n'
+            printf 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new\n'
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = preflight_space ]; then
+            printf 'INSTALL_DIAG install_%s target dir=/data/local mount=/data state=rw availkb=44 inodesfree=unknown mode=771 owner=2000:2000 selinux=Enforcing context=u:object_r:shell_data_file:s0\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+            printf 'INSTALL_UNCHANGED install_%s target_insufficient_space\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+          elif [ "${MOCK_HELPER_INSTALL:-ok}" = preflight_readonly ]; then
+            # The read-only case is the boot-file directory: the one place this layout still writes
+            # on /system, and the mount a zero-byte probe at /system could never see.
+            printf 'INSTALL_DIAG install_%s target dir=/system/etc/init mount=/system/etc/init state=ro availkb=98668 inodesfree=unknown mode=755 owner=0:0 selinux=Enforcing context=u:object_r:system_file:s0\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
+            printf 'INSTALL_UNCHANGED install_%s target_read_only\n' \
+              "$(printf '%s' "$command_text" | grep -oE 'install-(system|systemless|hybrid)' | head -1 | cut -d- -f2)"
           else
             [ "${MOCK_HELPER_INSTALL:-ok}" = ok ] && printf 'INSTALL_OK\n'
             [ "${MOCK_HELPER_INSTALL:-ok}" != ok ] || : > "$STATE_DIR/active-helper-transaction"

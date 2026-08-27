@@ -2447,6 +2447,64 @@ run_adb_install_attempt() {
   return "$status"
 }
 
+# Issue #120: a failed /system helper replacement was reported twice carrying only a step name.
+# The reason was already in the same capture both times, because cp prints its errno there, and this
+# grep threw it away — leaving nothing to separate a read-only partition from an exhausted one from
+# a differently-mounted /system/bin.
+root_helper_install_marker() {
+  printf '%s\n' "$1" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED|INSTALL_UNCHANGED) ' | head -1 || true
+}
+
+# Each of these three ends `|| true` because grep exits 1 when nothing matches, and under the
+# script's `set -e` that would abort the failure path itself. No match is a normal answer here: a
+# transaction that emitted no marker, no reason or no diagnostic simply has none to show, and the
+# caller tests the resulting string rather than an exit status.
+#
+# The displayed detail is the first marker, which for a retirement timeout is the line carrying the
+# surviving pids. The reason a transaction refused is a different question with a different answer,
+# and it is only ever on the INSTALL_UNCHANGED line.
+root_helper_unchanged_reason() {
+  printf '%s\n' "$1" | grep -E '^INSTALL_UNCHANGED ' | head -1 || true
+}
+
+# The transaction emits fixed keys over paths it already names in clear, so these lines are safe to
+# paste into a public issue. They are capped in both directions anyway: a panel that answers
+# unexpectedly must not be able to flood the host's output through the failure path.
+root_helper_install_diagnostics() {
+  printf '%s\n' "$1" | grep -E '^INSTALL_DIAG ' | head -6 | cut -c1-300 | sanitize_terminal || true
+}
+
+# `INSTALL_UNCHANGED <verb> <reason>` means the transaction refused before its first mutation. Only
+# one reason is a wedged helper; the rest are the panel declining to accept the replacement at all,
+# and telling their owner to restart a stuck process would send them after the wrong thing.
+root_helper_unchanged_advice() {
+  case "$1" in
+    *\ helper_retirement)
+      printf '%s\n' "Re-run once that process can be stopped. Restarting the panel clears a wedged helper." ;;
+    *\ target_read_only)
+      printf '%s\n' "The partition holding that directory is mounted read-only, so no upgrade can write to it." \
+        "Try 'adb -s $TARGET root && adb -s $TARGET remount' first; it needs no reboot." ;;
+    *\ target_insufficient_space)
+      printf '%s\n' "That partition does not have room for the replacement plus its recovery copy." \
+        "The INSTALL_DIAG line above gives the free space the panel reported for the exact directory." ;;
+    *\ target_insufficient_inodes)
+      printf '%s\n' "That partition has run out of inodes, so it cannot create another file at any size." ;;
+    *\ target_directory_missing)
+      printf '%s\n' "That directory does not exist on this panel, so this install layout does not apply to it." ;;
+    *\ target_not_writable)
+      printf '%s\n' "The panel reported the partition as writable but then refused a real write to that directory." \
+        "SELinux state and the directory's mode, owner and context are on the INSTALL_DIAG line above." ;;
+    *\ staged_source_unavailable)
+      printf '%s\n' "The staged helper bundle was no longer on the panel when the transaction read it." \
+        "Re-run the installer; nothing was replaced." ;;
+    *\ staged_source_unauthenticated)
+      printf '%s\n' "The staged helper bundle did not match the signed checksum this run authenticated." \
+        "Re-run the installer; nothing was replaced." ;;
+    *)
+      printf '%s\n' "Re-run the installer; nothing was replaced." ;;
+  esac
+}
+
 run_root_helper_transaction() {
   local action="$1" transaction_id="${2:-$ROOT_HELPER_TRANSACTION_ID}" target_apk="${3:-$TARGET_APK_SHA256}"
   local target_build="${4:-$ROOT_HELPER_TARGET_BUILD_ID}" target_helper="${5:-$ROOT_HELPER_TARGET_SHA256}"
@@ -3006,6 +3064,270 @@ snapshot() {
   root_owned "$recovery" || return 1
   recovery_sha=$(file_sha256 "$recovery") || return 1
   echo "1 $recovery_sha"
+}
+
+# Issue #120: a /system helper replacement that failed at its very first copy reported one step name
+# and threw the reason away. Two reports, a week apart, both said only
+# `INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new`, which cannot distinguish a read-only
+# partition from an exhausted one, from exhausted inodes, from a `/system/bin` that is mounted
+# differently to `/system`, from an SELinux refusal, from staging that is no longer there. cp's own
+# errno text was already reaching the host inside the same capture and being filtered out by the
+# marker grep, so the answer was in the output both times and the installer discarded it.
+#
+# Everything these functions emit is fixed-vocabulary or numeric, over paths this transaction
+# already names in clear. No configuration, credential, entity name, panel identity or host path
+# passes through them, so an INSTALL_DIAG line is safe to paste into a public issue. Every field
+# degrades to `unknown` instead of failing: a diagnostic that can itself fail would be a second
+# failure mode on the recovery path.
+diag_reset() {
+  diag_mount=unknown
+  diag_state=unknown
+  diag_availkb=unknown
+  diag_inodesfree=unknown
+  diag_mode=unknown
+  diag_owner=unknown
+  diag_selinux=unknown
+  diag_context=unknown
+}
+
+# `df -P -k <dir>` resolves the filesystem that actually holds <dir>, which is the whole point: the
+# route probe tested `/system` and the transaction writes to `/system/bin`, and nothing in the
+# installer has ever checked that those two are the same mount.
+describe_target() {
+  describe_dir=$1
+  diag_reset
+  # A missing directory is reported as every field `unknown`, not as a failure: this function only
+  # describes, and preflight_target is what refuses on it. Returning non-zero here would make the
+  # reporter and the gate two places that can decide the same thing.
+  [ -d "$describe_dir" ] || return 0
+
+  describe_row=$(df -P -k "$describe_dir" 2>/dev/null | sed -n 2p) || describe_row=
+  if [ -n "$describe_row" ]; then
+    set -f
+    set -- $describe_row
+    set +f
+    if [ "$#" -eq 6 ]; then
+      case "$4" in ''|*[!0-9]*) ;; *) diag_availkb=$4 ;; esac
+      diag_mount=$6
+    fi
+  fi
+
+  # The LAST /proc/mounts row for a mount point is the effective one, so an overmount that made this
+  # directory read-only under a writable parent is reported as read-only rather than missed.
+  if [ "$diag_mount" != unknown ]; then
+    while read -r mount_source mount_point mount_type mount_options mount_rest; do
+      [ "$mount_point" = "$diag_mount" ] || continue
+      case ",$mount_options," in
+        *,rw,*) diag_state=rw ;;
+        *,ro,*) diag_state=ro ;;
+        *) diag_state=unknown ;;
+      esac
+    done < /proc/mounts 2>/dev/null
+  fi
+
+  # Android 8.1's toybox df has no -i, so free inodes are best effort through whichever tool can
+  # answer. An unknown here is a gap in the report, never a reason to refuse an install.
+  #
+  # A filesystem that does not track inodes at all — overlayfs, which is how a panel with a scratch
+  # overlay presents /system, and several tmpfs configurations — answers zero TOTAL and zero free.
+  # Reading that free count on its own says "no inodes left" about a filesystem that cannot run out,
+  # so the total is what decides whether the free count means anything.
+  describe_inode_row=$(df -P -i "$describe_dir" 2>/dev/null | sed -n 2p) || describe_inode_row=
+  if [ -z "$describe_inode_row" ]; then
+    describe_inode_row=$(busybox df -P -i "$describe_dir" 2>/dev/null | sed -n 2p) || describe_inode_row=
+  fi
+  if [ -n "$describe_inode_row" ]; then
+    set -f
+    set -- $describe_inode_row
+    set +f
+    if [ "$#" -eq 6 ]; then
+      case "$2" in
+        ''|*[!0-9]*|0) ;;
+        *) case "$4" in ''|*[!0-9]*) ;; *) diag_inodesfree=$4 ;; esac ;;
+      esac
+    fi
+  fi
+
+  describe_value=$(stat -c %a "$describe_dir" 2>/dev/null || toybox stat -c %a "$describe_dir" 2>/dev/null) || describe_value=
+  [ -z "$describe_value" ] || diag_mode=$describe_value
+  describe_value=$(stat -c %u:%g "$describe_dir" 2>/dev/null || toybox stat -c %u:%g "$describe_dir" 2>/dev/null) || describe_value=
+  [ -z "$describe_value" ] || diag_owner=$describe_value
+  describe_value=$(getenforce 2>/dev/null) || describe_value=
+  [ -z "$describe_value" ] || diag_selinux=$describe_value
+  describe_value=$(ls -Zd "$describe_dir" 2>/dev/null | sed -n 's/^\([^ ][^ ]*\)[ ].*$/\1/p') || describe_value=
+  [ -z "$describe_value" ] || diag_context=$describe_value
+  return 0
+}
+
+emit_target_diag() {
+  describe_target "$3"
+  echo "INSTALL_DIAG $1 $2 dir=$3 mount=$diag_mount state=$diag_state availkb=$diag_availkb inodesfree=$diag_inodesfree mode=$diag_mode owner=$diag_owner selinux=$diag_selinux context=$diag_context"
+}
+
+# The staged bundle is pushed by one adb invocation and read by a later one, with the disposable
+# staging sweep running in between, so "the file this transaction was told to copy is still there
+# and still authentic" is a distinct question from "the destination accepted a write".
+emit_source_diag() {
+  source_state=missing
+  source_bytes=unknown
+  if [ -e "$3" ]; then
+    source_state=present
+    source_value=$(stat -c %s "$3" 2>/dev/null || toybox stat -c %s "$3" 2>/dev/null) || source_value=
+    [ -z "$source_value" ] || source_bytes=$source_value
+    if [ ! -r "$3" ]; then
+      source_state=unreadable
+    elif hash_matches "$4" "$3"; then
+      source_state=verified
+    else
+      source_state=mismatched
+    fi
+  fi
+  echo "INSTALL_DIAG $1 $2 source=$3 state=$source_state bytes=$source_bytes"
+}
+
+file_bytes() {
+  bytes_value=$(stat -c %s "$1" 2>/dev/null || toybox stat -c %s "$1" 2>/dev/null) || bytes_value=
+  case "$bytes_value" in ''|*[!0-9]*) printf '0\n' ;; *) printf '%s\n' "$bytes_value" ;; esac
+}
+
+# Sum every byte this transaction is about to write into one filesystem: the staged replacements and
+# the recovery copies it takes of whatever is live. Measuring the real files beats a fixed constant,
+# which is how a panel carrying a legacy hapaneld-ledd pair could pass a headroom check computed for
+# a panel that has none.
+sum_bytes() {
+  sum_total=0
+  for sum_path in "$@"; do
+    sum_total=$((sum_total + $(file_bytes "$sum_path")))
+  done
+  printf '%s\n' "$sum_total"
+}
+
+# Prove the destination accepts a real, non-zero write before anything is removed or replaced.
+#
+# The route probe this replaces wrote a ZERO-byte file to `/system`, then the transaction wrote
+# 76KB to `/system/bin`. A zero-byte create at the parent cannot fail for a full filesystem, for
+# exhausted inodes on a subtree, or for a read-only overmount one level down — which is precisely
+# the class of panel that reached the first cp and failed there.
+write_probe() {
+  probe_dir=$1
+  probe_path="$probe_dir/.hapaneld-write-probe-@TRANSACTION_ID@"
+  rm -f "$probe_path" 2>/dev/null
+  # 4096 bytes: one filesystem block, enough that the write reaches the allocator rather than
+  # landing in an inode, and small enough that the probe cannot itself be what fills the partition.
+  #
+  # `dd` is also what keeps a refused write recoverable, and that is not obvious. Writing the probe
+  # with `: > "$probe_path"` would be shorter, but `:` is a POSIX special builtin, so a redirection
+  # error on it terminates a non-interactive shell outright. The transaction would die at the probe
+  # with no marker, instead of returning false and refusing with a reason. `dd` is an ordinary
+  # command: it fails, the shell survives, and the refusal path runs.
+  if ! dd if=/dev/zero of="$probe_path" bs=4096 count=1 >/dev/null 2>&1; then
+    rm -f "$probe_path" 2>/dev/null
+    return 1
+  fi
+  probe_written=$(file_bytes "$probe_path")
+  # Best effort, and deliberately not a verdict. The removal can only fail on a filesystem that went
+  # read-only between the write and the unlink, and refusing an otherwise good upgrade over that
+  # would be the wrong trade. The residue it would leave is bounded and self-identifying: one
+  # 4096-byte file named for this transaction, beside the files the transaction is about to write.
+  rm -f "$probe_path" 2>/dev/null
+  [ "$probe_written" = 4096 ]
+}
+
+# Refuse before the first mutation, naming the blocker.
+#
+# Ordered cheapest and most decisive first, because the reasons are not interchangeable: staging
+# that is gone is not a partition fault, a read-only partition is not a capacity fault, and a
+# capacity fault is not a permissions fault. Anything that fails here has changed nothing, so the
+# host can say so without offering a rollback of an install that never started.
+preflight_target() {
+  preflight_verb=$1
+  preflight_dir=$2
+  preflight_need=$3
+
+  if [ ! -d "$preflight_dir" ]; then
+    emit_target_diag "$preflight_verb" target "$preflight_dir"
+    echo "INSTALL_UNCHANGED $preflight_verb target_directory_missing"
+    return 1
+  fi
+
+  describe_target "$preflight_dir"
+  if [ "$diag_state" = ro ]; then
+    emit_target_diag "$preflight_verb" target "$preflight_dir"
+    echo "INSTALL_UNCHANGED $preflight_verb target_read_only"
+    return 1
+  fi
+  case "$diag_availkb" in
+    ''|*[!0-9]*) ;;
+    *)
+      # Compare in kilobytes by dividing the need, never by multiplying the free space. The panel's
+      # /system/bin/sh does 32-bit signed arithmetic, so availkb * 1024 goes negative for any
+      # filesystem with more than 2 GiB free — and a negative number is "less than" every need, so a
+      # panel with the MOST room was refused as having none. Measured on hardware: 2652400 * 1024 gave
+      # -1578909696. The need is a few hundred KB at most, so the division side cannot overflow. The
+      # host's own shell is 64-bit and cannot reproduce this; the source-shape assertion in the suite
+      # and the hardware acceptance tool are what guard it.
+      if [ "$diag_availkb" -lt "$(( (preflight_need + 1023) / 1024 ))" ]; then
+        emit_target_diag "$preflight_verb" target "$preflight_dir"
+        echo "INSTALL_UNCHANGED $preflight_verb target_insufficient_space"
+        return 1
+      fi
+      ;;
+  esac
+  case "$diag_inodesfree" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$diag_inodesfree" -lt 8 ]; then
+        emit_target_diag "$preflight_verb" target "$preflight_dir"
+        echo "INSTALL_UNCHANGED $preflight_verb target_insufficient_inodes"
+        return 1
+      fi
+      ;;
+  esac
+  if ! write_probe "$preflight_dir"; then
+    emit_target_diag "$preflight_verb" target "$preflight_dir"
+    echo "INSTALL_UNCHANGED $preflight_verb target_not_writable"
+    return 1
+  fi
+  return 0
+}
+
+preflight_source() {
+  preflight_verb=$1
+  preflight_path=$2
+  preflight_sha=$3
+  if [ ! -f "$preflight_path" ] || [ ! -r "$preflight_path" ]; then
+    emit_source_diag "$preflight_verb" staged "$preflight_path" "$preflight_sha"
+    echo "INSTALL_UNCHANGED $preflight_verb staged_source_unavailable"
+    return 1
+  fi
+  # The destination hash check after each copy stays exactly as it was; this one only separates
+  # "the bundle we were handed is wrong" from "the write went wrong", and refuses before mutating.
+  if ! hash_matches "$preflight_sha" "$preflight_path"; then
+    emit_source_diag "$preflight_verb" staged "$preflight_path" "$preflight_sha"
+    echo "INSTALL_UNCHANGED $preflight_verb staged_source_unauthenticated"
+    return 1
+  fi
+  return 0
+}
+
+# One copy, with the reason kept when it fails. The step names are unchanged, so an existing report
+# still reads the same; what is new is the errno line and the two diagnostic lines beside it.
+copy_staged() {
+  copy_verb=$1
+  copy_step=$2
+  copy_source=$3
+  copy_destination=$4
+  copy_sha=$5
+  if copy_error=$(cp "$copy_source" "$copy_destination" 2>&1); then
+    return 0
+  fi
+  copy_error=$(printf '%s' "$copy_error" | tr '\n\t' '  ' | cut -c1-160)
+  [ -n "$copy_error" ] || copy_error=none
+  echo "INSTALL_DIAG $copy_verb $copy_step errno=$copy_error"
+  emit_source_diag "$copy_verb" "$copy_step" "$copy_source" "$copy_sha"
+  emit_target_diag "$copy_verb" "$copy_step" "${copy_destination%/*}"
+  echo "INSTALL_STEP_FAILED $copy_verb $copy_step"
+  return 1
 }
 
 flag() {
@@ -4206,13 +4528,36 @@ install_system() {
   mkdir -p /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system mkdir_hapaneld"; return 1; }
   chown 0:0 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld"; return 1; }
   chmod 700 /data/adb/hapaneld || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld"; return 1; }
+
+  # Nothing above this point has changed the panel, and nothing below it may run until the panel has
+  # proved it can take the replacement. Each directory is measured in its own right, because the
+  # route probe only ever tested `/system` and a write one level down can fail for reasons a probe at
+  # the parent cannot see: a read-only overmount, an exhausted subtree, a directory that simply
+  # refuses the write.
+  #
+  # The destinations are NOT the ones a reader of the old flow would expect. This layout keeps the
+  # helper binary at /data/local and the recovery copies under /data/adb/hapaneld, so the bytes that
+  # used to land in /system/bin no longer go there at all; what /system still takes is the boot file
+  # alone. Measuring /system for a 76KB binary that is not written there would be theatre, so each
+  # requirement below is the sum of the real files this transaction writes to that directory.
+  preflight_source install_system @STAGED_HELPER@ @BIN_SHA256@ || return 1
+  preflight_source install_system @STAGED_RC@ @RC_SHA256@ || return 1
+  data_local_need=$(sum_bytes @STAGED_HELPER@ @STAGED_HELPER@ /data/local/hapaneld-helper)
+  recovery_need=$(sum_bytes /data/local/hapaneld-helper /system/bin/hapaneld-helper /system/bin/hapaneld-ledd \
+    /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh /vendor/etc/init/hapaneld-helper.rc)
+  system_init_need=$(sum_bytes @STAGED_RC@ /system/etc/init/hapaneld-helper.rc)
+  preflight_target install_system /data/local "$data_local_need" || return 1
+  preflight_target install_system /data/adb/hapaneld "$recovery_need" || return 1
+  preflight_target install_system /system/etc/init "$system_init_need" || return 1
+
   candidate=/data/local/.hapaneld-helper.provision-$transaction_id
   rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_system rm_candidate"; return 1; }
-  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new"; return 1; }
+  copy_staged install_system cp_hapaneld-helper_new @STAGED_HELPER@ "$candidate" @BIN_SHA256@ || return 1
   chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper_new"; return 1; }
   chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper_new"; return 1; }
   file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper_new"; return 1; }
-  cp @STAGED_RC@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system cp_hapaneld-helper.rc_new"; return 1; }
+  copy_staged install_system cp_hapaneld-helper.rc_new @STAGED_RC@ /system/etc/init/hapaneld-helper.rc.new @RC_SHA256@ || return 1
   hash_matches @RC_SHA256@ /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system hash_matches_hapaneld-helper.rc_new"; return 1; }
   chown 0:0 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chown_hapaneld-helper.rc_new"; return 1; }
   chmod 644 /system/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_system chmod_hapaneld-helper.rc_new"; return 1; }
@@ -4302,13 +4647,25 @@ install_systemless() {
     [ ! -e /system/etc/init/hapaneld-helper.rc ] && [ ! -L /system/etc/init/hapaneld-helper.rc ] &&
     [ ! -e /system/bin/hapaneld-ledd ] && [ ! -L /system/bin/hapaneld-ledd ] &&
     [ ! -e /system/etc/init/hapaneld-ledd.rc ] && [ ! -L /system/etc/init/hapaneld-ledd.rc ] || { echo "INSTALL_STEP_FAILED install_systemless noncanonical_paths_present"; return 1; }
+
+  # Nothing above this point has changed the panel. This route writes to three directories under
+  # /data, and each is measured in its own right before anything is removed or replaced.
+  preflight_source install_systemless @STAGED_HELPER@ @BIN_SHA256@ || return 1
+  preflight_source install_systemless @STAGED_SERVICE@ @SERVICE_SHA256@ || return 1
+  data_local_need=$(sum_bytes @STAGED_HELPER@ @STAGED_HELPER@ /data/local/hapaneld-helper)
+  recovery_need=$(sum_bytes /data/local/hapaneld-helper /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh)
+  service_d_need=$(sum_bytes @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh)
+  preflight_target install_systemless /data/local "$data_local_need" || return 1
+  preflight_target install_systemless /data/adb/hapaneld "$recovery_need" || return 1
+  preflight_target install_systemless /data/adb/service.d "$service_d_need" || return 1
+
   candidate=/data/local/.hapaneld-helper.provision-$transaction_id
   rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless rm_candidate"; return 1; }
-  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper_new"; return 1; }
+  copy_staged install_systemless cp_hapaneld-helper_new @STAGED_HELPER@ "$candidate" @BIN_SHA256@ || return 1
   chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper_new"; return 1; }
   chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper_new"; return 1; }
   file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper_new"; return 1; }
-  cp @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless cp_hapaneld-helper.sh_new"; return 1; }
+  copy_staged install_systemless cp_hapaneld-helper.sh_new @STAGED_SERVICE@ /data/adb/service.d/hapaneld-helper.sh.new @SERVICE_SHA256@ || return 1
   hash_matches @SERVICE_SHA256@ /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless hash_matches_hapaneld-helper.sh_new"; return 1; }
   chown 0:0 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chown_hapaneld-helper.sh_new"; return 1; }
   chmod 755 /data/adb/service.d/hapaneld-helper.sh.new || { echo "INSTALL_STEP_FAILED install_systemless chmod_hapaneld-helper.sh_new"; return 1; }
@@ -4400,13 +4757,27 @@ install_hybrid() {
     hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc ||
       hash_matches_known_legacy /vendor/etc/init/hapaneld-helper.rc @LEGACY_HYBRID_RC_SHA256@ @LEGACY_HYBRID_RC_SUPERVISED_SHA256@ || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc"; return 1; }
   fi
+
+  # Nothing above this point has changed the panel. The boot file goes to /vendor/etc/init and the
+  # helper and recovery copies to /data; each directory is measured in its own right.
+  preflight_source install_hybrid @STAGED_HELPER@ @BIN_SHA256@ || return 1
+  preflight_source install_hybrid @STAGED_HYBRID_RC@ @HYBRID_RC_SHA256@ || return 1
+  data_local_need=$(sum_bytes @STAGED_HELPER@ @STAGED_HELPER@ /data/local/hapaneld-helper)
+  recovery_need=$(sum_bytes /data/local/hapaneld-helper /system/bin/hapaneld-helper /system/bin/hapaneld-ledd \
+    /system/etc/init/hapaneld-helper.rc /system/etc/init/hapaneld-ledd.rc \
+    /data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh /vendor/etc/init/hapaneld-helper.rc)
+  vendor_init_need=$(sum_bytes @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc)
+  preflight_target install_hybrid /data/local "$data_local_need" || return 1
+  preflight_target install_hybrid /data/adb/hapaneld "$recovery_need" || return 1
+  preflight_target install_hybrid /vendor/etc/init "$vendor_init_need" || return 1
+
   candidate=/data/local/.hapaneld-helper.provision-$transaction_id
   rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid rm_candidate"; return 1; }
-  cp @STAGED_HELPER@ "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper_new"; return 1; }
+  copy_staged install_hybrid cp_hapaneld-helper_new @STAGED_HELPER@ "$candidate" @BIN_SHA256@ || return 1
   chown 0:0 "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper_new"; return 1; }
   chmod 700 "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper_new"; return 1; }
   file_exact @BIN_SHA256@ "$candidate" 700 || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper_new"; return 1; }
-  cp @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid cp_hapaneld-helper.rc_new"; return 1; }
+  copy_staged install_hybrid cp_hapaneld-helper.rc_new @STAGED_HYBRID_RC@ /vendor/etc/init/hapaneld-helper.rc.new @HYBRID_RC_SHA256@ || return 1
   hash_matches @HYBRID_RC_SHA256@ /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid hash_matches_hapaneld-helper.rc_new"; return 1; }
   chown 0:0 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chown_hapaneld-helper.rc_new"; return 1; }
   chmod 644 /vendor/etc/init/hapaneld-helper.rc.new || { echo "INSTALL_STEP_FAILED install_hybrid chmod_hapaneld-helper.rc_new"; return 1; }
@@ -5021,12 +5392,34 @@ EOF
       fi
     fi
     mount -o rw,remount / 2>/dev/null; mount -o rw,remount /system 2>/dev/null
+    # Issue #120: this probed /system with a zero-byte `touch`, and the transaction writes its boot
+    # file to /system/etc/init. A zero-byte create at the parent cannot fail for a full filesystem,
+    # for exhausted inodes on a subtree, or for a read-only overmount one level down - which is the
+    # class of panel that passed this probe and then died at its first copy with no reason attached.
+    #
+    # Both are still required. A panel whose /system mount never came back read-write is reported as
+    # read-only here rather than as a mysteriously refused write further down. The second probe
+    # writes real bytes and checks they arrived, mirroring the /vendor/etc/init probe the hybrid
+    # route already uses; a create that stores nothing is not evidence that a file will fit.
+    # The cleanup is deliberately NOT chained onto the success test. A probe that is created but
+    # stores no bytes is exactly the case this exists to catch, and an `&&` chain would short-circuit
+    # before removing it, leaving a stray file on the partition whose fullness is in question.
+    system_init_probe=/system/etc/init/.hapaneld-rw-probe-@TRANSACTION_ID@
+    rm -f "$system_init_probe" 2>/dev/null
+    system_init_writable=0
     if touch /system/.rw_probe 2>/dev/null && rm /system/.rw_probe 2>/dev/null; then
+      if printf hapaneld-system-init-write-probe > "$system_init_probe" 2>/dev/null &&
+         [ -s "$system_init_probe" ]; then
+        system_init_writable=1
+      fi
+    fi
+    rm -f "$system_init_probe" 2>/dev/null
+    if [ "$system_init_writable" = 1 ]; then
       echo SYSTEM_RW
       # HAPANELD_CAPACITY_PROBE_BEGIN
       capacity_output=
       if command -v df >/dev/null 2>&1 && command -v sed >/dev/null 2>&1; then
-        capacity_output=$(df -P -k /system 2>/dev/null) || capacity_output=
+        capacity_output=$(df -P -k /system/etc/init 2>/dev/null) || capacity_output=
       fi
       capacity_row=
       capacity_extra=unknown
@@ -5165,13 +5558,29 @@ EOF
       out2="$(run_root_helper_transaction install-system 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
-        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        install_detail="$(root_helper_install_marker "$out2")"
+        install_diag_lines=()
+        while IFS= read -r diag_line; do
+          [ -z "$diag_line" ] || install_diag_lines+=("${D}$diag_line${X}")
+        done < <(root_helper_install_diagnostics "$out2")
         if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
           [ -z "$helper_dir" ] || rm -rf "$helper_dir"
-          fail "the old root helper could not be retired, so the upgrade did not start" \
+          install_unchanged="$(root_helper_unchanged_reason "$out2")"
+          unchanged_headline="the root-helper upgrade did not start"
+          case "$install_unchanged" in
+            *\ helper_retirement) unchanged_headline="the old root helper could not be retired, so the upgrade did not start" ;;
+            *\ staged_source_*) unchanged_headline="the staged root helper could not be used, so the upgrade did not start" ;;
+            *\ target_*) unchanged_headline="this panel cannot take the root-helper replacement, so the upgrade did not start" ;;
+          esac
+          unchanged_advice=()
+          while IFS= read -r advice_line; do
+            [ -z "$advice_line" ] || unchanged_advice+=("$advice_line")
+          done < <(root_helper_unchanged_advice "$install_unchanged")
+          fail "$unchanged_headline" \
             "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
             ${install_detail:+"The panel reported: $install_detail"} \
-            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"} \
+            ${unchanged_advice[@]+"${unchanged_advice[@]}"}
         fi
         if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
           fail "root-helper topology changed concurrently after its recovery snapshot" \
@@ -5188,24 +5597,42 @@ EOF
         if rollback_root_helper "$install_kind"; then
           fail "/system root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking writable-system capacity and permissions." \
-            ${install_detail:+"The panel reported: $install_detail"}
+            ${install_detail:+"The panel reported: $install_detail"} \
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"}
         fi
         fail "/system root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
-          ${install_detail:+"The panel reported: $install_detail"}
+          ${install_detail:+"The panel reported: $install_detail"} \
+          ${install_diag_lines[@]+"${install_diag_lines[@]}"}
       fi
       ;;
     hybrid)
       out2="$(run_root_helper_transaction install-hybrid 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
-        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        install_detail="$(root_helper_install_marker "$out2")"
+        install_diag_lines=()
+        while IFS= read -r diag_line; do
+          [ -z "$diag_line" ] || install_diag_lines+=("${D}$diag_line${X}")
+        done < <(root_helper_install_diagnostics "$out2")
         if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
           [ -z "$helper_dir" ] || rm -rf "$helper_dir"
-          fail "the old root helper could not be retired, so the upgrade did not start" \
+          install_unchanged="$(root_helper_unchanged_reason "$out2")"
+          unchanged_headline="the root-helper upgrade did not start"
+          case "$install_unchanged" in
+            *\ helper_retirement) unchanged_headline="the old root helper could not be retired, so the upgrade did not start" ;;
+            *\ staged_source_*) unchanged_headline="the staged root helper could not be used, so the upgrade did not start" ;;
+            *\ target_*) unchanged_headline="this panel cannot take the root-helper replacement, so the upgrade did not start" ;;
+          esac
+          unchanged_advice=()
+          while IFS= read -r advice_line; do
+            [ -z "$advice_line" ] || unchanged_advice+=("$advice_line")
+          done < <(root_helper_unchanged_advice "$install_unchanged")
+          fail "$unchanged_headline" \
             "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
             ${install_detail:+"The panel reported: $install_detail"} \
-            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"} \
+            ${unchanged_advice[@]+"${unchanged_advice[@]}"}
         fi
         if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
           fail "root-helper topology changed concurrently after its recovery snapshot" \
@@ -5222,24 +5649,42 @@ EOF
         if rollback_root_helper "$install_kind"; then
           fail "hybrid root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /vendor/etc/init and /data/adb." \
-            ${install_detail:+"The panel reported: $install_detail"}
+            ${install_detail:+"The panel reported: $install_detail"} \
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"}
         fi
         fail "hybrid root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
-          ${install_detail:+"The panel reported: $install_detail"}
+          ${install_detail:+"The panel reported: $install_detail"} \
+          ${install_diag_lines[@]+"${install_diag_lines[@]}"}
       fi
       ;;
     systemless)
       out2="$(run_root_helper_transaction install-systemless 2>&1)" || true
       resolve_root_helper_install_state "$install_kind"
       if ! printf '%s\n' "$out2" | grep -qx INSTALL_OK; then
-        install_detail="$(printf '%s\n' "$out2" | grep -E '^(RETIREMENT_TIMEOUT|INSTALL_STEP_FAILED) ' | head -1 || true)"
+        install_detail="$(root_helper_install_marker "$out2")"
+        install_diag_lines=()
+        while IFS= read -r diag_line; do
+          [ -z "$diag_line" ] || install_diag_lines+=("${D}$diag_line${X}")
+        done < <(root_helper_install_diagnostics "$out2")
         if printf '%s\n' "$out2" | grep -q '^INSTALL_UNCHANGED '; then
           [ -z "$helper_dir" ] || rm -rf "$helper_dir"
-          fail "the old root helper could not be retired, so the upgrade did not start" \
+          install_unchanged="$(root_helper_unchanged_reason "$out2")"
+          unchanged_headline="the root-helper upgrade did not start"
+          case "$install_unchanged" in
+            *\ helper_retirement) unchanged_headline="the old root helper could not be retired, so the upgrade did not start" ;;
+            *\ staged_source_*) unchanged_headline="the staged root helper could not be used, so the upgrade did not start" ;;
+            *\ target_*) unchanged_headline="this panel cannot take the root-helper replacement, so the upgrade did not start" ;;
+          esac
+          unchanged_advice=()
+          while IFS= read -r advice_line; do
+            [ -z "$advice_line" ] || unchanged_advice+=("$advice_line")
+          done < <(root_helper_unchanged_advice "$install_unchanged")
+          fail "$unchanged_headline" \
             "Nothing on the panel changed: the previous helper, its boot registration and the installed APK are all still in place." \
             ${install_detail:+"The panel reported: $install_detail"} \
-            "Re-run once that process can be stopped. Restarting the panel clears a wedged helper."
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"} \
+            ${unchanged_advice[@]+"${unchanged_advice[@]}"}
         fi
         if printf '%s\n' "$out2" | grep -qx TOPOLOGY_HOLD; then
           fail "root-helper topology changed concurrently after its recovery snapshot" \
@@ -5256,11 +5701,13 @@ EOF
         if rollback_root_helper "$install_kind"; then
           fail "systemless root-helper install failed; the prior helper was preserved or restored" \
             "The previous APK and helper remain active. Re-run after checking /data capacity and service.d permissions." \
-            ${install_detail:+"The panel reported: $install_detail"}
+            ${install_detail:+"The panel reported: $install_detail"} \
+            ${install_diag_lines[@]+"${install_diag_lines[@]}"}
         fi
         fail "systemless root-helper install failed and rollback could not be verified" \
           "The APK was not replaced. Restore the helper manually before relying on privileged operations." \
-          ${install_detail:+"The panel reported: $install_detail"}
+          ${install_detail:+"The panel reported: $install_detail"} \
+          ${install_diag_lines[@]+"${install_diag_lines[@]}"}
       fi
       ;;
   esac
