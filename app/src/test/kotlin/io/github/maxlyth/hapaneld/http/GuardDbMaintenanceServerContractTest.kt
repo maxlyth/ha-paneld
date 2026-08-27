@@ -244,15 +244,26 @@ class GuardDbMaintenanceServerContractTest {
             defaultProof.indexOf("proveExactARefusalUnderB(exactContext, prepared, staging)"))
 
         val canonicalSource = TestSources.kotlin("util/GuardDbStartupHealth.kt").readText()
+        val checkpoint = canonicalSource.substring(
+            canonicalSource.indexOf("internal fun <T : Any> runGuardDbRefusalCheckpoint"),
+            canonicalSource.indexOf("internal fun canonicalizeGuardDbMainForRefusal"),
+        )
+        assertTrue(checkpoint.contains("collectClosedCanonicalGuardDbProof("))
+        assertTrue(checkpoint.contains("checkpoint = { checkpoint(requireNotNull(database)) }"))
+        assertTrue(checkpoint.contains("close = { close(requireNotNull(database)) }"))
+        assertTrue(checkpoint.contains("stable = stable"))
+
         val canonical = canonicalSource.substring(
             canonicalSource.indexOf("internal fun canonicalizeGuardDbMainForRefusal"),
             canonicalSource.indexOf("internal fun exactGuardDbFinalStatus", canonicalSource.indexOf(
                 "internal fun canonicalizeGuardDbMainForRefusal",
             )),
         )
-        assertTrue(canonical.contains("collectClosedCanonicalGuardDbProof("))
-        assertTrue(canonical.contains("checkpoint = { database?.let(::checkpointGuardDbTruncate) == true }"))
-        assertTrue(canonical.contains("close = { requireNotNull(database).close() }"))
+        assertTrue(canonical.contains("runGuardDbRefusalCheckpoint("))
+        assertTrue(canonical.contains("flags,"))
+        assertTrue(canonicalSource.contains("SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING"))
+        assertTrue(canonical.contains("checkpoint = ::checkpointGuardDbTruncate"))
+        assertTrue(canonical.contains("close = SQLiteDatabase::close"))
         assertTrue(canonical.contains("stable = { stableGuardDbCanonicalMain(context.applicationContext) }"))
     }
 
