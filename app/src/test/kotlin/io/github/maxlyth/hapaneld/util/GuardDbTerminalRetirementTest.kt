@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.nio.file.Files
 
 class GuardDbTerminalRetirementTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -116,5 +117,35 @@ class GuardDbTerminalRetirementTest {
         )
         assertTrue(store.markComplete(intent))
         assertEquals(3, syncCalls)
+    }
+
+    @Test fun `dangling retirement record is corrupt and cannot authorize replacement`() {
+        val directory = temporary.newFolder("retirement-dangling")
+        val record = directory.resolve("guard-db-terminal-retirement.v1").toPath()
+        Files.createSymbolicLink(record, directory.resolve("missing-retirement").toPath())
+        val store = GuardDbTerminalRetirementStore(
+            directory,
+            syncDirectory = { true },
+            validateFile = { it.isFile },
+        )
+
+        assertTrue(store.load() is GuardDbTerminalRetirementLoad.Corrupt)
+        assertFalse(store.writeIntent(intent))
+        assertTrue(Files.isSymbolicLink(record))
+    }
+
+    @Test fun `foreign retirement pending entry is never deleted or followed`() {
+        val directory = temporary.newFolder("retirement-pending")
+        val pending = directory.resolve(".guard-db-terminal-retirement.v1.pending").toPath()
+        Files.createSymbolicLink(pending, directory.resolve("missing-pending-retirement").toPath())
+        val store = GuardDbTerminalRetirementStore(
+            directory,
+            syncDirectory = { true },
+            validateFile = { it.isFile },
+        )
+
+        assertFalse(store.writeIntent(intent))
+        assertTrue(Files.isSymbolicLink(pending))
+        assertTrue(store.load() is GuardDbTerminalRetirementLoad.Absent)
     }
 }

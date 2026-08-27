@@ -14,7 +14,7 @@ import java.security.SecureRandom
  * Provisioning remains the durable helper installer. A previously released direct-su panel can,
  * however, install a newer APK before the external provisioner runs. The new APK therefore carries
  * its exact helper and launches a root-owned `/data/local` copy when the installed daemon lacks the
- * Companion protocol. Helper-only panels cannot safely replace their own old daemon and remain
+ * Guard replacement protocol. Helper-only panels cannot safely replace their own old daemon and remain
  * explicitly reprovision-gated instead of accepting a generic privileged upgrade verb.
  *
  * That protection comes from OBSERVING root, not from the profile declaring it. A panel is helper-only
@@ -47,8 +47,8 @@ internal object BundledHelperInstaller {
             guardSupported = guardSupported,
             rootObserved = { Su.available() },
         )?.let { return it }
-        val guardStatus = GuardDbMaintenance.client.statusProbe()
-        if (!bundledHelperReplacementAllowed(guardStatus)) return Result.BLOCKED_ACTIVE
+        val replacementMode = bundledHelperReplacementMode(GuardDbMaintenance.client.statusProbe())
+            ?: return Result.BLOCKED_ACTIVE
         val stagedBuildId = BuildConfig.HELPER_BUILD_ID
             .takeIf(GuardDbMaintenanceProtocol::validSha256) ?: return Result.FAILED
         val incumbentBuildId = HelperClient.installedBuildId()
@@ -68,18 +68,33 @@ internal object BundledHelperInstaller {
                 Log.w(TAG, "bundled helper staging failed: ${output.orEmpty().take(120)}")
                 return Result.FAILED
             }
-            when (executeBundledHelperReplacement(
-                retire = {
-                    GuardDbMaintenance.client.retireApp(
-                        freshBundledHelperReplacementNonce(),
-                        expectedSha256,
-                        stagedBuildId,
+            val settlement = when (replacementMode) {
+                BundledHelperReplacementMode.GUARDED_RETIRE -> executeBundledHelperReplacement(
+                    retire = {
+                        GuardDbMaintenance.client.retireApp(
+                            freshBundledHelperReplacementNonce(),
+                            expectedSha256,
+                            stagedBuildId,
+                        )
+                    },
+                    probe = { HelperClient.replacementProbe(stagedBuildId, incumbentBuildId) },
+                    pause = { Thread.sleep(SETTLEMENT_POLL_MS) },
+                    polls = SETTLEMENT_POLLS,
+                )
+                BundledHelperReplacementMode.RELEASED_LEGACY_TAKEOVER -> {
+                    val installed = Su.runSingleAttempt(
+                        bundledLegacyHelperTakeoverCommand(
+                            expectedSha256,
+                            stagedBuildId,
+                            incumbentBuildId,
+                        ),
+                        LEGACY_TAKEOVER_TIMEOUT_MS,
                     )
-                },
-                probe = { HelperClient.replacementProbe(stagedBuildId, incumbentBuildId) },
-                pause = { Thread.sleep(SETTLEMENT_POLL_MS) },
-                polls = SETTLEMENT_POLLS,
-            )) {
+                    if (installed) BundledHelperReplacementSettlement.INSTALLED
+                    else BundledHelperReplacementSettlement.HOLD
+                }
+            }
+            when (settlement) {
                 BundledHelperReplacementSettlement.INSTALLED -> Result.INSTALLED
                 BundledHelperReplacementSettlement.BLOCKED_ACTIVE -> Result.BLOCKED_ACTIVE
                 BundledHelperReplacementSettlement.OLD_SAFE,
@@ -139,14 +154,33 @@ internal fun helperAssetName(abis: Iterable<String>): String? = when {
     else -> null
 }
 
-internal fun bundledHelperReplacementAllowed(status: GuardDbMaintenanceClient.StatusProbe): Boolean = when (status) {
-    GuardDbMaintenanceClient.StatusProbe.Unsupported -> true
-    is GuardDbMaintenanceClient.StatusProbe.Valid -> !status.status.ownsMaintenance
-    GuardDbMaintenanceClient.StatusProbe.Unreachable,
-    GuardDbMaintenanceClient.StatusProbe.Malformed -> false
+internal enum class BundledHelperReplacementMode {
+    GUARDED_RETIRE,
+    RELEASED_LEGACY_TAKEOVER,
 }
 
-/** Root stages one fixed candidate. Only the helper-owned R1 lease may replace or launch it. */
+/**
+ * A bare ERR is the released pre-Guard helper's exact response to an unknown verb. It cannot create
+ * the Guard replacement journal, so asking it to retire and then waiting for Guard capabilities can
+ * only hold forever. A direct-su app instead lets the staged, authenticated candidate prove the Guard
+ * namespace empty and perform one exact in-place takeover with an authenticated incumbent rollback.
+ * Any ambiguous reply remains fail-closed.
+ */
+internal fun bundledHelperReplacementMode(
+    status: GuardDbMaintenanceClient.StatusProbe,
+): BundledHelperReplacementMode? = when (status) {
+    GuardDbMaintenanceClient.StatusProbe.Unsupported ->
+        BundledHelperReplacementMode.RELEASED_LEGACY_TAKEOVER
+    is GuardDbMaintenanceClient.StatusProbe.Valid -> if (!status.status.ownsMaintenance) {
+        BundledHelperReplacementMode.GUARDED_RETIRE
+    } else {
+        null
+    }
+    GuardDbMaintenanceClient.StatusProbe.Unreachable,
+    GuardDbMaintenanceClient.StatusProbe.Malformed -> null
+}
+
+/** Root stages one fixed candidate; replacement happens only through the selected exact authority. */
 internal fun bundledHelperStageCommand(expectedSha256: String): String {
     require(expectedSha256.matches(Regex("[0-9a-f]{64}")))
     val dollar = '$'
@@ -168,7 +202,143 @@ internal fun bundledHelperStageCommand(expectedSha256: String): String {
     """.trimIndent()
 }
 
+/**
+ * Released helpers predate GUARDRETIRE, so the new candidate owns this narrowly-scoped takeover.
+ * It first proves the Guard namespace empty using its native implementation, then retains and verifies
+ * the incumbent before atomically making the already authenticated candidate live. The new supervisor
+ * retires only helper processes whose executable inode differs from its own. Success requires the live
+ * daemon's exact bytes/build, autonomous/supervised/terminal capabilities and EMPTY Guard status; a
+ * failed candidate is replaced by the exact retained incumbent and that daemon is re-verified.
+ */
+internal fun bundledLegacyHelperTakeoverCommand(
+    expectedSha256: String,
+    stagedBuildId: String,
+    incumbentBuildId: String,
+    dataLocal: String = "/data/local",
+    lockPath: String = "/dev/.hapaneld-helper-transaction.lock",
+    polls: Int = LEGACY_TAKEOVER_POLLS,
+): String {
+    require(GuardDbMaintenanceProtocol.validSha256(expectedSha256))
+    require(GuardDbMaintenanceProtocol.validSha256(stagedBuildId))
+    require(GuardDbMaintenanceProtocol.validSha256(incumbentBuildId))
+    require(stagedBuildId != incumbentBuildId)
+    require(dataLocal.startsWith("/") && SAFE_ABSOLUTE_PATH.matches(dataLocal) &&
+        dataLocal.split('/').none { it == ".." })
+    require(lockPath.startsWith("/") && SAFE_ABSOLUTE_PATH.matches(lockPath) &&
+        lockPath.split('/').none { it == ".." })
+    require(polls in 1..LEGACY_TAKEOVER_POLLS)
+    val dollar = '$'
+    val expectedCapabilities =
+        "${GuardDbMaintenanceProtocol.CAPS_REPLY} AUTONOMOUS SUPERVISED TERMINAL_RETIRE"
+    val expectedStatus = "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0"
+    return """
+        lock=$lockPath
+        if ! mkdir "${dollar}lock" 2>/dev/null; then
+          holder=${dollar}(cat "${dollar}lock/pid" 2>/dev/null || true)
+          case "${dollar}holder" in
+            ''|*[!0-9]*) exit 75 ;;
+            *) [ ! -d "/proc/${dollar}holder" ] || exit 75 ;;
+          esac
+          rm -rf "${dollar}lock" 2>/dev/null || exit 75
+          mkdir "${dollar}lock" 2>/dev/null || exit 75
+        fi
+        echo ${dollar}${dollar} > "${dollar}lock/pid" || { rm -rf "${dollar}lock"; exit 75; }
+        cleanup_helper_lock() { rm -rf "$lockPath"; }
+        trap cleanup_helper_lock 0 1 2 3 15
+
+        [ -d "$dataLocal" ] && [ ! -L "$dataLocal" ] || exit 1
+        stage=$dataLocal/.hapaneld-helper.new
+        live=$dataLocal/hapaneld-helper
+        previous=$dataLocal/.hapaneld-helper.previous
+        previous_tmp=$dataLocal/.hapaneld-helper.previous.tmp
+        [ -f "${dollar}stage" ] && [ ! -L "${dollar}stage" ] &&
+        [ -f "${dollar}live" ] && [ ! -L "${dollar}live" ] &&
+        [ ! -e "${dollar}previous" ] && [ ! -L "${dollar}previous" ] &&
+        [ ! -e "${dollar}previous_tmp" ] && [ ! -L "${dollar}previous_tmp" ] || exit 1
+        stage_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null) || exit 1
+        live_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null) || exit 1
+        case "${dollar}stage_meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
+        case "${dollar}live_meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
+        stage_bytes=${dollar}{stage_meta##*:}
+        live_bytes=${dollar}{live_meta##*:}
+        [ "${dollar}stage_bytes" -ge 1 ] && [ "${dollar}stage_bytes" -le $MAX_STAGED_HELPER_BYTES ] &&
+        [ "${dollar}live_bytes" -ge 1 ] && [ "${dollar}live_bytes" -le $MAX_STAGED_HELPER_BYTES ] || exit 1
+        stage_sha=${dollar}(sha256sum "${dollar}stage" 2>/dev/null || toybox sha256sum "${dollar}stage" 2>/dev/null) || exit 1
+        stage_sha=${dollar}{stage_sha%% *}
+        [ "${dollar}stage_sha" = "$expectedSha256" ] || exit 1
+        live_sha=${dollar}(sha256sum "${dollar}live" 2>/dev/null || toybox sha256sum "${dollar}live" 2>/dev/null) || exit 1
+        live_sha=${dollar}{live_sha%% *}
+        [ "${dollar}live_sha" != "$expectedSha256" ] || exit 1
+        [ "${dollar}("${dollar}live" --request BUILDID 2>/dev/null)" = "BUILDID $incumbentBuildId" ] || exit 1
+        [ "${dollar}("${dollar}stage" --replacement-safe 2>/dev/null)" = REPLACE_SAFE ] || exit 1
+
+        if ! cp "${dollar}live" "${dollar}previous_tmp" 2>/dev/null; then
+          rm -f "${dollar}previous_tmp"
+          toybox cp "${dollar}live" "${dollar}previous_tmp" 2>/dev/null || exit 1
+        fi
+        chown 0:0 "${dollar}previous_tmp" && chmod 700 "${dollar}previous_tmp" || exit 1
+        previous_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}previous_tmp" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}previous_tmp" 2>/dev/null) || exit 1
+        [ "${dollar}previous_meta" = "0:0:700:1:${dollar}live_bytes" ] || exit 1
+        previous_sha=${dollar}(sha256sum "${dollar}previous_tmp" 2>/dev/null || toybox sha256sum "${dollar}previous_tmp" 2>/dev/null) || exit 1
+        previous_sha=${dollar}{previous_sha%% *}
+        [ "${dollar}previous_sha" = "${dollar}live_sha" ] || exit 1
+        sync || exit 1
+        mv -f "${dollar}previous_tmp" "${dollar}previous" || exit 1
+        sync || exit 1
+        mv -f "${dollar}stage" "${dollar}live" || exit 1
+        sync || exit 1
+        "${dollar}live" --supervise >/dev/null 2>&1 &
+        attempt=0
+        candidate_ready=0
+        while [ "${dollar}attempt" -lt $polls ]; do
+          self=${dollar}("${dollar}live" --request GUARDSELF 2>/dev/null) || self=
+          if [ "${dollar}self" = "OK GUARDSELF 1 ${dollar}stage_bytes $expectedSha256 $stagedBuildId" ]; then
+            candidate_ready=1
+            break
+          fi
+          attempt=${dollar}((attempt + 1))
+          [ "${dollar}attempt" -ge $polls ] || sleep 1
+        done
+        if [ "${dollar}candidate_ready" = 1 ]; then
+          caps=${dollar}("${dollar}live" --request GUARDCAPS 2>/dev/null) || caps=
+          status=${dollar}("${dollar}live" --request GUARDSTATUS 2>/dev/null) || status=
+          if [ "${dollar}caps" = "$expectedCapabilities" ] && [ "${dollar}status" = "$expectedStatus" ]; then
+            rm -f "${dollar}previous" || exit 1
+            sync || exit 1
+            exit 0
+          fi
+        fi
+
+        candidate_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null) || exit 1
+        previous_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}previous" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}previous" 2>/dev/null) || exit 1
+        [ "${dollar}candidate_meta" = "0:0:700:1:${dollar}stage_bytes" ] &&
+        [ "${dollar}previous_meta" = "0:0:700:1:${dollar}live_bytes" ] || exit 1
+        candidate_sha=${dollar}(sha256sum "${dollar}live" 2>/dev/null || toybox sha256sum "${dollar}live" 2>/dev/null) || exit 1
+        candidate_sha=${dollar}{candidate_sha%% *}
+        rollback_sha=${dollar}(sha256sum "${dollar}previous" 2>/dev/null || toybox sha256sum "${dollar}previous" 2>/dev/null) || exit 1
+        rollback_sha=${dollar}{rollback_sha%% *}
+        [ "${dollar}candidate_sha" = "$expectedSha256" ] &&
+        [ "${dollar}rollback_sha" = "${dollar}live_sha" ] || exit 1
+        mv -f "${dollar}previous" "${dollar}live" || exit 1
+        sync || exit 1
+        "${dollar}live" --supervise >/dev/null 2>&1 &
+        attempt=0
+        while [ "${dollar}attempt" -lt $polls ]; do
+          build=${dollar}("${dollar}live" --request BUILDID 2>/dev/null) || build=
+          if [ "${dollar}build" = "BUILDID $incumbentBuildId" ]; then
+            exit 1
+          fi
+          attempt=${dollar}((attempt + 1))
+          [ "${dollar}attempt" -ge $polls ] || sleep 1
+        done
+        exit 1
+    """.trimIndent()
+}
+
 private const val MAX_STAGED_HELPER_BYTES = 16 * 1024 * 1024
+private const val LEGACY_TAKEOVER_POLLS = 3
+private const val LEGACY_TAKEOVER_TIMEOUT_MS = 45_000L
+private val SAFE_ABSOLUTE_PATH = Regex("/[A-Za-z0-9._/-]+")
 private val BUNDLED_HELPER_REPLACEMENT_RANDOM = SecureRandom()
 
 internal fun freshBundledHelperReplacementNonce(): String = ByteArray(32)

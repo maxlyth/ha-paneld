@@ -333,23 +333,44 @@ private fun ownedGuardDbFileIdentity(file: File, allowEmpty: Boolean): GuardDbCa
     )
 }.getOrNull()
 
+private const val GUARD_DB_REFUSAL_CHECKPOINT_OPEN_FLAGS =
+    SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
+        SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
+
+/** Exact raw-open seam: tests execute the same flags, checkpoint, close and stability path as production. */
+internal fun <T : Any> runGuardDbRefusalCheckpoint(
+    open: (Int) -> T,
+    checkpoint: (T) -> Boolean,
+    close: (T) -> Unit,
+    stable: () -> Boolean,
+): Boolean {
+    var database: T? = null
+    return collectClosedCanonicalGuardDbProof(
+        collect = {
+            database = open(GUARD_DB_REFUSAL_CHECKPOINT_OPEN_FLAGS)
+            Unit
+        },
+        checkpoint = { checkpoint(requireNotNull(database)) },
+        close = { close(requireNotNull(database)) },
+        stable = stable,
+    ) != null
+}
+
 /** Refusal has no SQLite owner of its own, but still re-canonicalizes B's main before inventory proof. */
 internal fun canonicalizeGuardDbMainForRefusal(context: Context): Boolean {
     val databaseFile = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
-    var database: SQLiteDatabase? = null
-    return collectClosedCanonicalGuardDbProof(
-        collect = {
-            database = SQLiteDatabase.openDatabase(
+    return runGuardDbRefusalCheckpoint(
+        open = { flags ->
+            SQLiteDatabase.openDatabase(
                 databaseFile.absolutePath,
                 null,
-                SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+                flags,
             )
-            Unit
         },
-        checkpoint = { database?.let(::checkpointGuardDbTruncate) == true },
-        close = { requireNotNull(database).close() },
+        checkpoint = ::checkpointGuardDbTruncate,
+        close = SQLiteDatabase::close,
         stable = { stableGuardDbCanonicalMain(context.applicationContext) },
-    ) != null
+    )
 }
 
 internal fun exactGuardDbFinalStatus(

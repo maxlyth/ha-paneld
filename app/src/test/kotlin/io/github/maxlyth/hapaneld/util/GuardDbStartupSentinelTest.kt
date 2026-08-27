@@ -7,6 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.nio.file.Files
 
 class GuardDbStartupSentinelTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -80,5 +81,28 @@ class GuardDbStartupSentinelTest {
             validateMarker = { it.isFile },
         )
         assertFalse(store.write(sentinel))
+    }
+
+    @Test fun `dangling marker is corrupt and cannot be cleared as absent`() {
+        val directory = temporary.newFolder("sentinel-dangling")
+        val marker = directory.resolve("guard-db-maintenance.v1").toPath()
+        Files.createSymbolicLink(marker, directory.resolve("missing-sentinel").toPath())
+        val store = GuardDbSentinelStore(directory, syncDirectory = { true }, validateMarker = { it.isFile })
+
+        assertTrue(store.load() is GuardDbSentinelLoad.Corrupt)
+        assertFalse(store.write(sentinel))
+        assertFalse(store.clear(sentinel.session))
+        assertTrue(Files.isSymbolicLink(marker))
+    }
+
+    @Test fun `foreign pending entry is never deleted or followed`() {
+        val directory = temporary.newFolder("sentinel-pending")
+        val pending = directory.resolve(".guard-db-maintenance.v1.pending").toPath()
+        Files.createSymbolicLink(pending, directory.resolve("missing-pending-sentinel").toPath())
+        val store = GuardDbSentinelStore(directory, syncDirectory = { true }, validateMarker = { it.isFile })
+
+        assertFalse(store.write(sentinel))
+        assertTrue(Files.isSymbolicLink(pending))
+        assertTrue(store.load() is GuardDbSentinelLoad.Absent)
     }
 }

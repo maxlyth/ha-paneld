@@ -7,6 +7,7 @@ import android.system.OsConstants
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
@@ -65,7 +66,9 @@ internal class GuardDbTerminalRetirementStore(
 
     @Synchronized
     fun load(): GuardDbTerminalRetirementLoad {
-        if (!record.exists()) return GuardDbTerminalRetirementLoad.Absent
+        if (Files.notExists(record.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            return GuardDbTerminalRetirementLoad.Absent
+        }
         if (!validateFile(record) || record.length() !in 1..2048) return GuardDbTerminalRetirementLoad.Corrupt
         val bytes = runCatching { record.readBytes() }.getOrNull() ?: return GuardDbTerminalRetirementLoad.Corrupt
         return parseGuardDbTerminalRetirement(bytes)
@@ -113,7 +116,7 @@ internal class GuardDbTerminalRetirementStore(
 
     private fun write(retirement: GuardDbTerminalRetirement): Boolean = runCatching {
         if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return false
-        temporary.delete()
+        if (!Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return false
         FileOutputStream(temporary).use { output ->
             output.write(encodeGuardDbTerminalRetirement(retirement))
             Os.chmod(temporary.absolutePath, 0x180)

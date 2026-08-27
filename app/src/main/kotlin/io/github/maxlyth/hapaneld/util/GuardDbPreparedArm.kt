@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.persistence.CleanDatabaseProof
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
@@ -178,34 +179,42 @@ internal class GuardDbPreparedArmStore(
 
     @Synchronized
     fun load(): GuardDbPreparedArmLoad {
-        if (!record.exists()) return GuardDbPreparedArmLoad.Absent
+        if (Files.notExists(record.toPath(), LinkOption.NOFOLLOW_LINKS)) return GuardDbPreparedArmLoad.Absent
         if (!validateFile(record) || record.length() !in 1..4096) return GuardDbPreparedArmLoad.Corrupt
         val bytes = runCatching { record.readBytes() }.getOrNull() ?: return GuardDbPreparedArmLoad.Corrupt
         return parseGuardDbPreparedArm(bytes)?.let(GuardDbPreparedArmLoad::Valid) ?: GuardDbPreparedArmLoad.Corrupt
     }
 
     @Synchronized
-    fun write(prepared: GuardDbPreparedArm): Boolean = runCatching {
+    fun write(prepared: GuardDbPreparedArm): Boolean = when (val current = load()) {
+        GuardDbPreparedArmLoad.Absent -> publish(prepared)
+        is GuardDbPreparedArmLoad.Valid -> current.prepared == prepared && syncDirectory(directory)
+        GuardDbPreparedArmLoad.Corrupt -> false
+    }
+
+    private fun publish(prepared: GuardDbPreparedArm): Boolean {
         if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return false
-        temporary.delete()
-        FileOutputStream(temporary).use { output ->
-            output.write(encodeGuardDbPreparedArm(prepared))
-            Os.chmod(temporary.absolutePath, 0x180)
-            output.fd.sync()
-        }
-        Files.move(
-            temporary.toPath(), record.toPath(),
-            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
-        )
-        syncDirectory(directory)
-    }.getOrDefault(false).also { temporary.delete() }
+        if (!Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return false
+        return runCatching {
+            FileOutputStream(temporary).use { output ->
+                output.write(encodeGuardDbPreparedArm(prepared))
+                Os.chmod(temporary.absolutePath, 0x180)
+                output.fd.sync()
+            }
+            Files.move(
+                temporary.toPath(), record.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectory(directory)
+        }.getOrDefault(false).also { temporary.delete() }
+    }
 
     @Synchronized
     fun clear(expectedSession: String): Boolean {
         val current = load()
         if (current is GuardDbPreparedArmLoad.Valid && current.prepared.session != expectedSession) return false
         if (current is GuardDbPreparedArmLoad.Corrupt) return false
-        if (record.exists() && !record.delete()) return false
+        if (current is GuardDbPreparedArmLoad.Valid && !record.delete()) return false
         return syncDirectory(directory)
     }
 }

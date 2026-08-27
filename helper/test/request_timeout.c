@@ -83,6 +83,68 @@ static int create_listener(void) {
     return fd;
 }
 
+static int write_all(int fd, const char *bytes) {
+    size_t remaining = strlen(bytes);
+    while (remaining > 0) {
+        ssize_t count = write(fd, bytes, remaining);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return -1;
+        bytes += (size_t)count;
+        remaining -= (size_t)count;
+    }
+    return 0;
+}
+
+static int read_exact_request(int fd, const char *expected) {
+    char request[64];
+    size_t used = 0;
+    while (used < sizeof request) {
+        ssize_t count = read(fd, request + used, sizeof request - used);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return -1;
+        used += (size_t)count;
+        if (memchr(request, '\n', used)) break;
+    }
+    return used == strlen(expected) && memcmp(request, expected, used) == 0 ? 0 : -1;
+}
+
+static int invoke_request_entry(const char *command, char *output, size_t capacity) {
+    int capture[2];
+    if (!output || capacity == 0 || pipe(capture) != 0) return -1;
+    fflush(stdout);
+    int saved_stdout = dup(STDOUT_FILENO);
+    if (saved_stdout < 0 || dup2(capture[1], STDOUT_FILENO) < 0) {
+        if (saved_stdout >= 0) close(saved_stdout);
+        close(capture[0]);
+        close(capture[1]);
+        return -1;
+    }
+    close(capture[1]);
+    char *argv[] = { (char *)"hapaneld-helper", (char *)"--request", (char *)command, NULL };
+    int result = hapaneld_helper_main_for_request_timeout_test(3, argv);
+    fflush(stdout);
+    int restored = dup2(saved_stdout, STDOUT_FILENO);
+    close(saved_stdout);
+    if (restored < 0) {
+        close(capture[0]);
+        return -1;
+    }
+    size_t used = 0;
+    while (used + 1 < capacity) {
+        ssize_t count = read(capture[0], output + used, capacity - 1 - used);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) {
+            close(capture[0]);
+            return -1;
+        }
+        if (count == 0) break;
+        used += (size_t)count;
+    }
+    close(capture[0]);
+    output[used] = '\0';
+    return result;
+}
+
 int main(void) {
     CHECK(supervisor_executor_deadline(100, 1000000) == 60100,
         "supervisor executor applies the fixed command cap");
@@ -126,6 +188,39 @@ int main(void) {
     CHECK(result == 1, "a partial reply that stalls must fail");
     CHECK(elapsed_ms >= 75, "request must wait for its bounded reply deadline");
     CHECK(elapsed_ms < 1000, "partial reply must not leave the request blocked");
+
+    listener = create_listener();
+    CHECK(listener >= 0, "long Guard-status test listener must bind");
+    char session[65], boot[65], sha[65];
+    memset(session, 'a', sizeof session - 1); session[sizeof session - 1] = '\0';
+    memset(boot, 'b', sizeof boot - 1); boot[sizeof boot - 1] = '\0';
+    memset(sha, 'c', sizeof sha - 1); sha[sizeof sha - 1] = '\0';
+    char guard_status[MAX_LINE + 2];
+    int guard_status_length = snprintf(guard_status, sizeof guard_status,
+        "OK GUARDSTATUS 12 WAIT_B_HEALTH %s %s B %s 569 15 37 NONE NONE "
+        "1800000 1320000\n", session, boot, sha);
+    CHECK(guard_status_length > 255 && guard_status_length <= MAX_LINE + 1,
+        "role-bearing Guard status must cross the former probe ceiling within the protocol bound");
+
+    server = fork();
+    CHECK(server >= 0, "long Guard-status test server must fork");
+    if (server == 0) {
+        int client = accept(listener, NULL, NULL);
+        if (client < 0) _exit(5);
+        if (read_exact_request(client, "GUARDSTATUS\n") != 0) _exit(6);
+        if (write_all(client, guard_status) != 0) _exit(7);
+        close(client);
+        _exit(0);
+    }
+
+    char observed[MAX_LINE + 2];
+    result = invoke_request_entry("GUARDSTATUS", observed, sizeof observed);
+    close(listener);
+    CHECK(waitpid(server, &status, 0) == server && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+        "long Guard-status test server must complete the exact exchange");
+    CHECK(result == 0, "helper --request GUARDSTATUS must accept a full role-bearing status");
+    CHECK(strcmp(observed, guard_status) == 0,
+        "helper --request GUARDSTATUS must preserve the complete role-bearing status");
     puts("request timeout tests passed");
     return 0;
 }

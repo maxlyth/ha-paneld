@@ -2,7 +2,9 @@ package io.github.maxlyth.hapaneld.util
 
 import io.github.maxlyth.hapaneld.persistence.CleanDatabaseProof
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,6 +46,81 @@ class GuardDbPreparedArmTest {
                 .toByteArray(Charsets.US_ASCII)))
         }
     }
+
+    @Test fun `dangling prepared arm is corrupt and cannot be cleared`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-dangling-").toFile()
+            try {
+                val record = directory.resolve("guard-db-prepared-arm.v1").toPath()
+                Files.createSymbolicLink(record, directory.resolve("missing-prepared-arm").toPath())
+                val store = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+
+                assertTrue(store.load() is GuardDbPreparedArmLoad.Corrupt)
+                assertFalse(store.clear(manifest.session))
+                assertFalse(store.write(prepared(manifest)))
+                assertTrue(Files.isSymbolicLink(record))
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun `prepared arm publication is idempotent but never replaces another proof`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-idempotent-").toFile()
+            try {
+                val store = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+                val first = prepared(manifest)
+                assertTrue(store.write(first))
+                assertTrue(store.write(first))
+                assertFalse(store.write(first.copy(session = "9".repeat(64))))
+                assertEquals(first, (store.load() as GuardDbPreparedArmLoad.Valid).prepared)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun `foreign prepared pending entry is never deleted or followed`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-pending-").toFile()
+            try {
+                val pending = directory.resolve(".guard-db-prepared-arm.v1.pending").toPath()
+                Files.createSymbolicLink(pending, directory.resolve("missing-pending-prepared").toPath())
+                val store = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+
+                assertFalse(store.write(prepared(manifest)))
+                assertTrue(Files.isSymbolicLink(pending))
+                assertTrue(store.load() is GuardDbPreparedArmLoad.Absent)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    private fun prepared(manifest: GuardDbArmManifest) = GuardDbPreparedArm.create(
+        manifest,
+        CleanDatabaseProof(
+            databaseBytes = 4096L,
+            sha256 = "c".repeat(64),
+            userVersion = 14,
+            appStateRows = 37L,
+            orderedAppStateSha256 = "d".repeat(64),
+            settingsSemanticSha256 = "e".repeat(64),
+        ),
+    )
 
     private inline fun withManifest(block: (GuardDbArmManifest) -> Unit) {
         val aFile = File.createTempFile("guard-prepared-a-", ".apk")

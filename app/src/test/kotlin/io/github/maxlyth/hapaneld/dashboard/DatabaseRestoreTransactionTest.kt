@@ -79,6 +79,114 @@ class DatabaseRestoreTransactionTest {
         assertEquals(16L, restarted.record.guard?.generation)
     }
 
+    @Test fun `restart after owned WAL open normalizes inert sidecars and retains Guard receipt`() =
+        withFiles { directory, target, staged ->
+            val sidecarChecks = mutableListOf<Pair<String, Boolean>>()
+            val transaction = DatabaseRestoreTransaction(
+                target,
+                guard,
+                ownedStableSidecar = { file, requireEmpty ->
+                    sidecarChecks += file.name to requireEmpty
+                    !requireEmpty || file.length() == 0L
+                },
+            )
+            assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+            File(target.path + "-wal").writeBytes(byteArrayOf())
+            File(target.path + "-shm").writeText("owned-open-shm")
+
+            val restarted = DatabaseRestoreTransaction(
+                target,
+                guard,
+                ownedStableSidecar = { file, requireEmpty ->
+                    sidecarChecks += file.name to requireEmpty
+                    !requireEmpty || file.length() == 0L
+                },
+            ).reconcile() as? DatabaseRestoreResult.Restored
+                ?: throw AssertionError("inert restored-open sidecars did not resume")
+
+            assertEquals(guard, restarted.record.guard)
+            assertEquals(
+                listOf("${target.name}-wal" to true, "${target.name}-shm" to false),
+                sidecarChecks,
+            )
+            assertFalse(File(target.path + "-wal").exists())
+            assertFalse(File(target.path + "-shm").exists())
+            assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+            assertEquals("schema14", target.readText())
+            assertEquals("schema15", supersededFile(target, 15).readText())
+        }
+
+    @Test fun `restart after ordinary WAL open resumes before second open consumes receipt`() =
+        withFiles { directory, target, staged ->
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            assertTrue(
+                DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+                    .restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored,
+            )
+            File(target.path + "-wal").writeBytes(byteArrayOf())
+            File(target.path + "-shm").writeText("owned-open-shm")
+
+            val restarted = DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+            assertTrue(restarted.reconcile() is DatabaseRestoreResult.Restored)
+            assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+            assertFalse(File(target.path + "-wal").exists())
+            assertFalse(File(target.path + "-shm").exists())
+
+            // SQLiteOpenHelper's second open may recreate the same inert topology before onOpen.
+            File(target.path + "-wal").writeBytes(byteArrayOf())
+            File(target.path + "-shm").writeText("owned-second-open-shm")
+            assertTrue(restarted.consumeOrdinaryRestored())
+            assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
+        }
+
+    @Test fun `restored restart rejects journal nonempty unproved and drifted topologies`() {
+        fun assertHeld(label: String, trusted: (File, Boolean) -> Boolean, mutate: (File, File, File) -> Unit) =
+            withFiles { directory, target, staged ->
+                val transaction = DatabaseRestoreTransaction(
+                    target,
+                    guard = null,
+                    ownedStableSidecar = trusted,
+                )
+                assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+                mutate(directory, target, staged)
+                val before = directory.listFiles()!!.associate { it.name to it.readSafeBytes() }
+
+                val restarted = DatabaseRestoreTransaction(
+                    target,
+                    guard = null,
+                    ownedStableSidecar = trusted,
+                ).reconcile()
+
+                assertTrue(label, restarted is DatabaseRestoreResult.Hold)
+                assertTrue(label, File(directory, ".ha-paneld.db.restore.v1").isFile)
+                assertEquals(label, before, directory.listFiles()!!.associate { it.name to it.readSafeBytes() })
+            }
+
+        val exactOwned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+            !requireEmpty || file.length() == 0L
+        }
+        assertHeld("rollback journal", exactOwned) { _, target, _ ->
+            File(target.path + "-journal").writeBytes(byteArrayOf())
+        }
+        assertHeld("nonempty WAL", exactOwned) { _, target, _ ->
+            File(target.path + "-wal").writeText("committed-frame")
+        }
+        assertHeld("unproved empty WAL", { _, _ -> false }) { _, target, _ ->
+            File(target.path + "-wal").writeBytes(byteArrayOf())
+        }
+        assertHeld("unproved SHM", { _, _ -> false }) { _, target, _ ->
+            File(target.path + "-shm").writeText("unproved-shm")
+        }
+        assertHeld("canonical target drift", exactOwned) { _, target, _ ->
+            target.writeText("changed-after-open")
+        }
+        assertHeld("superseded companion drift", exactOwned) { _, target, _ ->
+            File(supersededFile(target, 15).path + "-wal").writeBytes(byteArrayOf())
+        }
+    }
+
     @Test fun `sidecar authority rejects foreign hardlinked and changing identities`() {
         val exact = DatabaseRestoreSidecarIdentity(
             regular = true,
@@ -205,7 +313,10 @@ class DatabaseRestoreTransactionTest {
 
         assertTrue(transaction.consumeOrdinaryRestored())
         assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
-        assertTrue(transaction.reconcile() is DatabaseRestoreResult.Hold)
+        assertTrue(transaction.reconcile() is DatabaseRestoreResult.Restored)
+        assertFalse(File(target.path + "-wal").exists())
+        assertFalse(File(target.path + "-shm").exists())
+        assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
         assertFalse(transaction.clearRestored("2".repeat(64)))
         assertTrue(transaction.clearRestored(session))
         assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())

@@ -1071,13 +1071,30 @@ sed -e "s|^db=/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db$|db=$
 DB_OBSERVER_BIN="$DB_OBSERVER_DIR/bin"
 DB_OBSERVER_SQLITE_LOG="$DB_OBSERVER_DIR/sqlite-argv.log"
 mkdir -p "$DB_OBSERVER_BIN"
+# Target Android 8.1 userspaces do not necessarily provide awk. Give the extracted device program
+# only its explicit applets so a host /usr/bin fallback cannot make a forbidden dependency look green.
+for db_observer_tool in cp find grep ls mktemp rm sed sha256sum; do
+  db_observer_tool_path="$(PATH=/usr/bin:/bin command -v "$db_observer_tool" 2>/dev/null || true)"
+  if [ -n "$db_observer_tool_path" ]; then
+    ln -s "$db_observer_tool_path" "$DB_OBSERVER_BIN/$db_observer_tool"
+  else
+    LAST_OUTPUT="$TMP/observer-missing-tool"
+    printf 'missing host test prerequisite: %s\n' "$db_observer_tool" > "$LAST_OUTPUT"
+    fail_test "production observer no-awk fixture has its required Android-style tools"
+  fi
+done
 cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' "\$*" >> "$DB_OBSERVER_SQLITE_LOG"
 exec "$HAPANELD_HOST_SQLITE3" "\$@"
 EOF
 chmod 700 "$DB_OBSERVER_BIN/sqlite3"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+if PATH="$DB_OBSERVER_BIN" command -v awk >/dev/null 2>&1; then
+  fail_test "production observer no-awk fixture excludes awk from the device PATH"
+else
+  pass "production observer no-awk fixture excludes awk from the device PATH"
+fi
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=readable:15:ok' && \
    printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:ok'; then
   pass "production observer reads the actual primary and selects the newest in-bound recovery"
@@ -1092,7 +1109,7 @@ if printf '%s\n' "$observer_output" | grep -Fqx "HOSTDB_PRIMARY_FINGERPRINT=|:$o
   pass "production observer binds exact primary bytes and the complete readable recovery inventory"
 else fail_test "production observer binds exact primary bytes and the complete readable recovery inventory"; fi
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v15.premigrate" 'PRAGMA user_version=15; CREATE TABLE poison(value TEXT);'
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:ok' && \
    printf '%s\n' "$observer_output" | grep -Eq 'HOSTDB_INVENTORY_FINGERPRINT=.*ha-paneld\.db\.v15\.premigrate:file:[0-9a-f]{64}'; then
   pass "production observer inventories an out-of-bound newer recovery without selecting it"
@@ -1103,35 +1120,35 @@ if [ "$(grep -c '^-readonly ' "$DB_OBSERVER_SQLITE_LOG")" -ge 2 ] && \
   pass "production observer opens every SQLite candidate with CLI read-only enforcement"
 else fail_test "production observer opens every SQLite candidate with CLI read-only enforcement"; fi
 chmod 400 "$DB_OBSERVER_DB" "$DB_OBSERVER_DB.v13.premigrate" "$DB_OBSERVER_DB.v14.premigrate"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=readable:15:ok'; then
   pass "production observer reads a non-writable canonical database without mutation"
 else fail_test "production observer reads a non-writable canonical database without mutation"; fi
 chmod 600 "$DB_OBSERVER_DB" "$DB_OBSERVER_DB.v13.premigrate" "$DB_OBSERVER_DB.v14.premigrate"
 cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
-#!/usr/bin/env bash
+#!/bin/sh
 [ "\${1:-}" != -readonly ] || exit 1
 exec "$HAPANELD_HOST_SQLITE3" "\$@"
 EOF
 chmod 700 "$DB_OBSERVER_BIN/sqlite3"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=unreadable'; then
   pass "production observer fails closed when SQLite lacks -readonly support"
 else fail_test "production observer fails closed when SQLite lacks -readonly support"; fi
 cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
-#!/usr/bin/env bash
+#!/bin/sh
 exec "$HAPANELD_HOST_SQLITE3" "\$@"
 EOF
 chmod 700 "$DB_OBSERVER_BIN/sqlite3"
 printf 'not sqlite\n' > "$DB_OBSERVER_DB.v14.premigrate"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -Eq '^HOSTDB_RECOVERY=v14:(unreadable|readable:.*:bad)$'; then
   pass "production observer does not fall back past a poisoned newest selectable recovery"
 else fail_test "production observer does not fall back past a poisoned newest selectable recovery"; fi
 rm -f "$DB_OBSERVER_DB.v14.premigrate"
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v14.premigrate" 'PRAGMA user_version=14; CREATE TABLE canary(value TEXT);'
 : > "$DB_OBSERVER_DB.v14.premigrate-journal"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:sidecar'; then
   pass "production observer refuses a premigration recovery with a companion journal"
 else fail_test "production observer refuses a premigration recovery with a companion journal"; fi
@@ -1145,7 +1162,7 @@ rm -f "$DB_OBSERVER_DB.v14.premigrate" "$DB_OBSERVER_DB.v14.premigrate-wal" "$DB
   'PRAGMA journal_mode=WAL; PRAGMA user_version=14; CREATE TABLE wal_canary(value TEXT); INSERT INTO wal_canary VALUES("standalone");' >/dev/null
 wal_source_hash_before="$(/usr/bin/sha256sum "$DB_OBSERVER_DB.v14.premigrate" | awk '{print $1}')"
 wal_source_inventory_before="$(find "$DB_OBSERVER_DIR" -maxdepth 1 -name 'ha-paneld.db.v14.premigrate*' -printf '%f\n' | sort)"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 wal_source_hash_after="$(/usr/bin/sha256sum "$DB_OBSERVER_DB.v14.premigrate" | awk '{print $1}')"
 wal_source_inventory_after="$(find "$DB_OBSERVER_DIR" -maxdepth 1 -name 'ha-paneld.db.v14.premigrate*' -printf '%f\n' | sort)"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:ok' && \
@@ -1158,7 +1175,7 @@ else fail_test "production observer admits a standalone WAL-mode recovery withou
 rm -f "$DB_OBSERVER_DB.v14.premigrate"
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v13.premigrate" 'PRAGMA user_version=13; CREATE TABLE IF NOT EXISTS canary(value TEXT);'
 : > "$DB_OBSERVER_DB.v14.premigrate-journal"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:incomplete'; then
   pass "production observer lets an orphan newest recovery artifact block fallback"
 else fail_test "production observer lets an orphan newest recovery artifact block fallback"; fi
@@ -1166,13 +1183,13 @@ rm -f "$DB_OBSERVER_DB.v14.premigrate-journal"
 
 rm -f "$DB_OBSERVER_DB"
 ln -s "$DB_OBSERVER_DIR/missing" "$DB_OBSERVER_DB"
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=not_regular'; then
   pass "production observer refuses to follow a symlinked canonical database"
 else fail_test "production observer refuses to follow a symlinked canonical database"; fi
 rm -f "$DB_OBSERVER_DB" "$DB_OBSERVER_DB.v13.premigrate" "$DB_OBSERVER_DB.v14.premigrate"
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v14.superseded" 'PRAGMA user_version=14;'
-observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=missing' && \
    printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=none' && \
    printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RETAINED=1'; then
@@ -1181,7 +1198,7 @@ else fail_test "production observer treats superseded state as retained but neve
 rm -f "$DB_OBSERVER_DB.v14.superseded"
 for observer_retained_suffix in -journal .restore.tmp .vbad.premigrate.tmp; do
   : > "$DB_OBSERVER_DB$observer_retained_suffix"
-  observer_output="$(PATH="$DB_OBSERVER_BIN:/usr/bin:/bin" bash "$DB_OBSERVER_RUN")"
+  observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
   if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=missing' && \
      printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RETAINED=1'; then
     pass "production observer retains orphan artifact $observer_retained_suffix against fresh classification"

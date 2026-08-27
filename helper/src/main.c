@@ -291,7 +291,10 @@ static int request_daemon(const char *command) {
         sent += (size_t)n;
     }
 
-    char reply[256];
+    // Single-line replies share the daemon protocol's MAX_LINE printable-byte bound. Reserve one
+    // byte for the wire LF and one for the local NUL so a full Guard status cannot be mistaken for a
+    // truncated reply merely because it carries the transaction's three 64-byte identities.
+    char reply[MAX_LINE + 2];
     size_t used = 0;
     while (used + 1 < sizeof reply) {
         ssize_t n = read(fd, reply + used, 1);

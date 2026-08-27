@@ -88,8 +88,6 @@ grep -Fq "LC_ALL=C grep -aoE 'BUILDID .*'" "$SCRIPT"
 grep -Fq "LC_ALL=C grep -c '^BUILDID '" "$SCRIPT"
 grep -Fq "LC_ALL=C sed -nE 's/^BUILDID ([0-9a-f]{64})\$/\\1/p'" "$SCRIPT"
 grep -Fq "LC_ALL=C grep -Ec '^[0-9a-f]{64}\$'" "$SCRIPT"
-grep -Fq "[ \"\$records\" = 'BUILDID ' ] || return 1" "$SCRIPT"
-grep -Fq "LC_ALL=C grep -aoE '^[0-9a-f]{64}\$'" "$SCRIPT"
 if grep -Eq "grep -aoE 'BUILDID (\[[^]]*\][*+]?|\[0-9a-f\]\{64\})'" "$SCRIPT"; then
   echo "installer collects the helper identity with a bounded match, which truncates a longer record" >&2
   exit 1

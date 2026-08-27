@@ -1,9 +1,11 @@
 package io.github.maxlyth.hapaneld.util
 
+import android.database.sqlite.SQLiteDatabase
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
 import io.github.maxlyth.hapaneld.platform.DaemonStreamResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -237,6 +239,36 @@ class GuardDbStartupHealthTest {
             listOf(0L, 0L, 1L),
         ).forEach { assertFalse(exactGuardDbTruncateCheckpoint(it, hasAdditionalRow = false)) }
         assertFalse(exactGuardDbTruncateCheckpoint(listOf(0L, 0L, 0L), hasAdditionalRow = true))
+    }
+
+    @Test fun `exact A refusal raw open preserves WAL through closed checkpoint proof`() {
+        val events = mutableListOf<String>()
+        val openedDatabase = Any()
+
+        val canonical = runGuardDbRefusalCheckpoint(
+            open = { flags ->
+                events += "open"
+                assertEquals(
+                    SQLiteDatabase.OPEN_READWRITE or SQLiteDatabase.NO_LOCALIZED_COLLATORS or
+                        SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING,
+                    flags,
+                )
+                openedDatabase
+            },
+            checkpoint = { database ->
+                events += "checkpoint"
+                assertSame(openedDatabase, database)
+                exactGuardDbTruncateCheckpoint(listOf(0L, 0L, 0L), hasAdditionalRow = false)
+            },
+            close = { database ->
+                events += "close"
+                assertSame(openedDatabase, database)
+            },
+            stable = { events += "stable"; true },
+        )
+
+        assertTrue(canonical)
+        assertEquals(listOf("open", "checkpoint", "close", "stable"), events)
     }
 
     private fun waiting() = GuardDbMaintenanceProtocol.Status(

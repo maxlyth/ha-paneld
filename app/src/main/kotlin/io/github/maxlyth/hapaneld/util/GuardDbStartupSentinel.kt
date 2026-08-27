@@ -7,6 +7,7 @@ import android.os.Process
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
@@ -154,7 +155,7 @@ internal class GuardDbSentinelStore(
 
     @Synchronized
     fun load(): GuardDbSentinelLoad {
-        if (!marker.exists()) return GuardDbSentinelLoad.Absent
+        if (Files.notExists(marker.toPath(), LinkOption.NOFOLLOW_LINKS)) return GuardDbSentinelLoad.Absent
         if (!validateMarker(marker) || marker.length() !in 1..2048) {
             return GuardDbSentinelLoad.Corrupt
         }
@@ -163,25 +164,33 @@ internal class GuardDbSentinelStore(
     }
 
     @Synchronized
-    fun write(sentinel: GuardDbStartupSentinel): Boolean = runCatching {
+    fun write(sentinel: GuardDbStartupSentinel): Boolean = when (val current = load()) {
+        GuardDbSentinelLoad.Absent -> publish(sentinel)
+        is GuardDbSentinelLoad.Valid -> current.sentinel == sentinel && syncDirectory(directory)
+        GuardDbSentinelLoad.Corrupt -> false
+    }
+
+    private fun publish(sentinel: GuardDbStartupSentinel): Boolean {
         // noBackupFilesDir already exists and is durably owned by Package Manager. Keeping the fixed
         // marker directly in it avoids a crash seam where a newly-created child directory itself was
         // never fsynced into its parent.
         if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return false
-        temporary.delete()
-        FileOutputStream(temporary).use { output ->
-            output.write(encodeGuardDbSentinel(sentinel))
-            Os.chmod(temporary.absolutePath, 0x180) // 0600, before file fsync
-            output.fd.sync()
-        }
-        Files.move(
-            temporary.toPath(),
-            marker.toPath(),
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING,
-        )
-        syncDirectory(directory)
-    }.getOrDefault(false).also { temporary.delete() }
+        if (!Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return false
+        return runCatching {
+            FileOutputStream(temporary).use { output ->
+                output.write(encodeGuardDbSentinel(sentinel))
+                Os.chmod(temporary.absolutePath, 0x180) // 0600, before file fsync
+                output.fd.sync()
+            }
+            Files.move(
+                temporary.toPath(),
+                marker.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectory(directory)
+        }.getOrDefault(false).also { temporary.delete() }
+    }
 
     @Synchronized
     fun promoteArmed(expectedSession: String): Boolean {
@@ -196,7 +205,7 @@ internal class GuardDbSentinelStore(
     private fun promote(expectedSession: String, state: GuardDbSentinelState): Boolean {
         val current = (load() as? GuardDbSentinelLoad.Valid)?.sentinel ?: return false
         if (current.session != expectedSession) return false
-        return current.state == state || write(current.copy(state = state))
+        return current.state == state || publish(current.copy(state = state))
     }
 
     @Synchronized
@@ -204,7 +213,7 @@ internal class GuardDbSentinelStore(
         val current = load()
         if (current is GuardDbSentinelLoad.Valid && current.sentinel.session != expectedSession) return false
         if (current is GuardDbSentinelLoad.Corrupt) return false
-        if (marker.exists() && !marker.delete()) return false
+        if (current is GuardDbSentinelLoad.Valid && !marker.delete()) return false
         return syncDirectory(directory)
     }
 }

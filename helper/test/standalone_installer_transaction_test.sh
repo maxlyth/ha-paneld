@@ -29,6 +29,85 @@ cat > "$TMP/bin/adb" <<'EOF'
 #!/usr/bin/env bash
 set -u
 command_text="$*"
+v3_lease_phase_race_reply() {
+  [ "${MOCK_V3_LEASE_PHASE_RACE:-}" = 1 ] || return 125
+  [ "${3:-}" = shell ] || return 125
+  race_root="${MOCK_STATE_DIR:?}/v3-lease-race"
+  remote_command=${!#}
+
+  if printf '%s' "$command_text" | grep -Fq 'echo LEASE_OK' &&
+     printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+    remote_command=${remote_command//\/dev\/.hapaneld-helper-transaction.lock/$race_root/dev/.hapaneld-helper-transaction.lock}
+    remote_command=${remote_command//\/data/$race_root/data}
+    remote_command=$(printf '%s\n' "$remote_command" | sed 's/^\([[:space:]]*\)|\*/\1""|*/')
+    printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+    renewal_output="$(PATH=/usr/bin:/bin bash -c "$remote_command" 2>&1)"
+    renewal_status=$?
+    printf '%s\n' "$renewal_output"
+    if [ "$renewal_output" = TRANSACTION_BUSY ]; then
+      : > "$race_root/renewal-blocked-by-phase-lock"
+    elif [ "$renewal_output" = LEASE_OK ]; then
+      grep -qx SWAP_PHASE=TARGET "$race_root/data/local/.hapaneld-helper-manual-upgrade" || return 1
+      : > "$race_root/target-phase-renewed"
+    fi
+    return "$renewal_status"
+  fi
+
+  if printf '%s' "$command_text" | grep -Fq 'echo INSTALL_OK' &&
+     printf '%s' "$command_text" | grep -Fq 'SWAP_PHASE=PREPARED'; then
+    transaction_id="$(printf '%s\n' "$remote_command" |
+      sed -nE 's#.*candidate=/data/local/\.hapaneld-helper\.manual-([0-9a-f]{32}).*#\1#p' | head -1)"
+    [ "${#transaction_id}" -eq 32 ] || return 1
+    mkdir -p "$race_root/dev" "$race_root/data/local"
+    marker="$race_root/data/local/.hapaneld-helper-manual-upgrade"
+    current_boot="$(cat /proc/sys/kernel/random/boot_id)"
+    current_uptime="$(cut -d. -f1 /proc/uptime)"
+    cat > "$marker" <<RACEEOF
+JOURNAL_VERSION=3
+JOURNAL_SCOPE=HELPER_ONLY
+REGISTRATION_KIND=system
+TRANSACTION_ID=$transaction_id
+TARGET_BUILD_ID=${MOCK_HELPER_BUILD_ID:?}
+TARGET_HELPER_SHA256=${MOCK_MANUAL_TARGET_HELPER_SHA256:?}
+TARGET_SERVICE_SHA256=${MOCK_MANUAL_TARGET_SERVICE_SHA256:?}
+SWAP_PHASE=PREPARED
+LEASE_BOOT_ID=$current_boot
+LEASE_UNTIL_UPTIME=$((current_uptime + 3))
+RACEEOF
+    chmod 600 "$marker"
+    mkdir "$race_root/dev/.hapaneld-helper-transaction.lock"
+    printf '%s\n' "$$" > "$race_root/dev/.hapaneld-helper-transaction.lock/pid"
+    : > "$race_root/main-phase-lock-held"
+    attempt=0
+    while [ ! -f "$race_root/renewal-blocked-by-phase-lock" ]; do
+      attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || return 1; sleep 0.1
+    done
+    sed 's/^SWAP_PHASE=PREPARED$/SWAP_PHASE=TARGET/' "$marker" > "$marker.target"
+    chmod 600 "$marker.target"
+    mv -f "$marker.target" "$marker"
+    rm -rf "$race_root/dev/.hapaneld-helper-transaction.lock"
+    attempt=0
+    while [ ! -f "$race_root/target-phase-renewed" ]; do
+      attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || return 1; sleep 0.1
+    done
+    grep -qx SWAP_PHASE=TARGET "$marker" || return 1
+    : > "${MOCK_STATE_DIR:?}/manual-helper-transaction"
+    printf 'INSTALL_OK\n'
+    return 0
+  fi
+
+  if printf '%s' "$command_text" | grep -Fq 'echo COMMIT_OK' &&
+     printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-manual-upgrade'; then
+    marker="$race_root/data/local/.hapaneld-helper-manual-upgrade"
+    [ -f "$race_root/renewal-blocked-by-phase-lock" ] &&
+      [ -f "$race_root/target-phase-renewed" ] && grep -qx SWAP_PHASE=TARGET "$marker" || return 1
+    printf 'TARGET\n' > "$race_root/committed-phase"
+    rm -f "$marker" "${MOCK_STATE_DIR:?}/manual-helper-transaction"
+    printf 'COMMIT_OK\n'
+    return 0
+  fi
+  return 125
+}
 v3_real_filesystem_reply() {
   [ "${MOCK_V3_REAL_FILESYSTEM:-}" = 1 ] || return 125
   real_root="${MOCK_STATE_DIR:?}/v3-real"
@@ -95,6 +174,9 @@ v1_real_filesystem_reply() {
   fi
   return 125
 }
+v3_lease_phase_race_reply "$@"
+v3_lease_race_status=$?
+[ "$v3_lease_race_status" -eq 125 ] || exit "$v3_lease_race_status"
 v3_real_filesystem_reply "$@"
 v3_status=$?
 [ "$v3_status" -eq 125 ] || exit "$v3_status"
@@ -349,6 +431,24 @@ grep -q 'ROLLBACK_UNKNOWN' "$MOCK_CALL_LOG"
 ! grep -q 'echo ROLLBACK_FINALIZED' "$MOCK_CALL_LOG"
 unset MOCK_MANUAL_TRANSACTION_STATE MOCK_MANUAL_LIVE_STATE
 rm -f "$MOCK_STATE_DIR/manual-helper-transaction"
+
+rm -rf "$MOCK_STATE_DIR/v3-lease-race"
+export MOCK_V3_LEASE_PHASE_RACE=1
+export MOCK_ADB_ROOT=1
+: > "$MOCK_CALL_LOG"
+if ! bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/v3-lease-phase-race.out" 2>&1; then
+  cat "$TMP/v3-lease-phase-race.out" >&2
+  cat "$MOCK_CALL_LOG" >&2
+  exit 1
+fi
+[ -f "$MOCK_STATE_DIR/v3-lease-race/renewal-blocked-by-phase-lock" ]
+[ -f "$MOCK_STATE_DIR/v3-lease-race/target-phase-renewed" ]
+grep -qx TARGET "$MOCK_STATE_DIR/v3-lease-race/committed-phase"
+[ ! -e "$MOCK_STATE_DIR/v3-lease-race/data/local/.hapaneld-helper-manual-upgrade" ]
+grep -q 'echo LEASE_OK' "$MOCK_CALL_LOG"
+unset MOCK_V3_LEASE_PHASE_RACE
+export MOCK_ADB_ROOT=0
+rm -rf "$MOCK_STATE_DIR/v3-lease-race"
 
 export MOCK_MANUAL_TRANSACTION_STATE=stale_v3
 : > "$MOCK_STATE_DIR/manual-helper-transaction"

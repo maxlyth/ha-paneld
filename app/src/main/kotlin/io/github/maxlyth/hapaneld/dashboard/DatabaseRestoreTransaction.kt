@@ -283,7 +283,9 @@ internal class DatabaseRestoreTransaction(
                     else -> return DatabaseRestoreResult.Hold("database SOURCE_ASIDE topology is ambiguous")
                 }
                 DatabaseRestoreState.RESTORED -> {
-                    if (!targetIsStaged || !asideIsSource || entryExists(preparedFile) || !noCanonicalSidecars()) {
+                    if (!targetIsStaged || !asideIsSource || !exactStandaloneSuperseded(aside) ||
+                        entryExists(preparedFile) || !normalizeCanonicalSidecars()
+                    ) {
                         return DatabaseRestoreResult.Hold("database RESTORED receipt does not match files")
                     }
                     cut(DatabaseRestoreCut.BEFORE_RESULT)

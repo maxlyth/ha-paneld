@@ -1,5 +1,9 @@
 package io.github.maxlyth.hapaneld.util
 
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
+import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -104,6 +108,97 @@ class BundledHelperInstallerTest {
     @Test(expected = IllegalArgumentException::class)
     fun `stage command rejects non digest interpolation`() {
         bundledHelperStageCommand("a; reboot")
+    }
+
+    @Test fun `released base without Guard verbs uses candidate owned takeover`() {
+        // RC2 answers bare ERR to GUARDSTATUS, which statusProbe classifies as Unsupported. It cannot
+        // consume GUARDRETIRE, so this must never enter the guarded-retire settlement loop.
+        assertEquals(
+            BundledHelperReplacementMode.RELEASED_LEGACY_TAKEOVER,
+            bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Unsupported),
+        )
+
+        val hash = "c".repeat(64)
+        val command = bundledLegacyHelperTakeoverCommand(hash, stagedBuild, incumbentBuild)
+        assertTrue(command.contains("stage=/data/local/.hapaneld-helper.new"))
+        assertTrue(command.contains("live=/data/local/hapaneld-helper"))
+        assertTrue(command.contains("lock=/dev/.hapaneld-helper-transaction.lock"))
+        assertTrue(command.contains("--replacement-safe"))
+        assertTrue(command.contains("previous_tmp=/data/local/.hapaneld-helper.previous.tmp"))
+        assertTrue(command.contains("previous_sha"))
+        assertTrue(command.contains("= \"BUILDID $incumbentBuild\""))
+        assertTrue(command.contains("mv -f \"\$stage\" \"\$live\""))
+        assertTrue(command.contains("mv -f \"\$previous\" \"\$live\""))
+        assertTrue(command.contains("\"\$live\" --supervise"))
+        assertTrue(command.contains("--request BUILDID"))
+        assertTrue(command.contains("--request GUARDSELF"))
+        assertTrue(command.contains("$hash $stagedBuild"))
+        assertTrue(command.contains("AUTONOMOUS SUPERVISED TERMINAL_RETIRE"))
+        assertTrue(command.contains(emptyStatus))
+        assertFalse(command.contains("GUARDRETIRE"))
+        assertFalse(command.contains("pkill"))
+        assertFalse(command.contains("killall"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `legacy takeover rejects non digest build interpolation`() {
+        bundledLegacyHelperTakeoverCommand("c".repeat(64), "a; reboot", incumbentBuild)
+    }
+
+    @Test fun `released base takeover executes exact candidate and clears rollback custody`() {
+        withTakeoverFiles(candidateStarts = true) { directory, live, stage, oldBytes, candidateBytes ->
+            val command = bundledLegacyHelperTakeoverCommand(
+                sha256(stage), stagedBuild, incumbentBuild,
+                dataLocal = directory.absolutePath,
+                lockPath = File(directory, ".transaction-lock").absolutePath,
+                polls = 1,
+            )
+            assertEquals(0, runTakeoverCommand(command))
+            assertEquals(candidateBytes, live.readText())
+            assertFalse(stage.exists())
+            assertFalse(File(directory, ".hapaneld-helper.previous").exists())
+            assertFalse(File(directory, ".hapaneld-helper.previous.tmp").exists())
+            assertFalse(File(directory, ".transaction-lock").exists())
+            assertTrue(oldBytes != live.readText())
+        }
+    }
+
+    @Test fun `candidate supervision failure restores and verifies exact released incumbent`() {
+        withTakeoverFiles(candidateStarts = false) { directory, live, stage, oldBytes, _ ->
+            val oldSha = sha256(live)
+            val command = bundledLegacyHelperTakeoverCommand(
+                sha256(stage), stagedBuild, incumbentBuild,
+                dataLocal = directory.absolutePath,
+                lockPath = File(directory, ".transaction-lock").absolutePath,
+                polls = 1,
+            )
+            assertEquals(1, runTakeoverCommand(command))
+            assertEquals(oldBytes, live.readText())
+            assertEquals(oldSha, sha256(live))
+            assertFalse(stage.exists())
+            assertFalse(File(directory, ".hapaneld-helper.previous").exists())
+            assertFalse(File(directory, ".hapaneld-helper.previous.tmp").exists())
+            assertFalse(File(directory, ".transaction-lock").exists())
+        }
+    }
+
+    @Test fun `live shared transaction owner blocks takeover before custody or swap`() {
+        withTakeoverFiles(candidateStarts = true) { directory, live, stage, oldBytes, candidateBytes ->
+            val lock = File(directory, ".transaction-lock").apply { mkdir() }
+            File(lock, "pid").writeText("1\n")
+            val command = bundledLegacyHelperTakeoverCommand(
+                sha256(stage), stagedBuild, incumbentBuild,
+                dataLocal = directory.absolutePath,
+                lockPath = lock.absolutePath,
+                polls = 1,
+            )
+            assertEquals(75, runTakeoverCommand(command))
+            assertEquals(oldBytes, live.readText())
+            assertEquals(candidateBytes, stage.readText())
+            assertTrue(lock.isDirectory)
+            assertFalse(File(directory, ".hapaneld-helper.previous").exists())
+            assertFalse(File(directory, ".hapaneld-helper.previous.tmp").exists())
+        }
     }
 
     @Test fun `replacement nonce is fresh lowercase sha sized material`() {
@@ -233,7 +328,7 @@ class BundledHelperInstallerTest {
         }
     }
 
-    @Test fun `armed ambiguous and unreachable status block staging`() {
+    @Test fun `only exact empty or released unsupported status selects a replacement authority`() {
         val status = GuardDbMaintenanceProtocol.Status(
             generation = 8L,
             phase = GuardDbMaintenanceProtocol.Phase.AMBIGUOUS,
@@ -249,8 +344,8 @@ class BundledHelperInstallerTest {
             overallDeadlineElapsedMs = 1_800_000L,
             forwardDeadlineElapsedMs = 1_320_000L,
         )
-        assertFalse(bundledHelperReplacementAllowed(GuardDbMaintenanceClient.StatusProbe.Valid(status)))
-        assertFalse(bundledHelperReplacementAllowed(
+        assertNull(bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Valid(status)))
+        assertNull(bundledHelperReplacementMode(
             GuardDbMaintenanceClient.StatusProbe.Valid(status.copy(
                 phase = GuardDbMaintenanceProtocol.Phase.FINALIZED,
                 role = GuardDbMaintenanceProtocol.Role.A,
@@ -261,9 +356,30 @@ class BundledHelperInstallerTest {
                 outcome = GuardDbMaintenanceProtocol.Outcome.CANARY_PASSED,
             )),
         ))
-        assertTrue(bundledHelperReplacementAllowed(GuardDbMaintenanceClient.StatusProbe.Unsupported))
-        assertFalse(bundledHelperReplacementAllowed(GuardDbMaintenanceClient.StatusProbe.Unreachable))
-        assertFalse(bundledHelperReplacementAllowed(GuardDbMaintenanceClient.StatusProbe.Malformed))
+        assertEquals(
+            BundledHelperReplacementMode.RELEASED_LEGACY_TAKEOVER,
+            bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Unsupported),
+        )
+        assertEquals(
+            BundledHelperReplacementMode.GUARDED_RETIRE,
+            bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Valid(status.copy(
+                generation = 0L,
+                phase = GuardDbMaintenanceProtocol.Phase.EMPTY,
+                session = null,
+                bootNonce = null,
+                role = null,
+                apkSha256 = null,
+                versionCode = null,
+                schema = null,
+                baselineAppStateCount = 0L,
+                error = null,
+                outcome = null,
+                overallDeadlineElapsedMs = 0L,
+                forwardDeadlineElapsedMs = 0L,
+            ))),
+        )
+        assertNull(bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Unreachable))
+        assertNull(bundledHelperReplacementMode(GuardDbMaintenanceClient.StatusProbe.Malformed))
     }
 
     private fun exactProbe(build: String): HelperReplacementProbe = classifyHelperReplacementProbe(
@@ -274,4 +390,68 @@ class BundledHelperInstallerTest {
         stagedBuild,
         incumbentBuild,
     )
+
+    private fun withTakeoverFiles(
+        candidateStarts: Boolean,
+        test: (directory: File, live: File, stage: File, oldBytes: String, candidateBytes: String) -> Unit,
+    ) {
+        val directory = Files.createTempDirectory("bundled-helper-takeover-").toFile()
+        try {
+            val live = File(directory, "hapaneld-helper")
+            val stage = File(directory, ".hapaneld-helper.new")
+            val oldBytes = fakeHelper(incumbentBuild, candidate = false, starts = true)
+            val candidateBytes = fakeHelper(stagedBuild, candidate = true, starts = candidateStarts)
+            writeExecutable(live, oldBytes)
+            writeExecutable(stage, candidateBytes)
+            test(directory, live, stage, oldBytes, candidateBytes)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun fakeHelper(build: String, candidate: Boolean, starts: Boolean): String = """
+        #!/bin/sh
+        if [ "${'$'}1" = --replacement-safe ]; then
+          ${if (candidate) "echo REPLACE_SAFE; exit 0" else "exit 2"}
+        fi
+        if [ "${'$'}1" = --supervise ]; then exit ${if (starts) 0 else 7}; fi
+        if [ "${'$'}1" = --request ]; then
+          case "${'$'}2" in
+            PING) echo OK ;;
+            BUILDID) echo "BUILDID $build" ;;
+            GUARDCAPS) ${if (candidate && starts) "echo '${GuardDbMaintenanceProtocol.CAPS_REPLY} AUTONOMOUS SUPERVISED TERMINAL_RETIRE'" else "echo ERR"} ;;
+            GUARDSELF)
+              self_bytes=${'$'}(stat -c %s "${'$'}0")
+              self_sha=${'$'}(sha256sum "${'$'}0")
+              self_sha=${'$'}{self_sha%% *}
+              echo "OK GUARDSELF 1 ${'$'}self_bytes ${'$'}self_sha $build"
+              ;;
+            GUARDSTATUS) ${if (candidate && starts) "echo '$emptyStatus'" else "echo ERR"} ;;
+            *) echo ERR ;;
+          esac
+          exit 0
+        fi
+        exit 3
+    """.trimIndent() + "\n"
+
+    private fun writeExecutable(file: File, bytes: String) {
+        file.writeText(bytes)
+        Files.setPosixFilePermissions(file.toPath(), setOf(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.OWNER_EXECUTE,
+        ))
+    }
+
+    private fun sha256(file: File): String = MessageDigest.getInstance("SHA-256")
+        .digest(file.readBytes())
+        .joinToString("") { "%02x".format(it) }
+
+    private fun runTakeoverCommand(command: String): Int = ProcessBuilder("bash", "-c", command)
+        .redirectErrorStream(true)
+        .start()
+        .let { process ->
+            process.inputStream.bufferedReader().readText()
+            process.waitFor()
+        }
 }

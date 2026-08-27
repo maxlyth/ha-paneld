@@ -24,29 +24,34 @@ class EntityCatalogUpgradeTest {
 
     /**
      * Structures older than public v0.9.5 are out of contract: their migration steps were deleted, so
-     * onUpgrade cannot carry them forward. The store must still open — a throw would abort the open and
-     * take configuration down — by setting the old file aside and starting fresh. The previous database
-     * stays on disk for manual recovery.
+     * onUpgrade cannot carry them forward. The compatibility boundary must refuse the owned open and
+     * leave the exact database untouched; silently replacing it with a fresh store would discard state.
      */
-    @Test fun aDatabaseBelowTheSupportedFloorIsSetAsideAndTheStoreStillOpens() {
+    @Test fun aDatabaseBelowTheSupportedFloorIsRefusedWithoutReplacement() {
         legacyDatabase(8).use { db ->
             db.execSQL("CREATE TABLE entity(instance TEXT NOT NULL, entity_id TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(instance,entity_id))")
             db.execSQL("INSERT INTO entity(instance,entity_id,state) VALUES('home','sensor.room','21.5')")
             db.version = 8
         }
 
-        EntityCatalogStore(context).use { store ->
-            val db = store.writableDatabase
-            assertEquals(EntityCatalogSchema.CURRENT_VERSION, db.version)
-            // Fresh store at the current schema, not a half-migrated v8 one.
-            assertTrue(tableExists(db, "app_state"))
-            assertTrue(tableExists(db, "proximity_model"))
-            assertTrue(tableExists(db, "ambient_lux_minute"))
-            assertEquals("0", scalar(db, "SELECT count(*) FROM entity"))
+        val refusal = try {
+            EntityCatalogStore(context).use { it.writableDatabase }
+            throw AssertionError("below-minimum database was opened")
+        } catch (expected: DatabaseCompatibilityException) {
+            expected
         }
-        val preserved = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
-            .let { java.io.File(it.parentFile, "${it.name}.v8.superseded") }
-        assertTrue("the out-of-contract database must remain recoverable", preserved.isFile)
+        assertEquals(DatabaseCompatibilityRefusal.PRIMARY_BELOW_MINIMUM, refusal.refusal)
+
+        val target = context.getDatabasePath(EntityCatalogStore.DATABASE_NAME)
+        SQLiteDatabase.openDatabase(
+            target.path,
+            null,
+            SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS,
+        ).use { preserved ->
+            assertEquals(8, preserved.version)
+            assertEquals("21.5", scalar(preserved, "SELECT state FROM entity WHERE entity_id='sensor.room'"))
+        }
+        assertFalse(java.io.File(target.parentFile, "${target.name}.v8.superseded").exists())
     }
 
     @Test fun publicV095DatabaseUpgradePreservesConfigInOneStep() {
@@ -145,7 +150,9 @@ class EntityCatalogUpgradeTest {
         EntityCatalogStore(context).use { store ->
             val restored = store.writableDatabase
             assertTrue(restored.isWriteAheadLoggingEnabled)
-            assertEquals(0L, java.io.File(target.path + "-wal").length())
+            val wal = java.io.File(target.path + "-wal")
+            assertTrue("the owned open must retain its WAL sidecar", wal.isFile)
+            assertEquals(0L, wal.length())
             assertTrue(java.io.File(target.path + "-shm").isFile)
             assertEquals(EntityCatalogSchema.CURRENT_VERSION, restored.version)
             assertEquals("baseline", scalar(restored, "SELECT value FROM guard_restore_marker"))

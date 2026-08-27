@@ -4988,11 +4988,11 @@ inspect_database() {
   inspected=$($sqlite3_bin -readonly "$inspected_copy" "PRAGMA query_only=ON; PRAGMA user_version; PRAGMA quick_check;" 2>/dev/null) || { echo unreadable; return; }
   inspected_final=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
   [ "$inspected_before" = "$inspected_final" ] || { echo changed; return; }
-  inspected_lines=$(printf "%s\n" "$inspected" | awk "NF { n++ } END { print n + 0 }")
   inspected_version=$(printf "%s\n" "$inspected" | sed -n "1p")
   inspected_quick=$(printf "%s\n" "$inspected" | sed -n "2p")
+  inspected_extra=$(printf "%s\n" "$inspected" | sed -n "3,\$p")
   case "$inspected_version" in ""|*[!0-9]*) echo unreadable; return ;; esac
-  [ "$inspected_lines" = 2 ] || { echo "readable:$inspected_version:bad"; return; }
+  [ -z "$inspected_extra" ] || { echo "readable:$inspected_version:bad"; return; }
   [ "$inspected_quick" = ok ] && echo "readable:$inspected_version:ok" || echo "readable:$inspected_version:bad"
 }
 database_parent=${db%/*}

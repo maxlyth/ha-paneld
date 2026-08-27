@@ -483,16 +483,32 @@ renew_manual_lease() {
     *) return 1 ;;
   esac
   printf '%s\n' "$target_service" | grep -Eq '^[0-9a-f]{64}$' || return 1
-  renewed="$(run_root '
+  renewed="$(run_root_locked '
     marker='"$marker"'
     [ -f "$marker" ] || { echo LEASE_PENDING; exit 0; }
-    grep -q ^JOURNAL_VERSION=3$ "$marker" || exit 1
-    grep -q ^JOURNAL_SCOPE=HELPER_ONLY$ "$marker" || exit 1
-    grep -qx REGISTRATION_KIND='"$install_kind"' "$marker" || exit 1
-    grep -qx TRANSACTION_ID='"$TRANSACTION_ID"' "$marker" || exit 1
-    grep -qx TARGET_BUILD_ID='"$BUILD_ID"' "$marker" || exit 1
-    grep -qx TARGET_HELPER_SHA256='"$BIN_SHA256"' "$marker" || exit 1
-    grep -qx TARGET_SERVICE_SHA256='"$target_service"' "$marker" || exit 1
+    [ ! -L "$marker" ] || exit 1
+    owner=$(stat -c %u:%g "$marker" 2>/dev/null || toybox stat -c %u:%g "$marker" 2>/dev/null) || exit 1
+    mode=$(stat -c %a "$marker" 2>/dev/null || toybox stat -c %a "$marker" 2>/dev/null) || exit 1
+    [ "$owner" = 0:0 ] && [ "$mode" = 600 ] || exit 1
+    exact_field() {
+      name=$1; expected=$2
+      [ "$(grep -c ^"$name"= "$marker")" = 1 ] && grep -qx "$name=$expected" "$marker"
+    }
+    exact_field JOURNAL_VERSION 3 || exit 1
+    exact_field JOURNAL_SCOPE HELPER_ONLY || exit 1
+    exact_field REGISTRATION_KIND '"$install_kind"' || exit 1
+    exact_field TRANSACTION_ID '"$TRANSACTION_ID"' || exit 1
+    exact_field TARGET_BUILD_ID '"$BUILD_ID"' || exit 1
+    exact_field TARGET_HELPER_SHA256 '"$BIN_SHA256"' || exit 1
+    exact_field TARGET_SERVICE_SHA256 '"$target_service"' || exit 1
+    phase=$(sed -n s/^SWAP_PHASE=//p "$marker")
+    case "$phase" in PREPARED|MUTATING|TARGET) ;; *) exit 1 ;; esac
+    [ "$(grep -c ^SWAP_PHASE= "$marker")" = 1 ] || exit 1
+    file_hash() {
+      actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+      printf %s "${actual%% *}"
+    }
+    marker_before=$(file_hash "$marker") || exit 1
     current_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || exit 1
     current_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null) || exit 1
     echo "$current_uptime" | grep -Eq ^[0-9]+$ || exit 1
@@ -503,11 +519,20 @@ renew_manual_lease() {
     chown 0:0 "$marker.lease-new" || exit 1
     chmod 600 "$marker.lease-new" || exit 1
     sync || exit 1
+    [ "$(file_hash "$marker")" = "$marker_before" ] || exit 1
     mv -f "$marker.lease-new" "$marker" || exit 1
     sync || exit 1
+    exact_field JOURNAL_VERSION 3 && exact_field JOURNAL_SCOPE HELPER_ONLY &&
+      exact_field REGISTRATION_KIND '"$install_kind"' &&
+      exact_field TRANSACTION_ID '"$TRANSACTION_ID"' &&
+      exact_field TARGET_BUILD_ID '"$BUILD_ID"' &&
+      exact_field TARGET_HELPER_SHA256 '"$BIN_SHA256"' &&
+      exact_field TARGET_SERVICE_SHA256 '"$target_service"' &&
+      exact_field SWAP_PHASE "$phase" || exit 1
     echo LEASE_OK
   ' 2>&1)" || true
-  [ "$renewed" = LEASE_OK ] || [ "$renewed" = LEASE_PENDING ]
+  [ "$renewed" = LEASE_OK ] || [ "$renewed" = LEASE_PENDING ] ||
+    [ "$renewed" = TRANSACTION_BUSY ]
 }
 
 start_manual_lease_guard() {
