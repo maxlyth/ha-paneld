@@ -2154,8 +2154,12 @@ MOCK_DEVICE_AWK=missing MOCK_SYSTEM_AVAIL_KB=12 run_provision "$MOCK_TARGET" --a
 assert_success "an awk-less Android shell still determines writable-system capacity"
 assert_log_contains 'df -P -k /system/etc/init' \
   "capacity is measured at the directory the transaction writes, not at its parent"
-assert_log_contains '/system/etc/init/\.hapaneld-rw-probe-' \
+# The write and the size check, not the path: the probe's cleanup `rm -f` names the same path whether
+# or not anything was written, so matching the path let a zero-byte probe pass. A mutant proved it.
+assert_log_contains 'printf hapaneld-system-init-write-probe > "\$system_init_probe"' \
   "writability is proven with real bytes at the directory the transaction writes, not at its parent"
+assert_log_contains '\[ -s "\$system_init_probe" \]' \
+  "the route probe checks the bytes actually arrived rather than that a file was created"
 assert_not_contains 'df[^|]*/system[^|]*\|[[:space:]]*awk' "$MOCK_CALL_LOG" \
   "capacity probing has no device-side awk dependency"
 
@@ -6443,9 +6447,12 @@ fi
 assert_preflight_precedes_mutation() {
   local function_name="$1" body first_mutation first_preflight
   body="$(sed -n "/^${function_name}() {$/,/^}$/p" "$PROVISION")"
-  first_preflight="$(grep -nE '^  preflight_(source|target) ' <<<"$body" | head -1 | cut -d: -f1)"
+  # The LAST preflight, not the first. A verb that preflights its sources, then removes a file, then
+  # preflights its targets has still mutated before it finished asking - and taking the first
+  # preflight line would call that correct. A mutant did exactly that and survived.
+  last_preflight="$(grep -nE '^  preflight_(source|target) ' <<<"$body" | tail -1 | cut -d: -f1)"
   first_mutation="$(grep -nE '^  (rm -f|cp |copy_staged|mv -f) ' <<<"$body" | head -1 | cut -d: -f1)"
-  if [ -n "$first_preflight" ] && [ -n "$first_mutation" ] && [ "$first_preflight" -lt "$first_mutation" ]; then
+  if [ -n "$last_preflight" ] && [ -n "$first_mutation" ] && [ "$last_preflight" -lt "$first_mutation" ]; then
     pass "$function_name refuses before its first mutation"
   else
     fail_test "$function_name refuses before its first mutation"
