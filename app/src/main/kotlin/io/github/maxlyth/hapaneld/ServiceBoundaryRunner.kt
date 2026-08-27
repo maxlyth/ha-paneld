@@ -1,6 +1,38 @@
 package io.github.maxlyth.hapaneld
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 internal enum class ServiceTeardownDisposition { RELEASE, EXIT }
+
+/** Whether a newly created Android service generation may take ownership inside this process. */
+internal enum class ServiceGenerationAdmission { START, STAND_DOWN }
+
+/**
+ * Process-wide record that this OS process has already committed to exiting.
+ *
+ * An accepted explicit boundary is unconditionally terminal: [serviceTeardownDisposition] returns EXIT
+ * for it whatever the teardown proves. The service still has to re-arm its start request before exiting,
+ * because stopSelf() clears START_STICKY, and Android delivers that request into the *still-live*
+ * process. The generation it creates there cannot outlive the exit, so it can never prove a startup
+ * healthy, and anything it takes ownership of is owned twice for the length of the teardown.
+ *
+ * A generation created after the commitment must therefore stand down instead of resolving the staged
+ * profile, opening the database or attaching hardware owners. Consuming the staged PENDING activation in
+ * a process that is about to die is what leaves the fresh process an orphaned APPLYING to roll back.
+ *
+ * Only an accepted explicit boundary may commit. An ordinary clean stop deliberately leaves this open:
+ * that teardown releases a same-process successor and never exits, so fencing it would park the
+ * successor forever in a process with nothing left to restart it.
+ */
+internal class ProcessBoundaryCommitment {
+    private val committed = AtomicBoolean(false)
+
+    /** True for the one caller that commits this process; false for every caller after it. */
+    fun commit(): Boolean = committed.compareAndSet(false, true)
+
+    fun admitServiceGeneration(): ServiceGenerationAdmission =
+        if (committed.get()) ServiceGenerationAdmission.STAND_DOWN else ServiceGenerationAdmission.START
+}
 
 /** Only an ordinary, completely proved teardown may open a same-process successor. */
 internal fun serviceTeardownDisposition(

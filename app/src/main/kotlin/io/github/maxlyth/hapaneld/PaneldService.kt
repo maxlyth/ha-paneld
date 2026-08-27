@@ -870,6 +870,10 @@ class PaneldService : Service() {
     private var profileActivationGeneration: Long? = null
     // One-time-start guard for onStartCommand (see there for why). Reset in onDestroy.
     @Volatile private var started = false
+    // This generation was created inside a process that had already committed to exiting, so it owns
+    // nothing and must not be torn down as though it did. Never cleared: a stood-down generation stays
+    // stood down for as long as the doomed process lives.
+    @Volatile private var standingDown = false
     private val teardownBoundary = ServiceTeardownBoundary()
     private val restartAfterInternalBoundary = AtomicBoolean(false)
     private var upgradeShutdownClaim: UpgradeShutdownClaim? = null
@@ -884,6 +888,16 @@ class PaneldService : Service() {
         // controller construction: slow root-backed initialization must never consume that deadline.
         // The bootstrap notification is deliberately silent until persisted notification policy is read.
         startForegroundCompat("Starting…", silent = true)
+        // stopSelf() clears START_STICKY, so an app-internal boundary has to re-arm its own start
+        // request before exiting, and Android delivers that request into the still-live process. The
+        // generation it creates here cannot outlive the exit: it could only claim the staged profile
+        // activation, open the database and attach hardware owners alongside the outgoing runtime, then
+        // die before proving any of it healthy — which is precisely what left the fresh process an
+        // orphaned APPLYING to roll back. Stand down before any of that exists.
+        if (PROCESS_BOUNDARY_COMMITMENT.admitServiceGeneration() == ServiceGenerationAdmission.STAND_DOWN) {
+            standDownForCommittedProcessBoundary()
+            return
+        }
         restartLease = SERVICE_RESTART_BARRIER.enter()
         config = Config(this)
         config.migrateLiveStore()   // carry persisted settings across a schema bump before anything reads them
@@ -2580,6 +2594,9 @@ class PaneldService : Service() {
         // re-issue and on START_STICKY re-create; re-running this block would call server.start() again,
         // binding a second Ktor server on :8888 -> BindException crashes the process (and would also
         // double-start mqtt/mdns/sensors). started is reset in onDestroy so a genuine restart re-inits.
+        // A stood-down generation has no owner to start. START_STICKY is the point of keeping it: the
+        // live started-service record is what Android recreates once the committed process has exited.
+        if (standingDown) return START_STICKY
         if (started) return START_STICKY
         started = true
         val startupActivationGeneration = profileActivationGeneration
@@ -3395,6 +3412,21 @@ class PaneldService : Service() {
             .build()
 
     /**
+     * Hold Android's started-service record without owning anything until the committed process exits.
+     *
+     * Deliberately no stopSelf(): that live record is exactly what makes Android recreate this service
+     * in the fresh process, which is where the staged activation is claimed and proved. The notification
+     * is rewritten without touching config, which this generation never constructed.
+     */
+    private fun standDownForCommittedProcessBoundary() {
+        standingDown = true
+        Log.i(TAG, "service generation created inside a committed process boundary; standing down until the process exits")
+        val (mgr, channelId) = notificationChannel(silent = true)
+        runCatching { mgr.notify(NOTIF_ID, foregroundNotification(channelId, silent = true, "Restarting…")) }
+            .onFailure { Log.w(TAG, "could not describe the stood-down service generation", it) }
+    }
+
+    /**
      * Close the synchronous admission gates shared by ordinary destruction and an explicit process
      * boundary. Each owner is guarded because a requested boundary can arrive during startup, before
      * every controller exists; normal destruction has already initialized all of them.
@@ -3422,6 +3454,12 @@ class PaneldService : Service() {
     )
 
     override fun onDestroy() {
+        // A stood-down generation constructed no controller, holds no restart lease and armed no
+        // boundary, so every wait, drain and proof below would be about another generation's owners.
+        if (standingDown) {
+            super.onDestroy()
+            return
+        }
         // Android invokes this on the main thread. All deliberate waits below consume one deadline so
         // individually safe phase timeouts cannot accumulate into an input-dispatch ANR.
         val teardownDeadline = MonotonicDeadline(SERVICE_DESTROY_BUDGET_MS)
@@ -4022,6 +4060,11 @@ class PaneldService : Service() {
      */
     private fun requestSafeProcessBoundary(reason: String) {
         if (!teardownBoundary.requestExplicitBoundary()) return
+        // Accepting the request makes this process terminal — serviceTeardownDisposition always EXITs on
+        // an explicit boundary — so every service generation created in it from here on must stand down.
+        // Only this branch may commit: an ordinary clean stop RELEASEs a same-process successor and never
+        // exits, and fencing that successor would leave nothing to restart the panel.
+        PROCESS_BOUNDARY_COMMITMENT.commit()
         restartAfterInternalBoundary.set(true)
         Log.i(TAG, "safe process restart requested: $reason")
         closeServiceAdmissions()
@@ -4236,6 +4279,7 @@ class PaneldService : Service() {
          *  best-effort close of a never-connected runtime. See the fast path in the retire lambda. */
         private const val FIRST_CONFIG_RETIRE_MS = 1_500L
         private val SERVICE_RESTART_BARRIER = ServiceRestartBarrier()
+        private val PROCESS_BOUNDARY_COMMITMENT = ProcessBoundaryCommitment()
 
         fun start(context: Context) {
             val intent = Intent(context, PaneldService::class.java)

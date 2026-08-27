@@ -374,4 +374,45 @@ class ServiceBoundaryRunnerTest {
         )
         assertTrue(boundary.isStopping)
     }
+
+    @Test fun exactlyOneCallerCommitsTheProcessAndTheCommitmentIsIrreversible() {
+        val commitment = ProcessBoundaryCommitment()
+
+        assertEquals(ServiceGenerationAdmission.START, commitment.admitServiceGeneration())
+        assertTrue(commitment.commit())
+        assertEquals(ServiceGenerationAdmission.STAND_DOWN, commitment.admitServiceGeneration())
+        assertFalse(commitment.commit())
+        assertEquals(ServiceGenerationAdmission.STAND_DOWN, commitment.admitServiceGeneration())
+    }
+
+    @Test fun racingBoundaryRequestsCommitOnceAndEveryLaterGenerationStandsDown() {
+        // Several owners can request a boundary at the same instant (a profile activation, a WebView
+        // rebind, bounded recovery). Exactly one commits, and no generation admitted after the race may
+        // start: it would only claim state it cannot live long enough to prove.
+        val commitment = ProcessBoundaryCommitment()
+        val racers = 8
+        val ready = CountDownLatch(racers)
+        val go = CountDownLatch(1)
+        val winners = AtomicInteger()
+        val pool = Executors.newFixedThreadPool(racers)
+
+        try {
+            repeat(racers) {
+                pool.execute {
+                    ready.countDown()
+                    go.await()
+                    if (commitment.commit()) winners.incrementAndGet()
+                }
+            }
+            assertTrue(ready.await(5, TimeUnit.SECONDS))
+            go.countDown()
+            pool.shutdown()
+            assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+
+        assertEquals(1, winners.get())
+        assertEquals(ServiceGenerationAdmission.STAND_DOWN, commitment.admitServiceGeneration())
+    }
 }

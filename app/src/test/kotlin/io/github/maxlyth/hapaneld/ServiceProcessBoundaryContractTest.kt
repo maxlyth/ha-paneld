@@ -592,13 +592,110 @@ class ServiceProcessBoundaryContractTest {
         assertTrue(requested.contains("restartAfterInternalBoundary.set(true)"))
         assertTrue(destroy.contains("if (restartAfterInternalBoundary.get())"))
         assertTrue(destroy.indexOf("finishTeardownAsync(") < destroy.indexOf("if (restartAfterInternalBoundary.get())"))
-        assertTrue(destroy.indexOf("if (restartAfterInternalBoundary.get())") < destroy.indexOf("super.onDestroy()"))
+        // lastIndexOf: a generation that stood down inside a committed boundary returns through its
+        // own super.onDestroy() long before this one, and it never re-arms anything.
+        assertTrue(destroy.indexOf("if (restartAfterInternalBoundary.get())") < destroy.lastIndexOf("super.onDestroy()"))
         assertTrue(finalizer.contains("AppState.freezeForServiceShutdown(this)"))
         assertTrue(finalizer.contains("AppState.proveCleanServiceShutdown(this, proofMs)"))
 
         val activation = source.substring(source.indexOf("private suspend fun activateWebView"), source.indexOf("private suspend fun autoUpdateWebView"))
         val builtin = activation.substring(activation.indexOf("if (config.dashboardPackage"), activation.indexOf("system.reloadDashboard"))
         assertTrue(builtin.indexOf("requestSafeProcessBoundary") < builtin.indexOf("return"))
+    }
+
+    /**
+     * Issue #107: activating an imported profile put the default profile back. stopSelf() clears
+     * START_STICKY, so an app-internal boundary re-arms its own start request at the end of onDestroy,
+     * and Android serves that request inside the still-live process. That generation used to run a full
+     * onCreate — claiming the staged activation, opening the database and taking the hardware owners
+     * alongside the outgoing runtime — and then died at exitProcess before it could prove any of it
+     * healthy, leaving the fresh process an orphaned APPLYING to roll back. The ordering that keeps it
+     * harmless lives in PaneldService's own lifecycle, which no unit test can construct, so it is pinned
+     * here alongside the other service-lifecycle contracts.
+     */
+    @Test fun aCommittedProcessBoundaryStandsDownEveryLaterServiceGeneration() {
+        val create = source("PaneldService.kt").let {
+            it.substring(it.indexOf("override fun onCreate()"), it.indexOf("override fun onStartCommand("))
+        }
+        val promotion = create.indexOf("startForegroundCompat(\"Starting…\", silent = true)")
+        val admission = create.indexOf(
+            "PROCESS_BOUNDARY_COMMITMENT.admitServiceGeneration() == ServiceGenerationAdmission.STAND_DOWN",
+        )
+        val standDown = create.indexOf("standDownForCommittedProcessBoundary()")
+
+        assertTrue("a stood-down generation still owes Android its foreground promotion", promotion >= 0)
+        assertTrue("onCreate must decide generation admission", admission >= 0)
+        assertTrue(promotion < admission)
+        assertTrue(admission < standDown)
+        listOf(
+            "SERVICE_RESTART_BARRIER.enter()",
+            "config = Config(this)",
+            "config.migrateLiveStore()",
+            "profileRegistry = RuntimeProfileRegistry(this)",
+            "profileRegistry.resolveForStartup()",
+        ).forEach { owner ->
+            val at = create.indexOf(owner)
+            assertTrue("$owner is missing from onCreate", at >= 0)
+            assertTrue("$owner must not run before the generation-admission check", admission < at)
+        }
+        assertTrue(
+            "the stand-down must return before any owner is constructed",
+            create.substring(standDown, create.indexOf("SERVICE_RESTART_BARRIER.enter()")).contains("return"),
+        )
+    }
+
+    @Test fun onlyTheAcceptedExplicitBoundaryCommitsThisProcessToExiting() {
+        val source = source("PaneldService.kt")
+        val requested = source.substring(
+            source.indexOf("private fun requestSafeProcessBoundary("),
+            source.indexOf("private fun finishTeardownAfterExternalStateIsSafe("),
+        )
+        val accepted = requested.indexOf("if (!teardownBoundary.requestExplicitBoundary()) return")
+        val commit = requested.indexOf("PROCESS_BOUNDARY_COMMITMENT.commit()")
+
+        assertEquals(1, Regex("PROCESS_BOUNDARY_COMMITMENT\\.commit\\(\\)").findAll(source).count())
+        assertTrue(accepted >= 0)
+        assertTrue(commit >= 0)
+        // An ordinary clean stop RELEASEs a same-process successor and never exits. Committing there
+        // would park that successor forever with nothing left alive to bring the panel back.
+        assertTrue("only an accepted explicit boundary may commit the process", accepted < commit)
+        assertTrue(commit < requested.indexOf("restartAfterInternalBoundary.set(true)"))
+        val destroy = source.substring(
+            source.indexOf("override fun onDestroy()"),
+            source.indexOf("private fun finishTeardownAsync("),
+        )
+        assertFalse(destroy.contains("PROCESS_BOUNDARY_COMMITMENT.commit()"))
+    }
+
+    @Test fun aStoodDownGenerationKeepsItsStickyRecordAndTearsDownNothing() {
+        val source = source("PaneldService.kt")
+        val start = source.substring(
+            source.indexOf("override fun onStartCommand("),
+            source.indexOf("private fun startMqttWatchdog()"),
+        )
+        val standDownGuard = start.indexOf("if (standingDown) return START_STICKY")
+
+        assertTrue(standDownGuard >= 0)
+        assertTrue(standDownGuard < start.indexOf("if (started) return START_STICKY"))
+
+        val standDown = source.substring(
+            source.indexOf("private fun standDownForCommittedProcessBoundary()"),
+            source.indexOf("private fun closeServiceAdmissions()"),
+        )
+        // The live started-service record is the whole point: it is what Android recreates in the fresh
+        // process. Config was never constructed by this generation, so the notice cannot read it.
+        assertFalse(standDown.contains("stopSelf()"))
+        assertFalse(standDown.contains("config."))
+
+        val destroy = source.substring(
+            source.indexOf("override fun onDestroy()"),
+            source.indexOf("private fun finishTeardownAsync("),
+        )
+        val guard = destroy.indexOf("if (standingDown) {")
+        val markStopping = destroy.indexOf("teardownBoundary.markStopping()")
+        assertTrue(guard >= 0)
+        assertTrue("a generation that owns nothing must not run another generation's teardown", guard < markStopping)
+        assertTrue(destroy.substring(guard, markStopping).contains("return"))
     }
 
     @Test fun relayTerminationCommandCannotConsumeAnUnboundedProcessExit() {
