@@ -5014,8 +5014,63 @@ PATH="$SIGNER_ONLY_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
   /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_failure "fleet release policy fails closed without aapt"
-assert_contains 'aapt or aapt2 is required for fleet deployment' "fleet missing-tool failure names aapt"
+assert_contains 'aapt or aapt2 is required to verify a local fleet APK' "fleet missing-tool failure names aapt"
 assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-aapt failure starts no panel worker"
+
+# The same host, the same absent aapt, but an official release asset. The signed checksum has already
+# pinned the whole file by hashing it, so the package name it would have read is settled and the tool
+# is not needed. Requiring it here refused a deployment of an artifact the run had just authenticated.
+: > "$MOCK_CALL_LOG"
+LAST_OUTPUT="$TMP/fleet-release-without-aapt-output.txt"
+PATH="$SIGNER_ONLY_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_not_contains 'aapt or aapt2 is required' "$LAST_OUTPUT" "a release asset is not refused for a missing aapt"
+
+# apksigner is NOT relaxed alongside aapt, and this is the assertion that says so on purpose. It reads
+# the signer of the app ALREADY on the panel to refuse a cross-signer replacement, and no checksum over
+# the candidate can answer that question.
+: > "$MOCK_CALL_LOG"
+NO_SIGNER_WITH_TAG="$TMP/no-signer-with-tag"
+mkdir -p "$NO_SIGNER_WITH_TAG"
+ln -s "$(command -v dirname)" "$NO_SIGNER_WITH_TAG/dirname"
+LAST_OUTPUT="$TMP/fleet-release-without-apksigner-output.txt"
+PATH="$NO_SIGNER_WITH_TAG" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+LAST_STATUS=$?
+assert_failure "a release asset is still refused without apksigner"
+assert_contains 'apksigner is required for fleet deployment' "the apksigner refusal survives the aapt relaxation"
+assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-apksigner failure starts no panel worker"
+
+# update-fleet.sh hands off to provision.sh, which asks the same question again. Relaxing only the
+# wrapper would be cosmetic: its own download path forces --require-release-signer, and that used to
+# drag the package tool in with it, so the refusal simply moved one script downstream.
+#
+# The condition is READ OUT OF THE SHIPPED FILE rather than restated here. A test that restates a
+# boolean passes forever after the source stops matching it.
+package_gate_condition="$(grep -n 'elif \[ -z "\$APK_RELEASE_TAG" \]' "$PROVISION" | head -1 | cut -d: -f2- | sed 's/^ *elif //; s/; then$//')"
+if [ -n "$package_gate_condition" ]; then
+  pass "the package-tool gate condition was found in provision.sh"
+else
+  fail_test "the package-tool gate condition was found in provision.sh"
+fi
+package_gate_refuses() {
+  APK_RELEASE_TAG="$1" REQUIRE_RELEASE_SIGNER="$2" /bin/sh -c "
+    APK_RELEASE_TAG='$1'; REQUIRE_RELEASE_SIGNER='$2'
+    if $package_gate_condition; then echo refuses; else echo proceeds; fi"
+}
+[ "$(package_gate_refuses v0.9.2-rc3 1)" = proceeds ] \
+  && pass "an authenticated release asset installs without a package tool even under --require-release-signer" \
+  || fail_test "an authenticated release asset installs without a package tool even under --require-release-signer"
+[ "$(package_gate_refuses v0.9.2-rc3 0)" = proceeds ] \
+  && pass "an authenticated release asset installs without a package tool" \
+  || fail_test "an authenticated release asset installs without a package tool"
+[ "$(package_gate_refuses '' 0)" = refuses ] \
+  && pass "a local APK still requires a package tool" \
+  || fail_test "a local APK still requires a package tool"
+[ "$(package_gate_refuses '' 1)" = refuses ] \
+  && pass "a local APK still requires a package tool under --require-release-signer" \
+  || fail_test "a local APK still requires a package tool under --require-release-signer"
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-duplicate-apk-output.txt"

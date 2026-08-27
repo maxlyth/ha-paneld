@@ -226,10 +226,28 @@ find_build_tool() {
   done
   [ -n "$found" ] && printf '%s\n' "$found"
 }
+release_tag=""
+for ((i=0; i<${#PARGS[@]}; i++)); do
+  if [ "${PARGS[$i]}" = "--release-tag" ] && [ $((i + 1)) -lt ${#PARGS[@]} ]; then release_tag="${PARGS[$((i + 1))]}"; break; fi
+done
 APKSIGNER="$(find_build_tool apksigner || true)"
 AAPT="$(find_build_tool aapt || find_build_tool aapt2 || true)"
+# apksigner stays unconditional, and that is deliberate. Beyond pinning the release certificate here,
+# provision.sh compares the INSTALLED app's signer against the candidate's before replacing it, on
+# every panel that already has the app. A signed checksum cannot stand in for that: it proves what the
+# candidate is, and says nothing about what is already on the panel. Dropping the tool would drop a
+# guard against a cross-signer replacement, which wipes app data.
 [ -n "$APKSIGNER" ] || { echo "${RED}apksigner is required for fleet deployment${X}" >&2; exit 1; }
-[ -n "$AAPT" ] || { echo "${RED}aapt or aapt2 is required for fleet deployment${X}" >&2; exit 1; }
+# aapt is different. Its only use below is reading the package name to compare against a constant, and
+# for a release asset the signed checksum has already pinned the whole file — package name included —
+# by hashing it. So it is required only for a local APK, which has no such anchor. This mirrors the
+# policy provision.sh already applies, and it means a normal fleet deploy of an official release needs
+# no Android build tool for the package check.
+if [ -z "$AAPT" ] && [ -z "$release_tag" ]; then
+  echo "${RED}aapt or aapt2 is required to verify a local fleet APK${X}" >&2
+  echo "Official releases are authenticated by their signed checksum and do not need it." >&2
+  exit 1
+fi
 signer_output="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null)" || { echo "${RED}fleet APK signature verification failed${X}" >&2; exit 1; }
 signer_lines="$(printf '%s\n' "$signer_output" | sed -nE 's/^Signer #[0-9]+ certificate SHA-256 digest: *//p' | tr -d ':\r' | tr '[:upper:]' '[:lower:]')"
 signer_count="$(printf '%s\n' "$signer_lines" | awk 'NF { count++ } END { print count + 0 }')"
@@ -245,8 +263,10 @@ if [ "$require_release_signer" = 1 ] && [ "$signer_lines" != "$RELEASE_CERT_SHA2
   echo "Got: $signer_lines" >&2
   exit 1
 fi
-package_name="$("$AAPT" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
-[ "$package_name" = "io.github.maxlyth.hapaneld" ] || { echo "${RED}fleet APK package mismatch: ${package_name:-unavailable}${X}" >&2; exit 1; }
+if [ -n "$AAPT" ]; then
+  package_name="$("$AAPT" dump badging "$APK" 2>/dev/null | sed -nE "s/^package: name='([^']+)'.*/\1/p" | head -1 || true)"
+  [ "$package_name" = "io.github.maxlyth.hapaneld" ] || { echo "${RED}fleet APK package mismatch: ${package_name:-unavailable}${X}" >&2; exit 1; }
+fi
 apk_sha256="$(sha256sum "$APK" | awk '{print $1}')"
 echo "${GRN}✓${X} fleet artifact signer ${signer_lines:0:12}… · sha256 $apk_sha256"
 

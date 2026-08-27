@@ -1880,10 +1880,16 @@ verify_release_apk() {
     assert_candidate_apk_unchanged
     [ "$package_name" = "$PKG" ] || fail "release APK package mismatch" \
       "Expected $PKG" "Got      ${package_name:-unavailable}" "Nothing was installed, started, or privileged."
-  elif [ -z "$APK_RELEASE_TAG" ] || [ "$REQUIRE_RELEASE_SIGNER" = 1 ]; then
+  elif [ -z "$APK_RELEASE_TAG" ]; then
     fail "Android Build-Tools are required to verify a local APK package" \
       "${package_tool_problem:-Install aapt or aapt2 and retry.} Nothing was backed up, installed, started, or privileged."
   fi
+  # `--require-release-signer` deliberately does NOT force the package tool. That flag is about who
+  # signed the artifact, and the signer branch above already answers it with apksigner. The package
+  # name is a different question, and for a release asset the signed checksum has already settled it
+  # by hashing the whole file. Coupling the two refused a fleet deployment of an artifact this run had
+  # just authenticated, on a host missing a tool it did not need — and a fleet deploy forces that flag
+  # on its own download path, so the coupling fired exactly where the evidence was strongest.
   step "🛡️  verified" "${D}$artifact_label · package ${package_name:-authenticated release asset} · signer ${signer:-$RELEASE_CERT_SHA256}${X}"
 }
 
