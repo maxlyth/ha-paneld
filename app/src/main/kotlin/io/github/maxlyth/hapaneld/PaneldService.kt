@@ -2435,8 +2435,11 @@ class PaneldService : Service() {
                 "error: ${e.message}"
             }
             Log.i(TAG, "$logLabel: $result")
-            InstallProgress.finish(progress, result)
             after(result)
+            // Keep the destructive-operation lane until post-install activation is complete. WebView
+            // activation deliberately waits before requesting a process boundary; releasing the lane
+            // first lets the blocked screen start a second install that the pending restart kills.
+            InstallProgress.finish(progress, result)
             return result
         } finally {
             // Covers cancellation, fatal errors, and direct callers; stale tickets cannot clear a successor.
@@ -3951,7 +3954,11 @@ class PaneldService : Service() {
         refreshWebViewRepairCapability()
         WebViewRepairRuntime.attach(
             capability = { webViewRepairCapability },
-            start = { installComponent("webview", "reinstall", "") },
+            // Once activation has requested the process boundary, no new destructive work may enter
+            // the process that is being torn down, even if the progress slot has just gone terminal.
+            start = {
+                !teardownBoundary.isStopping && installComponent("webview", "reinstall", "")
+            },
             progress = {
                 WebViewRepairProgress(
                     running = InstallProgress.running,

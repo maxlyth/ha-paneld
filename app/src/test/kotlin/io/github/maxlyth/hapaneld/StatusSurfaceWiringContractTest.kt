@@ -753,7 +753,14 @@ class StatusSurfaceWiringContractTest {
         // cannot end up with different ideas of what "already installing" means.
         assertTrue(
             "the repair must reuse the existing install lane, not open a second one",
-            service.contains("""start = { installComponent("webview", "reinstall", "") },"""),
+            service.contains("""!teardownBoundary.isStopping && installComponent("webview", "reinstall", "")"""),
+        )
+        val operation = service.substringAfter("private suspend fun completeOperation(")
+            .substringBefore("private fun launchOperation(")
+        assertTrue(
+            "the destructive lane must remain owned through post-install activation",
+            operation.indexOf("after(result)") in 0 until
+                operation.indexOf("InstallProgress.finish(progress, result)"),
         )
         assertTrue(
             "the capability probe must not run on the caller's thread",
