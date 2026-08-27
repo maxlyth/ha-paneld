@@ -179,10 +179,30 @@ internal class GuardDbPreparedArmStore(
 
     @Synchronized
     fun load(): GuardDbPreparedArmLoad {
+        if (!reconcilePending()) return GuardDbPreparedArmLoad.Corrupt
+        return loadRecord()
+    }
+
+    private fun loadRecord(): GuardDbPreparedArmLoad {
         if (Files.notExists(record.toPath(), LinkOption.NOFOLLOW_LINKS)) return GuardDbPreparedArmLoad.Absent
         if (!validateFile(record) || record.length() !in 1..4096) return GuardDbPreparedArmLoad.Corrupt
         val bytes = runCatching { record.readBytes() }.getOrNull() ?: return GuardDbPreparedArmLoad.Corrupt
         return parseGuardDbPreparedArm(bytes)?.let(GuardDbPreparedArmLoad::Valid) ?: GuardDbPreparedArmLoad.Corrupt
+    }
+
+    private fun reconcilePending(): Boolean {
+        if (Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return true
+        if (!validateFile(temporary) || temporary.length() !in 1..4096) return false
+        val pending = runCatching { temporary.readBytes() }.getOrNull()
+            ?.let(::parseGuardDbPreparedArm) ?: return false
+        if (loadRecord() !is GuardDbPreparedArmLoad.Absent) return false
+        return runCatching {
+            Files.move(
+                temporary.toPath(), record.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectory(directory)
+        }.getOrDefault(false)
     }
 
     @Synchronized

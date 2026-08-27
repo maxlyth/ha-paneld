@@ -29,6 +29,40 @@ cat > "$TMP/bin/adb" <<'EOF'
 #!/usr/bin/env bash
 set -u
 command_text="$*"
+shared_lock_signal_reply() {
+  [ "${MOCK_SHARED_LOCK_SIGNAL:-}" = 1 ] || return 125
+  [ "${3:-}" = shell ] || return 125
+  printf '%s' "$command_text" | grep -Fq 'inspect_manual_journal_v1' || return 125
+  printf '%s' "$command_text" | grep -Fq '.hapaneld-helper-transaction.lock' || return 125
+
+  signal_root="${MOCK_STATE_DIR:?}/shared-lock-signal"
+  remote_command=${!#}
+  remote_command=${remote_command//\/dev\/.hapaneld-helper-transaction.lock/$signal_root/dev/.hapaneld-helper-transaction.lock}
+  injection=': > '"$signal_root"'/handler-ready
+  while [ ! -f '"$signal_root"'/release-handler ]; do sleep 0.05; done
+  : > '"$signal_root"'/post-signal-mutation
+  inspect_manual_journal_v1() {'
+  remote_command=${remote_command/'inspect_manual_journal_v1() {'/$injection}
+  remote_command=$(printf '%s\n' "$remote_command" | sed 's/^\([[:space:]]*\)|\*/\1""|*/')
+  printf '%s' "$remote_command" | grep -Fq "$signal_root/handler-ready" || return 1
+  mkdir -p "$signal_root/dev"
+  rm -f "$signal_root/handler-ready" "$signal_root/release-handler" \
+    "$signal_root/post-signal-mutation" "$signal_root/remote-output"
+  printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+  PATH=/usr/bin:/bin bash -c "$remote_command" >"$signal_root/remote-output" 2>&1 &
+  remote_pid=$!
+  attempt=0
+  while [ ! -f "$signal_root/handler-ready" ]; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || { kill -KILL "$remote_pid" 2>/dev/null; wait "$remote_pid" 2>/dev/null; return 1; }
+    sleep 0.05
+  done
+  kill -TERM "$remote_pid" || return 1
+  : > "$signal_root/release-handler"
+  if wait "$remote_pid"; then remote_status=0; else remote_status=$?; fi
+  printf '%s\n' "$remote_status" > "$signal_root/remote-status"
+  cat "$signal_root/remote-output"
+  return "$remote_status"
+}
 v3_lease_phase_race_reply() {
   [ "${MOCK_V3_LEASE_PHASE_RACE:-}" = 1 ] || return 125
   [ "${3:-}" = shell ] || return 125
@@ -174,6 +208,9 @@ v1_real_filesystem_reply() {
   fi
   return 125
 }
+shared_lock_signal_reply "$@"
+shared_lock_signal_status=$?
+[ "$shared_lock_signal_status" -eq 125 ] || exit "$shared_lock_signal_status"
 v3_lease_phase_race_reply "$@"
 v3_lease_race_status=$?
 [ "$v3_lease_race_status" -eq 125 ] || exit "$v3_lease_race_status"
@@ -215,6 +252,22 @@ if [ "${MOCK_REPLACEMENT_SAFE:-ok}" = r1_custody ] &&
   printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
   : > "${MOCK_STATE_DIR:?}/manual-helper-transaction"
   printf 'REPLACEMENT_AUTHORITY_ACTIVE\n'
+  exit 1
+fi
+if [ "${MOCK_APP_REPLACEMENT_INTERVAL:-}" = initial ] &&
+   printf '%s' "$command_text" | grep -Fq inspect_manual_journal &&
+   printf '%s' "$command_text" | grep -Fq 'echo APP_REPLACEMENT_HOLD'; then
+  printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+  : > "${MOCK_STATE_DIR:?}/app-hold-initial"
+  printf 'APP_REPLACEMENT_HOLD\n'
+  exit 0
+fi
+if [ "${MOCK_APP_REPLACEMENT_INTERVAL:-}" = pre_stage ] &&
+   printf '%s' "$command_text" | grep -Fq 'candidate=' &&
+   printf '%s' "$command_text" | grep -Fq 'echo APP_REPLACEMENT_HOLD; exit 75'; then
+  printf 'adb %s\n' "$*" >> "${MOCK_CALL_LOG:?}"
+  : > "${MOCK_STATE_DIR:?}/app-hold-pre-stage"
+  printf 'APP_REPLACEMENT_HOLD\n'
   exit 1
 fi
 if [ "${MOCK_APP_REPLACEMENT_INTERVAL:-}" = inflight ] &&
@@ -348,6 +401,487 @@ export HAPANELD_MANUAL_LEASE_SECONDS=3
 export HAPANELD_MANUAL_LEASE_RENEW_SECONDS=1
 mkdir -p "$MOCK_STATE_DIR"
 : > "$MOCK_CALL_LOG"
+
+# Execute the exact root block passed to run_root_locked for stale-journal inspection. That is the
+# first shared-lock owner in the standalone flow and now also reconciles app uploads/staging that
+# never acquired replacement authority.
+APP_STAGE_ROOT="$TMP/app-stage-root"
+APP_STAGE_BLOCK="$TMP/app-stage-reconcile.sh"
+awk '/^manual_journal_state="\$\(run_root_locked '\''$/{f=1;next} f&&/^'\'' 2>&1\)" \|\| true$/{exit} f' \
+  "$INSTALLER" |
+  sed -e 's|/system/|${APP_STAGE_ROOT}/system/|g' \
+      -e 's|/vendor/|${APP_STAGE_ROOT}/vendor/|g' \
+      -e 's|/data/|${APP_STAGE_ROOT}/data/|g' > "$APP_STAGE_BLOCK"
+grep -q '^  reconcile_authority_free_app_staging$' "$APP_STAGE_BLOCK"
+second_hold_line="$(grep -n 'echo APP_REPLACEMENT_HOLD; exit 75' "$INSTALLER" | tail -1 | cut -d: -f1)"
+second_mount_line="$(awk -v after="$second_hold_line" 'NR > after && /mount -o rw,remount/{print NR; exit}' "$INSTALLER")"
+second_candidate_line="$(awk -v after="$second_hold_line" 'NR > after && /^  candidate=/{print NR; exit}' "$INSTALLER")"
+[ -n "$second_hold_line" ] && [ -n "$second_mount_line" ] && [ -n "$second_candidate_line" ]
+[ "$second_hold_line" -lt "$second_mount_line" ] && [ "$second_mount_line" -lt "$second_candidate_line" ]
+run_app_stage_block() {
+  run_app_stage_script "$APP_STAGE_BLOCK"
+}
+run_app_stage_script() {
+  local block="$1"
+  APP_STAGE_ROOT="$APP_STAGE_ROOT" PATH=/usr/bin:/bin /bin/bash -u -c '
+    cleanup_helper_lock() { rm -rf "$APP_STAGE_ROOT/dev/.hapaneld-helper-transaction.lock"; }
+    abort_helper_lock() {
+      status=$1
+      trap - 0 1 2 3 15
+      cleanup_helper_lock
+      exit "$status"
+    }
+    . "$1"
+  ' _ "$block"
+}
+run_app_stage_script_exec() {
+  local block="$1"
+  APP_STAGE_ROOT="$APP_STAGE_ROOT" PATH=/usr/bin:/bin exec /bin/bash -u -c '
+    cleanup_helper_lock() { rm -rf "$APP_STAGE_ROOT/dev/.hapaneld-helper-transaction.lock"; }
+    abort_helper_lock() {
+      status=$1
+      trap - 0 1 2 3 15
+      cleanup_helper_lock
+      exit "$status"
+    }
+    . "$1"
+  ' _ "$block"
+}
+reset_app_stage_root() {
+  rm -rf "$APP_STAGE_ROOT"
+  mkdir -p "$APP_STAGE_ROOT/data/local" "$APP_STAGE_ROOT/data/adb/hapaneld" \
+    "$APP_STAGE_ROOT/system/bin" "$APP_STAGE_ROOT/vendor"
+}
+
+APP_STAGE_SHA="$(printf '%064d' 1)"
+reset_app_stage_root
+printf 'verified candidate\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+chmod 700 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+printf 'partial upload\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA"
+chmod 600 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA"
+printf 'foreign upload\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-not-a-sha"
+chmod 600 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-not-a-sha"
+[ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+[ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+[ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA" ]
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.app-stage-not-a-sha" ]
+
+for app_authority in \
+    "data/local/.hapaneld-guard-db/replacement.v1" \
+    "data/local/.hapaneld-guard-db/.replacement.v1.tmp" \
+    "data/local/.hapaneld-helper.legacy-takeover" \
+    "data/local/.hapaneld-helper.legacy-takeover.tmp" \
+    "data/local/.hapaneld-helper.previous" \
+    "data/local/.hapaneld-helper.previous.tmp" \
+    "system/bin/.hapaneld-helper-upgrade" \
+    "data/adb/hapaneld/.helper-upgrade.marker" \
+    "data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+    "data/local/.hapaneld-helper-manual-upgrade" \
+    "system/bin/.hapaneld-helper-manual-upgrade" \
+    "data/adb/hapaneld/.helper-manual-upgrade.marker"; do
+  reset_app_stage_root
+  printf 'verified candidate\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+  chmod 700 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+  mkdir -p "$(dirname "$APP_STAGE_ROOT/$app_authority")"
+  : > "$APP_STAGE_ROOT/$app_authority"
+  run_app_stage_block >/dev/null || true
+  if [ ! -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]; then
+    echo "$app_authority did not preserve app replacement staging" >&2
+    exit 1
+  fi
+done
+
+for malformed_stage in empty wrong-mode wrong-owner hardlink symlink oversized; do
+  reset_app_stage_root
+  stage_path="$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+  case "$malformed_stage" in
+    empty) : > "$stage_path"; chmod 700 "$stage_path" ;;
+    wrong-mode) printf x > "$stage_path"; chmod 600 "$stage_path" ;;
+    wrong-owner) printf x > "$stage_path"; chmod 700 "$stage_path"; chown 1:1 "$stage_path" ;;
+    hardlink) printf x > "$stage_path"; chmod 700 "$stage_path"; ln "$stage_path" "$APP_STAGE_ROOT/data/local/stage-second-link" ;;
+    symlink) ln -s /nonexistent "$stage_path" ;;
+    oversized) truncate -s 16777217 "$stage_path"; chmod 700 "$stage_path" ;;
+  esac
+  [ "$(run_app_stage_block)" = APP_REPLACEMENT_HOLD ]
+  if [ ! -e "$stage_path" ] && [ ! -L "$stage_path" ]; then
+    echo "$malformed_stage app replacement staging was deleted" >&2
+    exit 1
+  fi
+done
+
+# Exercise the embedded standalone normalizer itself. Distinct executables provide exact process
+# inode binding; the candidate reports GUARD_ARMED while live, proving there is no pre-stop safety
+# probe, then reports REPLACE_SAFE only after the exact candidate lineage is drained.
+STANDALONE_LEGACY_C="$TMP/standalone-legacy-fixture.c"
+STANDALONE_LEGACY_CANDIDATE="$TMP/standalone-legacy-candidate"
+STANDALONE_LEGACY_OLD="$TMP/standalone-legacy-old"
+cat > "$STANDALONE_LEGACY_C" <<'EOF'
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#ifndef CANDIDATE_ROLE
+#define CANDIDATE_ROLE 0
+#endif
+static char ready_path[1024];
+static volatile sig_atomic_t stop_requested;
+static void request_stop(int signal_number) { (void)signal_number; stop_requested = 1; }
+static int ready_file(const char *name) {
+    const char *root = getenv("STANDALONE_LEGACY_ROOT");
+    if (!root) return 0;
+    snprintf(ready_path, sizeof(ready_path), "%s/%s", root, name);
+    return access(ready_path, F_OK) == 0;
+}
+static int serve(const char *name) {
+    const char *root = getenv("STANDALONE_LEGACY_ROOT");
+    if (!root) return 1;
+    snprintf(ready_path, sizeof(ready_path), "%s/%s", root, name);
+    FILE *ready = fopen(ready_path, "w");
+    if (!ready) return 1;
+    fclose(ready);
+    signal(SIGTERM, request_stop);
+    signal(SIGINT, request_stop);
+    signal(SIGHUP, request_stop);
+    while (!stop_requested) pause();
+    if (CANDIDATE_ROLE && getenv("STANDALONE_LEGACY_STOP_DELAY")) {
+        char stopping_path[1024];
+        snprintf(stopping_path, sizeof(stopping_path), "%s/candidate-stopping", root);
+        FILE *stopping = fopen(stopping_path, "w");
+        if (stopping) fclose(stopping);
+        sleep(2);
+    }
+    unlink(ready_path);
+    _exit(0);
+}
+int main(int argc, char **argv) {
+    if (CANDIDATE_ROLE && argc == 2 && strcmp(argv[1], "--replacement-safe") == 0) {
+        if (ready_file("candidate-ready") || getenv("STANDALONE_LEGACY_POST_SAFE_ARMED")) {
+            puts("GUARD_ARMED");
+            return 3;
+        }
+        puts("REPLACE_SAFE");
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--request") == 0) {
+        if (!CANDIDATE_ROLE && strcmp(argv[2], "BUILDID") == 0 && ready_file("old-ready")) {
+            printf("BUILDID %s\n", getenv("STANDALONE_LEGACY_OLD_BUILD"));
+            return 0;
+        }
+        if (CANDIDATE_ROLE && strcmp(argv[2], "GUARDSELF") == 0 && ready_file("candidate-ready")) {
+            printf("OK GUARDSELF 1 %s %s %s\n", getenv("STANDALONE_LEGACY_CANDIDATE_BYTES"),
+                   getenv("STANDALONE_LEGACY_CANDIDATE_SHA"),
+                   getenv("STANDALONE_LEGACY_CANDIDATE_BUILD"));
+            return 0;
+        }
+        return 1;
+    }
+    return serve(CANDIDATE_ROLE ? "candidate-ready" : "old-ready");
+}
+EOF
+cc -O2 -DCANDIDATE_ROLE=1 "$STANDALONE_LEGACY_C" -o "$STANDALONE_LEGACY_CANDIDATE"
+cc -O2 -DCANDIDATE_ROLE=0 "$STANDALONE_LEGACY_C" -o "$STANDALONE_LEGACY_OLD"
+
+standalone_legacy_path_processes() {
+  local path="$1" inode executable executable_inode found=
+  [ -f "$path" ] || return 0
+  inode="$(stat -c '%d:%i' "$path")"
+  for executable in /proc/[0-9]*/exe; do
+    executable_inode="$(stat -Lc '%d:%i' "$executable" 2>/dev/null || true)"
+    [ "$executable_inode" != "$inode" ] || found="$found ${executable#/proc/}"
+  done
+  printf '%s\n' "$found"
+}
+standalone_legacy_stop_path() {
+  local executable pid
+  for executable in $(standalone_legacy_path_processes "$1"); do
+    pid=${executable%/exe}
+    kill "$pid" 2>/dev/null || true
+  done
+}
+standalone_legacy_cleanup() {
+  standalone_legacy_stop_path "$APP_STAGE_ROOT/data/local/hapaneld-helper"
+  standalone_legacy_stop_path "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+  standalone_legacy_stop_path "$APP_STAGE_ROOT/system/bin/hapaneld-helper"
+  standalone_legacy_stop_path "$APP_STAGE_ROOT/data/adb/hapaneld/hapaneld-helper"
+  sleep 0.05
+}
+standalone_legacy_wait() {
+  local path="$1" attempt=0
+  while [ ! -f "$path" ]; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 200 ] || return 1
+    sleep 0.01
+  done
+}
+standalone_legacy_registration() {
+  local topology="$1"
+  case "$topology" in
+    system)
+      STANDALONE_LEGACY_REGISTRATION="$APP_STAGE_ROOT/system/etc/init/hapaneld-helper.rc"
+      mkdir -p "${STANDALONE_LEGACY_REGISTRATION%/*}"
+      cat > "$STANDALONE_LEGACY_REGISTRATION" <<'EOF'
+service hapaneld_helper /system/bin/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+      STANDALONE_LEGACY_REGISTRATION_MODE=644
+      STANDALONE_LEGACY_REGISTRATION_EXPECTED=9b430712c493df177a19e5e893df445f6c2e951fc30ea140dcdbcdb7987de659 ;;
+    systemless)
+      STANDALONE_LEGACY_REGISTRATION="$APP_STAGE_ROOT/data/adb/service.d/hapaneld-helper.sh"
+      mkdir -p "${STANDALONE_LEGACY_REGISTRATION%/*}"
+      cat > "$STANDALONE_LEGACY_REGISTRATION" <<'EOF'
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
+/system/bin/stop hapaneld_helper 2>/dev/null
+/system/bin/stop hapaneld_ledd 2>/dev/null
+/system/bin/pkill -x hapaneld-helper 2>/dev/null
+/system/bin/pkill -x hapaneld-ledd 2>/dev/null
+/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+EOF
+      STANDALONE_LEGACY_REGISTRATION_MODE=755
+      STANDALONE_LEGACY_REGISTRATION_EXPECTED=60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493 ;;
+    hybrid)
+      STANDALONE_LEGACY_REGISTRATION="$APP_STAGE_ROOT/vendor/etc/init/hapaneld-helper.rc"
+      mkdir -p "${STANDALONE_LEGACY_REGISTRATION%/*}"
+      cat > "$STANDALONE_LEGACY_REGISTRATION" <<'EOF'
+service hapaneld_helper /data/adb/hapaneld/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+      STANDALONE_LEGACY_REGISTRATION_MODE=644
+      STANDALONE_LEGACY_REGISTRATION_EXPECTED=cf146dd5320fcb017514def6295fdb0c473e150a478d5c2219af2e3f03826ed1 ;;
+  esac
+  chmod "$STANDALONE_LEGACY_REGISTRATION_MODE" "$STANDALONE_LEGACY_REGISTRATION"
+  STANDALONE_LEGACY_REGISTRATION_SHA="$(sha256sum "$STANDALONE_LEGACY_REGISTRATION" | awk '{print $1}')"
+  [ "$STANDALONE_LEGACY_REGISTRATION_SHA" = "$STANDALONE_LEGACY_REGISTRATION_EXPECTED" ]
+}
+standalone_legacy_prepare() {
+  local topology="$1" location="${2:-live}" old_bin
+  standalone_legacy_cleanup
+  reset_app_stage_root
+  mkdir -p "$APP_STAGE_ROOT/dev" "$APP_STAGE_ROOT/data/adb/hapaneld" \
+    "$APP_STAGE_ROOT/system/bin" "$APP_STAGE_ROOT/vendor"
+  standalone_legacy_registration "$topology"
+  case "$topology" in
+    system) old_bin="$APP_STAGE_ROOT/system/bin/hapaneld-helper" ;;
+    systemless|hybrid) old_bin="$APP_STAGE_ROOT/data/adb/hapaneld/hapaneld-helper" ;;
+  esac
+  cp "$STANDALONE_LEGACY_OLD" "$old_bin"; chmod 755 "$old_bin"
+  STANDALONE_LEGACY_OLD_BIN="$old_bin"
+  if [ "$location" = stage ]; then
+    STANDALONE_LEGACY_CANDIDATE_PATH="$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+  else
+    STANDALONE_LEGACY_CANDIDATE_PATH="$APP_STAGE_ROOT/data/local/hapaneld-helper"
+  fi
+  cp "$STANDALONE_LEGACY_CANDIDATE" "$STANDALONE_LEGACY_CANDIDATE_PATH"
+  chmod 700 "$STANDALONE_LEGACY_CANDIDATE_PATH"
+  STANDALONE_LEGACY_OLD_SHA="$(sha256sum "$old_bin" | awk '{print $1}')"
+  STANDALONE_LEGACY_OLD_BYTES="$(wc -c < "$old_bin")"
+  STANDALONE_LEGACY_CANDIDATE_SHA="$(sha256sum "$STANDALONE_LEGACY_CANDIDATE_PATH" | awk '{print $1}')"
+  STANDALONE_LEGACY_CANDIDATE_BYTES="$(wc -c < "$STANDALONE_LEGACY_CANDIDATE_PATH")"
+  STANDALONE_LEGACY_REGISTRATION_BYTES="$(wc -c < "$STANDALONE_LEGACY_REGISTRATION")"
+  STANDALONE_LEGACY_OLD_BUILD="$(printf 'c%.0s' {1..64})"
+  STANDALONE_LEGACY_CANDIDATE_BUILD="$(printf 'd%.0s' {1..64})"
+  export STANDALONE_LEGACY_ROOT="$APP_STAGE_ROOT" STANDALONE_LEGACY_OLD_BIN \
+    STANDALONE_LEGACY_OLD_BUILD STANDALONE_LEGACY_CANDIDATE_BUILD \
+    STANDALONE_LEGACY_CANDIDATE_SHA STANDALONE_LEGACY_CANDIDATE_BYTES
+  cat > "$APP_STAGE_ROOT/system/bin/start" <<'EOF'
+#!/bin/sh
+: > "$STANDALONE_LEGACY_ROOT/init-started"
+"$STANDALONE_LEGACY_OLD_BIN" >/dev/null 2>&1 &
+EOF
+  chmod 755 "$APP_STAGE_ROOT/system/bin/start"
+  printf 'OK LEGACYTAKEOVER 1 %s %s %s %s %s %s %s %s %s %s\n' \
+    "$topology" "$STANDALONE_LEGACY_OLD_SHA" "$STANDALONE_LEGACY_OLD_BYTES" \
+    "$STANDALONE_LEGACY_REGISTRATION_SHA" "$STANDALONE_LEGACY_REGISTRATION_BYTES" \
+    "$STANDALONE_LEGACY_REGISTRATION_MODE" "$STANDALONE_LEGACY_OLD_BUILD" \
+    "$STANDALONE_LEGACY_CANDIDATE_BUILD" "$STANDALONE_LEGACY_CANDIDATE_SHA" \
+    "$STANDALONE_LEGACY_CANDIDATE_BYTES" \
+    > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover"
+  chmod 600 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover"
+}
+
+for standalone_legacy_topology in system systemless hybrid; do
+  standalone_legacy_prepare "$standalone_legacy_topology" live
+  "$STANDALONE_LEGACY_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+  standalone_legacy_candidate_pid=$!
+  standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+  [ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+  [ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+  ! kill -0 "$standalone_legacy_candidate_pid" 2>/dev/null
+  standalone_legacy_wait "$APP_STAGE_ROOT/old-ready"
+  case "$standalone_legacy_topology" in
+    system|hybrid) [ -f "$APP_STAGE_ROOT/init-started" ] ;;
+    systemless) [ ! -e "$APP_STAGE_ROOT/init-started" ] ;;
+  esac
+  standalone_legacy_cleanup
+done
+
+# Replay the durable cut after the exact old daemon is verified but before the record unlink. The
+# next locked entry must validate the retained authority again and finish on every topology.
+STANDALONE_LEGACY_PRE_UNLINK="$TMP/standalone-legacy-pre-unlink.sh"
+sed '/^    legacy_record_after=$(app_stage_metadata "$legacy_record")/i\
+: > "$STANDALONE_LEGACY_ROOT/pre-unlink-ready"\
+while [ ! -e "$STANDALONE_LEGACY_ROOT/pre-unlink-release" ]; do sleep 1; done
+' "$APP_STAGE_BLOCK" > "$STANDALONE_LEGACY_PRE_UNLINK"
+for standalone_legacy_topology in system systemless hybrid; do
+  standalone_legacy_prepare "$standalone_legacy_topology" live
+  "$STANDALONE_LEGACY_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+  standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+  run_app_stage_script_exec "$STANDALONE_LEGACY_PRE_UNLINK" \
+    > "$TMP/standalone-legacy-pre-unlink-$standalone_legacy_topology.out" 2>&1 &
+  standalone_legacy_cut_pid=$!
+  standalone_legacy_wait "$APP_STAGE_ROOT/pre-unlink-ready"
+  kill -KILL "$standalone_legacy_cut_pid"
+  wait "$standalone_legacy_cut_pid" 2>/dev/null || true
+  [ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+  standalone_legacy_wait "$APP_STAGE_ROOT/old-ready"
+  [ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+  [ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+  standalone_legacy_cleanup
+done
+
+# App death before candidate launch and both lone-tmp publication cuts recover without inventing
+# authority; an executing stage is foreign live custody and remains untouched.
+standalone_legacy_prepare system stage
+[ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+[ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+[ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+standalone_legacy_cleanup
+for standalone_legacy_tmp_kind in partial complete; do
+  standalone_legacy_prepare system stage
+  rm -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover"
+  if [ "$standalone_legacy_tmp_kind" = partial ]; then
+    : > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+  else
+    printf 'complete preauthority record bytes\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+  fi
+  chmod 600 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+  [ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+  [ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp" ]
+  [ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+  standalone_legacy_cleanup
+done
+standalone_legacy_prepare system stage
+"$STANDALONE_LEGACY_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+standalone_legacy_stage_pid=$!
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+[ "$(run_app_stage_block)" = LEGACY_TAKEOVER_HOLD ]
+kill -0 "$standalone_legacy_stage_pid"
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+standalone_legacy_cleanup
+
+reset_app_stage_root
+mkdir -p "$APP_STAGE_ROOT/dev"
+cp "$STANDALONE_LEGACY_CANDIDATE" "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+chmod 700 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new"
+export STANDALONE_LEGACY_ROOT="$APP_STAGE_ROOT"
+"$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" --supervise >/dev/null 2>&1 &
+standalone_legacy_stage_pid=$!
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+printf 'partial preauthority record\n' > "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+chmod 600 "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+[ "$(run_app_stage_block)" = LEGACY_TAKEOVER_HOLD ]
+kill -0 "$standalone_legacy_stage_pid"
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp" ]
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+rm -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+[ "$(run_app_stage_block)" = APP_REPLACEMENT_HOLD ]
+kill -0 "$standalone_legacy_stage_pid"
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.new" ]
+standalone_legacy_cleanup
+
+# Post-stop GUARD_ARMED and TERM during the original candidate's delayed drain both restore the
+# exact canonical candidate and retain the record. The signal path must drain before relaunch, leave
+# one fixture process, release the shared lock, and permit immediate normal retry.
+standalone_legacy_prepare system live
+"$STANDALONE_LEGACY_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+export STANDALONE_LEGACY_POST_SAFE_ARMED=1
+[ "$(run_app_stage_block)" = LEGACY_TAKEOVER_HOLD ]
+unset STANDALONE_LEGACY_POST_SAFE_ARMED
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+standalone_legacy_cleanup
+
+standalone_legacy_prepare system live
+export STANDALONE_LEGACY_STOP_DELAY=1
+"$STANDALONE_LEGACY_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+standalone_legacy_candidate_pid=$!
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+mkdir -p "$APP_STAGE_ROOT/dev/.hapaneld-helper-transaction.lock"
+APP_STAGE_ROOT="$APP_STAGE_ROOT" PATH=/usr/bin:/bin /bin/bash -u -c '
+  cleanup_helper_lock() { rm -rf "$APP_STAGE_ROOT/dev/.hapaneld-helper-transaction.lock"; }
+  abort_helper_lock() {
+    status=$1
+    trap - 0 1 2 3 15
+    cleanup_helper_lock
+    exit "$status"
+  }
+  . "$1"
+' _ "$APP_STAGE_BLOCK" > "$TMP/standalone-legacy-drain-signal.out" 2>&1 &
+standalone_legacy_signal_pid=$!
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-stopping"
+kill -TERM "$standalone_legacy_signal_pid"
+if wait "$standalone_legacy_signal_pid"; then standalone_legacy_signal_status=0; else standalone_legacy_signal_status=$?; fi
+[ "$standalone_legacy_signal_status" -eq 143 ]
+[ ! -e "$APP_STAGE_ROOT/dev/.hapaneld-helper-transaction.lock" ]
+[ -f "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+! kill -0 "$standalone_legacy_candidate_pid" 2>/dev/null
+standalone_legacy_wait "$APP_STAGE_ROOT/candidate-ready"
+standalone_legacy_recovered="$(standalone_legacy_path_processes "$STANDALONE_LEGACY_CANDIDATE_PATH")"
+[ "$(printf '%s\n' "$standalone_legacy_recovered" | wc -w)" -eq 1 ]
+unset STANDALONE_LEGACY_STOP_DELAY
+rm -f "$APP_STAGE_ROOT/candidate-stopping"
+[ "$(run_app_stage_block)" = NO_STALE_TRANSACTION ]
+[ ! -e "$APP_STAGE_ROOT/data/local/.hapaneld-helper.legacy-takeover" ]
+standalone_legacy_cleanup
+
+unset APP_STAGE_ROOT APP_STAGE_BLOCK APP_STAGE_SHA app_authority malformed_stage stage_path \
+  STANDALONE_LEGACY_C STANDALONE_LEGACY_CANDIDATE STANDALONE_LEGACY_OLD \
+  STANDALONE_LEGACY_ROOT STANDALONE_LEGACY_OLD_BIN STANDALONE_LEGACY_OLD_BUILD \
+  STANDALONE_LEGACY_CANDIDATE_BUILD STANDALONE_LEGACY_CANDIDATE_SHA \
+  STANDALONE_LEGACY_CANDIDATE_BYTES STANDALONE_LEGACY_REGISTRATION \
+  STANDALONE_LEGACY_REGISTRATION_MODE STANDALONE_LEGACY_REGISTRATION_EXPECTED \
+  STANDALONE_LEGACY_REGISTRATION_SHA STANDALONE_LEGACY_REGISTRATION_BYTES \
+  STANDALONE_LEGACY_OLD_SHA STANDALONE_LEGACY_OLD_BYTES \
+  STANDALONE_LEGACY_CANDIDATE_PATH standalone_legacy_topology \
+  standalone_legacy_candidate_pid standalone_legacy_tmp_kind standalone_legacy_stage_pid \
+  standalone_legacy_signal_pid standalone_legacy_signal_status standalone_legacy_recovered \
+  STANDALONE_LEGACY_PRE_UNLINK standalone_legacy_cut_pid
+
+rm -rf "$MOCK_STATE_DIR/shared-lock-signal"
+export MOCK_SHARED_LOCK_SIGNAL=1
+export MOCK_ADB_ROOT=1
+if bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/shared-lock-signal.out" 2>&1; then
+  echo "signal-interrupted shared-lock transaction unexpectedly resumed" >&2
+  exit 1
+fi
+[ -f "$MOCK_STATE_DIR/shared-lock-signal/remote-status" ] || {
+  cat "$TMP/shared-lock-signal.out" >&2
+  if grep -q inspect_manual_journal_v1 "$MOCK_CALL_LOG"; then
+    echo "signal fixture observed the journal inspection but did not execute it" >&2
+  else
+    echo "signal fixture never observed the journal inspection" >&2
+  fi
+  exit 1
+}
+grep -qx 143 "$MOCK_STATE_DIR/shared-lock-signal/remote-status"
+[ -f "$MOCK_STATE_DIR/shared-lock-signal/handler-ready" ]
+[ ! -e "$MOCK_STATE_DIR/shared-lock-signal/post-signal-mutation" ]
+[ ! -e "$MOCK_STATE_DIR/shared-lock-signal/dev/.hapaneld-helper-transaction.lock" ]
+grep -q 'could not determine the root-helper recovery state' "$TMP/shared-lock-signal.out"
+unset MOCK_SHARED_LOCK_SIGNAL
+export MOCK_ADB_ROOT=0
+: > "$MOCK_CALL_LOG"
+bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/shared-lock-signal-recovery.out" 2>&1
+[ ! -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
+rm -rf "$MOCK_STATE_DIR/shared-lock-signal"
 
 bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/first.out" 2>&1 &
 first_pid=$!
@@ -825,6 +1359,31 @@ grep -q '/data/local/hapaneld-helper --supervise' "$MOCK_CALL_LOG"
 grep -q '/data/adb/service.d/hapaneld-helper.sh.manual-' "$MOCK_CALL_LOG"
 [ ! -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
 export MOCK_SYSTEM_WRITABLE=1
+
+export MOCK_APP_REPLACEMENT_INTERVAL=initial
+: > "$MOCK_CALL_LOG"
+if bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/initial-app-hold.out" 2>&1; then
+  echo "installer unexpectedly continued past fixed app custody during initial recovery inspection" >&2
+  exit 1
+fi
+grep -q 'app-managed root-helper replacement custody blocks standalone installation' "$TMP/initial-app-hold.out"
+[ -f "$MOCK_STATE_DIR/app-hold-initial" ]
+[ ! -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
+unset MOCK_APP_REPLACEMENT_INTERVAL
+rm -f "$MOCK_STATE_DIR/app-hold-initial"
+
+export MOCK_APP_REPLACEMENT_INTERVAL=pre_stage
+: > "$MOCK_CALL_LOG"
+if bash "$INSTALLER" "$MOCK_TARGET" >"$TMP/pre-stage-app-hold.out" 2>&1; then
+  echo "installer unexpectedly continued after fixed app custody appeared before staging" >&2
+  exit 1
+fi
+grep -q 'app-managed root-helper replacement custody appeared while standalone installation was preparing' "$TMP/pre-stage-app-hold.out"
+[ -f "$MOCK_STATE_DIR/app-hold-pre-stage" ]
+[ ! -f "$MOCK_STATE_DIR/manual-helper-transaction" ]
+! grep -q 'ROLLBACK_' "$MOCK_CALL_LOG"
+unset MOCK_APP_REPLACEMENT_INTERVAL
+rm -f "$MOCK_STATE_DIR/app-hold-pre-stage"
 
 export MOCK_REPLACEMENT_SAFE=armed
 : > "$MOCK_CALL_LOG"

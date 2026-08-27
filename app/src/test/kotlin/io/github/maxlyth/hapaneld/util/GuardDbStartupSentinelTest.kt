@@ -7,6 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 
 class GuardDbStartupSentinelTest {
@@ -57,13 +59,17 @@ class GuardDbStartupSentinelTest {
         val directory = temporary.newFolder("sentinel")
         val store = GuardDbSentinelStore(directory, syncDirectory = { true }, validateMarker = { it.isFile })
         assertTrue(store.load() is GuardDbSentinelLoad.Absent)
+        assertFalse(store.write(sentinel.copy(state = GuardDbSentinelState.BASELINE_READY)))
+        assertFalse(store.write(sentinel.copy(state = GuardDbSentinelState.ARMED)))
         assertTrue(store.write(sentinel))
         assertEquals(sentinel, (store.load() as GuardDbSentinelLoad.Valid).sentinel)
+        assertFalse(store.promoteArmed(sentinel.session))
         assertTrue(store.promoteBaselineReady(sentinel.session))
         assertEquals(GuardDbSentinelState.BASELINE_READY,
             (store.load() as GuardDbSentinelLoad.Valid).sentinel.state)
         assertTrue(store.promoteArmed(sentinel.session))
         assertEquals(GuardDbSentinelState.ARMED, (store.load() as GuardDbSentinelLoad.Valid).sentinel.state)
+        assertFalse(store.promoteBaselineReady(sentinel.session))
         assertFalse(store.clear("3".repeat(64)))
         assertTrue(store.clear(sentinel.session))
         assertTrue(store.load() is GuardDbSentinelLoad.Absent)
@@ -81,6 +87,84 @@ class GuardDbStartupSentinelTest {
             validateMarker = { it.isFile },
         )
         assertFalse(store.write(sentinel))
+    }
+
+    @Test fun `restart resumes fsynced initial publication and exact forward promotions`() {
+        val directory = temporary.newFolder("sentinel-restart")
+        val pending = directory.resolve(".guard-db-maintenance.v1.pending")
+        fun restarted() = GuardDbSentinelStore(
+            directory,
+            syncDirectory = { true },
+            validateMarker = { it.isFile },
+        )
+
+        writeFsynced(pending, encodeGuardDbSentinel(sentinel))
+        assertEquals(sentinel, (restarted().load() as GuardDbSentinelLoad.Valid).sentinel)
+        assertFalse(pending.exists())
+
+        val baselineReady = sentinel.copy(state = GuardDbSentinelState.BASELINE_READY)
+        writeFsynced(pending, encodeGuardDbSentinel(baselineReady))
+        assertEquals(baselineReady, (restarted().load() as GuardDbSentinelLoad.Valid).sentinel)
+        assertFalse(pending.exists())
+
+        val armed = sentinel.copy(state = GuardDbSentinelState.ARMED)
+        writeFsynced(pending, encodeGuardDbSentinel(armed))
+        assertEquals(armed, (restarted().load() as GuardDbSentinelLoad.Valid).sentinel)
+        assertFalse(pending.exists())
+    }
+
+    @Test fun `mismatched pending promotion is fail closed and preserved`() {
+        val directory = temporary.newFolder("sentinel-pending-mismatch")
+        val store = GuardDbSentinelStore(directory, syncDirectory = { true }, validateMarker = { it.isFile })
+        assertTrue(store.write(sentinel))
+        val pending = directory.resolve(".guard-db-maintenance.v1.pending")
+        writeFsynced(
+            pending,
+            encodeGuardDbSentinel(sentinel.copy(
+                state = GuardDbSentinelState.BASELINE_READY,
+                securityAuthorityEpoch = sentinel.securityAuthorityEpoch + 1L,
+            )),
+        )
+
+        assertTrue(store.load() is GuardDbSentinelLoad.Corrupt)
+        assertTrue(pending.isFile)
+        assertFalse(store.promoteBaselineReady(sentinel.session))
+        assertTrue(pending.isFile)
+    }
+
+    @Test fun `ambiguous jump and downgrade pending promotions are fail closed`() {
+        listOf(
+            GuardDbSentinelState.INTENT to GuardDbSentinelState.ARMED,
+            GuardDbSentinelState.ARMED to GuardDbSentinelState.BASELINE_READY,
+        ).forEachIndexed { index, (currentState, pendingState) ->
+            val directory = temporary.newFolder("sentinel-pending-order-$index")
+            val store = GuardDbSentinelStore(
+                directory,
+                syncDirectory = { true },
+                validateMarker = { it.isFile },
+            )
+            assertTrue(store.write(sentinel))
+            if (currentState == GuardDbSentinelState.ARMED) {
+                assertTrue(store.promoteBaselineReady(sentinel.session))
+                assertTrue(store.promoteArmed(sentinel.session))
+            }
+            val pending = directory.resolve(".guard-db-maintenance.v1.pending")
+            writeFsynced(pending, encodeGuardDbSentinel(sentinel.copy(state = pendingState)))
+
+            assertTrue(store.load() is GuardDbSentinelLoad.Corrupt)
+            assertTrue(pending.isFile)
+        }
+    }
+
+    @Test fun `malformed pending sentinel is fail closed and preserved`() {
+        val directory = temporary.newFolder("sentinel-pending-malformed")
+        val pending = directory.resolve(".guard-db-maintenance.v1.pending")
+        writeFsynced(pending, "malformed\n".toByteArray())
+        val store = GuardDbSentinelStore(directory, syncDirectory = { true }, validateMarker = { it.isFile })
+
+        assertTrue(store.load() is GuardDbSentinelLoad.Corrupt)
+        assertFalse(store.write(sentinel))
+        assertTrue(pending.isFile)
     }
 
     @Test fun `dangling marker is corrupt and cannot be cleared as absent`() {
@@ -103,6 +187,14 @@ class GuardDbStartupSentinelTest {
 
         assertFalse(store.write(sentinel))
         assertTrue(Files.isSymbolicLink(pending))
-        assertTrue(store.load() is GuardDbSentinelLoad.Absent)
+        assertTrue(store.load() is GuardDbSentinelLoad.Corrupt)
+        assertTrue(Files.isSymbolicLink(pending))
+    }
+
+    private fun writeFsynced(file: File, bytes: ByteArray) {
+        FileOutputStream(file).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
     }
 }

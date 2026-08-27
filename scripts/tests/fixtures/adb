@@ -1134,7 +1134,9 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
-          if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
+          if [ "${MOCK_APP_REPLACEMENT_HOLD:-0}" = 1 ]; then
+            printf 'APP_REPLACEMENT_HOLD\n'
+          elif [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
           elif [ -f "$STATE_DIR/stale-helper-transaction" ]; then
             case "${MOCK_ACTIVE_TRANSACTION_KIND:-${MOCK_STALE_TRANSACTION_KIND:-system}}" in
@@ -1227,7 +1229,9 @@ case "${1:-}" in
         elif printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
         elif printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
-          if [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
+          if [ "${MOCK_APP_REPLACEMENT_HOLD:-0}" = 1 ]; then
+            printf 'APP_REPLACEMENT_HOLD\n'
+          elif [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
             printf 'TRANSACTION_BUSY\n'
           elif [ -f "$STATE_DIR/stale-helper-transaction" ]; then
             case "${MOCK_ACTIVE_TRANSACTION_KIND:-${MOCK_STALE_TRANSACTION_KIND:-system}}" in
@@ -1311,7 +1315,13 @@ case "${1:-}" in
         elif adb_root_active && printf '%s' "$command_text" | grep -Fq 'echo PROBE_READY'; then
           [ "${MOCK_TRANSACTION_TAMPER:-0}" != 1 ] && printf 'PROBE_READY\n'
         elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*install-(system|systemless|hybrid)'; then
-          [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ] && printf 'TRANSACTION_BUSY\n' || printf 'INSTALL_OK\n'
+          if [ "${MOCK_APP_REPLACEMENT_HOLD:-0}" = 1 ]; then
+            printf 'APP_REPLACEMENT_HOLD\n'
+          elif [ "${MOCK_TRANSACTION_BUSY:-0}" = 1 ]; then
+            printf 'TRANSACTION_BUSY\n'
+          else
+            printf 'INSTALL_OK\n'
+          fi
         elif adb_root_active && printf '%s' "$command_text" | grep -Eq 'helper-transaction-[0-9a-f]+.*commit-(system|systemless|hybrid)'; then
           [ "${MOCK_HELPER_COMMIT:-ok}" = ok ] &&
             [ "${MOCK_COMMIT_LIVE_STATE:-TARGET}" = TARGET ] && printf 'COMMIT_OK\n'

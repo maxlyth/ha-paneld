@@ -61,9 +61,20 @@ class EntityCatalogStorageHealthContractTest {
                 "maintainSoftLimit",
                 "writeProximityBatch",
                 "clearProximityLearning",
+                "openRestoredDatabaseOwner",
             ),
             owners,
         )
+
+        val restoredOpen = functionBody("openRestoredDatabaseOwner")
+        assertTrue("the restored helper must open only through the process-wide lease",
+            "open = ::openRestoredDatabaseOwner" in source)
+        assertTrue("the restored helper must publish its per-open state before opening SQLite",
+            "restoredOpenPending = !joiningRetainedGuard" in restoredOpen &&
+                "writableDatabase" in restoredOpen)
+        assertTrue("every restored-open exit must clear its per-open state",
+            "finally" in restoredOpen && "restoredOpenPending = false" in restoredOpen &&
+                "retainedGuardJoinPending = false" in restoredOpen)
 
         val operations = listOf(
             "catalog-status",

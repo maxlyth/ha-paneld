@@ -83,13 +83,18 @@
 #define GUARD_APP_HELPER_STAGE ".hapaneld-helper-live-test.new"
 #define GUARD_APP_HELPER_PREVIOUS ".hapaneld-helper-live-test.previous"
 #define GUARD_APP_HELPER_PREVIOUS_TMP ".hapaneld-helper-live-test.previous.tmp"
+#define HELPER_TRANSACTION_LOCK_PARENT "/tmp"
+#define HELPER_TRANSACTION_LOCK_NAME ".hapaneld-helper-transaction-lock-test"
 #else
 #define GUARD_APP_HELPER_PARENT "/data/local"
 #define GUARD_APP_HELPER_LIVE "hapaneld-helper"
 #define GUARD_APP_HELPER_STAGE ".hapaneld-helper.new"
 #define GUARD_APP_HELPER_PREVIOUS ".hapaneld-helper.previous"
 #define GUARD_APP_HELPER_PREVIOUS_TMP ".hapaneld-helper.previous.tmp"
+#define HELPER_TRANSACTION_LOCK_PARENT "/dev"
+#define HELPER_TRANSACTION_LOCK_NAME ".hapaneld-helper-transaction.lock"
 #endif
+#define HELPER_TRANSACTION_LOCK_PID "pid"
 #define GUARD_MAX_RECORD_BYTES 4096
 #define GUARD_MAX_APK_BYTES (256ULL * 1024ULL * 1024ULL)
 #define GUARD_MAX_DB_BYTES (64ULL * 1024ULL * 1024ULL)
@@ -216,6 +221,19 @@ typedef struct {
     int present;
     struct stat stat;
 } guard_file_snapshot;
+
+typedef struct {
+    int parent;
+    int dir;
+    struct stat dir_stat;
+    struct stat pid_stat;
+} helper_transaction_lock;
+
+enum helper_transaction_lock_result {
+    HELPER_TRANSACTION_LOCK_HOLD = -1,
+    HELPER_TRANSACTION_LOCK_ACQUIRED = 0,
+    HELPER_TRANSACTION_LOCK_BUSY = 1,
+};
 
 enum guard_publish_result {
     GUARD_PUBLISH_FAILED = -1,
@@ -5063,6 +5081,209 @@ static int open_app_helper_parent(void) {
     return dir;
 }
 
+static int helper_transaction_lock_namespace_exact(int dir) {
+    int duplicate = openat(dir, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (duplicate < 0) return 0;
+    DIR *stream = fdopendir(duplicate);
+    if (!stream) { close(duplicate); return 0; }
+    int exact = 1;
+    errno = 0;
+    for (struct dirent *entry = readdir(stream); entry; entry = readdir(stream)) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
+            strcmp(entry->d_name, HELPER_TRANSACTION_LOCK_PID) == 0) {
+            errno = 0;
+            continue;
+        }
+        exact = 0;
+        break;
+    }
+    if (errno != 0) exact = 0;
+    closedir(stream);
+    return exact;
+}
+
+static int helper_transaction_lock_dir_exact(int parent, int dir, struct stat *snapshot) {
+    struct stat held, named;
+    int exact = fstat(dir, &held) == 0 &&
+        fstatat(parent, HELPER_TRANSACTION_LOCK_NAME, &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+        S_ISDIR(held.st_mode) && held.st_uid == geteuid() && held.st_gid == getegid() &&
+        (held.st_mode & (S_IWGRP | S_IWOTH)) == 0 &&
+        stat_identity_unchanged_strict(&held, &named);
+    if (exact && snapshot) *snapshot = held;
+    return exact;
+}
+
+static int helper_transaction_lock_pid_exact(int dir, pid_t *holder,
+                                             struct stat *snapshot) {
+    int fd = openat(dir, HELPER_TRANSACTION_LOCK_PID,
+        O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat before, after, named;
+    char record[32];
+    int exact = fd >= 0 && fstat(fd, &before) == 0 && S_ISREG(before.st_mode) &&
+        before.st_uid == geteuid() && before.st_gid == getegid() && before.st_nlink == 1 &&
+        (before.st_mode & (S_IWGRP | S_IWOTH)) == 0 && before.st_size >= 2 &&
+        before.st_size < (off_t)sizeof record;
+    size_t used = 0;
+    while (exact && used < (size_t)before.st_size) {
+        ssize_t count = read(fd, record + used, (size_t)before.st_size - used);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { exact = 0; break; }
+        used += (size_t)count;
+    }
+    unsigned char extra;
+    ssize_t extra_count = -1;
+    if (exact) {
+        do extra_count = read(fd, &extra, 1); while (extra_count < 0 && errno == EINTR);
+        exact = extra_count == 0 && fstat(fd, &after) == 0 &&
+            fstatat(dir, HELPER_TRANSACTION_LOCK_PID, &named, AT_SYMLINK_NOFOLLOW) == 0 &&
+            stat_identity_unchanged_strict(&before, &after) &&
+            stat_identity_unchanged_strict(&before, &named);
+    }
+    if (fd >= 0) close(fd);
+    if (!exact || used < 2 || record[used - 1] != '\n') return -1;
+    record[used - 1] = '\0';
+    uint64_t parsed = 0;
+    if (parse_u64(record, 2, INT_MAX, &parsed) != 0) return -1;
+    if (holder) *holder = (pid_t)parsed;
+    if (snapshot) *snapshot = before;
+    return 0;
+}
+
+static int open_helper_transaction_lock_parent(void) {
+    int parent = open(HELPER_TRANSACTION_LOCK_PARENT,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat st;
+    int exact = parent >= 0 && fstat(parent, &st) == 0 && S_ISDIR(st.st_mode) &&
+        st.st_uid == geteuid() && st.st_gid == getegid() &&
+        ((st.st_mode & (S_IWGRP | S_IWOTH)) == 0 || (st.st_mode & S_ISVTX) != 0);
+    if (!exact && parent >= 0) { close(parent); parent = -1; }
+    return parent;
+}
+
+static int write_helper_transaction_lock_pid(int dir, struct stat *snapshot) {
+    int fd = openat(dir, HELPER_TRANSACTION_LOCK_PID,
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    char record[32];
+    int length = snprintf(record, sizeof record, "%ld\n", (long)getpid());
+    int exact = fd >= 0 && length > 1 && (size_t)length < sizeof record &&
+        fchmod(fd, 0600) == 0;
+    size_t used = 0;
+    while (exact && used < (size_t)length) {
+        ssize_t count = write(fd, record + used, (size_t)length - used);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { exact = 0; break; }
+        used += (size_t)count;
+    }
+    if (fd >= 0 && close(fd) != 0) exact = 0;
+    pid_t holder = -1;
+    return exact && helper_transaction_lock_pid_exact(dir, &holder, snapshot) == 0 &&
+        holder == getpid() ? 0 : -1;
+}
+
+static void close_helper_transaction_lock(helper_transaction_lock *lock) {
+    if (lock->dir >= 0) close(lock->dir);
+    if (lock->parent >= 0) close(lock->parent);
+    lock->dir = -1;
+    lock->parent = -1;
+}
+
+static int release_helper_transaction_lock(helper_transaction_lock *lock) {
+    struct stat dir_stat, pid_stat;
+    pid_t holder = -1;
+    int exact = lock && lock->parent >= 0 && lock->dir >= 0 &&
+        helper_transaction_lock_dir_exact(lock->parent, lock->dir, &dir_stat) &&
+        stat_identity_unchanged_strict(&lock->dir_stat, &dir_stat) &&
+        helper_transaction_lock_namespace_exact(lock->dir) &&
+        helper_transaction_lock_pid_exact(lock->dir, &holder, &pid_stat) == 0 &&
+        holder == getpid() && stat_identity_unchanged_strict(&lock->pid_stat, &pid_stat);
+    int removed = exact && unlinkat(lock->dir, HELPER_TRANSACTION_LOCK_PID, 0) == 0 &&
+        unlinkat(lock->parent, HELPER_TRANSACTION_LOCK_NAME, AT_REMOVEDIR) == 0;
+    close_helper_transaction_lock(lock);
+    return removed ? 0 : -1;
+}
+
+static int create_helper_transaction_lock(int parent, helper_transaction_lock *lock) {
+    if (mkdirat(parent, HELPER_TRANSACTION_LOCK_NAME, 0700) != 0) return -1;
+    int dir = openat(parent, HELPER_TRANSACTION_LOCK_NAME,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    helper_transaction_lock created = { .parent = parent, .dir = dir };
+    int exact = dir >= 0 && helper_transaction_lock_dir_exact(
+        parent, dir, NULL) &&
+        write_helper_transaction_lock_pid(dir, &created.pid_stat) == 0 &&
+        helper_transaction_lock_dir_exact(parent, dir, &created.dir_stat) &&
+        helper_transaction_lock_namespace_exact(dir);
+    if (!exact) {
+        if (dir >= 0) {
+            pid_t holder = -1;
+            struct stat ignored;
+            if (helper_transaction_lock_pid_exact(dir, &holder, &ignored) == 0 &&
+                holder == getpid()) (void)unlinkat(dir, HELPER_TRANSACTION_LOCK_PID, 0);
+            close(dir);
+        }
+        (void)unlinkat(parent, HELPER_TRANSACTION_LOCK_NAME, AT_REMOVEDIR);
+        return -1;
+    }
+    *lock = created;
+    return 0;
+}
+
+static int acquire_helper_transaction_lock(helper_transaction_lock *lock) {
+    memset(lock, 0, sizeof *lock);
+    lock->parent = -1;
+    lock->dir = -1;
+    int parent = open_helper_transaction_lock_parent();
+    if (parent < 0) return HELPER_TRANSACTION_LOCK_HOLD;
+    if (create_helper_transaction_lock(parent, lock) == 0)
+        return HELPER_TRANSACTION_LOCK_ACQUIRED;
+    if (errno != EEXIST) {
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_HOLD;
+    }
+
+    int dir = openat(parent, HELPER_TRANSACTION_LOCK_NAME,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat dir_before, pid_before, dir_after, pid_after;
+    pid_t holder = -1, rebound_holder = -1;
+    int exact = dir >= 0 && helper_transaction_lock_dir_exact(parent, dir, &dir_before) &&
+        helper_transaction_lock_namespace_exact(dir) &&
+        helper_transaction_lock_pid_exact(dir, &holder, &pid_before) == 0;
+    if (!exact) {
+        if (dir >= 0) close(dir);
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_HOLD;
+    }
+    errno = 0;
+    if (kill(holder, 0) == 0 || errno == EPERM) {
+        close(dir);
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_BUSY;
+    }
+    if (errno != ESRCH) {
+        close(dir);
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_HOLD;
+    }
+    errno = 0;
+    if (kill(holder, 0) == 0 || errno != ESRCH ||
+        !helper_transaction_lock_dir_exact(parent, dir, &dir_after) ||
+        !stat_identity_unchanged_strict(&dir_before, &dir_after) ||
+        !helper_transaction_lock_namespace_exact(dir) ||
+        helper_transaction_lock_pid_exact(dir, &rebound_holder, &pid_after) != 0 ||
+        holder != rebound_holder || !stat_identity_unchanged_strict(&pid_before, &pid_after) ||
+        unlinkat(dir, HELPER_TRANSACTION_LOCK_PID, 0) != 0 ||
+        unlinkat(parent, HELPER_TRANSACTION_LOCK_NAME, AT_REMOVEDIR) != 0) {
+        close(dir);
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_HOLD;
+    }
+    close(dir);
+    if (create_helper_transaction_lock(parent, lock) != 0) {
+        close(parent);
+        return HELPER_TRANSACTION_LOCK_HOLD;
+    }
+    return HELPER_TRANSACTION_LOCK_ACQUIRED;
+}
+
 static int app_helper_identity_at(int dir, const char *name, uint64_t *bytes,
                                   char sha[65], uint64_t *dev, uint64_t *ino) {
     int fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -5327,9 +5548,21 @@ static void cmd_guardretire_app(conn_ctx *ctx, const char *args) {
         error_reply(ctx, "ARGS", "retire");
         return;
     }
-    if (!guard_admission_ready(ctx)) return;
     if (pthread_mutex_trylock(&package_gate) != 0) {
         error_reply(ctx, "BUSY", "replacement");
+        return;
+    }
+    helper_transaction_lock transaction_lock;
+    int transaction = acquire_helper_transaction_lock(&transaction_lock);
+    if (transaction != HELPER_TRANSACTION_LOCK_ACQUIRED) {
+        pthread_mutex_unlock(&package_gate);
+        error_reply(ctx, transaction == HELPER_TRANSACTION_LOCK_BUSY ? "BUSY" : "HOLD",
+                    "replacement");
+        return;
+    }
+    if (!guard_admission_ready(ctx)) {
+        (void)release_helper_transaction_lock(&transaction_lock);
+        pthread_mutex_unlock(&package_gate);
         return;
     }
     pthread_mutex_lock(&guard_lock);
@@ -5338,6 +5571,7 @@ static void cmd_guardretire_app(conn_ctx *ctx, const char *args) {
     if (!safe) {
         if (dir >= 0) close(dir);
         pthread_mutex_unlock(&guard_lock);
+        (void)release_helper_transaction_lock(&transaction_lock);
         pthread_mutex_unlock(&package_gate);
         error_reply(ctx, "ARMED", "replacement");
         return;
@@ -5365,11 +5599,13 @@ static void cmd_guardretire_app(conn_ctx *ctx, const char *args) {
     if (dir >= 0) close(dir);
     if (published != GUARD_PUBLISH_COMMITTED) {
         pthread_mutex_unlock(&guard_lock);
+        (void)release_helper_transaction_lock(&transaction_lock);
         pthread_mutex_unlock(&package_gate);
         error_reply(ctx, published == GUARD_PUBLISH_INDETERMINATE ? "INDETERMINATE" : "HOLD",
                     "replacement");
         return;
     }
+    (void)release_helper_transaction_lock(&transaction_lock);
     guard_initialized = 0;
     /* Keep guard_lock held through process death: the durable fence closes admission before reply. */
     (void)reply(ctx->fd, "OK GUARDRETIRE 1 REQUESTED\n");
@@ -5813,6 +6049,9 @@ void guard_test_reset(void) {
     (void)unlink(GUARD_APP_HELPER_PARENT "/" GUARD_APP_HELPER_STAGE);
     (void)unlink(GUARD_APP_HELPER_PARENT "/" GUARD_APP_HELPER_PREVIOUS);
     (void)unlink(GUARD_APP_HELPER_PARENT "/" GUARD_APP_HELPER_PREVIOUS_TMP);
+    (void)unlink(HELPER_TRANSACTION_LOCK_PARENT "/" HELPER_TRANSACTION_LOCK_NAME "/"
+                 HELPER_TRANSACTION_LOCK_PID);
+    (void)rmdir(HELPER_TRANSACTION_LOCK_PARENT "/" HELPER_TRANSACTION_LOCK_NAME);
     test_fault = GUARD_TEST_FAULT_NONE;
     test_now_ms = 0;
     test_pm_process_state = 0;

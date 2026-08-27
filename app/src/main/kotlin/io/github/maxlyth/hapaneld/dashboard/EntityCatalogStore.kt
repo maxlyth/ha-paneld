@@ -29,9 +29,10 @@ import java.io.File
 import java.io.Writer
 
 /** Bounded, derived entity/catalog evidence. Credentials are never stored here. */
-class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcileSchemaAndName(context), null, VERSION) {
+class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, VERSION) {
     /** Held for the config vault: a freshly created database may need configuration restored into it. */
     private val appContext: Context = context.applicationContext ?: context
+    private val databaseTarget: File = context.getDatabasePath(DATABASE_NAME)
     private val maintenanceGate = MaintenanceIntervalGate(MAINTENANCE_INTERVAL_MS)
     private val performanceMaintenanceGate = MaintenanceIntervalGate(PERFORMANCE_MAINTENANCE_INTERVAL_MS)
     private val busyRetry = DatabaseBusyRetry()
@@ -39,6 +40,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
     /** Closing races a retry backoff; the flag lets an in-flight run give up instead of sleeping on. */
     @Volatile
     private var busyRetryAbandoned = false
+    private var restoredOpenPending = false
+    private var retainedGuardJoinPending = false
+    private var openedRetainedGuard: DatabaseRestoreRecord? = null
 
     internal fun isBusyRetryAbandoned(): Boolean = busyRetryAbandoned
 
@@ -89,6 +93,27 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
         // SQLiteDatabase.enableWriteAheadLogging() from onConfigure is not supported consistently on
         // the Android 8-era SQLite builds used by several target panels.
         setWriteAheadLoggingEnabled(true)
+        DATABASE_RESTORE_OPEN_LEASE.reconcileAndOpen(
+            establishedGuardReceipt = { record ->
+                DatabaseRestoreTransaction(databaseTarget).establishedGuardReceipt(record)
+            },
+            reconcile = { reconcileSchema(context).action == SchemaReconcileAction.RESTORED },
+            open = ::openRestoredDatabaseOwner,
+        )
+    }
+
+    /** Called only while the process-wide restore lease excludes every competing helper open. */
+    private fun openRestoredDatabaseOwner(joiningRetainedGuard: Boolean): DatabaseRestoreRecord? {
+        retainedGuardJoinPending = joiningRetainedGuard
+        restoredOpenPending = !joiningRetainedGuard
+        openedRetainedGuard = null
+        return try {
+            writableDatabase
+            openedRetainedGuard
+        } finally {
+            restoredOpenPending = false
+            retainedGuardJoinPending = false
+        }
     }
 
     data class StateRow(val entityId: String, val state: String, val friendlyName: String = "")
@@ -216,12 +241,14 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
 
     override fun onOpen(db: SQLiteDatabase) {
         super.onOpen(db)
-        val restored = lastSchemaReconcile?.action == SchemaReconcileAction.RESTORED
-        if (restored && !DatabaseRestoreTransaction(
-                appContext.getDatabasePath(DATABASE_NAME),
-            ).consumeOrdinaryRestored()
-        ) {
-            throw DatabaseRestoreHoldException("database restore receipt could not be consumed")
+        if (retainedGuardJoinPending || !restoredOpenPending) return
+        when (val receipt = DatabaseRestoreTransaction(databaseTarget).settleRestoredAfterOpen()) {
+            DatabaseRestoreOpenedReceipt.Absent,
+            DatabaseRestoreOpenedReceipt.OrdinaryConsumed -> Unit
+            is DatabaseRestoreOpenedReceipt.GuardRetained -> openedRetainedGuard = receipt.record
+            DatabaseRestoreOpenedReceipt.Hold -> {
+                throw DatabaseRestoreHoldException("database restore receipt could not be consumed")
+            }
         }
     }
 
@@ -1965,7 +1992,7 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             }
 
         // ---- Schema downgrade safety net (Tier-2). See reconcilePreOpen() below. ----
-        private val SCHEMA_RECONCILE_LOCK = Any()
+        private val DATABASE_RESTORE_OPEN_LEASE = DatabaseRestoreOpenLease()
 
         private fun retainDatabaseFailure(operation: String, failure: Throwable) {
             if (failure is SQLException) StorageHealthRuntime.recordDatabaseFailure(operation, failure)
@@ -1985,8 +2012,8 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
             private set
 
         /** Runs the authoritative pre-open decision; refusal must prevent SQLiteOpenHelper from opening. */
-        private fun reconcileSchemaAndName(context: Context): String = synchronized(SCHEMA_RECONCILE_LOCK) {
-            try {
+        private fun reconcileSchema(context: Context): SchemaReconcile {
+            return try {
                 val target = context.getDatabasePath(DATABASE_NAME)
                 val boundary = EntityCatalogSchema.DATABASE_COMPATIBILITY
                 val restore = DatabaseRestoreTransaction(target)
@@ -2010,11 +2037,11 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, reconcile
                     restoreTransaction = restore,
                 )
                 lastSchemaReconcile = retainFirstSchemaReconcile(lastSchemaReconcile, outcome)
+                outcome
             } catch (failure: Throwable) {
                 retainDatabaseFailure("database-preopen-reconcile", failure)
                 throw failure
             }
-            DATABASE_NAME
         }
 
         /**

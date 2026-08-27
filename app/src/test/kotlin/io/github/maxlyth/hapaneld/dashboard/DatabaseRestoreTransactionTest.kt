@@ -2,8 +2,13 @@ package io.github.maxlyth.hapaneld.dashboard
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -140,6 +145,332 @@ class DatabaseRestoreTransactionTest {
             assertTrue(restarted.consumeOrdinaryRestored())
             assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
         }
+
+    @Test fun `open lease keeps a concurrent reconciler away from live restored WAL`() =
+        withFiles { directory, target, staged ->
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            assertTrue(
+                DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+                    .restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored,
+            )
+            val lease = DatabaseRestoreOpenLease()
+            val firstOpened = CountDownLatch(1)
+            val releaseFirst = CountDownLatch(1)
+            val secondAttempting = CountDownLatch(1)
+            val secondEntered = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(2)
+            val firstResult = AtomicReference<DatabaseRestoreResult>()
+            val secondResult = AtomicReference<DatabaseRestoreResult>()
+            try {
+                val first = executor.submit {
+                    lease.reconcileAndOpen(
+                        establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                        reconcile = {
+                            val restored = DatabaseRestoreTransaction(
+                                target,
+                                guard = null,
+                                ownedStableSidecar = owned,
+                            ).reconcile()
+                            firstResult.set(restored)
+                            restored is DatabaseRestoreResult.Restored
+                        },
+                        open = { joiningRetainedGuard ->
+                            assertFalse(joiningRetainedGuard)
+                            File(target.path + "-wal").writeBytes(byteArrayOf())
+                            File(target.path + "-shm").writeText("live-owned-shm")
+                            firstOpened.countDown()
+                            assertTrue(releaseFirst.await(5, TimeUnit.SECONDS))
+                            assertTrue(
+                                DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+                                    .consumeOrdinaryRestored(),
+                            )
+                            null
+                        },
+                    )
+                }
+                assertTrue(firstOpened.await(5, TimeUnit.SECONDS))
+                val second = executor.submit {
+                    secondAttempting.countDown()
+                    lease.reconcileAndOpen(
+                        establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                        reconcile = {
+                            secondEntered.countDown()
+                            val result = DatabaseRestoreTransaction(
+                                target,
+                                guard = null,
+                                ownedStableSidecar = owned,
+                            ).reconcile()
+                            secondResult.set(result)
+                            result is DatabaseRestoreResult.Restored
+                        },
+                        open = { throw AssertionError("receipt-absent second owner tried a restored open") },
+                    )
+                }
+                assertTrue(secondAttempting.await(5, TimeUnit.SECONDS))
+                assertFalse(
+                    "second reconcile entered while restored WAL was live",
+                    secondEntered.await(250, TimeUnit.MILLISECONDS),
+                )
+                assertTrue(File(target.path + "-wal").isFile)
+                assertTrue(File(target.path + "-shm").isFile)
+                assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+
+                releaseFirst.countDown()
+                first.get(5, TimeUnit.SECONDS)
+                second.get(5, TimeUnit.SECONDS)
+                assertTrue(firstResult.get() is DatabaseRestoreResult.Restored)
+                assertTrue(secondResult.get() is DatabaseRestoreResult.Absent)
+                assertTrue("the later receipt-absent reconcile must not unlink a live WAL", File(target.path + "-wal").isFile)
+                assertTrue(File(target.path + "-shm").isFile)
+                assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
+            } finally {
+                releaseFirst.countDown()
+                executor.shutdownNow()
+            }
+        }
+
+    @Test fun `failed restored open poisons lease before a later owner can reconcile live sidecars`() =
+        withFiles { directory, target, staged ->
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            val transaction = DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+            assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+            val lease = DatabaseRestoreOpenLease()
+
+            val failure = assertThrows(IllegalStateException::class.java) {
+                lease.reconcileAndOpen(
+                    establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                    reconcile = { transaction.reconcile() is DatabaseRestoreResult.Restored },
+                    open = { joiningRetainedGuard ->
+                        assertFalse(joiningRetainedGuard)
+                        File(target.path + "-wal").writeBytes(byteArrayOf())
+                        File(target.path + "-shm").writeText("live-failed-open-shm")
+                        throw IllegalStateException("failed after SQLite open")
+                    },
+                )
+            }
+            assertEquals("failed after SQLite open", failure.message)
+
+            val held = assertThrows(DatabaseRestoreHoldException::class.java) {
+                lease.reconcileAndOpen(
+                    establishedGuardReceipt = { throw AssertionError("poisoned lease inspected a receipt") },
+                    reconcile = { throw AssertionError("poisoned lease re-entered destructive reconcile") },
+                    open = { throw AssertionError("poisoned lease opened SQLite") },
+                )
+            }
+            assertEquals("database restore open did not settle", held.message)
+            assertTrue(File(target.path + "-wal").isFile)
+            assertTrue(File(target.path + "-shm").isFile)
+            assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+        }
+
+    @Test fun `reentrant restored owner cannot reconcile while the first open owns live sidecars`() =
+        withFiles { directory, target, staged ->
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            val transaction = DatabaseRestoreTransaction(target, guard = null, ownedStableSidecar = owned)
+            assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+            val lease = DatabaseRestoreOpenLease()
+            lease.reconcileAndOpen(
+                establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                reconcile = {
+                    val held = assertThrows(DatabaseRestoreHoldException::class.java) {
+                        lease.reconcileAndOpen(
+                            establishedGuardReceipt = { throw AssertionError("reentrant owner inspected a receipt") },
+                            reconcile = { throw AssertionError("reentrant owner nested inside reconcile") },
+                            open = { throw AssertionError("reentrant owner opened inside reconcile") },
+                        )
+                    }
+                    assertEquals("database restore admission already in progress", held.message)
+                    transaction.reconcile() is DatabaseRestoreResult.Restored
+                },
+                open = { joiningRetainedGuard ->
+                    assertFalse(joiningRetainedGuard)
+                    File(target.path + "-wal").writeBytes(byteArrayOf())
+                    File(target.path + "-shm").writeText("live-reentrant-shm")
+                    val held = assertThrows(DatabaseRestoreHoldException::class.java) {
+                        lease.reconcileAndOpen(
+                            establishedGuardReceipt = { throw AssertionError("reentrant owner inspected a receipt") },
+                            reconcile = { throw AssertionError("reentrant owner reconciled live sidecars") },
+                            open = { throw AssertionError("reentrant owner opened SQLite") },
+                        )
+                    }
+                    assertEquals("database restore admission already in progress", held.message)
+                    assertTrue(transaction.consumeOrdinaryRestored())
+                    null
+                },
+            )
+            assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
+            assertTrue(File(target.path + "-wal").isFile)
+            assertTrue(File(target.path + "-shm").isFile)
+        }
+
+    @Test fun `retained Guard open makes a concurrent owner join without unlinking live WAL`() =
+        withFiles { directory, target, staged ->
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            assertTrue(
+                DatabaseRestoreTransaction(target, guard, ownedStableSidecar = owned)
+                    .restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored,
+            )
+            val lease = DatabaseRestoreOpenLease()
+            val firstOpened = CountDownLatch(1)
+            val releaseFirst = CountDownLatch(1)
+            val secondAttempting = CountDownLatch(1)
+            val secondJoined = CountDownLatch(1)
+            val executor = Executors.newFixedThreadPool(2)
+            try {
+                val first = executor.submit {
+                    lease.reconcileAndOpen(
+                        establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                        reconcile = {
+                            DatabaseRestoreTransaction(target, guard, ownedStableSidecar = owned)
+                                .reconcile() is DatabaseRestoreResult.Restored
+                        },
+                        open = { joiningRetainedGuard ->
+                            assertFalse(joiningRetainedGuard)
+                            File(target.path + "-wal").writeBytes(byteArrayOf())
+                            File(target.path + "-shm").writeText("live-guard-shm")
+                            firstOpened.countDown()
+                            assertTrue(releaseFirst.await(5, TimeUnit.SECONDS))
+                            val receipt = DatabaseRestoreTransaction(target, guard, ownedStableSidecar = owned)
+                                .settleRestoredAfterOpen()
+                            (receipt as DatabaseRestoreOpenedReceipt.GuardRetained).record
+                        },
+                    )
+                }
+                assertTrue(firstOpened.await(5, TimeUnit.SECONDS))
+                val second = executor.submit {
+                    secondAttempting.countDown()
+                    lease.reconcileAndOpen(
+                        establishedGuardReceipt = { record ->
+                            DatabaseRestoreTransaction(target, guard, ownedStableSidecar = owned)
+                                .establishedGuardReceipt(record)
+                        },
+                        reconcile = { throw AssertionError("retained Guard owner re-entered destructive reconcile") },
+                        open = { joiningRetainedGuard ->
+                            assertTrue(joiningRetainedGuard)
+                            assertTrue(File(target.path + "-wal").isFile)
+                            assertTrue(File(target.path + "-shm").isFile)
+                            assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+                            secondJoined.countDown()
+                            null
+                        },
+                    )
+                }
+                assertTrue(secondAttempting.await(5, TimeUnit.SECONDS))
+                assertFalse(
+                    "second Guard owner joined before the first open settled",
+                    secondJoined.await(250, TimeUnit.MILLISECONDS),
+                )
+                assertTrue(File(target.path + "-wal").isFile)
+                assertTrue(File(target.path + "-shm").isFile)
+
+                releaseFirst.countDown()
+                first.get(5, TimeUnit.SECONDS)
+                second.get(5, TimeUnit.SECONDS)
+                assertTrue(secondJoined.await(5, TimeUnit.SECONDS))
+                assertTrue(File(target.path + "-wal").isFile)
+                assertTrue(File(target.path + "-shm").isFile)
+                assertTrue("Guard receipt must remain durable", File(directory, ".ha-paneld.db.restore.v1").isFile)
+            } finally {
+                releaseFirst.countDown()
+                executor.shutdownNow()
+            }
+        }
+
+    @Test fun `established Guard lease admits terminal receipt clear but holds changed receipt`() {
+        fun establish(target: File, staged: File): Pair<DatabaseRestoreOpenLease, DatabaseRestoreTransaction> {
+            val owned: (File, Boolean) -> Boolean = { file, requireEmpty ->
+                !requireEmpty || file.length() == 0L
+            }
+            val transaction = DatabaseRestoreTransaction(target, guard, ownedStableSidecar = owned)
+            assertTrue(transaction.restore(staged, 15, 14, checkpoint = { true }) is DatabaseRestoreResult.Restored)
+            val lease = DatabaseRestoreOpenLease()
+            lease.reconcileAndOpen(
+                establishedGuardReceipt = { DatabaseRestoreEstablishedReceipt.MISMATCH },
+                reconcile = { transaction.reconcile() is DatabaseRestoreResult.Restored },
+                open = { joiningRetainedGuard ->
+                    assertFalse(joiningRetainedGuard)
+                    File(target.path + "-wal").writeBytes(byteArrayOf())
+                    File(target.path + "-shm").writeText("live-guard-shm")
+                    val receipt = transaction.settleRestoredAfterOpen()
+                    (receipt as DatabaseRestoreOpenedReceipt.GuardRetained).record
+                },
+            )
+            return lease to transaction
+        }
+
+        withFiles { directory, target, staged ->
+            val (lease, transaction) = establish(target, staged)
+            val racingClear = DatabaseRestoreTransaction(
+                target,
+                guard,
+                beforeEstablishedReceiptRead = { assertTrue(transaction.clearRestored(session)) },
+            )
+            var joined = false
+            lease.reconcileAndOpen(
+                establishedGuardReceipt = racingClear::establishedGuardReceipt,
+                reconcile = { throw AssertionError("cleared established receipt re-entered reconcile") },
+                open = { joiningRetainedGuard ->
+                    assertTrue(joiningRetainedGuard)
+                    joined = true
+                    null
+                },
+            )
+            assertTrue(joined)
+            assertFalse(File(directory, ".ha-paneld.db.restore.v1").exists())
+            assertTrue(File(target.path + "-wal").isFile)
+            assertTrue(File(target.path + "-shm").isFile)
+        }
+
+        withFiles { directory, target, staged ->
+            val (lease, transaction) = establish(target, staged)
+            val receipt = File(directory, ".ha-paneld.db.restore.v1")
+            receipt.writeText("changed-receipt")
+            assertThrows(DatabaseRestoreHoldException::class.java) {
+                lease.reconcileAndOpen(
+                    establishedGuardReceipt = transaction::establishedGuardReceipt,
+                    reconcile = { throw AssertionError("changed established receipt re-entered reconcile") },
+                    open = { throw AssertionError("changed established receipt opened") },
+                )
+            }
+            assertEquals("changed-receipt", receipt.readText())
+            assertTrue(File(target.path + "-wal").isFile)
+            assertTrue(File(target.path + "-shm").isFile)
+        }
+
+        withFiles { directory, target, staged ->
+            val (lease, transaction) = establish(target, staged)
+            val failure = assertThrows(IllegalStateException::class.java) {
+                lease.reconcileAndOpen(
+                    establishedGuardReceipt = transaction::establishedGuardReceipt,
+                    reconcile = { throw AssertionError("established Guard join re-entered reconcile") },
+                    open = { joiningRetainedGuard ->
+                        assertTrue(joiningRetainedGuard)
+                        throw IllegalStateException("failed while joining established Guard owner")
+                    },
+                )
+            }
+            assertEquals("failed while joining established Guard owner", failure.message)
+            val held = assertThrows(DatabaseRestoreHoldException::class.java) {
+                lease.reconcileAndOpen(
+                    establishedGuardReceipt = { throw AssertionError("poisoned lease inspected Guard receipt") },
+                    reconcile = { throw AssertionError("poisoned lease reconciled") },
+                    open = { throw AssertionError("poisoned lease retried Guard join") },
+                )
+            }
+            assertEquals("database restore open did not settle", held.message)
+            assertTrue(File(directory, ".ha-paneld.db.restore.v1").isFile)
+            assertTrue(File(target.path + "-wal").isFile)
+            assertTrue(File(target.path + "-shm").isFile)
+        }
+    }
 
     @Test fun `restored restart rejects journal nonempty unproved and drifted topologies`() {
         fun assertHeld(label: String, trusted: (File, Boolean) -> Boolean, mutate: (File, File, File) -> Unit) =

@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.util
 
 import io.github.maxlyth.hapaneld.persistence.CleanDatabaseProof
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -89,6 +90,72 @@ class GuardDbPreparedArmTest {
         }
     }
 
+    @Test fun `restart resumes an exact fsynced initial prepared publication`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-restart-").toFile()
+            try {
+                val expected = prepared(manifest)
+                val pending = directory.resolve(".guard-db-prepared-arm.v1.pending")
+                writeFsynced(pending, encodeGuardDbPreparedArm(expected))
+
+                val restarted = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+                assertEquals(expected, (restarted.load() as GuardDbPreparedArmLoad.Valid).prepared)
+                assertFalse(pending.exists())
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun `pending prepared overwrite is fail closed and preserved`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-pending-mismatch-").toFile()
+            try {
+                val store = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+                val first = prepared(manifest)
+                assertTrue(store.write(first))
+                val pending = directory.resolve(".guard-db-prepared-arm.v1.pending")
+                writeFsynced(pending, encodeGuardDbPreparedArm(first.copy(session = "9".repeat(64))))
+
+                assertTrue(store.load() is GuardDbPreparedArmLoad.Corrupt)
+                assertTrue(pending.isFile)
+                assertFalse(store.write(first))
+                assertTrue(pending.isFile)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    @Test fun `malformed pending prepared proof is fail closed and preserved`() {
+        withManifest { manifest ->
+            val directory = Files.createTempDirectory("guard-prepared-pending-malformed-").toFile()
+            try {
+                val pending = directory.resolve(".guard-db-prepared-arm.v1.pending")
+                writeFsynced(pending, "malformed\n".toByteArray())
+                val store = GuardDbPreparedArmStore(
+                    directory,
+                    syncDirectory = { true },
+                    validateFile = { it.isFile },
+                )
+
+                assertTrue(store.load() is GuardDbPreparedArmLoad.Corrupt)
+                assertFalse(store.write(prepared(manifest)))
+                assertTrue(pending.isFile)
+            } finally {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
     @Test fun `foreign prepared pending entry is never deleted or followed`() {
         withManifest { manifest ->
             val directory = Files.createTempDirectory("guard-prepared-pending-").toFile()
@@ -103,7 +170,8 @@ class GuardDbPreparedArmTest {
 
                 assertFalse(store.write(prepared(manifest)))
                 assertTrue(Files.isSymbolicLink(pending))
-                assertTrue(store.load() is GuardDbPreparedArmLoad.Absent)
+                assertTrue(store.load() is GuardDbPreparedArmLoad.Corrupt)
+                assertTrue(Files.isSymbolicLink(pending))
             } finally {
                 directory.deleteRecursively()
             }
@@ -121,6 +189,13 @@ class GuardDbPreparedArmTest {
             settingsSemanticSha256 = "e".repeat(64),
         ),
     )
+
+    private fun writeFsynced(file: File, bytes: ByteArray) {
+        FileOutputStream(file).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+    }
 
     private inline fun withManifest(block: (GuardDbArmManifest) -> Unit) {
         val aFile = File.createTempFile("guard-prepared-a-", ".apk")

@@ -6,6 +6,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.control.Su
 import java.io.File
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
@@ -35,8 +36,17 @@ internal object BundledHelperInstaller {
         FAILED,
     }
 
+    /** Resume only an exact current-build ephemeral candidate; never stages or starts a replacement. */
+    @Synchronized
+    fun resumeRetainedCurrent(): Boolean = resumeRetainedCurrentOutcome() == true
+
     @Synchronized
     fun ensureCurrent(context: Context): Result {
+        when (resumeRetainedCurrentOutcome()) {
+            true -> return Result.INSTALLED
+            false -> return Result.FAILED
+            null -> Unit
+        }
         if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) return Result.BLOCKED_ACTIVE
         val companionSupported = HelperClient.supportsCompanionData()
         val bundledBuildMatches = HelperClient.matchesBundledHelper()
@@ -46,11 +56,34 @@ internal object BundledHelperInstaller {
             companionSupported = companionSupported,
             guardSupported = guardSupported,
             rootObserved = { Su.available() },
-        )?.let { return it }
-        val replacementMode = bundledHelperReplacementMode(GuardDbMaintenance.client.statusProbe())
-            ?: return Result.BLOCKED_ACTIVE
+        )?.let {
+            if (it == Result.ALREADY_CURRENT && Su.available()) {
+                currentBundledLegacyTakeoverRecordResult(BuildConfig.HELPER_BUILD_ID)?.let { result ->
+                    Log.w(TAG, "current helper has legacy takeover custody requiring $result")
+                    return result
+                }
+            }
+            return it
+        }
         val stagedBuildId = BuildConfig.HELPER_BUILD_ID
             .takeIf(GuardDbMaintenanceProtocol::validSha256) ?: return Result.FAILED
+        val statusProbe = GuardDbMaintenance.client.statusProbe()
+        val replacementMode = bundledHelperReplacementMode(statusProbe) ?: return Result.BLOCKED_ACTIVE
+        val priorRecordReply = Su.runOutputLong(
+            bundledLegacyTakeoverRecordReadCommand(),
+            INSTALL_TIMEOUT_MS,
+        )
+        if (priorRecordReply != null) {
+            val priorRecord = parseBundledLegacyTakeoverRecord(priorRecordReply) ?: return Result.FAILED
+            when (bundledLegacyPriorRecordDisposition(stagedBuildId, priorRecord)) {
+                BundledLegacyPriorRecordDisposition.REPROVISION -> {
+                    // The old boot helper plus another app build's retained live bytes need an exact
+                    // normalization transaction. External provisioning owns that cross-build case.
+                    return Result.REPROVISION_REQUIRED
+                }
+                BundledLegacyPriorRecordDisposition.KEEP -> Unit
+            }
+        }
         val incumbentBuildId = HelperClient.installedBuildId()
             ?.takeIf { it != stagedBuildId } ?: return Result.FAILED
         val asset = helperAssetName(Build.SUPPORTED_ABIS.asIterable()) ?: return Result.SKIPPED
@@ -95,7 +128,16 @@ internal object BundledHelperInstaller {
                 }
             }
             when (settlement) {
-                BundledHelperReplacementSettlement.INSTALLED -> Result.INSTALLED
+                BundledHelperReplacementSettlement.INSTALLED -> {
+                    if (replacementMode == BundledHelperReplacementMode.GUARDED_RETIRE &&
+                        !cleanupAnyBundledLegacyTakeoverRecord()
+                    ) {
+                        Log.w(TAG, "guarded helper installed but stale takeover authority cleanup failed")
+                        Result.FAILED
+                    } else {
+                        Result.INSTALLED
+                    }
+                }
                 BundledHelperReplacementSettlement.BLOCKED_ACTIVE -> Result.BLOCKED_ACTIVE
                 BundledHelperReplacementSettlement.OLD_SAFE,
                 BundledHelperReplacementSettlement.NOT_SUBMITTED,
@@ -108,6 +150,67 @@ internal object BundledHelperInstaller {
             staged.delete()
         }
     }
+
+    private fun resumeRetainedCurrentOutcome(): Boolean? {
+        val stagedBuildId = BuildConfig.HELPER_BUILD_ID
+            .takeIf(GuardDbMaintenanceProtocol::validSha256) ?: return false
+        val statusProbe = GuardDbMaintenance.client.statusProbe()
+        val retainedLegacy = if (statusProbe == GuardDbMaintenanceClient.StatusProbe.Unreachable ||
+            statusProbe == GuardDbMaintenanceClient.StatusProbe.Unsupported
+        ) {
+            Su.runOutputLong(bundledLegacyTakeoverRecordReadCommand(), INSTALL_TIMEOUT_MS)
+                ?.let(::parseBundledLegacyTakeoverRecord)
+                ?.takeIf { it.stagedBuildId == stagedBuildId }
+        } else {
+            null
+        }
+        if (!bundledLegacyRecoveryAllowed(statusProbe, retainedLegacy)) return null
+        val record = requireNotNull(retainedLegacy)
+        val resumed = Su.runSingleAttempt(
+            bundledLegacyHelperResumeCommand(
+                record.candidateSha256,
+                record.stagedBuildId,
+                record.incumbentBuildId,
+            ),
+            LEGACY_TAKEOVER_TIMEOUT_MS,
+        )
+        if (!resumed) return false
+        return GuardDbMaintenance.client.statusProbe() is GuardDbMaintenanceClient.StatusProbe.Valid
+    }
+
+    /** A different app build may not discard the record that makes the live helper reboot-recoverable. */
+    private fun currentBundledLegacyTakeoverRecordResult(currentBuildId: String): Result? {
+        val reply = Su.runOutputLong(bundledLegacyTakeoverRecordReadCommand(), INSTALL_TIMEOUT_MS)
+            ?: return if (verifyBundledLegacyTakeoverRecordAbsent()) null else Result.FAILED
+        val record = parseBundledLegacyTakeoverRecord(reply) ?: return Result.FAILED
+        if (record.stagedBuildId != currentBuildId) return Result.REPROVISION_REQUIRED
+        return if (Su.runLong(
+            bundledLegacyTakeoverRecordCleanupCommand(
+                record.recordSha256,
+                record.recordBytes,
+                preserveIfOldAuthorityExact = record,
+            ),
+            INSTALL_TIMEOUT_MS,
+        )) null else Result.FAILED
+    }
+
+    private fun cleanupAnyBundledLegacyTakeoverRecord(): Boolean {
+        val reply = Su.runOutputLong(bundledLegacyTakeoverRecordReadCommand(), INSTALL_TIMEOUT_MS)
+            ?: return verifyBundledLegacyTakeoverRecordAbsent()
+        val record = parseBundledLegacyTakeoverRecord(reply) ?: return false
+        return cleanupBundledLegacyTakeoverRecord(record)
+    }
+
+    private fun cleanupBundledLegacyTakeoverRecord(record: BundledLegacyTakeoverRecord): Boolean =
+        Su.runLong(
+            bundledLegacyTakeoverRecordCleanupCommand(record.recordSha256, record.recordBytes),
+            INSTALL_TIMEOUT_MS,
+        )
+
+    private fun verifyBundledLegacyTakeoverRecordAbsent(): Boolean = Su.runLong(
+        bundledLegacyTakeoverRecordCleanupCommand(NO_RECORD_SHA256, 0),
+        INSTALL_TIMEOUT_MS,
+    )
 
     private const val TAG = "ha-paneld/helper-migrate"
     private const val INSTALL_TIMEOUT_MS = 30_000L
@@ -154,9 +257,210 @@ internal fun helperAssetName(abis: Iterable<String>): String? = when {
     else -> null
 }
 
+internal data class BundledLegacyTakeoverRecord(
+    val topology: String,
+    val oldSha256: String,
+    val oldBytes: Long,
+    val registrationSha256: String,
+    val registrationBytes: Long,
+    val registrationMode: Int,
+    val incumbentBuildId: String,
+    val stagedBuildId: String,
+    val candidateSha256: String,
+    val recordSha256: String,
+    val recordBytes: Long,
+)
+
+internal fun bundledLegacyRecoveryAllowed(
+    status: GuardDbMaintenanceClient.StatusProbe,
+    record: BundledLegacyTakeoverRecord?,
+): Boolean = status in setOf(
+    GuardDbMaintenanceClient.StatusProbe.Unreachable,
+    GuardDbMaintenanceClient.StatusProbe.Unsupported,
+) && record != null
+
+internal fun parseBundledLegacyTakeoverRecord(reply: String): BundledLegacyTakeoverRecord? {
+    if ('\r' in reply || reply.toByteArray(Charsets.UTF_8).size !in 1..1024) return null
+    val line = if (reply.endsWith('\n')) reply.dropLast(1) else reply
+    if ('\n' in line) return null
+    val fields = line.split(' ')
+    if (fields.size != 13 || fields[0] != "OK" || fields[1] != "LEGACYTAKEOVER" || fields[2] != "1") {
+        return null
+    }
+    if (fields[3] !in setOf("system", "systemless", "hybrid") ||
+        fields[5].toLongOrNull()?.let { it in 1..MAX_STAGED_HELPER_BYTES } != true ||
+        fields[7].toLongOrNull()?.let { it in 1..MAX_STAGED_HELPER_BYTES } != true ||
+        fields[8] !in setOf("644", "755") ||
+        fields[12].toLongOrNull()?.let { it in 1..MAX_STAGED_HELPER_BYTES } != true ||
+        listOf(fields[4], fields[6], fields[9], fields[10], fields[11]).any {
+            !GuardDbMaintenanceProtocol.validSha256(it)
+        }
+    ) {
+        return null
+    }
+    val recordBytes = reply.toByteArray(Charsets.UTF_8)
+    val recordSha256 = MessageDigest.getInstance("SHA-256").digest(recordBytes)
+        .joinToString("") { byte -> "%02x".format(byte) }
+    return BundledLegacyTakeoverRecord(
+        topology = fields[3],
+        oldSha256 = fields[4],
+        oldBytes = fields[5].toLong(),
+        registrationSha256 = fields[6],
+        registrationBytes = fields[7].toLong(),
+        registrationMode = fields[8].toInt(),
+        incumbentBuildId = fields[9],
+        stagedBuildId = fields[10],
+        candidateSha256 = fields[11],
+        recordSha256 = recordSha256,
+        recordBytes = recordBytes.size.toLong(),
+    )
+}
+
+internal fun bundledLegacyTakeoverRecordReadCommand(filesystemRoot: String = ""): String {
+    require(filesystemRoot.isEmpty() ||
+        (filesystemRoot.startsWith("/") && !filesystemRoot.endsWith("/") &&
+            SAFE_ABSOLUTE_PATH.matches(filesystemRoot) &&
+            filesystemRoot.split('/').none { it == ".." }))
+    return """
+    record=$filesystemRoot/data/local/.hapaneld-helper.legacy-takeover
+    [ -f "${'$'}record" ] && [ ! -L "${'$'}record" ] &&
+    meta=${'$'}(stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null) &&
+    case "${'$'}meta" in 0:0:600:1:*) ;; *) false ;; esac &&
+    bytes=${'$'}{meta##*:} && [ "${'$'}bytes" -ge 1 ] && [ "${'$'}bytes" -le 1024 ] &&
+    dd if="${'$'}record" bs=1025 count=1 2>/dev/null
+""".trimIndent()
+}
+
+internal fun bundledLegacyTakeoverOldAuthorityExactCommand(
+    record: BundledLegacyTakeoverRecord,
+    filesystemRoot: String = "",
+): String {
+    require(filesystemRoot.isEmpty() ||
+        (filesystemRoot.startsWith("/") && !filesystemRoot.endsWith("/") &&
+            SAFE_ABSOLUTE_PATH.matches(filesystemRoot) &&
+            filesystemRoot.split('/').none { it == ".." }))
+    val (binary, registration, foreign) = when (record.topology) {
+        "system" -> Triple(
+            "system/bin/hapaneld-helper",
+            "system/etc/init/hapaneld-helper.rc",
+            listOf(
+                "data/adb/hapaneld/hapaneld-helper",
+                "data/adb/service.d/hapaneld-helper.sh",
+                "vendor/etc/init/hapaneld-helper.rc",
+            ),
+        )
+        "systemless" -> Triple(
+            "data/adb/hapaneld/hapaneld-helper",
+            "data/adb/service.d/hapaneld-helper.sh",
+            listOf(
+                "system/bin/hapaneld-helper",
+                "system/etc/init/hapaneld-helper.rc",
+                "vendor/etc/init/hapaneld-helper.rc",
+            ),
+        )
+        "hybrid" -> Triple(
+            "data/adb/hapaneld/hapaneld-helper",
+            "vendor/etc/init/hapaneld-helper.rc",
+            listOf(
+                "system/bin/hapaneld-helper",
+                "system/etc/init/hapaneld-helper.rc",
+                "data/adb/service.d/hapaneld-helper.sh",
+            ),
+        )
+        else -> error("invalid parsed takeover topology")
+    }
+    val foreignChecks = foreign.joinToString(" &&\n  ") {
+        "[ ! -e \"\$root/$it\" ] && [ ! -L \"\$root/$it\" ]"
+    }
+    return """
+        root=$filesystemRoot
+        binary=${'$'}root/$binary
+        registration=${'$'}root/$registration
+        [ -f "${'$'}binary" ] && [ ! -L "${'$'}binary" ] &&
+        [ -f "${'$'}registration" ] && [ ! -L "${'$'}registration" ] &&
+        binary_meta=${'$'}(stat -c '%u:%g:%a:%h:%s' "${'$'}binary" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${'$'}binary" 2>/dev/null) &&
+        [ "${'$'}binary_meta" = "0:0:755:1:${record.oldBytes}" ] &&
+        binary_hash=${'$'}(sha256sum "${'$'}binary" 2>/dev/null || toybox sha256sum "${'$'}binary" 2>/dev/null) &&
+        [ "${'$'}{binary_hash%% *}" = "${record.oldSha256}" ] &&
+        registration_meta=${'$'}(stat -c '%u:%g:%a:%h:%s' "${'$'}registration" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${'$'}registration" 2>/dev/null) &&
+        [ "${'$'}registration_meta" = "0:0:${record.registrationMode}:1:${record.registrationBytes}" ] &&
+        registration_hash=${'$'}(sha256sum "${'$'}registration" 2>/dev/null || toybox sha256sum "${'$'}registration" 2>/dev/null) &&
+        [ "${'$'}{registration_hash%% *}" = "${record.registrationSha256}" ] &&
+        $foreignChecks &&
+        [ ! -e "${'$'}root/system/bin/hapaneld-ledd" ] && [ ! -L "${'$'}root/system/bin/hapaneld-ledd" ] &&
+        [ ! -e "${'$'}root/system/etc/init/hapaneld-ledd.rc" ] && [ ! -L "${'$'}root/system/etc/init/hapaneld-ledd.rc" ]
+    """.trimIndent()
+}
+
+internal fun bundledLegacyTakeoverRecordCleanupCommand(
+    expectedRecordSha256: String,
+    expectedRecordBytes: Long,
+    filesystemRoot: String = "",
+    preserveIfOldAuthorityExact: BundledLegacyTakeoverRecord? = null,
+): String {
+    require(GuardDbMaintenanceProtocol.validSha256(expectedRecordSha256))
+    require(expectedRecordBytes in 0..1024)
+    require(filesystemRoot.isEmpty() ||
+        (filesystemRoot.startsWith("/") && !filesystemRoot.endsWith("/") &&
+            SAFE_ABSOLUTE_PATH.matches(filesystemRoot) &&
+            filesystemRoot.split('/').none { it == ".." }))
+    val preserveExact = preserveIfOldAuthorityExact?.let { record ->
+        """
+        if (
+        ${bundledLegacyTakeoverOldAuthorityExactCommand(record, filesystemRoot).prependIndent("  ")}
+        ); then exit 0; fi
+        """.trimIndent()
+    }.orEmpty()
+    return """
+        root=$filesystemRoot
+        lock=${'$'}root/dev/.hapaneld-helper-transaction.lock
+        if ! mkdir "${'$'}lock" 2>/dev/null; then
+          holder=${'$'}(cat "${'$'}lock/pid" 2>/dev/null || true)
+          case "${'$'}holder" in ''|*[!0-9]*) exit 75 ;; *) [ ! -d "/proc/${'$'}holder" ] || exit 75 ;; esac
+          rm -rf "${'$'}lock" 2>/dev/null || exit 75
+          mkdir "${'$'}lock" 2>/dev/null || exit 75
+        fi
+        echo ${'$'}${'$'} > "${'$'}lock/pid" || { rm -rf "${'$'}lock"; exit 75; }
+        cleanup_record_lock() { rm -rf "${'$'}lock"; }
+        trap cleanup_record_lock 0
+        trap 'cleanup_record_lock; trap - 0; exit 74' 1 2 3 15
+        record=${'$'}root/data/local/.hapaneld-helper.legacy-takeover
+        if [ ! -e "${'$'}record" ] && [ ! -L "${'$'}record" ]; then
+          [ $expectedRecordBytes -eq 0 ] || exit 1
+          exit 0
+        fi
+        [ $expectedRecordBytes -ge 1 ] || exit 1
+        [ -f "${'$'}record" ] && [ ! -L "${'$'}record" ] || exit 1
+        meta=${'$'}(stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null) || exit 1
+        [ "${'$'}meta" = "0:0:600:1:$expectedRecordBytes" ] || exit 1
+        record_hash=${'$'}(sha256sum "${'$'}record" 2>/dev/null || toybox sha256sum "${'$'}record" 2>/dev/null) || exit 1
+        [ "${'$'}{record_hash%% *}" = '$expectedRecordSha256' ] || exit 1
+        $preserveExact
+        # Rebind pathname metadata and bytes immediately before unlink; the shared lock excludes every
+        # helper transaction writer, while the exact digest prevents a same-target foreign replacement.
+        meta=${'$'}(stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${'$'}record" 2>/dev/null) || exit 1
+        [ "${'$'}meta" = "0:0:600:1:$expectedRecordBytes" ] || exit 1
+        record_hash=${'$'}(sha256sum "${'$'}record" 2>/dev/null || toybox sha256sum "${'$'}record" 2>/dev/null) || exit 1
+        [ "${'$'}{record_hash%% *}" = '$expectedRecordSha256' ] || exit 1
+        rm -f "${'$'}record" || exit 1
+        sync || exit 1
+    """.trimIndent()
+}
+
 internal enum class BundledHelperReplacementMode {
     GUARDED_RETIRE,
     RELEASED_LEGACY_TAKEOVER,
+}
+
+internal enum class BundledLegacyPriorRecordDisposition { KEEP, REPROVISION }
+
+internal fun bundledLegacyPriorRecordDisposition(
+    currentBuildId: String,
+    record: BundledLegacyTakeoverRecord,
+): BundledLegacyPriorRecordDisposition = if (record.stagedBuildId == currentBuildId) {
+    BundledLegacyPriorRecordDisposition.KEEP
+} else {
+    BundledLegacyPriorRecordDisposition.REPROVISION
 }
 
 /**
@@ -181,58 +485,146 @@ internal fun bundledHelperReplacementMode(
 }
 
 /** Root stages one fixed candidate; replacement happens only through the selected exact authority. */
-internal fun bundledHelperStageCommand(expectedSha256: String): String {
+internal fun bundledHelperStageCommand(
+    expectedSha256: String,
+    filesystemRoot: String = "",
+): String {
     require(expectedSha256.matches(Regex("[0-9a-f]{64}")))
+    require(filesystemRoot.isEmpty() ||
+        (filesystemRoot.startsWith("/") && !filesystemRoot.endsWith("/") &&
+            SAFE_ABSOLUTE_PATH.matches(filesystemRoot) &&
+            filesystemRoot.split('/').none { it == ".." }))
     val dollar = '$'
     return """
-        [ -d /data/local ] && [ ! -L /data/local ] &&
-        rm -f /data/local/.hapaneld-helper.new &&
-        cat > /data/local/.hapaneld-helper.new &&
-        [ -f /data/local/.hapaneld-helper.new ] && [ ! -L /data/local/.hapaneld-helper.new ] &&
-        actual=${dollar}(sha256sum /data/local/.hapaneld-helper.new 2>/dev/null || toybox sha256sum /data/local/.hapaneld-helper.new 2>/dev/null) &&
-        actual=${dollar}{actual%% *} &&
-        [ "${dollar}actual" = "$expectedSha256" ] &&
-        chown 0:0 /data/local/.hapaneld-helper.new &&
-        chmod 700 /data/local/.hapaneld-helper.new &&
-        meta=${dollar}(stat -c '%u:%g:%a:%h:%s' /data/local/.hapaneld-helper.new 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' /data/local/.hapaneld-helper.new 2>/dev/null) &&
-        case "${dollar}meta" in 0:0:700:1:*) ;; *) false ;; esac &&
-        bytes=${dollar}{meta##*:} &&
-        [ "${dollar}bytes" -ge 1 ] && [ "${dollar}bytes" -le $MAX_STAGED_HELPER_BYTES ] &&
+        root=$filesystemRoot
+        data_local=${dollar}root/data/local
+        lock=${dollar}root/dev/.hapaneld-helper-transaction.lock
+        stage=${dollar}data_local/.hapaneld-helper.new
+        upload=${dollar}data_local/.hapaneld-helper.app-stage-$expectedSha256
+        if ! mkdir "${dollar}lock" 2>/dev/null; then
+          holder=${dollar}(cat "${dollar}lock/pid" 2>/dev/null || true)
+          case "${dollar}holder" in ''|*[!0-9]*) exit 75 ;; *) [ ! -d "/proc/${dollar}holder" ] || exit 75 ;; esac
+          rm -rf "${dollar}lock" 2>/dev/null || exit 75
+          mkdir "${dollar}lock" 2>/dev/null || exit 75
+        fi
+        echo ${dollar}${dollar} > "${dollar}lock/pid" || { rm -rf "${dollar}lock"; exit 75; }
+        cleanup_stage_lock() { rm -f "${dollar}upload"; rm -rf "${dollar}lock"; }
+        trap cleanup_stage_lock 0
+        trap 'cleanup_stage_lock; trap - 0; exit 74' 1 2 3 15
+        [ -d "${dollar}data_local" ] && [ ! -L "${dollar}data_local" ] || exit 1
+        other_authority_absent() {
+          for authority in \
+            "${dollar}root/data/local/.hapaneld-guard-db/replacement.v1" \
+            "${dollar}root/data/local/.hapaneld-guard-db/.replacement.v1.tmp" \
+            "${dollar}root/data/local/.hapaneld-helper.legacy-takeover" \
+            "${dollar}root/data/local/.hapaneld-helper.previous" \
+            "${dollar}root/data/local/.hapaneld-helper.previous.tmp" \
+            "${dollar}root/system/bin/.hapaneld-helper-upgrade" \
+            "${dollar}root/system/bin/.hapaneld-helper-manual-upgrade" \
+            "${dollar}root/data/adb/hapaneld/.helper-upgrade.marker" \
+            "${dollar}root/data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+            "${dollar}root/data/adb/hapaneld/.helper-manual-upgrade.marker"; do
+            [ ! -e "${dollar}authority" ] && [ ! -L "${dollar}authority" ] || return 1
+          done
+        }
+        record_tmp=${dollar}data_local/.hapaneld-helper.legacy-takeover.tmp
+        other_authority_absent || exit 75
+        if [ -e "${dollar}record_tmp" ] || [ -L "${dollar}record_tmp" ]; then
+          [ -f "${dollar}record_tmp" ] && [ ! -L "${dollar}record_tmp" ] || exit 75
+          record_tmp_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}record_tmp" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}record_tmp" 2>/dev/null) || exit 75
+          case "${dollar}record_tmp_meta" in 0:0:600:1:*) ;; *) exit 75 ;; esac
+          record_tmp_bytes=${dollar}{record_tmp_meta##*:}
+          [ "${dollar}record_tmp_bytes" -le 1024 ] || exit 75
+          rm -f "${dollar}record_tmp" || exit 75
+          sync || exit 75
+        fi
+        authority_absent() { other_authority_absent && [ ! -e "${dollar}record_tmp" ] && [ ! -L "${dollar}record_tmp" ]; }
+        authority_absent || exit 75
+        if [ -e "${dollar}upload" ] || [ -L "${dollar}upload" ]; then
+          [ -f "${dollar}upload" ] && [ ! -L "${dollar}upload" ] || exit 1
+          upload_meta=${dollar}(stat -c '%u:%g:%h:%s' "${dollar}upload" 2>/dev/null || toybox stat -c '%u:%g:%h:%s' "${dollar}upload" 2>/dev/null) || exit 1
+          case "${dollar}upload_meta" in 0:0:1:*) ;; *) exit 1 ;; esac
+          rm -f "${dollar}upload" || exit 1
+        fi
+        umask 077
+        cat > "${dollar}upload" || exit 1
+        [ -f "${dollar}upload" ] && [ ! -L "${dollar}upload" ] || exit 1
+        actual=${dollar}(sha256sum "${dollar}upload" 2>/dev/null || toybox sha256sum "${dollar}upload" 2>/dev/null) || exit 1
+        [ "${dollar}{actual%% *}" = "$expectedSha256" ] || exit 1
+        chown 0:0 "${dollar}upload" && chmod 700 "${dollar}upload" || exit 1
+        meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}upload" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}upload" 2>/dev/null) || exit 1
+        case "${dollar}meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
+        bytes=${dollar}{meta##*:}
+        [ "${dollar}bytes" -ge 1 ] && [ "${dollar}bytes" -le $MAX_STAGED_HELPER_BYTES ] || exit 1
+        # Rebind the authority namespace at the last cut before replacing an unowned fixed-stage
+        # orphan. Every supported writer shares this lock, and the rebind also fails closed on
+        # unsupported or manually published authority.
+        authority_absent || exit 75
+        if [ -e "${dollar}stage" ] || [ -L "${dollar}stage" ]; then
+          [ -f "${dollar}stage" ] && [ ! -L "${dollar}stage" ] || exit 1
+        fi
+        mv -f "${dollar}upload" "${dollar}stage" || exit 1
+        sync || exit 1
+        meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null) || exit 1
+        [ "${dollar}meta" = "0:0:700:1:${dollar}bytes" ] || exit 1
+        actual=${dollar}(sha256sum "${dollar}stage" 2>/dev/null || toybox sha256sum "${dollar}stage" 2>/dev/null) || exit 1
+        [ "${dollar}{actual%% *}" = "$expectedSha256" ] || exit 1
         echo STAGED_OK
     """.trimIndent()
 }
 
 /**
- * Released helpers predate GUARDRETIRE, so the new candidate owns this narrowly-scoped takeover.
- * It first proves the Guard namespace empty using its native implementation, then retains and verifies
- * the incumbent before atomically making the already authenticated candidate live. The new supervisor
- * retires only helper processes whose executable inode differs from its own. Success requires the live
- * daemon's exact bytes/build, autonomous/supervised/terminal capabilities and EMPTY Guard status; a
- * failed candidate is replaced by the exact retained incumbent and that daemon is re-verified.
+ * Released helpers predate GUARDRETIRE, so a direct-su app may perform one same-session takeover.
+ * The released binary and its exact boot registration remain byte-for-byte untouched: provisioning is
+ * still the durable installer and a reboot therefore restores the released helper. Under the shared
+ * helper lock, the candidate is published only at /data/local, supervises its own worker, and retires
+ * only a different executable inode. Failure or interruption terminates that exact candidate lineage,
+ * returns its authenticated bytes to staging, and relaunches/verifies the untouched incumbent. A
+ * bounded root-owned authority record remains for the lifetime of this ephemeral takeover so a later
+ * app process can recover a dead supervisor. A different bundled build ignores the record; durable
+ * provisioning supersedes its recorded topology and leaves the now-inert record unable to authorize a
+ * mutation because the shell rebinds every recorded byte/hash/path before publication.
  */
 internal fun bundledLegacyHelperTakeoverCommand(
     expectedSha256: String,
     stagedBuildId: String,
     incumbentBuildId: String,
-    dataLocal: String = "/data/local",
-    lockPath: String = "/dev/.hapaneld-helper-transaction.lock",
+    filesystemRoot: String = "",
     polls: Int = LEGACY_TAKEOVER_POLLS,
+    retainedResumeOnly: Boolean = false,
 ): String {
     require(GuardDbMaintenanceProtocol.validSha256(expectedSha256))
     require(GuardDbMaintenanceProtocol.validSha256(stagedBuildId))
     require(GuardDbMaintenanceProtocol.validSha256(incumbentBuildId))
     require(stagedBuildId != incumbentBuildId)
-    require(dataLocal.startsWith("/") && SAFE_ABSOLUTE_PATH.matches(dataLocal) &&
-        dataLocal.split('/').none { it == ".." })
-    require(lockPath.startsWith("/") && SAFE_ABSOLUTE_PATH.matches(lockPath) &&
-        lockPath.split('/').none { it == ".." })
+    require(filesystemRoot.isEmpty() ||
+        (filesystemRoot.startsWith("/") && !filesystemRoot.endsWith("/") &&
+            SAFE_ABSOLUTE_PATH.matches(filesystemRoot) &&
+            filesystemRoot.split('/').none { it == ".." }))
     require(polls in 1..LEGACY_TAKEOVER_POLLS)
     val dollar = '$'
     val expectedCapabilities =
         "${GuardDbMaintenanceProtocol.CAPS_REPLY} AUTONOMOUS SUPERVISED TERMINAL_RETIRE"
     val expectedStatus = "OK GUARDSTATUS 0 EMPTY NONE NONE NONE NONE 0 0 0 NONE NONE 0 0"
+    val resumeAdmission = if (retainedResumeOnly) "exit 1" else ""
+    val initialReplacementProof = if (retainedResumeOnly) {
+        "exit 1"
+    } else {
+        """
+          exact_file "${dollar}stage" "$expectedSha256" 700 "${dollar}candidate_bytes" &&
+            [ "${dollar}("${dollar}stage" --replacement-safe 2>/dev/null)" = REPLACE_SAFE ] &&
+            [ "${dollar}("${dollar}old_bin" --request BUILDID 2>/dev/null)" = "BUILDID $incumbentBuildId" ] || exit 1
+        """.trimIndent()
+    }
+    val acceptedStatus = if (retainedResumeOnly) {
+        "[ -n \"${dollar}status\" ]"
+    } else {
+        "[ \"${dollar}status\" = \"$expectedStatus\" ]"
+    }
     return """
-        lock=$lockPath
+        root=$filesystemRoot
+        data_local=${dollar}root/data/local
+        lock=${dollar}root/dev/.hapaneld-helper-transaction.lock
         if ! mkdir "${dollar}lock" 2>/dev/null; then
           holder=${dollar}(cat "${dollar}lock/pid" 2>/dev/null || true)
           case "${dollar}holder" in
@@ -243,56 +635,220 @@ internal fun bundledLegacyHelperTakeoverCommand(
           mkdir "${dollar}lock" 2>/dev/null || exit 75
         fi
         echo ${dollar}${dollar} > "${dollar}lock/pid" || { rm -rf "${dollar}lock"; exit 75; }
-        cleanup_helper_lock() { rm -rf "$lockPath"; }
-        trap cleanup_helper_lock 0 1 2 3 15
+        cleanup_helper_lock() { rm -rf "${dollar}lock"; }
+        boot_service_stopped=0
+        on_takeover_signal() {
+          trap - 1 2 3 15
+          rollback_candidate >/dev/null 2>&1 || true
+          cleanup_helper_lock
+          trap - 0
+          exit 74
+        }
+        trap cleanup_helper_lock 0
+        trap on_takeover_signal 1 2 3 15
 
-        [ -d "$dataLocal" ] && [ ! -L "$dataLocal" ] || exit 1
-        stage=$dataLocal/.hapaneld-helper.new
-        live=$dataLocal/hapaneld-helper
-        previous=$dataLocal/.hapaneld-helper.previous
-        previous_tmp=$dataLocal/.hapaneld-helper.previous.tmp
-        [ -f "${dollar}stage" ] && [ ! -L "${dollar}stage" ] &&
-        [ -f "${dollar}live" ] && [ ! -L "${dollar}live" ] &&
-        [ ! -e "${dollar}previous" ] && [ ! -L "${dollar}previous" ] &&
-        [ ! -e "${dollar}previous_tmp" ] && [ ! -L "${dollar}previous_tmp" ] || exit 1
-        stage_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}stage" 2>/dev/null) || exit 1
-        live_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null) || exit 1
-        case "${dollar}stage_meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
-        case "${dollar}live_meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
-        stage_bytes=${dollar}{stage_meta##*:}
-        live_bytes=${dollar}{live_meta##*:}
-        [ "${dollar}stage_bytes" -ge 1 ] && [ "${dollar}stage_bytes" -le $MAX_STAGED_HELPER_BYTES ] &&
-        [ "${dollar}live_bytes" -ge 1 ] && [ "${dollar}live_bytes" -le $MAX_STAGED_HELPER_BYTES ] || exit 1
-        stage_sha=${dollar}(sha256sum "${dollar}stage" 2>/dev/null || toybox sha256sum "${dollar}stage" 2>/dev/null) || exit 1
-        stage_sha=${dollar}{stage_sha%% *}
-        [ "${dollar}stage_sha" = "$expectedSha256" ] || exit 1
-        live_sha=${dollar}(sha256sum "${dollar}live" 2>/dev/null || toybox sha256sum "${dollar}live" 2>/dev/null) || exit 1
-        live_sha=${dollar}{live_sha%% *}
-        [ "${dollar}live_sha" != "$expectedSha256" ] || exit 1
-        [ "${dollar}("${dollar}live" --request BUILDID 2>/dev/null)" = "BUILDID $incumbentBuildId" ] || exit 1
-        [ "${dollar}("${dollar}stage" --replacement-safe 2>/dev/null)" = REPLACE_SAFE ] || exit 1
+        [ -d "${dollar}data_local" ] && [ ! -L "${dollar}data_local" ] || exit 1
+        stage=${dollar}data_local/.hapaneld-helper.new
+        live=${dollar}data_local/hapaneld-helper
+        record=${dollar}data_local/.hapaneld-helper.legacy-takeover
+        record_tmp=${dollar}data_local/.hapaneld-helper.legacy-takeover.tmp
+        system_bin=${dollar}root/system/bin/hapaneld-helper
+        data_bin=${dollar}root/data/adb/hapaneld/hapaneld-helper
+        system_registration=${dollar}root/system/etc/init/hapaneld-helper.rc
+        vendor_registration=${dollar}root/vendor/etc/init/hapaneld-helper.rc
+        service_registration=${dollar}root/data/adb/service.d/hapaneld-helper.sh
+        legacy_bin=${dollar}root/system/bin/hapaneld-ledd
+        legacy_registration=${dollar}root/system/etc/init/hapaneld-ledd.rc
 
-        if ! cp "${dollar}live" "${dollar}previous_tmp" 2>/dev/null; then
-          rm -f "${dollar}previous_tmp"
-          toybox cp "${dollar}live" "${dollar}previous_tmp" 2>/dev/null || exit 1
+        file_hash() {
+          hash=${dollar}(sha256sum "${dollar}1" 2>/dev/null || toybox sha256sum "${dollar}1" 2>/dev/null) || return 1
+          printf '%s\n' "${dollar}{hash%% *}"
+        }
+        file_meta() {
+          stat -c '%u:%g:%a:%h:%s' "${dollar}1" 2>/dev/null ||
+            toybox stat -c '%u:%g:%a:%h:%s' "${dollar}1" 2>/dev/null
+        }
+        absent() { [ ! -e "${dollar}1" ] && [ ! -L "${dollar}1" ]; }
+        exact_file() {
+          [ -f "${dollar}1" ] && [ ! -L "${dollar}1" ] &&
+            [ "${dollar}(file_hash "${dollar}1")" = "${dollar}2" ] &&
+            [ "${dollar}(file_meta "${dollar}1")" = "0:0:${dollar}3:1:${dollar}4" ]
+        }
+
+        for foreign_journal in \
+          "${dollar}root/data/local/.hapaneld-guard-db/replacement.v1" \
+          "${dollar}root/data/local/.hapaneld-guard-db/.replacement.v1.tmp" \
+          "${dollar}root/system/bin/.hapaneld-helper-upgrade" \
+          "${dollar}root/system/bin/.hapaneld-helper-manual-upgrade" \
+          "${dollar}root/data/adb/hapaneld/.helper-upgrade.marker" \
+          "${dollar}root/data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+          "${dollar}root/data/adb/hapaneld/.helper-manual-upgrade.marker"; do
+          absent "${dollar}foreign_journal" || exit 75
+        done
+        absent "${dollar}data_local/.hapaneld-helper.previous" &&
+          absent "${dollar}data_local/.hapaneld-helper.previous.tmp" || exit 75
+
+        system_match=0; systemless_match=0; hybrid_match=0
+        if [ -f "${dollar}system_bin" ] && [ ! -L "${dollar}system_bin" ] &&
+           [ -f "${dollar}system_registration" ] && [ ! -L "${dollar}system_registration" ] &&
+           absent "${dollar}data_bin" && absent "${dollar}vendor_registration" &&
+           absent "${dollar}service_registration"; then system_match=1; fi
+        if [ -f "${dollar}data_bin" ] && [ ! -L "${dollar}data_bin" ] &&
+           [ -f "${dollar}service_registration" ] && [ ! -L "${dollar}service_registration" ] &&
+           absent "${dollar}system_bin" && absent "${dollar}system_registration" &&
+           absent "${dollar}vendor_registration"; then systemless_match=1; fi
+        if [ -f "${dollar}data_bin" ] && [ ! -L "${dollar}data_bin" ] &&
+           [ -f "${dollar}vendor_registration" ] && [ ! -L "${dollar}vendor_registration" ] &&
+           absent "${dollar}system_bin" && absent "${dollar}system_registration" &&
+           absent "${dollar}service_registration"; then hybrid_match=1; fi
+        [ ${dollar}((system_match + systemless_match + hybrid_match)) -eq 1 ] &&
+          absent "${dollar}legacy_bin" && absent "${dollar}legacy_registration" || exit 1
+        if [ "${dollar}system_match" = 1 ]; then topology=system; old_bin=${dollar}system_bin; registration=${dollar}system_registration; registration_mode=644
+        elif [ "${dollar}systemless_match" = 1 ]; then topology=systemless; old_bin=${dollar}data_bin; registration=${dollar}service_registration; registration_mode=755
+        else topology=hybrid; old_bin=${dollar}data_bin; registration=${dollar}vendor_registration; registration_mode=644; fi
+
+        old_meta=${dollar}(file_meta "${dollar}old_bin") || exit 1
+        case "${dollar}old_meta" in 0:0:755:1:*) ;; *) exit 1 ;; esac
+        old_bytes=${dollar}{old_meta##*:}
+        [ "${dollar}old_bytes" -ge 1 ] && [ "${dollar}old_bytes" -le $MAX_STAGED_HELPER_BYTES ] || exit 1
+        old_sha=${dollar}(file_hash "${dollar}old_bin") || exit 1
+        [ "${dollar}old_sha" != "$expectedSha256" ] || exit 1
+        registration_meta=${dollar}(file_meta "${dollar}registration") || exit 1
+        case "${dollar}registration_meta" in 0:0:${dollar}registration_mode:1:*) ;; *) exit 1 ;; esac
+        registration_bytes=${dollar}{registration_meta##*:}
+        registration_sha=${dollar}(file_hash "${dollar}registration") || exit 1
+        case "${dollar}topology:${dollar}registration_sha" in
+          system:9b430712c493df177a19e5e893df445f6c2e951fc30ea140dcdbcdb7987de659|system:1ec2c7baef1b3961f3d8a4c20222fe63c358896238022f4d87bbb5b8b51bdf8e|system:b42a66ff435a830390c7f04e66ffa252e3bf4027e68c72a29002df4886f8d4f4) ;;
+          systemless:60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493|systemless:cc3eb30416693865345eb241493efaf846c803b9c7370883d0e7eed8101d1411) ;;
+          hybrid:cf146dd5320fcb017514def6295fdb0c473e150a478d5c2219af2e3f03826ed1|hybrid:0bdc270e81edee3af5150dd6fe599cb5f3dd0571a7df5214be13ccbbbca33eba) ;;
+          *) exit 1 ;;
+        esac
+
+        candidate_source=
+        if [ -f "${dollar}live" ] && [ ! -L "${dollar}live" ]; then candidate_source=${dollar}live
+        elif ! absent "${dollar}live"; then exit 1
+        elif [ -f "${dollar}stage" ] && [ ! -L "${dollar}stage" ]; then candidate_source=${dollar}stage
+        else exit 1; fi
+        candidate_meta=${dollar}(file_meta "${dollar}candidate_source") || exit 1
+        case "${dollar}candidate_meta" in 0:0:700:1:*) ;; *) exit 1 ;; esac
+        candidate_bytes=${dollar}{candidate_meta##*:}
+        [ "${dollar}candidate_bytes" -ge 1 ] && [ "${dollar}candidate_bytes" -le $MAX_STAGED_HELPER_BYTES ] &&
+          [ "${dollar}(file_hash "${dollar}candidate_source")" = "$expectedSha256" ] || exit 1
+        if [ -f "${dollar}stage" ] && [ ! -L "${dollar}stage" ]; then
+          exact_file "${dollar}stage" "$expectedSha256" 700 "${dollar}candidate_bytes" || exit 1
+        elif ! absent "${dollar}stage"; then exit 1; fi
+
+        expected_record="OK LEGACYTAKEOVER 1 ${dollar}topology ${dollar}old_sha ${dollar}old_bytes ${dollar}registration_sha ${dollar}registration_bytes ${dollar}registration_mode $incumbentBuildId $stagedBuildId $expectedSha256 ${dollar}candidate_bytes"
+        retained_record=0
+        if [ -f "${dollar}record" ] && [ ! -L "${dollar}record" ]; then
+          record_meta=${dollar}(file_meta "${dollar}record") || exit 1
+          case "${dollar}record_meta" in 0:0:600:1:*) ;; *) exit 1 ;; esac
+          [ "${dollar}(cat "${dollar}record")" = "${dollar}expected_record" ] || exit 1
+          retained_record=1
+          absent "${dollar}record_tmp" || exit 1
+        else
+          absent "${dollar}record" || exit 1
+          $resumeAdmission
+          if [ -f "${dollar}record_tmp" ] && [ ! -L "${dollar}record_tmp" ]; then
+            [ "${dollar}candidate_source" = "${dollar}stage" ] && absent "${dollar}live" || exit 1
+            record_tmp_meta=${dollar}(file_meta "${dollar}record_tmp") || exit 1
+            case "${dollar}record_tmp_meta" in 0:0:600:1:*) ;; *) exit 1 ;; esac
+            record_tmp_bytes=${dollar}{record_tmp_meta##*:}
+            [ "${dollar}record_tmp_bytes" -le 1024 ] || exit 1
+            rm -f "${dollar}record_tmp" || exit 1
+          elif ! absent "${dollar}record_tmp"; then exit 1; fi
+          $initialReplacementProof
+          umask 077
+          printf '%s\n' "${dollar}expected_record" > "${dollar}record_tmp" || exit 1
+          chown 0:0 "${dollar}record_tmp" && chmod 600 "${dollar}record_tmp" || exit 1
+          sync || exit 1
+          mv -f "${dollar}record_tmp" "${dollar}record" || exit 1
+          sync || exit 1
+          retained_record=0
         fi
-        chown 0:0 "${dollar}previous_tmp" && chmod 700 "${dollar}previous_tmp" || exit 1
-        previous_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}previous_tmp" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}previous_tmp" 2>/dev/null) || exit 1
-        [ "${dollar}previous_meta" = "0:0:700:1:${dollar}live_bytes" ] || exit 1
-        previous_sha=${dollar}(sha256sum "${dollar}previous_tmp" 2>/dev/null || toybox sha256sum "${dollar}previous_tmp" 2>/dev/null) || exit 1
-        previous_sha=${dollar}{previous_sha%% *}
-        [ "${dollar}previous_sha" = "${dollar}live_sha" ] || exit 1
+
+        path_processes() {
+          target_inode=${dollar}(stat -c '%d:%i' "${dollar}1" 2>/dev/null || toybox stat -c '%d:%i' "${dollar}1" 2>/dev/null) || return 1
+          found=
+          for executable in /proc/[0-9]*/exe; do
+            inode=${dollar}(stat -Lc '%d:%i' "${dollar}executable" 2>/dev/null || toybox stat -L -c '%d:%i' "${dollar}executable" 2>/dev/null) || continue
+            [ "${dollar}inode" != "${dollar}target_inode" ] || found="${dollar}found ${dollar}{executable#/proc/}"
+          done
+          printf '%s\n' "${dollar}found"
+        }
+        stop_path_processes() {
+          candidates=${dollar}(path_processes "${dollar}1") || return 1
+          for candidate in ${dollar}candidates; do candidate=${dollar}{candidate%/exe}; kill "${dollar}candidate" 2>/dev/null || true; done
+          attempt=0
+          while [ "${dollar}attempt" -lt 3 ]; do
+            candidates=${dollar}(path_processes "${dollar}1") || return 1
+            [ -n "${dollar}candidates" ] || return 0
+            sleep 1; attempt=${dollar}((attempt + 1))
+          done
+          for candidate in ${dollar}candidates; do candidate=${dollar}{candidate%/exe}; kill -9 "${dollar}candidate" 2>/dev/null || true; done
+          sleep 1
+          [ -z "${dollar}(path_processes "${dollar}1")" ]
+        }
+        stop_candidate() { stop_path_processes "${dollar}live"; }
+
+        rollback_candidate() {
+          exact_file "${dollar}old_bin" "${dollar}old_sha" 755 "${dollar}old_bytes" || return 1
+          exact_file "${dollar}registration" "${dollar}registration_sha" "${dollar}registration_mode" "${dollar}registration_bytes" || return 1
+          if [ -f "${dollar}live" ] && [ ! -L "${dollar}live" ]; then
+            exact_file "${dollar}live" "$expectedSha256" 700 "${dollar}candidate_bytes" || return 1
+            stop_candidate || return 1
+            if absent "${dollar}stage"; then mv -f "${dollar}live" "${dollar}stage" || return 1
+            else exact_file "${dollar}stage" "$expectedSha256" 700 "${dollar}candidate_bytes" && rm -f "${dollar}live" || return 1; fi
+          elif ! absent "${dollar}live"; then return 1; fi
+          sync || return 1
+          exact_file "${dollar}old_bin" "${dollar}old_sha" 755 "${dollar}old_bytes" &&
+            exact_file "${dollar}registration" "${dollar}registration_sha" "${dollar}registration_mode" "${dollar}registration_bytes" &&
+            exact_file "${dollar}stage" "$expectedSha256" 700 "${dollar}candidate_bytes" && absent "${dollar}live" || return 1
+          if [ "${dollar}topology" = system ] || [ "${dollar}topology" = hybrid ]; then
+            "${dollar}root/system/bin/start" hapaneld_helper >/dev/null 2>&1 || return 1
+            boot_service_stopped=0
+          else
+            "${dollar}old_bin" >/dev/null 2>&1 &
+          fi
+          attempt=0
+          while [ "${dollar}attempt" -lt $polls ]; do
+            [ "${dollar}("${dollar}old_bin" --request BUILDID 2>/dev/null)" != "BUILDID $incumbentBuildId" ] || break
+            attempt=${dollar}((attempt + 1)); [ "${dollar}attempt" -ge $polls ] || sleep 1
+          done
+          [ "${dollar}("${dollar}old_bin" --request BUILDID 2>/dev/null)" = "BUILDID $incumbentBuildId" ] || return 1
+          if [ "${dollar}retained_record" != 1 ]; then rm -f "${dollar}record" || return 1; fi
+          sync || return 1
+          return 0
+        }
+
+        # A retained record is durable authority for this exact candidate, not for another
+        # replacement. Stop only its inode-bound lineage, then resume that same supervisor directly;
+        # Guard state remains in its durable namespace and the released boot files stay untouched.
+        if [ "${dollar}retained_record" = 1 ]; then
+          if [ "${dollar}candidate_source" = "${dollar}live" ]; then stop_candidate || exit 1; fi
+          incumbent_reply=${dollar}("${dollar}old_bin" --request BUILDID 2>/dev/null) || incumbent_reply=
+          case "${dollar}incumbent_reply" in ''|"BUILDID $incumbentBuildId") ;; *) exit 1 ;; esac
+        fi
+        if [ "${dollar}retained_record" != 1 ] && [ "${dollar}candidate_source" = "${dollar}live" ]; then
+          stop_candidate || exit 1
+        fi
+        if [ "${dollar}topology" = system ] || [ "${dollar}topology" = hybrid ]; then
+          "${dollar}root/system/bin/stop" hapaneld_helper >/dev/null 2>&1 || exit 1
+          boot_service_stopped=1
+        fi
+        stop_path_processes "${dollar}old_bin" || exit 1
+        if [ "${dollar}candidate_source" = "${dollar}stage" ]; then
+          mv -f "${dollar}stage" "${dollar}live" || exit 1
+          candidate_source=${dollar}live
+        fi
         sync || exit 1
-        mv -f "${dollar}previous_tmp" "${dollar}previous" || exit 1
-        sync || exit 1
-        mv -f "${dollar}stage" "${dollar}live" || exit 1
-        sync || exit 1
+
         "${dollar}live" --supervise >/dev/null 2>&1 &
         attempt=0
         candidate_ready=0
         while [ "${dollar}attempt" -lt $polls ]; do
           self=${dollar}("${dollar}live" --request GUARDSELF 2>/dev/null) || self=
-          if [ "${dollar}self" = "OK GUARDSELF 1 ${dollar}stage_bytes $expectedSha256 $stagedBuildId" ]; then
+          if [ "${dollar}self" = "OK GUARDSELF 1 ${dollar}candidate_bytes $expectedSha256 $stagedBuildId" ]; then
             candidate_ready=1
             break
           fi
@@ -302,42 +858,39 @@ internal fun bundledLegacyHelperTakeoverCommand(
         if [ "${dollar}candidate_ready" = 1 ]; then
           caps=${dollar}("${dollar}live" --request GUARDCAPS 2>/dev/null) || caps=
           status=${dollar}("${dollar}live" --request GUARDSTATUS 2>/dev/null) || status=
-          if [ "${dollar}caps" = "$expectedCapabilities" ] && [ "${dollar}status" = "$expectedStatus" ]; then
-            rm -f "${dollar}previous" || exit 1
+          if [ "${dollar}caps" = "$expectedCapabilities" ] && $acceptedStatus; then
+            exact_file "${dollar}live" "$expectedSha256" 700 "${dollar}candidate_bytes" || { rollback_candidate; exit 1; }
+            exact_file "${dollar}old_bin" "${dollar}old_sha" 755 "${dollar}old_bytes" || { rollback_candidate; exit 1; }
+            exact_file "${dollar}registration" "${dollar}registration_sha" "${dollar}registration_mode" "${dollar}registration_bytes" || { rollback_candidate; exit 1; }
+            if [ -f "${dollar}stage" ]; then exact_file "${dollar}stage" "$expectedSha256" 700 "${dollar}candidate_bytes" || exit 1; rm -f "${dollar}stage" || exit 1; fi
             sync || exit 1
             exit 0
           fi
         fi
-
-        candidate_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}live" 2>/dev/null) || exit 1
-        previous_meta=${dollar}(stat -c '%u:%g:%a:%h:%s' "${dollar}previous" 2>/dev/null || toybox stat -c '%u:%g:%a:%h:%s' "${dollar}previous" 2>/dev/null) || exit 1
-        [ "${dollar}candidate_meta" = "0:0:700:1:${dollar}stage_bytes" ] &&
-        [ "${dollar}previous_meta" = "0:0:700:1:${dollar}live_bytes" ] || exit 1
-        candidate_sha=${dollar}(sha256sum "${dollar}live" 2>/dev/null || toybox sha256sum "${dollar}live" 2>/dev/null) || exit 1
-        candidate_sha=${dollar}{candidate_sha%% *}
-        rollback_sha=${dollar}(sha256sum "${dollar}previous" 2>/dev/null || toybox sha256sum "${dollar}previous" 2>/dev/null) || exit 1
-        rollback_sha=${dollar}{rollback_sha%% *}
-        [ "${dollar}candidate_sha" = "$expectedSha256" ] &&
-        [ "${dollar}rollback_sha" = "${dollar}live_sha" ] || exit 1
-        mv -f "${dollar}previous" "${dollar}live" || exit 1
-        sync || exit 1
-        "${dollar}live" --supervise >/dev/null 2>&1 &
-        attempt=0
-        while [ "${dollar}attempt" -lt $polls ]; do
-          build=${dollar}("${dollar}live" --request BUILDID 2>/dev/null) || build=
-          if [ "${dollar}build" = "BUILDID $incumbentBuildId" ]; then
-            exit 1
-          fi
-          attempt=${dollar}((attempt + 1))
-          [ "${dollar}attempt" -ge $polls ] || sleep 1
-        done
+        rollback_candidate || exit 1
         exit 1
     """.trimIndent()
 }
 
+internal fun bundledLegacyHelperResumeCommand(
+    expectedSha256: String,
+    stagedBuildId: String,
+    incumbentBuildId: String,
+    filesystemRoot: String = "",
+    polls: Int = LEGACY_TAKEOVER_POLLS,
+): String = bundledLegacyHelperTakeoverCommand(
+    expectedSha256,
+    stagedBuildId,
+    incumbentBuildId,
+    filesystemRoot,
+    polls,
+    retainedResumeOnly = true,
+)
+
 private const val MAX_STAGED_HELPER_BYTES = 16 * 1024 * 1024
-private const val LEGACY_TAKEOVER_POLLS = 3
-private const val LEGACY_TAKEOVER_TIMEOUT_MS = 45_000L
+private const val LEGACY_TAKEOVER_POLLS = 8
+internal const val LEGACY_TAKEOVER_TIMEOUT_MS = 120_000L
+private const val NO_RECORD_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 private val SAFE_ABSOLUTE_PATH = Regex("/[A-Za-z0-9._/-]+")
 private val BUNDLED_HELPER_REPLACEMENT_RANDOM = SecureRandom()
 

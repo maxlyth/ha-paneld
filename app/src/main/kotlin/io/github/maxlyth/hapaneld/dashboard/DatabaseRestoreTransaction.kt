@@ -12,6 +12,8 @@ import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /** Optional Guard identity retained in the durable restore receipt. */
 internal data class DatabaseRestoreGuardBinding(val session: String, val generation: Long) {
@@ -73,6 +75,15 @@ internal sealed interface DatabaseRestoreResult {
     data class Hold(val reason: String) : DatabaseRestoreResult
 }
 
+internal sealed interface DatabaseRestoreOpenedReceipt {
+    data object Absent : DatabaseRestoreOpenedReceipt
+    data object OrdinaryConsumed : DatabaseRestoreOpenedReceipt
+    data class GuardRetained(val record: DatabaseRestoreRecord) : DatabaseRestoreOpenedReceipt
+    data object Hold : DatabaseRestoreOpenedReceipt
+}
+
+internal enum class DatabaseRestoreEstablishedReceipt { MATCHES, ABSENT, MISMATCH }
+
 /** Named cut points used by the process-death fixture. Production's observer is a no-op. */
 internal enum class DatabaseRestoreCut {
     PREPARED_FILE_SYNC,
@@ -115,6 +126,51 @@ internal fun exactOwnedStableDatabaseSidecar(
 ): Boolean = first != null && first == second && first.regular && first.links == 1L &&
     first.uid == expectedUid && first.gid == expectedUid && (!requireEmpty || first.bytes == 0L)
 
+/** Serializes pre-open restore reconciliation through the restored owner's first SQLite open. */
+internal class DatabaseRestoreOpenLease {
+    private val lock = ReentrantLock(true)
+    private var establishedGuard: DatabaseRestoreRecord? = null
+    private var admissionActive = false
+    private var poisoned = false
+
+    fun reconcileAndOpen(
+        establishedGuardReceipt: (DatabaseRestoreRecord) -> DatabaseRestoreEstablishedReceipt,
+        reconcile: () -> Boolean,
+        open: (joiningRetainedGuard: Boolean) -> DatabaseRestoreRecord?,
+    ) = lock.withLock {
+        if (poisoned) throw DatabaseRestoreHoldException("database restore open did not settle")
+        if (admissionActive) throw DatabaseRestoreHoldException("database restore admission already in progress")
+        admissionActive = true
+        try {
+            val retained = establishedGuard
+            if (retained != null) {
+                if (establishedGuardReceipt(retained) == DatabaseRestoreEstablishedReceipt.MISMATCH) {
+                    throw DatabaseRestoreHoldException("established Guard restore receipt changed")
+                }
+                try {
+                    open(true)
+                } catch (failure: Throwable) {
+                    poisoned = true
+                    throw failure
+                }
+                return@withLock
+            }
+            if (!reconcile()) return@withLock
+            try {
+                open(false)?.let { record ->
+                    check(record.state == DatabaseRestoreState.RESTORED && record.guard != null)
+                    establishedGuard = record
+                }
+            } catch (failure: Throwable) {
+                poisoned = true
+                throw failure
+            }
+        } finally {
+            admissionActive = false
+        }
+    }
+}
+
 /**
  * Same-directory, crash-durable schema restore. The main files move atomically; a checksummed record
  * makes every intermediate topology resumable without treating a missing canonical primary as fresh.
@@ -123,6 +179,7 @@ internal class DatabaseRestoreTransaction(
     private val target: File,
     private val guard: DatabaseRestoreGuardBinding? = DatabaseRestoreGuardContext.current(),
     private val ownedStableSidecar: (File, Boolean) -> Boolean = ::ownedStableDatabaseSidecar,
+    private val beforeEstablishedReceiptRead: () -> Unit = {},
     private val cut: (DatabaseRestoreCut) -> Unit = {},
 ) {
     private val directory = requireNotNull(target.absoluteFile.parentFile).absoluteFile.normalize()
@@ -203,23 +260,49 @@ internal class DatabaseRestoreTransaction(
         }.getOrDefault(false)
     }
 
-    /** A non-Guard receipt is consumed only after SQLiteOpenHelper has successfully opened the owner. */
-    fun consumeOrdinaryRestored(): Boolean {
-        val record = loadAuthoritativeRecord() ?: return !entryExists(recordFile) &&
+    /** Settle a receipt only after SQLiteOpenHelper has successfully opened the restored owner. */
+    fun settleRestoredAfterOpen(): DatabaseRestoreOpenedReceipt {
+        val record = loadAuthoritativeRecord() ?: return if (!entryExists(recordFile) &&
             !entryExists(recordTemporary) && !entryExists(preparedFile)
+        ) DatabaseRestoreOpenedReceipt.Absent else DatabaseRestoreOpenedReceipt.Hold
         val aside = File(directory, record.supersededName)
         if (!recordBindsTarget(record) || record.state != DatabaseRestoreState.RESTORED ||
             !matches(normalizedTarget, record.stagedBytes, record.stagedSha256) ||
             !matches(aside, record.sourceBytes, record.sourceSha256) ||
             !exactStandaloneSuperseded(aside) || entryExists(preparedFile) ||
             !exactOpenCanonicalSidecars()
-        ) return false
-        if (record.guard != null) return true
-        return runCatching {
+        ) return DatabaseRestoreOpenedReceipt.Hold
+        if (record.guard != null) return DatabaseRestoreOpenedReceipt.GuardRetained(record)
+        val consumed = runCatching {
             Files.deleteIfExists(recordTemporary.toPath())
             Files.delete(recordFile.toPath())
             syncDirectory()
         }.getOrDefault(false)
+        return if (consumed) DatabaseRestoreOpenedReceipt.OrdinaryConsumed
+        else DatabaseRestoreOpenedReceipt.Hold
+    }
+
+    /** Compatibility wrapper for ordinary owners and direct transaction tests. */
+    fun consumeOrdinaryRestored(): Boolean = settleRestoredAfterOpen() !is DatabaseRestoreOpenedReceipt.Hold
+
+    /** A live in-process Guard owner accepts its exact receipt or its legitimate terminal removal. */
+    fun establishedGuardReceipt(expected: DatabaseRestoreRecord): DatabaseRestoreEstablishedReceipt {
+        if (expected.state != DatabaseRestoreState.RESTORED || expected.guard == null ||
+            !recordBindsTarget(expected) || entryExists(recordTemporary) || entryExists(preparedFile)
+        ) return DatabaseRestoreEstablishedReceipt.MISMATCH
+        if (!entryExists(recordFile)) return DatabaseRestoreEstablishedReceipt.ABSENT
+        beforeEstablishedReceiptRead()
+        val current = readRecord(recordFile)
+        if (current != null) {
+            return if (current == expected && !entryExists(recordTemporary) && !entryExists(preparedFile)) {
+                DatabaseRestoreEstablishedReceipt.MATCHES
+            } else DatabaseRestoreEstablishedReceipt.MISMATCH
+        }
+        return if (!entryExists(recordFile) && !entryExists(recordTemporary) && !entryExists(preparedFile)) {
+            DatabaseRestoreEstablishedReceipt.ABSENT
+        } else {
+            DatabaseRestoreEstablishedReceipt.MISMATCH
+        }
     }
 
     private fun resume(initial: DatabaseRestoreRecord): DatabaseRestoreResult {

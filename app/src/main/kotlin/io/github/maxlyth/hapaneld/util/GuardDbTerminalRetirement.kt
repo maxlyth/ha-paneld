@@ -66,6 +66,11 @@ internal class GuardDbTerminalRetirementStore(
 
     @Synchronized
     fun load(): GuardDbTerminalRetirementLoad {
+        if (!reconcilePending()) return GuardDbTerminalRetirementLoad.Corrupt
+        return loadRecord()
+    }
+
+    private fun loadRecord(): GuardDbTerminalRetirementLoad {
         if (Files.notExists(record.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             return GuardDbTerminalRetirementLoad.Absent
         }
@@ -75,6 +80,34 @@ internal class GuardDbTerminalRetirementStore(
             ?.let(GuardDbTerminalRetirementLoad::Valid) ?: GuardDbTerminalRetirementLoad.Corrupt
     }
 
+    private fun reconcilePending(): Boolean {
+        if (Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return true
+        if (!validateFile(temporary) || temporary.length() !in 1..2048) return false
+        val pending = runCatching { temporary.readBytes() }.getOrNull()
+            ?.let(::parseGuardDbTerminalRetirement) ?: return false
+        val allowed = when (val current = loadRecord()) {
+            GuardDbTerminalRetirementLoad.Absent -> pending.state == GuardDbTerminalRetirementState.INTENT
+            GuardDbTerminalRetirementLoad.Corrupt -> false
+            is GuardDbTerminalRetirementLoad.Valid -> when (current.retirement.state to pending.state) {
+                GuardDbTerminalRetirementState.INTENT to GuardDbTerminalRetirementState.COMPLETE,
+                GuardDbTerminalRetirementState.INTENT to GuardDbTerminalRetirementState.RETRYABLE,
+                -> current.retirement.copy(state = pending.state) == pending
+                GuardDbTerminalRetirementState.COMPLETE to GuardDbTerminalRetirementState.INTENT,
+                GuardDbTerminalRetirementState.RETRYABLE to GuardDbTerminalRetirementState.INTENT,
+                -> allowedGuardDbTerminalIntentReplacement(current.retirement, pending)
+                else -> false
+            }
+        }
+        if (!allowed) return false
+        return runCatching {
+            Files.move(
+                temporary.toPath(), record.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectory(directory)
+        }.getOrDefault(false)
+    }
+
     @Synchronized
     fun writeIntent(retirement: GuardDbTerminalRetirement): Boolean {
         if (retirement.state != GuardDbTerminalRetirementState.INTENT) return false
@@ -82,12 +115,7 @@ internal class GuardDbTerminalRetirementStore(
             GuardDbTerminalRetirementLoad.Absent -> write(retirement)
             is GuardDbTerminalRetirementLoad.Valid -> when {
                 current.retirement == retirement -> syncDirectory(directory)
-                current.retirement.state == GuardDbTerminalRetirementState.COMPLETE &&
-                    current.retirement.copy(state = GuardDbTerminalRetirementState.INTENT) == retirement -> false
-                current.retirement.state in setOf(
-                    GuardDbTerminalRetirementState.RETRYABLE,
-                    GuardDbTerminalRetirementState.COMPLETE,
-                ) -> write(retirement)
+                allowedGuardDbTerminalIntentReplacement(current.retirement, retirement) -> write(retirement)
                 else -> false
             }
             GuardDbTerminalRetirementLoad.Corrupt -> false
@@ -129,6 +157,15 @@ internal class GuardDbTerminalRetirementStore(
         syncDirectory(directory)
     }.getOrDefault(false).also { temporary.delete() }
 }
+
+private fun allowedGuardDbTerminalIntentReplacement(
+    current: GuardDbTerminalRetirement,
+    pending: GuardDbTerminalRetirement,
+): Boolean = pending.state == GuardDbTerminalRetirementState.INTENT && current.state in setOf(
+    GuardDbTerminalRetirementState.RETRYABLE,
+    GuardDbTerminalRetirementState.COMPLETE,
+) && !(current.state == GuardDbTerminalRetirementState.COMPLETE &&
+    current.copy(state = GuardDbTerminalRetirementState.INTENT) == pending)
 
 internal fun guardDbTerminalRetirementStore(context: Context): GuardDbTerminalRetirementStore =
     GuardDbTerminalRetirementStore(context.noBackupFilesDir)

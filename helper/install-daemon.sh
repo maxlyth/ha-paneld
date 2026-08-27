@@ -294,7 +294,17 @@ run_root_locked() {
     fi
     echo $$ > "$lock/pid" || { rm -rf "$lock"; echo TRANSACTION_BUSY; exit 75; }
     cleanup_helper_lock() { rm -rf /dev/.hapaneld-helper-transaction.lock; }
-    trap cleanup_helper_lock 0 1 2 3 15
+    abort_helper_lock() {
+      signal_status=$1
+      trap - 0 1 2 3 15
+      cleanup_helper_lock
+      exit "$signal_status"
+    }
+    trap cleanup_helper_lock 0
+    trap "abort_helper_lock 129" 1
+    trap "abort_helper_lock 130" 2
+    trap "abort_helper_lock 131" 3
+    trap "abort_helper_lock 143" 15
   '"$block"
 }
 
@@ -1113,6 +1123,8 @@ rollback_root_helper_v3() {
           /data/local/.hapaneld-helper.new \
           /data/local/.hapaneld-helper.previous \
           /data/local/.hapaneld-helper.previous.tmp \
+          /data/local/.hapaneld-helper.legacy-takeover \
+          /data/local/.hapaneld-helper.legacy-takeover.tmp \
           /data/local/.hapaneld-guard-db/replacement.v1 \
           /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
         if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
@@ -1384,10 +1396,12 @@ finalize_root_helper_rollback_v3() {
     grep -qx TARGET_BUILD_ID='"$target_build"' "$marker" || exit 1
     grep -qx TARGET_HELPER_SHA256='"$target_helper"' "$marker" || exit 1
     grep -qx TARGET_SERVICE_SHA256='"$target_service"' "$marker" || exit 1
-    for custody in \
+      for custody in \
         /data/local/.hapaneld-helper.new \
         /data/local/.hapaneld-helper.previous \
         /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
         /data/local/.hapaneld-guard-db/replacement.v1 \
         /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
       [ ! -e "$custody" ] && [ ! -L "$custody" ] || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
@@ -1411,10 +1425,12 @@ finalize_root_helper_rollback_v3() {
     recorded LIVE_SYSTEMLESS_SERVICE /data/adb/service.d/hapaneld-helper.sh &&
     recorded LIVE_LEGACY_BIN /system/bin/hapaneld-ledd &&
     recorded LIVE_LEGACY_RC /system/etc/init/hapaneld-ledd.rc || exit 1
-    for custody in \
+      for custody in \
         /data/local/.hapaneld-helper.new \
         /data/local/.hapaneld-helper.previous \
         /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
         /data/local/.hapaneld-guard-db/replacement.v1 \
         /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
       [ ! -e "$custody" ] && [ ! -L "$custody" ] || { echo ROLLBACK_REPLACEMENT_AUTHORITY_ACTIVE; exit 0; }
@@ -1497,6 +1513,412 @@ commit_root_helper_upgrade_v3() {
 adb -s "$TARGET" push "$BIN" "$PROBE_STAGING_PATH" >/dev/null
 
 manual_journal_state="$(run_root_locked '
+  app_stage_authority_absent() {
+    for authority in \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /system/bin/.hapaneld-helper-upgrade \
+        /data/adb/hapaneld/.helper-upgrade.marker \
+        /data/adb/hapaneld/.helper-hybrid-upgrade.marker \
+        /data/local/.hapaneld-helper-manual-upgrade \
+        /system/bin/.hapaneld-helper-manual-upgrade \
+        /data/adb/hapaneld/.helper-manual-upgrade.marker; do
+      [ ! -e "$authority" ] && [ ! -L "$authority" ] || return 1
+    done
+    return 0
+  }
+  app_replacement_custody_present() {
+    for custody in \
+        /data/local/.hapaneld-helper.new \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+      if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
+    done
+    return 1
+  }
+  app_stage_metadata() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    stat -c "%d:%i:%u:%g:%a:%h:%s" "$1" 2>/dev/null ||
+      toybox stat -c "%d:%i:%u:%g:%a:%h:%s" "$1" 2>/dev/null
+  }
+  valid_app_stage_metadata() {
+    app_stage_value=$1; app_stage_modes=$2
+    app_stage_old_ifs=$IFS
+    IFS=:
+    set -- $app_stage_value
+    IFS=$app_stage_old_ifs
+    [ "$#" -eq 7 ] || return 1
+    [ "$3:$4:$6" = 0:0:1 ] || return 1
+    case ":$app_stage_modes:" in *:"$5":*) ;; *) return 1 ;; esac
+    case "$7" in ""|*[!0-9]*) return 1 ;; esac
+    [ "$7" -ge 1 ] && [ "$7" -le 16777216 ]
+  }
+  app_stage_file_sha256() {
+    app_stage_hash=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
+    printf "%s\n" "${app_stage_hash%% *}"
+  }
+  legacy_takeover_only_authority() {
+    for authority in \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /system/bin/.hapaneld-helper-upgrade \
+        /data/adb/hapaneld/.helper-upgrade.marker \
+        /data/adb/hapaneld/.helper-hybrid-upgrade.marker \
+        /data/local/.hapaneld-helper-manual-upgrade \
+        /system/bin/.hapaneld-helper-manual-upgrade \
+        /data/adb/hapaneld/.helper-manual-upgrade.marker; do
+      [ ! -e "$authority" ] && [ ! -L "$authority" ] || return 1
+    done
+    return 0
+  }
+  reconcile_lone_legacy_takeover_tmp() {
+    legacy_tmp_record=/data/local/.hapaneld-helper.legacy-takeover.tmp
+    [ ! -e /data/local/.hapaneld-helper.legacy-takeover ] &&
+      [ ! -L /data/local/.hapaneld-helper.legacy-takeover ] || return 0
+    if [ ! -e "$legacy_tmp_record" ] && [ ! -L "$legacy_tmp_record" ]; then return 0; fi
+    for legacy_tmp_foreign in \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /system/bin/.hapaneld-helper-upgrade \
+        /data/adb/hapaneld/.helper-upgrade.marker \
+        /data/adb/hapaneld/.helper-hybrid-upgrade.marker \
+        /data/local/.hapaneld-helper-manual-upgrade \
+        /system/bin/.hapaneld-helper-manual-upgrade \
+        /data/adb/hapaneld/.helper-manual-upgrade.marker; do
+      [ ! -e "$legacy_tmp_foreign" ] && [ ! -L "$legacy_tmp_foreign" ] || return 1
+    done
+    if [ -f /data/local/.hapaneld-helper.new ]; then
+      legacy_tmp_stage_processes=$(legacy_path_processes /data/local/.hapaneld-helper.new) || return 1
+      [ -z "$legacy_tmp_stage_processes" ] || return 1
+    fi
+    legacy_tmp_before=$(app_stage_metadata "$legacy_tmp_record") || return 1
+    legacy_tmp_old_ifs=$IFS
+    IFS=:
+    set -- $legacy_tmp_before
+    IFS=$legacy_tmp_old_ifs
+    [ "$#" -eq 7 ] && [ "$3:$4:$5:$6" = 0:0:600:1 ] || return 1
+    case "$7" in ""|*[!0-9]*) return 1 ;; esac
+    [ "$7" -le 1024 ] || return 1
+    legacy_tmp_after=$(app_stage_metadata "$legacy_tmp_record") || return 1
+    [ "$legacy_tmp_after" = "$legacy_tmp_before" ] || return 1
+    rm -f "$legacy_tmp_record" || return 1
+    sync || return 1
+    return 0
+  }
+  legacy_valid_sha256() {
+    case "$1" in ""|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#1}" -eq 64 ]
+  }
+  legacy_bounded_bytes() {
+    case "$1" in ""|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge 1 ] && [ "$1" -le 16777216 ]
+  }
+  legacy_exact_file() {
+    legacy_path=$1; legacy_sha=$2; legacy_mode=$3; legacy_bytes=$4
+    legacy_meta=$(app_stage_metadata "$legacy_path") || return 1
+    legacy_meta_old_ifs=$IFS
+    IFS=:
+    set -- $legacy_meta
+    IFS=$legacy_meta_old_ifs
+    [ "$#" -eq 7 ] && [ "$3:$4:$5:$6:$7" = "0:0:$legacy_mode:1:$legacy_bytes" ] || return 1
+    [ "$(app_stage_file_sha256 "$legacy_path")" = "$legacy_sha" ]
+  }
+  legacy_path_processes() {
+    legacy_process_inode=$(stat -c "%d:%i" "$1" 2>/dev/null || toybox stat -c "%d:%i" "$1" 2>/dev/null) || return 1
+    legacy_process_found=
+    for legacy_executable in /proc/[0-9]*/exe; do
+      legacy_executable_inode=$(stat -Lc "%d:%i" "$legacy_executable" 2>/dev/null || toybox stat -L -c "%d:%i" "$legacy_executable" 2>/dev/null) || continue
+      [ "$legacy_executable_inode" != "$legacy_process_inode" ] || legacy_process_found="$legacy_process_found ${legacy_executable#/proc/}"
+    done
+    printf "%s\n" "$legacy_process_found"
+  }
+  legacy_stop_path_processes() {
+    legacy_processes=$(legacy_path_processes "$1") || return 1
+    for legacy_process in $legacy_processes; do legacy_process=${legacy_process%/exe}; kill "$legacy_process" 2>/dev/null || true; done
+    legacy_stop_attempt=0
+    while [ "$legacy_stop_attempt" -lt 3 ]; do
+      legacy_processes=$(legacy_path_processes "$1") || return 1
+      [ -n "$legacy_processes" ] || return 0
+      sleep 1
+      legacy_stop_attempt=$((legacy_stop_attempt + 1))
+    done
+    for legacy_process in $legacy_processes; do legacy_process=${legacy_process%/exe}; kill -9 "$legacy_process" 2>/dev/null || true; done
+    sleep 1
+    legacy_processes=$(legacy_path_processes "$1") || return 1
+    [ -z "$legacy_processes" ]
+  }
+  legacy_old_serving() {
+    legacy_old_processes=$(legacy_path_processes "$legacy_old_bin") || return 1
+    [ -n "$legacy_old_processes" ] &&
+      [ "$("$legacy_old_bin" --request BUILDID 2>/dev/null)" = "BUILDID $legacy_incumbent_build" ]
+  }
+  legacy_candidate_serving() {
+    legacy_candidate_path_serving /data/local/hapaneld-helper
+  }
+  legacy_candidate_path_serving() {
+    legacy_exact_file "$1" "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+    legacy_serving_processes=$(legacy_path_processes "$1") || return 1
+    [ -n "$legacy_serving_processes" ] &&
+      [ "$("$1" --request GUARDSELF 2>/dev/null)" = "OK GUARDSELF 1 $legacy_candidate_bytes $legacy_candidate_sha $legacy_staged_build" ]
+  }
+  legacy_start_old() {
+    case "$legacy_topology" in
+      system|hybrid) /system/bin/start hapaneld_helper >/dev/null 2>&1 || true ;;
+      systemless) "$legacy_old_bin" >/dev/null 2>&1 & ;;
+      *) return 1 ;;
+    esac
+    legacy_start_attempt=0
+    while [ "$legacy_start_attempt" -lt 8 ]; do
+      legacy_old_serving && return 0
+      legacy_start_attempt=$((legacy_start_attempt + 1))
+      [ "$legacy_start_attempt" -ge 8 ] || sleep 1
+    done
+    return 1
+  }
+  legacy_restart_candidate() {
+    [ "$legacy_candidate_was_running" = 1 ] || return 1
+    legacy_stop_path_processes "$legacy_old_bin" 2>/dev/null || return 1
+    legacy_exact_file /data/local/hapaneld-helper "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+    # Fully drain an interrupted canonical supervisor before relaunching it.  Otherwise a dying
+    # process can answer GUARDSELF while a second supervisor exits on its owner-lock collision.
+    legacy_stop_path_processes /data/local/hapaneld-helper || return 1
+    legacy_restart_processes=$(legacy_path_processes /data/local/hapaneld-helper) || return 1
+    [ -z "$legacy_restart_processes" ] || return 1
+    /data/local/hapaneld-helper --supervise >/dev/null 2>&1 &
+    legacy_restore_attempt=0
+    while [ "$legacy_restore_attempt" -lt 8 ]; do
+      legacy_candidate_serving && return 0
+      legacy_restore_attempt=$((legacy_restore_attempt + 1))
+      [ "$legacy_restore_attempt" -ge 8 ] || sleep 1
+    done
+    return 1
+  }
+  legacy_restore_after_normalization_failure() {
+    if [ "${legacy_normalization_phase:-candidate}" = candidate ]; then
+      legacy_restart_candidate
+    else
+      legacy_start_old || legacy_restart_candidate
+    fi
+  }
+  legacy_restore_signal_traps() {
+    trap "abort_helper_lock 129" 1
+    trap "abort_helper_lock 130" 2
+    trap "abort_helper_lock 131" 3
+    trap "abort_helper_lock 143" 15
+  }
+  legacy_normalization_signal() {
+    legacy_signal_status=$1
+    trap - 1 2 3 15
+    legacy_restore_after_normalization_failure >/dev/null 2>&1 || true
+    cleanup_helper_lock
+    trap - 0
+    exit "$legacy_signal_status"
+  }
+  normalize_legacy_takeover() {
+    legacy_record=/data/local/.hapaneld-helper.legacy-takeover
+    if [ ! -e "$legacy_record" ] && [ ! -L "$legacy_record" ]; then
+      [ ! -e "$legacy_record.tmp" ] && [ ! -L "$legacy_record.tmp" ]
+      return $?
+    fi
+    legacy_takeover_only_authority || return 1
+    legacy_record_meta=$(app_stage_metadata "$legacy_record") || return 1
+    legacy_record_old_ifs=$IFS
+    IFS=:
+    set -- $legacy_record_meta
+    IFS=$legacy_record_old_ifs
+    [ "$#" -eq 7 ] && [ "$3:$4:$5:$6" = 0:0:600:1 ] || return 1
+    legacy_record_bytes=$7
+    case "$legacy_record_bytes" in ""|*[!0-9]*) return 1 ;; esac
+    [ "$legacy_record_bytes" -ge 1 ] && [ "$legacy_record_bytes" -le 1024 ] || return 1
+    legacy_record_sha=$(app_stage_file_sha256 "$legacy_record") || return 1
+    legacy_record_line=$(cat "$legacy_record") || return 1
+    set -f
+    set -- $legacy_record_line
+    set +f
+    [ "$#" -eq 13 ] && [ "$1:$2:$3" = OK:LEGACYTAKEOVER:1 ] || return 1
+    legacy_topology=$4; legacy_old_sha=$5; legacy_old_bytes=$6
+    legacy_registration_sha=$7; legacy_registration_bytes=$8; legacy_registration_mode=$9
+    legacy_incumbent_build=${10}; legacy_staged_build=${11}; legacy_candidate_sha=${12}; legacy_candidate_bytes=${13}
+    [ "$legacy_record_line" = "OK LEGACYTAKEOVER 1 $legacy_topology $legacy_old_sha $legacy_old_bytes $legacy_registration_sha $legacy_registration_bytes $legacy_registration_mode $legacy_incumbent_build $legacy_staged_build $legacy_candidate_sha $legacy_candidate_bytes" ] || return 1
+    [ "$legacy_record_bytes" -eq $((${#legacy_record_line} + 1)) ] || return 1
+    legacy_valid_sha256 "$legacy_old_sha" && legacy_valid_sha256 "$legacy_registration_sha" &&
+      legacy_valid_sha256 "$legacy_incumbent_build" && legacy_valid_sha256 "$legacy_staged_build" &&
+      legacy_valid_sha256 "$legacy_candidate_sha" || return 1
+    legacy_bounded_bytes "$legacy_old_bytes" && legacy_bounded_bytes "$legacy_registration_bytes" &&
+      legacy_bounded_bytes "$legacy_candidate_bytes" || return 1
+    [ "$legacy_old_sha" != "$legacy_candidate_sha" ] &&
+      [ "$legacy_incumbent_build" != "$legacy_staged_build" ] || return 1
+    case "$legacy_topology:$legacy_registration_mode" in
+      system:644)
+        legacy_old_bin=/system/bin/hapaneld-helper; legacy_registration=/system/etc/init/hapaneld-helper.rc
+        legacy_foreign="/data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh /vendor/etc/init/hapaneld-helper.rc" ;;
+      systemless:755)
+        legacy_old_bin=/data/adb/hapaneld/hapaneld-helper; legacy_registration=/data/adb/service.d/hapaneld-helper.sh
+        legacy_foreign="/system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc /vendor/etc/init/hapaneld-helper.rc" ;;
+      hybrid:644)
+        legacy_old_bin=/data/adb/hapaneld/hapaneld-helper; legacy_registration=/vendor/etc/init/hapaneld-helper.rc
+        legacy_foreign="/system/bin/hapaneld-helper /system/etc/init/hapaneld-helper.rc /data/adb/service.d/hapaneld-helper.sh" ;;
+      *) return 1 ;;
+    esac
+    case "$legacy_topology:$legacy_registration_sha" in
+      system:9b430712c493df177a19e5e893df445f6c2e951fc30ea140dcdbcdb7987de659|system:1ec2c7baef1b3961f3d8a4c20222fe63c358896238022f4d87bbb5b8b51bdf8e|system:b42a66ff435a830390c7f04e66ffa252e3bf4027e68c72a29002df4886f8d4f4) ;;
+      systemless:60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493|systemless:cc3eb30416693865345eb241493efaf846c803b9c7370883d0e7eed8101d1411) ;;
+      hybrid:cf146dd5320fcb017514def6295fdb0c473e150a478d5c2219af2e3f03826ed1|hybrid:0bdc270e81edee3af5150dd6fe599cb5f3dd0571a7df5214be13ccbbbca33eba) ;;
+      *) return 1 ;;
+    esac
+    legacy_exact_file "$legacy_old_bin" "$legacy_old_sha" 755 "$legacy_old_bytes" &&
+      legacy_exact_file "$legacy_registration" "$legacy_registration_sha" "$legacy_registration_mode" "$legacy_registration_bytes" || return 1
+    for legacy_absent in $legacy_foreign /system/bin/hapaneld-ledd /system/etc/init/hapaneld-ledd.rc; do
+      [ ! -e "$legacy_absent" ] && [ ! -L "$legacy_absent" ] || return 1
+    done
+    legacy_candidate_present=0
+    legacy_candidate_source=
+    if [ -e /data/local/hapaneld-helper ] || [ -L /data/local/hapaneld-helper ]; then
+      legacy_exact_file /data/local/hapaneld-helper "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+      legacy_candidate_present=1
+      legacy_candidate_source=/data/local/hapaneld-helper
+    fi
+    if [ -e /data/local/.hapaneld-helper.new ] || [ -L /data/local/.hapaneld-helper.new ]; then
+      legacy_exact_file /data/local/.hapaneld-helper.new "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+      legacy_candidate_present=1
+      [ -n "$legacy_candidate_source" ] || legacy_candidate_source=/data/local/.hapaneld-helper.new
+    fi
+    [ "$legacy_candidate_present" = 1 ] || return 1
+    legacy_candidate_was_running=0
+    legacy_running_candidate_source=
+    if [ -f /data/local/hapaneld-helper ]; then
+      legacy_live_processes=$(legacy_path_processes /data/local/hapaneld-helper) || return 1
+      if [ -n "$legacy_live_processes" ]; then
+        legacy_candidate_was_running=1
+        legacy_running_candidate_source=/data/local/hapaneld-helper
+      fi
+    fi
+    if [ -f /data/local/.hapaneld-helper.new ]; then
+      legacy_stage_processes=$(legacy_path_processes /data/local/.hapaneld-helper.new) || return 1
+      if [ -n "$legacy_stage_processes" ]; then
+        # No valid app takeover cut executes the staging pathname, and no exact restoration state
+        # exists for one.  Preserve the record and staged process fail-closed.
+        return 1
+      fi
+    fi
+    if [ "$legacy_candidate_was_running" = 1 ]; then
+      legacy_candidate_path_serving "$legacy_running_candidate_source" || return 1
+    fi
+    legacy_normalization_phase=candidate
+    trap "legacy_normalization_signal 129" 1
+    trap "legacy_normalization_signal 130" 2
+    trap "legacy_normalization_signal 131" 3
+    trap "legacy_normalization_signal 143" 15
+    if [ -f /data/local/hapaneld-helper ]; then
+      legacy_stop_path_processes /data/local/hapaneld-helper || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+    fi
+    if [ -f /data/local/.hapaneld-helper.new ]; then
+      legacy_stop_path_processes /data/local/.hapaneld-helper.new || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+    fi
+    if [ -f /data/local/hapaneld-helper ]; then
+      legacy_exact_file /data/local/hapaneld-helper "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+      legacy_live_processes=$(legacy_path_processes /data/local/hapaneld-helper) || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+      [ -z "$legacy_live_processes" ] || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+    fi
+    if [ -f /data/local/.hapaneld-helper.new ]; then
+      legacy_exact_file /data/local/.hapaneld-helper.new "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+      legacy_stage_processes=$(legacy_path_processes /data/local/.hapaneld-helper.new) || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+      [ -z "$legacy_stage_processes" ] || { legacy_restore_after_normalization_failure || true; legacy_restore_signal_traps; return 1; }
+    fi
+    legacy_safe_reply=$("$legacy_candidate_source" --replacement-safe 2>/dev/null)
+    legacy_safe_status=$?
+    if [ "$legacy_safe_status" -ne 0 ] || [ "$legacy_safe_reply" != REPLACE_SAFE ]; then
+      legacy_restore_after_normalization_failure || true
+      legacy_restore_signal_traps
+      return 1
+    fi
+    legacy_normalization_phase=old
+    if ! legacy_start_old; then
+      legacy_restore_after_normalization_failure || true
+      legacy_restore_signal_traps
+      return 1
+    fi
+    legacy_restore_signal_traps
+    legacy_takeover_only_authority || return 1
+    legacy_exact_file "$legacy_old_bin" "$legacy_old_sha" 755 "$legacy_old_bytes" &&
+    legacy_exact_file "$legacy_registration" "$legacy_registration_sha" "$legacy_registration_mode" "$legacy_registration_bytes" &&
+      legacy_old_serving || return 1
+    if [ -f /data/local/hapaneld-helper ]; then
+      legacy_exact_file /data/local/hapaneld-helper "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+      legacy_live_processes=$(legacy_path_processes /data/local/hapaneld-helper) || return 1
+      [ -z "$legacy_live_processes" ] || return 1
+    fi
+    if [ -f /data/local/.hapaneld-helper.new ]; then
+      legacy_exact_file /data/local/.hapaneld-helper.new "$legacy_candidate_sha" 700 "$legacy_candidate_bytes" || return 1
+      legacy_stage_processes=$(legacy_path_processes /data/local/.hapaneld-helper.new) || return 1
+      [ -z "$legacy_stage_processes" ] || return 1
+    fi
+    legacy_record_after=$(app_stage_metadata "$legacy_record") || return 1
+    [ "$legacy_record_after" = "$legacy_record_meta" ] && [ "$(app_stage_file_sha256 "$legacy_record")" = "$legacy_record_sha" ] || return 1
+    legacy_record_final=$(app_stage_metadata "$legacy_record") || return 1
+    [ "$legacy_record_final" = "$legacy_record_meta" ] && [ "$(app_stage_file_sha256 "$legacy_record")" = "$legacy_record_sha" ] || return 1
+    rm -f "$legacy_record" || return 1
+    sync || return 1
+    return 0
+  }
+  reconcile_authority_free_app_staging() {
+    [ -d /data/local ] && [ ! -L /data/local ] || return 0
+    app_stage_authority_absent || return 0
+    app_stage=/data/local/.hapaneld-helper.new
+    if [ -e "$app_stage" ] || [ -L "$app_stage" ]; then
+      app_stage_before=$(app_stage_metadata "$app_stage") || return 0
+      valid_app_stage_metadata "$app_stage_before" 700 || return 0
+      app_stage_processes=$(legacy_path_processes "$app_stage") || return 0
+      [ -z "$app_stage_processes" ] || return 0
+      app_stage_authority_absent || return 0
+      app_stage_after=$(app_stage_metadata "$app_stage") || return 0
+      [ "$app_stage_after" = "$app_stage_before" ] || return 0
+      valid_app_stage_metadata "$app_stage_after" 700 || return 0
+      app_stage_processes=$(legacy_path_processes "$app_stage") || return 0
+      [ -z "$app_stage_processes" ] || return 0
+      rm -f "$app_stage" || return 0
+      sync || return 0
+    fi
+    for app_upload in /data/local/.hapaneld-helper.app-stage-*; do
+      [ -e "$app_upload" ] || [ -L "$app_upload" ] || continue
+      app_upload_id=${app_upload#/data/local/.hapaneld-helper.app-stage-}
+      case "$app_upload_id" in ""|*[!0-9a-f]*) continue ;; esac
+      [ "${#app_upload_id}" -eq 64 ] || continue
+      app_upload_before=$(app_stage_metadata "$app_upload") || continue
+      valid_app_stage_metadata "$app_upload_before" "600:700" || continue
+      app_upload_processes=$(legacy_path_processes "$app_upload") || continue
+      [ -z "$app_upload_processes" ] || continue
+      app_stage_authority_absent || return 0
+      app_upload_after=$(app_stage_metadata "$app_upload") || continue
+      [ "$app_upload_after" = "$app_upload_before" ] || continue
+      valid_app_stage_metadata "$app_upload_after" "600:700" || continue
+      app_upload_processes=$(legacy_path_processes "$app_upload") || continue
+      [ -z "$app_upload_processes" ] || continue
+      rm -f "$app_upload" 2>/dev/null || continue
+      sync 2>/dev/null || true
+    done
+    return 0
+  }
+
+  # This command is already inside run_root_locked. Reclaim only app staging that never acquired
+  # any native, legacy, previous, provisioner, or manual transaction authority.
+  reconcile_lone_legacy_takeover_tmp || { echo LEGACY_TAKEOVER_HOLD; exit 75; }
+  normalize_legacy_takeover || { echo LEGACY_TAKEOVER_HOLD; exit 75; }
+  reconcile_authority_free_app_staging
+
   inspect_manual_journal_v1() {
     kind=$1; marker=$2
     owner=$(stat -c %u:%g "$marker" 2>/dev/null || toybox stat -c %u:%g "$marker" 2>/dev/null) || { echo INVALID_MANUAL_TRANSACTION; return; }
@@ -1581,6 +2003,8 @@ manual_journal_state="$(run_root_locked '
     inspect_historical_journal SYSTEM /system/bin/.hapaneld-helper-manual-upgrade
   elif [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
     inspect_historical_journal SYSTEMLESS /data/adb/hapaneld/.helper-manual-upgrade.marker
+  elif app_replacement_custody_present; then
+    echo APP_REPLACEMENT_HOLD
   else
     echo NO_STALE_TRANSACTION
   fi
@@ -1617,6 +2041,12 @@ case "$manual_journal_state" in
     fail "an incomplete APK-coupled helper upgrade must be recovered by the provisioner first" \
       "Re-run the same scripts/provision.sh or scripts/update-fleet.sh command that started the upgrade." \
       "This standalone installer did not change helper files." ;;
+  LEGACY_TAKEOVER_HOLD)
+    fail "a retained app-managed root-helper takeover could not be normalized safely" \
+      "The exact takeover record and helper bytes were preserved. Let the app finish recovery, then re-run this installer." ;;
+  APP_REPLACEMENT_HOLD)
+    fail "app-managed root-helper replacement custody blocks standalone installation" \
+      "The fixed custody paths were preserved, and no helper topology or standalone recovery journal was changed. Let the app finish or reconcile its replacement, then re-run this installer." ;;
   TRANSACTION_BUSY)
     fail "another root-helper transaction is active on the panel" \
       "Wait for the other installer or provisioner to finish, then re-run." ;;
@@ -1725,14 +2155,19 @@ fi
 
 start_manual_lease_guard "$INSTALL_KIND"
 out2="$(run_root_locked '
-  mount -o rw,remount / 2>/dev/null
-  mount -o rw,remount /system 2>/dev/null
-  mount -o rw,remount /vendor 2>/dev/null
-  mkdir -p /data/local /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
-  [ '"$INSTALL_KIND"' != systemless ] || mkdir -p /data/adb/service.d ||
-    { echo TARGET_DIR_FAIL; exit 1; }
-  chown 0:0 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
-  chmod 700 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+  app_replacement_custody_present() {
+    for custody in \
+        /data/local/.hapaneld-helper.new \
+        /data/local/.hapaneld-helper.previous \
+        /data/local/.hapaneld-helper.previous.tmp \
+        /data/local/.hapaneld-helper.legacy-takeover \
+        /data/local/.hapaneld-helper.legacy-takeover.tmp \
+        /data/local/.hapaneld-guard-db/replacement.v1 \
+        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
+      if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
+    done
+    return 1
+  }
 
   if [ -f /system/bin/.hapaneld-helper-upgrade ] ||
      [ -f /data/adb/hapaneld/.helper-upgrade.marker ] ||
@@ -1742,7 +2177,18 @@ out2="$(run_root_locked '
        [ -f /system/bin/.hapaneld-helper-manual-upgrade ] ||
        [ -f /data/adb/hapaneld/.helper-manual-upgrade.marker ]; then
     echo ACTIVE_MANUAL_TRANSACTION; exit 75
+  elif app_replacement_custody_present; then
+    echo APP_REPLACEMENT_HOLD; exit 75
   fi
+
+  mount -o rw,remount / 2>/dev/null
+  mount -o rw,remount /system 2>/dev/null
+  mount -o rw,remount /vendor 2>/dev/null
+  mkdir -p /data/local /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+  [ '"$INSTALL_KIND"' != systemless ] || mkdir -p /data/adb/service.d ||
+    { echo TARGET_DIR_FAIL; exit 1; }
+  chown 0:0 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
+  chmod 700 /data/adb/hapaneld || { echo TARGET_DIR_FAIL; exit 1; }
 
   file_hash() {
     actual=$(sha256sum "$1" 2>/dev/null || toybox sha256sum "$1" 2>/dev/null) || return 1
@@ -1837,17 +2283,6 @@ out2="$(run_root_locked '
       *) return 1 ;;
     esac
   }
-  app_replacement_custody_present() {
-    for custody in \
-        /data/local/.hapaneld-helper.new \
-        /data/local/.hapaneld-helper.previous \
-        /data/local/.hapaneld-helper.previous.tmp \
-        /data/local/.hapaneld-guard-db/replacement.v1 \
-        /data/local/.hapaneld-guard-db/.replacement.v1.tmp; do
-      if [ -e "$custody" ] || [ -L "$custody" ]; then return 0; fi
-    done
-    return 1
-  }
   recorded_live LIVE_CANONICAL /data/local/hapaneld-helper &&
   recorded_live LIVE_SYSTEM_BIN /system/bin/hapaneld-helper &&
   recorded_live LIVE_SYSTEM_RC /system/etc/init/hapaneld-helper.rc &&
@@ -1917,6 +2352,9 @@ out2="$(run_root_locked '
 ' 2>&1)" || true
 echo "$out2" | sed 's/^/   /'
 case "$out2" in
+  *APP_REPLACEMENT_HOLD*)
+    fail "app-managed root-helper replacement custody appeared while standalone installation was preparing" \
+      "The fixed custody paths were preserved. No topology remount, candidate copy, recovery snapshot, journal, helper retirement, or rollback was attempted; re-run after the app replacement finishes." ;;
   *LIVE_IDENTITY_CHANGED*)
     fail "live helper topology changed after the standalone snapshot" \
       "Another helper replacement completed while the incumbent was retiring; no live file was overwritten and the stale snapshots were not rolled back." \

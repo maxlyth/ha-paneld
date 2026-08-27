@@ -41,6 +41,8 @@
 #define HELPER_LIVE "/tmp/.hapaneld-helper-live-test"
 #define HELPER_STAGE "/tmp/.hapaneld-helper-live-test.new"
 #define HELPER_PREVIOUS "/tmp/.hapaneld-helper-live-test.previous"
+#define SHARED_LOCK "/tmp/.hapaneld-helper-transaction-lock-test"
+#define SHARED_LOCK_PID SHARED_LOCK "/pid"
 static const char SETTINGS_AUTHORITY[] =
     "S2\n616c706861|737472696e67|64656661756c74\n";
 
@@ -383,6 +385,14 @@ static void setup(void) {
         "boot nonce domain-separated fixed vector\n");
     CHECK(guard_test_reconcile() == 0, "empty startup reconciliation succeeds\n");
     guard_test_set_app_autonomous_profile(1);
+}
+
+static void write_shared_lock_pid(pid_t pid) {
+    char record[32];
+    int length = snprintf(record, sizeof record, "%ld\n", (long)pid);
+    CHECK(mkdir(SHARED_LOCK, 0700) == 0, "create shared helper-lock fixture\n");
+    if (length > 1 && (size_t)length < sizeof record)
+        write_file_mode(SHARED_LOCK_PID, record, (size_t)length, 0600);
 }
 
 static void prepare_exact_baseline(const void *database, size_t size, char db_sha[65]) {
@@ -766,6 +776,8 @@ static void test_replacement_fence_and_same_lease_app_swap(void) {
         "retirement worker exits only after durable fence\n");
     CHECK(strcmp(reply, "OK GUARDRETIRE 1 REQUESTED\n") == 0,
         "retirement reply identifies durable request (got %s)\n", reply);
+    CHECK(access(SHARED_LOCK, F_OK) != 0,
+        "durable replacement request releases the shared helper lock before retirement\n");
 
     char prepare_line[512];
     prepare_command(prepare_line);
@@ -801,6 +813,55 @@ static void test_replacement_fence_and_same_lease_app_swap(void) {
           (errno == EWOULDBLOCK || errno == EAGAIN),
         "new supervised lineage continuously retains the same lease\n");
     if (contender >= 0) close(contender);
+}
+
+static void test_replacement_shared_lock_admission(void) {
+    setup();
+    static const char old_helper[] = "shared-lock-old-app-helper";
+    static const char new_helper[] = "shared-lock-new-app-helper";
+    char new_sha[65], command[512], reply[512];
+    write_file_mode(HELPER_LIVE, old_helper, sizeof old_helper - 1, 0700);
+    write_file_mode(HELPER_STAGE, new_helper, sizeof new_helper - 1, 0700);
+    hash_bytes(new_helper, sizeof new_helper - 1, new_sha);
+    write_shared_lock_pid(getpid());
+    snprintf(command, sizeof command, "GUARDRETIRE APP %s %s %s",
+        REPLACEMENT_NONCE, new_sha, REPLACEMENT_BUILD);
+    dispatch_once(command, reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR BUSY replacement\n") == 0 &&
+          access(CUSTODY "/replacement.v1", F_OK) != 0 &&
+          file_equals(HELPER_STAGE, new_helper, sizeof new_helper - 1),
+        "live shared helper lock blocks before replacement authority or stage mutation (got %s)\n",
+        reply);
+
+    setup();
+    write_file_mode(HELPER_LIVE, old_helper, sizeof old_helper - 1, 0700);
+    write_file_mode(HELPER_STAGE, new_helper, sizeof new_helper - 1, 0700);
+    CHECK(mkdir(SHARED_LOCK, 0700) == 0,
+        "create ambiguous shared helper-lock fixture\n");
+    dispatch_once(command, reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR HOLD replacement\n") == 0 &&
+          access(CUSTODY "/replacement.v1", F_OK) != 0 &&
+          access(SHARED_LOCK, F_OK) == 0,
+        "ambiguous shared helper lock fails closed without reclamation (got %s)\n", reply);
+
+    setup();
+    write_file_mode(HELPER_LIVE, old_helper, sizeof old_helper - 1, 0700);
+    write_file_mode(HELPER_STAGE, new_helper, sizeof new_helper - 1, 0700);
+    pid_t dead = fork();
+    CHECK(dead >= 0, "fork stale shared-lock holder fixture\n");
+    if (dead == 0) _exit(0);
+    int status = 0;
+    CHECK(waitpid(dead, &status, 0) == dead && WIFEXITED(status),
+        "reap stale shared-lock holder fixture\n");
+    write_shared_lock_pid(dead);
+    snprintf(command, sizeof command, "GUARDRETIRE APP %s %064d %s",
+        REPLACEMENT_NONCE, 0, REPLACEMENT_BUILD);
+    dispatch_once(command, reply, sizeof reply);
+    CHECK(strcmp(reply, "ERR HOLD replacement\n") == 0 &&
+          access(CUSTODY "/replacement.v1", F_OK) != 0 &&
+          access(SHARED_LOCK, F_OK) != 0 &&
+          file_equals(HELPER_STAGE, new_helper, sizeof new_helper - 1),
+        "dead-PID shared lock is reclaimed and released on validation failure (got %s)\n", reply);
 }
 
 static void test_replacement_respects_installstream_package_gate(void) {
@@ -2551,6 +2612,7 @@ int main(void) {
     test_atomic_draft_fault_and_owner_lock();
     test_nonreplacement_staging_dirsync_reconciliation();
     test_replacement_respects_installstream_package_gate();
+    test_replacement_shared_lock_admission();
     test_replacement_fence_and_same_lease_app_swap();
     test_replacement_backup_cut_recovers_exact_old();
     test_replacement_build_mismatch_aborts_before_swap();

@@ -15,8 +15,10 @@ UPDATE_FLEET="$ROOT/scripts/update-fleet.sh"
 FIXTURES="$ROOT/scripts/tests/fixtures"
 TMP="$(mktemp -d)"
 ACTIVE_PUBLICATION_PGID=""
+readonly PROVISION_TEST_OWNER_BASHPID="$BASHPID"
 cleanup_provision_test() {
   local status=$? pgid="${ACTIVE_PUBLICATION_PGID:-}" attempt=0
+  [ "$BASHPID" = "$PROVISION_TEST_OWNER_BASHPID" ] || return "$status"
   trap - EXIT
   if [ -n "$pgid" ]; then
     kill -TERM -- "-$pgid" 2>/dev/null || true
@@ -389,6 +391,7 @@ run_provision() {
   MOCK_VENDOR_INIT_RW="${MOCK_VENDOR_INIT_RW:-1}" \
   MOCK_VENDOR_RC_STATE="${MOCK_VENDOR_RC_STATE:-missing}" \
   MOCK_HELPER_INSTALL="${MOCK_HELPER_INSTALL:-ok}" \
+  MOCK_APP_REPLACEMENT_HOLD="${MOCK_APP_REPLACEMENT_HOLD:-0}" \
   MOCK_HELPER_COMMIT="${MOCK_HELPER_COMMIT:-ok}" \
   MOCK_COMMIT_LIVE_STATE="${MOCK_COMMIT_LIVE_STATE:-TARGET}" \
   MOCK_TRANSACTION_BUSY="${MOCK_TRANSACTION_BUSY:-0}" \
@@ -1070,6 +1073,7 @@ sed -e "s|^db=/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db$|db=$
     "$DB_OBSERVER_SOURCE" > "$DB_OBSERVER_RUN"
 DB_OBSERVER_BIN="$DB_OBSERVER_DIR/bin"
 DB_OBSERVER_SQLITE_LOG="$DB_OBSERVER_DIR/sqlite-argv.log"
+DB_OBSERVER_HOST_SED=""
 mkdir -p "$DB_OBSERVER_BIN"
 # Target Android 8.1 userspaces do not necessarily provide awk. Give the extracted device program
 # only its explicit applets so a host /usr/bin fallback cannot make a forbidden dependency look green.
@@ -1077,6 +1081,7 @@ for db_observer_tool in cp find grep ls mktemp rm sed sha256sum; do
   db_observer_tool_path="$(PATH=/usr/bin:/bin command -v "$db_observer_tool" 2>/dev/null || true)"
   if [ -n "$db_observer_tool_path" ]; then
     ln -s "$db_observer_tool_path" "$DB_OBSERVER_BIN/$db_observer_tool"
+    [ "$db_observer_tool" != sed ] || DB_OBSERVER_HOST_SED="$db_observer_tool_path"
   else
     LAST_OUTPUT="$TMP/observer-missing-tool"
     printf 'missing host test prerequisite: %s\n' "$db_observer_tool" > "$LAST_OUTPUT"
@@ -1108,6 +1113,38 @@ if printf '%s\n' "$observer_output" | grep -Fqx "HOSTDB_PRIMARY_FINGERPRINT=|:$o
    printf '%s\n' "$observer_output" | grep -Eq 'HOSTDB_INVENTORY_FINGERPRINT=.*ha-paneld\.db\.v13\.premigrate:file:[0-9a-f]{64}.*ha-paneld\.db\.v14\.premigrate:file:[0-9a-f]{64}'; then
   pass "production observer binds exact primary bytes and the complete readable recovery inventory"
 else fail_test "production observer binds exact primary bytes and the complete readable recovery inventory"; fi
+
+# A failed parser must not turn missing output into proof that SQLite returned exactly two lines.
+# Fail only the third selector while SQLite emits a malformed extra line: this was the fail-open seam.
+rm -f "$DB_OBSERVER_BIN/sed"
+cat > "$DB_OBSERVER_BIN/sed" <<EOF
+#!/bin/sh
+case "\${2:-}" in
+  '3,\$p') exit 1 ;;
+esac
+exec "$DB_OBSERVER_HOST_SED" "\$@"
+EOF
+cat > "$DB_OBSERVER_BIN/sqlite3" <<'EOF'
+#!/bin/sh
+printf '15\nok\nunexpected-extra-line\n'
+EOF
+chmod 700 "$DB_OBSERVER_BIN/sed" "$DB_OBSERVER_BIN/sqlite3"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
+if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=unreadable'; then
+  pass "production observer fails closed when the extra-output parser fails"
+else
+  LAST_OUTPUT="$TMP/observer-output"; printf '%s\n' "$observer_output" > "$LAST_OUTPUT"
+  fail_test "production observer fails closed when the extra-output parser fails"
+fi
+rm -f "$DB_OBSERVER_BIN/sed"
+ln -s "$DB_OBSERVER_HOST_SED" "$DB_OBSERVER_BIN/sed"
+cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$DB_OBSERVER_SQLITE_LOG"
+exec "$HAPANELD_HOST_SQLITE3" "\$@"
+EOF
+chmod 700 "$DB_OBSERVER_BIN/sqlite3"
+
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v15.premigrate" 'PRAGMA user_version=15; CREATE TABLE poison(value TEXT);'
 observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:ok' && \
@@ -1206,7 +1243,7 @@ for observer_retained_suffix in -journal .restore.tmp .vbad.premigrate.tmp; do
   rm -f "$DB_OBSERVER_DB$observer_retained_suffix"
 done
 unset observer_retained_suffix
-unset DB_OBSERVER_SOURCE DB_OBSERVER_DIR DB_OBSERVER_DB DB_OBSERVER_RUN DB_OBSERVER_BIN DB_OBSERVER_SQLITE_LOG observer_output observer_primary_sha
+unset DB_OBSERVER_SOURCE DB_OBSERVER_DIR DB_OBSERVER_DB DB_OBSERVER_RUN DB_OBSERVER_BIN DB_OBSERVER_SQLITE_LOG DB_OBSERVER_HOST_SED observer_output observer_primary_sha
 unset wal_source_hash_before wal_source_hash_after wal_source_inventory_before wal_source_inventory_after
 
 if grep -Fq 'HAPANELD_HOST_DB_GATE_V1' "$ROOT/scripts/install.sh" && \
@@ -2198,6 +2235,11 @@ MOCK_TRANSACTION_BUSY=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "a live standalone-installer lock blocks provisioner mutation"
 assert_contains 'another root-helper transaction is active' "cross-tool lock contention fails closed"
 assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless)|^adb .* install( |$)' "$MOCK_CALL_LOG" "cross-tool contention performs no rollback or APK replacement"
+
+MOCK_APP_REPLACEMENT_HOLD=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "fixed app replacement custody blocks provisioner mutation"
+assert_contains 'app-managed root-helper replacement custody blocks provisioning' "fixed app custody has an exact host refusal"
+assert_not_contains 'helper-transaction-[0-9a-f]+.*rollback-(system|systemless|hybrid)|^adb .* install( |$)' "$MOCK_CALL_LOG" "fixed app custody performs no rollback or APK replacement"
 
 MOCK_STALE_TRANSACTION=1 MOCK_ACTIVE_TRANSACTION=1 \
   run_provision "$MOCK_TARGET" --apk "$HELPER_RELEASE_APK" --release-tag v0.9.4-rc1 --no-tame
@@ -5760,7 +5802,9 @@ marker_line="$(grep -n '} > "\$marker.new"' "$PROVISION" | head -1 | cut -d: -f1
 pre_marker_sync_line="$(awk -v after="$marker_line" 'NR > after && /sync \|\| /{print NR; exit}' "$PROVISION")"
 marker_move_line="$(grep -n 'mv -f "\$marker.new" "\$marker"' "$PROVISION" | head -1 | cut -d: -f1)"
 post_marker_sync_line="$(awk -v after="$marker_move_line" 'NR > after && /sync \|\| /{print NR; exit}' "$PROVISION")"
-retire_alt_line="$(grep -n '/data/adb/hapaneld/hapaneld-helper /data/adb/service.d/hapaneld-helper.sh' "$PROVISION" | head -1 | cut -d: -f1)"
+retire_alt_line="$(awk -v after="$post_marker_sync_line" \
+  'NR > after && /\/data\/adb\/hapaneld\/hapaneld-helper \/data\/adb\/service.d\/hapaneld-helper.sh/{print NR; exit}' \
+  "$PROVISION")"
 if [ -n "$snapshot_line" ] && [ -n "$marker_line" ] && [ -n "$retire_alt_line" ] && \
    [ -n "$pre_marker_sync_line" ] && [ -n "$marker_move_line" ] && [ -n "$post_marker_sync_line" ] && \
    [ "$snapshot_line" -lt "$marker_line" ] && [ "$marker_line" -lt "$pre_marker_sync_line" ] && \
@@ -5955,8 +5999,13 @@ else
   fail_test "a surviving LED daemon times out, is escalated to SIGKILL, and is named in the diagnostic"
 fi
 
-if grep -Fq '/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &' "$PROVISION" && \
-   ! grep -Fq 'start hapaneld_helper' "$PROVISION"; then
+managed_restart_body="$(awk '
+  /# All boot mechanisms only register the canonical authority/ { active=1 }
+  active { print }
+  active && /if ! wait_for_helper_reply PING OK/ { exit }
+' "$PROVISION")"
+if grep -Fq '/data/local/hapaneld-helper --supervise >/dev/null 2>&1 &' <<<"$managed_restart_body" && \
+   ! grep -Fq 'start hapaneld_helper' <<<"$managed_restart_body"; then
   pass "managed helper restart bypasses stale in-memory init definitions and launches the canonical supervisor"
 else
   fail_test "managed helper restart bypasses stale in-memory init definitions and launches the canonical supervisor"
@@ -6579,6 +6628,24 @@ sed -e "s/@TRANSACTION_ID@/$SWEEP_OWN_ID/g" \
     -e 's|/vendor/|${SWEEP_ROOT}/vendor/|g' \
     -e 's|/dev/.hapaneld-helper-transaction.lock|${SWEEP_ROOT}/dev/.hapaneld-helper-transaction.lock|g' \
     "$DEVICE_HEREDOC" > "$DISPATCH_SCRIPT"
+for app_hold_kind in system systemless hybrid; do
+  app_hold_body="$(sed -n "/^install_${app_hold_kind}() {$/,/^}$/p" "$DEVICE_HEREDOC")"
+  app_hold_admission_line="$(printf '%s\n' "$app_hold_body" | grep -n 'state=$(helper_journal_state)' | head -1 | cut -d: -f1)"
+  app_hold_first_mutation_line="$(printf '%s\n' "$app_hold_body" | grep -En '^  (mount|mkdir|chown|chmod|cp|snapshot)' | head -1 | cut -d: -f1)"
+  if [ -n "$app_hold_admission_line" ] && [ -n "$app_hold_first_mutation_line" ] && \
+     [ "$app_hold_admission_line" -lt "$app_hold_first_mutation_line" ]; then
+    pass "$app_hold_kind checks fixed app custody before its first topology mutation"
+  else
+    fail_test "$app_hold_kind checks fixed app custody before its first topology mutation"
+  fi
+done
+if [ "$(grep -Fc 'APP_REPLACEMENT_HOLD' "$PROVISION")" -ge 3 ] && \
+   grep -Fq 'APP_REPLACEMENT_HOLD)' "$PROVISION" && \
+   grep -Eq 'APP_REPLACEMENT_HOLD\|TRANSACTION_BUSY|TRANSACTION_BUSY\|APP_REPLACEMENT_HOLD' "$PROVISION"; then
+  pass "host provisioning treats fixed app custody as terminal before rollback"
+else
+  fail_test "host provisioning treats fixed app custody as terminal before rollback"
+fi
 mk_sweep_tree
 mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
 : > "$SWEEP_TREE/data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID"
@@ -6603,6 +6670,762 @@ assert_swept "data/local/tmp/hapaneld-helper-$SWEEP_STALE_ID" "production transa
 assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_OWN_ID" "production dispatch keeps the emitted transaction identity"
 assert_kept "data/local/tmp/hapaneld-helper-$SWEEP_ARG_ID" "production dispatch keeps the argv transaction identity"
 assert_swept "dev/.hapaneld-helper-transaction.lock" "production dispatch releases its transaction lock"
+
+# BundledHelperInstaller publishes .new only after an identity-bound upload has been verified. If
+# the app dies before publishing transaction authority, the next provisioner owns the shared lock
+# and can safely discard both pre-authority files. Execute that reconciliation through the complete
+# emitted script, not a shell model of it.
+APP_STAGE_SHA="$SWEEP_SHA"
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+printf 'verified candidate\n' > "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+chmod 700 "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+printf 'partial upload\n' > "$SWEEP_TREE/data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA"
+chmod 600 "$SWEEP_TREE/data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA"
+printf 'foreign upload\n' > "$SWEEP_TREE/data/local/.hapaneld-helper.app-stage-not-a-sha"
+chmod 600 "$SWEEP_TREE/data/local/.hapaneld-helper.app-stage-not-a-sha"
+app_stage_output="$TMP/device-dispatch-app-stage-output"
+SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+  discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+  > "$app_stage_output" 2>&1 || true
+assert_swept "data/local/.hapaneld-helper.new" "production dispatch reclaims an exact authority-free app stage"
+assert_swept "data/local/.hapaneld-helper.app-stage-$APP_STAGE_SHA" "production dispatch reclaims a strict authority-free app upload orphan"
+assert_kept "data/local/.hapaneld-helper.app-stage-not-a-sha" "an upload outside the strict app-stage namespace is not guessed at"
+if [ "$(tail -n 1 "$app_stage_output")" = "LIVE_STATE=PRE_SWAP" ]; then
+  pass "an unowned upload orphan is never treated as replacement authority"
+else
+  LAST_OUTPUT="$app_stage_output"
+  fail_test "an unowned upload orphan is never treated as replacement authority"
+fi
+
+# Every transaction-authority namespace fences .new reclamation. This includes native Guard
+# replacement, retained legacy takeover, previous-byte custody, all three APK-coupled journal
+# locations, and all three historical/canonical standalone journal locations.
+for app_authority in \
+    "data/local/.hapaneld-guard-db/replacement.v1" \
+    "data/local/.hapaneld-guard-db/.replacement.v1.tmp" \
+    "data/local/.hapaneld-helper.legacy-takeover" \
+    "data/local/.hapaneld-helper.legacy-takeover.tmp" \
+    "data/local/.hapaneld-helper.previous" \
+    "data/local/.hapaneld-helper.previous.tmp" \
+    "system/bin/.hapaneld-helper-upgrade" \
+    "data/adb/hapaneld/.helper-upgrade.marker" \
+    "data/adb/hapaneld/.helper-hybrid-upgrade.marker" \
+    "data/local/.hapaneld-helper-manual-upgrade" \
+    "system/bin/.hapaneld-helper-manual-upgrade" \
+    "data/adb/hapaneld/.helper-manual-upgrade.marker"; do
+  mk_sweep_tree
+  mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor" "$(dirname "$SWEEP_TREE/$app_authority")"
+  printf 'verified candidate\n' > "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  chmod 700 "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  : > "$SWEEP_TREE/$app_authority"
+  SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$TMP/device-dispatch-authority-output" 2>&1 || true
+  assert_kept "data/local/.hapaneld-helper.new" "${app_authority#/} authority preserves app replacement staging"
+done
+
+# A specific provisioner or standalone journal remains the diagnostic authority even when fixed
+# app staging is also present. Generic app custody must never hide the owning recovery path.
+for app_precedence_case in \
+    'system/bin/.hapaneld-helper-upgrade|STALE_SYSTEM_TRANSACTION' \
+    'data/adb/hapaneld/.helper-upgrade.marker|STALE_SYSTEMLESS_TRANSACTION' \
+    'data/adb/hapaneld/.helper-hybrid-upgrade.marker|STALE_HYBRID_TRANSACTION' \
+    'data/local/.hapaneld-helper-manual-upgrade|FOREIGN_MANUAL_TRANSACTION' \
+    'system/bin/.hapaneld-helper-manual-upgrade|FOREIGN_MANUAL_TRANSACTION' \
+    'data/adb/hapaneld/.helper-manual-upgrade.marker|FOREIGN_MANUAL_TRANSACTION'; do
+  app_precedence_path=${app_precedence_case%%|*}
+  app_precedence_expected=${app_precedence_case#*|}
+  mk_sweep_tree
+  mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor" "$(dirname "$SWEEP_TREE/$app_precedence_path")"
+  printf 'fixed candidate\n' > "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  chmod 700 "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  : > "$SWEEP_TREE/$app_precedence_path"
+  app_precedence_output="$TMP/device-dispatch-precedence-${app_precedence_path##*/}-output"
+  if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+      install-systemless "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+      > "$app_precedence_output" 2>&1; then
+    app_precedence_status=0
+  else
+    app_precedence_status=$?
+  fi
+  if [ "$app_precedence_status" -eq 2 ] && \
+     [ "$(cat "$app_precedence_output")" = "$app_precedence_expected" ]; then
+    pass "$app_precedence_path takes precedence over generic app custody"
+  else
+    LAST_OUTPUT="$app_precedence_output"
+    fail_test "$app_precedence_path takes precedence over generic app custody"
+  fi
+  assert_kept "data/local/.hapaneld-helper.new" "$app_precedence_path precedence preserves fixed app custody"
+done
+
+# A stage outside the exact root-owned, regular, one-link, 0700, 1..16MiB envelope is foreign. It
+# remains visible to app_replacement_custody_present and therefore holds topology instead of being
+# silently deleted.
+for malformed_stage in empty wrong-mode wrong-owner hardlink symlink oversized; do
+  mk_sweep_tree
+  mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+  stage_path="$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  case "$malformed_stage" in
+    empty) : > "$stage_path"; chmod 700 "$stage_path" ;;
+    wrong-mode) printf x > "$stage_path"; chmod 600 "$stage_path" ;;
+    wrong-owner) printf x > "$stage_path"; chmod 700 "$stage_path"; chown 1:1 "$stage_path" ;;
+    hardlink) printf x > "$stage_path"; chmod 700 "$stage_path"; ln "$stage_path" "$SWEEP_TREE/data/local/stage-second-link" ;;
+    symlink) ln -s /nonexistent "$stage_path" ;;
+    oversized) truncate -s 16777217 "$stage_path"; chmod 700 "$stage_path" ;;
+  esac
+  malformed_output="$TMP/device-dispatch-malformed-$malformed_stage-output"
+  SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$malformed_output" 2>&1 || true
+  assert_kept "data/local/.hapaneld-helper.new" "$malformed_stage app stage is preserved as foreign custody"
+  if [ "$(tail -n 1 "$malformed_output")" = "LIVE_STATE=TOPOLOGY_HOLD" ]; then
+    pass "$malformed_stage app stage fails closed as replacement custody"
+  else
+    LAST_OUTPUT="$malformed_output"
+    fail_test "$malformed_stage app stage fails closed as replacement custody"
+  fi
+done
+
+# Fixed app custody is an install admission boundary, not merely a discovery label. Every layout
+# must refuse before remounts, target-directory creation, candidate staging, snapshots, or journals.
+for app_hold_kind in system systemless hybrid; do
+  mk_sweep_tree
+  mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+  : > "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  chmod 700 "$SWEEP_TREE/data/local/.hapaneld-helper.new"
+  app_hold_output="$TMP/device-dispatch-app-hold-$app_hold_kind-output"
+  if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+      "install-$app_hold_kind" "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+      > "$app_hold_output" 2>&1; then
+    app_hold_status=0
+  else
+    app_hold_status=$?
+  fi
+  if [ "$app_hold_status" -eq 2 ] && [ "$(cat "$app_hold_output")" = APP_REPLACEMENT_HOLD ]; then
+    pass "$app_hold_kind install refuses fixed app custody with its exact terminal state"
+  else
+    LAST_OUTPUT="$app_hold_output"
+    fail_test "$app_hold_kind install refuses fixed app custody with status 2"
+  fi
+  assert_kept "data/local/.hapaneld-helper.new" "$app_hold_kind admission preserves fixed app custody"
+  if [ ! -e "$SWEEP_TREE/data/local/.hapaneld-helper.provision-$SWEEP_ARG_ID" ] && \
+     [ ! -e "$SWEEP_TREE/system/etc/init/hapaneld-helper.rc.new" ] && \
+     [ ! -e "$SWEEP_TREE/vendor/etc/init/hapaneld-helper.rc.new" ] && \
+     [ ! -e "$SWEEP_TREE/data/adb/service.d/hapaneld-helper.sh.new" ] && \
+     [ ! -e "$SWEEP_TREE/system/bin/.hapaneld-helper-upgrade" ] && \
+     [ ! -e "$SWEEP_TREE/data/adb/hapaneld/.helper-upgrade.marker" ] && \
+     [ ! -e "$SWEEP_TREE/data/adb/hapaneld/.helper-hybrid-upgrade.marker" ]; then
+    pass "$app_hold_kind admission performs no helper or journal staging"
+  else
+    fail_test "$app_hold_kind admission performs no helper or journal staging"
+  fi
+done
+
+# Exact bytes and metadata are not enough to make an authority-free stage disposable: an executing
+# inode is live foreign custody. Reconciliation must preserve both it and its pathname without
+# inventing transaction authority.
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+stage_path="$SWEEP_TREE/data/local/.hapaneld-helper.new"
+if cp /bin/sleep "$stage_path" && chmod 700 "$stage_path"; then
+  pass "executing authority-free stage fixture publishes exact executable bytes"
+else
+  fail_test "executing authority-free stage fixture publishes exact executable bytes"
+fi
+"$stage_path" 60 &
+app_stage_pid=$!
+app_stage_inode="$(stat -c '%d:%i' "$stage_path")"
+app_stage_wait=0
+app_stage_process_inode=
+while [ "$app_stage_wait" -lt 100 ]; do
+  app_stage_process_inode="$(stat -Lc '%d:%i' "/proc/$app_stage_pid/exe" 2>/dev/null || true)"
+  [ "$app_stage_process_inode" != "$app_stage_inode" ] || break
+  sleep 0.01
+  app_stage_wait=$((app_stage_wait + 1))
+done
+if [ "$app_stage_process_inode" = "$app_stage_inode" ]; then
+  pass "executing authority-free stage fixture reaches a live exact inode"
+else
+  fail_test "executing authority-free stage fixture reaches a live exact inode"
+fi
+app_stage_running_output="$TMP/device-dispatch-running-app-stage-output"
+SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+  discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+  > "$app_stage_running_output" 2>&1 || true
+assert_kept "data/local/.hapaneld-helper.new" "an executing authority-free stage is never reclaimed"
+if kill -0 "$app_stage_pid" 2>/dev/null; then
+  pass "authority-free stage reconciliation preserves the executing inode"
+else
+  fail_test "authority-free stage reconciliation preserves the executing inode"
+fi
+if [ "$(tail -n 1 "$app_stage_running_output")" = LIVE_STATE=TOPOLOGY_HOLD ]; then
+  pass "an executing authority-free stage remains visible as topology custody"
+else
+  LAST_OUTPUT="$app_stage_running_output"
+  fail_test "an executing authority-free stage remains visible as topology custody"
+fi
+app_stage_install_output="$TMP/device-dispatch-running-app-stage-install-output"
+if SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$DISPATCH_SCRIPT" \
+    install-systemless "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$app_stage_install_output" 2>&1; then
+  app_stage_install_status=0
+else
+  app_stage_install_status=$?
+fi
+if [ "$app_stage_install_status" -eq 2 ] && \
+   [ "$(cat "$app_stage_install_output")" = APP_REPLACEMENT_HOLD ]; then
+  pass "an executing authority-free stage blocks install before mutation"
+else
+  LAST_OUTPUT="$app_stage_install_output"
+  fail_test "an executing authority-free stage blocks install before mutation"
+fi
+kill "$app_stage_pid" 2>/dev/null || true
+wait "$app_stage_pid" 2>/dev/null || true
+unset APP_STAGE_SHA app_stage_output app_authority malformed_stage stage_path malformed_output \
+  app_stage_pid app_stage_inode app_stage_wait app_stage_process_inode app_stage_running_output
+
+# Exercise retained legacy-takeover normalization through the complete emitted provisioner script.
+# Two tiny executables provide real, distinct /proc/$pid/exe inodes. The candidate deliberately
+# reports GUARD_ARMED from --replacement-safe while its server owns the simulated Guard lock, so a
+# pre-stop safety probe would wedge this success case; only the daemon-down probe can return safe.
+LEGACY_FIXTURE_ROOT="$TMP/legacy-normalization"
+LEGACY_FIXTURE_C="$TMP/legacy-fixture.c"
+LEGACY_FIXTURE_CANDIDATE="$TMP/legacy-candidate"
+LEGACY_FIXTURE_OLD="$TMP/legacy-old"
+legacy_assert() {
+  local description="$1"
+  shift
+  if "$@"; then pass "$description"; else fail_test "$description"; return 1; fi
+}
+legacy_assert_not() {
+  local description="$1"
+  shift
+  if "$@"; then fail_test "$description"; return 1; else pass "$description"; fi
+}
+legacy_assert_present() {
+  local path="$1" description="$2"
+  if [ -e "$path" ] || [ -L "$path" ]; then pass "$description"; else fail_test "$description"; return 1; fi
+}
+legacy_assert_absent() {
+  local path="$1" description="$2"
+  if [ ! -e "$path" ] && [ ! -L "$path" ]; then pass "$description"; else fail_test "$description"; return 1; fi
+}
+legacy_assert_dispatch_success() {
+  local output="$1" description="$2"
+  if legacy_run_dispatch > "$output" 2>&1; then pass "$description"
+  else LAST_OUTPUT="$output"; fail_test "$description"; return 1; fi
+}
+legacy_assert_dispatch_failure() {
+  local output="$1" description="$2" status
+  if legacy_run_dispatch > "$output" 2>&1; then
+    LAST_OUTPUT="$output"
+    fail_test "$description"
+    return 1
+  else
+    status=$?
+  fi
+  if [ "$status" -eq 75 ] && [ "$(tail -n 1 "$output")" = LEGACY_TAKEOVER_HOLD ]; then
+    pass "$description"
+  else
+    LAST_OUTPUT="$output"
+    fail_test "$description (got status $status without exact HOLD)"
+    return 1
+  fi
+}
+legacy_assert_status() {
+  local actual="$1" expected="$2" description="$3"
+  if [ "$actual" -eq "$expected" ]; then pass "$description"
+  else fail_test "$description (got $actual, expected $expected)"; return 1; fi
+}
+legacy_pid_alive() { kill -0 "$1" 2>/dev/null; }
+cat > "$LEGACY_FIXTURE_C" <<'EOF'
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#ifndef CANDIDATE_ROLE
+#define CANDIDATE_ROLE 0
+#endif
+
+static char ready_path[1024];
+static volatile sig_atomic_t stop_requested;
+static void stop_server(int signal_number) {
+    (void)signal_number;
+    stop_requested = 1;
+}
+static int ready_file(const char *name) {
+    const char *root = getenv("LEGACY_FIXTURE_ROOT");
+    if (!root) return 0;
+    snprintf(ready_path, sizeof(ready_path), "%s/%s", root, name);
+    return access(ready_path, F_OK) == 0;
+}
+static int serve(const char *name) {
+    const char *root = getenv("LEGACY_FIXTURE_ROOT");
+    if (!root) return 1;
+    if (!CANDIDATE_ROLE && getenv("LEGACY_OLD_START_FAIL")) return 1;
+    snprintf(ready_path, sizeof(ready_path), "%s/%s", root, name);
+    FILE *ready = fopen(ready_path, "w");
+    if (!ready) return 1;
+    fclose(ready);
+    signal(SIGTERM, stop_server);
+    signal(SIGINT, stop_server);
+    signal(SIGHUP, stop_server);
+    while (!stop_requested) pause();
+    if (CANDIDATE_ROLE && getenv("LEGACY_CANDIDATE_STOP_DELAY")) {
+        char stopping_path[1024];
+        snprintf(stopping_path, sizeof(stopping_path), "%s/candidate-stopping", root);
+        FILE *stopping = fopen(stopping_path, "w");
+        if (stopping) fclose(stopping);
+        sleep(2);
+    }
+    unlink(ready_path);
+    _exit(0);
+}
+int main(int argc, char **argv) {
+    if (CANDIDATE_ROLE && argc == 2 && strcmp(argv[1], "--replacement-safe") == 0) {
+        if (ready_file("candidate-ready") || getenv("LEGACY_POST_SAFE_ARMED")) {
+            puts("GUARD_ARMED");
+            return 3;
+        }
+        puts("REPLACE_SAFE");
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--request") == 0) {
+        if (!CANDIDATE_ROLE && strcmp(argv[2], "BUILDID") == 0 && ready_file("old-ready")) {
+            printf("BUILDID %s\n", getenv("LEGACY_OLD_BUILD"));
+            return 0;
+        }
+        if (CANDIDATE_ROLE && strcmp(argv[2], "GUARDSELF") == 0 && ready_file("candidate-ready")) {
+            printf("OK GUARDSELF 1 %s %s %s\n", getenv("LEGACY_CANDIDATE_BYTES"),
+                   getenv("LEGACY_CANDIDATE_SHA"), getenv("LEGACY_CANDIDATE_BUILD"));
+            return 0;
+        }
+        return 1;
+    }
+    return serve(CANDIDATE_ROLE ? "candidate-ready" : "old-ready");
+}
+EOF
+legacy_assert "legacy fixture compiles the candidate executable" \
+  cc -O2 -DCANDIDATE_ROLE=1 "$LEGACY_FIXTURE_C" -o "$LEGACY_FIXTURE_CANDIDATE"
+legacy_assert "legacy fixture compiles the distinct released executable" \
+  cc -O2 -DCANDIDATE_ROLE=0 "$LEGACY_FIXTURE_C" -o "$LEGACY_FIXTURE_OLD"
+
+legacy_stop_fixture_path() {
+  local path="$1" inode executable executable_inode pid
+  [ -f "$path" ] || return 0
+  inode="$(stat -c '%d:%i' "$path")" || return 1
+  for executable in /proc/[0-9]*/exe; do
+    executable_inode="$(stat -Lc '%d:%i' "$executable" 2>/dev/null || true)"
+    [ "$executable_inode" != "$inode" ] || { pid=${executable#/proc/}; pid=${pid%/exe}; kill "$pid" 2>/dev/null || true; }
+  done
+}
+legacy_cleanup_fixture() {
+  legacy_stop_fixture_path "$LEGACY_FIXTURE_ROOT/data/local/hapaneld-helper" || return 1
+  legacy_stop_fixture_path "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.new" || return 1
+  legacy_stop_fixture_path "$LEGACY_FIXTURE_ROOT/system/bin/hapaneld-helper" || return 1
+  legacy_stop_fixture_path "$LEGACY_FIXTURE_ROOT/data/adb/hapaneld/hapaneld-helper" || return 1
+  sleep 0.05
+}
+legacy_fixture_processes() {
+  local path="$1" inode executable executable_inode found=
+  [ -f "$path" ] || return 0
+  inode="$(stat -c '%d:%i' "$path")" || return 1
+  for executable in /proc/[0-9]*/exe; do
+    executable_inode="$(stat -Lc '%d:%i' "$executable" 2>/dev/null || true)"
+    [ "$executable_inode" != "$inode" ] || found="$found ${executable#/proc/}"
+  done
+  printf '%s\n' "$found"
+}
+legacy_write_registration() {
+  local topology="$1" registration
+  case "$topology" in
+    system)
+      registration="$LEGACY_FIXTURE_ROOT/system/etc/init/hapaneld-helper.rc"
+      mkdir -p "${registration%/*}" || return 1
+      cat > "$registration" <<'EOF' || return 1
+service hapaneld_helper /system/bin/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+      LEGACY_REGISTRATION_MODE=644
+      LEGACY_EXPECTED_REGISTRATION_SHA=9b430712c493df177a19e5e893df445f6c2e951fc30ea140dcdbcdb7987de659 ;;
+    systemless)
+      registration="$LEGACY_FIXTURE_ROOT/data/adb/service.d/hapaneld-helper.sh"
+      mkdir -p "${registration%/*}" || return 1
+      cat > "$registration" <<'EOF' || return 1
+#!/system/bin/sh
+while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 3; done
+/system/bin/stop hapaneld_helper 2>/dev/null
+/system/bin/stop hapaneld_ledd 2>/dev/null
+/system/bin/pkill -x hapaneld-helper 2>/dev/null
+/system/bin/pkill -x hapaneld-ledd 2>/dev/null
+/data/adb/hapaneld/hapaneld-helper >/dev/null 2>&1 &
+EOF
+      LEGACY_REGISTRATION_MODE=755
+      LEGACY_EXPECTED_REGISTRATION_SHA=60ff22aa9b38483cbffd95a653d804d0d9abf682e1b952e8b4519d5c0f3f9493 ;;
+    hybrid)
+      registration="$LEGACY_FIXTURE_ROOT/vendor/etc/init/hapaneld-helper.rc"
+      mkdir -p "${registration%/*}" || return 1
+      cat > "$registration" <<'EOF' || return 1
+service hapaneld_helper /data/adb/hapaneld/hapaneld-helper
+    class main
+    user root
+    group root
+    seclabel u:r:su:s0
+EOF
+      LEGACY_REGISTRATION_MODE=644
+      LEGACY_EXPECTED_REGISTRATION_SHA=cf146dd5320fcb017514def6295fdb0c473e150a478d5c2219af2e3f03826ed1 ;;
+  esac
+  chmod "$LEGACY_REGISTRATION_MODE" "$registration" || return 1
+  LEGACY_REGISTRATION="$registration"
+  LEGACY_REGISTRATION_SHA="$(/usr/bin/sha256sum "$registration" | awk '{print $1}')" || return 1
+  [ "$LEGACY_REGISTRATION_SHA" = "$LEGACY_EXPECTED_REGISTRATION_SHA" ]
+}
+legacy_prepare_fixture() {
+  local topology="$1" candidate_location="${2:-live}" old_bin
+  legacy_cleanup_fixture || return 1
+  rm -rf "$LEGACY_FIXTURE_ROOT" || return 1
+  mkdir -p "$LEGACY_FIXTURE_ROOT/dev" "$LEGACY_FIXTURE_ROOT/data/local" \
+    "$LEGACY_FIXTURE_ROOT/data/adb/hapaneld" "$LEGACY_FIXTURE_ROOT/system/bin" \
+    "$LEGACY_FIXTURE_ROOT/vendor" || return 1
+  legacy_write_registration "$topology" || return 1
+  case "$topology" in
+    system) old_bin="$LEGACY_FIXTURE_ROOT/system/bin/hapaneld-helper" ;;
+    systemless|hybrid) old_bin="$LEGACY_FIXTURE_ROOT/data/adb/hapaneld/hapaneld-helper" ;;
+  esac
+  cp "$LEGACY_FIXTURE_OLD" "$old_bin" || return 1
+  chmod 755 "$old_bin" || return 1
+  LEGACY_FIXTURE_OLD_BIN="$old_bin"
+  if [ "$candidate_location" = stage ]; then
+    LEGACY_FIXTURE_CANDIDATE_PATH="$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.new"
+  else
+    LEGACY_FIXTURE_CANDIDATE_PATH="$LEGACY_FIXTURE_ROOT/data/local/hapaneld-helper"
+  fi
+  cp "$LEGACY_FIXTURE_CANDIDATE" "$LEGACY_FIXTURE_CANDIDATE_PATH" || return 1
+  chmod 700 "$LEGACY_FIXTURE_CANDIDATE_PATH" || return 1
+  LEGACY_OLD_SHA="$(/usr/bin/sha256sum "$old_bin" | awk '{print $1}')" || return 1
+  LEGACY_OLD_BYTES="$(wc -c < "$old_bin")" || return 1
+  LEGACY_CANDIDATE_SHA="$(/usr/bin/sha256sum "$LEGACY_FIXTURE_CANDIDATE_PATH" | awk '{print $1}')" || return 1
+  LEGACY_CANDIDATE_BYTES="$(wc -c < "$LEGACY_FIXTURE_CANDIDATE_PATH")" || return 1
+  LEGACY_REGISTRATION_BYTES="$(wc -c < "$LEGACY_REGISTRATION")" || return 1
+  LEGACY_OLD_BUILD="$(printf 'a%.0s' {1..64})" || return 1
+  LEGACY_CANDIDATE_BUILD="$(printf 'b%.0s' {1..64})" || return 1
+  export LEGACY_FIXTURE_ROOT LEGACY_FIXTURE_OLD_BIN LEGACY_OLD_BUILD LEGACY_CANDIDATE_BUILD \
+    LEGACY_CANDIDATE_SHA LEGACY_CANDIDATE_BYTES
+  cat > "$LEGACY_FIXTURE_ROOT/system/bin/start" <<'EOF' || return 1
+#!/bin/sh
+"$LEGACY_FIXTURE_OLD_BIN" >/dev/null 2>&1 &
+EOF
+  chmod 755 "$LEGACY_FIXTURE_ROOT/system/bin/start" || return 1
+  printf 'OK LEGACYTAKEOVER 1 %s %s %s %s %s %s %s %s %s %s\n' \
+    "$topology" "$LEGACY_OLD_SHA" "$LEGACY_OLD_BYTES" "$LEGACY_REGISTRATION_SHA" \
+    "$LEGACY_REGISTRATION_BYTES" "$LEGACY_REGISTRATION_MODE" "$LEGACY_OLD_BUILD" \
+    "$LEGACY_CANDIDATE_BUILD" "$LEGACY_CANDIDATE_SHA" "$LEGACY_CANDIDATE_BYTES" \
+    > "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" || return 1
+  chmod 600 "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" || return 1
+}
+legacy_run_dispatch() {
+  PATH=/usr/bin:/bin SWEEP_ROOT="$LEGACY_FIXTURE_ROOT" /bin/sh -u "$DISPATCH_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA"
+}
+legacy_wait_ready() {
+  local marker="$1" attempt=0
+  while [ ! -f "$marker" ]; do attempt=$((attempt + 1)); [ "$attempt" -lt 1000 ] || return 1; sleep 0.01; done
+}
+
+for legacy_topology in system systemless hybrid; do
+  legacy_assert "$legacy_topology legacy fixture binds canonical registration hashes and executable bytes" \
+    legacy_prepare_fixture "$legacy_topology" live
+  "$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+  legacy_candidate_pid=$!
+  legacy_assert "$legacy_topology live candidate fixture becomes serving" \
+    legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+  legacy_output="$TMP/legacy-$legacy_topology-output"
+  legacy_assert_dispatch_success "$legacy_output" "$legacy_topology live takeover normalizes through production dispatch"
+  legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+    "$legacy_topology success retires exact takeover authority"
+  legacy_assert_not "$legacy_topology success drains the retained candidate PID" \
+    legacy_pid_alive "$legacy_candidate_pid"
+  legacy_assert "$legacy_topology success starts and verifies exact old authority" \
+    legacy_wait_ready "$LEGACY_FIXTURE_ROOT/old-ready"
+  legacy_assert_not "$legacy_topology owner-lock fixture never returns takeover HOLD" \
+    grep -q LEGACY_TAKEOVER_HOLD "$legacy_output"
+  legacy_assert "$legacy_topology success fixture cleanup completes" legacy_cleanup_fixture
+done
+
+# SIGKILL after exact old start/verification but before record unlink leaves the durable record as
+# the retry authority. Re-entry sees zero candidate processes, revalidates through the candidate
+# CLI while the Guard-less released old daemon serves, and completes on every released topology.
+LEGACY_PRE_UNLINK_SCRIPT="$TMP/device-dispatch-legacy-pre-unlink.sh"
+if sed '/^  legacy_record_after=$(app_stage_metadata "$legacy_record")/i\
+: > "$LEGACY_FIXTURE_ROOT/pre-unlink-ready"\
+while [ ! -e "$LEGACY_FIXTURE_ROOT/pre-unlink-release" ]; do sleep 1; done
+' "$DISPATCH_SCRIPT" > "$LEGACY_PRE_UNLINK_SCRIPT"; then
+  pass "legacy pre-unlink cut script is generated from production dispatch"
+else
+  fail_test "legacy pre-unlink cut script is generated from production dispatch"
+fi
+for legacy_topology in system systemless hybrid; do
+  legacy_assert "$legacy_topology pre-unlink fixture prepares exact custody" \
+    legacy_prepare_fixture "$legacy_topology" live
+  "$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+  legacy_assert "$legacy_topology pre-unlink fixture starts its candidate" \
+    legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+  PATH=/usr/bin:/bin SWEEP_ROOT="$LEGACY_FIXTURE_ROOT" /bin/sh -u "$LEGACY_PRE_UNLINK_SCRIPT" \
+    discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+    > "$TMP/legacy-pre-unlink-$legacy_topology-output" 2>&1 &
+  legacy_cut_pid=$!
+  legacy_assert "$legacy_topology pre-unlink fixture reaches the durable replay cut" \
+    legacy_wait_ready "$LEGACY_FIXTURE_ROOT/pre-unlink-ready"
+  legacy_assert "$legacy_topology pre-unlink fixture accepts SIGKILL" kill -KILL "$legacy_cut_pid"
+  if wait "$legacy_cut_pid" 2>/dev/null; then legacy_cut_status=0; else legacy_cut_status=$?; fi
+  legacy_assert_status "$legacy_cut_status" 137 "$legacy_topology pre-unlink cut exits from SIGKILL"
+  legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+    "$legacy_topology pre-unlink cut retains exact authority"
+  legacy_assert "$legacy_topology pre-unlink cut leaves the released helper serving" \
+    legacy_wait_ready "$LEGACY_FIXTURE_ROOT/old-ready"
+  legacy_assert_dispatch_success "$TMP/legacy-pre-unlink-$legacy_topology-retry-output" \
+    "$legacy_topology pre-unlink cut replays through ordinary dispatch"
+  legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+    "$legacy_topology replay retires exact authority"
+  legacy_assert "$legacy_topology pre-unlink fixture cleanup succeeds" legacy_cleanup_fixture
+done
+
+# A signal delivered while the original candidate is still draining must not launch against that
+# dying supervisor and accept its stale GUARDSELF response. Recovery waits for the exact inode to
+# disappear, starts one replacement, verifies it, keeps authority, and releases shared custody.
+legacy_assert "delayed-drain signal fixture prepares exact live custody" \
+  legacy_prepare_fixture system live
+export LEGACY_CANDIDATE_STOP_DELAY=1
+"$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+legacy_candidate_pid=$!
+legacy_assert "delayed-drain signal fixture starts its retained candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+PATH=/usr/bin:/bin SWEEP_ROOT="$LEGACY_FIXTURE_ROOT" /bin/sh -u "$DISPATCH_SCRIPT" \
+  discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+  > "$TMP/legacy-candidate-drain-signal-output" 2>&1 &
+legacy_signal_pid=$!
+legacy_assert "delayed-drain fixture reaches the dying-original interval" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-stopping"
+legacy_assert "delayed-drain normalizer accepts TERM" kill -TERM "$legacy_signal_pid"
+if wait "$legacy_signal_pid"; then legacy_signal_status=0; else legacy_signal_status=$?; fi
+legacy_assert_status "$legacy_signal_status" 143 "delayed-drain TERM exits normalization nonzero"
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "delayed-drain TERM retains exact takeover authority"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/dev/.hapaneld-helper-transaction.lock" \
+  "delayed-drain TERM releases shared transaction custody"
+legacy_assert_not "delayed-drain recovery retires the original candidate PID" \
+  legacy_pid_alive "$legacy_candidate_pid"
+legacy_assert "delayed-drain recovery starts a verified candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+legacy_recovered_processes="$(legacy_fixture_processes "$LEGACY_FIXTURE_CANDIDATE_PATH")"
+legacy_assert "delayed-drain recovery leaves exactly one canonical candidate process" \
+  test "$(printf '%s\n' "$legacy_recovered_processes" | wc -w)" -eq 1
+unset LEGACY_CANDIDATE_STOP_DELAY
+legacy_assert "delayed-drain fixture clears its synthetic cut marker" \
+  rm -f "$LEGACY_FIXTURE_ROOT/candidate-stopping"
+legacy_assert_dispatch_success "$TMP/legacy-candidate-drain-retry-output" \
+  "delayed-drain authority permits an ordinary normalization retry"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "delayed-drain retry retires exact takeover authority"
+legacy_assert "delayed-drain fixture cleanup succeeds" legacy_cleanup_fixture
+
+# Stage-only publication and both lone tmp cuts are preauthority: old init/process ownership is
+# established, then the record/tmp and stage are durably reclaimed.
+legacy_assert "stage-only app-death fixture prepares exact custody" legacy_prepare_fixture system stage
+legacy_assert_dispatch_success "$TMP/legacy-stage-only-output" \
+  "stage-only app-death cut normalizes through production dispatch"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "stage-only app-death cut retires exact takeover authority"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.new" \
+  "stage-only app-death cut reclaims the authority-free candidate"
+legacy_assert "stage-only app-death fixture cleanup succeeds" legacy_cleanup_fixture
+
+# No valid app publication cut executes .new. An exact staged process is foreign live custody: do
+# not stop it, retire its record, or mutate either candidate pathname.
+legacy_assert "executing-stage fixture prepares exact staged custody" legacy_prepare_fixture system stage
+"$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+legacy_stage_pid=$!
+legacy_assert "executing-stage fixture starts the foreign staged process" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+legacy_assert_dispatch_failure "$TMP/legacy-running-stage-output" \
+  "an executing app stage is refused without normalization"
+legacy_assert "executing-stage HOLD preserves the staged process" legacy_pid_alive "$legacy_stage_pid"
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "executing-stage HOLD preserves takeover authority"
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.new" \
+  "executing-stage HOLD preserves candidate bytes"
+legacy_assert "executing-stage fixture cleanup succeeds" legacy_cleanup_fixture
+
+# TERM during the candidate-down phase must retain authority, release the shared lock, and restore
+# the exact prior candidate because post-stop REPLACE_SAFE has not yet succeeded. The ordinary retry
+# then normalizes it cleanly.
+LEGACY_CANDIDATE_DOWN_SCRIPT="$TMP/device-dispatch-legacy-candidate-down.sh"
+if sed '/^  legacy_safe_reply=$("$legacy_candidate_source" --replacement-safe/i\
+: > "$LEGACY_FIXTURE_ROOT/candidate-down-ready"\
+while [ ! -e "$LEGACY_FIXTURE_ROOT/candidate-down-release" ]; do sleep 1; done
+' "$DISPATCH_SCRIPT" > "$LEGACY_CANDIDATE_DOWN_SCRIPT"; then
+  pass "candidate-down cut script is generated from production dispatch"
+else
+  fail_test "candidate-down cut script is generated from production dispatch"
+fi
+legacy_assert "candidate-down signal fixture prepares exact live custody" legacy_prepare_fixture system live
+"$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+legacy_assert "candidate-down signal fixture starts its retained candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+PATH=/usr/bin:/bin SWEEP_ROOT="$LEGACY_FIXTURE_ROOT" /bin/sh -u "$LEGACY_CANDIDATE_DOWN_SCRIPT" \
+  discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+  > "$TMP/legacy-candidate-down-signal-output" 2>&1 &
+legacy_signal_pid=$!
+legacy_assert "candidate-down signal fixture reaches the pre-safety cut" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-down-ready"
+legacy_assert "candidate-down normalizer accepts TERM" kill -TERM "$legacy_signal_pid"
+if wait "$legacy_signal_pid"; then legacy_signal_status=0; else legacy_signal_status=$?; fi
+legacy_assert_status "$legacy_signal_status" 143 "candidate-down TERM exits normalization nonzero"
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "candidate-down TERM retains exact takeover authority"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/dev/.hapaneld-helper-transaction.lock" \
+  "candidate-down TERM releases shared transaction custody"
+legacy_assert "candidate-down recovery restores the exact prior candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+legacy_assert_dispatch_success "$TMP/legacy-candidate-down-retry-output" \
+  "candidate-down authority permits an ordinary normalization retry"
+legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "candidate-down retry retires exact takeover authority"
+legacy_assert "candidate-down fixture cleanup succeeds" legacy_cleanup_fixture
+for legacy_tmp_kind in partial complete; do
+  legacy_assert "$legacy_tmp_kind lone-tmp fixture prepares staged preauthority" \
+    legacy_prepare_fixture system stage
+  legacy_assert "$legacy_tmp_kind lone-tmp fixture removes the unpublished final record" \
+    rm -f "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover"
+  if [ "$legacy_tmp_kind" = partial ]; then
+    if : > "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"; then
+      pass "partial lone-tmp fixture publishes zero preauthority bytes"
+    else
+      fail_test "partial lone-tmp fixture publishes zero preauthority bytes"
+    fi
+  else
+    if printf 'complete preauthority record bytes\n' > "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"; then
+      pass "complete lone-tmp fixture publishes bounded preauthority bytes"
+    else
+      fail_test "complete lone-tmp fixture publishes bounded preauthority bytes"
+    fi
+  fi
+  legacy_assert "$legacy_tmp_kind lone-tmp fixture binds root-only record mode" \
+    chmod 600 "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp"
+  legacy_assert_dispatch_success "$TMP/legacy-tmp-$legacy_tmp_kind-output" \
+    "$legacy_tmp_kind lone-tmp cut reconciles through production dispatch"
+  legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover.tmp" \
+    "$legacy_tmp_kind lone-tmp cut retires preauthority bytes"
+  legacy_assert_absent "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.new" \
+    "$legacy_tmp_kind lone-tmp cut reclaims staged candidate bytes"
+  legacy_assert "$legacy_tmp_kind lone-tmp fixture cleanup succeeds" legacy_cleanup_fixture
+done
+
+# A Guard plan that becomes active at the daemon-down cut restores the exact previously serving
+# candidate and retains its authority record. This also proves normalization never probes
+# --replacement-safe while the simulated owner lock (candidate-ready) is live.
+legacy_assert "post-stop Guard-race fixture prepares exact live custody" legacy_prepare_fixture system live
+"$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+legacy_candidate_pid=$!
+legacy_assert "post-stop Guard-race fixture starts its retained candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+export LEGACY_POST_SAFE_ARMED=1
+legacy_assert_dispatch_failure "$TMP/legacy-post-safe-armed-output" \
+  "post-stop GUARD_ARMED refuses takeover normalization"
+unset LEGACY_POST_SAFE_ARMED
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "post-stop GUARD_ARMED retains exact takeover authority"
+legacy_assert "post-stop GUARD_ARMED restores a verified candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+legacy_recovered_processes="$(legacy_fixture_processes "$LEGACY_FIXTURE_CANDIDATE_PATH")"
+legacy_assert "post-stop GUARD_ARMED leaves a canonical candidate process" \
+  test "$(printf '%s\n' "$legacy_recovered_processes" | wc -w)" -ge 1
+legacy_assert "post-stop Guard-race fixture cleanup succeeds" legacy_cleanup_fixture
+
+# Parser mismatch is a hard hold with zero process mutation, including Kotlin-rejected trailing
+# blank lines. An unrelated executable inode also survives the successful normalization kill.
+legacy_assert "noncanonical-record fixture prepares exact live custody" legacy_prepare_fixture system live
+if printf '\n' >> "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover"; then
+  pass "noncanonical-record fixture appends a second trailing newline"
+else
+  fail_test "noncanonical-record fixture appends a second trailing newline"
+fi
+"$LEGACY_FIXTURE_CANDIDATE_PATH" --supervise >/dev/null 2>&1 &
+legacy_candidate_pid=$!
+legacy_assert "noncanonical-record fixture starts its retained candidate" \
+  legacy_wait_ready "$LEGACY_FIXTURE_ROOT/candidate-ready"
+legacy_assert_dispatch_failure "$TMP/legacy-extra-newline-output" \
+  "noncanonical legacy record is refused without normalization"
+legacy_assert "noncanonical record refusal preserves the retained candidate" legacy_pid_alive "$legacy_candidate_pid"
+legacy_assert_present "$LEGACY_FIXTURE_ROOT/data/local/.hapaneld-helper.legacy-takeover" \
+  "noncanonical record refusal preserves exact bytes"
+legacy_assert "noncanonical-record fixture cleanup succeeds" legacy_cleanup_fixture
+
+legacy_assert "unrelated-inode fixture prepares exact takeover custody" legacy_prepare_fixture system live
+legacy_assert "unrelated-inode fixture copies a distinct executable" \
+  cp /bin/sleep "$LEGACY_FIXTURE_ROOT/data/local/unrelated-helper"
+legacy_assert "unrelated-inode fixture makes its executable runnable" \
+  chmod 700 "$LEGACY_FIXTURE_ROOT/data/local/unrelated-helper"
+"$LEGACY_FIXTURE_ROOT/data/local/unrelated-helper" 60 &
+legacy_unrelated_pid=$!
+legacy_assert_dispatch_success "$TMP/legacy-unrelated-inode-output" \
+  "normalization succeeds while an unrelated executable inode is live"
+legacy_assert "normalization preserves the unrelated executable process" legacy_pid_alive "$legacy_unrelated_pid"
+kill "$legacy_unrelated_pid" 2>/dev/null || true
+wait "$legacy_unrelated_pid" 2>/dev/null || true
+legacy_assert "unrelated-inode fixture cleanup succeeds" legacy_cleanup_fixture
+unset LEGACY_FIXTURE_ROOT LEGACY_FIXTURE_C LEGACY_FIXTURE_CANDIDATE LEGACY_FIXTURE_OLD \
+  LEGACY_FIXTURE_OLD_BIN LEGACY_REGISTRATION_MODE LEGACY_EXPECTED_REGISTRATION_SHA \
+  LEGACY_REGISTRATION LEGACY_REGISTRATION_SHA LEGACY_OLD_SHA LEGACY_OLD_BYTES \
+  LEGACY_CANDIDATE_SHA LEGACY_CANDIDATE_BYTES LEGACY_REGISTRATION_BYTES \
+  LEGACY_OLD_BUILD LEGACY_CANDIDATE_BUILD LEGACY_FIXTURE_CANDIDATE_PATH \
+  LEGACY_PRE_UNLINK_SCRIPT LEGACY_CANDIDATE_DOWN_SCRIPT legacy_topology legacy_candidate_pid \
+  legacy_output legacy_tmp_kind legacy_unrelated_pid legacy_cut_pid legacy_signal_pid legacy_signal_status \
+  legacy_stage_pid legacy_recovered_processes
+
+# Signal cleanup must terminate the transaction as well as releasing its lock. Hold the emitted
+# dispatch immediately after acquisition so TERM deterministically reaches a live lock owner.
+INTERRUPT_DISPATCH_SCRIPT="$TMP/device-dispatch-interrupt.sh"
+sed '/^transaction_id=${2:-}$/i\
+sleep 2
+' "$DISPATCH_SCRIPT" > "$INTERRUPT_DISPATCH_SCRIPT"
+mk_sweep_tree
+mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
+interrupt_output="$TMP/device-dispatch-interrupt-output"
+SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$INTERRUPT_DISPATCH_SCRIPT" \
+  discover-system "$SWEEP_ARG_ID" "$SWEEP_SHA" test-build "$SWEEP_SHA" \
+  > "$interrupt_output" 2>&1 &
+interrupt_pid=$!
+interrupt_lock="$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock"
+interrupt_wait=0
+while [ "$interrupt_wait" -lt 200 ]; do
+  [ ! -d "$interrupt_lock" ] || break
+  kill -0 "$interrupt_pid" 2>/dev/null || break
+  sleep 0.01
+  interrupt_wait=$((interrupt_wait + 1))
+done
+if [ -d "$interrupt_lock" ]; then
+  pass "interruption fixture reaches a live production transaction lock"
+else
+  LAST_OUTPUT="$interrupt_output"
+  fail_test "interruption fixture reaches a live production transaction lock"
+fi
+kill -TERM "$interrupt_pid" 2>/dev/null || true
+if wait "$interrupt_pid"; then interrupt_status=0; else interrupt_status=$?; fi
+if [ "$interrupt_status" -eq 143 ]; then
+  pass "TERM cleanup exits the production transaction with a signal-derived failure"
+else
+  LAST_OUTPUT="$interrupt_output"
+  fail_test "TERM cleanup exits the production transaction with a signal-derived failure (got $interrupt_status)"
+fi
+assert_swept "dev/.hapaneld-helper-transaction.lock" "TERM cleanup releases the production transaction lock"
+unset INTERRUPT_DISPATCH_SCRIPT interrupt_output interrupt_pid interrupt_lock interrupt_wait interrupt_status
 
 # A live owner must reject before the sweep. This proves the top-level order, not merely that the
 # successful path eventually leaves no lock directory behind.
@@ -6684,6 +7507,10 @@ assert_msys_argv() {
   if grep -Eq -- "$1" "$MSYS_ARGV_LOG"; then pass "$2"
   else fail_test "$2 (missing argv pattern: $1)"; fi
 }
+assert_msys_argv_exact() {
+  if grep -Fqx -- "argv=$1" "$MSYS_ARGV_LOG"; then pass "$2"
+  else fail_test "$2 (missing exact argv: $1)"; fi
+}
 refute_msys_argv() {
   if grep -Eq -- "$1" "$MSYS_ARGV_LOG"; then fail_test "$2 (unexpected argv pattern: $1)"
   else pass "$2"; fi
@@ -6705,10 +7532,12 @@ assert_msys_argv '^argv=/data/local/tmp/\.hapaneld-db-txn\.[0-9a-f]+/ha-paneld\.
   "the database pull source reaches adb literally"
 refute_msys_argv "^argv=$MSYS_ROOT/(data|system|vendor|dev|proc|sys)" \
   "no Android filesystem root is rewritten"
-# The other direction. The APK and the pulled database are host files; under Git Bash adb.exe cannot
-# open `/tmp/...`, so the runtime translating them is the only reason those operands work at all.
-assert_msys_argv "^argv=$MSYS_ROOT$APK\$" \
-  "the APK host path is still translated for adb.exe"
+# The other direction. The owner-bound APK snapshot and the pulled database are host files; under
+# Git Bash adb.exe cannot open `/tmp/...`, so the runtime translating them is the only reason those
+# operands work at all. The aapt fixture records the exact private snapshot selected by production,
+# avoiding a stale assertion against the mutable caller path that production no longer installs.
+assert_msys_argv_exact "$MSYS_ROOT$(cat "$TMP/candidate-apk-path")" \
+  "the bound APK host path is still translated for adb.exe"
 assert_msys_argv "^argv=$MSYS_ROOT$TMP/" \
   "host operands under the working directory are still translated"
 assert_msys_argv '^argv=panel\.test:5555$' \

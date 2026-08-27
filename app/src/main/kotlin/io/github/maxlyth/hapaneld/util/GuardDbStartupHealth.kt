@@ -211,20 +211,51 @@ internal object GuardDbStartupAcknowledger {
     )
 
     private fun reacquireStatus(): GuardDbMaintenanceClient.StatusProbe {
-        var probe = GuardDbMaintenance.client.statusProbe()
+        return try {
+            reacquireGuardDbStartupStatus(
+                statusProbe = GuardDbMaintenance.client::statusProbe,
+                resumeRetainedCurrent = BundledHelperInstaller::resumeRetainedCurrent,
+                pause = { Thread.sleep(250L) },
+            )
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            GuardDbMaintenanceClient.StatusProbe.Unreachable
+        }
+    }
+
+}
+
+/**
+ * Reacquires Guard status without opening an ordinary helper migration path. An active sentinel may
+ * outlive the ephemeral current-build supervisor across an app or supervisor restart, so an exact
+ * retained record gets one recovery attempt before startup remains writer-free. A successful resume
+ * receives a fresh bounded window so the app independently reacquires status through its normal
+ * helper transport.
+ */
+internal fun reacquireGuardDbStartupStatus(
+    statusProbe: () -> GuardDbMaintenanceClient.StatusProbe,
+    resumeRetainedCurrent: () -> Boolean,
+    pause: () -> Unit,
+): GuardDbMaintenanceClient.StatusProbe {
+    fun boundedStatusWindow(initial: GuardDbMaintenanceClient.StatusProbe):
+        GuardDbMaintenanceClient.StatusProbe {
+        var probe = initial
         repeat(7) {
             if (probe !is GuardDbMaintenanceClient.StatusProbe.Unreachable) return probe
-            try {
-                Thread.sleep(250L)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                return GuardDbMaintenanceClient.StatusProbe.Unreachable
-            }
-            probe = GuardDbMaintenance.client.statusProbe()
+            pause()
+            probe = statusProbe()
         }
         return probe
     }
 
+    val original = boundedStatusWindow(statusProbe())
+    if (original != GuardDbMaintenanceClient.StatusProbe.Unsupported &&
+        original != GuardDbMaintenanceClient.StatusProbe.Unreachable
+    ) {
+        return original
+    }
+    if (!resumeRetainedCurrent()) return original
+    return boundedStatusWindow(statusProbe())
 }
 
 /**

@@ -155,6 +155,11 @@ internal class GuardDbSentinelStore(
 
     @Synchronized
     fun load(): GuardDbSentinelLoad {
+        if (!reconcilePending()) return GuardDbSentinelLoad.Corrupt
+        return loadRecord()
+    }
+
+    private fun loadRecord(): GuardDbSentinelLoad {
         if (Files.notExists(marker.toPath(), LinkOption.NOFOLLOW_LINKS)) return GuardDbSentinelLoad.Absent
         if (!validateMarker(marker) || marker.length() !in 1..2048) {
             return GuardDbSentinelLoad.Corrupt
@@ -163,9 +168,33 @@ internal class GuardDbSentinelStore(
         return parseGuardDbSentinel(bytes)?.let(GuardDbSentinelLoad::Valid) ?: GuardDbSentinelLoad.Corrupt
     }
 
+    private fun reconcilePending(): Boolean {
+        if (Files.notExists(temporary.toPath(), LinkOption.NOFOLLOW_LINKS)) return true
+        if (!validateMarker(temporary) || temporary.length() !in 1..2048) return false
+        val pending = runCatching { temporary.readBytes() }.getOrNull()
+            ?.let(::parseGuardDbSentinel) ?: return false
+        val allowed = when (val current = loadRecord()) {
+            GuardDbSentinelLoad.Absent -> pending.state == GuardDbSentinelState.INTENT
+            GuardDbSentinelLoad.Corrupt -> false
+            is GuardDbSentinelLoad.Valid -> current.sentinel.copy(state = pending.state) == pending &&
+                allowedGuardDbSentinelPromotion(current.sentinel.state, pending.state)
+        }
+        if (!allowed) return false
+        return runCatching {
+            Files.move(
+                temporary.toPath(),
+                marker.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+            syncDirectory(directory)
+        }.getOrDefault(false)
+    }
+
     @Synchronized
     fun write(sentinel: GuardDbStartupSentinel): Boolean = when (val current = load()) {
-        GuardDbSentinelLoad.Absent -> publish(sentinel)
+        GuardDbSentinelLoad.Absent ->
+            sentinel.state == GuardDbSentinelState.INTENT && publish(sentinel)
         is GuardDbSentinelLoad.Valid -> current.sentinel == sentinel && syncDirectory(directory)
         GuardDbSentinelLoad.Corrupt -> false
     }
@@ -205,7 +234,8 @@ internal class GuardDbSentinelStore(
     private fun promote(expectedSession: String, state: GuardDbSentinelState): Boolean {
         val current = (load() as? GuardDbSentinelLoad.Valid)?.sentinel ?: return false
         if (current.session != expectedSession) return false
-        return current.state == state || publish(current.copy(state = state))
+        if (current.state == state) return syncDirectory(directory)
+        return allowedGuardDbSentinelPromotion(current.state, state) && publish(current.copy(state = state))
     }
 
     @Synchronized
@@ -217,6 +247,12 @@ internal class GuardDbSentinelStore(
         return syncDirectory(directory)
     }
 }
+
+private fun allowedGuardDbSentinelPromotion(
+    current: GuardDbSentinelState,
+    pending: GuardDbSentinelState,
+): Boolean = current == GuardDbSentinelState.INTENT && pending == GuardDbSentinelState.BASELINE_READY ||
+    current == GuardDbSentinelState.BASELINE_READY && pending == GuardDbSentinelState.ARMED
 
 internal fun guardDbSentinelStore(context: Context): GuardDbSentinelStore =
     GuardDbSentinelStore(context.noBackupFilesDir)
