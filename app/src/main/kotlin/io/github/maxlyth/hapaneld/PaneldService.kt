@@ -2480,8 +2480,9 @@ class PaneldService : Service() {
         if (result !is WebViewInstaller.HealResult.Installed) return
         kotlinx.coroutines.delay(2_000)
         if (config.dashboardPackage.isBlank() || config.dashboardPackage == io.github.maxlyth.hapaneld.control.SystemController.BUILTIN_DASHBOARD) {
-            // A WebView provider binds once per process. Progress is terminal and the HTTP reply has
-            // time to flush before START_STICKY restarts the service and HOME on the new provider.
+            // A WebView provider binds once per process. The asynchronous trigger has already replied,
+            // while the operation ticket stays owned until this boundary is requested; START_STICKY
+            // then restarts the service and HOME on the new provider.
             Log.i(TAG, "WebView $verb — restarting process so the built-in renderer binds the new provider")
             kotlinx.coroutines.delay(1_000)
             requestSafeProcessBoundary("binding the $verb WebView provider")
