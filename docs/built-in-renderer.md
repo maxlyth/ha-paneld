@@ -30,7 +30,16 @@ Starting with ha-paneld 0.9.6, the built-in renderer requires both:
 - **Home Assistant 2026.4.2 or newer**; and
 - an Android System WebView that supports the secure WebMessage listener used by Home Assistant's native-host interface.
 
-Most users only need to install a current Android System WebView. ha-paneld checks the required WebView capability and verifies Home Assistant compatibility before it loads the dashboard. If the panel shows **Home Assistant upgrade required** or **This panel's web viewer is too old**, update the thing it names and select **Retry**. How Android System WebView is updated depends on the panel: some take it from Google Play, others only from a vendor firmware update or a manually installed build.
+Most users only need a current Android System WebView. ha-paneld checks the required WebView capability and verifies Home Assistant compatibility before it loads the dashboard.
+
+If the panel shows **Home Assistant upgrade required**, upgrade Home Assistant and select **Retry**. Nothing on the panel substitutes for that.
+
+If it shows **This panel's web viewer is too old**, the screen tells you what this particular panel can do about it, because that differs by model and by how the panel is set up:
+
+- **The panel can repair itself.** When a known-good Android System WebView is bundled for the panel and ha-paneld is permitted to install it, the screen offers **Update the web viewer**. Select it and the panel installs that version and restarts once to use it. If the screen comes back afterwards, the bundled version did not resolve the fault and the manual routes below still apply.
+- **The panel cannot, and the screen says why.** It names one of three reasons, and the update has to be done by hand, after which you select **Retry**: a known-good version is bundled but ha-paneld is not permitted to install it; no known-good version is bundled for this panel; or the panel takes its Android System WebView from a store, which will replace it more safely than ha-paneld would. Reinstalling the same version repairs a damaged one.
+
+How Android System WebView is updated by hand depends on the panel: some take it from Google Play, others only from a vendor firmware update or a manually installed build.
 
 The built-in renderer does not fall back to the older, less isolated bridge. Another renderer may help when Home Assistant itself cannot be upgraded. The Companion app uses the same system WebView, so it cannot bypass an obsolete WebView on the panel.
 

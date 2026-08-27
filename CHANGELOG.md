@@ -2,6 +2,12 @@
 
 ## v0.9.7-rc3 - 2026-08-27
 
+### Added
+
+- **A panel that says its web viewer is too old can now fix it itself.** The built-in dashboard needs a current Android System WebView, and when the panel had an old one that screen could only tell you to go and update it, on a device whose dashboard was already down, which is the worst possible moment to be sent somewhere else. Where a known-good version is bundled for the panel and ha-paneld is permitted to install it, the screen now offers **Update the web viewer**: the panel installs that version and restarts once to use it. Where it cannot, the screen names which of three reasons applies: a version is bundled but ha-paneld may not install it, no version is bundled for this panel, or the panel takes its web viewer from a store that will replace it more safely. The instruction you are given is one you can act on.
+
+- **The Home Assistant sign-in screens can hand the job to your phone.** When a panel has no Home Assistant login, or its saved one has stopped working, typing a password on a wall panel with no keyboard is the slowest way through. Those two screens now show a code that opens the panel's own sign-in setting on a phone, in place of the button that opened the same setting on the panel itself. The code appears only when the panel has an address a phone could actually reach, and that address is printed beneath it so it can be typed instead.
+
 ### Fixed
 
 - **Installing from Git Bash on Windows reaches the panel.** Git for Windows rewrites anything that looks like a path before it hands it to a Windows program, and it cannot tell a folder on the panel from a folder on your computer. Every address inside the panel — `/data/local/tmp/...` and the rest — was turned into a folder inside the Git installation before `adb` ever saw it, so `adb` was given the wrong destination path. Nothing arrived, every command reported success, and the run failed later with nothing to point at the cause; the only way through was WSL. The installer now marks the panel's own addresses as belonging to the panel, while the paths on your computer are still translated as they must be, so an install started in Git Bash finishes there. macOS and Linux are unaffected. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24)
