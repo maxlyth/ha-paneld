@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import android.app.Activity
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -512,6 +513,10 @@ internal class StatusSurface(
 
         /** The single theme decision, so no screen re-derives one of its own. */
         fun darkFor(activity: Activity, config: Config): Boolean = statusSurfaceDark(
+            // Resolved, never the raw package: blank means Auto, which is the built-in renderer too.
+            forcedDark = DashboardTheme.forcedDark(config.dashboardTheme).takeIf {
+                RendererResolver.isBuiltinSelection(config.dashboardPackage, activity.packageName)
+            },
             configuredDark = config.dashboardThemeDark,
             systemDark = (activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
                 Configuration.UI_MODE_NIGHT_YES,

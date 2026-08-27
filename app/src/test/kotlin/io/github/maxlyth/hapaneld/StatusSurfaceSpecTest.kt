@@ -241,19 +241,37 @@ class StatusSurfaceSpecTest {
     /** A configured dashboard theme is the panel's decision and outranks both fallbacks. */
     @Test
     fun aConfiguredThemeWinsOverTheSystemAndTheStoredPreference() {
-        assertTrue(statusSurfaceDark(configuredDark = true, systemDark = false, storedDark = false, sdkInt = 33))
-        assertTrue(!statusSurfaceDark(configuredDark = false, systemDark = true, storedDark = true, sdkInt = 33))
-        assertTrue(statusSurfaceDark(configuredDark = true, systemDark = false, storedDark = false, sdkInt = 26))
+        assertTrue(statusSurfaceDark(forcedDark = null, configuredDark = true, systemDark = false, storedDark = false, sdkInt = 33))
+        assertTrue(!statusSurfaceDark(forcedDark = null, configuredDark = false, systemDark = true, storedDark = true, sdkInt = 33))
+        assertTrue(statusSurfaceDark(forcedDark = null, configuredDark = true, systemDark = false, storedDark = false, sdkInt = 26))
     }
 
     /** Android 10 and newer have a real system night setting; older panels do not, so the panel's own
      *  stored preference is the only honest answer there. */
     @Test
     fun theSystemSettingIsFollowedOnlyWhereAndroidActuallyHasOne() {
-        assertTrue(statusSurfaceDark(configuredDark = null, systemDark = true, storedDark = false, sdkInt = 29))
-        assertTrue(!statusSurfaceDark(configuredDark = null, systemDark = false, storedDark = true, sdkInt = 29))
-        assertTrue(statusSurfaceDark(configuredDark = null, systemDark = false, storedDark = true, sdkInt = 28))
-        assertTrue(!statusSurfaceDark(configuredDark = null, systemDark = true, storedDark = false, sdkInt = 28))
+        assertTrue(statusSurfaceDark(forcedDark = null, configuredDark = null, systemDark = true, storedDark = false, sdkInt = 29))
+        assertTrue(!statusSurfaceDark(forcedDark = null, configuredDark = null, systemDark = false, storedDark = true, sdkInt = 29))
+        assertTrue(statusSurfaceDark(forcedDark = null, configuredDark = null, systemDark = false, storedDark = true, sdkInt = 28))
+        assertTrue(!statusSurfaceDark(forcedDark = null, configuredDark = null, systemDark = true, storedDark = false, sdkInt = 28))
+    }
+
+    /**
+     * An explicit Dark/Light policy outranks every other input, including a theme already observed
+     * from Home Assistant. These screens stand in for the dashboard, so a panel told to show a dark
+     * dashboard must not show a light screen on the way to it — and it must be right on the FIRST
+     * frame after the change, not one renderer observation later.
+     */
+    @Test
+    fun anExplicitThemePolicyOutranksEveryOtherInput() {
+        // Against a contrary observed theme, both directions, on both Android tiers.
+        assertTrue(statusSurfaceDark(forcedDark = true, configuredDark = false, systemDark = false, storedDark = false, sdkInt = 33))
+        assertTrue(!statusSurfaceDark(forcedDark = false, configuredDark = true, systemDark = true, storedDark = true, sdkInt = 33))
+        assertTrue(statusSurfaceDark(forcedDark = true, configuredDark = false, systemDark = false, storedDark = false, sdkInt = 26))
+        assertTrue(!statusSurfaceDark(forcedDark = false, configuredDark = true, systemDark = true, storedDark = true, sdkInt = 26))
+        // Follow surrenders the decision entirely: it must not act as a third opinion.
+        assertTrue(statusSurfaceDark(forcedDark = null, configuredDark = true, systemDark = false, storedDark = false, sdkInt = 33))
+        assertTrue(!statusSurfaceDark(forcedDark = null, configuredDark = false, systemDark = true, storedDark = true, sdkInt = 33))
     }
 
     // --- keeping the frame between phases ---------------------------------------------------------

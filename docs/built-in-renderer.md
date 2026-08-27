@@ -167,7 +167,16 @@ Like the rest of ha-paneld's control API, this endpoint is unauthenticated and i
 
 ## Theming
 
-The dashboard follows the panel's dark/light preference by default. On Android 13+ this tracks the system setting live; on Android 9-12 the "Dark mode" toggle (Configure → Display) sets it. A theme picked *inside* Home Assistant always wins over the default.
+**Dashboard theme** (Configure → Built-in renderer) decides who chooses light or dark:
+
+- **Follow Home Assistant** (the default) leaves the choice to Home Assistant. The panel supplies only a starting point: on Android 13+ that tracks the system setting live, and on Android 9-12 the "Dark mode" toggle (Configure → Display) sets it. A theme picked inside Home Assistant wins over that starting point.
+- **Dark** and **Light** make the panel choose. This is for a kiosk dashboard with the sidebar hidden, where the Home Assistant profile page is not reachable from the panel at all.
+
+Forcing a theme changes only the light/dark part of the choice. A named theme and its colours are left exactly as they are, and switching back to Follow Home Assistant returns the light/dark part to the value it had before, or to Auto if there was none. The panel never changes the theme stored against your Home Assistant *account*, so a panel set to Dark cannot darken your phone.
+
+One case it cannot override: if this Home Assistant user has explicitly chosen Light or Dark (rather than Auto), that choice still wins, because overriding it would mean changing a setting shared with every other device that user signs in on. Set the user's theme to Auto, or use a separate Home Assistant user for the panel, and the panel's choice applies.
+
+The `:8888` web interface is separate from all of this and always follows the browser you are viewing it in.
 
 ## Reverting
 

@@ -110,6 +110,7 @@ import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.util.DashboardPath
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.util.Cached
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.AndroidInput
@@ -292,6 +293,7 @@ internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
     "dashboard_idle_return_min",
     "dashboard_zoom",
     "dark_mode",
+    "dashboard_theme",
     "auto_brightness",
     "auto_brightness_minimum_percent",
     "auto_brightness_response_percent",
@@ -5581,6 +5583,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // applyBatch returns the pre-commit value, which silently defeated change-detection) but EXECUTED
         // after it commits, so the relaunched renderer can never read stale config.
         var applyDark: Boolean? = null
+        // The built-in dashboard colour-scheme policy. Detected from the POSTED value for the same
+        // reason as applyDark: a read-back inside applyBatch returns the pre-commit value.
+        var themePolicyChanged = false
         var relaunchForHa = false
         var relaunchForDash = false
         var relaunchForFullscreen = false
@@ -5716,6 +5721,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     val postedDark = p["dark_mode"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
                     postedDark?.let { config.setDarkMode(it) }
                     if (postedDark != null && postedDark != prevDark && android.os.Build.VERSION.SDK_INT < 29) applyDark = postedDark
+                    // Dashboard colour-scheme policy (Dashboard card). Separate authority from dark_mode
+                    // and deliberately ungated by SDK: it is the only lever that re-themes Home Assistant,
+                    // and it must reach a fresh page load because the policy is baked into a
+                    // document-start script that cannot be replaced in a live WebView.
+                    val prevThemePolicy = config.dashboardTheme
+                    val postedThemePolicy = p["dashboard_theme"]?.let { DashboardTheme.policy(it) }
+                    postedThemePolicy?.let { config.setDashboardTheme(it) }
+                    themePolicyChanged = postedThemePolicy != null && postedThemePolicy != prevThemePolicy
                     val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
                     val logHost = p["log_ship_host"]?.trim()
                     val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
@@ -5856,6 +5869,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                                 nativeKioskChanged = relaunchForNativeKiosk,
                                 homeChanged = homeDashboardChangedEarly,
                                 darkMode = applyDark,
+                                themePolicyChanged = themePolicyChanged,
                             ),
                         )
                     }.onFailure { rendererFailure = it }
@@ -9176,6 +9190,10 @@ internal data class RendererConfigEffects(
                 homeChanged = changed("home_dashboard"),
                 darkMode = accepted["dark_mode"]?.toBooleanStrictOrNull()
                     ?.takeIf { changed("dark_mode") && android.os.Build.VERSION.SDK_INT < 29 },
+                // Unlike dark_mode this has no SDK gate: the policy is the only lever that re-themes
+                // Home Assistant, and it is meaningful on every panel (Android 10+ has no HA theme
+                // lever at all today, which is half of what this setting exists to fix).
+                themePolicyChanged = changed("dashboard_theme"),
             )
         }
 
@@ -9190,8 +9208,12 @@ internal data class RendererConfigEffects(
             // appeared to do nothing. A change reloads the built-in renderer onto the new home now.
             homeChanged: Boolean = false,
             darkMode: Boolean?,
+            // The colour-scheme policy is baked into a document-start script, which cannot be replaced
+            // in a live WebView, so a change must reach a fresh page load rather than a foregrounding.
+            themePolicyChanged: Boolean = false,
         ): RendererConfigEffects {
-            val reload = !dashboardChanged && (credentialChanged || zoomChanged || homeChanged || darkMode != null)
+            val reload = !dashboardChanged &&
+                (credentialChanged || zoomChanged || homeChanged || darkMode != null || themePolicyChanged)
             val relaunch = !dashboardChanged && !reload &&
                 (fullscreenChanged || overscrollChanged || nativeKioskChanged)
             return RendererConfigEffects(dashboardChanged, reload, relaunch, darkMode)

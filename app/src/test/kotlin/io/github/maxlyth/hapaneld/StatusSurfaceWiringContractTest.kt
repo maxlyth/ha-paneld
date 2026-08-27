@@ -312,6 +312,35 @@ class StatusSurfaceWiringContractTest {
     }
 
     /**
+     * The theme-policy rebuild signature is recorded where the WebView is BUILT.
+     *
+     * `onNewIntent` rebuilds the WebView when the live signature differs from config, because a
+     * document-start script cannot be replaced in an existing WebView. The kiosk and watchdog return
+     * loops reach `onNewIntent` on every foregrounding, so if the field is never assigned from the
+     * config that built the WebView, the comparison never converges and the panel tears down and
+     * rebuilds its dashboard forever. The assignment must therefore sit next to the registration it
+     * describes, not in the rebuild branch.
+     */
+    @Test
+    fun theThemePolicySignatureIsRecordedWhereTheWebViewIsBuilt() {
+        assertTrue(
+            "the rebuild branch must compare the live signature against config",
+            dashboard.contains("val nextThemeSignature = config.dashboardTheme") &&
+                dashboard.contains("if (nextThemeSignature != dashboardThemeSignature)"),
+        )
+        val build = dashboard.substringAfter("val forcedThemeDark = DashboardTheme.forcedDark(config.dashboardTheme)")
+            .substringBefore("addDocumentStartJavaScript")
+        assertTrue(
+            "the signature must be assigned beside the script it describes",
+            build.contains("dashboardThemeSignature = config.dashboardTheme"),
+        )
+        assertTrue(
+            "and the policy script must actually be registered from it",
+            dashboard.contains("ExternalAuthProtocol.dashboardThemePolicyJs(forcedThemeDark)"),
+        )
+    }
+
+    /**
      * One theme authority reaches every rendered surface, not only the native ones.
      *
      * The two WebView pages bake their palette and artwork into static HTML, so a persisted theme
@@ -321,7 +350,11 @@ class StatusSurfaceWiringContractTest {
     fun aPersistedThemeChangeRedrawsEveryRenderedSurface() {
         assertTrue(
             "a persisted theme change must be observed",
-            dashboard.contains("key == \"dashboard_theme_dark\"") && dashboard.contains("key == \"dark_mode\""),
+            dashboard.contains("key == \"dashboard_theme_dark\"") &&
+                dashboard.contains("key == \"dark_mode\"") &&
+                // The policy is a third writer of the effective theme, so a change to it has to redraw
+                // whatever is on the display now, exactly as the other two do.
+                dashboard.contains("key == \"dashboard_theme\""),
         )
         val converge = dashboard.substringAfter("private fun convergeStatusTheme(").substringBefore("\n    }")
         assertTrue("it must drop the cached frame", converge.contains("statusSurface = null"))

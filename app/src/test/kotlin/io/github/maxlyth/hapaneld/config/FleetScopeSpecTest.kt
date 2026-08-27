@@ -35,6 +35,7 @@ class FleetScopeSpecTest {
                 "touch_sound",
                 "keep_awake",
                 "dashboard_entity_learning",
+                "dashboard_theme",
                 "dashboard_fullscreen",
                 "dashboard_native_kiosk",
                 "dashboard_overscroll",

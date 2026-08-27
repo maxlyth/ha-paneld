@@ -2252,7 +2252,7 @@
   };
   var BUILTIN_RENDERER_KEYS = {
     dashboard_entity_learning: true, dashboard_fullscreen: true, dashboard_native_kiosk: true,
-    dashboard_idle_return_min: true, dashboard_zoom: true
+    dashboard_idle_return_min: true, dashboard_zoom: true, dashboard_theme: true
   };
   var BUILTIN_RENDERER_ONLY_KEYS = { dashboard_idle_return_min: true };
   var HA_CONNECTION_KEYS = { ha_url: true, ha_token: true };

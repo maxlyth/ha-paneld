@@ -25,6 +25,17 @@ internal object InjectionScript {
      *  Auto/Light/Dark radio writes, and the only lever that actually re-renders HA's theme. */
     const val SELECTED_THEME_KEY = "selectedTheme"
 
+    /**
+     * ha-paneld's own marker inside the same store, recording what the `dark` field held at the moment
+     * a Dark/Light policy first took ownership of it.
+     *
+     * It exists so that returning to Follow Home Assistant is a hand-back rather than a guess. The
+     * marker records ONLY the `dark` field and whether the whole entry was absent, because `dark` is
+     * the only field the policy ever writes: a named theme and its colours live in the same object and
+     * are the user's, so they are preserved on the way in and left alone on the way out.
+     */
+    const val FORCED_THEME_MARKER_KEY = "haPaneldForcedThemeDark"
+
     /** JS-literal identifiers for the single HA entity WebSocket a document-start wrapper is allowed
      *  to intercept: [origins] is a JSON array of the permitted `wss://`/`ws://` origins and [path]
      *  is the quoted API path. Both are ready to interpolate straight into a script template. */

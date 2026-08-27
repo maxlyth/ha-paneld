@@ -56,6 +56,7 @@ import io.github.maxlyth.hapaneld.dashboard.HomeDashboardLaunchCache
 import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 import io.github.maxlyth.hapaneld.util.LocalAdminEndpoint
 import io.github.maxlyth.hapaneld.util.localIpv4
@@ -221,6 +222,9 @@ class DashboardActivity : AppCompatActivity() {
         lifecycleBar = null
     }
     private var entityFilterSignature = "disabled"
+    // The colour-scheme policy baked into the live WebView's document-start script. Document-start
+    // scripts cannot be replaced in an existing WebView, so a policy change rebuilds it (below).
+    private var dashboardThemeSignature = DashboardTheme.DEFAULT
     private var entityFilterLease: EntityFilterTelemetry.Lease? = null
     private var entityFilterNativeHold: EntityFilterNativeHold? = null
     private var customView: View? = null                        // active onShowCustomView (fullscreen) view
@@ -254,7 +258,7 @@ class DashboardActivity : AppCompatActivity() {
         // settings left an installed compatibility or recovery screen on the old palette and artwork —
         // and the two WebView-drawn pages bake their colours into static HTML, so they stayed stale
         // even where the system change did redraw the native ones.
-        if (key == "dashboard_theme_dark" || key == "dark_mode") {
+        if (key == "dashboard_theme_dark" || key == "dark_mode" || key == "dashboard_theme") {
             runOnUiThread { if (!destroyed) convergeStatusTheme() }
         }
     }
@@ -1321,6 +1325,22 @@ class DashboardActivity : AppCompatActivity() {
             buildAndLoad(config)
             return
         }
+        // Same reason as the filter set above: the theme policy is carried by a document-start script,
+        // which the WebView fixes at creation. Rebuilding is also what makes the change reversible —
+        // the fresh script runs the hand-back transaction before Home Assistant's own bootstrap reads
+        // the store, so the restored value is the one the frontend boots with.
+        val nextThemeSignature = config.dashboardTheme
+        if (nextThemeSignature != dashboardThemeSignature) {
+            Log.i(TAG, "dashboard theme policy changed — rebuilding dashboard WebView")
+            announceDeliberateRestart("applying your dashboard theme")
+            unlatchAuth("theme policy change")
+            retryPolicy.reset()
+            interstitialShown = false
+            teardownWeb()
+            configureEntityFilter(config)
+            buildAndLoad(config)
+            return
+        }
         val nav = BuiltinDashboard.consumeNavPath()
         val reload = BuiltinDashboard.consumeReloadRequest()
         val reloadReason = BuiltinDashboard.consumeReloadReason()
@@ -1353,7 +1373,10 @@ class DashboardActivity : AppCompatActivity() {
         noteDeliberateDashboardNavigation()
         noteAppNavigationTarget(targetPath)
         val generation = rendererGeneration
-        if (android.os.Build.VERSION.SDK_INT < 29) {
+        // Same suppression as the seed in createWebView: while Dark/Light owns the `dark` field, a
+        // dark_mode toggle must not write it as well. The policy's own document-start script re-applies
+        // on the load this reload is about to start, so nothing is lost by staying out of the way.
+        if (android.os.Build.VERSION.SDK_INT < 29 && !DashboardTheme.forces(config.dashboardTheme)) {
             // The theme write must COMPLETE before the navigation — evaluateJavascript is async (queued
             // to the JS thread), and a loadUrl issued right after can tear the page down first, losing
             // the write. The result callback runs after evaluation, on the UI thread.
@@ -1486,6 +1509,10 @@ class DashboardActivity : AppCompatActivity() {
             when (result) {
                 "true" -> Config(this).setDashboardThemeDark(true)
                 "false" -> Config(this).setDashboardThemeDark(false)
+                // An explicit absence is an observation too. Recording only true/false made the key
+                // write-only, so a stored theme that later went away (or a forced one this panel just
+                // handed back) kept outranking the system setting on every native screen.
+                "null" -> Config(this).clearDashboardThemeDark()
             }
         }
     }
@@ -3238,10 +3265,32 @@ class DashboardActivity : AppCompatActivity() {
         // stays off (no builtInZoomControls) — the zoom is a deliberate per-panel value (see applyZoom).
         setInitialScale((resources.displayMetrics.density * config.dashboardZoom).toInt())
         applyForceDark(this)
+        // The colour-scheme policy runs on every panel and every Android version, and the signature is
+        // recorded HERE rather than at the call site because this is the WebView it is baked into:
+        // onNewIntent compares that signature against config to decide whether to rebuild.
+        val forcedThemeDark = DashboardTheme.forcedDark(config.dashboardTheme)
+        dashboardThemeSignature = config.dashboardTheme
+        runCatching {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
+                    this,
+                    ExternalAuthProtocol.dashboardThemePolicyJs(forcedThemeDark),
+                    documentStartOrigins,
+                )
+            } else if (forcedThemeDark != null) {
+                // Never silently: without document-start the policy cannot reach the page before Home
+                // Assistant reads its own store, so forcing would simply appear not to work.
+                Log.w(TAG, "no document-start support — dashboard theme policy cannot be applied")
+            }
+        }
         // Seed the dashboard's DEFAULT colour scheme through HA's own per-device theme store, before
         // any page script runs — only when the panel has no system dark mode (the Display-card toggle
         // population) and only if the user hasn't picked a theme in HA (see selectedThemeJs).
-        if (android.os.Build.VERSION.SDK_INT < 29) runCatching {
+        //
+        // Suppressed while a policy is forcing: both write the same field, and dark_mode's seed would
+        // be a second authority over it. Under Follow this is byte-identical to before, which is what
+        // leaves dark_mode's meaning unchanged.
+        if (android.os.Build.VERSION.SDK_INT < 29 && forcedThemeDark == null) runCatching {
             if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 androidx.webkit.WebViewCompat.addDocumentStartJavaScript(
                     this,
@@ -3718,6 +3767,84 @@ object ExternalAuthProtocol {
         else "try{$write}catch(e){}"
         return "(()=>{${InjectionScript.TOP_FRAME_GUARD}$body})();"
     }
+
+    /**
+     * Document-start JavaScript implementing the `dashboard_theme` policy.
+     *
+     * [forcedDark] null means Follow Home Assistant and produces the HAND-BACK script; true/false
+     * produce the FORCE script. Both are self-gating and idempotent, so they can run on every page
+     * load, and both must run before Home Assistant's bundle: the frontend captures its
+     * `prefers-color-scheme` MediaQueryList at MODULE scope and reads `localStorage.selectedTheme` as
+     * its pre-connection bootstrap seed.
+     *
+     * Forcing is two layers, because neither alone covers the cases this setting exists for:
+     *
+     *  1. A NARROW `matchMedia` shim. The frontend resolves `themeSettings?.dark === undefined ?
+     *     darkPreferred : themeSettings.dark`, so the shim is what decides for every "Auto" user —
+     *     including one whose theme lives in Home Assistant's per-user SERVER storage, where the value
+     *     mirrored back down over `selectedTheme` after connect would otherwise beat anything written
+     *     here. It also decides the FIRST PAINT, before Home Assistant has connected at all. It shims
+     *     only `prefers-color-scheme` queries and delegates every other query to the real
+     *     implementation — answering all of them would break the frontend's layout breakpoints.
+     *  2. A read-modify-write of the `dark` field of `selectedTheme`. This is what beats an EXPLICIT
+     *     stored light/dark, which the shim cannot touch because `themeSettings.dark` is then defined.
+     *     It is required rather than optional on Android 9- panels, where ha-paneld's own `dark_mode`
+     *     seed has already planted an explicit `dark` in that store.
+     *
+     * What forcing deliberately does NOT do is write Home Assistant's server-side per-user preference.
+     * That value is shared with the user's phone and laptop, so a wall panel must never set it. The
+     * consequence is a named boundary rather than a hidden failure: an explicit theme chosen inside
+     * Home Assistant still wins over the panel's policy.
+     */
+    fun dashboardThemePolicyJs(forcedDark: Boolean?): String {
+        val key = JSONObject.quote(InjectionScript.SELECTED_THEME_KEY)
+        val marker = JSONObject.quote(InjectionScript.FORCED_THEME_MARKER_KEY)
+        val body = if (forcedDark == null) handBackThemeJs(key, marker) else forceThemeJs(forcedDark, key, marker)
+        return "(()=>{${InjectionScript.TOP_FRAME_GUARD}try{$body}catch(e){}})();"
+    }
+
+    /** Take ownership of the `dark` field, recording what it held so it can be handed back exactly. */
+    private fun forceThemeJs(dark: Boolean, key: String, marker: String): String = (
+        // The shim answers a `dark` query with the policy and a `light` query with its negation, so a
+        // frontend asking either way gets one coherent answer. `no-preference` stays false, which is
+        // what a real browser reports once a preference is stated.
+        "var n=window.matchMedia&&window.matchMedia.bind(window);" +
+            "if(n){window.matchMedia=function(q){var s=String(q);" +
+            "if(s.indexOf('prefers-color-scheme')<0)return n(s);" +
+            "var m=s.indexOf('dark')>=0?$dark:(s.indexOf('light')>=0?${!dark}:false);" +
+            "return{media:s,matches:m,onchange:null," +
+            // themes-mixin uses the DEPRECATED addListener, so both spellings must exist. They are
+            // no-ops on purpose: a policy change rebuilds the WebView, so there is no change to emit.
+            "addListener:function(){},removeListener:function(){}," +
+            "addEventListener:function(){},removeEventListener:function(){}," +
+            "dispatchEvent:function(){return false}}};}" +
+            "var r=localStorage.getItem($key),o=null;" +
+            "try{o=r?JSON.parse(r):null}catch(e){}" +
+            "if(!o||typeof o!=='object'||o instanceof Array)o={};" +
+            // Snapshot once, on the first load under this policy. A later load must not re-snapshot, or
+            // the recorded original would become the value this script itself wrote.
+            "if(localStorage.getItem($marker)===null){" +
+            "localStorage.setItem($marker,JSON.stringify({a:r===null,d:typeof o.dark==='boolean'?o.dark:null}))}" +
+            "o.dark=$dark;localStorage.setItem($key,JSON.stringify(o));"
+        )
+
+    /** Give the `dark` field back, and only that field; every other key in the object is the user's. */
+    private fun handBackThemeJs(key: String, marker: String): String = (
+        "var k=localStorage.getItem($marker);if(k===null)return;" +
+            "var m={};try{m=JSON.parse(k)||{}}catch(e){}" +
+            "var r=localStorage.getItem($key),o=null;" +
+            "try{o=r?JSON.parse(r):null}catch(e){}" +
+            "if(o&&typeof o==='object'&&!(o instanceof Array)){" +
+            // Absent originally means absent again: restoring `false` would invent a preference the
+            // user never expressed, and `dark:false` is not the same as Auto to the frontend.
+            "if(m.d===true||m.d===false)o.dark=m.d;else delete o.dark;" +
+            "var c=0;for(var p in o)if(Object.prototype.hasOwnProperty.call(o,p))c++;" +
+            // If ha-paneld created the whole entry and nothing but `dark` was ever in it, remove the
+            // entry rather than leave an empty object where Home Assistant had stored nothing at all.
+            "if(m.a===true&&c===0)localStorage.removeItem($key);" +
+            "else localStorage.setItem($key,JSON.stringify(o))}" +
+            "localStorage.removeItem($marker);"
+        )
 
     /** Validate the fixed frontend callback before any token lookup or network refresh is attempted. */
     fun validAuthRequestForce(payload: String): Boolean? {

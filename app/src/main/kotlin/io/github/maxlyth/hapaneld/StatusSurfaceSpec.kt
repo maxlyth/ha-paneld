@@ -230,20 +230,29 @@ internal fun statusPalette(dark: Boolean): StatusPalette = if (dark) {
 /**
  * The one dark/light rule for every status screen.
  *
- * The panel's configured dashboard theme wins where it is set, because a wall panel's look is a
- * deliberate choice rather than a system preference. Where it is unset, Android 10 and newer have a
- * real system setting to follow; below that the platform has no reliable night mode, so the panel's
- * own stored preference is the only honest answer.
+ * An explicit dashboard theme policy wins outright, because these screens exist to stand in for the
+ * dashboard: a panel told to show a dark dashboard must not flash a light screen on the way to it.
+ * [forcedDark] is null unless the built-in renderer is the resolved dashboard and the policy is
+ * Dark or Light, so a panel rendering through a Companion is unaffected by a setting that cannot
+ * reach its dashboard. Deciding from the policy rather than waiting for the renderer to observe its
+ * effect is what makes the very first frame after a policy change correct rather than one page load
+ * late.
+ *
+ * Below that, the theme observed from Home Assistant wins where it is set, because a wall panel's
+ * look is a deliberate choice rather than a system preference. Where it is unset, Android 10 and
+ * newer have a real system setting to follow; below that the platform has no reliable night mode, so
+ * the panel's own stored preference is the only honest answer.
  *
  * Screens previously disagreed here — some read the system uiMode, some defaulted to dark — so the
  * same panel could show a light startup screen and a dark failure screen minutes apart.
  */
 internal fun statusSurfaceDark(
+    forcedDark: Boolean?,
     configuredDark: Boolean?,
     systemDark: Boolean,
     storedDark: Boolean,
     sdkInt: Int,
-): Boolean = configuredDark ?: if (sdkInt >= 29) systemDark else storedDark
+): Boolean = forcedDark ?: configuredDark ?: if (sdkInt >= 29) systemDark else storedDark
 
 /**
  * Whether an already-built frame can be kept for the next phase.

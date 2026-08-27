@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.config
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.DashboardPath
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
 import java.util.Locale
 
@@ -370,6 +371,17 @@ object SettingsRegistry {
                             "e.g. /lovelace or /dashboard-name/tab-name",
                     )
             },
+        ),
+        SettingSpec(
+            key = "dashboard_theme", type = SettingType.ENUM, group = "Dashboard",
+            label = "Dashboard theme", default = DashboardTheme.DEFAULT,
+            options = DashboardTheme.OPTIONS, aliases = DashboardTheme.ALIASES,
+            scope = Scope.PORTABLE,
+            help = "Built-in renderer only. Follow Home Assistant leaves the dashboard's light/dark " +
+                "choice to Home Assistant, which is what the Dark mode setting supplies a default for. " +
+                "Dark and Light override it on this panel, for a kiosk dashboard with no sidebar to " +
+                "reach the Home Assistant profile page from. Returning to Follow Home Assistant hands " +
+                "the choice back exactly as it was found.",
         ),
         SettingSpec(
             key = "dashboard_fullscreen", type = SettingType.BOOL, group = "Dashboard",

@@ -22,6 +22,7 @@ import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.DurableVisibilityPreferences
 import io.github.maxlyth.hapaneld.util.DashboardPath
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
@@ -1276,6 +1277,13 @@ class Config private constructor(
     val dashboardNativeKiosk: Boolean get() = boolPref("dashboard_native_kiosk")
     fun setDashboardNativeKiosk(on: Boolean) { edit { putBoolean("dashboard_native_kiosk", on) } }
 
+    /** Built-in renderer: who owns the dashboard's light/dark choice — [DashboardTheme.FOLLOW] (Home
+     *  Assistant does, which is what [darkMode] supplies a default for) or an explicit Dark/Light this
+     *  panel imposes. A stored value this build no longer declares resolves to the default rather than
+     *  leaving the renderer with a policy it cannot act on. */
+    val dashboardTheme: String get() = DashboardTheme.policy(prefs.getString("dashboard_theme", null))
+    fun setDashboardTheme(v: String) { edit { putString("dashboard_theme", DashboardTheme.policy(v)) } }
+
     /** Built-in renderer: allow Android's overscroll stretch/glow past the top or bottom of the page.
      *  Off by default (a wall panel rarely scrolls; the bounce looks out of place). API-only setting. */
     val dashboardOverscroll: Boolean get() = boolPref("dashboard_overscroll")
@@ -1845,6 +1853,14 @@ class Config private constructor(
         prefs.edit().putBoolean("dashboard_theme_dark", dark).apply()
     }
 
+    /** Forget the observed Home Assistant theme, because the renderer has just observed that there is
+     *  no longer one to observe. Without this the key is write-only: a panel that forced Dark and then
+     *  handed the choice back kept reporting the forced value to every native screen forever, which is
+     *  precisely the ha-paneld-owned residue that returning to Follow is supposed to remove. */
+    fun clearDashboardThemeDark() {
+        if (prefs.contains("dashboard_theme_dark")) prefs.edit().remove("dashboard_theme_dark").apply()
+    }
+
     // --- remote log shipping (opt-in) --------------------------------------------------------------
     // Forward ha-paneld's OWN process logcat (its Log.* output + the Ktor/HiveMQ SLF4J library logs,
     // all emitted by this app's uid → readable with no READ_LOGS and no root) to a central aggregator
@@ -2132,6 +2148,9 @@ class Config private constructor(
             // A pre-UDP panel has the retired "syslog" spelling on disk. Canonicalize here so the
             // Configure select, the export bundle and the revision diff all see a declared option.
             "log_ship_protocol" -> logShipProtocol
+            // Same reason: an alias spelling ("follow") or a value from a build that declared a
+            // different option set must present as one of THIS build's declared options.
+            "dashboard_theme" -> dashboardTheme
             else -> prefs.getString(spec.key, spec.default) ?: spec.default
         }
     }
