@@ -4100,8 +4100,27 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             addressFamilyPolicy = config.mqttAddressFamily,
             live = RendererAdmissionRuntime.current(),
             nowElapsedMs = android.os.SystemClock.elapsedRealtime(),
+            processStartElapsedMs = android.os.Process.getStartElapsedRealtime(),
+            packageUpdatedAtMs = packageUpdatedAtMs(),
+            nowWallMs = System.currentTimeMillis(),
         )
     }
+
+    /**
+     * When this app package was last installed or replaced, or null when the package manager would
+     * not say. Same source as [buildToken], read as a number rather than an opaque token because a
+     * deployment check has to do arithmetic with it.
+     *
+     * The failure is deliberately not distinguished from an unset value, and deliberately does not
+     * fail the status request: this is one figure on a health surface whose whole purpose is to keep
+     * answering while things are wrong. Swallowing it is safe because it is reported as null and
+     * every consumer treats null as "cannot prove it" — a deployment check refuses a panel that
+     * cannot name its own install rather than passing it — so the quiet path is the strict one, not
+     * a way through.
+     */
+    private fun packageUpdatedAtMs(): Long? =
+        runCatching { appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime }
+            .getOrNull()
 
     /** Call after any write that changes probed state (config apply/import/restore, density, tame),
      *  so the next render doesn't show pre-write values for a TTL. */

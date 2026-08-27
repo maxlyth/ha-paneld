@@ -6,6 +6,8 @@
 
 - **Installing from Git Bash on Windows reaches the panel.** Git for Windows rewrites anything that looks like a path before it hands it to a Windows program, and it cannot tell a folder on the panel from a folder on your computer. Every address inside the panel — `/data/local/tmp/...` and the rest — was turned into a folder inside the Git installation before `adb` ever saw it, so `adb` was given the wrong destination path. Nothing arrived, every command reported success, and the run failed later with nothing to point at the cause; the only way through was WSL. The installer now marks the panel's own addresses as belonging to the panel, while the paths on your computer are still translated as they must be, so an install started in Git Bash finishes there. macOS and Linux are unaffected. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24)
 
+- **The panel now says how recently its dashboard check ran, and when the app was last updated.** The Runtime card used to report the dashboard as "seen" some length of time ago, which on a panel that had been rendering continuously for a day read as though nobody had seen it working since the previous morning. The check simply does not re-run once it passes, so that figure was the age of the check, not of a sighting, and the card now says so. `GET /api/v1/status` also reports how long the app has been running and how long ago it was last installed or updated, so a fleet tool can tell that a panel's dashboard evidence came from the build it is currently running rather than from before an upgrade.
+
 ## v0.9.7-rc2 - 2026-08-26
 
 ### Fixed

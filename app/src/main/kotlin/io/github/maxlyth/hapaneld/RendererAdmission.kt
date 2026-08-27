@@ -187,8 +187,37 @@ internal data class RendererAdmissionPresentation(
      *  client on this panel reports which address it actually reached, and inventing one would be a
      *  claim rather than an observation. */
     val addressFamilyPolicy: String,
-    /** How long ago the verdict was observed, or null when nothing has been observed. */
+    /**
+     * How long ago the ADMISSION verdict was observed, or null when nothing has been observed.
+     *
+     * Admission does not re-run once it passes — an admitted renderer short-circuits the probe — so on
+     * a healthy panel this is the age of the renderer generation, not a measure of how recently the
+     * dashboard was seen working. "Is it up now?" is [RendererAdmissionState.RENDERED], which the
+     * frontend maintains live. Read this instead as "when was this verdict formed", and compare it
+     * with [packageUpdatedAgeMs] to learn whether the verdict postdates an upgrade.
+     */
     val observedAgeMs: Long?,
+    /**
+     * How long ago the process holding this observation started.
+     *
+     * The runtime record is process-local and never persisted, so no observation can be older than
+     * this — an anchor a consumer can check rather than a property it has to take on trust.
+     */
+    val processAgeMs: Long,
+    /**
+     * How long ago this app package was last installed or replaced, or null when the package manager
+     * would not say.
+     *
+     * A package replacement kills the process, so evidence gathered after an upgrade is necessarily
+     * YOUNGER than this value. That comparison is per panel, which is the point: a wave installs its
+     * panels minutes or hours apart, and one shared window judged against the last install will call
+     * an earlier panel stale when its telemetry was truthful all along.
+     *
+     * Wall-clock, unlike every other age here, because that is the only clock the package manager
+     * records against. A panel whose clock is stepped between the install and the read distorts it,
+     * so a consumer comparing the two allows a margin.
+     */
+    val packageUpdatedAgeMs: Long?,
     val summary: String,
     val action: String,
 ) {
@@ -215,6 +244,8 @@ internal data class RendererAdmissionPresentation(
         field("transport", transport)
         field("address_family_policy", addressFamilyPolicy)
         field("observed_age_ms", observedAgeMs)
+        field("process_age_ms", processAgeMs)
+        field("package_updated_age_ms", packageUpdatedAgeMs)
         field("rendered", state == RendererAdmissionState.RENDERED)
         field("summary", summary)
         field("action", action)
@@ -232,6 +263,8 @@ internal data class RendererAdmissionPresentation(
         append(" transport=").append(transport)
         append(" address_family=").append(addressFamilyPolicy)
         append(" observed_age=").append(observedAgeMs?.let { fmtAge(it) } ?: "never")
+        append(" process_age=").append(fmtAge(processAgeMs))
+        append(" package_updated=").append(packageUpdatedAgeMs?.let { fmtAge(it) } ?: "unknown")
     }
 
     /** The Runtime diagnostics card row, or null when there is nothing worth a permanent row. */
@@ -240,9 +273,13 @@ internal data class RendererAdmissionPresentation(
         // A foreign renderer's connection to Home Assistant belongs to that app. Saying "not
         // observed" is the honest row; claiming health we cannot see is the defect being fixed.
         RendererMode.EXTERNAL -> "external renderer · Home Assistant connection not observed by ha-paneld"
+        // The age is the ADMISSION's, and it is labelled as such. It used to read "seen 22h2m ago",
+        // which on a panel that had been rendering continuously for those 22 hours told a maintainer
+        // the dashboard had last been sighted the previous morning. Admission simply does not re-run
+        // once it passes; the live fact is the state, which leads the row already.
         RendererMode.BUILTIN -> buildString {
             append("built-in · ").append(summary)
-            observedAgeMs?.let { append(" · seen ").append(fmtAge(it)).append(" ago") }
+            observedAgeMs?.let { append(" · admitted ").append(fmtAge(it)).append(" ago") }
         }
     }
 
@@ -265,6 +302,10 @@ internal data class RendererAdmissionPresentation(
          * Activity, a WebView or a clock.
          *
          * @param live the live generation's tuple, or null when nothing is reportable.
+         * @param processStartElapsedMs when this process started, on the same `elapsedRealtime` clock
+         *   as [nowElapsedMs], so the subtraction is exact rather than approximately right.
+         * @param packageUpdatedAtMs the package manager's `lastUpdateTime`, or null/0 when unknown.
+         *   Wall-clock, hence [nowWallMs] beside it; nothing else here uses that clock.
          */
         fun of(
             mode: RendererMode,
@@ -272,11 +313,24 @@ internal data class RendererAdmissionPresentation(
             addressFamilyPolicy: String,
             live: RendererAdmissionRuntime.Live?,
             nowElapsedMs: Long,
+            processStartElapsedMs: Long,
+            packageUpdatedAtMs: Long?,
+            nowWallMs: Long,
         ): RendererAdmissionPresentation {
             val record = live?.record
             val connected = live?.frontendConnected == true
             val transport = transportOf(haUrl)
             val family = addressFamilyPolicy.trim().lowercase().replace(' ', '_').ifBlank { "automatic" }
+            // Both anchors describe the app, not the renderer, so they are reported for every mode:
+            // "no renderer telemetry" and "no anchor to judge it against" are different problems and a
+            // consumer must not have to tell them apart from an absent field.
+            val processAgeMs = (nowElapsedMs - processStartElapsedMs).coerceAtLeast(0L)
+            // A non-positive lastUpdateTime is the package manager declining to answer, not an install
+            // at the epoch. Reported as null so it cannot be mistaken for a very old install, which
+            // would let any observation look post-upgrade.
+            val packageUpdatedAgeMs = packageUpdatedAtMs
+                ?.takeIf { it > 0L }
+                ?.let { (nowWallMs - it).coerceAtLeast(0L) }
             if (mode != RendererMode.BUILTIN) {
                 return RendererAdmissionPresentation(
                     mode = mode,
@@ -288,6 +342,8 @@ internal data class RendererAdmissionPresentation(
                     transport = transport,
                     addressFamilyPolicy = family,
                     observedAgeMs = null,
+                    processAgeMs = processAgeMs,
+                    packageUpdatedAgeMs = packageUpdatedAgeMs,
                     summary = if (mode == RendererMode.EXTERNAL) {
                         "an external renderer is configured; ha-paneld does not observe its Home Assistant connection"
                     } else {
@@ -331,6 +387,8 @@ internal data class RendererAdmissionPresentation(
                 transport = transport,
                 addressFamilyPolicy = family,
                 observedAgeMs = record?.let { (nowElapsedMs - it.observedAtElapsedMs).coerceAtLeast(0L) },
+                processAgeMs = processAgeMs,
+                packageUpdatedAgeMs = packageUpdatedAgeMs,
                 summary = summaryOf(state, record, evidence.fault),
                 action = actionOf(state, record?.outcome),
             )

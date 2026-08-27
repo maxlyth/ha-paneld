@@ -142,4 +142,31 @@ class RendererHealthSurfaceContractTest {
         )
         assertTrue(api.getJSONObject("paths").getJSONObject("/api/v1/diag").toString().contains("renderer"))
     }
+
+    @Test fun everyFieldTheProjectionEmitsIsDocumentedAndRequired() {
+        // Derived from what `statusJson()` actually produces rather than transcribed beside it. The
+        // last field added to this object shipped undocumented and was caught by the exact-tree gate
+        // after composition, which is the expensive place to find it.
+        val emitted = JSONObject(
+            io.github.maxlyth.hapaneld.RendererAdmissionPresentation.of(
+                mode = io.github.maxlyth.hapaneld.RendererMode.BUILTIN,
+                haUrl = "https://home-assistant.example.invalid",
+                addressFamilyPolicy = "Automatic",
+                live = null,
+                nowElapsedMs = 1_000L,
+                processStartElapsedMs = 0L,
+                packageUpdatedAtMs = 1L,
+                nowWallMs = 2L,
+            ).statusJson(),
+        ).keys().asSequence().toSet()
+
+        val api = JSONObject(File("src/main/assets/openapi.json").readText())
+        val schema = api.getJSONObject("components").getJSONObject("schemas").getJSONObject("RendererHealth")
+        val documented = schema.getJSONObject("properties").keys().asSequence().toSet()
+        val required = schema.getJSONArray("required")
+            .let { array -> (0 until array.length()).map { array.getString(it) } }.toSet()
+
+        assertEquals("OpenAPI documents fields the panel does not emit", emitted, documented)
+        assertEquals("the object is always fully populated, so every field is required", emitted, required)
+    }
 }

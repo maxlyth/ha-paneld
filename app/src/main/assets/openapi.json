@@ -21,7 +21,7 @@
       "RendererHealth": {
         "type": "object",
         "description": "Sanitized state of the panel's dashboard renderer and its Home Assistant admission. Always present, including when an external renderer or no renderer is configured, so a consumer never infers applicability from an absent object. No URL, host, credential or raw exception text is exposed: the transport failure arrives already classified and fault_detail is a sanitized exception class name.",
-        "required": ["mode", "state", "outcome", "fault", "fault_detail", "recovery", "transport", "address_family_policy", "observed_age_ms", "rendered", "summary", "action"],
+        "required": ["mode", "state", "outcome", "fault", "fault_detail", "recovery", "transport", "address_family_policy", "observed_age_ms", "process_age_ms", "package_updated_age_ms", "rendered", "summary", "action"],
         "properties": {
           "mode": { "type": "string", "enum": ["builtin", "external", "none"], "description": "Which renderer is configured. ha-paneld observes admission only for its own built-in renderer; a foreign renderer's Home Assistant connection is not visible to it." },
           "state": { "type": "string", "enum": ["rendered", "admitted", "checking", "blocked", "unobserved"], "description": "rendered means admitted AND the Home Assistant frontend is connected now. admitted without rendered is a panel that started but shows no dashboard. unobserved is never a statement of health — it is a fresh process, a replaced renderer, or a renderer that is not running." },
@@ -31,7 +31,9 @@
           "recovery": { "type": "string", "enum": ["none", "from_base", "at_ceiling", "manual_only"], "description": "How a blocked verdict may recover unattended. manual_only will not clear without a person or a server change the panel cannot notice." },
           "transport": { "type": "string", "enum": ["https", "http", "unknown"], "description": "Scheme of the configured Home Assistant endpoint. The scheme alone; never the URL or host." },
           "address_family_policy": { "type": "string", "description": "Configured address-family policy Home Assistant connections follow (automatic, prefer_ipv4, force_ipv4). A policy, not an observed connection: no client reports which address it reached." },
-          "observed_age_ms": { "type": "integer", "format": "int64", "nullable": true, "description": "How long ago the verdict was observed; null when nothing has been observed for the live renderer." },
+          "observed_age_ms": { "type": "integer", "format": "int64", "nullable": true, "description": "How long ago the ADMISSION verdict was observed; null when nothing has been observed for the live renderer. Admission does not re-run once it passes, so on a healthy panel this is the age of the renderer generation rather than a measure of how recently the dashboard was seen working; state answers that." },
+          "process_age_ms": { "type": "integer", "format": "int64", "description": "How long ago the process holding this observation started. The record is process-local and never persisted, so observed_age_ms can never legitimately exceed this." },
+          "package_updated_age_ms": { "type": "integer", "format": "int64", "nullable": true, "description": "How long ago this app package was last installed or replaced; null when the package manager would not say. A replacement kills the process, so evidence gathered after an upgrade is necessarily younger than this. Wall-clock, unlike the other ages here, because that is the only clock the package manager records against — allow a margin when comparing." },
           "rendered": { "type": "boolean", "description": "Convenience mirror of state == rendered." },
           "summary": { "type": "string" },
           "action": { "type": "string", "description": "Empty unless state is blocked." }
