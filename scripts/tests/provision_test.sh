@@ -5017,15 +5017,44 @@ assert_failure "fleet release policy fails closed without aapt"
 assert_contains 'aapt or aapt2 is required to verify a local fleet APK' "fleet missing-tool failure names aapt"
 assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-aapt failure starts no panel worker"
 
-# The same host, the same absent aapt, but an official release asset. The signed checksum has already
-# pinned the whole file by hashing it, so the package name it would have read is settled and the tool
-# is not needed. Requiring it here refused a deployment of an artifact the run had just authenticated.
+# The same absent aapt, but an official release asset. The signed checksum has already pinned the whole
+# file by hashing it, so the package name it would have read is settled and the tool is not needed.
+#
+# A host with everything EXCEPT aapt/aapt2. Subtraction is the only honest way to model an absent tool
+# on a machine that has one: putting /usr/bin back on PATH would re-introduce the very thing under test,
+# which is exactly how the sibling assertion above spent a month unable to fail.
+NO_AAPT_BIN="$TMP/no-aapt-bin"
+mkdir -p "$NO_AAPT_BIN"
+for aapt_free_dir in "$FIXTURES" /usr/bin /bin; do
+  [ -d "$aapt_free_dir" ] || continue
+  for aapt_free_tool in "$aapt_free_dir"/*; do
+    case "${aapt_free_tool##*/}" in aapt|aapt2) continue ;; esac
+    [ -e "$NO_AAPT_BIN/${aapt_free_tool##*/}" ] || ln -s "$aapt_free_tool" "$NO_AAPT_BIN/${aapt_free_tool##*/}" 2>/dev/null
+  done
+done
+if PATH="$NO_AAPT_BIN" command -v aapt >/dev/null 2>&1 || PATH="$NO_AAPT_BIN" command -v aapt2 >/dev/null 2>&1; then
+  fail_test "the aapt-free sandbox really has no aapt"
+else
+  pass "the aapt-free sandbox really has no aapt"
+fi
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-release-without-aapt-output.txt"
-PATH="$SIGNER_ONLY_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
-  /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+PATH="$NO_AAPT_BIN" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  bash "$UPDATE_FLEET" --require-release-signer --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
+# Deliberately NOT assert_success, and the reason is the whole point of this block. A host with no
+# aapt still cannot read the candidate's database-compatibility metadata out of its manifest, and that
+# gate refuses rather than guess. It is a data-loss guard, it is not what this change is about, and a
+# signed checksum cannot stand in for it: the hash proves WHICH apk this is, not what schema range it
+# declares. So the run must still stop - what changes is WHICH gate stops it, and what it says.
+#
+# Absence checks alone would not establish that. A run that died of a package mismatch also lacks the
+# aapt message, so the positive assertions below carry the weight.
+assert_failure "a release asset without aapt still stops at the database gate"
+assert_contains 'database compatibility could not be proven' "the refusal names the database gate rather than a missing tool"
+assert_contains 'package authenticated release asset' "the package gate is satisfied by the signed checksum instead of a tool"
 assert_not_contains 'aapt or aapt2 is required' "$LAST_OUTPUT" "a release asset is not refused for a missing aapt"
+assert_not_contains 'package mismatch' "$LAST_OUTPUT" "a release asset is not refused for an unreadable package name"
 
 # apksigner is NOT relaxed alongside aapt, and this is the assertion that says so on purpose. It reads
 # the signer of the app ALREADY on the panel to refuse a cross-signer replacement, and no checksum over
@@ -5036,10 +5065,14 @@ mkdir -p "$NO_SIGNER_WITH_TAG"
 ln -s "$(command -v dirname)" "$NO_SIGNER_WITH_TAG/dirname"
 LAST_OUTPUT="$TMP/fleet-release-without-apksigner-output.txt"
 PATH="$NO_SIGNER_WITH_TAG" ANDROID_HOME= ANDROID_SDK_ROOT= \
-  /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
+  /bin/bash "$UPDATE_FLEET" --require-release-signer --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
+# The load-bearing check is the MESSAGE, not the exit status. Without apksigner the run fails either
+# way - it would just fail later, at signature verification, for a reason that blames the artifact
+# instead of the host. A bare assert_failure cannot tell those apart and would pass either way.
 assert_failure "a release asset is still refused without apksigner"
 assert_contains 'apksigner is required for fleet deployment' "the apksigner refusal survives the aapt relaxation"
+assert_not_contains 'signature verification failed' "$LAST_OUTPUT" "a missing apksigner is not reported as a bad artifact"
 assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing-apksigner failure starts no panel worker"
 
 # update-fleet.sh hands off to provision.sh, which asks the same question again. Relaxing only the
