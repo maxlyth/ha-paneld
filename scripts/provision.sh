@@ -4550,6 +4550,13 @@ install_system() {
   preflight_target install_system /data/local "$data_local_need" || return 1
   preflight_target install_system /data/adb/hapaneld "$recovery_need" || return 1
   preflight_target install_system /system/etc/init "$system_init_need" || return 1
+  # /system/bin is still written by this route even though the helper no longer lives there: the
+  # journal marker `$marker` is created here (as `.new`, then renamed), and the old helper is removed
+  # from here after retirement. Both happen after the first mutation, so a read-only or full
+  # /system/bin reproduced the Issue #120 failure class late, as `INSTALL_STEP_FAILED install_system _`,
+  # with transaction artifacts left behind. The journal is a few hundred bytes; two blocks covers the
+  # `.new` and the rename with room, and the probe itself proves the directory takes a real write.
+  preflight_target install_system /system/bin 8192 || return 1
 
   candidate=/data/local/.hapaneld-helper.provision-$transaction_id
   rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_system rm_candidate"; return 1; }
@@ -4770,6 +4777,10 @@ install_hybrid() {
   preflight_target install_hybrid /data/local "$data_local_need" || return 1
   preflight_target install_hybrid /data/adb/hapaneld "$recovery_need" || return 1
   preflight_target install_hybrid /vendor/etc/init "$vendor_init_need" || return 1
+  # This route removes an old system-layout helper from /system/bin after retirement and fails the
+  # transaction if that removal is refused, so a read-only /system/bin must be caught here rather
+  # than there. No headroom is needed for a removal; the write probe alone proves writability.
+  preflight_target install_hybrid /system/bin 0 || return 1
 
   candidate=/data/local/.hapaneld-helper.provision-$transaction_id
   rm -f "$candidate" || { echo "INSTALL_STEP_FAILED install_hybrid rm_candidate"; return 1; }

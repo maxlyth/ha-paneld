@@ -6465,6 +6465,18 @@ assert_preflight_precedes_mutation install_system
 assert_preflight_precedes_mutation install_systemless
 assert_preflight_precedes_mutation install_hybrid
 
+# The journal marker still lives in /system/bin on the system route, and both the system and hybrid
+# routes remove an old helper from there after retirement. Each is a write that fails the transaction
+# late on a read-only /system/bin unless that directory is preflighted like every other destination.
+# A review of the first submission found exactly this gap; these pin the fix.
+for preflight_verb in install_system install_hybrid; do
+  if sed -n "/^${preflight_verb}() {$/,/^}$/p" "$PROVISION" | grep -qE "^  preflight_target ${preflight_verb} /system/bin "; then
+    pass "$preflight_verb preflights /system/bin, where its journal or old-helper removal still writes"
+  else
+    fail_test "$preflight_verb preflights /system/bin, where its journal or old-helper removal still writes"
+  fi
+done
+
 # Every copy of a staged file goes through the reporting path. One raw `cp @STAGED_...@` left behind
 # is one more failure that can only ever report a step name.
 preflight_raw_copies=0
