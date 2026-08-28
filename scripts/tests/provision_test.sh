@@ -2156,9 +2156,12 @@ assert_log_contains 'df -P -k /system/etc/init' \
   "capacity is measured at the directory the transaction writes, not at its parent"
 # The write and the size check, not the path: the probe's cleanup `rm -f` names the same path whether
 # or not anything was written, so matching the path let a zero-byte probe pass. A mutant proved it.
-assert_log_contains 'printf hapaneld-system-init-write-probe > "\$system_init_probe"' \
+# Quoting-agnostic on purpose: run_root escapes `"` and `$` before the script reaches adb, so the
+# logged text reads `> \"\$system_init_probe\"`. Matching the printf marker and the `-s` test around
+# the variable name survives that, and both still vanish when the write is removed.
+assert_log_contains 'printf hapaneld-system-init-write-probe > ' \
   "writability is proven with real bytes at the directory the transaction writes, not at its parent"
-assert_log_contains '\[ -s "\$system_init_probe" \]' \
+assert_log_contains '\[ -s [^]]*system_init_probe[^]]*\]' \
   "the route probe checks the bytes actually arrived rather than that a file was created"
 assert_not_contains 'df[^|]*/system[^|]*\|[[:space:]]*awk' "$MOCK_CALL_LOG" \
   "capacity probing has no device-side awk dependency"
