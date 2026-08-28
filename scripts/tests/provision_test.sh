@@ -599,6 +599,48 @@ mkdir -p "$NO_SIGNER_FIXTURES"
 for fixture in "$FIXTURES"/*; do
   [ "$(basename "$fixture")" = apksigner ] || ln -s "$fixture" "$NO_SIGNER_FIXTURES/$(basename "$fixture")"
 done
+# A complete host, minus the one tool under test. Every apksigner-absence scenario used to run with
+# `$NO_SIGNER_FIXTURES:/usr/bin:/bin`, which re-admits a host apksigner the moment it is installed in
+# /usr/bin - and then the "absent" assertions pass for a reason that has nothing to do with the code.
+# They passed here only because this host keeps apksigner in /usr/local/bin. Subtraction is the only
+# honest way to model absence on a machine that has the tool: link everything, skip the tool.
+for no_signer_dir in /usr/bin /bin; do
+  [ -d "$no_signer_dir" ] || continue
+  for no_signer_tool in "$no_signer_dir"/*; do
+    case "${no_signer_tool##*/}" in apksigner) continue ;; esac
+    [ -e "$NO_SIGNER_FIXTURES/${no_signer_tool##*/}" ] || ln -s "$no_signer_tool" "$NO_SIGNER_FIXTURES/${no_signer_tool##*/}" 2>/dev/null
+  done
+done
+# Prove the sandbox excludes an apksigner that IS on the host's PATH, on every host. A decoy is placed
+# ahead of the sandbox and must be found; the sandbox alone must not find it. Without the control the
+# second check could pass because command -v itself was broken.
+NO_SIGNER_DECOY="$TMP/host-apksigner-decoy"
+mkdir -p "$NO_SIGNER_DECOY"
+printf '#!/bin/sh\nexit 0\n' > "$NO_SIGNER_DECOY/apksigner"
+chmod 755 "$NO_SIGNER_DECOY/apksigner"
+if PATH="$NO_SIGNER_DECOY:$NO_SIGNER_FIXTURES" command -v apksigner >/dev/null 2>&1; then
+  pass "a host apksigner ahead of the sandbox is findable (control)"
+else
+  fail_test "a host apksigner ahead of the sandbox is findable (control)"
+fi
+if PATH="$NO_SIGNER_FIXTURES" command -v apksigner >/dev/null 2>&1; then
+  fail_test "the no-apksigner sandbox has no apksigner wherever the host keeps one"
+else
+  pass "the no-apksigner sandbox has no apksigner wherever the host keeps one"
+fi
+if PATH="$NO_SIGNER_FIXTURES" command -v bash >/dev/null 2>&1 && PATH="$NO_SIGNER_FIXTURES" command -v sed >/dev/null 2>&1; then
+  pass "the no-apksigner sandbox is otherwise a complete host"
+else
+  fail_test "the no-apksigner sandbox is otherwise a complete host"
+fi
+# The leak is a habit, not a one-off: every absence site once appended the host directories. This
+# reads the suite itself so the habit cannot come back unnoticed on a host where it happens to be
+# harmless.
+if grep -q 'NO_SIGNER_FIXTURES:/usr/bin' "$0"; then
+  fail_test "no apksigner-absence scenario re-admits the host's tool directories"
+else
+  pass "no apksigner-absence scenario re-admits the host's tool directories"
+fi
 NO_GH_FIXTURES="$TMP/fixtures-without-gh"
 mkdir -p "$NO_GH_FIXTURES"
 for fixture in "$FIXTURES"/*; do
@@ -3020,7 +3062,7 @@ fi
 
 # A signed checksum authenticates the publisher, but an existing panel also needs the incumbent
 # signer comparison and exact manifest contract. Both require Android Build-Tools before mutation.
-PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
+PATH="$NO_SIGNER_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_failure "an existing release install refuses without required Android Build-Tools"
 assert_contains 'Android Build-Tools are required to compare the installed and candidate signers' \
@@ -3048,7 +3090,7 @@ assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the unproved replac
 UNRUNNABLE_SDK="$TMP/unrunnable-android-sdk"
 mkdir -p "$UNRUNNABLE_SDK/build-tools/99.0.0"
 ln -s "$FIXTURES/apksigner" "$UNRUNNABLE_SDK/build-tools/99.0.0/apksigner"
-PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" MOCK_APKSIGNER_RUNS=0 ANDROID_HOME= ANDROID_SDK_ROOT="$UNRUNNABLE_SDK" \
+PATH="$NO_SIGNER_FIXTURES" MOCK_APKSIGNER_RUNS=0 ANDROID_HOME= ANDROID_SDK_ROOT="$UNRUNNABLE_SDK" \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_failure "an SDK-root-only unrunnable apksigner cannot authorize incumbent replacement"
 assert_contains "$UNRUNNABLE_SDK/build-tools/99.0.0/apksigner" "SDK-root-only failure names the discovered tool path"
@@ -3522,7 +3564,7 @@ assert_not_contains 'install -r .*shizuku\.apk' "$MOCK_CALL_LOG" "newer Shizuku 
 SDK_ROOT="$TMP/android-sdk"
 mkdir -p "$SDK_ROOT/build-tools/35.0.0"
 ln -s "$FIXTURES/apksigner" "$SDK_ROOT/build-tools/35.0.0/apksigner"
-PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT="$SDK_ROOT" \
+PATH="$NO_SIGNER_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT="$SDK_ROOT" \
   MOCK_SHIZUKU_VERSION_CODE=1087 MOCK_SHIZUKU_TRUSTED=1 \
   run_provision "$MOCK_TARGET" --apk "$APK" --shizuku --no-tame
 assert_success "Shizuku signer verification discovers apksigner through ANDROID_SDK_ROOT"
@@ -5099,7 +5141,7 @@ assert_not_contains '^adb ' "$MOCK_CALL_LOG" "fleet missing APK starts no panel 
 
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-missing-signer-tool-output.txt"
-PATH="$NO_SIGNER_FIXTURES:/usr/bin:/bin" ANDROID_HOME= ANDROID_SDK_ROOT= \
+PATH="$NO_SIGNER_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
   bash "$UPDATE_FLEET" --require-release-signer --apk "$APK" -- "$MOCK_TARGET" > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_failure "fleet release policy fails closed without apksigner"
