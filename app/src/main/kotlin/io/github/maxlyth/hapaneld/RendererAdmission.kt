@@ -321,7 +321,6 @@ internal data class RendererAdmissionPresentation(
         RendererMode.BUILTIN -> buildString {
             append("built-in · ").append(summary)
             observedAgeMs?.let { append(" · admitted ").append(fmtAge(it)).append(" ago") }
-            if (themeOverridden) append(" · Home Assistant's theme is overriding Dashboard theme")
         }
     }
 

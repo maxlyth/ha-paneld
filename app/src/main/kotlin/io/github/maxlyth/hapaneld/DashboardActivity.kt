@@ -295,8 +295,13 @@ class DashboardActivity : AppCompatActivity() {
      * up after it went down. The property initializer assigns the backing field directly, so the
      * pre-`onCreate` value never publishes against an unacquired lease.
      */
+    private var themeObservationEpoch = 0L
     private var frontendConnected = false
         set(value) {
+            // A pending evaluateJavascript callback belongs to the connection that started it. A
+            // disconnect, page replacement or teardown must invalidate that callback before the
+            // runtime clears its effective-theme observation, or the stale result can republish it.
+            if (!value) themeObservationEpoch++
             field = value
             RendererAdmissionRuntime.setFrontendConnected(activityOwner, value)
         }
@@ -1505,8 +1510,13 @@ class DashboardActivity : AppCompatActivity() {
         session: ExternalBusController.Session,
     ) {
         if (!bridgeCurrent(generation, session)) return
+        // Theme-update events can arrive faster than WebView callbacks. Only the newest read from the
+        // current connection may publish, so an older answer cannot overwrite a later HA choice.
+        val observationEpoch = ++themeObservationEpoch
         web?.evaluateJavascript(ExternalAuthProtocol.THEME_OBSERVATION_JS) { result ->
-            if (!bridgeCurrent(generation, session)) return@evaluateJavascript
+            if (!bridgeCurrent(generation, session) || !frontendConnected ||
+                observationEpoch != themeObservationEpoch
+            ) return@evaluateJavascript
             val observed = ExternalAuthProtocol.parseThemeObservation(result)
             when (observed.storedDark) {
                 true -> Config(this).setDashboardThemeDark(true)

@@ -39,7 +39,7 @@
           "theme_effective": { "type": "string", "enum": ["dark", "light"], "nullable": true, "description": "The colour scheme the Home Assistant frontend reports it is rendering now, observed by the built-in renderer on connect and on every theme change. Null when there is no connected built-in page to observe." },
           "theme_overridden": { "type": "boolean", "description": "True when dashboard_theme forces a scheme and the connected frontend is rendering the other one. That is the documented precedence: an explicit Light or Dark chosen in Home Assistant wins over the panel's policy, because overriding it would mean writing the user's account-wide preference. This field exists so that case is never silent; summary and action then say so." },
           "summary": { "type": "string" },
-          "action": { "type": "string", "description": "Empty unless state is blocked or theme_overridden is true." }
+          "action": { "type": "string", "description": "Actionable guidance for the current renderer state; empty when no action is required." }
         }
       },
       "StorageHealth": {

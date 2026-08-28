@@ -36,8 +36,24 @@ class RendererThemeOverrideWiringContractTest {
             capture.contains("RendererAdmissionRuntime.setEffectiveTheme(activityOwner, observed.effectiveDark)"),
         )
         assertTrue(
+            "only the newest asynchronous observation may publish",
+            capture.contains("observationEpoch != themeObservationEpoch"),
+        )
+        assertTrue(
+            "a disconnected page cannot publish a late observation",
+            capture.contains("!frontendConnected"),
+        )
+        assertTrue(
             "a garbage answer must not erase the stored observation",
             capture.contains("null -> if (observed.valid) Config(this).clearDashboardThemeDark()"),
+        )
+    }
+
+    @Test fun disconnectInvalidatesEveryPendingThemeObservation() {
+        val setter = dashboard.substringAfter("private var frontendConnected = false").substringBefore("private val retryPolicy")
+        assertTrue(
+            "disconnect, page replacement and teardown all pass through the connected setter",
+            setter.contains("if (!value) themeObservationEpoch++"),
         )
     }
 

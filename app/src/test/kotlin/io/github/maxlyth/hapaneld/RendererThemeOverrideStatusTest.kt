@@ -64,7 +64,7 @@ class RendererThemeOverrideStatusTest {
         assertEquals(RendererAdmissionPresentation.OVERRIDDEN_ACTION, j.getString("action"))
         // The rendered state is untouched: an override is not a fault.
         assertEquals("rendered", j.getString("state"))
-        assertTrue(p.statusText()!!.contains("overriding Dashboard theme"))
+        assertTrue(p.statusText()!!.contains("overriding this panel's Dashboard theme"))
         assertTrue(p.diagnosticLine().contains("theme=dark/light theme_overridden=true"))
     }
 
