@@ -412,6 +412,8 @@ emitted_rollback_cuts() {
   mkdir -p "$work/data/local/tmp" "$work/data/local" "$work/data/adb/hapaneld" \
     "$work/data/adb/service.d" "$work/system/bin" "$work/system/etc/init" \
     "$work/vendor/etc/init" "$work/dev"
+  dd if=/dev/zero of="$work/dev/zero" bs=4096 count=1 >/dev/null 2>&1 ||
+    die 'could not seed emitted transaction /dev/zero fixture'
   for captured_slot in helper rc hrc svc txn; do copy_captured_remote "$captured_slot" "$work"; done
   chmod 755 "$work$(sed -n '1p' "$CAPTURED/helper.remote")"
 
