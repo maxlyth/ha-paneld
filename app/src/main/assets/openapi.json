@@ -21,7 +21,7 @@
       "RendererHealth": {
         "type": "object",
         "description": "Sanitized state of the panel's dashboard renderer and its Home Assistant admission. Always present, including when an external renderer or no renderer is configured, so a consumer never infers applicability from an absent object. No URL, host, credential or raw exception text is exposed: the transport failure arrives already classified and fault_detail is a sanitized exception class name.",
-        "required": ["mode", "state", "outcome", "fault", "fault_detail", "recovery", "transport", "address_family_policy", "observed_age_ms", "process_age_ms", "package_updated_age_ms", "rendered", "summary", "action"],
+        "required": ["mode", "state", "outcome", "fault", "fault_detail", "recovery", "transport", "address_family_policy", "observed_age_ms", "process_age_ms", "package_updated_age_ms", "rendered", "theme_policy", "theme_effective", "theme_overridden", "summary", "action"],
         "properties": {
           "mode": { "type": "string", "enum": ["builtin", "external", "none"], "description": "Which renderer is configured. ha-paneld observes admission only for its own built-in renderer; a foreign renderer's Home Assistant connection is not visible to it." },
           "state": { "type": "string", "enum": ["rendered", "admitted", "checking", "blocked", "unobserved"], "description": "rendered means admitted AND the Home Assistant frontend is connected now. admitted without rendered is a panel that started but shows no dashboard. unobserved is never a statement of health — it is a fresh process, a replaced renderer, or a renderer that is not running." },
@@ -35,8 +35,11 @@
           "process_age_ms": { "type": "integer", "format": "int64", "description": "How long ago the process holding this observation started. The record is process-local and never persisted, so observed_age_ms can never legitimately exceed this." },
           "package_updated_age_ms": { "type": "integer", "format": "int64", "nullable": true, "description": "How long ago this app package was last installed or replaced; null when the package manager would not say. A replacement kills the process, so evidence gathered after an upgrade is necessarily younger than this. Wall-clock, unlike the other ages here, because that is the only clock the package manager records against — allow a margin when comparing." },
           "rendered": { "type": "boolean", "description": "Convenience mirror of state == rendered." },
+          "theme_policy": { "type": "string", "enum": ["follow", "dark", "light"], "description": "The configured dashboard_theme as a wire token." },
+          "theme_effective": { "type": "string", "enum": ["dark", "light"], "nullable": true, "description": "The colour scheme the Home Assistant frontend reports it is rendering now, observed by the built-in renderer on connect and on every theme change. Null when there is no connected built-in page to observe." },
+          "theme_overridden": { "type": "boolean", "description": "True when dashboard_theme forces a scheme and the connected frontend is rendering the other one. That is the documented precedence: an explicit Light or Dark chosen in Home Assistant wins over the panel's policy, because overriding it would mean writing the user's account-wide preference. This field exists so that case is never silent; summary and action then say so." },
           "summary": { "type": "string" },
-          "action": { "type": "string", "description": "Empty unless state is blocked." }
+          "action": { "type": "string", "description": "Empty unless state is blocked or theme_overridden is true." }
         }
       },
       "StorageHealth": {

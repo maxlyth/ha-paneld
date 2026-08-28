@@ -146,4 +146,32 @@ class RendererAdmissionRuntimeTest {
         assertFalse(blocked(0L))
         assertNull(RendererAdmissionRuntime.current())
     }
+
+    // --- the effective-theme observation rides the same generation tuple ------------------------
+
+    @Test fun theEffectiveThemeIsPublishedForTheLiveGenerationAndSurvivesARecord() {
+        assertTrue(RendererAdmissionRuntime.setEffectiveTheme(owner, false))
+        assertEquals(false, RendererAdmissionRuntime.current()!!.effectiveDark)
+        // A later admission record must not wipe the observation: the two halves are written by
+        // different paths at different moments and both describe the same page.
+        assertTrue(RendererAdmissionRuntime.record(owner, RendererAdmissionState.ADMITTED, 2_000L))
+        assertEquals(false, RendererAdmissionRuntime.current()!!.effectiveDark)
+        assertTrue(RendererAdmissionRuntime.setFrontendConnected(owner, true))
+        assertEquals(false, RendererAdmissionRuntime.current()!!.effectiveDark)
+    }
+
+    @Test fun aDisconnectClearsTheEffectiveThemeSoAStaleSchemeIsNeverReported() {
+        RendererAdmissionRuntime.setFrontendConnected(owner, true)
+        RendererAdmissionRuntime.setEffectiveTheme(owner, true)
+        assertEquals(true, RendererAdmissionRuntime.current()!!.effectiveDark)
+        RendererAdmissionRuntime.setFrontendConnected(owner, false)
+        assertNull(RendererAdmissionRuntime.current()!!.effectiveDark)
+    }
+
+    @Test fun aSupersededGenerationCannotPublishATheme() {
+        val stale = owner
+        owner = BuiltinDashboard.acquireActivityOwner()
+        assertFalse(RendererAdmissionRuntime.setEffectiveTheme(stale, true))
+        assertNull(RendererAdmissionRuntime.current()?.effectiveDark)
+    }
 }

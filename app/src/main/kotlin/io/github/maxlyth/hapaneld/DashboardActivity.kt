@@ -1497,23 +1497,26 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     /** Remember HA's own per-device theme so the native pre-WebView launch screen matches it on the
-     * next boot. The JS returns only true/false/null, avoiding any localStorage contents in logs. */
+     * next boot, and publish the scheme the frontend is ACTUALLY rendering so `/api/v1/status` can say
+     * when an explicit Home Assistant theme is overriding this panel's Dashboard theme. The JS returns
+     * only booleans/null in a fixed two-letter shape, avoiding any localStorage contents in logs. */
     private fun captureDashboardTheme(
         generation: Long,
         session: ExternalBusController.Session,
     ) {
         if (!bridgeCurrent(generation, session)) return
-        val script = """(function(){try{var t=JSON.parse(localStorage.getItem('${InjectionScript.SELECTED_THEME_KEY}')||'null');return t&&typeof t.dark==='boolean'?t.dark:null}catch(e){return null}})()"""
-        web?.evaluateJavascript(script) { result ->
+        web?.evaluateJavascript(ExternalAuthProtocol.THEME_OBSERVATION_JS) { result ->
             if (!bridgeCurrent(generation, session)) return@evaluateJavascript
-            when (result) {
-                "true" -> Config(this).setDashboardThemeDark(true)
-                "false" -> Config(this).setDashboardThemeDark(false)
+            val observed = ExternalAuthProtocol.parseThemeObservation(result)
+            when (observed.storedDark) {
+                true -> Config(this).setDashboardThemeDark(true)
+                false -> Config(this).setDashboardThemeDark(false)
                 // An explicit absence is an observation too. Recording only true/false made the key
                 // write-only, so a stored theme that later went away (or a forced one this panel just
                 // handed back) kept outranking the system setting on every native screen.
-                "null" -> Config(this).clearDashboardThemeDark()
+                null -> if (observed.valid) Config(this).clearDashboardThemeDark()
             }
+            RendererAdmissionRuntime.setEffectiveTheme(activityOwner, observed.effectiveDark)
         }
     }
 
@@ -3848,6 +3851,30 @@ object ExternalAuthProtocol {
             "else localStorage.setItem($key,JSON.stringify(o))}" +
             "localStorage.removeItem($marker);"
         )
+
+    /**
+     * Reads HA's stored per-device theme (`s`) and the scheme the frontend is rendering now (`e`).
+     * Both are booleans or null; nothing else from the page is returned, so the result is safe to log.
+     * The effective value comes from `hass.themes.darkMode`, which is what the profile radio, the
+     * server-side preference and `prefers-color-scheme` all resolve INTO — the one place the answer
+     * to "what is on screen" is not a guess.
+     */
+    const val THEME_OBSERVATION_JS = """(function(){var s=null,e=null;try{var t=JSON.parse(localStorage.getItem('${InjectionScript.SELECTED_THEME_KEY}')||'null');s=t&&typeof t.dark==='boolean'?t.dark:null}catch(x){}try{var h=document.querySelector('home-assistant');var d=h&&h.hass&&h.hass.themes?h.hass.themes.darkMode:null;e=typeof d==='boolean'?d:null}catch(x){}return JSON.stringify({s:s,e:e})})()"""
+
+    /** One theme observation; [valid] is false when the page returned something unparseable. */
+    data class ThemeObservation(val storedDark: Boolean?, val effectiveDark: Boolean?, val valid: Boolean)
+
+    /** Parse the `evaluateJavascript` result of [THEME_OBSERVATION_JS] (a JSON string, itself JSON-quoted). */
+    fun parseThemeObservation(result: String?): ThemeObservation {
+        val raw = result ?: return ThemeObservation(null, null, valid = false)
+        return runCatching {
+            // evaluateJavascript hands back the string VALUE as a JSON literal, so unquote it first.
+            val inner = if (raw.startsWith("\"")) JSONObject("{\"v\":$raw}").getString("v") else raw
+            val o = JSONObject(inner)
+            fun field(k: String): Boolean? = if (o.isNull(k)) null else o.optBoolean(k).takeIf { o.get(k) is Boolean }
+            ThemeObservation(field("s"), field("e"), valid = true)
+        }.getOrElse { ThemeObservation(null, null, valid = false) }
+    }
 
     /** Validate the fixed frontend callback before any token lookup or network refresh is attempted. */
     fun validAuthRequestForce(payload: String): Boolean? {

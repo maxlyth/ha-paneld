@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.util.HaTransportEvidence
 import io.github.maxlyth.hapaneld.util.HaTransportFault
@@ -95,6 +96,13 @@ internal object RendererAdmissionRuntime {
          *  The renderer writes both halves, so this is the owner reporting its own state rather than
          *  a copy of somebody else's that could drift from it. */
         val frontendConnected: Boolean,
+        /**
+         * The colour scheme the Home Assistant frontend is ACTUALLY rendering (`hass.themes.darkMode`),
+         * or null when the renderer has not observed it for this generation. Observed on connect and
+         * on every theme-update event, so it follows a change made inside Home Assistant. Cleared
+         * with the connection: a page that is not connected is not rendering anything current.
+         */
+        val effectiveDark: Boolean? = null,
     )
 
     private val lock = Any()
@@ -125,7 +133,7 @@ internal object RendererAdmissionRuntime {
         val next = Record(state, outcome, admittedOnCachedVersion, evidence, nowElapsedMs)
         synchronized(lock) {
             val previous = live?.takeIf { it.owner == owner }
-            live = Live(owner, next, previous?.frontendConnected ?: false)
+            live = Live(owner, next, previous?.frontendConnected ?: false, previous?.effectiveDark)
         }
         return true
     }
@@ -139,7 +147,23 @@ internal object RendererAdmissionRuntime {
         if (!BuiltinDashboard.ownsActivity(owner)) return false
         synchronized(lock) {
             val previous = live?.takeIf { it.owner == owner }
-            live = Live(owner, previous?.record, connected)
+            // A disconnected page renders nothing current, so its last observed scheme goes with it
+            // rather than being reported as though it were still on screen.
+            live = Live(owner, previous?.record, connected, if (connected) previous?.effectiveDark else null)
+        }
+        return true
+    }
+
+    /**
+     * Publish the colour scheme the frontend reports it is rendering, for the generation holding
+     * [owner]. The renderer observes it on connect and on every theme-update, so this is the owner
+     * reporting its own page rather than a cache of somebody else's reading.
+     */
+    fun setEffectiveTheme(owner: Long, effectiveDark: Boolean?): Boolean {
+        if (!BuiltinDashboard.ownsActivity(owner)) return false
+        synchronized(lock) {
+            val previous = live?.takeIf { it.owner == owner }
+            live = Live(owner, previous?.record, previous?.frontendConnected ?: false, effectiveDark)
         }
         return true
     }
@@ -220,6 +244,17 @@ internal data class RendererAdmissionPresentation(
     val packageUpdatedAgeMs: Long?,
     val summary: String,
     val action: String,
+    /** The configured `dashboard_theme` policy as a wire token: `follow`, `dark` or `light`. */
+    val themePolicy: String,
+    /** `dark` or `light` as the frontend reports it is rendering now; null when not observed. */
+    val themeEffective: String?,
+    /**
+     * True when the policy forces a scheme and the connected frontend is rendering the other one.
+     * That is the documented boundary: an explicit Light or Dark chosen in Home Assistant wins over
+     * the panel's policy, because overriding it would mean writing the user's account-wide
+     * preference. The boundary is allowed; being silent about it is not.
+     */
+    val themeOverridden: Boolean,
 ) {
 
     /** Stable flat JSON for `GET /api/v1/status`; `mode` and `state` stay first for shell clients. */
@@ -247,6 +282,9 @@ internal data class RendererAdmissionPresentation(
         field("process_age_ms", processAgeMs)
         field("package_updated_age_ms", packageUpdatedAgeMs)
         field("rendered", state == RendererAdmissionState.RENDERED)
+        field("theme_policy", themePolicy)
+        field("theme_effective", themeEffective)
+        field("theme_overridden", themeOverridden)
         field("summary", summary)
         field("action", action)
         append('}')
@@ -265,6 +303,9 @@ internal data class RendererAdmissionPresentation(
         append(" observed_age=").append(observedAgeMs?.let { fmtAge(it) } ?: "never")
         append(" process_age=").append(fmtAge(processAgeMs))
         append(" package_updated=").append(packageUpdatedAgeMs?.let { fmtAge(it) } ?: "unknown")
+        append(" theme=").append(themePolicy)
+        append('/').append(themeEffective ?: "unobserved")
+        if (themeOverridden) append(" theme_overridden=true")
     }
 
     /** The Runtime diagnostics card row, or null when there is nothing worth a permanent row. */
@@ -280,6 +321,7 @@ internal data class RendererAdmissionPresentation(
         RendererMode.BUILTIN -> buildString {
             append("built-in · ").append(summary)
             observedAgeMs?.let { append(" · admitted ").append(fmtAge(it)).append(" ago") }
+            if (themeOverridden) append(" · Home Assistant's theme is overriding Dashboard theme")
         }
     }
 
@@ -316,9 +358,22 @@ internal data class RendererAdmissionPresentation(
             processStartElapsedMs: Long,
             packageUpdatedAtMs: Long?,
             nowWallMs: Long,
+            /** The configured `dashboard_theme`; defaults to Follow so an older caller reports honestly. */
+            themePolicy: String = DashboardTheme.DEFAULT,
         ): RendererAdmissionPresentation {
             val record = live?.record
             val connected = live?.frontendConnected == true
+            val forcedDark = DashboardTheme.forcedDark(themePolicy)
+            val policyWire = when (forcedDark) {
+                true -> "dark"
+                false -> "light"
+                null -> "follow"
+            }
+            // The theme is a fact about the built-in renderer's page. For any other mode there is no
+            // page to observe, so the policy is reported and the observation is honestly null.
+            val effectiveDark = live?.effectiveDark?.takeIf { mode == RendererMode.BUILTIN && connected }
+            val effectiveWire = effectiveDark?.let { if (it) "dark" else "light" }
+            val overridden = forcedDark != null && effectiveDark != null && effectiveDark != forcedDark
             val transport = transportOf(haUrl)
             val family = addressFamilyPolicy.trim().lowercase().replace(' ', '_').ifBlank { "automatic" }
             // Both anchors describe the app, not the renderer, so they are reported for every mode:
@@ -354,6 +409,9 @@ internal data class RendererAdmissionPresentation(
                     } else {
                         "Choose a dashboard renderer in Configure."
                     },
+                    themePolicy = policyWire,
+                    themeEffective = null,
+                    themeOverridden = false,
                 )
             }
             // A live frontend connection outranks the admission verdict, and only upgrades an
@@ -389,10 +447,26 @@ internal data class RendererAdmissionPresentation(
                 observedAgeMs = record?.let { (nowElapsedMs - it.observedAtElapsedMs).coerceAtLeast(0L) },
                 processAgeMs = processAgeMs,
                 packageUpdatedAgeMs = packageUpdatedAgeMs,
-                summary = summaryOf(state, record, evidence.fault),
-                action = actionOf(state, record?.outcome),
+                summary = summaryOf(state, record, evidence.fault) +
+                    if (overridden) OVERRIDDEN_SUMMARY_SUFFIX else "",
+                // An override is not a blocked state, but it is the one case where a healthy-looking
+                // panel is not doing what its owner configured, and the fix is on the Home Assistant
+                // side, so it earns the action slot that is otherwise reserved for a block.
+                action = actionOf(state, record?.outcome).ifBlank { if (overridden) OVERRIDDEN_ACTION else "" },
+                themePolicy = policyWire,
+                themeEffective = effectiveWire,
+                themeOverridden = overridden,
             )
         }
+
+        /** Appended to the summary when an explicit Home Assistant theme is overriding the policy. */
+        const val OVERRIDDEN_SUMMARY_SUFFIX =
+            "; an explicit Home Assistant theme is overriding this panel's Dashboard theme"
+
+        /** The one fix is on the Home Assistant side, so the action names it rather than the panel. */
+        const val OVERRIDDEN_ACTION =
+            "Set this panel's Home Assistant user to the Auto theme, or give the panel its own user, " +
+                "so the Dashboard theme setting applies."
 
         /** Only the scheme leaves the panel — a full URL would carry the host into a pasted report. */
         private fun transportOf(haUrl: String): String =

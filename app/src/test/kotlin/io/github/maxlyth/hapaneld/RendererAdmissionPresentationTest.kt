@@ -250,7 +250,7 @@ class RendererAdmissionPresentationTest {
         listOf(
             "mode", "state", "outcome", "fault", "fault_detail", "recovery", "transport",
             "address_family_policy", "observed_age_ms", "process_age_ms", "package_updated_age_ms",
-            "rendered", "summary", "action",
+            "rendered", "theme_policy", "theme_effective", "theme_overridden", "summary", "action",
         ).forEach { assertTrue("missing $it", j.has(it)) }
     }
 

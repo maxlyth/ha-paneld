@@ -4387,6 +4387,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             processStartElapsedMs = android.os.Process.getStartElapsedRealtime(),
             packageUpdatedAtMs = packageUpdatedAtMs(),
             nowWallMs = System.currentTimeMillis(),
+            themePolicy = config.dashboardTheme,
         )
     }
 

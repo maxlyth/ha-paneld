@@ -174,7 +174,7 @@ Like the rest of ha-paneld's control API, this endpoint is unauthenticated and i
 
 Forcing a theme changes only the light/dark part of the choice. A named theme and its colours are left exactly as they are, and switching back to Follow Home Assistant returns the light/dark part to the value it had before, or to Auto if there was none. The panel never changes the theme stored against your Home Assistant *account*, so a panel set to Dark cannot darken your phone.
 
-One case it cannot override: if this Home Assistant user has explicitly chosen Light or Dark (rather than Auto), that choice still wins, because overriding it would mean changing a setting shared with every other device that user signs in on. Set the user's theme to Auto, or use a separate Home Assistant user for the panel, and the panel's choice applies.
+One case it cannot override: if this Home Assistant user has explicitly chosen Light or Dark (rather than Auto), that choice still wins, because overriding it would mean changing a setting shared with every other device that user signs in on. Set the user's theme to Auto, or use a separate Home Assistant user for the panel, and the panel's choice applies. When that happens the panel says so rather than staying quiet: the Runtime card on the `:8888` pages notes that Home Assistant's theme is overriding Dashboard theme, and `GET /api/v1/status` reports it under `renderer` as `theme_overridden: true`, with `theme_policy` and `theme_effective` beside it and the fix named in `action`.
 
 The `:8888` web interface is separate from all of this and always follows the browser you are viewing it in.
 
