@@ -636,7 +636,10 @@ fi
 # The leak is a habit, not a one-off: every absence site once appended the host directories. This
 # reads the suite itself so the habit cannot come back unnoticed on a host where it happens to be
 # harmless.
-if grep -q 'NO_SIGNER_FIXTURES:/usr/bin' "$0"; then
+# Non-comment lines only, and the shape of a real PATH assignment - a bare quote before the dollar,
+# then the variable, then a colon. This block's own comment and this grep line both mention the leak
+# in other forms, and a self-grep that matched them failed on the clean tree the first time.
+if grep -v '^[[:space:]]*#' "$0" | grep -Eq 'PATH="\$NO_SIGNER_FIXTURES:[^"]'; then
   fail_test "no apksigner-absence scenario re-admits the host's tool directories"
 else
   pass "no apksigner-absence scenario re-admits the host's tool directories"
