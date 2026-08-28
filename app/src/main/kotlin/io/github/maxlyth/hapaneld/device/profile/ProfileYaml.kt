@@ -180,7 +180,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val platform = map(root["platform"], "platform", setOf("su_form", "app_can_su", "has_recents", "has_native_navbar"), required = true).orEmpty()
         val hardware = map(root["hardware"], "hardware", setOf(
             "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
-            "relay_base_fallbacks", "button_led_gpio_base", "touch_click_gain",
+            "relay_base_fallbacks", "button_led_gpio_base", "touch_click_gain", "camera", "microphone",
         ), required = true).orEmpty()
         val led = map(hardware["led"], "hardware.led", setOf("mechanism", "transfer"), required = true).orEmpty()
         val sensors = map(
@@ -279,6 +279,8 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 relayBaseFallbacks = stringList(hardware["relay_base_fallbacks"], "hardware.relay_base_fallbacks"),
                 buttonLedGpioBase = integer(hardware, "button_led_gpio_base", "hardware"),
                 touchClickGain = float(hardware, "touch_click_gain", "hardware"),
+                hasCamera = boolean(hardware, "camera", "hardware") ?: false,
+                hasMicrophone = boolean(hardware, "microphone", "hardware") ?: false,
             ),
             sensors = ProfileSensors(
                 proximityTechnology = string(sensors, "proximity_technology", "sensors"),
@@ -620,6 +622,8 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "relay_base_fallbacks" to hardware.relayBaseFallbacks.takeIf { it.isNotEmpty() },
         "button_led_gpio_base" to hardware.buttonLedGpioBase,
         "touch_click_gain" to hardware.touchClickGain,
+        "camera" to hardware.hasCamera,
+        "microphone" to hardware.hasMicrophone,
     ).withoutNullValues(),
     "sensors" to linkedMapOf(
         "proximity_technology" to sensors.proximityTechnology,

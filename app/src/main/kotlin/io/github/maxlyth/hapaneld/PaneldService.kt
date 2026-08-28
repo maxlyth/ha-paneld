@@ -2453,6 +2453,8 @@ class PaneldService : Service() {
                 hasWifi = wifiAvailable.rssi,
                 hasWifiSsid = wifiAvailable.ssid,
                 hasCht8305 = profile.hasCht8305,
+                hasCamera = profile.hasCamera,
+                hasMicrophone = profile.hasMicrophone,
                 appCanSu = profile.appCanSu,
                 hasRecents = profile.hasRecents,
                 // Profile declaration only, deliberately not the Android/vendor navbar-visibility signals

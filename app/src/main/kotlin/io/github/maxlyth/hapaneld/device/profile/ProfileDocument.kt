@@ -112,6 +112,10 @@ data class ProfileHardware(
     val relayBaseFallbacks: List<String> = emptyList(),
     val buttonLedGpioBase: Int? = null,
     val touchClickGain: Float? = null,
+    // Whether the panel has a usable camera / microphone at all. Declared independently because some
+    // hardware has one without the other (e.g. a microphone with no camera).
+    val hasCamera: Boolean = false,
+    val hasMicrophone: Boolean = false,
 )
 
 data class ProfileLed(

@@ -327,6 +327,38 @@ object SettingsRegistry {
             label = "Keep panel responsive", default = "true", scope = Scope.PORTABLE,
             help = "Keep the network and background services running while the screen is off.",
         ),
+        // Camera trial: off by default, and offered only where the device profile declares
+        // `hardware.camera`. These four settings carry no `ha` descriptor yet — the Home Assistant
+        // surface is a later slice.
+        SettingSpec(
+            key = "camera_enabled", type = SettingType.BOOL, group = "Behaviour",
+            label = "Camera (experimental trial)", default = "false", scope = Scope.DEVICE,
+            help = "Experimental trial, off by default. Serves the panel's camera as an RTSP stream " +
+                "and JPEG snapshot for Home Assistant to pull; no frames leave the panel unless a " +
+                "client is connected.",
+            availableWhen = { it.hasCamera },
+        ),
+        SettingSpec(
+            key = "camera_max_resolution", type = SettingType.ENUM, group = "Behaviour",
+            label = "Camera max resolution", default = "720p", scope = Scope.DEVICE,
+            options = listOf("480p", "720p", "1080p"),
+            help = "Hard ceiling on the resolution a stream URL may request; a higher request is clamped to this.",
+            availableWhen = { it.hasCamera },
+        ),
+        SettingSpec(
+            key = "camera_max_fps", type = SettingType.INT, group = "Behaviour",
+            label = "Camera max frame rate", default = "15", min = 1.0, max = 30.0, step = 1.0,
+            scope = Scope.DEVICE,
+            help = "Hard ceiling on the requested frame rate; a higher request is clamped to this.",
+            availableWhen = { it.hasCamera },
+        ),
+        SettingSpec(
+            key = "camera_max_kbps", type = SettingType.INT, group = "Behaviour",
+            label = "Camera max bitrate (kbps)", default = "2000", min = 250.0, max = 8000.0, step = 250.0,
+            scope = Scope.DEVICE,
+            help = "Hard ceiling on the requested bitrate in kbps; a higher request is clamped to this.",
+            availableWhen = { it.hasCamera },
+        ),
 
         // ---- Dashboard ---------------------------------------------------------------------------
         // Which app renders the dashboard + how the built-in renderer connects to HA.

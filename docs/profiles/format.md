@@ -129,6 +129,8 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `hardware.relay_base` | Optional; default absent | One exact allowlisted path: `/sys/class/relay`, `/sys/class/st_relay` or `/sys/class/strelay`. |
 | `hardware.relay_base_fallbacks` | Optional; default `[]` | List of at most three paths from the same relay allowlist. Entries must be unique and must not repeat `relay_base`. |
 | `hardware.button_led_gpio_base` | Optional; default absent | Integer 0–4092, representing the first GPIO in a four-GPIO block. |
+| `hardware.camera` | Optional; default `false` | Boolean; declares the board has a usable camera. |
+| `hardware.microphone` | Optional; default `false` | Boolean; declares the board has a usable microphone. Independent of `hardware.camera` — some hardware has one without the other. |
 
 ### `sensors` and `identity`
 

@@ -58,6 +58,8 @@ data class Capabilities(
     val hasWifiSsid: Boolean = false,
     val hasCht8305: Boolean = false,
     val hasButtonBacklight: Boolean = false,
+    val hasCamera: Boolean = false,
+    val hasMicrophone: Boolean = false,
     val buttonsEnabled: Boolean = false,
     val hasEvdevButtons: Boolean = false,
     val appCanSu: Boolean = false,

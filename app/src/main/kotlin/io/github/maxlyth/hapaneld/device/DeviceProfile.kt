@@ -101,6 +101,13 @@ interface DeviceProfile {
      *  no `/sys/class/leds/button-backlight` node. */
     val hasButtonBacklight: Boolean get() = false
 
+    /** Board carries a usable camera. Default false: only declare it once verified on the hardware. */
+    val hasCamera: Boolean get() = false
+
+    /** Board carries a usable microphone, independent of [hasCamera] — some hardware has one without
+     *  the other. Default false: only declare it once verified on the hardware. */
+    val hasMicrophone: Boolean get() = false
+
     /** SoundPool gain for the physical-speaker click. This is deliberately profile-owned because the
      *  same media-stream level produces very different acoustic output across panel speaker/enclosure
      *  combinations. It scales only ha-paneld's click sample and never changes Android stream volume. */
