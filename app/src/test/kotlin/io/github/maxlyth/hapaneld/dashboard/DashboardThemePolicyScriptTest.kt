@@ -78,6 +78,7 @@ class DashboardThemePolicyScriptTest {
             out['__dark'] = String(globalThis.matchMedia('(prefers-color-scheme: dark)').matches);
             out['__light'] = String(globalThis.matchMedia('(prefers-color-scheme: light)').matches);
             out['__other'] = String(globalThis.matchMedia('(min-width: 870px)').matches);
+            out['__compound'] = String(globalThis.matchMedia('not (prefers-color-scheme: dark)').matches);
             out['__nativeCalls'] = nativeCalls.join('|');
             console.log(JSON.stringify(out));
             """.trimIndent(),
@@ -233,12 +234,14 @@ class DashboardThemePolicyScriptTest {
         assertTrue("light query is the negation: $dark", dark.contains(""""__light":"false""""))
         // Anything else must reach the real implementation, or the frontend's layout breakpoints break.
         assertTrue("other queries delegate: $dark", dark.contains(""""__other":"NATIVE""""))
+        assertTrue("compound queries delegate: $dark", dark.contains(""""__compound":"NATIVE""""))
         assertTrue("delegation actually called through: $dark", dark.contains("min-width: 870px"))
 
         val light = exec(null, force(false))
         assertTrue("light policy: $light", light.contains(""""__dark":"false""""))
         assertTrue("light policy: $light", light.contains(""""__light":"true""""))
         assertTrue("other queries delegate: $light", light.contains(""""__other":"NATIVE""""))
+        assertTrue("compound queries delegate: $light", light.contains(""""__compound":"NATIVE""""))
     }
 
     @Test fun followInstallsNoShimAtAll() {

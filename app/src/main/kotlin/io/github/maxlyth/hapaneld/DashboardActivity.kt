@@ -2394,7 +2394,9 @@ class DashboardActivity : AppCompatActivity() {
             return
         }
         val owner = DashboardV2CompatibilityOwner(url, config.haAuthSnapshot().stableOwner())
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+        ) {
             showBlockedAdmissionScreen(
                 "This panel's web viewer is too old",
                 "The built-in dashboard needs a newer Android System WebView than this panel has. " +
@@ -3810,8 +3812,9 @@ object ExternalAuthProtocol {
         // what a real browser reports once a preference is stated.
         "var n=window.matchMedia&&window.matchMedia.bind(window);" +
             "if(n){window.matchMedia=function(q){var s=String(q);" +
-            "if(s.indexOf('prefers-color-scheme')<0)return n(s);" +
-            "var m=s.indexOf('dark')>=0?$dark:(s.indexOf('light')>=0?${!dark}:false);" +
+            "var c=/^\\s*\\(\\s*prefers-color-scheme\\s*:\\s*(dark|light)\\s*\\)\\s*$/i.exec(s);" +
+            "if(!c)return n(s);" +
+            "var m=c[1].toLowerCase()==='dark'?$dark:${!dark};" +
             "return{media:s,matches:m,onchange:null," +
             // themes-mixin uses the DEPRECATED addListener, so both spellings must exist. They are
             // no-ops on purpose: a policy change rebuilds the WebView, so there is no change to emit.

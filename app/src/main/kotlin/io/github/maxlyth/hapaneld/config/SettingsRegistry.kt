@@ -379,9 +379,10 @@ object SettingsRegistry {
             scope = Scope.PORTABLE,
             help = "Built-in renderer only. Follow Home Assistant leaves the dashboard's light/dark " +
                 "choice to Home Assistant, which is what the Dark mode setting supplies a default for. " +
-                "Dark and Light override it on this panel, for a kiosk dashboard with no sidebar to " +
-                "reach the Home Assistant profile page from. Returning to Follow Home Assistant hands " +
-                "the choice back exactly as it was found.",
+                "Dark and Light choose it on this panel when Home Assistant is set to Auto, for a kiosk " +
+                "dashboard with no sidebar to reach the Home Assistant profile page from. An explicit " +
+                "Light or Dark choice in Home Assistant still wins; use Auto or a separate panel user. " +
+                "Returning to Follow Home Assistant hands the choice back exactly as it was found.",
         ),
         SettingSpec(
             key = "dashboard_fullscreen", type = SettingType.BOOL, group = "Dashboard",
