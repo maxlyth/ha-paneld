@@ -98,12 +98,11 @@ class RendererHealthSurfaceContractTest {
         // Five sites assign `frontendConnected`. A setter covers all of them and any future one; a
         // hand-maintained list beside each assignment is one edit away from a surface that claims a
         // dashboard is up after it went down.
-        assertTrue(
-            activity.replace(Regex("\\s+"), " ").contains(
-                "private var frontendConnected = false set(value) { field = value " +
-                    "RendererAdmissionRuntime.setFrontendConnected(activityOwner, value) }",
-            ),
-        )
+        val setter = activity.substringAfter("private var frontendConnected = false")
+            .substringBefore("private val retryPolicy")
+        assertTrue(setter.contains("if (!value) themeObservationEpoch++"))
+        assertTrue(setter.contains("field = value"))
+        assertTrue(setter.contains("RendererAdmissionRuntime.setFrontendConnected(activityOwner, value)"))
         assertEquals(
             1,
             Regex("RendererAdmissionRuntime\\.setFrontendConnected\\(").findAll(activity).count(),
