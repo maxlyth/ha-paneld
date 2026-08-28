@@ -50,6 +50,49 @@ class BundledProfileParityTest {
         assertTrue(rejected.issues.any { it.path == "platform.has_teleporter" && it.message == "Unknown field." })
     }
 
+    /**
+     * `hardware.camera` and `hardware.microphone` declare what the board physically has. They are
+     * deliberately independent: the NSPanel Pro line carries a microphone and no camera, so a single
+     * combined flag would either deny the voice work its hardware or claim a camera that is not there.
+     * No bundled profile declares either yet — turning the camera trial on is a separate change — so
+     * these assertions drive the parser from constructed YAML rather than from the catalog.
+     */
+    @Test fun cameraAndMicrophoneAreDeclaredIndependentlyAndSurviveARoundTrip() {
+        listOf("hardware.camera", "hardware.microphone").forEach { path ->
+            val descriptor = ProfileMetadata.schema.fields.single { it.path == path }
+            assertEquals("boolean", descriptor.type)
+            assertFalse("hardware without the part must be able to omit $path", descriptor.required)
+        }
+
+        // Absent means false, which is what every bundled profile relies on today.
+        bundled.forEach {
+            assertFalse("no bundled profile may declare a camera yet: ${it.document.id}", it.document.hardware.hasCamera)
+            assertFalse("no bundled profile may declare a microphone yet: ${it.document.id}", it.document.hardware.hasMicrophone)
+        }
+
+        // A microphone without a camera is the case that matters, and it must survive serialization.
+        val base = bundledById.getValue("nspanel-pro").document
+        val micOnly = base.copy(hardware = base.hardware.copy(hasMicrophone = true))
+        val reparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(micOnly)).document)
+        assertTrue("a microphone declaration must survive the round trip", reparsed.hardware.hasMicrophone)
+        assertFalse("a microphone must not imply a camera", reparsed.hardware.hasCamera)
+        assertEquals(micOnly, reparsed)
+
+        // The declaration must reach the capability the settings gate on, not stop at the document.
+        val micProfile = DataDeviceProfile(
+            document = micOnly, productVersion = "", revision = "test", trustedBundledContent = true,
+        )
+        assertTrue(micProfile.hasMicrophone)
+        assertFalse(micProfile.hasCamera)
+
+        // Adding two keys must not open the hardware block to a third.
+        val rejected = ProfileYaml.parse(
+            ProfileYaml.serialize(micOnly).replace("  microphone: true", "  microphone: true\n  periscope: true")
+        )
+        assertNull(rejected.document)
+        assertTrue(rejected.issues.any { it.path == "hardware.periscope" && it.message == "Unknown field." })
+    }
+
     @Test fun theNativeNavbarDeclarationSurvivesASerializeParseRoundTrip() {
         val document = bundledById.getValue("wf1589t").document
         val reparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(document)).document)

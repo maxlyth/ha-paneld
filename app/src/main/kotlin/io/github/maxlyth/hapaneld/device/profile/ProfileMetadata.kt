@@ -97,6 +97,8 @@ object ProfileMetadata {
             field("hardware.led.transfer", "enum", false, "Core-owned LED transfer function; defaults to identity.", listOf("identity", "rk3576-four-bit")),
             field("hardware.screen_off", "enum", true, "Preferred screen-off route.", listOf("brightness-zero", "su-blpower", "daemon-blpower", "keyevent")),
             field("hardware.has_button_backlight", "boolean", false, "Helper-backed button backlight capability."),
+            field("hardware.camera", "boolean", false, "Board carries a usable camera."),
+            field("hardware.microphone", "boolean", false, "Board carries a usable microphone; independent of hardware.camera."),
             field("hardware.zigbee_gateway_dir", "path", false, "Supported Sonoff gateway directory."),
             field("hardware.relay_base", "path", false, "Preferred supported relay sysfs class."),
             field("hardware.relay_base_fallbacks", "path[]", false, "Alternative relay sysfs classes."),
