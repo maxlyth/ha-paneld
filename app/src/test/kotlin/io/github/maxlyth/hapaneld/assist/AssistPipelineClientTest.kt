@@ -5,6 +5,8 @@ import io.github.maxlyth.hapaneld.audio.PcmFrame
 import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
+import io.github.maxlyth.hapaneld.util.HaTransportEvidence
+import io.github.maxlyth.hapaneld.util.HaTransportFault
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.async
@@ -335,6 +337,19 @@ class AssistPipelineClientTest {
         assertEquals(1, socket.closes)
     }
 
+    @Test fun `cancelling a listing still closes its socket`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(socket)
+        val listing = async { harness.client.listPipelines() }
+        runCurrent()
+
+        listing.cancel()
+        runCurrent()
+
+        assertTrue(listing.isCancelled)
+        assertEquals(1, socket.closes)
+    }
+
     @Test fun `a refused listing reports the server's own reason`() = runTest {
         val socket = FakeAssistSocket()
         val harness = harness(socket)
@@ -512,11 +527,159 @@ class AssistPipelineClientTest {
         socket.deliver(event("run-end"))
     }
 
+    @Test fun `a superseded reply is not a successful reply`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            playback = {
+                throw AssistPlaybackException(
+                    AssistPipelineClient.CODE_PLAYBACK_SUPERSEDED,
+                    "a later announcement replaced this reply",
+                )
+            },
+        )
+        val run = harness.start(this)
+        runCurrent()
+        deliverAnsweredRun(socket)
+        runCurrent()
+
+        assertTrue(run.isCompleted)
+        val outcome = run.await()
+        // Announcements keep only the newest, so this is an ordinary outcome — and an answer the
+        // room never heard, which is not a run that succeeded.
+        assertEquals(AssistPipelineClient.CODE_PLAYBACK_SUPERSEDED, outcome.error?.code)
+        assertEquals("turn on the lamp", outcome.sttText)
+        assertEquals("Done", outcome.responseText)
+        assertEquals(1, harness.closes.get())
+        assertEquals(1, socket.closes)
+    }
+
+    @Test fun `a reply cancelled under a live run fails the run`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            playback = { throw kotlinx.coroutines.CancellationException("the announcement was dropped") },
+        )
+        val run = harness.start(this)
+        runCurrent()
+        deliverAnsweredRun(socket)
+        runCurrent()
+
+        assertTrue(run.isCompleted)
+        // The run itself was never cancelled, so this cancellation happened to the reply alone.
+        assertEquals(AssistPipelineClient.CODE_PLAYBACK_CANCELLED, run.await().error?.code)
+        assertEquals(1, harness.closes.get())
+    }
+
+    @Test fun `an event for another command cannot end this run`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(socket)
+        val run = harness.start(this)
+        runCurrent()
+        socket.deliver(runStart(200))
+        runCurrent()
+
+        // Same socket, another command's id: run-end here would finish a run it has nothing to do with.
+        socket.deliver(foreign(event("run-end")))
+        socket.deliver(foreign(event("error", """{"code":"boom","message":"not ours"}""")))
+        runCurrent()
+        assertFalse("a foreign event must not finish or fail this run", run.isCompleted)
+
+        socket.deliver(event("stt-end", """{"stt_output":{"text":"ours"}}"""))
+        socket.deliver(event("run-end"))
+        runCurrent()
+
+        assertTrue(run.isCompleted)
+        val outcome = run.await()
+        assertNull(outcome.error)
+        assertEquals("ours", outcome.sttText)
+    }
+
+    @Test fun `a late event cannot change a finished run`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(socket)
+        val run = harness.start(this)
+        runCurrent()
+        socket.deliver(runStart(200))
+        socket.deliver(event("stt-end", """{"stt_output":{"text":"lights out"}}"""))
+        socket.deliver(event("run-end"))
+        // Arrives behind run-end, with this run's own id: the run is over and stays over.
+        socket.deliver(event("error", """{"code":"late","message":"after the end"}"""))
+        runCurrent()
+
+        assertTrue(run.isCompleted)
+        val outcome = run.await()
+        assertNull(outcome.error)
+        assertEquals("lights out", outcome.sttText)
+    }
+
+    @Test fun `an unreachable Home Assistant is not a missing credential`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            session = HaApiSession(
+                "https://ha.example",
+                null,
+                transientDetail = "failed to connect: unroutable-endpoint-detail",
+                transientEvidence = HaTransportEvidence(HaTransportFault.DNS),
+            ),
+        )
+        val run = harness.start(this)
+        runCurrent()
+
+        val error = run.await().error
+        // Telling the owner to sign in again would be a lie about a panel whose network is broken.
+        assertEquals(AssistPipelineClient.CODE_HA_UNREACHABLE, error?.code)
+        assertTrue("the classified fault is what a diagnostic surface can paste", error?.message?.contains("dns") == true)
+        // Raw platform text can embed the configured host, so it is never the thing reported.
+        assertFalse(error?.message?.contains("unroutable-endpoint-detail") == true)
+        assertEquals(0, harness.connects.get())
+    }
+
+    @Test fun `an unclassified transport failure still reports unreachable`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            session = HaApiSession("https://ha.example", null, transientDetail = "something went wrong"),
+        )
+        val run = harness.start(this)
+        runCurrent()
+
+        val error = run.await().error
+        // "We did not classify it" must degrade to unknown, never to a healthy-looking absence.
+        assertEquals(AssistPipelineClient.CODE_HA_UNREACHABLE, error?.code)
+        assertTrue(error?.message?.contains("unknown") == true)
+    }
+
+    @Test fun `a refresh that fails in transport is not a rejection`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            refuseFirstConnections = 1,
+            refreshSession = HaApiSession(
+                "https://ha.example",
+                null,
+                transientEvidence = HaTransportEvidence(HaTransportFault.TIMEOUT),
+            ),
+        )
+        val run = harness.start(this)
+        runCurrent()
+
+        val error = run.await().error
+        // The token was refused once and the refresh never reached the server: that is a network
+        // fault, not a credential the owner has to replace.
+        assertEquals(AssistPipelineClient.CODE_HA_UNREACHABLE, error?.code)
+        assertTrue(error?.message?.contains("timeout") == true)
+        assertEquals(listOf(false, true), harness.forces)
+        assertEquals(1, harness.connects.get())
+    }
+
     private fun TestScope.harness(
         socket: FakeAssistSocket,
         session: HaApiSession = HaApiSession("https://ha.example", "token"),
         queueFrames: Int = 200,
         refuseFirstConnections: Int = 0,
+        refreshSession: HaApiSession? = null,
         attachFails: Boolean = false,
         request: AssistRunRequest = AssistRunRequest(),
         defaultRunTimeoutMs: Long = 50_000L,
@@ -528,6 +691,7 @@ class AssistPipelineClientTest {
         session,
         queueFrames,
         refuseFirstConnections,
+        refreshSession,
         attachFails,
         request,
         defaultRunTimeoutMs,
@@ -553,6 +717,7 @@ class AssistPipelineClientTest {
         private val session: HaApiSession,
         queueFrames: Int,
         private val refuseFirstConnections: Int,
+        private val refreshSession: HaApiSession?,
         private val attachFails: Boolean,
         private val request: AssistRunRequest,
         defaultRunTimeoutMs: Long,
@@ -572,7 +737,7 @@ class AssistPipelineClientTest {
         val client = AssistPipelineClient(
             auth = HaApiSessionProvider { force ->
                 forces += force
-                session
+                if (force) refreshSession ?: session else session
             },
             transport = AssistTransport { _, _ ->
                 if (connects.incrementAndGet() <= refuseFirstConnections) {
@@ -663,6 +828,9 @@ class AssistPipelineClientTest {
 
         fun runStart(handlerId: Int) =
             event("run-start", """{"runner_data":{"stt_binary_handler_id":$handlerId,"timeout":300}}""")
+
+        /** Rewrites a scripted frame to another command's request id. */
+        fun foreign(raw: String) = raw.replaceFirst("""{"id":1,""", """{"id":99,""")
 
         fun event(name: String, data: String = "{}") =
             """{"id":1,"type":"event","event":{"type":"$name","data":$data,"timestamp":1.0}}"""

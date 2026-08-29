@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
 import io.github.maxlyth.hapaneld.sensors.HaProtocolException
+import io.github.maxlyth.hapaneld.util.HaTransportFault
 import io.github.maxlyth.hapaneld.util.HaWebSocketClients
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
@@ -53,10 +54,34 @@ internal fun interface AssistTransport {
     suspend fun connect(baseUrl: String, accessToken: String): AssistSocket
 }
 
-/** Plays a reply. Returns when the reply has finished, or at once if the caller only queues it. */
+/**
+ * Plays one reply to completion.
+ *
+ * The contract is narrow because the run reports its outcome from it: [play] returns **only** when
+ * the audio has actually finished playing. Handing the url to a queue and returning is not
+ * completion, and an implementation that does so makes every run claim the panel spoke when it may
+ * not have.
+ *
+ * A reply that failed, or that a later announcement superseded before it finished, is not a
+ * successful reply: throw [AssistPlaybackException] to say which. The panel plays announcements
+ * through one coordinator that keeps only the newest, so supersession is an ordinary outcome rather
+ * than a fault, and it still means this run's answer was never heard.
+ *
+ * Cancelling the parent run is not a playback failure — it unwinds normally and reports nothing.
+ * Cancellation of the playback alone, while the run is still live, is a reply that did not play.
+ */
 internal fun interface AssistPlayback {
     suspend fun play(url: String)
 }
+
+/**
+ * A reply that could not be played to completion. [code] reaches the run's outcome unchanged, so it
+ * must be one of the playback codes on [AssistPipelineClient].
+ */
+internal class AssistPlaybackException(
+    val code: String = AssistPipelineClient.CODE_PLAYBACK_FAILED,
+    message: String,
+) : RuntimeException(message)
 
 internal sealed interface AssistCatalogResult {
     data class Catalog(val catalog: AssistPipelineCatalog) : AssistCatalogResult
@@ -130,7 +155,9 @@ internal class AssistPipelineClient(
             } catch (_: TimeoutCancellationException) {
                 AssistCatalogResult.Failed(AssistError(CODE_TIMEOUT, "Home Assistant did not list its pipelines"))
             } finally {
-                connection.socket.close()
+                // Uncancellable for the same reason the run's teardown is: a cancelled listing must
+                // still close its socket and the HTTP client behind it.
+                withContext(NonCancellable) { connection.socket.close() }
             }
         }
     }
@@ -251,9 +278,19 @@ internal class AssistPipelineClient(
                         // A reply the panel could not speak is not a successful run: the failure is
                         // kept and reported beside the transcript rather than swallowed here.
                         playbackJob = launch {
-                            playbackError = runCatching { playback.play(url) }
-                                .exceptionOrNull()
-                                ?.takeIf { it !is CancellationException }
+                            try {
+                                playback.play(url)
+                            } catch (cancelled: CancellationException) {
+                                // Recorded AND rethrown: the job must still complete as cancelled,
+                                // but a playback cancelled out from under a live run is a reply the
+                                // panel never spoke, not a success.
+                                playbackError = cancelled
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                // Not rethrown: a reply that would not play must fail this run's
+                                // outcome, never tear down the scope that is still reporting it.
+                                playbackError = error
+                            }
                         }
                     }
                     is AssistCommand.Finish -> finished = command.outcome
@@ -268,8 +305,12 @@ internal class AssistPipelineClient(
                     val raw = socket.receiveText() ?: break
                     // A frame this build cannot parse is skipped, never fatal: a core that adds a
                     // field must not be able to end a run that is otherwise proceeding normally.
+                    // Every event and the terminal result echo the id the run message carried. A
+                    // frame belonging to any other command on this socket must not be able to
+                    // finish, fail or restart this run, so it is dropped before the machine sees it.
                     when (val message = runCatching { AssistPipelineJson.parseMessage(raw) }.getOrNull()) {
-                        is AssistMessage.Event -> channel.send(AssistInput.Event(message.event))
+                        is AssistMessage.Event ->
+                            if (message.id == RUN_REQUEST_ID) channel.send(AssistInput.Event(message.event))
                         is AssistMessage.Result ->
                             if (message.id == RUN_REQUEST_ID) {
                                 channel.send(AssistInput.Result(message.success, message.code, message.message))
@@ -320,6 +361,13 @@ internal class AssistPipelineClient(
                         when {
                             completed == null ->
                                 AssistInput.Aborted(CODE_PLAYBACK_TIMEOUT, "The reply did not finish playing in time")
+                            // Reaching this line at all means the run itself was never cancelled —
+                            // a cancelled run unwinds through the join above and reports no outcome.
+                            // So a cancellation recorded here happened to the playback alone.
+                            failure is CancellationException ->
+                                AssistInput.Aborted(CODE_PLAYBACK_CANCELLED, "The reply was cancelled before it finished")
+                            failure is AssistPlaybackException ->
+                                AssistInput.Aborted(failure.code, failure.message ?: "The reply did not play")
                             failure != null ->
                                 AssistInput.Aborted(CODE_PLAYBACK_FAILED, failure.javaClass.simpleName.take(MAX_DETAIL_CHARS))
                             else -> AssistInput.PlaybackFinished
@@ -391,11 +439,8 @@ internal class AssistPipelineClient(
         if (session.rejected) {
             return Connection.Failed(AssistError(CODE_AUTH_REJECTED, "Home Assistant rejected the panel's token"))
         }
-        if (session.notAttempted) {
-            return Connection.Failed(AssistError(CODE_CREDENTIALS_UNAVAILABLE, "No Home Assistant credential was tried"))
-        }
         if (session.baseUrl.isBlank() || session.accessToken.isNullOrBlank()) {
-            return Connection.Failed(AssistError(CODE_NOT_CONFIGURED, "This panel has no Home Assistant credential"))
+            return Connection.Failed(credentialFailure(session))
         }
         return try {
             open(session)
@@ -403,8 +448,12 @@ internal class AssistPipelineClient(
             // Exactly one forced refresh and one retry. A token can expire between resolve and
             // handshake; anything beyond one retry is a storm against a server already saying no.
             session = auth.resolve(true)
-            if (session.rejected || session.accessToken.isNullOrBlank()) {
+            if (session.rejected) {
                 Connection.Failed(AssistError(CODE_AUTH_REJECTED, "Home Assistant rejected the panel's token"))
+            } else if (session.accessToken.isNullOrBlank()) {
+                // A refresh that failed in transport left no token, but the credential is not the
+                // thing that is wrong.
+                Connection.Failed(credentialFailure(session))
             } else {
                 try {
                     open(session)
@@ -413,6 +462,24 @@ internal class AssistPipelineClient(
                 }
             }
         }
+    }
+
+    /**
+     * Why this panel has no usable token. The three reasons are kept apart on purpose: a panel whose
+     * network is broken must not tell its owner to sign in again, and a refresh that was never
+     * attempted is not the same fact as one that was refused. The classified evidence is reported
+     * rather than [HaApiSession.transientDetail], which is raw platform text and can embed the
+     * configured host.
+     */
+    private fun credentialFailure(session: HaApiSession): AssistError = when {
+        session.transientDetail != null || session.transientEvidence.fault != HaTransportFault.NONE ->
+            AssistError(
+                CODE_HA_UNREACHABLE,
+                "Home Assistant could not be reached: ${session.transientEvidence.orUnclassified().fault.wire}",
+            )
+        session.notAttempted ->
+            AssistError(CODE_CREDENTIALS_UNAVAILABLE, "No Home Assistant credential was tried")
+        else -> AssistError(CODE_NOT_CONFIGURED, "This panel has no Home Assistant credential")
     }
 
     private suspend fun open(session: HaApiSession): Connection = try {
@@ -461,6 +528,13 @@ internal class AssistPipelineClient(
         const val CODE_MICROPHONE_UNAVAILABLE = "microphone_unavailable"
         const val CODE_PLAYBACK_FAILED = "playback_failed"
         const val CODE_PLAYBACK_TIMEOUT = "playback_timeout"
+        const val CODE_PLAYBACK_CANCELLED = "playback_cancelled"
+
+        /** A later announcement replaced this reply before it finished; the answer was not heard. */
+        const val CODE_PLAYBACK_SUPERSEDED = "playback_superseded"
+
+        /** The panel has a credential but could not reach Home Assistant to use or refresh it. */
+        const val CODE_HA_UNREACHABLE = "ha_unreachable"
         const val MAX_DETAIL_CHARS = 120
 
         /** Canonical capture is signed 16-bit; Home Assistant reads it little-endian. */
