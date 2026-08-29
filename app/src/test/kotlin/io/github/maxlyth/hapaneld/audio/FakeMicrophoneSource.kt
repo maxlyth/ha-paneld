@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * a sleep or a second thread to reason about what its consumer received. [MicrophoneFanOut]'s own
  * threading is proved by `MicrophoneFanOutTest`; the features that lease it should not re-prove it.
  *
- * Copy this class rather than sharing it if a lane needs different behaviour.
+ * Copy this class rather than sharing it if a caller needs different behaviour.
  */
 class FakeMicrophoneSource : MicrophoneSource {
 
