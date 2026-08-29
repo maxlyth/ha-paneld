@@ -37,7 +37,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import io.github.maxlyth.hapaneld.audio.MicrophoneAvailability
+import io.github.maxlyth.hapaneld.audio.MicrophoneAdmission
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -3641,7 +3641,8 @@ class DashboardActivity : AppCompatActivity() {
                 permissionHeld = { permission ->
                     ContextCompat.checkSelfPermission(this@DashboardActivity, permission) == PackageManager.PERMISSION_GRANTED
                 },
-                microphoneIdle = MicrophoneAvailability.isIdle,
+                microphoneIdle = MicrophoneAdmission.isIdle,
+                webViewCaptureAllowed = MicrophoneAdmission.webViewCaptureAllowed,
             )
             if (granted.isNotEmpty()) request.grant(granted) else request.deny()
         }
@@ -3704,19 +3705,22 @@ internal fun shouldEnableWebViewDebugging(networkAdbEnabled: Boolean, hardenedSe
  * HALs on these panels cannot share with the session. Declaring CAMERA for the service must never
  * arm that branch by accident.
  *
- * Microphone capture needs the Android permission *and* an idle shared source: the panel has one
- * microphone and one capture client, so handing the page a recorder while ha-paneld holds a lease
- * takes the microphone from one of them silently. A resource this build does not understand is
- * never granted.
+ * Microphone capture needs three things, and the Android permission is the least of them. It needs
+ * an explicit opt-in, because provisioning grants `RECORD_AUDIO` to every panel and a granted
+ * permission is therefore not a decision anybody made about this page. It needs an idle shared
+ * source, because the panel has one microphone and one capture client, so handing the page a
+ * recorder while ha-paneld holds a lease takes the microphone from one of them silently. And it
+ * needs the permission itself. A resource this build does not understand is never granted.
  */
 internal fun webViewCaptureGrants(
     requested: Array<String>,
     permissionHeld: (String) -> Boolean,
     microphoneIdle: () -> Boolean,
+    webViewCaptureAllowed: () -> Boolean,
 ): Array<String> = requested.filter { resource ->
     when (resource) {
         PermissionRequest.RESOURCE_AUDIO_CAPTURE ->
-            permissionHeld(Manifest.permission.RECORD_AUDIO) && microphoneIdle()
+            webViewCaptureAllowed() && permissionHeld(Manifest.permission.RECORD_AUDIO) && microphoneIdle()
         else -> false
     }
 }.toTypedArray()
