@@ -35,6 +35,13 @@ import java.util.concurrent.atomic.AtomicReference
  * [scope] is injectable purely so unit tests can drive the loop on a real test dispatcher; production
  * always uses the default IO scope. It must be a real dispatcher, not a virtual-time TestScope — the
  * cancel-and-join runs under [runBlocking] and would deadlock against virtual time.
+ *
+ * **Holds.** An indication that must not be overwritten — the camera-in-use light while the screen is
+ * off — takes a [Hold]. While one is held, every ordinary write ([start], [setSolid], [setOff], [stop])
+ * is refused and returns false, so the MQTT `handleLed` path persists the user's intent and reports the
+ * actuation as unknown rather than silently painting over the indication. The holder writes through the
+ * hold, and releasing it restores nothing: the release caller re-derives the LED from persisted intent,
+ * which is the only source that also reflects a command that arrived mid-hold.
  */
 class LedEffectController(
     private val led: LedController,
@@ -42,15 +49,48 @@ class LedEffectController(
 ) {
     @Volatile private var job: Job? = null
     private val runtime = AtomicReference(Runtime(0, Status.IDLE))
+    @Volatile private var holder: Hold? = null
 
     enum class Status { IDLE, RUNNING, FAILED, CLOSED }
+
+    /** An exclusive claim on the LED for an indication. Close it to give ordinary writers the LED back. */
+    inner class Hold internal constructor() : AutoCloseable {
+        /** Solid colour through the hold; refused once the hold is closed or the controller is closed. */
+        fun setSolid(r: Int, g: Int, b: Int): Boolean = synchronized(this@LedEffectController) {
+            if (holder !== this || status() == Status.CLOSED) return false
+            cancelAndJoinCurrent(Status.IDLE)
+            write(LedEffects.Frame.Rgb(r, g, b)).also { if (!it) setStatus(Status.FAILED) }
+        }
+
+        fun setOff(): Boolean = synchronized(this@LedEffectController) {
+            if (holder !== this || status() == Status.CLOSED) return false
+            cancelAndJoinCurrent(Status.IDLE)
+            write(LedEffects.Frame.Off).also { if (!it) setStatus(Status.FAILED) }
+        }
+
+        val active: Boolean get() = holder === this
+
+        override fun close() = synchronized(this@LedEffectController) {
+            if (holder === this) holder = null
+        }
+    }
+
+    /** Take the LED for an indication; null when closed or already held. Never restores on release. */
+    @Synchronized
+    fun hold(): Hold? {
+        if (status() == Status.CLOSED || holder != null) return null
+        return Hold().also { holder = it }
+    }
+
+    /** True while a [Hold] owns the LED and ordinary writes are being refused. */
+    fun held(): Boolean = holder != null
 
     private data class Runtime(val generation: Long, val status: Status)
 
     /** Start or replace [effect]. The first frame is confirmed before success is returned. */
     @Synchronized
     fun start(effect: LedEffects.Effect, r: Int, g: Int, b: Int, br: Int): Boolean {
-        if (status() == Status.CLOSED) return false
+        if (status() == Status.CLOSED || holder != null) return false
         cancelAndJoinCurrent(Status.IDLE)
         if (!write(LedEffects.frame(effect, 0, r, g, b, br))) {
             setStatus(Status.FAILED)
@@ -79,7 +119,7 @@ class LedEffectController(
     /** Cancel any effect, then confirm one solid RGB write. */
     @Synchronized
     fun setSolid(r: Int, g: Int, b: Int): Boolean {
-        if (status() == Status.CLOSED) return false
+        if (status() == Status.CLOSED || holder != null) return false
         cancelAndJoinCurrent(Status.IDLE)
         return write(LedEffects.Frame.Rgb(r, g, b)).also { if (!it) setStatus(Status.FAILED) }
     }
@@ -87,7 +127,7 @@ class LedEffectController(
     /** Cancel any effect, then confirm all channels off. */
     @Synchronized
     fun setOff(): Boolean {
-        if (status() == Status.CLOSED) return false
+        if (status() == Status.CLOSED || holder != null) return false
         cancelAndJoinCurrent(Status.IDLE)
         return write(LedEffects.Frame.Off).also { if (!it) setStatus(Status.FAILED) }
     }
@@ -98,7 +138,7 @@ class LedEffectController(
      */
     @Synchronized
     fun stop() {
-        if (status() != Status.CLOSED) cancelAndJoinCurrent(Status.IDLE)
+        if (status() != Status.CLOSED && holder == null) cancelAndJoinCurrent(Status.IDLE)
     }
 
     /** True while an effect loop is active. */
@@ -109,6 +149,7 @@ class LedEffectController(
     /** Terminally refuse new output and wait for the last owned frame. Idempotent. */
     @Synchronized
     fun close() {
+        holder = null
         if (status() != Status.CLOSED) cancelAndJoinCurrent(Status.CLOSED)
     }
 

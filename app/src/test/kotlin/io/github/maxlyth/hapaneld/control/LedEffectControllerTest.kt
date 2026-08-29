@@ -193,3 +193,65 @@ class LedEffectControllerTest {
         }
     }
 }
+
+/**
+ * The hold: the camera-in-use indication takes the LED while the screen is off, and nothing else may
+ * paint over it until the hold is released. Ordinary writes are refused rather than queued, so the
+ * MQTT path persists intent and reports the actuation as unknown instead of pretending it happened.
+ */
+class LedEffectControllerHoldTest {
+
+    private class RecordingLed : LedController {
+        val writes = java.util.concurrent.CopyOnWriteArrayList<String>()
+        override fun available() = true
+        override fun colorCapable() = true
+        override fun setRgb(r: Int, g: Int, b: Int): Boolean { writes.add("rgb:$r,$g,$b"); return true }
+        override fun off(): Boolean { writes.add("off"); return true }
+    }
+
+    @Test fun ordinaryWritesAreRefusedWhileHeldAndTheHolderWritesThrough() {
+        val led = RecordingLed()
+        val controller = LedEffectController(led)
+        val hold = requireNotNull(controller.hold())
+        assertTrue(controller.held())
+
+        assertFalse("a user command must not overwrite the indication", controller.setSolid(0, 0, 255))
+        assertFalse(controller.setOff())
+        assertFalse(controller.start(LedEffects.Effect.PULSE, 0, 255, 0, 255))
+        assertEquals(emptyList<String>(), led.writes)
+
+        assertTrue(hold.setSolid(255, 0, 0))
+        assertEquals(listOf("rgb:255,0,0"), led.writes)
+    }
+
+    @Test fun aSecondHoldIsRefusedUntilTheFirstIsClosed() {
+        val controller = LedEffectController(RecordingLed())
+        val first = requireNotNull(controller.hold())
+        assertEquals(null, controller.hold())
+        first.close()
+        assertFalse(controller.held())
+        assertTrue(requireNotNull(controller.hold()).active)
+    }
+
+    @Test fun releasingRestoresNothingByItselfAndReopensOrdinaryWrites() {
+        val led = RecordingLed()
+        val controller = LedEffectController(led)
+        val hold = requireNotNull(controller.hold())
+        assertTrue(hold.setSolid(255, 0, 0))
+        hold.close()
+        assertFalse(hold.active)
+        assertFalse("a closed hold no longer writes", hold.setSolid(1, 2, 3))
+        assertEquals(listOf("rgb:255,0,0"), led.writes)
+        assertTrue(controller.setSolid(0, 0, 255))
+        assertEquals(listOf("rgb:255,0,0", "rgb:0,0,255"), led.writes)
+    }
+
+    @Test fun closeDropsTheHoldSoTeardownIsNeverBlockedByAnIndication() {
+        val controller = LedEffectController(RecordingLed())
+        val hold = requireNotNull(controller.hold())
+        controller.close()
+        assertFalse(hold.active)
+        assertFalse(controller.held())
+        assertEquals(null, controller.hold())
+    }
+}

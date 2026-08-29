@@ -2139,21 +2139,7 @@ internal class MqttBridge(
         // Navigate: last pushed path, else default to the dashboard root "/" so the entity shows a
         // sensible local path instead of "unknown" before anything has been navigated.
         // LED: re-apply the last colour to the hardware (reset on reboot) and publish it.
-        val desiredLed = LedCommandPolicy.stored(config.lastLed, config.lastLedEffect)
-        ledActuationKnown = false
-        ledActuationKnown = if (desiredLed.on && desiredLed.effect != null) {
-            ledEffect.start(desiredLed.effect, desiredLed.red, desiredLed.green, desiredLed.blue, desiredLed.brightness)
-        } else if (desiredLed.on) {
-            ledEffect.setSolid(
-                desiredLed.red * desiredLed.brightness / 255,
-                desiredLed.green * desiredLed.brightness / 255,
-                desiredLed.blue * desiredLed.brightness / 255,
-            )
-        } else {
-            // Force the hardware off too — the LED can power up to a default on reboot, so publishing
-            // OFF without driving it leaves HA and the physical LED disagreeing (seen on rk3576).
-            ledEffect.setOff()
-        }
+        reapplyStoredLed()
         if (hasButtonBacklight) {
             config.lastButtonBacklight.takeIf { it >= 0 }?.let { HelperClient.send("BTN $it") }
         }
@@ -2362,6 +2348,31 @@ internal class MqttBridge(
         if (json.has("brightness")) brightness.setBrightness(level)
         screen.noteLevel(level)
         publishScreenBrightness(level)
+    }
+
+    /**
+     * Drive the LED from persisted intent and record whether the actuation was confirmed. Reconnect uses
+     * it because the LED resets on reboot; the camera indicator uses it to give the LED back after
+     * holding it, because persisted intent is the only source that also reflects a command that arrived
+     * while the hold refused ordinary writes.
+     */
+    fun reapplyStoredLed() {
+        val desiredLed = LedCommandPolicy.stored(config.lastLed, config.lastLedEffect)
+        ledActuationKnown = false
+        ledActuationKnown = if (desiredLed.on && desiredLed.effect != null) {
+            ledEffect.start(desiredLed.effect, desiredLed.red, desiredLed.green, desiredLed.blue, desiredLed.brightness)
+        } else if (desiredLed.on) {
+            ledEffect.setSolid(
+                desiredLed.red * desiredLed.brightness / 255,
+                desiredLed.green * desiredLed.brightness / 255,
+                desiredLed.blue * desiredLed.brightness / 255,
+            )
+        } else {
+            // Force the hardware off too — the LED can power up to a default on reboot, so publishing
+            // OFF without driving it leaves HA and the physical LED disagreeing (seen on rk3576).
+            ledEffect.setOff()
+        }
+        stateConverger.reconcile("led", force = true)
     }
 
     private fun handleLed(payload: String) {
