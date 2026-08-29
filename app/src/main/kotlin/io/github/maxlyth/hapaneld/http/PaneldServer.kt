@@ -680,6 +680,46 @@ internal fun shouldDiscoverHaUrlForMqttOnboarding(currentHaUrl: String, posted: 
         posted["mqtt_password"] != null
 }
 
+/** Maps an [io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.Result] to the exact
+ *  `GET /api/v1/voice/pipelines` response, pure so every branch is unit-testable without a routed
+ *  request. */
+internal fun voicePipelinesResponse(
+    result: io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.Result,
+): Pair<HttpStatusCode, String> = when (result) {
+    is io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.Result.Available -> {
+        val pipelines = result.pipelines.joinToString(",") {
+            "{\"id\":${Json.str(it.id)},\"name\":${Json.str(it.name)}}"
+        }
+        HttpStatusCode.OK to "{\"pipelines\":[$pipelines],\"preferred\":${Json.str(result.preferred)}}"
+    }
+    is io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.Result.NotConfigured ->
+        HttpStatusCode.ServiceUnavailable to "{\"error\":\"not-configured\",\"reason\":${Json.str(result.reason)}}"
+    is io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.Result.Unavailable ->
+        HttpStatusCode.ServiceUnavailable to "{\"error\":\"unavailable\",\"reason\":${Json.str(result.reason)}}"
+}
+
+/** Refuses `POST /api/v1/voice/test` before the trigger is ever called — returns the 409 reason, or
+ *  null to proceed. Checked ahead of [io.github.maxlyth.hapaneld.assist.VoiceTestTrigger] so a disabled
+ *  or capability-less panel never depends on whether the coordinator lane happens to be wired up. */
+internal fun voiceTestRefusal(hasMicrophone: Boolean, voiceEnabled: Boolean): String? = when {
+    !hasMicrophone -> "this panel has no microphone capability"
+    !voiceEnabled -> "voice assistant is disabled"
+    else -> null
+}
+
+/** Maps a [io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result] to the exact
+ *  `POST /api/v1/voice/test` response, pure so every branch is unit-testable without a routed request. */
+internal fun voiceTestTriggerResponse(
+    result: io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result,
+): Pair<HttpStatusCode, String> = when (result) {
+    is io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result.Accepted ->
+        HttpStatusCode.Accepted to "{\"accepted\":true}"
+    is io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result.Refused ->
+        HttpStatusCode.Conflict to "{\"reason\":${Json.str(result.reason)}}"
+    is io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result.Unavailable ->
+        HttpStatusCode.ServiceUnavailable to "{\"reason\":${Json.str(result.reason)}}"
+}
+
 /**
  * Validate and normalize every direct-config value in one pass. Historically the bespoke route
  * normalized only panel_id while malformed booleans became false, numeric values were silently
@@ -1245,6 +1285,14 @@ class PaneldServer internal constructor(
     // needed here. AbsentCameraSurface is the default so a board with no camera owner still compiles
     // and answers `absent` truthfully; the service wires the real session owner once profile.hasCamera.
     private val camera: CameraSurface = AbsentCameraSurface,
+    // Home Assistant Assist pipeline catalogue for the Configure voice_pipelines picker. Defaults to a
+    // stub reporting not-configured; the voice-coordinator lane injects the real HA-backed directory.
+    private val assistPipelines: io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory =
+        io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory.NOT_WIRED,
+    // One-shot voice-assistant test trigger for POST /api/v1/voice/test. Defaults to a stub reporting
+    // unavailable; the voice-coordinator lane injects the real pipeline-runtime trigger.
+    private val voiceTest: io.github.maxlyth.hapaneld.assist.VoiceTestTrigger =
+        io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.NOT_WIRED,
 ) {
     private suspend fun authorizeSensitive(
         call: ApplicationCall,
@@ -2335,6 +2383,34 @@ class PaneldServer internal constructor(
                             """{${sensors.valuesJson()},"volume_pct":${runCatching { volume.getPercent() }.getOrDefault(-1)},"brightness":$bright}""",
                             ContentType.Application.Json,
                         )
+                    }
+                    // Home Assistant Assist pipelines for the Configure voice_pipelines picker. Delegates to
+                    // an injectable directory (the voice-coordinator lane's real HA-backed implementation;
+                    // the stub default reports 503 not-configured) rather than talking to Home Assistant here.
+                    // The response is decided by the pure voicePipelinesResponse() so it is unit-testable
+                    // without a routed request.
+                    get("/voice/pipelines") {
+                        val (status, body) = voicePipelinesResponse(assistPipelines.list())
+                        call.respondText(body, ContentType.Application.Json, status)
+                    }
+                    // One-shot voice-assistant test run. Refused with 409 before ever reaching the trigger
+                    // when the panel has no microphone capability or voice_enabled is off, so a disabled
+                    // panel never depends on whether the coordinator lane happens to be wired up. The
+                    // refusal check and the trigger-result mapping are both pure (voiceTestRefusal(),
+                    // voiceTestTriggerResponse()) so every branch is unit-testable without a routed request.
+                    post("/voice/test") {
+                        val caps = liveCapabilities(snapStaleOk().caps)
+                        val refusal = voiceTestRefusal(hasMicrophone = caps.hasMicrophone, voiceEnabled = config.voiceEnabled)
+                        if (refusal != null) {
+                            call.respondText(
+                                "{\"reason\":${Json.str(refusal)}}",
+                                ContentType.Application.Json,
+                                HttpStatusCode.Conflict,
+                            )
+                            return@post
+                        }
+                        val (status, body) = voiceTestTriggerResponse(voiceTest.trigger())
+                        call.respondText(body, ContentType.Application.Json, status)
                     }
                     // LAN ha-paneld panels for the header panel switcher — a cheap, non-blocking snapshot of
                     // the live mDNS roster (a background listener keeps it converged + fresh; see browsePeers).
@@ -5721,6 +5797,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     // dashboard_idle_return_min previously had NO persist path at all — the Configure field
                     // rendered but silently never saved (found wiring dashboard_fullscreen, issue #25/#24 pass).
                     p["dashboard_idle_return_min"]?.trim()?.toIntOrNull()?.let { config.setDashboardIdleReturnMin(it.coerceIn(0, 1440)) }
+                    // Voice settings — plain local prefs with no MQTT entity of their own (voice_enabled is
+                    // the one voice_* key with an entity, and is liveApply-routed through applySetting
+                    // instead). Values here are already registry-validated and canonicalized by this
+                    // point, so they persist verbatim.
+                    p["voice_wake_words"]?.let { config.setVoiceWakeWords(it) }
+                    p["voice_pipelines"]?.let { config.setVoicePipelines(it) }
+                    p["voice_audio_source"]?.let { config.setVoiceAudioSource(it) }
+                    p["voice_sensitivity"]?.let { config.setVoiceSensitivity(it) }
                     // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
                     // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
                     // Detected from the POSTED value — config read-back inside the batch is pre-commit.
