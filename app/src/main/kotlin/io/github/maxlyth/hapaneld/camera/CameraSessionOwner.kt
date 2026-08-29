@@ -142,9 +142,19 @@ class CameraSessionOwner(
             synchronized(lock) { state.addWaiter(waiter) }
             val bytes = runCatching { waiter.get(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()
             if (bytes != null) return SnapshotResult.Jpeg(bytes)
-            // A frame that arrived but would not encode is the encoder's fault, not the camera's.
-            val encodeFailed = synchronized(lock) { fault == CameraFault.ENCODE }
-            return SnapshotResult.Refused(if (encodeFailed) CameraRefusal.ENCODE else CameraRefusal.STARVED)
+            // Null means one of three things, told apart by what the session did meanwhile: a teardown
+            // that drained the waiter (report the teardown's own refusal), a frame that arrived but would
+            // not encode (the encoder's fault, not the camera's), or genuinely no frame in time.
+            val refusal = synchronized(lock) {
+                when {
+                    state.phase == Phase.STOPPING -> CameraRefusal.STOPPING
+                    !enabled() -> CameraRefusal.DISABLED
+                    state.phase == Phase.DEGRADED -> CameraRefusal.FAILED
+                    fault == CameraFault.ENCODE -> CameraRefusal.ENCODE
+                    else -> CameraRefusal.STARVED
+                }
+            }
+            return SnapshotResult.Refused(refusal)
         } finally {
             synchronized(lock) { state.removeWaiter(waiter) }
             lease.close()
@@ -399,7 +409,7 @@ class CameraSessionOwner(
                 synchronized(lock) { recovery = "reopening in ${decision.afterMs}ms (attempt ${decision.attempt})" }
                 scheduleReopen(decision.afterMs)
             }
-            is Failure.Degrade -> degrade(f, decision.attempt)
+            is Failure.Degrade -> degrade(attempt, f, decision.attempt)
         }
     }
 
@@ -452,46 +462,72 @@ class CameraSessionOwner(
         h.postDelayed({ tick(attempt) }, policy.starvationMs / 2)
     }
 
+    /** What the tick decided, applied to hardware outside the lock once the state machine has moved. */
+    private sealed interface TickAction {
+        data object Continue : TickAction
+        data class Finish(val ended: Attempt?, val stopping: Boolean) : TickAction
+        data class Reopen(val afterMs: Long) : TickAction
+        data class Degrade(val fault: CameraFault, val attempt: Int) : TickAction
+    }
+
     private fun tick(attempt: Attempt) {
         synchronized(lock) { if (!state.isCurrent(attempt.id) || state.phase != Phase.LIVE) return }
         // The light is a continuing prerequisite: a session the room is not being told about closes.
+        // Blocking LED work, so it runs outside the lock; the decision below re-checks the attempt.
         val indicated = indicator.refresh()
-        val decision = synchronized(lock) { state.tick(attempt.id, nowMs(), enabled(), indicated) } ?: return
-        when (decision) {
-            CameraSessionPolicy.Decision.Continue -> scheduleTick(attempt)
-            is CameraSessionPolicy.Decision.Close -> {
-                // Every close goes through a real state-machine ending, never a sentinel. IDLE here means
-                // the policy saw no clients; that cannot happen on a live session because the last lease
-                // ends it synchronously, so endNow() is the honest no-op if it ever does. STOPPING is
-                // impossible on this path (the tick passes stopping = false) and is handled like a stop.
-                val ended = synchronized(lock) {
+        // Decide AND move the state machine in one critical section, so a disable, a last-lease release
+        // or a stop that lands after the decision cannot be overtaken by it: every transition below is
+        // guarded on the attempt still being current, and a refused transition is a no-op here.
+        val action: TickAction = synchronized(lock) {
+            val decision = state.tick(attempt.id, nowMs(), enabled(), indicated) ?: return
+            when (decision) {
+                CameraSessionPolicy.Decision.Continue -> TickAction.Continue
+                is CameraSessionPolicy.Decision.Close -> {
                     outcome = when (decision.reason) {
                         CameraSessionPolicy.CloseReason.DISABLED -> CameraRefusal.DISABLED.token
                         CameraSessionPolicy.CloseReason.STOPPING -> CameraRefusal.STOPPING.token
                         CameraSessionPolicy.CloseReason.IDLE -> "ok"
                     }
-                    if (decision.reason == CameraSessionPolicy.CloseReason.STOPPING) state.stopping() else state.endNow()
-                    takeCurrentLocked()
+                    // Every close goes through a real state-machine ending, never a sentinel. IDLE here
+                    // means the policy saw no clients, which cannot happen on a live session because the
+                    // last lease ends it synchronously; endNow() is the honest no-op if it ever does.
+                    val stopping = decision.reason == CameraSessionPolicy.CloseReason.STOPPING
+                    if (stopping) state.stopping() else state.endNow()
+                    TickAction.Finish(takeCurrentLocked(), stopping)
                 }
-                finishAttempt(ended ?: attempt, stopping = decision.reason == CameraSessionPolicy.CloseReason.STOPPING)
-            }
-            is CameraSessionPolicy.Decision.Reopen -> {
-                synchronized(lock) {
+                is CameraSessionPolicy.Decision.Reopen -> {
+                    if (!state.reopening(attempt.id, decision.attempt)) return
                     fault = decision.fault
                     outcome = if (decision.fault == CameraFault.INDICATION) CameraRefusal.INDICATION.token else CameraRefusal.FAILED.token
                     recovery = "reopening in ${decision.afterMs}ms (attempt ${decision.attempt})"
-                    state.reopening(decision.attempt)
                     if (current === attempt) current = null
+                    TickAction.Reopen(decision.afterMs)
                 }
+                is CameraSessionPolicy.Decision.Degrade -> {
+                    if (!state.degraded(attempt.id, decision.attempt, nowMs())) return
+                    fault = decision.fault
+                    outcome = CameraRefusal.FAILED.token
+                    recovery = "reattach a client after the hold or toggle the camera setting"
+                    current = null
+                    TickAction.Degrade(decision.fault, decision.attempt)
+                }
+            }
+        }
+        when (action) {
+            TickAction.Continue -> scheduleTick(attempt)
+            is TickAction.Finish -> finishAttempt(action.ended ?: attempt, stopping = action.stopping)
+            is TickAction.Reopen -> {
                 attempt.release()
                 foreground.demote()
                 indicator.hide()
-                scheduleReopen(decision.afterMs)
+                scheduleReopen(action.afterMs)
             }
-            is CameraSessionPolicy.Decision.Degrade -> {
-                synchronized(lock) { if (current === attempt) current = null }
+            is TickAction.Degrade -> {
                 attempt.release()
-                degrade(decision.fault, decision.attempt)
+                foreground.demote()
+                indicator.hide()
+                quitThread()
+                Log.w(TAG, "camera session degraded after ${action.attempt} failures: ${action.fault.wire}")
             }
         }
     }
@@ -512,18 +548,19 @@ class CameraSessionOwner(
         // A live attempt's fault is picked up by the next tick, which decides the ladder.
     }
 
-    private fun degrade(f: CameraFault, attempt: Int) {
+    private fun degrade(attempt: Attempt, f: CameraFault, count: Int) {
+        // openFailed() has already moved the state machine to DEGRADED for this attempt; this only
+        // brings the hardware side down and records the presentation.
         foreground.demote()
         indicator.hide()
         synchronized(lock) {
-            state.degraded(attempt, nowMs())
             fault = f
             outcome = CameraRefusal.FAILED.token
             recovery = "reattach a client after the hold or toggle the camera setting"
-            current = null
+            if (current === attempt) current = null
         }
         quitThread()
-        Log.w(TAG, "camera session degraded after $attempt failures: ${f.wire}")
+        Log.w(TAG, "camera session degraded after $count failures: ${f.wire}")
     }
 
     // ---- close --------------------------------------------------------------------------------------

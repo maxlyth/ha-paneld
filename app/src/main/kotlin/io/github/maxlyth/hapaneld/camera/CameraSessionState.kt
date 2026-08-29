@@ -255,17 +255,28 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         )
     }
 
-    /** A live session is being torn down for a reopen: leases stay, the attempt ends, grace restarts on fire. */
-    fun reopening(attempt: Int) {
+    /**
+     * A live session is being torn down for a reopen: leases stay, the attempt ends, grace restarts on
+     * fire. Refused — returning false and changing nothing — unless [attemptId] is still the current
+     * attempt of a live session, so a decision computed for a session that a disable, a last-lease
+     * release or a stop has since ended can never revive it. The owner computes and applies a tick
+     * decision inside one critical section; this guard is the backstop for any path that does not.
+     */
+    fun reopening(attemptId: Long, attempt: Int): Boolean {
+        if (!isCurrent(attemptId) || phase != Phase.LIVE) return false
         phase = Phase.OPENING
         consecutiveFailures = attempt
         currentAttempt = null
         pendingFault = null
+        return true
     }
 
-    fun degraded(attempt: Int, nowMs: Long) {
+    /** Same guard as [reopening]: only the current attempt of an opening or live session may degrade it. */
+    fun degraded(attemptId: Long, attempt: Int, nowMs: Long): Boolean {
+        if (!isCurrent(attemptId) || (phase != Phase.LIVE && phase != Phase.OPENING)) return false
         endSession(Phase.DEGRADED)
         consecutiveFailures = attempt
         retryNotBeforeMs = nowMs + policy().maxBackoffMs
+        return true
     }
 }

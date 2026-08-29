@@ -185,10 +185,50 @@ class CameraSessionStateTest {
         assertNull("a tick for another attempt decides nothing", state.tick(first.attempt + 1, 1_300L, enabled = true, indicated = true))
     }
 
+    @Test fun aReopenDecidedForALiveSessionCannotBeAppliedAfterADisableEndedIt() {
+        // The decision/apply gap: the tick decides Reopen, then a disable lands before it is applied.
+        val first = open(nowMs = 1_000L)
+        assertTrue(state.openSucceeded(first.attempt))
+        state.frame(first.attempt, 1_100L)
+        val decision = state.tick(first.attempt, nowMs = 9_000L, enabled = true, indicated = true)
+        assertTrue("$decision", decision is CameraSessionPolicy.Decision.Reopen)
+        assertTrue(state.disable())
+        assertFalse("a reopen for an ended session is refused", state.reopening(first.attempt, 1))
+        assertEquals("and changes nothing", Phase.IDLE, state.phase)
+        assertNull(state.currentAttempt)
+        assertNull("nothing to fire", state.reopenAttempt(nowMs = 10_000L))
+    }
+
+    @Test fun aReopenOrDegradeDecidedBeforeAStopOrTheLastLeaseLeavingIsRefused() {
+        val first = open(nowMs = 1_000L)
+        assertTrue(state.openSucceeded(first.attempt))
+        assertTrue(state.release(first.lease))
+        assertEquals(Phase.IDLE, state.phase)
+        assertFalse(state.reopening(first.attempt, 1))
+        assertFalse(state.degraded(first.attempt, 3, 2_000L))
+        assertEquals(Phase.IDLE, state.phase)
+        val fresh = CameraSessionState { policy }
+        val again = fresh.acquire(gate = null, nowMs = 0L) as Admission.Open
+        assertTrue(fresh.openSucceeded(again.attempt))
+        assertTrue(fresh.stopping())
+        assertFalse("a stopped session stays stopped", fresh.reopening(again.attempt, 1))
+        assertFalse(fresh.degraded(again.attempt, 3, 1L))
+        assertEquals(Phase.STOPPING, fresh.phase)
+    }
+
+    @Test fun aReopenOrDegradeIsOnlyForTheCurrentAttempt() {
+        val first = open(nowMs = 1_000L)
+        assertTrue(state.openSucceeded(first.attempt))
+        assertFalse("a superseded attempt id cannot move a live session", state.reopening(first.attempt + 7, 1))
+        assertFalse(state.degraded(first.attempt + 7, 3, 2_000L))
+        assertEquals(Phase.LIVE, state.phase)
+        assertTrue(state.reopening(first.attempt, 1))
+    }
+
     @Test fun aLiveReopenKeepsTheLeasesEndsTheAttemptAndTheFiredAttemptGetsFreshGrace() {
         val first = open(nowMs = 1_000L)
         assertTrue(state.openSucceeded(first.attempt))
-        state.reopening(attempt = 1)
+        assertTrue(state.reopening(first.attempt, attempt = 1))
         assertEquals(Phase.OPENING, state.phase)
         assertEquals(1, state.clients)
         assertNull(state.currentAttempt)

@@ -24,6 +24,15 @@ object CameraPermissionPrompt {
     @Volatile private var store: Store = InMemory
     @Volatile private var wanted = false
     @Volatile private var inFlight = false
+    /** The resumed activity's ear: invoked when [shouldAsk] turns true, so an enable that lands while
+     *  it is already on screen prompts at once instead of waiting for an unrelated resume. */
+    @Volatile private var listener: (() -> Unit)? = null
+
+    /** Register while resumed, clear on pause. Registering while an ask is already due fires at once. */
+    fun setListener(l: (() -> Unit)?) {
+        listener = l
+        if (l != null && shouldAsk()) l()
+    }
 
     fun install(store: Store) {
         this.store = store
@@ -31,8 +40,10 @@ object CameraPermissionPrompt {
 
     /** The owner publishes the gate state; a fresh enable also forgets an earlier denial. */
     fun publish(wantsPermission: Boolean, freshEnable: Boolean) {
+        val before = shouldAsk()
         if (freshEnable) store.declined = false
         wanted = wantsPermission
+        if (!before && shouldAsk()) listener?.invoke()
     }
 
     fun shouldAsk(): Boolean = wanted && !store.declined && !inFlight
@@ -59,5 +70,6 @@ object CameraPermissionPrompt {
         InMemory.declined = false
         wanted = false
         inFlight = false
+        listener = null
     }
 }

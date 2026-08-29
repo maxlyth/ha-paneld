@@ -264,11 +264,10 @@ class DashboardActivity : AppCompatActivity() {
         }
         // Camera trial: the runtime permission is requested only once the setting is on,
         // and only as a direct result of that switch turning on — never before, never as a side effect.
-        if (key == "camera_enabled") {
-            // The service's camera owner republishes CameraPermissionPrompt on this same change; give it
-            // the turn before asking, so a camera-less profile is never prompted.
-            runOnUiThread { if (!destroyed) requestCameraPermissionIfNeeded() }
-        }
+        // camera_enabled needs no branch here: the service's camera owner republishes
+        // CameraPermissionPrompt on that change, asynchronously on its own lane, and the prompt's
+        // listener — registered below while this activity is resumed — is what raises the dialog.
+        // Asking on the raw preference change raced that publication and could see nothing to ask.
     }
 
     /** Redraw every ha-paneld status surface that is currently rendered, native or WebView-drawn. */
@@ -1984,9 +1983,13 @@ class DashboardActivity : AppCompatActivity() {
         applyFullscreen()
         applyOverscroll()
         applyZoom()
-        // Catches a camera_enabled flip that happened while this activity was backgrounded: a permission
-        // dialog raised on a non-resumed activity is not reliable, so the resumed one asks instead.
-        requestCameraPermissionIfNeeded()
+        // Camera trial: while resumed this activity is the prompt's ear. Registering fires at once if an
+        // ask is already due (a flip that happened while backgrounded), and later publications from
+        // the service's owner fire it too, so enabling while already on screen prompts without an
+        // unrelated pause/resume. The dialog must come from the main thread.
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener {
+            runOnUiThread { if (!destroyed) requestCameraPermissionIfNeeded() }
+        }
         // Reconcile the outage card with the canonical clock on wake: `postDelayed` runs on uptime,
         // which pauses through deep sleep while the canonical window does not, so a recovery notice
         // that lapsed during sleep would otherwise stay visible until its stalled timer caught up.
@@ -2068,6 +2071,7 @@ class DashboardActivity : AppCompatActivity() {
         if (hasFocus) applyFullscreen()
     }
     override fun onPause() {
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener(null)
         io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.activityPaused()
         onAdmissionVisibilityChanged(false)            // the retry stays armed; only the repaint stops
         BuiltinDashboard.setActivityForeground(activityOwner, false)

@@ -65,6 +65,34 @@ class CameraIndicationAndPromptTest {
         assertTrue("a fresh enable is the one event that asks again", CameraPermissionPrompt.shouldAsk())
     }
 
+    @Test fun theResumedActivityIsSignalledWhenAnAskBecomesDueNotOnlyOnResume() {
+        var fired = 0
+        CameraPermissionPrompt.setListener { fired++ }
+        assertEquals("nothing due yet", 0, fired)
+        // The owner publishes after the switch turns on while the activity is already resumed.
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = true)
+        assertEquals("the listener is the signal", 1, fired)
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
+        assertEquals("a republish that changes nothing does not re-signal", 1, fired)
+        CameraPermissionPrompt.asking()
+        CameraPermissionPrompt.answered(granted = false)
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
+        assertEquals("a remembered denial does not re-signal", 1, fired)
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = true)
+        assertEquals("a fresh enable does", 2, fired)
+    }
+
+    @Test fun registeringWhileAnAskIsAlreadyDueFiresAtOnceAndAPausedActivityIsNotSignalled() {
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
+        var fired = 0
+        CameraPermissionPrompt.setListener { fired++ }
+        assertEquals("a flip that happened while backgrounded prompts on resume", 1, fired)
+        CameraPermissionPrompt.setListener(null)
+        CameraPermissionPrompt.answered(granted = false)
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = true)
+        assertEquals("no listener while paused; the next resume asks", 1, fired)
+    }
+
     @Test fun aGrantEndsTheWantAndACameralessOwnerNeverWants() {
         CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
         CameraPermissionPrompt.asking()
