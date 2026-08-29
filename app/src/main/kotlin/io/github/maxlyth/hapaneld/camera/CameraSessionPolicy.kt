@@ -22,6 +22,12 @@ class CameraSessionPolicy(
     val maxConsecutiveFailures: Int = 3,
     val initialBackoffMs: Long = 1_000L,
     val maxBackoffMs: Long = 30_000L,
+    /**
+     * After the encoder refuses or fails, stream leases are refused for this long without touching the
+     * codec again, so a reconnecting client's patience does not set the retry rate. Snapshots are
+     * unaffected: the camera is not what failed.
+     */
+    val encoderHoldMs: Long = 30_000L,
 ) {
     init {
         require(frameIntervalMs > 0) { "frameIntervalMs must be positive" }

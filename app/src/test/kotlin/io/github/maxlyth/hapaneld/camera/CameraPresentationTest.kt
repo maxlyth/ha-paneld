@@ -47,13 +47,48 @@ class CameraPresentationTest {
         val j = JSONObject(CameraPresentation.absent().statusJson())
         listOf(
             "state", "outcome", "fault", "fault_detail", "recovery", "clients",
-            "last_frame_age_ms", "consecutive_failures", "indication", "live", "summary", "action",
+            "last_frame_age_ms", "consecutive_failures", "indication", "live",
+            "stream_clients", "stream_port", "encoder", "encode_width", "encode_height", "encode_fps", "encode_kbps",
+            "delivered_fps", "delivered_kbps", "summary", "action",
         ).forEach { assertTrue("missing $it", j.has(it)) }
         assertEquals("absent", j.getString("state"))
         assertEquals("none", j.getString("fault"))
         assertTrue(j.isNull("fault_detail"))
         assertTrue(j.isNull("last_frame_age_ms"))
         assertFalse(j.getBoolean("live"))
+        assertEquals(0, j.getInt("stream_clients"))
+        listOf("stream_port", "encoder", "encode_width", "encode_height", "encode_fps", "encode_kbps", "delivered_fps", "delivered_kbps")
+            .forEach { assertTrue("$it is null while nothing streams", j.isNull(it)) }
+    }
+
+    @Test fun streamFactsAreCarriedAndTheDeliveredRateIsRoundedToOneDecimal() {
+        val p = CameraPresentation.absent().copy(
+            state = CameraState.LIVE, clients = 2, streamClients = 1, streamPort = 8554, encoder = "OMX.rk.video_encoder.avc",
+            encodeWidth = 1280, encodeHeight = 720, encodeFps = 15, encodeKbps = 2_000, deliveredFps = 14.96, deliveredKbps = 1_870,
+        )
+        val j = JSONObject(p.statusJson())
+        // Presence first, as assertions: a field that stops being emitted must fail this test by
+        // assertion, not by the JSON accessor throwing.
+        listOf("stream_clients", "stream_port", "encoder", "encode_width", "encode_height", "encode_fps", "encode_kbps", "delivered_fps", "delivered_kbps")
+            .forEach { assertTrue("missing $it", j.has(it)) }
+        assertEquals(1, j.getInt("stream_clients"))
+        assertEquals(8554, j.getInt("stream_port"))
+        assertEquals("OMX.rk.video_encoder.avc", j.getString("encoder"))
+        assertEquals(1280, j.getInt("encode_width"))
+        assertEquals(720, j.getInt("encode_height"))
+        assertEquals(15, j.getInt("encode_fps"))
+        assertEquals(2_000, j.getInt("encode_kbps"))
+        assertEquals(15.0, j.getDouble("delivered_fps"), 0.0)
+        assertEquals(1_870, j.getInt("delivered_kbps"))
+        val line = p.diagnosticLine()
+        assertTrue(line, line.contains(" stream_clients=1 stream_port=8554 encoder=OMX.rk.video_encoder.avc encode=1280x720@15/2000kbps delivered=15.0fps/1870kbps"))
+        assertFalse("the dump carries the port but never an address or URL", line.contains("rtsp://"))
+    }
+
+    @Test fun permissionNeededCarriesTheListeningPortSoAUserSeesTheStreamIsWaitingOnThem() {
+        assertEquals(8554, CameraPresentation.permissionNeeded(streamPort = 8554).streamPort)
+        assertNull(CameraPresentation.permissionNeeded().streamPort)
+        assertNull("off means not listening", CameraPresentation.disabled().streamPort)
     }
 
     @Test fun liveIsTrueOnlyForTheLiveState() {
@@ -71,6 +106,8 @@ class CameraPresentationTest {
         assertTrue(line.contains("outcome=camera-disabled"))
         assertTrue(line.contains("last_frame=never"))
         assertTrue(line.contains("indication=none"))
+        assertTrue(line.contains("stream_port=off"))
+        assertTrue(line.contains("encoder=none encode=none delivered=none"))
     }
 
     @Test fun diagnosticLineFormatsAKnownLastFrameAge() {

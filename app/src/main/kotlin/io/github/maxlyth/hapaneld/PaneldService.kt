@@ -905,6 +905,9 @@ class PaneldService : Service() {
     // Effect loop for the LED — owned here (not the MQTT bridge) so a bridge rebuild never orphans it.
     private lateinit var ledEffect: LedEffectController
     private lateinit var camera: io.github.maxlyth.hapaneld.camera.CameraSessionOwner
+    // The RTSP transport for the camera trial. It listens only while the camera switch is on, holds no
+    // thread until then, and is drained before the camera owner so no client can reattach mid-stop.
+    private lateinit var cameraStream: io.github.maxlyth.hapaneld.camera.CameraRtspServer
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var audio: AudioPlaybackCoordinator
@@ -1132,12 +1135,21 @@ class PaneldService : Service() {
                     set(value) { config.cameraPermissionDeclined = value }
             },
         )
+        // The stream transport reads the owner through the FIELD so construction order does not matter:
+        // it only asks for the camera once a client connects, which cannot happen before the owner
+        // exists because the owner is what turns listening on.
+        cameraStream = io.github.maxlyth.hapaneld.camera.CameraRtspServer(
+            source = { camera },
+            log = { Log.w(TAG, "camera stream: $it") },
+        )
         camera = io.github.maxlyth.hapaneld.camera.CameraSessionOwner(
             context = this,
             hasCamera = profile.hasCamera,
             enabled = { config.cameraEnabled },
             maxResolution = { config.cameraMaxResolution },
             maxFps = { config.cameraMaxFps },
+            maxKbps = { config.cameraMaxKbps },
+            transport = cameraStream,
             permissionGranted = {
                 androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -3901,6 +3913,9 @@ class PaneldService : Service() {
                 }
             }
             closeOwner("watchdog") { watchdog.stop() }
+            // The stream transport before the camera: every client is disconnected and its lease
+            // returned before the owner tears the session down, and no new client can reattach.
+            if (::cameraStream.isInitialized) closeOwner("camera stream") { cameraStream.stop() }
             // Before the LED: a session may hold it for indication and gives it back on close.
             if (::camera.isInitialized) {
                 closeOwnerResult("camera") {

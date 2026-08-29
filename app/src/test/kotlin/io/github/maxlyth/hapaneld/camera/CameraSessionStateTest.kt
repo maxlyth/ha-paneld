@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.camera
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Admission
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Failure
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Phase
+import io.github.maxlyth.hapaneld.camera.CameraSessionState.Release
 import java.util.concurrent.CompletableFuture
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,12 +19,16 @@ import org.junit.Test
  * re-enable starts a real attempt and every waiting caller is settled, a callback from a superseded
  * attempt is recognised by identity, a reopen gets its own attempt and its own first-frame grace, an
  * open that fails climbs the ladder while subscribers remain and is backed off across sessions when
- * none do, waiters are independent, and a stop settles everything.
+ * none do, waiters are independent, and a stop settles everything. The stream cases add the encoder's
+ * ownership: it is wanted exactly while a stream lease exists, bound by the first stream lease, kept
+ * across a reopen, dropped with every other subscriber when the session ends, and held off after it
+ * fails without touching a snapshot.
  */
 class CameraSessionStateTest {
 
     private val policy = CameraSessionPolicy(frameIntervalMs = 66L, maxConsecutiveFailures = 3)
     private val state = CameraSessionState { policy }
+    private val binding = StreamBinding(fps = 15, kbps = 2_000)
 
     /** A future that must already be settled; an unsettled one fails the test instead of blocking it. */
     private fun <T> settled(future: CompletableFuture<T>, why: String): T {
@@ -38,13 +43,25 @@ class CameraSessionStateTest {
         return admission as Admission.Open
     }
 
+    private fun openStream(nowMs: Long = 1_000L, binding: StreamBinding = this.binding): Admission.Open {
+        val admission = state.acquire(gate = null, nowMs = nowMs, kind = LeaseKind.STREAM, binding = binding)
+        assertTrue("expected a fresh open, got $admission", admission is Admission.Open)
+        return admission as Admission.Open
+    }
+
+    private fun joinStream(nowMs: Long, binding: StreamBinding = this.binding): Admission.Join {
+        val admission = state.acquire(gate = null, nowMs = nowMs, kind = LeaseKind.STREAM, binding = binding)
+        assertTrue("expected to join, got $admission", admission is Admission.Join)
+        return admission as Admission.Join
+    }
+
     @Test fun theFirstLeaseOpensAndItsReleaseClosesTheSessionItOpened() {
         val first = open()
         assertEquals(Phase.OPENING, state.phase)
         assertTrue(state.isCurrent(first.attempt))
         assertTrue(state.openSucceeded(first.attempt))
         assertEquals(Phase.LIVE, state.phase)
-        assertTrue("the last lease must release the hardware", state.release(first.lease))
+        assertEquals("the last lease must release the hardware", Release.Close, state.release(first.lease))
         assertEquals("the phase changes at the decision, not when hardware trails", Phase.IDLE, state.phase)
         assertNull(state.currentAttempt)
         assertEquals(0, state.clients)
@@ -55,12 +72,13 @@ class CameraSessionStateTest {
         val joined = state.acquire(gate = null, nowMs = 1_001L)
         assertTrue("expected to join the open in flight, got $joined", joined is Admission.Join)
         val second = joined as Admission.Join
+        assertFalse("a snapshot never starts the encoder", second.startEncoder)
         val wait = requireNotNull(state.awaitOpen())
         assertEquals(2, state.clients)
         assertTrue(state.openSucceeded(first.attempt))
         assertNull(settled(wait, "the joiner learns the open succeeded"))
-        assertFalse("not the last lease", state.release(first.lease))
-        assertTrue(state.release(second.lease))
+        assertEquals("not the last lease", Release.None, state.release(first.lease))
+        assertEquals(Release.Close, state.release(second.lease))
     }
 
     @Test fun theStaticGatesRefuseWithoutTakingALease() {
@@ -79,7 +97,7 @@ class CameraSessionStateTest {
         assertEquals(CameraRefusal.DISABLED, settled(waiting, "an open waiter is settled, not left to time out"))
         assertTrue("frame waiters are settled too", frame.isDone)
         assertFalse("the staled attempt's success is refused", state.openSucceeded(first.attempt))
-        assertTrue(state.frame(first.attempt, 2_000L).isEmpty())
+        assertNull("a frame from the staled attempt must not be delivered", state.frame(first.attempt, 2_000L))
         // Re-enable before the old hardware has even been released: a brand-new attempt, never a join.
         val again = state.acquire(gate = null, nowMs = 2_001L)
         assertTrue("$again", again is Admission.Open)
@@ -121,7 +139,7 @@ class CameraSessionStateTest {
         // Poll 1: the open fails while the caller is still waiting; it learns the refusal and leaves.
         val first = open(nowMs = 0L)
         assertEquals(Failure.Reopen(1_000L, 1), state.openFailed(first.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 0L))
-        assertTrue("the departing caller ends the session", state.release(first.lease))
+        assertEquals("the departing caller ends the session", Release.Close, state.release(first.lease))
         assertEquals(Phase.IDLE, state.phase)
         assertEquals("the failure is remembered across the session", 1, state.consecutiveFailures)
         assertEquals("and so is the backoff", 1_000L, state.retryNotBeforeMs)
@@ -129,12 +147,12 @@ class CameraSessionStateTest {
         // Poll 2 after the backoff: attempt 2, fails, backoff doubles.
         val second = open(nowMs = 1_000L)
         assertEquals(Failure.Reopen(2_000L, 2), state.openFailed(second.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 1_000L))
-        assertTrue(state.release(second.lease))
+        assertEquals(Release.Close, state.release(second.lease))
         assertEquals(3_000L, state.retryNotBeforeMs)
         // Poll 3: the ceiling — degraded, visibly, and held there for the maximum backoff.
         val third = open(nowMs = 3_000L)
         assertEquals(Failure.Degrade(3), state.openFailed(third.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 3_000L))
-        assertFalse("degrading already ended the session", state.release(third.lease))
+        assertEquals("degrading already ended the session", Release.None, state.release(third.lease))
         assertEquals(Phase.DEGRADED, state.phase)
         assertEquals(3_000L + policy.maxBackoffMs, state.retryNotBeforeMs)
         assertEquals(Admission.Refused(CameraRefusal.FAILED), state.acquire(gate = null, nowMs = 10_000L))
@@ -146,7 +164,7 @@ class CameraSessionStateTest {
 
     @Test fun anOpenThatFailsWithNobodyWaitingClosesTheSession() {
         val first = open(nowMs = 0L)
-        assertTrue(state.release(first.lease))
+        assertEquals(Release.Close, state.release(first.lease))
         assertEquals(Failure.Ignored, state.openFailed(first.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 1L))
         val again = open(nowMs = 5_000L)
         state.release(again.lease)
@@ -162,16 +180,16 @@ class CameraSessionStateTest {
         state.addWaiter(b)
         assertEquals(listOf(a, b), state.frame(first.attempt, 1_500L))
         assertEquals(1_500L, state.lastFrameAtMs)
-        assertTrue("the queue drains", state.frame(first.attempt, 1_600L).isEmpty())
+        assertEquals("the queue drains but the frame is still live", emptyList<CompletableFuture<ByteArray?>>(), state.frame(first.attempt, 1_600L))
     }
 
     @Test fun aFrameFromAnEarlierAttemptNeverTouchesTheCurrentSession() {
         val first = open()
         assertTrue(state.openSucceeded(first.attempt))
-        assertTrue(state.release(first.lease))
+        assertEquals(Release.Close, state.release(first.lease))
         val second = open(nowMs = 5_000L)
         assertTrue(state.openSucceeded(second.attempt))
-        assertTrue(state.frame(first.attempt, 5_000L).isEmpty())
+        assertNull(state.frame(first.attempt, 5_000L))
         assertNull(state.lastFrameAtMs)
     }
 
@@ -202,7 +220,7 @@ class CameraSessionStateTest {
     @Test fun aReopenOrDegradeDecidedBeforeAStopOrTheLastLeaseLeavingIsRefused() {
         val first = open(nowMs = 1_000L)
         assertTrue(state.openSucceeded(first.attempt))
-        assertTrue(state.release(first.lease))
+        assertEquals(Release.Close, state.release(first.lease))
         assertEquals(Phase.IDLE, state.phase)
         assertFalse(state.reopening(first.attempt, 1))
         assertFalse(state.degraded(first.attempt, 3, 2_000L))
@@ -256,5 +274,154 @@ class CameraSessionStateTest {
         assertNotNull(state.awaitOpen())
         state.openSucceeded(first.attempt)
         assertNull("nothing to wait for once live", state.awaitOpen())
+    }
+
+    // ---- the ladder after a successful open ------------------------------------------------------------
+
+    @Test fun aFaultThatRecursAfterEverySuccessfulOpenStillReachesTheCeiling() {
+        val first = openStream()
+        assertTrue(state.openSucceeded(first.attempt))
+        // No frame ever arrives; the device faults after each open.
+        assertTrue(state.noteDeviceFault(first.attempt, CameraFault.DEVICE_ERROR))
+        assertEquals(CameraSessionPolicy.Decision.Reopen(1_000L, CameraFault.DEVICE_ERROR, 1), state.tick(first.attempt, 2_000L, enabled = true, indicated = true))
+        assertTrue(state.reopening(first.attempt, 1))
+        val second = requireNotNull(state.reopenAttempt(3_000L))
+        assertTrue(state.openSucceeded(second))
+        assertEquals("a successful open is not proof; only a frame is", 1, state.consecutiveFailures)
+        assertTrue(state.noteDeviceFault(second, CameraFault.DEVICE_ERROR))
+        assertEquals(CameraSessionPolicy.Decision.Reopen(2_000L, CameraFault.DEVICE_ERROR, 2), state.tick(second, 4_000L, enabled = true, indicated = true))
+        assertTrue(state.reopening(second, 2))
+        val third = requireNotNull(state.reopenAttempt(6_000L))
+        assertTrue(state.openSucceeded(third))
+        assertTrue(state.noteDeviceFault(third, CameraFault.DEVICE_ERROR))
+        assertEquals(
+            "bounded: the ceiling is reached, not an endless cycle",
+            CameraSessionPolicy.Decision.Degrade(CameraFault.DEVICE_ERROR, 3),
+            state.tick(third, 7_000L, enabled = true, indicated = true),
+        )
+    }
+
+    @Test fun aDeliveredFrameIsWhatResetsTheLadder() {
+        val first = open()
+        assertEquals(Failure.Reopen(1_000L, 1), state.openFailed(first.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 1_000L))
+        assertEquals(1, state.consecutiveFailures)
+        val second = requireNotNull(state.reopenAttempt(2_000L))
+        assertTrue(state.openSucceeded(second))
+        assertEquals("still counting until a frame proves the session", 1, state.consecutiveFailures)
+        assertNotNull(state.frame(second, 3_000L))
+        assertEquals(0, state.consecutiveFailures)
+    }
+
+    // ---- stream leases -----------------------------------------------------------------------------
+
+    @Test fun aStreamLeaseFirstOpensTheSessionAndWantsTheEncoderOnceLive() {
+        val first = openStream()
+        assertEquals(Phase.OPENING, state.phase)
+        assertTrue("wanted from the moment the lease exists", state.encoderWanted)
+        assertEquals(binding, state.streamBinding)
+        assertTrue(state.openSucceeded(first.attempt))
+        assertTrue("the owner starts the encoder on the successful open", state.encoderWanted)
+        assertEquals(1, state.streamClients)
+    }
+
+    @Test fun aStreamJoiningALiveSnapshotSessionStartsTheEncoderOnceAndLaterStreamsJoinItsBinding() {
+        val snapshot = open()
+        assertTrue(state.openSucceeded(snapshot.attempt))
+        assertFalse(state.encoderWanted)
+        val stream = joinStream(2_000L)
+        assertTrue("first stream lease on a live session starts the encoder now", stream.startEncoder)
+        assertEquals(binding, state.streamBinding)
+        val second = joinStream(2_100L, StreamBinding(fps = 5, kbps = 500))
+        assertFalse("the encoder is already running; the second stream joins it", second.startEncoder)
+        assertEquals("the first client's parameters win", binding, state.streamBinding)
+        assertEquals(2, state.streamClients)
+        assertEquals(3, state.clients)
+    }
+
+    @Test fun theLastStreamLeaseStopsTheEncoderWhileASnapshotLeaseKeepsTheSession() {
+        val snapshot = open()
+        assertTrue(state.openSucceeded(snapshot.attempt))
+        val stream = joinStream(2_000L)
+        assertEquals("the snapshot lease still holds the hardware", Release.StopEncoder, state.release(stream.lease))
+        assertFalse(state.encoderWanted)
+        assertNull("the binding leaves with the last stream lease", state.streamBinding)
+        assertEquals(Phase.LIVE, state.phase)
+        assertEquals("now the last lease of any kind", Release.Close, state.release(snapshot.lease))
+    }
+
+    @Test fun theLastLeaseOfAnyKindClosesTheSessionEvenWhenItIsAStream() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        assertEquals(Release.Close, state.release(stream.lease))
+        assertNull(state.streamBinding)
+        assertFalse(state.encoderWanted)
+        assertEquals(Phase.IDLE, state.phase)
+    }
+
+    @Test fun aStreamJoiningMidOpenStartsWithTheOpenNotBeforeIt() {
+        val snapshot = open()
+        val stream = joinStream(1_001L)
+        assertFalse("nothing to start on a session that is still opening", stream.startEncoder)
+        assertTrue(state.openSucceeded(snapshot.attempt))
+        assertTrue("the successful open finds the encoder wanted", state.encoderWanted)
+        assertEquals(binding, state.streamBinding)
+    }
+
+    @Test fun aReopenKeepsTheStreamLeasesAndTheirBindingSoTheEncoderRestartsWithTheSession() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        state.frame(stream.attempt, 1_100L)
+        val decision = state.tick(stream.attempt, nowMs = 9_000L, enabled = true, indicated = true)
+        assertTrue("$decision", decision is CameraSessionPolicy.Decision.Reopen)
+        assertTrue(state.reopening(stream.attempt, 1))
+        assertEquals(Phase.OPENING, state.phase)
+        assertEquals("the subscriber is the same", 1, state.streamClients)
+        assertEquals(binding, state.streamBinding)
+        val fired = requireNotNull(state.reopenAttempt(10_000L))
+        assertTrue(state.openSucceeded(fired))
+        assertTrue(state.encoderWanted)
+    }
+
+    @Test fun degradingOrClosingDropsStreamLeasesAndTheBindingWithEveryOtherSubscriber() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        assertTrue(state.degraded(stream.attempt, 3, nowMs = 5_000L))
+        assertEquals(0, state.streamClients)
+        assertNull(state.streamBinding)
+        assertFalse(state.encoderWanted)
+        val again = openStream(nowMs = 5_000L + policy.maxBackoffMs)
+        assertTrue(state.openSucceeded(again.attempt))
+        assertTrue(state.disable())
+        assertEquals(0, state.clients)
+        assertNull(state.streamBinding)
+        assertEquals("a late release after the close is a no-op", Release.None, state.release(again.lease))
+    }
+
+    @Test fun aFailedEncoderHoldsStreamLeasesOffForTheBackoffButNeverASnapshot() {
+        state.encoderFailed(nowMs = 10_000L)
+        assertEquals(
+            Admission.Refused(CameraRefusal.STREAM_ENCODER),
+            state.acquire(gate = null, nowMs = 20_000L, kind = LeaseKind.STREAM, binding = binding),
+        )
+        assertEquals("the camera is not what failed", 0, state.clients)
+        val snapshot = state.acquire(gate = null, nowMs = 20_000L)
+        assertTrue("$snapshot", snapshot is Admission.Open)
+        val afterHold = state.acquire(gate = null, nowMs = 40_000L, kind = LeaseKind.STREAM, binding = binding)
+        assertTrue("$afterHold", afterHold is Admission.Join)
+        assertNull("one admitted attempt clears the hold", state.encoderHoldUntilMs)
+    }
+
+    @Test fun aStreamLeaseMustCarryABinding() {
+        val failed = runCatching { state.acquire(gate = null, nowMs = 0L, kind = LeaseKind.STREAM, binding = null) }
+        assertTrue(failed.exceptionOrNull() is IllegalArgumentException)
+        assertEquals("no lease was taken", 0, state.clients)
+    }
+
+    @Test fun aLiveFrameWithNoSnapshotWaiterIsStillLiveForTheEncoder() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        val delivered = state.frame(stream.attempt, 1_500L)
+        assertEquals("live, nobody waiting for a JPEG", emptyList<CompletableFuture<ByteArray?>>(), delivered)
+        assertEquals(1_500L, state.lastFrameAtMs)
     }
 }

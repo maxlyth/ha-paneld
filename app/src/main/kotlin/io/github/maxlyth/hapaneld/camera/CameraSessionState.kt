@@ -2,6 +2,12 @@ package io.github.maxlyth.hapaneld.camera
 
 import java.util.concurrent.CompletableFuture
 
+/** Who is holding a lease. Stream and snapshot are subscribers alike; only the encoder cares which. */
+enum class LeaseKind { SNAPSHOT, STREAM }
+
+/** What the first stream lease binds the encoder to. Later stream leases join it rather than re-encoding. */
+data class StreamBinding(val fps: Int, val kbps: Int)
+
 /**
  * The camera session's ownership state, with no Android in it. `CameraSessionOwner` is the adapter
  * that drives the device; every enable/open/lease/close decision is made here so each interleaving is a
@@ -24,7 +30,14 @@ import java.util.concurrent.CompletableFuture
  * Callers waiting for an open register a future here, so a disable, a stop or the last lease leaving
  * settles them at once instead of leaving them to time out. Failure memory survives a session: a
  * camera that keeps refusing is backed off between polls and declared degraded at the ceiling, so a
- * poller cannot turn a broken camera into an unbounded retry loop.
+ * poller cannot turn a broken camera into an unbounded retry loop. The failure count is reset only by a
+ * delivered frame, never by a successful open on its own, so a fault that recurs after every open still
+ * climbs the ladder to the ceiling instead of cycling the device for ever.
+ *
+ * The encoder is a property of the leases, not of the hardware: it is wanted exactly while a stream
+ * lease exists ([encoderWanted]), its parameters are bound by the first stream lease and released by
+ * the last ([streamBinding]), and a reopen keeps both because the subscribers are the same. An encoder
+ * that refuses or fails holds stream leases off for the policy's backoff without touching snapshots.
  *
  * Not thread-safe: the owner serialises every call under one lock.
  */
@@ -50,34 +63,58 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
     /** No new attempt before this instant; the backoff a poller must respect between failed opens. */
     var retryNotBeforeMs: Long = 0L
         private set
+    /** Bound by the first stream lease of a session; null while no stream lease is held. */
+    var streamBinding: StreamBinding? = null
+        private set
+    /** Stream leases are refused until this time after the encoder refused or failed; never bounds a snapshot. */
+    var encoderHoldUntilMs: Long? = null
+        private set
 
-    private val leases = LinkedHashSet<Long>()
+    private val leases = LinkedHashMap<Long, LeaseKind>()
     private var nextLease = 1L
     private val frameWaiters = ArrayList<CompletableFuture<ByteArray?>>()
     private val openWaiters = ArrayList<CompletableFuture<CameraRefusal?>>()
     private var pendingFault: CameraFault? = null
 
     val clients: Int get() = leases.size
+    val streamClients: Int get() = leases.values.count { it == LeaseKind.STREAM }
+    /** The encoder runs exactly while a stream lease exists on a live session. */
+    val encoderWanted: Boolean get() = streamClients > 0
 
     sealed interface Admission {
         data class Refused(val reason: CameraRefusal) : Admission
-        /** The session is open or opening; the caller holds [lease] and, if opening, waits on [awaitOpen]. */
-        data class Join(val lease: Long) : Admission
+        /**
+         * The session is open or opening; the caller holds [lease] and, if opening, waits on [awaitOpen].
+         * [startEncoder] is true when this is the first stream lease on an already-live session, so the
+         * owner must start the encoder now; a lease joining mid-open starts it with the open.
+         */
+        data class Join(val lease: Long, val startEncoder: Boolean) : Admission
         /** The caller's lease is the first; the owner must start attempt [attempt]. */
         data class Open(val lease: Long, val attempt: Long) : Admission
     }
 
-    /** [gate] is the classified refusal from the static gates, or null when they all pass. */
-    fun acquire(gate: CameraRefusal?, nowMs: Long): Admission {
+    /**
+     * [gate] is the classified refusal from the static gates, or null when they all pass. A stream lease
+     * carries the [binding] it asks for; only the first stream lease of a session binds the encoder.
+     */
+    fun acquire(gate: CameraRefusal?, nowMs: Long, kind: LeaseKind = LeaseKind.SNAPSHOT, binding: StreamBinding? = null): Admission {
         if (phase == Phase.STOPPING) return Admission.Refused(CameraRefusal.STOPPING)
         if (gate != null) return Admission.Refused(gate)
+        require(kind != LeaseKind.STREAM || binding != null) { "a stream lease must carry a binding" }
+        if (kind == LeaseKind.STREAM) {
+            val hold = encoderHoldUntilMs
+            if (hold != null && nowMs < hold) return Admission.Refused(CameraRefusal.STREAM_ENCODER)
+            encoderHoldUntilMs = null
+        }
+        val firstStream = kind == LeaseKind.STREAM && streamClients == 0
         return when (phase) {
-            Phase.LIVE, Phase.OPENING -> Admission.Join(newLease())
+            Phase.LIVE -> Admission.Join(newLease(kind, firstStream, binding), startEncoder = firstStream)
+            Phase.OPENING -> Admission.Join(newLease(kind, firstStream, binding), startEncoder = false)
             Phase.IDLE, Phase.DEGRADED -> {
                 // Backoff is honoured across sessions: a poller retrying a broken camera waits it out.
                 if (nowMs < retryNotBeforeMs) return Admission.Refused(CameraRefusal.FAILED)
                 if (phase == Phase.DEGRADED) consecutiveFailures = 0
-                val lease = newLease()
+                val lease = newLease(kind, firstStream, binding)
                 phase = Phase.OPENING
                 generation++
                 beginAttempt(nowMs)
@@ -87,7 +124,12 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         }
     }
 
-    private fun newLease(): Long = (nextLease++).also { leases += it }
+    private fun newLease(kind: LeaseKind, firstStream: Boolean, binding: StreamBinding?): Long {
+        val lease = nextLease++
+        leases[lease] = kind
+        if (firstStream) streamBinding = binding
+        return lease
+    }
 
     private fun beginAttempt(nowMs: Long) {
         attempt++
@@ -105,14 +147,21 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
 
     fun isCurrent(attemptId: Long): Boolean = currentAttempt == attemptId
 
-    /** True when [attemptId] is the live attempt and the session is now serving. */
+    /**
+     * True when [attemptId] is the live attempt and the session is now serving; read [encoderWanted]
+     * next. The failure count is NOT reset here — only a delivered frame proves the session works.
+     */
     fun openSucceeded(attemptId: Long): Boolean {
         if (!isCurrent(attemptId) || phase != Phase.OPENING) return false
         phase = Phase.LIVE
-        consecutiveFailures = 0
         retryNotBeforeMs = 0L
         settleOpen(null)
         return true
+    }
+
+    /** The encoder refused or failed: hold stream leases off for the policy's backoff. The session itself is untouched. */
+    fun encoderFailed(nowMs: Long) {
+        encoderHoldUntilMs = nowMs + policy().encoderHoldMs
     }
 
     sealed interface Failure {
@@ -170,12 +219,28 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         return attempt
     }
 
-    /** True when the caller must release the attempt's hardware: the last lease is gone. */
-    fun release(lease: Long): Boolean {
-        if (!leases.remove(lease)) return false
-        if (leases.isNotEmpty() || phase == Phase.IDLE || phase == Phase.STOPPING) return false
-        endSession(Phase.IDLE)
-        return true
+    sealed interface Release {
+        /** Other subscribers remain, or the lease was already gone; nothing changes for the hardware. */
+        data object None : Release
+        /** The last stream lease left but a snapshot lease still holds the session: stop only the encoder. */
+        data object StopEncoder : Release
+        /** The last lease is gone: the session has ended and the caller must release the attempt's hardware. */
+        data object Close : Release
+    }
+
+    fun release(lease: Long): Release {
+        val kind = leases.remove(lease) ?: return Release.None
+        if (leases.isEmpty()) {
+            streamBinding = null
+            if (phase == Phase.IDLE || phase == Phase.STOPPING) return Release.None
+            endSession(Phase.IDLE)
+            return Release.Close
+        }
+        if (kind == LeaseKind.STREAM && streamClients == 0) {
+            streamBinding = null
+            return Release.StopEncoder
+        }
+        return Release.None
     }
 
     /** The master switch turned off. True when the owner must release the current attempt's hardware. */
@@ -199,12 +264,13 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         return held
     }
 
-    /** Synchronous end of the session: phase, generation, leases and every waiter, all at once. */
+    /** Synchronous end of the session: phase, generation, leases, the stream binding and every waiter, all at once. */
     private fun endSession(next: Phase) {
         phase = next
         generation++
         currentAttempt = null
         leases.clear()
+        streamBinding = null
         settleOpen(if (next == Phase.STOPPING) CameraRefusal.STOPPING else CameraRefusal.DISABLED)
         val drained = frameWaiters.toList()
         frameWaiters.clear()
@@ -218,9 +284,13 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         pending.forEach { it.complete(refusal) }
     }
 
-    /** A frame arrived for [attemptId]; returns the waiters to satisfy, or nothing if the frame is stale. */
-    fun frame(attemptId: Long, nowMs: Long): List<CompletableFuture<ByteArray?>> {
-        if (!isCurrent(attemptId) || phase != Phase.LIVE) return emptyList()
+    /**
+     * A frame arrived for [attemptId]. Null means the frame is stale and must be dropped; otherwise the
+     * list is the snapshot waiters to satisfy — empty when nobody is waiting for a JPEG, which is the
+     * ordinary case while only the encoder is consuming.
+     */
+    fun frame(attemptId: Long, nowMs: Long): List<CompletableFuture<ByteArray?>>? {
+        if (!isCurrent(attemptId) || phase != Phase.LIVE) return null
         lastFrameAtMs = nowMs
         consecutiveFailures = 0
         val ready = frameWaiters.toList()
@@ -256,11 +326,12 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
     }
 
     /**
-     * A live session is being torn down for a reopen: leases stay, the attempt ends, grace restarts on
-     * fire. Refused — returning false and changing nothing — unless [attemptId] is still the current
-     * attempt of a live session, so a decision computed for a session that a disable, a last-lease
-     * release or a stop has since ended can never revive it. The owner computes and applies a tick
-     * decision inside one critical section; this guard is the backstop for any path that does not.
+     * A live session is being torn down for a reopen: the leases and the stream binding stay, the attempt
+     * ends, grace restarts on fire. Refused — returning false and changing nothing — unless [attemptId]
+     * is still the current attempt of a live session, so a decision computed for a session that a
+     * disable, a last-lease release or a stop has since ended can never revive it. The owner computes
+     * and applies a tick decision inside one critical section; this guard is the backstop for any path
+     * that does not.
      */
     fun reopening(attemptId: Long, attempt: Int): Boolean {
         if (!isCurrent(attemptId) || phase != Phase.LIVE) return false

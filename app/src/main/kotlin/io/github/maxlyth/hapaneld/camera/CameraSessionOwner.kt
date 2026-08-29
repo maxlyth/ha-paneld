@@ -21,10 +21,17 @@ import android.util.Size
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Admission
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Failure
 import io.github.maxlyth.hapaneld.camera.CameraSessionState.Phase
+import io.github.maxlyth.hapaneld.camera.CameraSessionState.Release
 import io.github.maxlyth.hapaneld.util.HaTransportFault
+import io.github.maxlyth.hapaneld.util.localIpv4
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+
+/** How the owner opens an encoder; a seam so the `MediaCodec` adapter is not welded into the lifecycle. */
+fun interface EncoderFactory {
+    fun open(width: Int, height: Int, fps: Int, kbps: Int, handler: Handler, listener: VideoEncoder.Listener): EncoderOpen
+}
 
 /**
  * The Android adapter around [CameraSessionState]: it drives the device, the light and the foreground
@@ -51,8 +58,11 @@ import java.util.concurrent.TimeUnit
  *
  * A session is one repeating YUV capture into an [ImageReader]. Frames are handed to subscribers no
  * faster than the configured frame-rate cap: the sensor may capture faster, and frames arriving sooner
- * than the cap allows are observed for liveness but not delivered. Nothing is kept warm: when the last
- * lease closes, the attempt's hardware, the handler thread and the foreground standing are released.
+ * than the cap allows are observed for liveness but not delivered. The encoder is one more consumer of
+ * those paced frames: it runs exactly while a stream lease exists, bound by the first stream client's
+ * parameters within the caps, fed by buffer copy at its own paced rate, and its output fans out through
+ * the [transport]. Nothing is kept warm: when the last lease closes, the encoder, the attempt's
+ * hardware, the handler thread and the foreground standing are released.
  */
 class CameraSessionOwner(
     private val context: Context,
@@ -60,11 +70,17 @@ class CameraSessionOwner(
     private val enabled: () -> Boolean,
     private val maxResolution: () -> CameraResolution,
     private val maxFps: () -> Int,
+    private val maxKbps: () -> Int,
     private val permissionGranted: () -> Boolean,
     private val indicator: CameraIndicator,
     private val foreground: CameraForegroundGate,
+    private val transport: CameraStreamTransport = AbsentStreamTransport,
+    private val encoderFactory: EncoderFactory = EncoderFactory { w, h, fps, kbps, handler, listener ->
+        MediaCodecH264Encoder.open(w, h, fps, kbps, handler, listener)
+    },
+    private val localAddress: () -> String? = ::localIpv4,
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
-) : CameraSurface {
+) : CameraSurface, CameraStreamSource {
 
     private val lock = Any()
     private var policy = CameraSessionPolicy(frameIntervalMs = 1_000L / 15)
@@ -88,6 +104,8 @@ class CameraSessionOwner(
         var reader: ImageReader? = null
         var device: CameraDevice? = null
         var session: CameraCaptureSession? = null
+        /** The capture size this attempt configured; the encoder, if wanted, encodes exactly this. */
+        var size: Size? = null
 
         fun release() {
             val s: CameraCaptureSession?
@@ -104,34 +122,60 @@ class CameraSessionOwner(
         }
     }
 
+    private var encoder: VideoEncoder? = null
+    private var encoderPacer: FramePacer? = null
+    private var streamParams: StreamParams? = null
+    /** Settled by the running encoder attempt: its parameter sets, or why there is none. */
+    private var streamReady = CompletableFuture<StreamOutcome>()
+    private val stats = StreamStats()
+
+    private sealed interface StreamOutcome {
+        data class Ready(val params: StreamParams) : StreamOutcome
+        data class Refused(val reason: CameraRefusal) : StreamOutcome
+    }
+
     init {
         publishPermissionPrompt(freshEnable = false)
+        transport.setListening(hasCamera && enabled())
     }
 
     /** A subscriber's claim on the open session. Close exactly once; closing the last one closes the device. */
     inner class Lease internal constructor(private val id: Long) : AutoCloseable {
         private var open = true
         override fun close() {
+            val release: Release
             val ended: Attempt?
+            val generation: Long
             synchronized(lock) {
                 if (!open) return
                 open = false
-                ended = if (state.release(id)) takeCurrentLocked() else null
-                if (ended != null) outcome = "ok"
+                release = state.release(id)
+                ended = if (release == Release.Close) takeCurrentLocked() else null
+                if (release == Release.Close) outcome = "ok"
+                generation = state.generation
             }
-            if (ended != null) post { finishAttempt(ended, stopping = false) }
+            when (release) {
+                Release.Close -> post { finishAttempt(ended, stopping = false, endedGeneration = generation) }
+                Release.StopEncoder -> post { stopEncoderIfUnwanted() }
+                Release.None -> Unit
+            }
         }
     }
 
     // ---- CameraSurface ---------------------------------------------------------------------------
 
-    override fun presentation(): CameraPresentation = synchronized(lock) {
-        when {
-            !hasCamera -> CameraPresentation.absent()
-            state.phase == Phase.STOPPING -> current()
-            !enabled() -> CameraPresentation.disabled()
-            !permissionGranted() -> CameraPresentation.permissionNeeded()
-            else -> current()
+    override fun presentation(): CameraPresentation {
+        // Both the transport's facts and the interface walk stay outside the owner lock.
+        val facts = transport.facts()
+        val address = facts.port?.let { localAddress() }
+        return synchronized(lock) {
+            when {
+                !hasCamera -> CameraPresentation.absent()
+                state.phase == Phase.STOPPING -> current(facts, address)
+                !enabled() -> CameraPresentation.disabled()
+                !permissionGranted() -> CameraPresentation.permissionNeeded(streamPort = facts.port)
+                else -> current(facts, address)
+            }
         }
     }
 
@@ -161,22 +205,57 @@ class CameraSessionOwner(
         }
     }
 
+    // ---- CameraStreamSource ----------------------------------------------------------------------
+
+    override fun acquireStream(request: StreamRequest): StreamAdmission {
+        val bound = request.bind(maxResolution(), maxFps(), maxKbps())
+        val lease = acquireLease(bound.resolution, LeaseKind.STREAM, bound.binding)
+            ?: return StreamAdmission.Refused(lastRefusal())
+        val ready = synchronized(lock) {
+            val params = streamParams
+            if (encoder != null && params != null) CompletableFuture.completedFuture<StreamOutcome>(StreamOutcome.Ready(params)) else streamReady
+        }
+        return when (val outcome = runCatching { ready.get(ENCODER_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()) {
+            is StreamOutcome.Ready -> StreamAdmission.Granted(lease, outcome.params)
+            is StreamOutcome.Refused -> {
+                lease.close()
+                StreamAdmission.Refused(outcome.reason)
+            }
+            null -> {
+                lease.close()
+                StreamAdmission.Refused(CameraRefusal.STARVED)
+            }
+        }
+    }
+
+    override fun requestKeyFrame() {
+        val enc = synchronized(lock) { encoder } ?: return
+        post { enc.requestKeyFrame() }
+    }
+
     // ---- lifecycle used by the service --------------------------------------------------------------
 
-    /** The master switch moved. Off ends a live or opening session at once; on republishes the prompt. */
+    /** The master switch moved. Off ends a live or opening session at once; on republishes the prompt and listens. */
     fun onEnabledChanged() {
         if (enabled()) {
             publishPermissionPrompt(freshEnable = true)
+            transport.setListening(hasCamera)
             return
         }
         publishPermissionPrompt(freshEnable = false)
-        val ended = synchronized(lock) {
-            if (state.disable()) {
-                outcome = CameraRefusal.DISABLED.token
-                takeCurrentLocked()
-            } else null
+        transport.setListening(false)
+        val disabled: Boolean
+        val ended: Attempt?
+        val generation: Long
+        synchronized(lock) {
+            disabled = state.disable()
+            if (disabled) outcome = CameraRefusal.DISABLED.token
+            ended = if (disabled) takeCurrentLocked() else null
+            generation = state.generation
         }
-        if (ended != null) post { finishAttempt(ended, stopping = false) }
+        // Decide on the ending, not on whether an attempt was current: inside a reopen window there is
+        // no attempt, but the session still ended and its waiters, encoder and thread must be settled.
+        if (disabled) post { finishAttempt(ended, stopping = false, endedGeneration = generation) }
     }
 
     /** Refuse new leases; existing ones drain through [stop]. */
@@ -187,23 +266,30 @@ class CameraSessionOwner(
     /** Close everything now and quit the thread. Returns once the device is released. */
     fun stop(): CompletableFuture<Unit> {
         closeAdmission()
+        transport.setListening(false)
         val done = CompletableFuture<Unit>()
         val ended: Attempt?
         val h: Handler?
+        val generation: Long
         synchronized(lock) {
             state.stopping()
             outcome = CameraRefusal.STOPPING.token
             ended = takeCurrentLocked()
             h = handler
+            generation = state.generation
         }
         if (ended == null || h == null) {
-            indicator.forceHide()
-            quitThread()
+            finishAttempt(ended, stopping = true, endedGeneration = generation)
             done.complete(Unit)
             return done
         }
-        h.post {
-            finishAttempt(ended, stopping = true)
+        val posted = h.post {
+            finishAttempt(ended, stopping = true, endedGeneration = generation)
+            done.complete(Unit)
+        }
+        if (!posted) {
+            // The looper quit between the read and the post: close inline rather than never.
+            finishAttempt(ended, stopping = true, endedGeneration = generation)
             done.complete(Unit)
         }
         return done
@@ -211,8 +297,10 @@ class CameraSessionOwner(
 
     // ---- leases -------------------------------------------------------------------------------------
 
-    /** Blocking: returns a lease on an open session, or null after recording the classified refusal. */
-    fun acquire(requested: CameraResolution?): Lease? {
+    /** Blocking: returns a snapshot lease on an open session, or null after recording the classified refusal. */
+    fun acquire(requested: CameraResolution?): Lease? = acquireLease(requested, LeaseKind.SNAPSHOT, null)
+
+    private fun acquireLease(requested: CameraResolution?, kind: LeaseKind, binding: StreamBinding?): Lease? {
         val gate = synchronized(lock) {
             when {
                 !hasCamera -> CameraRefusal.ABSENT
@@ -224,8 +312,9 @@ class CameraSessionOwner(
         }
         val leaseId: Long
         val pending: CompletableFuture<CameraRefusal?>?
+        var startEncoderFor: Long? = null
         synchronized(lock) {
-            when (val admission = state.acquire(gate, nowMs())) {
+            when (val admission = state.acquire(gate, nowMs(), kind, binding)) {
                 is Admission.Refused -> {
                     outcome = admission.reason.token
                     if (admission.reason == CameraRefusal.PERMISSION) publishPermissionPrompt(freshEnable = false)
@@ -238,16 +327,32 @@ class CameraSessionOwner(
                 }
                 is Admission.Join -> {
                     leaseId = admission.lease
+                    // A first stream lease on a live session: the attempt is current by construction
+                    // (only openSucceeded reaches LIVE, and every LIVE exit nulls it under this lock), and
+                    // streamReady is an unsettled future (every encoder ending replaces a done one).
+                    if (admission.startEncoder) startEncoderFor = requireNotNull(state.currentAttempt) { "a live session has a current attempt" }
                     pending = state.awaitOpen()
                 }
             }
         }
+        startEncoderFor?.let { attemptId -> post { startEncoder(attemptId) } }
         val refusal = pending?.let {
             runCatching { it.get(OPEN_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrDefault(CameraRefusal.FAILED)
         }
         if (refusal != null) {
-            val ended = synchronized(lock) { if (state.release(leaseId)) takeCurrentLocked() else null }
-            if (ended != null) post { finishAttempt(ended, stopping = false) }
+            val release: Release
+            val ended: Attempt?
+            val generation: Long
+            synchronized(lock) {
+                release = state.release(leaseId)
+                ended = if (release == Release.Close) takeCurrentLocked() else null
+                generation = state.generation
+            }
+            when (release) {
+                Release.Close -> post { finishAttempt(ended, stopping = false, endedGeneration = generation) }
+                Release.StopEncoder -> post { stopEncoderIfUnwanted() }
+                Release.None -> Unit
+            }
             return null
         }
         return Lease(leaseId)
@@ -301,7 +406,10 @@ class CameraSessionOwner(
         val fpsRange = chooseFpsRange(chosen.second, fps)
         val r = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 2)
         r.setOnImageAvailableListener({ rd -> rd.acquireLatestImage()?.let { onFrame(it, attempt) } }, h)
-        synchronized(lock) { attempt.reader = r }
+        synchronized(lock) {
+            attempt.reader = r
+            attempt.size = size
+        }
         try {
             @Suppress("MissingPermission")
             manager.openCamera(chosen.first, object : CameraDevice.StateCallback() {
@@ -359,12 +467,18 @@ class CameraSessionOwner(
                         openFailed(attempt, CameraFault.CONFIGURE, CameraRefusal.FAILED, e.javaClass.simpleName)
                         return
                     }
-                    val became = synchronized(lock) {
-                        state.openSucceeded(attempt.id).also { ok ->
-                            if (ok) { outcome = "ok"; fault = CameraFault.NONE; faultDetail = null; recovery = "none" }
-                        }
+                    val became: Boolean
+                    val encoderWanted: Boolean
+                    synchronized(lock) {
+                        became = state.openSucceeded(attempt.id)
+                        if (became) { outcome = "ok"; fault = CameraFault.NONE; faultDetail = null; recovery = "none" }
+                        encoderWanted = became && state.encoderWanted
                     }
-                    if (became) scheduleTick(attempt)
+                    if (became) {
+                        scheduleTick(attempt)
+                        // A stream lease taken before or during the open starts its encoder with the session.
+                        if (encoderWanted) startEncoder(attempt.id)
+                    }
                 }
 
                 override fun onConfigureFailed(s: CameraCaptureSession) {
@@ -383,6 +497,7 @@ class CameraSessionOwner(
     private fun openFailed(attempt: Attempt, f: CameraFault, refusal: CameraRefusal, detail: String?) {
         attempt.release()
         val decision: Failure
+        val generation: Long
         synchronized(lock) {
             decision = state.openFailed(attempt.id, f, refusal, nowMs())
             if (decision != Failure.Ignored) {
@@ -391,6 +506,7 @@ class CameraSessionOwner(
                 faultDetail = HaTransportFault.sanitize(detail)
                 if (current === attempt) current = null
             }
+            generation = state.generation
         }
         when (decision) {
             Failure.Ignored -> Unit
@@ -402,6 +518,7 @@ class CameraSessionOwner(
                     else "next open retries after ${state.retryNotBeforeMs - nowMs()}ms"
                 }
                 quitThread()
+                endStreamIfStillEnded(refusal, generation)
             }
             is Failure.Reopen -> {
                 foreground.demote()
@@ -422,24 +539,165 @@ class CameraSessionOwner(
         }, afterMs)
     }
 
+    // ---- encoder ------------------------------------------------------------------------------------
+
+    private val encoderListener = object : VideoEncoder.Listener {
+        override fun onParameterSets(sets: ParameterSets) {
+            synchronized(lock) {
+                val enc = encoder ?: return
+                val facts = enc.facts
+                val params = StreamParams(facts.width, facts.height, facts.fps, facts.kbps, facts.name, sets)
+                streamParams = params
+                streamReady.complete(StreamOutcome.Ready(params))
+            }
+            transport.onParameterSets(sets)
+        }
+
+        override fun onAccessUnit(nals: List<ByteArray>, keyFrame: Boolean, ptsUs: Long, bytes: Int) {
+            stats.onFrame(nowMs(), bytes)
+            transport.onAccessUnit(nals, keyFrame, ptsUs)
+        }
+
+        override fun onEncoderError(detail: String) {
+            // The encoder failed, not the camera: stop the encoder alone, hold stream leases off for
+            // the policy's backoff so a reconnecting client cannot set the retry rate, and drop the
+            // stream clients so they reconnect after it. Snapshot subscribers never notice.
+            if (synchronized(lock) { encoder == null }) return
+            Log.w(TAG, "encoder failed while streaming ($detail); stopping the stream, snapshots unaffected")
+            stopEncoder()
+            synchronized(lock) {
+                fault = CameraFault.STREAM_ENCODER
+                faultDetail = HaTransportFault.sanitize(detail)
+                outcome = CameraRefusal.STREAM_ENCODER.token
+                state.encoderFailed(nowMs())
+            }
+            settleStreamWaiters(CameraRefusal.STREAM_ENCODER)
+            transport.onStreamEnded()
+        }
+    }
+
+    /** On the camera thread: open the encoder for the live attempt if a stream lease still wants one. */
+    private fun startEncoder(attemptId: Long) {
+        val h: Handler
+        val size: Size?
+        val binding: StreamBinding?
+        synchronized(lock) {
+            if (!state.isCurrent(attemptId) || state.phase != Phase.LIVE || !state.encoderWanted || encoder != null) return
+            h = handler ?: return
+            size = current?.takeIf { it.id == attemptId }?.size
+            binding = state.streamBinding
+        }
+        if (size == null || binding == null) return refuseEncoder("no_capture_size")
+        // Never above the caps: the binding is already clamped, and the session's own pace bounds the feed.
+        val fps = minOf(binding.fps, boundFps)
+        when (val opened = encoderFactory.open(size.width, size.height, fps, binding.kbps, h, encoderListener)) {
+            is EncoderOpen.Refused -> refuseEncoder(opened.detail)
+            is EncoderOpen.Ready -> synchronized(lock) {
+                encoder = opened.encoder
+                encoderPacer = FramePacer(fps)
+                streamParams = null
+                stats.reset()
+            }
+        }
+    }
+
+    /**
+     * No encoder for this session's stream clients — including the ones a reopen carried over, who would
+     * otherwise hold the camera open behind a lit light with nothing ever restarting the encoder.
+     * They are dropped like any other stream ending; the hold keeps their reconnects off the codec.
+     */
+    private fun refuseEncoder(detail: String) {
+        synchronized(lock) {
+            fault = CameraFault.STREAM_ENCODER
+            faultDetail = HaTransportFault.sanitize(detail)
+            outcome = CameraRefusal.STREAM_ENCODER.token
+            state.encoderFailed(nowMs())
+        }
+        settleStreamWaiters(CameraRefusal.STREAM_ENCODER)
+        transport.onStreamEnded()
+        Log.w(TAG, "stream refused: no usable encoder ($detail); snapshots are unaffected")
+    }
+
+    /**
+     * The last stream lease left; unless another arrived in the meantime, the encoder goes with it. The
+     * check and the swap of the waiters' future are one critical section, so a stream lease acquired
+     * between them cannot be handed a future that is then refused under it.
+     */
+    private fun stopEncoderIfUnwanted() {
+        val settled: CompletableFuture<StreamOutcome>
+        synchronized(lock) {
+            if (state.encoderWanted) return
+            settled = streamReady
+            streamReady = CompletableFuture()
+        }
+        stopEncoder()
+        settled.complete(StreamOutcome.Refused(CameraRefusal.FAILED))
+    }
+
+    /**
+     * Stop the codec without refusing anyone waiting for parameter sets: across a bounded reopen the
+     * pending future is completed by the restarted encoder, so a joiner rides the reopen out instead of
+     * being refused a session that is about to come back. A future that was already settled by the
+     * stopped encoder is replaced, so a joiner during the reopen waits for the new parameter sets rather
+     * than being granted the old encoder's. Terminal paths settle explicitly.
+     */
+    private fun stopEncoder() {
+        val enc: VideoEncoder?
+        synchronized(lock) {
+            enc = encoder
+            encoder = null
+            encoderPacer = null
+            streamParams = null
+            if (streamReady.isDone) streamReady = CompletableFuture()
+        }
+        if (enc == null) return
+        runCatching { enc.close() }
+        stats.reset()
+        transport.onEncoderStopped()
+    }
+
+    /** Everyone waiting for parameter sets learns [refusal]; the next encoder attempt gets a fresh future. */
+    private fun settleStreamWaiters(refusal: CameraRefusal) {
+        val settled: CompletableFuture<StreamOutcome>
+        synchronized(lock) {
+            settled = streamReady
+            streamReady = CompletableFuture()
+        }
+        settled.complete(StreamOutcome.Refused(refusal))
+    }
+
+    /**
+     * The stream side of a session ending, applied only if that session is still the one that ended:
+     * the ending is posted, and a new session may have started — with its own stream clients and
+     * waiters — before it runs. Those belong to the new session and must not be dropped by the old one.
+     */
+    private fun endStreamIfStillEnded(refusal: CameraRefusal, endedGeneration: Long) {
+        if (synchronized(lock) { state.generation != endedGeneration }) return
+        settleStreamWaiters(refusal)
+        transport.onStreamEnded()
+    }
+
     // ---- frames -------------------------------------------------------------------------------------
 
     private fun onFrame(image: Image, attempt: Attempt) {
         image.use { img ->
             val now = nowMs()
             val ready: List<CompletableFuture<ByteArray?>>
+            val enc: VideoEncoder?
             synchronized(lock) {
-                ready = state.frame(attempt.id, now)
-                if (ready.isEmpty()) return
+                ready = state.frame(attempt.id, now) ?: return
                 // The frame-rate cap bounds delivery: a frame arriving sooner than the cap allows is
-                // observed for liveness but not handed on.
+                // observed for liveness but not handed on to anyone.
                 val interval = 1_000L / boundFps
                 if (now - lastDeliveredAtMs < interval) {
                     ready.forEach { state.addWaiter(it) }
                     return
                 }
                 lastDeliveredAtMs = now
+                enc = encoder?.takeIf { encoderPacer?.admit(now) == true }
             }
+            enc?.feed(img, now * 1_000L)
+            if (ready.isEmpty()) return
             val jpeg = toJpegOrNull(img)
             synchronized(lock) {
                 if (jpeg == null) {
@@ -465,9 +723,9 @@ class CameraSessionOwner(
     /** What the tick decided, applied to hardware outside the lock once the state machine has moved. */
     private sealed interface TickAction {
         data object Continue : TickAction
-        data class Finish(val ended: Attempt?, val stopping: Boolean) : TickAction
+        data class Finish(val ended: Attempt?, val stopping: Boolean, val generation: Long) : TickAction
         data class Reopen(val afterMs: Long) : TickAction
-        data class Degrade(val fault: CameraFault, val attempt: Int) : TickAction
+        data class Degrade(val fault: CameraFault, val attempt: Int, val generation: Long) : TickAction
     }
 
     private fun tick(attempt: Attempt) {
@@ -483,17 +741,17 @@ class CameraSessionOwner(
             when (decision) {
                 CameraSessionPolicy.Decision.Continue -> TickAction.Continue
                 is CameraSessionPolicy.Decision.Close -> {
+                    // Every close goes through a real state-machine ending, never a sentinel. IDLE here
+                    // means the policy saw no clients, which cannot happen on a live session because the
+                    // last lease ends it synchronously; endNow() is the honest no-op if it ever does.
                     outcome = when (decision.reason) {
                         CameraSessionPolicy.CloseReason.DISABLED -> CameraRefusal.DISABLED.token
                         CameraSessionPolicy.CloseReason.STOPPING -> CameraRefusal.STOPPING.token
                         CameraSessionPolicy.CloseReason.IDLE -> "ok"
                     }
-                    // Every close goes through a real state-machine ending, never a sentinel. IDLE here
-                    // means the policy saw no clients, which cannot happen on a live session because the
-                    // last lease ends it synchronously; endNow() is the honest no-op if it ever does.
                     val stopping = decision.reason == CameraSessionPolicy.CloseReason.STOPPING
                     if (stopping) state.stopping() else state.endNow()
-                    TickAction.Finish(takeCurrentLocked(), stopping)
+                    TickAction.Finish(takeCurrentLocked(), stopping, state.generation)
                 }
                 is CameraSessionPolicy.Decision.Reopen -> {
                     if (!state.reopening(attempt.id, decision.attempt)) return
@@ -509,24 +767,29 @@ class CameraSessionOwner(
                     outcome = CameraRefusal.FAILED.token
                     recovery = "reattach a client after the hold or toggle the camera setting"
                     current = null
-                    TickAction.Degrade(decision.fault, decision.attempt)
+                    TickAction.Degrade(decision.fault, decision.attempt, state.generation)
                 }
             }
         }
         when (action) {
             TickAction.Continue -> scheduleTick(attempt)
-            is TickAction.Finish -> finishAttempt(action.ended ?: attempt, stopping = action.stopping)
+            is TickAction.Finish -> finishAttempt(action.ended ?: attempt, stopping = action.stopping, endedGeneration = action.generation)
             is TickAction.Reopen -> {
+                // The encoder comes down with the capture beneath it and restarts with the reopened
+                // session; stream clients keep their place and joiners ride the reopen out.
+                stopEncoder()
                 attempt.release()
                 foreground.demote()
                 indicator.hide()
                 scheduleReopen(action.afterMs)
             }
             is TickAction.Degrade -> {
+                stopEncoder()
                 attempt.release()
                 foreground.demote()
                 indicator.hide()
                 quitThread()
+                endStreamIfStillEnded(CameraRefusal.FAILED, action.generation)
                 Log.w(TAG, "camera session degraded after ${action.attempt} failures: ${action.fault.wire}")
             }
         }
@@ -553,13 +816,16 @@ class CameraSessionOwner(
         // brings the hardware side down and records the presentation.
         foreground.demote()
         indicator.hide()
+        val generation: Long
         synchronized(lock) {
             fault = f
             outcome = CameraRefusal.FAILED.token
             recovery = "reattach a client after the hold or toggle the camera setting"
             if (current === attempt) current = null
+            generation = state.generation
         }
         quitThread()
+        endStreamIfStillEnded(CameraRefusal.FAILED, generation)
         Log.w(TAG, "camera session degraded after $count failures: ${f.wire}")
     }
 
@@ -568,12 +834,19 @@ class CameraSessionOwner(
     /** Under [lock]: detach the current attempt so its hardware can come down outside the lock. */
     private fun takeCurrentLocked(): Attempt? = current.also { current = null }
 
-    /** Bring one attempt's hardware down; the state machine has already ended the session. */
-    private fun finishAttempt(attempt: Attempt, stopping: Boolean) {
-        attempt.release()
+    /**
+     * Bring the session down: the state machine has already ended it, as generation [endedGeneration].
+     * The encoder stops first so nothing is produced while the capture beneath it is torn down; then
+     * the attempt's hardware, if any; then — only if no newer session has started in the meantime —
+     * every stream client is dropped so it reconnects and pays the open cost.
+     */
+    private fun finishAttempt(attempt: Attempt?, stopping: Boolean, endedGeneration: Long) {
+        stopEncoder()
+        attempt?.release()
         foreground.demote()
         if (stopping) indicator.forceHide() else indicator.hide()
         quitThread()
+        endStreamIfStillEnded(if (stopping) CameraRefusal.STOPPING else lastRefusal(), endedGeneration)
     }
 
     private fun quitThread() {
@@ -590,7 +863,8 @@ class CameraSessionOwner(
 
     private fun post(action: () -> Unit) {
         val h = synchronized(lock) { handler }
-        if (h != null) h.post(action) else action()
+        // A looper that quit between the read and the post refuses the post; run inline rather than drop it.
+        if (h == null || !h.post(action)) action()
     }
 
     private fun publishPermissionPrompt(freshEnable: Boolean) {
@@ -600,11 +874,14 @@ class CameraSessionOwner(
         )
     }
 
-    private fun current(): CameraPresentation {
+    private fun current(facts: StreamTransportFacts, address: String?): CameraPresentation {
+        val now = nowMs()
         val last = state.lastFrameAtMs
         val phase = state.phase
         val clients = state.clients
+        val streaming = state.streamClients
         val failures = state.consecutiveFailures
+        val encoderFacts = encoder?.facts
         val presented = when (phase) {
             Phase.IDLE -> CameraState.IDLE
             Phase.OPENING -> CameraState.OPENING
@@ -612,24 +889,42 @@ class CameraSessionOwner(
             Phase.DEGRADED -> CameraState.DEGRADED
             Phase.STOPPING -> CameraState.STOPPING
         }
+        // The warning travels with the URL: the place a person copies it from is the place they are
+        // about to paste it into a card on this very panel, which is the loop the panel cannot afford.
+        val stream = when {
+            facts.port == null -> "stream not listening"
+            address != null -> "stream at rtsp://$address:${facts.port}$STREAM_PATH (not for this panel's own dashboard)"
+            else -> "stream listening on port ${facts.port}"
+        }
         return CameraPresentation(
             state = presented, outcome = outcome, fault = fault, faultDetail = faultDetail, recovery = recovery,
-            clients = clients, lastFrameAgeMs = last?.let { (nowMs() - it).coerceAtLeast(0) },
+            clients = clients, lastFrameAgeMs = last?.let { (now - it).coerceAtLeast(0) },
             consecutiveFailures = failures, indication = indicator.route(),
             summary = when (phase) {
-                Phase.LIVE -> "camera open for $clients client${if (clients == 1) "" else "s"}"
-                Phase.OPENING -> "camera opening"
-                Phase.DEGRADED -> "camera gave up after $failures failures (${fault.wire})"
+                Phase.LIVE -> "camera open for $clients client${if (clients == 1) "" else "s"}" +
+                    (if (streaming > 0) " ($streaming streaming)" else "") + "; $stream"
+                Phase.OPENING -> "camera opening; $stream"
+                Phase.DEGRADED -> "camera gave up after $failures failures (${fault.wire}); $stream"
                 Phase.STOPPING -> "camera stopping"
-                Phase.IDLE -> "camera closed; nobody is watching"
+                Phase.IDLE -> "camera closed; nobody is watching; $stream"
             },
             action = when {
                 phase == Phase.DEGRADED -> "check the camera hardware; a new client after the hold or a setting toggle retries"
                 fault == CameraFault.FOREGROUND -> "wake the panel: a camera session can only start while the dashboard is visible"
                 fault == CameraFault.INDICATION -> "the camera-in-use light could not be shown; check overlay permission and the LED"
                 fault == CameraFault.ENCODE -> "the camera delivers frames but they could not be encoded; report this with the panel's diagnostics"
+                fault == CameraFault.STREAM_ENCODER -> "no hardware H.264 encoder fits the camera bitrate cap; snapshots still work, streaming does not"
                 else -> "none"
             },
+            streamClients = streaming,
+            streamPort = facts.port,
+            encoder = encoderFacts?.name,
+            encodeWidth = encoderFacts?.width,
+            encodeHeight = encoderFacts?.height,
+            encodeFps = encoderFacts?.fps,
+            encodeKbps = encoderFacts?.kbps,
+            deliveredFps = if (encoderFacts != null) stats.fps(now) else null,
+            deliveredKbps = if (encoderFacts != null) stats.kbps(now) else null,
         )
     }
 
@@ -677,7 +972,10 @@ class CameraSessionOwner(
         private const val OPEN_WAIT_MS = 8_000L
         private const val FOREGROUND_WAIT_MS = 3_000L
         private const val SNAPSHOT_WAIT_MS = 5_000L
+        /** Codec start plus its first config buffer is well under a second; a bound, not a budget. */
+        private const val ENCODER_WAIT_MS = 6_000L
         private const val JPEG_QUALITY = 85
+        const val STREAM_PATH = RtspSession.MOUNT_PATH
 
         /** Pack a YUV_420_888 image as NV21 honouring row and pixel strides. */
         internal fun yuv420ToNv21(image: Image): ByteArray {

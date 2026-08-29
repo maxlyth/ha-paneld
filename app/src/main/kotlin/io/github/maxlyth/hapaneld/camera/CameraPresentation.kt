@@ -35,6 +35,10 @@ enum class CameraRefusal(val token: String) {
     ENCODE("camera-encode-failed"),
     /** The device could not be opened or configured; see the status object for the classified fault. */
     FAILED("camera-unavailable"),
+    /** No hardware H.264 encoder could be opened within the caps, so a stream is refused; snapshots still work. */
+    STREAM_ENCODER("camera-stream-encoder-unavailable"),
+    /** The stream transport already serves as many clients as it will; try again when one leaves. */
+    BUSY("camera-busy"),
     /** The service is tearing down. */
     STOPPING("camera-stopping"),
 }
@@ -90,6 +94,8 @@ enum class CameraFault(val wire: String) {
     STARVED("starved"),
     /** The last frame could not be encoded; classified separately from starvation because the camera delivered. */
     ENCODE("encode"),
+    /** The hardware H.264 stream encoder could not be opened within the caps, or failed while streaming. */
+    STREAM_ENCODER("stream_encoder"),
 }
 
 /** Which route is telling the room the camera is on. `none` is only legal when the camera is closed. */
@@ -105,6 +111,12 @@ enum class CameraIndication(val wire: String) { NONE("none"), OVERLAY("overlay")
  *
  * [lastFrameAgeMs] is named for what it measures: the age of a real captured frame, never the age of a
  * verdict or a state change. The renderer's `observed_age_ms` was misread once because it was not.
+ *
+ * The stream fields describe the one encode session: what it is bound to ([encodeWidth] and friends,
+ * null while no encoder runs) and what it actually delivered over the last few seconds
+ * ([deliveredFps], [deliveredKbps]) — the measurement the plan's open question about whether the
+ * targets are honoured is answered with. The panel's own stream URL may appear in [summary]; the
+ * diagnostic line carries only the port, because the dump omits network identifiers.
  */
 data class CameraPresentation(
     val state: CameraState,
@@ -114,13 +126,24 @@ data class CameraPresentation(
     val faultDetail: String?,
     /** How a degraded state may recover on its own, or `none` when nothing is degraded. */
     val recovery: String,
-    /** Subscribers currently holding the session open. */
+    /** Subscribers currently holding the session open, streams and snapshots alike. */
     val clients: Int,
     val lastFrameAgeMs: Long?,
     val consecutiveFailures: Int,
     val indication: CameraIndication,
     val summary: String,
     val action: String,
+    /** Stream clients among [clients]. */
+    val streamClients: Int = 0,
+    /** The RTSP port while the transport is listening; null when the feature is off or the port could not be bound. */
+    val streamPort: Int? = null,
+    val encoder: String? = null,
+    val encodeWidth: Int? = null,
+    val encodeHeight: Int? = null,
+    val encodeFps: Int? = null,
+    val encodeKbps: Int? = null,
+    val deliveredFps: Double? = null,
+    val deliveredKbps: Int? = null,
 ) {
     /** Stable flat JSON for `GET /api/v1/status`; `state` stays first for shell clients. */
     fun statusJson(): String = buildString {
@@ -129,6 +152,7 @@ data class CameraPresentation(
             append(JSONObject.quote(name)).append(':')
             when (value) {
                 null -> append("null")
+                is Double -> append(Math.round(value * 10) / 10.0)
                 is Number -> append(value)
                 is Boolean -> append(value)
                 else -> append(JSONObject.quote(value.toString()))
@@ -145,12 +169,21 @@ data class CameraPresentation(
         field("consecutive_failures", consecutiveFailures)
         field("indication", indication.wire)
         field("live", state == CameraState.LIVE)
+        field("stream_clients", streamClients)
+        field("stream_port", streamPort)
+        field("encoder", encoder)
+        field("encode_width", encodeWidth)
+        field("encode_height", encodeHeight)
+        field("encode_fps", encodeFps)
+        field("encode_kbps", encodeKbps)
+        field("delivered_fps", deliveredFps)
+        field("delivered_kbps", deliveredKbps)
         field("summary", summary)
         field("action", action)
         append('}')
     }
 
-    /** One terminal-safe line for the copy-paste support dump. */
+    /** One terminal-safe line for the copy-paste support dump. No address, no URL: the port alone. */
     fun diagnosticLine(): String = buildString {
         append("[camera] state=").append(state.wire)
         append(" outcome=").append(outcome)
@@ -161,6 +194,21 @@ data class CameraPresentation(
         append(" last_frame=").append(lastFrameAgeMs?.let { fmtAge(it) } ?: "never")
         append(" failures=").append(consecutiveFailures)
         append(" indication=").append(indication.wire)
+        append(" stream_clients=").append(streamClients)
+        append(" stream_port=").append(streamPort?.toString() ?: "off")
+        append(" encoder=").append(encoder ?: "none")
+        append(" encode=")
+        if (encodeWidth != null && encodeHeight != null) {
+            append(encodeWidth).append('x').append(encodeHeight).append('@').append(encodeFps ?: 0).append('/').append(encodeKbps ?: 0).append("kbps")
+        } else {
+            append("none")
+        }
+        append(" delivered=")
+        if (deliveredFps != null) {
+            append(Math.round(deliveredFps * 10) / 10.0).append("fps/").append(deliveredKbps ?: 0).append("kbps")
+        } else {
+            append("none")
+        }
     }
 
     companion object {
@@ -175,15 +223,16 @@ data class CameraPresentation(
             state = CameraState.DISABLED, outcome = CameraRefusal.DISABLED.token, fault = CameraFault.NONE,
             faultDetail = null, recovery = "none", clients = 0, lastFrameAgeMs = null,
             consecutiveFailures = 0, indication = CameraIndication.NONE,
-            summary = "camera off", action = "turn on the camera setting to serve snapshots",
+            summary = "camera off", action = "turn on the camera setting to serve snapshots and a stream",
         )
 
-        fun permissionNeeded(): CameraPresentation = CameraPresentation(
+        fun permissionNeeded(streamPort: Int? = null): CameraPresentation = CameraPresentation(
             state = CameraState.PERMISSION_NEEDED, outcome = CameraRefusal.PERMISSION.token,
             fault = CameraFault.PERMISSION, faultDetail = null, recovery = "none", clients = 0,
             lastFrameAgeMs = null, consecutiveFailures = 0, indication = CameraIndication.NONE,
             summary = "camera on, but Android has not granted the permission",
             action = "grant the camera permission on the panel when prompted",
+            streamPort = streamPort,
         )
 
         internal fun fmtAge(ms: Long): String {
