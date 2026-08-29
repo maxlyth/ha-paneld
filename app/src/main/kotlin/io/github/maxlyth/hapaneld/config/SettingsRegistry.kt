@@ -665,7 +665,7 @@ object SettingsRegistry {
             validate = ::validateVoiceWakeWords,
         ),
         SettingSpec(
-            key = "voice_pipelines", type = SettingType.STRING, group = "Voice",
+            key = "voice_pipelines", type = SettingType.STRING, group = "Voice", picker = "voice_pipelines",
             label = "Wake word pipelines", default = "{}", tier = Tier.ADVANCED, scope = Scope.DEVICE,
             maxChars = 2_048,
             help = "Which Home Assistant Assist pipeline each configured wake word triggers, as a JSON " +

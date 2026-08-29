@@ -10,6 +10,9 @@
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
   var haSourceItems = [], haSourceRequest = 0, haSourceTimer = null;
   var homeDashboardItems = [], homeDashboardRequest = 0, homeDashboardQueried = false;
+  // Assist pipeline catalogue for the voice_pipelines picker. null = not fetched yet, false = the
+  // endpoint returned an error/503 (degrade to the raw JSON textarea), an array = the fetched catalogue.
+  var voicePipelinesCatalog = null, voicePipelinesRequest = 0;
   // A per-load, owner-safe seed supplied by the config response. The endpoint is still fetched every
   // render so a failed query, credential change or Home Assistant area edit can recover immediately.
   var haAreaSeed = null, haAreaSeedGeneration = 0, haAreaCatalogRequest = 0, haAreaUserOverride = false;
@@ -415,6 +418,67 @@
       }
       sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(f.key); });
       return sel;
+    }
+    // Wake-word-pipeline picker: one native select per configured wake word (from voice_wake_words),
+    // offering the Home Assistant Assist pipelines fetched from /api/v1/voice/pipelines. Degrades to the
+    // raw JSON textarea while that endpoint hasn't answered yet, or answered 503 (no Home Assistant
+    // connection, or the voice-coordinator lane not wired up yet) — Safari-first: plain fetch/select/
+    // textarea, no picker library.
+    if (f.picker === "voice_pipelines") {
+      if (voicePipelinesCatalog === null) loadVoicePipelines();
+      var pipelinesWrap = el("div", { class: "voice-pipelines-picker" });
+      if (voicePipelinesCatalog === null || voicePipelinesCatalog === false) {
+        var pipelinesRaw = el("textarea", { class: "voice-pipelines-raw", rows: "2", text: v == null ? "" : v });
+        pipelinesRaw.addEventListener("change", function () {
+          values[f.key] = pipelinesRaw.value; setDirty(f.key);
+        });
+        pipelinesWrap.appendChild(pipelinesRaw);
+        if (voicePipelinesCatalog === false) {
+          pipelinesWrap.appendChild(el("small", { text: "Pipeline list unavailable — edit as JSON." }));
+        }
+        return pipelinesWrap;
+      }
+      var configuredWakeWords = [];
+      try {
+        var parsedWakeWords = JSON.parse(values.voice_wake_words || "[]");
+        if (Array.isArray(parsedWakeWords)) {
+          configuredWakeWords = parsedWakeWords.filter(function (w) { return typeof w === "string" && w; });
+        }
+      } catch (e) { configuredWakeWords = []; }
+      if (!configuredWakeWords.length) {
+        pipelinesWrap.appendChild(el("small", { text: "Configure a wake word above first." }));
+        return pipelinesWrap;
+      }
+      var pipelineMapping = {};
+      try {
+        var parsedMapping = JSON.parse(v || "{}");
+        if (parsedMapping && typeof parsedMapping === "object" && !Array.isArray(parsedMapping)) {
+          pipelineMapping = parsedMapping;
+        }
+      } catch (e) { pipelineMapping = {}; }
+      configuredWakeWords.forEach(function (word) {
+        var pipelineRow = el("div", { class: "voice-pipeline-row" });
+        pipelineRow.appendChild(el("span", { class: "voice-pipeline-label", text: word }));
+        var pipelineSelect = el("select");
+        pipelineSelect.appendChild(el("option", { value: "", text: "Preferred pipeline" }));
+        voicePipelinesCatalog.forEach(function (p) {
+          var pid = p && p.id ? String(p.id) : "";
+          if (!pid) return;
+          var pname = p && p.name ? String(p.name) : pid;
+          var pipelineOption = el("option", { value: pid, text: pname });
+          if (pipelineMapping[word] === pid) pipelineOption.selected = true;
+          pipelineSelect.appendChild(pipelineOption);
+        });
+        pipelineSelect.addEventListener("change", function () {
+          if (pipelineSelect.value) pipelineMapping[word] = pipelineSelect.value;
+          else delete pipelineMapping[word];
+          values[f.key] = JSON.stringify(pipelineMapping);
+          setDirty(f.key);
+        });
+        pipelineRow.appendChild(pipelineSelect);
+        pipelinesWrap.appendChild(pipelineRow);
+      });
+      return pipelinesWrap;
     }
     // Home dashboard picker: Home Assistant provides this signed-in user's dashboards in its own order.
     // Deliberately a NATIVE select. A custom popup was tried (to carry the dashboards' icons like HA's
@@ -2841,6 +2905,26 @@
       render();
       configCardGeometryChanged();
     }).catch(function () {});
+  }
+
+  // Fetched once per page load; a 503 (no Home Assistant connection, or the coordinator lane not wired
+  // up yet) is remembered as false rather than retried on every render, and the picker degrades to the
+  // raw JSON textarea.
+  function loadVoicePipelines() {
+    if (voicePipelinesCatalog !== null) return;
+    var request = ++voicePipelinesRequest;
+    fetch("/api/v1/voice/pipelines", { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (body) {
+      if (request !== voicePipelinesRequest) return;
+      voicePipelinesCatalog = (body && Array.isArray(body.pipelines)) ? body.pipelines : [];
+      render();
+    }).catch(function () {
+      if (request !== voicePipelinesRequest) return;
+      voicePipelinesCatalog = false;
+      render();
+    });
   }
 
   function scheduleApplyPendingPoll() {
