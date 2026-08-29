@@ -24,6 +24,15 @@
     <!-- Soft navigation-bar overlay (TYPE_APPLICATION_OVERLAY) for panels whose firmware hides the
          native navbar. Not granted by default on the panels; NavbarController grants it via root appops. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Camera trial (experimental, off by default, offered only where the profile declares hardware.camera).
+         The session runs under a dedicated camera-typed foreground service so Android 11+ grants it
+         while-in-use access. RECORD_AUDIO is deliberately NOT declared: the trial ships video only. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Not required: most supported panels have no camera, and the permission alone would otherwise
+         imply one and make the app uninstallable on them. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Configuration contains MQTT and Home Assistant credentials. Backups are exported only
          through ha-paneld's explicit sealed backup flow, never Android's implicit transport. -->
@@ -131,6 +140,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="ha-paneld persistent HTTP/MQTT listener for Home Assistant panel hardware control" />
         </service>
+
+        <service
+            android:name=".camera.CameraForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
 
         <service
             android:name=".GuardDbMaintenanceService"

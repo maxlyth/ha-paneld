@@ -669,6 +669,7 @@ internal data class ConfigOwnerRefreshPlan(
     val launcherHome: Boolean,
     val rendererTarget: Boolean,
     val haLifecycle: Boolean,
+    val camera: Boolean,
 )
 
 internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefreshPlan {
@@ -685,6 +686,8 @@ internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefres
         // Lifecycle demand follows the renderer selection AND the credentials, because it is only worth
         // holding a socket open for a panel that both renders a dashboard and can authenticate.
         haLifecycle = changedKeys.any((ha + "dashboard_package")::contains),
+        // The master switch closes a live session on this lane too, not only on the watchdog tick.
+        camera = "camera_enabled" in changedKeys,
     )
 }
 
@@ -901,6 +904,7 @@ class PaneldService : Service() {
     private lateinit var led: LedController
     // Effect loop for the LED — owned here (not the MQTT bridge) so a bridge rebuild never orphans it.
     private lateinit var ledEffect: LedEffectController
+    private lateinit var camera: io.github.maxlyth.hapaneld.camera.CameraSessionOwner
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var audio: AudioPlaybackCoordinator
@@ -1119,6 +1123,27 @@ class PaneldService : Service() {
         }
         led = LedFactory.detect(profile)
         ledEffect = LedEffectController(led)
+        // Camera trial. Owned here, beside the LED it borrows for off-screen indication and the screen
+        // whose intended-off state decides the handover; nothing runs until a subscriber asks for a frame.
+        camera = io.github.maxlyth.hapaneld.camera.CameraSessionOwner(
+            context = this,
+            hasCamera = profile.hasCamera,
+            enabled = { config.cameraEnabled },
+            maxResolution = { config.cameraMaxResolution },
+            maxFps = { config.cameraMaxFps },
+            permissionGranted = {
+                androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            },
+            indicator = io.github.maxlyth.hapaneld.camera.CameraIndicator(
+                context = this,
+                ledEffect = ledEffect,
+                // Re-derive from persisted intent through whichever bridge is current, never a snapshot.
+                restoreLed = { runCatching { runtime.current().mqtt.reapplyStoredLed() } },
+                screenOff = { screen.isIntendedOff() },
+            ),
+            foreground = io.github.maxlyth.hapaneld.camera.AndroidCameraForegroundGate(this),
+        )
         navigate = NavigateController(this)
         volume = VolumeController(this)
         audio = AudioPlaybackCoordinator(
@@ -1382,6 +1407,7 @@ class PaneldService : Service() {
             onRepairPowerSafety = ::repairPowerSafety,
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
+            camera = camera,
             // Captures the FIELD, not a snapshot, so it follows reconfigure()'s bridge reassignment.
             // A bridge generation built from credentials that no longer match the persisted config is
             // mid-swap: whatever state it reports was earned by the OLD credentials (on a fresh panel,
@@ -2193,6 +2219,7 @@ class PaneldService : Service() {
             io.github.maxlyth.hapaneld.http.PerfReader.updateRendererTarget(rendererTargetSnapshot())
         }
         if (ownerRefresh.haLifecycle) runCatching { refreshHaLifecycleWatch() }
+        if (ownerRefresh.camera && ::camera.isInitialized) runCatching { camera.onEnabledChanged() }
     }
 
     /**
@@ -3689,6 +3716,7 @@ class PaneldService : Service() {
         if (::kiosk.isInitialized) kiosk.closeAdmission()
         if (::navbar.isInitialized) navbar.closeAdmission()
         if (::screen.isInitialized) screen.closeAdmission()
+        if (::camera.isInitialized) camera.closeAdmission()
     }
 
     /** Explicit power-safety repair. This is referenced by the HTTP server during startup but can execute
@@ -3866,6 +3894,12 @@ class PaneldService : Service() {
                 }
             }
             closeOwner("watchdog") { watchdog.stop() }
+            // Before the LED: a session may hold it for indication and gives it back on close.
+            if (::camera.isInitialized) {
+                closeOwnerResult("camera") {
+                    runCatching { camera.stop().get(CAMERA_STOP_MS, java.util.concurrent.TimeUnit.MILLISECONDS) }.isSuccess
+                }
+            }
             closeOwner("LED effect") { ledEffect.close() }
             closeOwnerResult("wake-on-wave worker") {
                 wakeOnWaveWorker.closeAndJoin(
@@ -4556,6 +4590,7 @@ class PaneldService : Service() {
         private const val SILENT_CHANNEL_ID = "ha-paneld-silent-v1"
         private const val STORAGE_HEALTH_CHANNEL_ID = "ha-paneld-storage-health-v1"
         private const val NOTIF_ID = 1
+        private const val CAMERA_STOP_MS = 3_000L
         private const val STORAGE_HEALTH_NOTIF_ID = 2
         // Daily rather than wall-clock scheduled: the service owns one immediate check, then delays
         // from completion. A bounded short retry absorbs transient StatFs/SQLite observation failures.

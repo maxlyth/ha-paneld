@@ -35,6 +35,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -247,6 +248,12 @@ class DashboardActivity : AppCompatActivity() {
     // land AFTER onDestroy's removeCallbacksAndMessages and re-arm the self-perpetuating watchdog on a
     // dead activity. Every posted handler checks this first so nothing runs (or re-schedules) post-destroy.
     @Volatile private var destroyed = false
+    // Camera trial (contract §1). A request is in flight from the moment the system dialog is raised
+    // until Android answers it, and a denial is remembered for as long as the switch stays on: the next
+    // ask is a fresh enable, never a resume. Counting resumes would loop, because the dialog's own
+    // dismissal resumes this activity.
+    private var cameraPermissionInFlight = false
+    private var cameraPermissionDeclined = false
     private val rendererPowerListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "prevent_idle_dim") {
             runOnUiThread {
@@ -260,6 +267,15 @@ class DashboardActivity : AppCompatActivity() {
         // even where the system change did redraw the native ones.
         if (key == "dashboard_theme_dark" || key == "dark_mode" || key == "dashboard_theme") {
             runOnUiThread { if (!destroyed) convergeStatusTheme() }
+        }
+        // Camera trial (contract §1): the runtime permission is requested only once the setting is on,
+        // and only as a direct result of that switch turning on — never before, never as a side effect.
+        if (key == "camera_enabled") {
+            runOnUiThread {
+                if (destroyed) return@runOnUiThread
+                if (::activityConfig.isInitialized && activityConfig.cameraEnabled) cameraPermissionDeclined = false
+                requestCameraPermissionIfNeeded()
+            }
         }
     }
 
@@ -1976,10 +1992,37 @@ class DashboardActivity : AppCompatActivity() {
         applyFullscreen()
         applyOverscroll()
         applyZoom()
+        // Catches a camera_enabled flip that happened while this activity was backgrounded: a permission
+        // dialog raised on a non-resumed activity is not reliable, so the resumed one asks instead.
+        requestCameraPermissionIfNeeded()
         // Reconcile the outage card with the canonical clock on wake: `postDelayed` runs on uptime,
         // which pauses through deep sleep while the canonical window does not, so a recovery notice
         // that lapsed during sleep would otherwise stay visible until its stalled timer caught up.
         redrawLifecycleBar()
+    }
+
+    /** Camera trial (contract §1): request CAMERA only when [Config.cameraEnabled] is already on and the
+     *  permission is not already held. Called both from the settings-change listener above (the switch
+     *  flips while this activity is resumed) and from [onResume] (the switch flipped while backgrounded). */
+    private fun requestCameraPermissionIfNeeded() {
+        if (!::activityConfig.isInitialized || !activityConfig.cameraEnabled) return
+        if (cameraPermissionInFlight || cameraPermissionDeclined) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return
+        cameraPermissionInFlight = true
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA_PERMISSION) return
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        cameraPermissionInFlight = false
+        cameraPermissionDeclined = !granted
+        Log.d(TAG, "camera permission ${if (granted) "granted" else "denied"}")
     }
 
     /** The foreground built-in renderer owns its timeout policy directly. This is the standard Android
@@ -3531,7 +3574,9 @@ class DashboardActivity : AppCompatActivity() {
      * uses it for destructive actions — the UI hangs on an unanswered result), fullscreen video, and
      * getUserMedia permission requests. This provides the minimum: native dialogs for confirm/alert,
      * fullscreen show/hide, and a permission handler that grants only resources whose Android permission
-     * we actually hold (none of camera/mic by default — the getUserMedia/intercom path is out of scope),
+     * we actually hold — mic is out of scope (the manifest declares no RECORD_AUDIO today, so this stays
+     * denied) and the camera is refused outright, because the camera trial's session owner is the only
+     * thing allowed to open the device and a page's `getUserMedia()` is not one of its subscribers —
      * else denies explicitly so the card shows its own error instead of hanging.
      */
     private fun dashboardChromeClient(generation: Long) = object : WebChromeClient() {
@@ -3578,7 +3623,12 @@ class DashboardActivity : AppCompatActivity() {
             if (!rendererCurrent(generation)) { request.deny(); return }
             val granted = request.resources.filter { res ->
                 val perm = when (res) {
-                    PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+                    // Camera trial (contract §5): one owner holds the device and every consumer is its
+                    // subscriber. A page's getUserMedia() would be a second, independent owner that the
+                    // LIMITED HALs on these panels cannot share with the session, so it is refused
+                    // outright rather than following the switch. Declaring CAMERA for the service must
+                    // never arm this branch by accident.
+                    PermissionRequest.RESOURCE_VIDEO_CAPTURE -> null
                     PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
                     else -> null
                 }
@@ -3590,6 +3640,9 @@ class DashboardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ha-paneld/dashboard"
+        /** Camera trial (contract §1): the CAMERA runtime-permission request raised when the camera
+         *  setting turns on. Distinct from any other request code — this activity had none before. */
+        private const val REQUEST_CAMERA_PERMISSION = 4801
         private const val SIGN_IN_LOAD_RETRIES_MAX = 4
         private const val SIGN_IN_LOAD_RETRY_MS = 4_000L
         private const val ADMISSION_COUNTDOWN_TICK_MS = 1_000L  // repaint cadence of the visible retry countdown

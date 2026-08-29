@@ -7,6 +7,7 @@ import android.content.res.Resources
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import io.github.maxlyth.hapaneld.camera.CameraResolution
 import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.config.SettingSpec
 import io.github.maxlyth.hapaneld.config.SettingType
@@ -1098,6 +1099,14 @@ class Config private constructor(
     fun setWatchdogEnabled(on: Boolean) {
         edit { putBoolean("watchdog_enabled", on) }
     }
+
+    // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request
+    // (contract §1, §4). Read-only convenience accessors; there is no corresponding setter here.
+    val cameraEnabled: Boolean get() = boolPref("camera_enabled")
+    val cameraMaxResolution: CameraResolution
+        get() = CameraResolution.parse(stringPref("camera_max_resolution")) ?: CameraResolution.P720
+    val cameraMaxFps: Int get() = intPref("camera_max_fps").coerceIn(1, 30)
+    val cameraMaxKbps: Int get() = intPref("camera_max_kbps").coerceIn(250, 8000)
 
     // Experimental Android dashboard lock: hide system bars and return from other apps/Recents so a casual
     // user does not remain away from the dashboard. Persisted, off by default, with recovery routes and a
