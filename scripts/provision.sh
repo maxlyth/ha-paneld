@@ -7597,6 +7597,10 @@ step "🔑 permissions" "${D}notifications · WRITE_SETTINGS (brightness/screen)
 # A failed grant must not abort the run — the app works with reduced capability, verify() reports the
 # true end-state, and each warning names the manual Settings path to finish the job by hand.
 adb -s "$TARGET" shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+# Microphone. Granted here for the same reason as notifications: a wall panel has nobody standing at
+# it to answer a runtime permission dialog, and a permission that is only ever asked for on screen is
+# a permission a headless panel never gets. Nothing records until a feature asks for the microphone.
+adb -s "$TARGET" shell pm grant "$PKG" android.permission.RECORD_AUDIO >/dev/null 2>&1 || true
 adb -s "$TARGET" shell appops set "$PKG" WRITE_SETTINGS allow >/dev/null 2>&1 \
   || warn "could not grant WRITE_SETTINGS via adb — grant manually: Settings → Apps → ha-paneld → 'Modify system settings'"
 # Soft-navbar overlay. SuperSU panels self-grant this at runtime via in-app su, but sandbox-walled

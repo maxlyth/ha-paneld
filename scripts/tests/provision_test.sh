@@ -3599,6 +3599,11 @@ unset MOCK_HEALTH
 # Some panels answer /health before the heavier diagnostics endpoint finishes root/capability probes.
 MOCK_VERIFY=transient run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "healthy panel survives one transient slow diagnostics response"
+# The runtime permissions a panel cannot be asked for in person are granted over adb instead. Both
+# are asserted, because a grant block that silently loses a line still provisions and still passes
+# every other check here: the app simply comes up with a capability quietly missing.
+assert_log_contains '^adb .* shell pm grant io\.github\.maxlyth\.hapaneld android\.permission\.POST_NOTIFICATIONS$' "provisioning grants the notification permission"
+assert_log_contains '^adb .* shell pm grant io\.github\.maxlyth\.hapaneld android\.permission\.RECORD_AUDIO$' "provisioning grants the microphone permission"
 assert_log_contains 'appops get io.github.maxlyth.hapaneld WRITE_SETTINGS' "post-install WRITE_SETTINGS verification reads Android's authority"
 assert_log_contains 'settings get secure enabled_accessibility_services' "post-install accessibility verification reads Android's authority"
 unset MOCK_VERIFY
