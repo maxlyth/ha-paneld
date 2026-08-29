@@ -233,6 +233,10 @@ class DashboardActivity : AppCompatActivity() {
 
     // --- long-run reliability state (all touched on the main thread only) ---
     private val main = Handler(Looper.getMainLooper())
+    // Camera trial: the permission dialog may only be raised from an observably resumed activity, and
+    // AndroidX reports RESUMED only after onResume returns; this gate holds a signal that lands too
+    // early or while paused and delivers it at the lifecycle's own ON_RESUME.
+    private val cameraPromptDelivery = io.github.maxlyth.hapaneld.camera.CameraPromptDelivery { requestCameraPermissionIfNeeded() }
     private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val rendererGate = RendererGenerationGate()
     private val wakeMediaRecovery = WakeMediaRecoveryGate()
@@ -598,6 +602,24 @@ class DashboardActivity : AppCompatActivity() {
         }
         activityConfig = config
         activityConfig.registerChangeListener(rendererPowerListener)
+        // The service's camera owner publishes the prompt state on its own lane; the listener posts
+        // to main (never inline) and the delivery gate defers to the lifecycle's ON_RESUME, which is
+        // the first point AndroidX reports RESUMED. Registering fires at once if an ask is already due.
+        lifecycle.addObserver(
+            androidx.lifecycle.LifecycleEventObserver { _, event ->
+                when (event) {
+                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> cameraPromptDelivery.onResumed()
+                    androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                        cameraPromptDelivery.onPaused()
+                        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.activityPaused()
+                    }
+                    else -> Unit
+                }
+            },
+        )
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener {
+            main.post { if (!destroyed) cameraPromptDelivery.onSignal() }
+        }
         applyRendererScreenPolicy()
         configureEntityFilter(config)
         // Freeze the WebView when the panel screen is off (CPU/heat/memory), and reload the moment
@@ -633,6 +655,7 @@ class DashboardActivity : AppCompatActivity() {
         homeDashboardAttempts.invalidate()
         activityScope.cancel()
         if (::activityConfig.isInitialized) activityConfig.unregisterChangeListener(rendererPowerListener)
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener(null)
         wakeMediaRecovery.close()
         rendererGate.close()
         entityFilterLease?.let(EntityFilterTelemetry::stop)
@@ -1983,13 +2006,6 @@ class DashboardActivity : AppCompatActivity() {
         applyFullscreen()
         applyOverscroll()
         applyZoom()
-        // Camera trial: while resumed this activity is the prompt's ear. Registering fires at once if an
-        // ask is already due (a flip that happened while backgrounded), and later publications from
-        // the service's owner fire it too, so enabling while already on screen prompts without an
-        // unrelated pause/resume. The dialog must come from the main thread.
-        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener {
-            runOnUiThread { if (!destroyed) requestCameraPermissionIfNeeded() }
-        }
         // Reconcile the outage card with the canonical clock on wake: `postDelayed` runs on uptime,
         // which pauses through deep sleep while the canonical window does not, so a recovery notice
         // that lapsed during sleep would otherwise stay visible until its stalled timer caught up.
@@ -2002,9 +2018,9 @@ class DashboardActivity : AppCompatActivity() {
     private fun requestCameraPermissionIfNeeded() {
         // Camera trial: whether to ask is the session owner's decision — it alone knows the profile
         // declares a camera, the switch is on and the permission is missing — and a denial is remembered
-        // durably. Only a resumed activity may raise the dialog; a paused one cannot show it reliably and
-        // must not mark a request in flight that Android will never answer.
-        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
+        // durably. Reaching here means the delivery gate has seen the lifecycle's ON_RESUME, so the
+        // dialog can be raised; a guard on the lifecycle state here would reject a signal that lands
+        // during onResume itself and never retry it.
         if (!io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.shouldAsk()) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return
         io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.asking()
@@ -2071,8 +2087,6 @@ class DashboardActivity : AppCompatActivity() {
         if (hasFocus) applyFullscreen()
     }
     override fun onPause() {
-        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.setListener(null)
-        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.activityPaused()
         onAdmissionVisibilityChanged(false)            // the retry stays armed; only the repaint stops
         BuiltinDashboard.setActivityForeground(activityOwner, false)
         super.onPause()
