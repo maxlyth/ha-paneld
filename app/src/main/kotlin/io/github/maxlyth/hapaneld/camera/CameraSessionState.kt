@@ -179,7 +179,14 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
     }
 
     /** The master switch turned off. True when the owner must release the current attempt's hardware. */
-    fun disable(): Boolean {
+    fun disable(): Boolean = endNow()
+
+    /**
+     * End an opening or live session now, to idle, settling everyone. The watchdog uses this for a
+     * close it decided itself; it is the same ending as [disable] because the effect is the same, and
+     * there is deliberately no way to end a session without going through it.
+     */
+    fun endNow(): Boolean {
         if (phase != Phase.OPENING && phase != Phase.LIVE) return false
         endSession(Phase.IDLE)
         return true

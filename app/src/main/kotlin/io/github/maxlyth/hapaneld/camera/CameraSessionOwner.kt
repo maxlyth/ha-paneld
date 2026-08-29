@@ -460,18 +460,19 @@ class CameraSessionOwner(
         when (decision) {
             CameraSessionPolicy.Decision.Continue -> scheduleTick(attempt)
             is CameraSessionPolicy.Decision.Close -> {
+                // Every close goes through a real state-machine ending, never a sentinel. IDLE here means
+                // the policy saw no clients; that cannot happen on a live session because the last lease
+                // ends it synchronously, so endNow() is the honest no-op if it ever does. STOPPING is
+                // impossible on this path (the tick passes stopping = false) and is handled like a stop.
                 val ended = synchronized(lock) {
-                    val token = when (decision.reason) {
+                    outcome = when (decision.reason) {
                         CameraSessionPolicy.CloseReason.DISABLED -> CameraRefusal.DISABLED.token
                         CameraSessionPolicy.CloseReason.STOPPING -> CameraRefusal.STOPPING.token
                         CameraSessionPolicy.CloseReason.IDLE -> "ok"
                     }
-                    outcome = token
-                    if (decision.reason == CameraSessionPolicy.CloseReason.DISABLED) state.disable() else state.release(-1L)
+                    if (decision.reason == CameraSessionPolicy.CloseReason.STOPPING) state.stopping() else state.endNow()
                     takeCurrentLocked()
                 }
-                // The state machine already ended the session (disable) or the leases are gone; either way
-                // this attempt's hardware comes down now.
                 finishAttempt(ended ?: attempt, stopping = decision.reason == CameraSessionPolicy.CloseReason.STOPPING)
             }
             is CameraSessionPolicy.Decision.Reopen -> {
