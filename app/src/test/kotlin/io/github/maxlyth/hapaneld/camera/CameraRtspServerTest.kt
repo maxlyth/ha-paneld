@@ -31,6 +31,8 @@ class CameraRtspServerTest {
         val released = AtomicInteger()
         val keyFrames = AtomicInteger()
         val requests = ArrayList<StreamRequest>()
+        /** What the camera does on a sync-frame request: a real owner may deliver one synchronously. */
+        var onKeyFrame: (() -> Unit)? = null
 
         override fun acquireStream(request: StreamRequest): StreamAdmission {
             synchronized(requests) { requests += request }
@@ -48,16 +50,30 @@ class CameraRtspServerTest {
 
         override fun requestKeyFrame() {
             keyFrames.incrementAndGet()
+            onKeyFrame?.invoke()
         }
     }
 
     private val servers = ArrayList<CameraRtspServer>()
 
-    private fun server(source: CameraStreamSource, maxClients: Int = 4, queuePackets: Int = 512, readTimeoutMs: Int = 10_000): CameraRtspServer {
-        val s = CameraRtspServer(port = 0, source = { source }, maxClients = maxClients, queuePackets = queuePackets, readTimeoutMs = readTimeoutMs)
+    private fun server(
+        source: CameraStreamSource,
+        maxClients: Int = 4,
+        queuePackets: Int = 512,
+        readTimeoutMs: Int = 10_000,
+        maxConnections: Int = 8,
+        maxBodyBytes: Int = 16 * 1024,
+    ): CameraRtspServer {
+        val s = CameraRtspServer(
+            port = 0, source = { source }, maxClients = maxClients, queuePackets = queuePackets,
+            readTimeoutMs = readTimeoutMs, maxConnections = maxConnections, maxBodyBytes = maxBodyBytes,
+        )
         servers += s
         s.setListening(true)
         assertNotNull("bound", s.boundPort)
+        // The camera publishes its encoder's parameter sets before any client can be granted a stream;
+        // without them a DESCRIBE is refused rather than answered with nothing to decode from.
+        s.onParameterSets(sets)
         return s
     }
 
@@ -70,7 +86,7 @@ class CameraRtspServerTest {
         val input: InputStream = BufferedInputStream(socket.getInputStream())
         private var cseq = 0
 
-        fun request(method: String, url: String, vararg headers: String): Response {
+        fun send(method: String, url: String, vararg headers: String) {
             val text = buildString {
                 append(method).append(' ').append(url).append(" RTSP/1.0\r\n")
                 append("CSeq: ").append(++cseq).append("\r\n")
@@ -78,7 +94,17 @@ class CameraRtspServerTest {
                 append("\r\n")
             }
             socket.getOutputStream().write(text.toByteArray(Charsets.US_ASCII))
+        }
+
+        fun request(method: String, url: String, vararg headers: String): Response {
+            send(method, url, *headers)
             return readResponse()
+        }
+
+        /** The next byte on the wire without consuming it. */
+        fun peek(): Int {
+            input.mark(1)
+            return input.read().also { input.reset() }
         }
 
         fun readResponse(): Response {
@@ -135,10 +161,28 @@ class CameraRtspServerTest {
             -2
         }
 
+        /** The status of the next response, or null when the connection ended (end of stream or a reset) before one arrived. */
+        fun statusOrEnd(): Int? = try {
+            readResponse().status
+        } catch (_: IllegalStateException) {
+            null
+        } catch (_: java.net.SocketException) {
+            null
+        }
+
+        /** True when the server has ended the connection: end of stream or a reset, never a silent timeout. */
+        fun ended(): Boolean = try {
+            input.read() == -1
+        } catch (_: java.net.SocketTimeoutException) {
+            false
+        } catch (_: java.net.SocketException) {
+            true
+        }
+
         fun play(url: String): String {
             request("OPTIONS", url)
             val describe = request("DESCRIBE", url, "Accept: application/sdp")
-            check(describe.status == 200) { "describe ${describe.status}" }
+            check(describe.status == 200) { "describe ${describe.status}: ${describe.headers}" }
             val setup = request("SETUP", "$url/trackID=0", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1")
             check(setup.status == 200) { "setup ${setup.status}" }
             val session = requireNotNull(setup.headers["Session"]).substringBefore(';')
@@ -167,13 +211,14 @@ class CameraRtspServerTest {
         val server = server(source)
         val url = "rtsp://127.0.0.1:${server.boundPort}/live?res=480p&fps=5"
         Client(server.boundPort!!).use { client ->
+            server.onParameterSets(sets)
             val session = client.play(url)
             assertEquals(1, source.acquired.get())
             assertEquals(listOf(StreamRequest(resolution = CameraResolution.P480, fps = 5)), source.requests)
-            assertEquals("PLAY asks for a sync frame", 1, source.keyFrames.get())
+            // The 200 PLAY is on the wire before media is enabled; the sync-frame request follows it.
+            await("PLAY asks for a sync frame") { source.keyFrames.get() == 1 }
             assertEquals(StreamTransportFacts(port = server.boundPort, clients = 1), server.facts())
 
-            server.onParameterSets(sets)
             server.onAccessUnit(listOf(idr), keyFrame = true, ptsUs = 1_000_000L)
             val first = client.readFrame()
             assertEquals(0, first.first)
@@ -202,6 +247,98 @@ class CameraRtspServerTest {
         Client(server.boundPort!!).use { it.play(url) }
         await("lease release after a bare disconnect") { source.released.get() == 1 }
         assertEquals(0, server.facts().clients)
+    }
+
+    @Test fun connectionsBeyondTheBoundAreClosedBeforeTheyOwnAThread() {
+        val source = FakeSource()
+        val server = server(source, maxConnections = 2)
+        // Reader threads are named per client; earlier tests' threads may still be unwinding in this
+        // JVM, so only threads that appear after this point are counted.
+        fun readers(): Set<Thread> = Thread.getAllStackTraces().keys.filter { it.isAlive && it.name.startsWith("camera-rtsp-client-") }.toSet()
+        val before = readers()
+        val held = listOf(Client(server.boundPort!!), Client(server.boundPort!!))
+        try {
+            await("two idle connections are accepted") { (readers() - before).size == 2 }
+            Client(server.boundPort!!).use { extra ->
+                assertEquals("the third is closed at the acceptor", -1, extra.readOrTimeout())
+            }
+            assertEquals("and never got a reader thread", 2, (readers() - before).size)
+            assertEquals(0, source.acquired.get())
+        } finally {
+            held.forEach { it.close() }
+        }
+    }
+
+    @Test fun aRequestBodyBeyondTheBoundIsRefusedWithoutBeingRead() {
+        val source = FakeSource()
+        val server = server(source, maxBodyBytes = 64)
+        val url = "rtsp://127.0.0.1:${server.boundPort}/live"
+        Client(server.boundPort!!).use { client ->
+            client.send("GET_PARAMETER", url, "Content-Length: 65")
+            client.socket.getOutputStream().write(ByteArray(65) { 'x'.code.toByte() })
+            // The server closes with that body unread, so the kernel answers with a reset and the peer
+            // may lose the 413 before reading it: what holds is that the request is never answered
+            // and the connection ends, never that the refusal is observed.
+            val status = client.statusOrEnd()
+            assertTrue("one byte over the bound is refused or the connection ends, never answered: $status", status == null || status == 413)
+            assertTrue("and the connection ends rather than resynchronising past an unread body", client.ended())
+        }
+        Client(server.boundPort!!).use { client ->
+            client.send("GET_PARAMETER", url, "Content-Length: 64")
+            client.socket.getOutputStream().write(ByteArray(64) { 'x'.code.toByte() })
+            assertEquals("a body at the bound is skipped and the request answered", 200, client.statusOrEnd())
+            assertEquals("and the connection continues", 200, client.request("OPTIONS", url).status)
+        }
+        Client(server.boundPort!!).use { client ->
+            // A declared gigabyte with nothing sent after the head: refused from the header alone, before
+            // any buffer for it could exist, and with nothing unread the refusal itself is delivered.
+            assertEquals(413, client.request("GET_PARAMETER", url, "Content-Length: 1073741824").status)
+            assertTrue(client.ended())
+        }
+        assertEquals("no request took a lease", 0, source.acquired.get())
+    }
+
+    @Test fun theSyncFrameRequestedByPlayNeverReachesTheWireAheadOfThePlayResponse() {
+        val source = FakeSource()
+        val server = server(source)
+        // A camera that answers the sync-frame request synchronously, on the requesting thread: the
+        // most demanding case for ordering on the one byte stream.
+        source.onKeyFrame = { server.onAccessUnit(listOf(idr), keyFrame = true, ptsUs = 0L) }
+        val url = "rtsp://127.0.0.1:${server.boundPort}/live"
+        Client(server.boundPort!!).use { client ->
+            client.request("OPTIONS", url)
+            assertEquals(200, client.request("DESCRIBE", url, "Accept: application/sdp").status)
+            val setup = client.request("SETUP", "$url/trackID=0", "Transport: RTP/AVP/TCP;unicast;interleaved=0-1")
+            val session = requireNotNull(setup.headers["Session"]).substringBefore(';')
+            client.send("PLAY", url, "Session: $session")
+            assertEquals("the 200 PLAY is the first thing after PLAY on the wire, never an interleaved frame", 'R'.code, client.peek())
+            assertEquals(200, client.readResponse().status)
+            val (channel, packet) = client.readFrame()
+            assertEquals("the sync frame follows it", 0, channel)
+            assertTrue(packet.size > 12)
+            assertEquals(1, source.keyFrames.get())
+        }
+    }
+
+    @Test fun aDescribeWhileTheEncoderIsDownIsRefusedRatherThanAnsweredWithRetainedSets() {
+        val source = FakeSource()
+        val server = server(source)
+        val url = "rtsp://127.0.0.1:${server.boundPort}/live"
+        Client(server.boundPort!!).use { client ->
+            server.onParameterSets(sets)
+            client.play(url)
+            // A reopen: the encoder stops, and nothing is advertised until the new one publishes.
+            server.onEncoderStopped()
+            val stale = client.request("DESCRIBE", url, "Accept: application/sdp")
+            assertEquals(503, stale.status)
+            assertEquals("camera-starved", stale.headers["X-Camera"])
+            val fresh = ParameterSets(byteArrayOf(0x67, 0x64, 0x00, 0x1F, 0x01), pps)
+            server.onParameterSets(fresh)
+            val again = client.request("DESCRIBE", url, "Accept: application/sdp")
+            assertEquals(200, again.status)
+            assertTrue("the new encoder's sets, never the old", again.body.contains(fresh.spropParameterSets()))
+            assertFalse(again.body.contains(sets.spropParameterSets()))
+        }
     }
 
     @Test fun aRefusedCameraReachesTheClientAsServiceUnavailableWithTheReasonAndTakesNoLease() {

@@ -82,6 +82,18 @@ class ParameterSets(val sps: ByteArray, val pps: ByteArray) {
         }
 
         fun fromCodecConfig(buffer: ByteArray): ParameterSets? = fromNalUnits(AnnexB.split(buffer))
+
+        /**
+         * From `MediaCodec`'s output format: `csd-0` and `csd-1` are Annex-B buffers, SPS then PPS on
+         * most encoders, but some put both in `csd-0` and omit `csd-1` — so the two are split together
+         * and the pair is taken from whatever they hold.
+         */
+        fun fromCsd(csd0: ByteArray?, csd1: ByteArray?): ParameterSets? {
+            val nals = ArrayList<ByteArray>()
+            csd0?.let { nals += AnnexB.split(it) }
+            csd1?.let { nals += AnnexB.split(it) }
+            return fromNalUnits(nals)
+        }
     }
 }
 

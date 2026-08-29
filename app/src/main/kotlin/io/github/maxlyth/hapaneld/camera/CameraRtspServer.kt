@@ -33,6 +33,9 @@ class CameraRtspServer(
     private val log: (String) -> Unit = {},
     private val queuePackets: Int = QUEUE_PACKETS,
     private val readTimeoutMs: Int = READ_TIMEOUT_MS,
+    /** Accepted connections of any state, attached or not; enforced before a connection owns a thread. */
+    private val maxConnections: Int = MAX_CONNECTIONS,
+    private val maxBodyBytes: Int = MAX_BODY_BYTES,
 ) : CameraStreamTransport {
 
     private val lock = Any()
@@ -146,7 +149,10 @@ class CameraRtspServer(
     }
 
     override fun onEncoderStopped() {
-        // A bounded reopen: the clients keep their place and receive fresh parameter sets with the next IDR.
+        // A bounded reopen: the clients keep their place and receive fresh parameter sets with the next
+        // IDR. Until then nothing is advertised: a DESCRIBE in the gap is refused rather than answered
+        // with the previous encoder's sets.
+        sets = null
     }
 
     override fun onStreamEnded() {
@@ -161,8 +167,12 @@ class CameraRtspServer(
             } catch (_: IOException) {
                 break
             }
+            // The admission boundary: a connection beyond the bound is closed here, before it owns a
+            // reader, a writer or a queue — so idle or half-open peers cannot multiply threads, and the
+            // attached-stream limit further down bounds only what reaches the camera.
             val client = synchronized(lock) {
-                if (listener !== owner) null else Client(accepted, nextClientId++).also { clients += it }
+                if (listener !== owner || clients.size >= maxConnections) null
+                else Client(accepted, nextClientId++).also { clients += it }
             }
             if (client == null) {
                 runCatching { accepted.close() }
@@ -172,8 +182,7 @@ class CameraRtspServer(
         }
     }
 
-    /** Decimal digits only: the same id is the SDP's sess-id, which RFC 4566 defines as a numeric string and strict parsers (pion, used by go2rtc) enforce. */
-    private fun sessionId(): String = "%010d".format(random.nextInt() and 0x7FFF_FFFF)
+    private fun sessionId(): String = RtspSession.sessionIdFrom(random.nextInt())
 
     /** One connection: its RTSP session, its lease on the camera, and its two threads. */
     private inner class Client(private val socket: Socket, id: Int) : StreamDescriber {
@@ -196,12 +205,15 @@ class CameraRtspServer(
                 socket.soTimeout = readTimeoutMs
                 socket.tcpNoDelay = true
             }
-            reader.start()
+            // The writer exists before the reader can finish a request: a graceful end waits for the
+            // writer to drain the final response, and a join on a thread that has not started yet
+            // returns at once, closing the socket with that response still queued.
             writer.start()
+            reader.start()
         }
 
         override fun describe(request: StreamRequest): Described {
-            synchronized(lock) { params }?.let { return Described.Ready(sdp(it)) }
+            synchronized(lock) { params }?.let { return sdpOrRefusal(it) }
             val full = synchronized(lock) {
                 if (clients.count { it.attached } + attaching >= maxClients) true else { attaching++; false }
             }
@@ -223,7 +235,7 @@ class CameraRtspServer(
                             runCatching { admission.lease.close() }
                             Described.Refused(CameraRefusal.STOPPING)
                         } else {
-                            Described.Ready(sdp(admission.params))
+                            sdpOrRefusal(admission.params)
                         }
                     }
                 }
@@ -232,9 +244,15 @@ class CameraRtspServer(
             }
         }
 
-        /** The newest parameter sets the encoder produced, so a re-DESCRIBE after a reopen describes the running encode. */
-        private fun sdp(params: StreamParams): String =
-            Sdp.video(session.id, sets ?: params.sets, params.fps, params.width, params.height)
+        /**
+         * Describe the RUNNING encoder's parameter sets, never a retained pair: the camera publishes a
+         * new encoder's sets here before it wakes anyone, and clears them when the encoder stops, so a
+         * DESCRIBE that finds none is one that arrived while no encoder runs and is refused instead.
+         */
+        private fun sdpOrRefusal(params: StreamParams): Described {
+            val current = sets ?: return Described.Refused(CameraRefusal.STARVED)
+            return Described.Ready(Sdp.video(session.id, current, params.fps, params.width, params.height))
+        }
 
         /** From the encoder's thread: packetise for this client and queue; overflow drops the client, never blocks. */
         fun send(wire: List<ByteArray>, rtpTimestamp: Long) {
@@ -265,16 +283,24 @@ class CameraRtspServer(
                         graceful = true
                         break
                     }
-                    request.header("content-length")?.toIntOrNull()?.let { skip(input, it) }
+                    val bodyLength = request.header("content-length")?.toIntOrNull() ?: 0
+                    if (bodyLength < 0 || bodyLength > maxBodyBytes) {
+                        // Part of the admission boundary: a body beyond the bound is never read or held.
+                        enqueue(RtspResponse(413, "Request Entity Too Large", listOf("CSeq" to (request.cseq?.toString() ?: "0"), "Server" to RtspSession.SERVER_NAME)).encode())
+                        graceful = true
+                        break
+                    }
+                    if (bodyLength > 0) skip(input, bodyLength)
                     val outcome = session.handle(request, packetizer.nextSequence, lastRtpTimestamp)
                     if (outcome.stopPlaying) playing = false
-                    // Playing state and the sync-frame request come BEFORE the response goes out, so a
-                    // client that has read its 200 is already receiving, and the IDR it needs is on its way.
+                    // The 200 PLAY is queued BEFORE media delivery is enabled, so on the one ordered
+                    // byte stream the response always precedes the first interleaved frame; the sync
+                    // frame is requested right after so the picture the client needs is on its way.
+                    enqueue(outcome.response.encode())
                     if (outcome.startPlaying) {
                         playing = true
                         source().requestKeyFrame()
                     }
-                    enqueue(outcome.response.encode())
                     if (outcome.close) {
                         graceful = true
                         break
@@ -384,6 +410,10 @@ class CameraRtspServer(
         const val DEFAULT_PORT = 8554
         const val MOUNT = RtspSession.MOUNT_PATH
         const val MAX_CLIENTS = 4
+        /** Attached streams plus a little room for a client that is still describing or tearing down. */
+        const val MAX_CONNECTIONS = 8
+        /** RTSP request bodies here are keepalive or parameter probes; anything larger is not a client we serve. */
+        const val MAX_BODY_BYTES = 16 * 1024
         /** About two seconds of a 2 Mbps stream in 1400-byte packets; beyond it the client is not keeping up. */
         const val QUEUE_PACKETS = 512
         /** One and a half times the advertised session timeout: a peer that sends nothing for this long is gone. */

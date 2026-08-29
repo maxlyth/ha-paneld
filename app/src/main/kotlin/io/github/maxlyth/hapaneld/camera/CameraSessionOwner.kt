@@ -543,14 +543,19 @@ class CameraSessionOwner(
 
     private val encoderListener = object : VideoEncoder.Listener {
         override fun onParameterSets(sets: ParameterSets) {
+            val params: StreamParams
+            val ready: CompletableFuture<StreamOutcome>
             synchronized(lock) {
                 val enc = encoder ?: return
                 val facts = enc.facts
-                val params = StreamParams(facts.width, facts.height, facts.fps, facts.kbps, facts.name, sets)
+                params = StreamParams(facts.width, facts.height, facts.fps, facts.kbps, facts.name, sets)
                 streamParams = params
-                streamReady.complete(StreamOutcome.Ready(params))
+                ready = streamReady
             }
+            // The transport learns the new sets BEFORE any waiter is woken, so a DESCRIBE that wakes on
+            // this encoder can never be answered with the previous encoder's retained SPS/PPS.
             transport.onParameterSets(sets)
+            ready.complete(StreamOutcome.Ready(params))
         }
 
         override fun onAccessUnit(nals: List<ByteArray>, keyFrame: Boolean, ptsUs: Long, bytes: Int) {

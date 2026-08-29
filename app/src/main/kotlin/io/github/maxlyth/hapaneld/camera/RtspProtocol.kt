@@ -235,15 +235,29 @@ class RtspSession(
         const val CAMERA_HEADER = "X-Camera"
         val PUBLIC: List<Pair<String, String>> = listOf("Public" to "OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER, SET_PARAMETER")
 
-        /** `interleaved=a-b` from a TCP transport spec, defaulting to 0-1; null for any other lower transport. */
+        /**
+         * `interleaved=a-b` from a TCP transport spec, defaulting to 0-1; null for any other lower transport
+         * or for a channel that does not fit the one byte the interleaved frame header carries.
+         */
         fun interleavedChannels(transport: String): Pair<Int, Int>? {
             val spec = transport.split(',').map { it.trim() }.firstOrNull { it.uppercase().startsWith("RTP/AVP/TCP") } ?: return null
             val channels = spec.split(';').map { it.trim() }.firstOrNull { it.startsWith("interleaved=") }
                 ?.removePrefix("interleaved=") ?: return 0 to 1
             val a = channels.substringBefore('-').toIntOrNull() ?: return null
             val b = channels.substringAfter('-', "").toIntOrNull() ?: (a + 1)
+            if (a !in 0..MAX_CHANNEL || b !in 0..MAX_CHANNEL) return null
             return a to b
         }
+
+        /** The largest channel an interleaved frame can name: its header spends one byte on it. */
+        const val MAX_CHANNEL = 255
+
+        /**
+         * A session id from a random value: ten ASCII decimal digits, whatever the panel's locale. It
+         * doubles as the SDP's sess-id, which RFC 4566 defines as a numeric string and strict parsers
+         * (pion, used by go2rtc) enforce — a locale whose digits are not ASCII would break both.
+         */
+        fun sessionIdFrom(random: Int): String = String.format(java.util.Locale.ROOT, "%010d", random and 0x7FFF_FFFF)
     }
 }
 

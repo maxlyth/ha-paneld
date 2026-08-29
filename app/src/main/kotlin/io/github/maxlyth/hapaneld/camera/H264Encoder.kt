@@ -101,21 +101,36 @@ class MediaCodecH264Encoder private constructor(
         }
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
-            // The parameter sets arrive as a config buffer as well; nothing to do with the format itself.
+            // The standard place for the parameter sets: csd-0 (SPS) and csd-1 (PPS). A codec-config
+            // buffer, if the encoder also emits one, carries the same sets and is then ignored.
+            if (closed || configSeen) return
+            val sets = ParameterSets.fromCsd(bytesOf(format, "csd-0"), bytesOf(format, "csd-1")) ?: return
+            configSeen = true
+            Log.i(TAG, "encoder ${facts.name}: parameter sets arrived in the output format (csd-0/csd-1)")
+            listener.onParameterSets(sets)
         }
+    }
+
+    private fun bytesOf(format: MediaFormat, key: String): ByteArray? {
+        if (!format.containsKey(key)) return null
+        val buffer = format.getByteBuffer(key) ?: return null
+        val copy = ByteArray(buffer.remaining())
+        buffer.duplicate().get(copy)
+        return copy
     }
 
     private fun deliver(bytes: ByteArray, info: MediaCodec.BufferInfo) {
         val nals = AnnexB.split(bytes)
         if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+            // Evidence for the plan's SPS/PPS question: the config buffer exists on this encoder.
+            Log.i(TAG, "encoder ${facts.name}: a codec-config buffer arrived${if (configSeen) " after the output format already carried the sets" else ""}")
+            if (configSeen) return
             val sets = ParameterSets.fromCodecConfig(bytes)
-            configSeen = true
             if (sets == null) {
                 listener.onEncoderError("config_without_parameter_sets")
                 return
             }
-            // Evidence for the plan's SPS/PPS question: the config buffer exists on this encoder.
-            Log.i(TAG, "encoder ${facts.name}: parameter sets arrived as a codec-config buffer")
+            configSeen = true
             listener.onParameterSets(sets)
             return
         }

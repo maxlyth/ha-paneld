@@ -65,6 +65,37 @@ class CameraStreamContractTest {
         assertEquals("the transport only ever learns the camera through the field", 1, Regex("source = \\{ camera \\}").findAll(service).count())
     }
 
+    @Test fun theTransportLearnsNewParameterSetsBeforeAnyStreamWaiterIsWoken() {
+        // A DESCRIBE that wakes on a new encoder must find that encoder's SPS/PPS in the transport,
+        // never the previous encoder's retained pair; so the publication precedes the wake-up.
+        val body = owner.substringAfter("override fun onParameterSets(sets: ParameterSets) {").substringBefore("override fun onAccessUnit(")
+        val published = body.indexOf("transport.onParameterSets(sets)")
+        val woken = body.indexOf("ready.complete(StreamOutcome.Ready(params))")
+        assertTrue("both the publication and the wake-up exist", published >= 0 && woken >= 0)
+        assertTrue("the transport learns the sets before the waiters wake", published < woken)
+        assertTrue("the transport forgets them when the encoder stops", TestSources.kotlin("camera/CameraRtspServer.kt").readText().substringAfter("override fun onEncoderStopped()").substringBefore("}").contains("sets = null"))
+    }
+
+    @Test fun aClientsWriterIsRunningBeforeItsReaderCanFinishARequest() {
+        // A graceful end (TEARDOWN, a refusal) lets the writer drain the final response by joining it;
+        // a join on a thread not yet started returns at once and the response is lost with the socket.
+        // Found by the mutation session's load, where the acceptor was descheduled between the two starts.
+        val start = TestSources.kotlin("camera/CameraRtspServer.kt").readText().substringAfter("fun start() {").substringBefore("override fun describe(")
+        val writer = start.indexOf("writer.start()")
+        val reader = start.indexOf("reader.start()")
+        assertTrue("both threads are started", writer >= 0 && reader >= 0)
+        assertTrue("the writer is started first", writer < reader)
+    }
+
+    @Test fun theEncoderTakesParameterSetsFromTheOutputFormatAsWellAsACodecConfigBuffer() {
+        // Android's documented place for the SPS/PPS is the output format's csd-0/csd-1; a codec-config
+        // buffer is what some encoders emit instead. Both are accepted; the first to arrive wins.
+        val formatChange = encoder.substringAfter("override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {").substringBefore("override fun")
+        assertTrue(formatChange.contains("ParameterSets.fromCsd(bytesOf(format, \"csd-0\"), bytesOf(format, \"csd-1\"))"))
+        assertTrue("the same sets arriving twice are published once", formatChange.contains("configSeen"))
+        assertTrue(encoder.contains("BUFFER_FLAG_CODEC_CONFIG"))
+    }
+
     @Test fun theStreamUrlNeverEntersTheDiagnosticDumpButTheStatusSummaryMayCarryIt() {
         val presentation = TestSources.kotlin("camera/CameraPresentation.kt").readText()
         val diag = presentation.substringAfter("fun diagnosticLine()").substringBefore("companion object")

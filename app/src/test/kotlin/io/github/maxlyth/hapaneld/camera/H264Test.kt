@@ -54,6 +54,17 @@ class H264Test {
         assertNull(ParameterSets.fromCodecConfig(annexB(idr)))
     }
 
+    @Test fun parameterSetsComeOutOfTheOutputFormatCsdBuffersInEitherLayout() {
+        val split = ParameterSets.fromCsd(annexB(sps), annexB(pps))
+        assertArrayEquals(sps, split?.sps)
+        assertArrayEquals("the PPS comes from csd-1", pps, split?.pps)
+        val together = ParameterSets.fromCsd(annexB(sps, pps), null)
+        assertArrayEquals("some encoders put both sets in csd-0 and omit csd-1", pps, together?.pps)
+        assertEquals("42C01F", split?.profileLevelId)
+        assertNull("csd-0 alone with only an SPS is not usable", ParameterSets.fromCsd(annexB(sps), null))
+        assertNull(ParameterSets.fromCsd(null, null))
+    }
+
     @Test fun anIdrGetsTheParameterSetsAheadOfItUnlessTheEncoderAlreadyPutThemThere() {
         val sets = ParameterSets(sps, pps)
         val injected = accessUnitForTransport(listOf(idr), sets)

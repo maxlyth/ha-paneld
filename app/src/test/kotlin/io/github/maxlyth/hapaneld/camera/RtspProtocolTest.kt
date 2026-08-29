@@ -113,6 +113,28 @@ class RtspProtocolTest {
         assertEquals(0 to 1, RtspSession.interleavedChannels("RTP/AVP/TCP;unicast"))
         assertNull(RtspSession.interleavedChannels("RTP/AVP/UDP;unicast;client_port=1-2"))
         assertEquals(4 to 5, RtspSession.interleavedChannels("RTP/AVP/TCP;interleaved=4"))
+        assertEquals(254 to 255, RtspSession.interleavedChannels("RTP/AVP/TCP;interleaved=254-255"))
+        assertNull("a channel must fit the one byte the frame header carries", RtspSession.interleavedChannels("RTP/AVP/TCP;interleaved=300-301"))
+        assertNull(RtspSession.interleavedChannels("RTP/AVP/TCP;interleaved=255"))
+        assertNull(RtspSession.interleavedChannels("RTP/AVP/TCP;interleaved=-1-0"))
+        val outOfRange = RtspSession("77", FakeDescriber(Described.Ready(sdp)))
+        assertEquals(461, outOfRange.handle(req("SETUP", cseq = 3, headers = mapOf("Transport" to "RTP/AVP/TCP;unicast;interleaved=256-257"))).response.status)
+    }
+
+    @Test fun sessionIdsAreTenAsciiDigitsWhateverThePanelsLocale() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            // A locale whose digits are not ASCII: Arabic-Indic numerals via the Unicode nu extension.
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
+            listOf(0, 1, -1, Int.MAX_VALUE, Int.MIN_VALUE, 123456789).forEach { seed ->
+                val id = RtspSession.sessionIdFrom(seed)
+                assertTrue("$seed -> $id", Regex("^[0-9]{10}$").matches(id))
+            }
+            assertEquals("0000000000", RtspSession.sessionIdFrom(0))
+            assertEquals("2147483647", RtspSession.sessionIdFrom(Int.MAX_VALUE))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
     }
 
     @Test fun methodsOutOfOrderAreRefusedByStateAndSessionRatherThanActedOn() {
