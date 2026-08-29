@@ -333,9 +333,9 @@ object SettingsRegistry {
         SettingSpec(
             key = "camera_enabled", type = SettingType.BOOL, group = "Behaviour",
             label = "Camera (experimental trial)", default = "false", scope = Scope.DEVICE,
-            help = "Experimental trial, off by default. Serves the panel's camera as an RTSP stream " +
-                "and JPEG snapshot for Home Assistant to pull; no frames leave the panel unless a " +
-                "client is connected.",
+            help = "Experimental trial, off by default. Serves a JPEG snapshot of the panel's camera " +
+                "for Home Assistant to poll; no frames leave the panel unless a client is asking, and " +
+                "the panel shows a red light whenever the camera is open.",
             availableWhen = { it.hasCamera },
         ),
         SettingSpec(

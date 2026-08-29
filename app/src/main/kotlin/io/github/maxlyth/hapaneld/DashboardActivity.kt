@@ -248,12 +248,6 @@ class DashboardActivity : AppCompatActivity() {
     // land AFTER onDestroy's removeCallbacksAndMessages and re-arm the self-perpetuating watchdog on a
     // dead activity. Every posted handler checks this first so nothing runs (or re-schedules) post-destroy.
     @Volatile private var destroyed = false
-    // Camera trial (contract §1). A request is in flight from the moment the system dialog is raised
-    // until Android answers it, and a denial is remembered for as long as the switch stays on: the next
-    // ask is a fresh enable, never a resume. Counting resumes would loop, because the dialog's own
-    // dismissal resumes this activity.
-    private var cameraPermissionInFlight = false
-    private var cameraPermissionDeclined = false
     private val rendererPowerListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "prevent_idle_dim") {
             runOnUiThread {
@@ -271,11 +265,9 @@ class DashboardActivity : AppCompatActivity() {
         // Camera trial (contract §1): the runtime permission is requested only once the setting is on,
         // and only as a direct result of that switch turning on — never before, never as a side effect.
         if (key == "camera_enabled") {
-            runOnUiThread {
-                if (destroyed) return@runOnUiThread
-                if (::activityConfig.isInitialized && activityConfig.cameraEnabled) cameraPermissionDeclined = false
-                requestCameraPermissionIfNeeded()
-            }
+            // The service's camera owner republishes CameraPermissionPrompt on this same change; give it
+            // the turn before asking, so a camera-less profile is never prompted.
+            runOnUiThread { if (!destroyed) requestCameraPermissionIfNeeded() }
         }
     }
 
@@ -2005,10 +1997,12 @@ class DashboardActivity : AppCompatActivity() {
      *  permission is not already held. Called both from the settings-change listener above (the switch
      *  flips while this activity is resumed) and from [onResume] (the switch flipped while backgrounded). */
     private fun requestCameraPermissionIfNeeded() {
-        if (!::activityConfig.isInitialized || !activityConfig.cameraEnabled) return
-        if (cameraPermissionInFlight || cameraPermissionDeclined) return
+        // Camera trial (contract §1): whether to ask is the session owner's decision — it alone knows the
+        // profile declares a camera, the switch is on and the permission is missing — and the answer is
+        // remembered process-wide, so a denial survives this activity being recreated.
+        if (!io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.shouldAsk()) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return
-        cameraPermissionInFlight = true
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.asking()
         ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
     }
 
@@ -2020,8 +2014,7 @@ class DashboardActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_CAMERA_PERMISSION) return
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        cameraPermissionInFlight = false
-        cameraPermissionDeclined = !granted
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.answered(granted)
         Log.d(TAG, "camera permission ${if (granted) "granted" else "denied"}")
     }
 

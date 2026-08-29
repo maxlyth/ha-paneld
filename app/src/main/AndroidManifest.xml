@@ -33,6 +33,7 @@
          imply one and make the app uninstallable on them. -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <!-- Configuration contains MQTT and Home Assistant credentials. Backups are exported only
          through ha-paneld's explicit sealed backup flow, never Android's implicit transport. -->

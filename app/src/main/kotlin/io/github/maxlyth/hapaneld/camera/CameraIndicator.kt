@@ -19,20 +19,36 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
+ * Decides whether the room is being told the camera is on. Pure so the rule is a unit test: the overlay
+ * alone is positive only while the display is lit; once the screen is intended off the overlay sits at
+ * the never-blank floor where it is illegible, so only a lit LED counts.
+ */
+object CameraIndicationPolicy {
+    fun positive(overlayAttached: Boolean, screenOff: Boolean, ledLit: Boolean): Boolean =
+        overlayAttached && (!screenOff || ledLit)
+
+    fun route(overlayAttached: Boolean, ledLit: Boolean): CameraIndication = when {
+        ledLit -> CameraIndication.LED
+        overlayAttached -> CameraIndication.OVERLAY
+        else -> CameraIndication.NONE
+    }
+}
+
+/**
  * The camera-in-use light the room can see. Contract §2 in code:
  *
  * - An always-on-top, non-touchable overlay in a fixed corner, drawn with the same window type the
  *   navigation-bar and kiosk overlays use, so page content cannot cover it and a tap never hits it.
- * - [show] returns only once the window is confirmed attached on the main thread, and returns false
- *   when it cannot be — the owner then refuses to open the camera. A panel that cannot show that it
- *   is watching does not watch.
- * - [hide] keeps the light on for a minimum hold, so rapid snapshot polling reads as one continuous
- *   indication rather than a train of sub-second blinks; a [show] inside the hold simply cancels it.
- * - While the screen is intended off the display is dark or at the never-blank floor, where the
- *   overlay is lit but illegible, so [refresh] hands the indication to the status LED through a
- *   [LedEffectController.Hold] and gives it back when the screen returns. Releasing never restores
- *   from a snapshot: [restoreLed] re-derives the LED from persisted intent, which is the only source
- *   that also reflects a command that arrived while the camera held it.
+ * - [show] returns only once the window is confirmed attached on the main thread AND the indication is
+ *   positive for the current screen state; false means the owner must not open the camera.
+ * - [refresh] is the continuing prerequisite: the owner calls it on every watchdog tick and closes the
+ *   session when it returns false. While the screen is intended off the display is dark or at the
+ *   never-blank floor, so the indication moves to the status LED through a [LedEffectController.Hold];
+ *   if that hold cannot be taken or lit, the indication is negative and capture stops.
+ * - [hide] keeps the light on for a minimum hold so rapid snapshot polling reads as one continuous
+ *   indication; a [show] inside the hold cancels it. Releasing the LED never restores from a snapshot:
+ *   [restoreLed] re-derives it from persisted intent, and that work runs on a worker thread because the
+ *   LED HAL blocks on every write.
  */
 class CameraIndicator(
     private val context: Context,
@@ -48,16 +64,11 @@ class CameraIndicator(
     private var view: View? = null
     private var generation = 0L
     private var ledHold: LedEffectController.Hold? = null
+    private var ledLit = false
 
-    fun route(): CameraIndication = synchronized(lock) {
-        when {
-            ledHold != null -> CameraIndication.LED
-            view != null -> CameraIndication.OVERLAY
-            else -> CameraIndication.NONE
-        }
-    }
+    fun route(): CameraIndication = synchronized(lock) { CameraIndicationPolicy.route(view != null, ledLit) }
 
-    /** Attach the overlay and confirm it; false means the camera must not open. */
+    /** Attach the overlay and confirm the indication is positive; false means the camera must not open. */
     fun show(): Boolean {
         synchronized(lock) { generation++ }
         if (!ensureOverlayPermission()) {
@@ -94,21 +105,35 @@ class CameraIndicator(
             }
         }
         if (!ran || !attached) return false
-        refresh()
-        return true
+        return refresh()
     }
 
-    /** Move the indication between the overlay and the LED to match the screen state. */
-    fun refresh() {
+    /**
+     * Move the indication between the overlay and the LED to match the screen state, and report whether
+     * the room is being told. Blocking LED work; never call on the main thread.
+     */
+    fun refresh(): Boolean {
         val dark = screenOff()
         synchronized(lock) {
-            if (view == null) return
+            if (view == null) return false
             if (dark && ledHold == null) {
-                val hold = ledEffect.hold() ?: return
-                if (hold.setSolid(255, 0, 0)) ledHold = hold else hold.close()
+                val hold = ledEffect.hold()
+                if (hold == null) {
+                    Log.w(TAG, "screen is off and the LED is unavailable; indication is negative")
+                } else if (hold.setSolid(255, 0, 0)) {
+                    ledHold = hold
+                    ledLit = true
+                } else {
+                    hold.close()
+                    Log.w(TAG, "screen is off and the LED would not light; indication is negative")
+                }
+            } else if (dark && ledHold != null && !ledLit) {
+                // A hold whose write failed earlier: try once more rather than sit negative for ever.
+                ledLit = ledHold?.setSolid(255, 0, 0) == true
             } else if (!dark && ledHold != null) {
                 releaseLedLocked()
             }
+            return CameraIndicationPolicy.positive(overlayAttached = true, screenOff = dark, ledLit = ledLit)
         }
     }
 
@@ -116,30 +141,42 @@ class CameraIndicator(
     fun hide() {
         val token = synchronized(lock) { ++generation }
         main.postDelayed({
+            val removeLed: Boolean
             synchronized(lock) {
                 if (generation != token) return@postDelayed
-                removeLocked()
+                view?.let { runCatching { wm.removeView(it) } }
+                view = null
+                removeLed = ledHold != null
             }
+            // The LED HAL blocks on every write; never restore it from the main looper.
+            if (removeLed) offMain { synchronized(lock) { if (generation == token) releaseLedLocked() } }
         }, holdAfterCloseMs)
     }
 
     /** Teardown: no hold, no delay. Safe from any thread. */
     fun forceHide() {
         synchronized(lock) { generation++ }
-        onMain { synchronized(lock) { removeLocked() } }
-    }
-
-    private fun removeLocked() {
-        view?.let { runCatching { wm.removeView(it) } }
-        view = null
-        releaseLedLocked()
+        onMain {
+            synchronized(lock) {
+                view?.let { runCatching { wm.removeView(it) } }
+                view = null
+            }
+        }
+        val onMainNow = Looper.myLooper() == Looper.getMainLooper()
+        if (onMainNow) offMain { synchronized(lock) { releaseLedLocked() } }
+        else synchronized(lock) { releaseLedLocked() }
     }
 
     private fun releaseLedLocked() {
         val hold = ledHold ?: return
         ledHold = null
+        ledLit = false
         hold.close()
         runCatching { restoreLed() }.onFailure { Log.w(TAG, "LED restore failed: ${it.javaClass.simpleName}") }
+    }
+
+    private fun offMain(action: () -> Unit) {
+        Thread({ runCatching(action).onFailure { Log.w(TAG, "LED work failed: ${it.javaClass.simpleName}") } }, "camera-light-led").start()
     }
 
     private fun ensureOverlayPermission(): Boolean {

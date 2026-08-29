@@ -27,13 +27,17 @@ class CameraManifestContractTest {
         assertFalse(declares("FOREGROUND_SERVICE_MICROPHONE"))
     }
 
-    @Test fun theCameraIsOptionalHardwareSoCameralessPanelsCanStillInstall() {
-        // Without this the CAMERA permission implies a required camera and Android refuses the install on
-        // every panel that has none, which is most of them.
-        assertTrue(
-            Regex("""<uses-feature\s+android:name="android\.hardware\.camera"\s+android:required="false"""")
-                .containsMatchIn(manifest),
-        )
+    @Test fun everyFeatureTheCameraPermissionImpliesIsDeclaredOptional() {
+        // The CAMERA permission implies BOTH android.hardware.camera and android.hardware.camera.autofocus
+        // as required hardware unless each is declared optional; either alone would make Android refuse
+        // the install on every panel without one, which is most of them.
+        listOf("android.hardware.camera", "android.hardware.camera.any", "android.hardware.camera.autofocus").forEach { feature ->
+            assertTrue(
+                "$feature must be declared optional",
+                Regex("""<uses-feature\s+android:name="${Regex.escape(feature)}"\s+android:required="false"""")
+                    .containsMatchIn(manifest),
+            )
+        }
     }
 
     @Test fun theCameraTypeLivesOnADedicatedServiceNotTheBootStartedAgent() {

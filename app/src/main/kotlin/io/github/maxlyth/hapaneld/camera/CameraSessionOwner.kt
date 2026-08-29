@@ -18,30 +18,35 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Range
 import android.util.Size
+import io.github.maxlyth.hapaneld.camera.CameraSessionState.Admission
+import io.github.maxlyth.hapaneld.camera.CameraSessionState.Failure
+import io.github.maxlyth.hapaneld.camera.CameraSessionState.Phase
 import io.github.maxlyth.hapaneld.util.HaTransportFault
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 
 /**
- * The one owner of the camera device (contract §5). Stream, snapshot and the later motion detector are
- * subscribers holding a [Lease]; the device opens on the first lease and closes on the last, and no
- * subscriber can open or close the hardware on another's behalf.
+ * The Android adapter around [CameraSessionState]: it drives the device, the light and the foreground
+ * standing, and every ownership decision is the state machine's. Stream, snapshot and the later motion
+ * detector are subscribers holding a [Lease]; the device opens on the first lease and closes on the
+ * last (contract §5), and no subscriber can open or close the hardware on another's behalf.
  *
  * Gate order before the device opens, each classified when it refuses: the board has a camera, the
  * master switch is on, Android has granted the permission, the camera-in-use light is confirmed
- * showing, and Android has confirmed camera-typed foreground standing. Only then `openCamera`. On
- * Android 11 that standing is granted silently and refused only at `openCamera`, so a `SecurityException`
- * there is classified as a foreground refusal when the permission is otherwise held.
+ * positive for the current screen state, and Android has confirmed camera-typed foreground standing.
+ * Only then `openCamera`. The light stays a prerequisite for as long as the session runs: every
+ * watchdog tick re-checks it and closes the session when it is negative (§2).
  *
- * A session is one repeating YUV capture into an [ImageReader]. A snapshot waits for the next frame and
- * encodes it; a later stream subscriber adds its own target to the same session. Nothing is kept warm:
- * when the last lease closes, the reader, session, device, handler thread and foreground standing are
- * all released, so idle cost is zero rather than small (§4).
+ * Foreground standing can only be started while an activity is visible. On the backlight routes the
+ * dashboard activity stays resumed through screen-off, so a session can start and continue there; on
+ * the keyevent route the panel is genuinely asleep and a cold start is refused, classified as a
+ * foreground refusal whose action says to wake the panel. A session already running survives either.
  *
- * Every state mutation happens under [lock]; camera callbacks arrive on the owned handler thread and
- * callers wait on futures, never on that thread.
+ * A session is one repeating YUV capture into an [ImageReader]. Frames are delivered to subscribers no
+ * faster than the configured frame-rate cap — the cap bounds what leaves the session, and the sensor
+ * may run at the lowest rate it offers above that. Nothing is kept warm: when the last lease closes,
+ * the reader, session, device, handler thread and foreground standing are all released (§4).
  */
 class CameraSessionOwner(
     private val context: Context,
@@ -56,16 +61,12 @@ class CameraSessionOwner(
 ) : CameraSurface {
 
     private val lock = Any()
-    private var state = CameraState.IDLE
+    private var policy = CameraSessionPolicy(frameIntervalMs = 1_000L / 15)
+    private val state = CameraSessionState { policy }
     private var outcome = "ok"
     private var fault = CameraFault.NONE
     private var faultDetail: String? = null
     private var recovery = "none"
-    private var consecutiveFailures = 0
-    private var lastFrameAtMs: Long? = null
-    private var openedAtMs = 0L
-    private var leases = 0
-    private var pendingFault: CameraFault? = null
     private var admissionClosed = false
 
     private var thread: HandlerThread? = null
@@ -73,24 +74,27 @@ class CameraSessionOwner(
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
-    private var boundSize: Size? = null
-    private var policy = CameraSessionPolicy(frameIntervalMs = 1_000L / 15)
-    private var snapshotWaiter: CompletableFuture<ByteArray>? = null
-    private var opening: CompletableFuture<CameraRefusal?>? = null
-    private var generation = 0L
+    private var boundTarget: CameraResolution? = null
+    private var boundFps = 15
+    private var lastDeliveredAtMs = 0L
+    /** The outcome of the open attempt for a generation; joiners wait on it too. */
+    private val openOutcome = HashMap<Long, CompletableFuture<CameraRefusal?>>()
+
+    init {
+        publishPermissionPrompt(freshEnable = false)
+    }
 
     /** A subscriber's claim on the open session. Close exactly once; closing the last one closes the device. */
-    inner class Lease internal constructor(private val token: Long) : AutoCloseable {
+    inner class Lease internal constructor(private val id: Long) : AutoCloseable {
         private var open = true
         override fun close() {
-            val last: Boolean
+            val closeNow: Boolean
             synchronized(lock) {
                 if (!open) return
                 open = false
-                leases--
-                last = leases == 0 && generation == token
+                closeNow = state.release(id)
             }
-            if (last) post { closeSession(CameraState.IDLE, "ok") }
+            if (closeNow) post { closeSession(Phase.IDLE, "ok") }
         }
     }
 
@@ -99,7 +103,7 @@ class CameraSessionOwner(
     override fun presentation(): CameraPresentation = synchronized(lock) {
         when {
             !hasCamera -> CameraPresentation.absent()
-            state == CameraState.STOPPING -> current()
+            state.phase == Phase.STOPPING -> current()
             !enabled() -> CameraPresentation.disabled()
             !permissionGranted() -> CameraPresentation.permissionNeeded()
             else -> current()
@@ -108,23 +112,28 @@ class CameraSessionOwner(
 
     override fun snapshot(requested: CameraResolution?): SnapshotResult {
         val lease = acquire(requested) ?: return SnapshotResult.Refused(lastRefusal())
+        val waiter = CompletableFuture<ByteArray?>()
         try {
-            val waiter = CompletableFuture<ByteArray>()
-            synchronized(lock) { snapshotWaiter = waiter }
-            val bytes = runCatching { waiter.get(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS) }
-                .getOrElse { if (it is TimeoutException) null else null }
-            synchronized(lock) { if (snapshotWaiter === waiter) snapshotWaiter = null }
+            synchronized(lock) { state.addWaiter(waiter) }
+            val bytes = runCatching { waiter.get(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()
             return if (bytes != null) SnapshotResult.Jpeg(bytes) else SnapshotResult.Refused(CameraRefusal.STARVED)
         } finally {
+            synchronized(lock) { state.removeWaiter(waiter) }
             lease.close()
         }
     }
 
     // ---- lifecycle used by the service --------------------------------------------------------------
 
-    /** The master switch moved; a live session closes within this call's posted work, not a tick later. */
+    /** The master switch moved. Off closes a live or opening session now; on republishes the prompt. */
     fun onEnabledChanged() {
-        if (!enabled()) post { if (isOpen()) closeSession(CameraState.IDLE, CameraRefusal.DISABLED.token) }
+        if (enabled()) {
+            publishPermissionPrompt(freshEnable = true)
+            return
+        }
+        publishPermissionPrompt(freshEnable = false)
+        val closeNow = synchronized(lock) { state.disable() }
+        if (closeNow) post { closeSession(Phase.IDLE, CameraRefusal.DISABLED.token) }
     }
 
     /** Refuse new leases; existing ones drain through [stop]. */
@@ -136,15 +145,20 @@ class CameraSessionOwner(
     fun stop(): CompletableFuture<Unit> {
         closeAdmission()
         val done = CompletableFuture<Unit>()
-        val h = synchronized(lock) { handler }
-        if (h == null) {
+        val held: Boolean
+        val h: Handler?
+        synchronized(lock) {
+            held = state.stopping()
+            h = handler
+        }
+        if (!held || h == null) {
             indicator.forceHide()
-            synchronized(lock) { state = CameraState.STOPPING }
+            synchronized(lock) { state.closed(Phase.STOPPING) }
             done.complete(Unit)
             return done
         }
         h.post {
-            closeSession(CameraState.STOPPING, CameraRefusal.STOPPING.token)
+            closeSession(Phase.STOPPING, CameraRefusal.STOPPING.token)
             done.complete(Unit)
         }
         return done
@@ -154,38 +168,43 @@ class CameraSessionOwner(
 
     /** Blocking: returns a lease on an open session, or null after recording the classified refusal. */
     fun acquire(requested: CameraResolution?): Lease? {
-        val refusal = synchronized(lock) {
+        val gate = synchronized(lock) {
             when {
                 !hasCamera -> CameraRefusal.ABSENT
-                admissionClosed || state == CameraState.STOPPING -> CameraRefusal.STOPPING
+                admissionClosed -> CameraRefusal.STOPPING
                 !enabled() -> CameraRefusal.DISABLED
                 !permissionGranted() -> CameraRefusal.PERMISSION
                 else -> null
             }
         }
-        if (refusal != null) {
-            synchronized(lock) { outcome = refusal.token }
-            return null
-        }
+        val admission: Admission
         val pending: CompletableFuture<CameraRefusal?>?
-        val token: Long
         synchronized(lock) {
-            leases++
-            token = generation
-            // A second subscriber arriving mid-open waits on the same outcome as the first, so a refusal
-            // is reported as what it was rather than as the starvation its snapshot would otherwise hit.
-            pending = when {
-                isOpenLocked() -> null
-                state == CameraState.OPENING && opening != null -> opening
-                else -> beginOpenLocked(requested)
+            admission = state.acquire(gate, nowMs())
+            pending = when (admission) {
+                is Admission.Refused -> {
+                    outcome = admission.reason.token
+                    if (admission.reason == CameraRefusal.PERMISSION) publishPermissionPrompt(freshEnable = false)
+                    null
+                }
+                is Admission.Open -> beginOpenLocked(admission.generation, requested)
+                is Admission.Join -> openOutcome[admission.generation]?.takeIf { !it.isDone }
             }
         }
-        val result = pending?.let { runCatching { it.get(OPEN_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrDefault(CameraRefusal.FAILED) }
-        if (result != null) {
-            synchronized(lock) { leases-- }
+        val leaseId = when (admission) {
+            is Admission.Refused -> return null
+            is Admission.Open -> admission.lease
+            is Admission.Join -> admission.lease
+        }
+        val refusal = pending?.let {
+            runCatching { it.get(OPEN_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrDefault(CameraRefusal.FAILED)
+        }
+        if (refusal != null) {
+            val closeNow = synchronized(lock) { state.release(leaseId) }
+            if (closeNow) post { closeSession(Phase.IDLE, refusal.token) }
             return null
         }
-        return Lease(token)
+        return Lease(leaseId)
     }
 
     private fun lastRefusal(): CameraRefusal = synchronized(lock) {
@@ -194,111 +213,97 @@ class CameraSessionOwner(
 
     // ---- open ---------------------------------------------------------------------------------------
 
-    /** Under [lock]: start the thread if needed and post the open sequence; the future settles on the handler. */
-    private fun beginOpenLocked(requested: CameraResolution?): CompletableFuture<CameraRefusal?> {
+    /** Under [lock]: the first lease binds the parameters and starts attempt [gen] on the owned thread. */
+    private fun beginOpenLocked(gen: Long, requested: CameraResolution?): CompletableFuture<CameraRefusal?> {
         val future = CompletableFuture<CameraRefusal?>()
+        openOutcome[gen] = future
+        future.whenComplete { _, _ -> synchronized(lock) { openOutcome.remove(gen) } }
         val h = handler ?: HandlerThread("ha-paneld-camera").let { t ->
             t.start()
             thread = t
             Handler(t.looper).also { handler = it }
         }
-        state = CameraState.OPENING
         val cap = maxResolution()
-        val target = CameraResolution.clamp(requested ?: cap, cap)
-        val fps = maxFps().coerceIn(1, 30)
-        policy = CameraSessionPolicy(frameIntervalMs = 1_000L / fps)
-        val myGeneration = ++generation
-        opening = future
-        future.whenComplete { _, _ -> synchronized(lock) { if (opening === future) opening = null } }
-        h.post { open(target, fps, myGeneration, future) }
+        boundTarget = CameraResolution.clamp(requested ?: cap, cap)
+        boundFps = maxFps().coerceIn(1, 30)
+        policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
+        h.post { open(gen) }
         return future
     }
 
-    private fun open(target: CameraResolution, fps: Int, myGeneration: Long, future: CompletableFuture<CameraRefusal?>) {
-        fun refuse(refusal: CameraRefusal, f: CameraFault, detail: String?) {
-            synchronized(lock) {
-                if (generation != myGeneration) return
-                outcome = refusal.token
-                fault = f
-                faultDetail = HaTransportFault.sanitize(detail)
-            }
-            // The reader may already exist when openCamera itself throws; nothing survives a refusal.
-            releaseHardware()
-            foreground.demote()
-            indicator.hide()
-            failure(f, myGeneration)
-            future.complete(refusal)
+    private fun open(gen: Long) {
+        val target: CameraResolution
+        val fps: Int
+        synchronized(lock) {
+            // A reopen posted before a close or a disable is a no-op: the generation moved on.
+            if (state.generation != gen || state.phase != Phase.OPENING) return
+            target = boundTarget ?: maxResolution()
+            fps = boundFps
         }
-        if (!indicator.show()) return refuse(CameraRefusal.INDICATION, CameraFault.INDICATION, null)
-        if (!foreground.promote(FOREGROUND_WAIT_MS)) return refuse(CameraRefusal.FOREGROUND, CameraFault.FOREGROUND, null)
+        if (!indicator.show()) return openFailed(gen, CameraFault.INDICATION, CameraRefusal.INDICATION, null)
+        if (!foreground.promote(FOREGROUND_WAIT_MS)) {
+            return openFailed(gen, CameraFault.FOREGROUND, CameraRefusal.FOREGROUND, null)
+        }
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val h = synchronized(lock) { handler } ?: return refuse(CameraRefusal.STOPPING, CameraFault.NONE, null)
+        val h = synchronized(lock) { handler } ?: return openFailed(gen, CameraFault.NONE, CameraRefusal.STOPPING, null)
         val chosen = runCatching { chooseCamera(manager) }.getOrNull()
-            ?: return refuse(CameraRefusal.FAILED, CameraFault.OPEN, "no_camera_id")
+            ?: return openFailed(gen, CameraFault.OPEN, CameraRefusal.FAILED, "no_camera_id")
+        // Both caps are ceilings. A board that cannot stay under the resolution cap is refused rather
+        // than exceeded; the frame-rate cap is enforced on delivery, so the sensor range only needs to
+        // be the lowest one on offer.
         val size = chooseSize(chosen.second, target)
-            ?: return refuse(CameraRefusal.FAILED, CameraFault.CONFIGURE, "no_yuv_size")
+            ?: return openFailed(gen, CameraFault.CONFIGURE, CameraRefusal.FAILED, "no_size_within_cap")
         val fpsRange = chooseFpsRange(chosen.second, fps)
         val r = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 2)
-        r.setOnImageAvailableListener({ reader -> reader.acquireLatestImage()?.let { onFrame(it, myGeneration) } }, h)
-        synchronized(lock) {
-            reader = r
-            boundSize = size
-            openedAtMs = nowMs()
-            lastFrameAtMs = null
-            pendingFault = null
-        }
+        r.setOnImageAvailableListener({ rd -> rd.acquireLatestImage()?.let { onFrame(it, gen) } }, h)
+        synchronized(lock) { reader = r }
         try {
             @Suppress("MissingPermission")
             manager.openCamera(chosen.first, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
-                    synchronized(lock) {
-                        if (generation != myGeneration) { camera.close(); return }
-                        device = camera
+                    val live = synchronized(lock) {
+                        if (state.generation == gen && state.phase == Phase.OPENING) { device = camera; true } else false
                     }
-                    configure(camera, r, fpsRange, myGeneration, future)
+                    if (!live) { camera.close(); return }
+                    configure(camera, r, fpsRange, gen)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close()
-                    noteFault(CameraFault.DISCONNECTED, null, myGeneration, future)
+                    deviceFault(gen, CameraFault.DISCONNECTED, null)
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     camera.close()
-                    noteFault(CameraFault.DEVICE_ERROR, "error_$error", myGeneration, future)
+                    deviceFault(gen, CameraFault.DEVICE_ERROR, "error_$error")
                 }
             }, h)
         } catch (e: SecurityException) {
             // Android 11 grants the foreground type silently and refuses here instead.
             val permitted = permissionGranted()
-            refuse(
-                if (permitted) CameraRefusal.FOREGROUND else CameraRefusal.PERMISSION,
+            openFailed(
+                gen,
                 if (permitted) CameraFault.FOREGROUND else CameraFault.PERMISSION,
+                if (permitted) CameraRefusal.FOREGROUND else CameraRefusal.PERMISSION,
                 e.javaClass.simpleName,
             )
         } catch (e: CameraAccessException) {
-            refuse(CameraRefusal.FAILED, CameraFault.OPEN, "cae_${e.reason}")
+            openFailed(gen, CameraFault.OPEN, CameraRefusal.FAILED, "cae_${e.reason}")
         } catch (e: RuntimeException) {
-            refuse(CameraRefusal.FAILED, CameraFault.OPEN, e.javaClass.simpleName)
+            openFailed(gen, CameraFault.OPEN, CameraRefusal.FAILED, e.javaClass.simpleName)
         }
     }
 
-    private fun configure(
-        camera: CameraDevice,
-        r: ImageReader,
-        fpsRange: Range<Int>?,
-        myGeneration: Long,
-        future: CompletableFuture<CameraRefusal?>,
-    ) {
+    private fun configure(camera: CameraDevice, r: ImageReader, fpsRange: Range<Int>?, gen: Long) {
         val h = synchronized(lock) { handler } ?: return
         try {
             @Suppress("DEPRECATION")
             camera.createCaptureSession(listOf(r.surface), object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
-                    synchronized(lock) {
-                        if (generation != myGeneration) { s.close(); return }
-                        session = s
+                    val live = synchronized(lock) {
+                        if (state.generation == gen && state.phase == Phase.OPENING) { session = s; true } else false
                     }
+                    if (!live) { s.close(); return }
                     try {
                         val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                             addTarget(r.surface)
@@ -306,161 +311,165 @@ class CameraSessionOwner(
                         }.build()
                         s.setRepeatingRequest(request, null, h)
                     } catch (e: Exception) {
-                        noteFault(CameraFault.CONFIGURE, e.javaClass.simpleName, myGeneration, future)
+                        openFailed(gen, CameraFault.CONFIGURE, CameraRefusal.FAILED, e.javaClass.simpleName)
                         return
                     }
-                    synchronized(lock) {
-                        if (generation != myGeneration) return
-                        state = CameraState.LIVE
-                        outcome = "ok"
-                        fault = CameraFault.NONE
-                        faultDetail = null
-                        recovery = "none"
+                    val became = synchronized(lock) {
+                        val ok = state.openSucceeded(gen)
+                        if (ok) {
+                            outcome = "ok"; fault = CameraFault.NONE; faultDetail = null; recovery = "none"
+                        }
+                        ok
                     }
-                    future.complete(null)
-                    scheduleTick(myGeneration)
+                    if (became) {
+                        openOutcomeFor(gen)?.complete(null)
+                        scheduleTick(gen)
+                    }
                 }
 
                 override fun onConfigureFailed(s: CameraCaptureSession) {
-                    noteFault(CameraFault.CONFIGURE, "configure_failed", myGeneration, future)
+                    openFailed(gen, CameraFault.CONFIGURE, CameraRefusal.FAILED, "configure_failed")
                 }
             }, h)
         } catch (e: Exception) {
-            noteFault(CameraFault.CONFIGURE, e.javaClass.simpleName, myGeneration, future)
+            openFailed(gen, CameraFault.CONFIGURE, CameraRefusal.FAILED, e.javaClass.simpleName)
         }
     }
 
+    /**
+     * An open attempt failed. The first caller learns the refusal at once; the ladder keeps climbing in
+     * the background for as long as subscribers remain, and stops the moment none do.
+     */
+    private fun openFailed(gen: Long, f: CameraFault, refusal: CameraRefusal, detail: String?) {
+        releaseHardware()
+        val decision: Failure
+        synchronized(lock) {
+            decision = state.openFailed(gen, f)
+            if (decision != Failure.Ignored) {
+                outcome = refusal.token
+                fault = f
+                faultDetail = HaTransportFault.sanitize(detail)
+            }
+        }
+        openOutcomeFor(gen)?.complete(refusal)
+        when (decision) {
+            Failure.Ignored -> Unit
+            Failure.Close -> closeSession(Phase.IDLE, refusal.token)
+            is Failure.Reopen -> {
+                foreground.demote()
+                indicator.hide()
+                synchronized(lock) { recovery = "reopening in ${decision.afterMs}ms (attempt ${decision.attempt})" }
+                val h = synchronized(lock) { handler } ?: return
+                h.postDelayed({ open(gen) }, decision.afterMs)
+            }
+            is Failure.Degrade -> degrade(f, decision.attempt)
+        }
+    }
+
+    private fun openOutcomeFor(gen: Long): CompletableFuture<CameraRefusal?>? = synchronized(lock) { openOutcome[gen] }
+
     // ---- frames -------------------------------------------------------------------------------------
 
-    private fun onFrame(image: Image, myGeneration: Long) {
+    private fun onFrame(image: Image, gen: Long) {
         image.use { img ->
-            val waiter: CompletableFuture<ByteArray>?
+            val now = nowMs()
+            val ready: List<CompletableFuture<ByteArray?>>
             synchronized(lock) {
-                if (generation != myGeneration) return
-                lastFrameAtMs = nowMs()
-                consecutiveFailures = 0
-                waiter = snapshotWaiter
-                snapshotWaiter = null
+                ready = state.frame(gen, now)
+                if (ready.isEmpty()) return
+                // The frame-rate cap bounds delivery: a frame arriving sooner than the cap allows is
+                // observed for liveness but not handed on.
+                val interval = 1_000L / boundFps
+                if (now - lastDeliveredAtMs < interval) {
+                    ready.forEach { state.addWaiter(it) }
+                    return
+                }
+                lastDeliveredAtMs = now
             }
-            if (waiter != null) {
-                val jpeg = runCatching { toJpeg(img) }.getOrNull()
-                if (jpeg != null) waiter.complete(jpeg) else waiter.complete(null)
-            }
+            val jpeg = runCatching { toJpeg(img) }.getOrNull()
+            ready.forEach { it.complete(jpeg) }
         }
     }
 
     // ---- watchdog -----------------------------------------------------------------------------------
 
-    private fun scheduleTick(myGeneration: Long) {
+    private fun scheduleTick(gen: Long) {
         val h = synchronized(lock) { handler } ?: return
-        h.postDelayed({ tick(myGeneration) }, policy.starvationMs / 2)
+        h.postDelayed({ tick(gen) }, policy.starvationMs / 2)
     }
 
-    private fun tick(myGeneration: Long) {
-        val decision: CameraSessionPolicy.Decision
-        synchronized(lock) {
-            if (generation != myGeneration || !isOpenLocked()) return
-            val t = CameraSessionPolicy.Tick(
-                nowMs = nowMs(), openedAtMs = openedAtMs, lastFrameAtMs = lastFrameAtMs, clients = leases,
-                enabled = enabled(), stopping = admissionClosed, deviceFault = pendingFault,
-                consecutiveFailures = consecutiveFailures,
-            )
-            pendingFault = null
-            decision = policy.onTick(t)
+    private fun tick(gen: Long) {
+        synchronized(lock) { if (state.generation != gen || state.phase != Phase.LIVE) return }
+        // The light is a continuing prerequisite: a session the room is not being told about closes.
+        val indicated = indicator.refresh()
+        val decision = synchronized(lock) {
+            if (state.generation != gen || state.phase != Phase.LIVE) return
+            state.tick(nowMs(), enabled(), indicated)
         }
-        indicator.refresh()
         when (decision) {
-            CameraSessionPolicy.Decision.Continue -> scheduleTick(myGeneration)
+            CameraSessionPolicy.Decision.Continue -> scheduleTick(gen)
             is CameraSessionPolicy.Decision.Close -> closeSession(
-                if (decision.reason == CameraSessionPolicy.CloseReason.STOPPING) CameraState.STOPPING else CameraState.IDLE,
+                if (decision.reason == CameraSessionPolicy.CloseReason.STOPPING) Phase.STOPPING else Phase.IDLE,
                 when (decision.reason) {
                     CameraSessionPolicy.CloseReason.DISABLED -> CameraRefusal.DISABLED.token
                     CameraSessionPolicy.CloseReason.STOPPING -> CameraRefusal.STOPPING.token
                     CameraSessionPolicy.CloseReason.IDLE -> "ok"
                 },
             )
-            is CameraSessionPolicy.Decision.Reopen -> reopen(decision, myGeneration)
+            is CameraSessionPolicy.Decision.Reopen -> {
+                releaseHardware()
+                foreground.demote()
+                indicator.hide()
+                val h = synchronized(lock) {
+                    fault = decision.fault
+                    outcome = if (decision.fault == CameraFault.INDICATION) CameraRefusal.INDICATION.token else CameraRefusal.FAILED.token
+                    recovery = "reopening in ${decision.afterMs}ms (attempt ${decision.attempt})"
+                    state.reopening(decision.attempt)
+                    handler
+                } ?: return
+                h.postDelayed({ open(gen) }, decision.afterMs)
+            }
             is CameraSessionPolicy.Decision.Degrade -> degrade(decision.fault, decision.attempt)
         }
     }
 
-    /** A device callback or the tick found a fault mid-session; the ladder decides what happens next. */
-    private fun noteFault(f: CameraFault, detail: String?, myGeneration: Long, future: CompletableFuture<CameraRefusal?>?) {
+    private fun deviceFault(gen: Long, f: CameraFault, detail: String?) {
         synchronized(lock) {
-            if (generation != myGeneration) return
+            if (!state.noteDeviceFault(gen, f)) return
             fault = f
             faultDetail = HaTransportFault.sanitize(detail)
-            pendingFault = f
         }
-        if (future != null && !future.isDone) {
-            // The open itself failed: count it and settle the caller.
-            val attempt = synchronized(lock) { ++consecutiveFailures }
-            when (val d = policy.onFailure(f, attempt)) {
-                is CameraSessionPolicy.Decision.Degrade -> { degrade(f, d.attempt); future.complete(CameraRefusal.FAILED) }
-                else -> { releaseHardware(); synchronized(lock) { state = CameraState.IDLE; outcome = CameraRefusal.FAILED.token }
-                    foreground.demote(); indicator.hide(); future.complete(CameraRefusal.FAILED) }
-            }
-        }
-    }
-
-    private fun failure(f: CameraFault, myGeneration: Long) {
-        synchronized(lock) {
-            if (generation != myGeneration) return
-            consecutiveFailures++
-            state = if (consecutiveFailures >= policy.maxConsecutiveFailures) CameraState.DEGRADED else CameraState.IDLE
-            recovery = if (state == CameraState.DEGRADED) "reattach a client or toggle the camera setting" else "next open retries"
-            fault = f
-        }
-    }
-
-    private fun reopen(decision: CameraSessionPolicy.Decision.Reopen, myGeneration: Long) {
-        releaseHardware()
-        val h = synchronized(lock) {
-            if (generation != myGeneration) return
-            consecutiveFailures = decision.attempt
-            state = CameraState.OPENING
-            recovery = "reopening after ${decision.afterMs}ms"
-            handler
-        } ?: return
-        val size = synchronized(lock) { boundSize }
-        val target = size?.let { s -> CameraResolution.entries.firstOrNull { it.width == s.width } } ?: maxResolution()
-        val fps = (1_000L / policy.frameIntervalMs).toInt().coerceIn(1, 30)
-        h.postDelayed({
-            val future = CompletableFuture<CameraRefusal?>()
-            open(target, fps, myGeneration, future)
-        }, decision.afterMs)
+        // A device that dropped out mid-open never reaches onConfigured; settle the caller now.
+        if (synchronized(lock) { state.phase == Phase.OPENING }) openFailed(gen, f, CameraRefusal.FAILED, detail)
     }
 
     private fun degrade(f: CameraFault, attempt: Int) {
         releaseHardware()
         foreground.demote()
         indicator.hide()
+        val t: HandlerThread?
         synchronized(lock) {
-            state = CameraState.DEGRADED
+            state.degraded(attempt)
             fault = f
-            consecutiveFailures = attempt
             outcome = CameraRefusal.FAILED.token
             recovery = "reattach a client or toggle the camera setting"
+            t = thread; thread = null; handler = null
         }
+        t?.quitSafely()
         Log.w(TAG, "camera session degraded after $attempt failures: ${f.wire}")
     }
 
     // ---- close --------------------------------------------------------------------------------------
 
-    private fun closeSession(next: CameraState, finalOutcome: String) {
+    private fun closeSession(next: Phase, finalOutcome: String) {
         releaseHardware()
         foreground.demote()
-        if (next == CameraState.STOPPING) indicator.forceHide() else indicator.hide()
+        if (next == Phase.STOPPING) indicator.forceHide() else indicator.hide()
         val t: HandlerThread?
         synchronized(lock) {
-            generation++
-            state = next
+            state.closed(next)
             outcome = finalOutcome
-            snapshotWaiter?.complete(null)
-            snapshotWaiter = null
-            t = thread
-            thread = null
-            handler = null
+            t = thread; thread = null; handler = null
         }
         t?.quitSafely()
     }
@@ -486,24 +495,40 @@ class CameraSessionOwner(
         if (h != null) h.post(action) else action()
     }
 
-    private fun isOpen(): Boolean = synchronized(lock) { isOpenLocked() }
-    private fun isOpenLocked(): Boolean = state == CameraState.LIVE
+    private fun publishPermissionPrompt(freshEnable: Boolean) {
+        CameraPermissionPrompt.publish(
+            wantsPermission = hasCamera && enabled() && !permissionGranted(),
+            freshEnable = freshEnable && hasCamera,
+        )
+    }
 
     private fun current(): CameraPresentation {
-        val last = lastFrameAtMs
+        val last = state.lastFrameAtMs
+        val phase = state.phase
+        val clients = state.clients
+        val failures = state.consecutiveFailures
+        val presented = when (phase) {
+            Phase.IDLE -> CameraState.IDLE
+            Phase.OPENING -> CameraState.OPENING
+            Phase.LIVE -> CameraState.LIVE
+            Phase.DEGRADED -> CameraState.DEGRADED
+            Phase.STOPPING -> CameraState.STOPPING
+        }
         return CameraPresentation(
-            state = state, outcome = outcome, fault = fault, faultDetail = faultDetail, recovery = recovery,
-            clients = leases, lastFrameAgeMs = last?.let { (nowMs() - it).coerceAtLeast(0) },
-            consecutiveFailures = consecutiveFailures, indication = indicator.route(),
-            summary = when (state) {
-                CameraState.LIVE -> "camera open for $leases client${if (leases == 1) "" else "s"}"
-                CameraState.OPENING -> "camera opening"
-                CameraState.DEGRADED -> "camera gave up after $consecutiveFailures failures (${fault.wire})"
-                CameraState.STOPPING -> "camera stopping"
-                else -> "camera closed; nobody is watching"
+            state = presented, outcome = outcome, fault = fault, faultDetail = faultDetail, recovery = recovery,
+            clients = clients, lastFrameAgeMs = last?.let { (nowMs() - it).coerceAtLeast(0) },
+            consecutiveFailures = failures, indication = indicator.route(),
+            summary = when (phase) {
+                Phase.LIVE -> "camera open for $clients client${if (clients == 1) "" else "s"}"
+                Phase.OPENING -> "camera opening"
+                Phase.DEGRADED -> "camera gave up after $failures failures (${fault.wire})"
+                Phase.STOPPING -> "camera stopping"
+                Phase.IDLE -> "camera closed; nobody is watching"
             },
-            action = when (state) {
-                CameraState.DEGRADED -> "check the camera hardware; a new client or a setting toggle retries"
+            action = when {
+                phase == Phase.DEGRADED -> "check the camera hardware; a new client or a setting toggle retries"
+                fault == CameraFault.FOREGROUND -> "wake the panel: a camera session can only start while the dashboard is visible"
+                fault == CameraFault.INDICATION -> "the camera-in-use light could not be shown; check overlay permission and the LED"
                 else -> "none"
             },
         )
@@ -518,25 +543,27 @@ class CameraSessionOwner(
             ?: described.first()
     }
 
+    /** The largest YUV size within the cap, preferring the cap's aspect; null when nothing fits. */
     private fun chooseSize(characteristics: CameraCharacteristics, target: CameraResolution): Size? {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return null
         val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
-        if (sizes.isEmpty()) return null
         val targetArea = target.width.toLong() * target.height
         val targetAspect = target.width.toDouble() / target.height
         return sizes
-            .filter { it.width.toLong() * it.height <= targetArea }
-            .maxWithOrNull(compareBy<Size> { kotlin.math.abs(it.width.toDouble() / it.height - targetAspect) < 0.2 }.thenBy { it.width.toLong() * it.height })
-            ?: sizes.minByOrNull { it.width.toLong() * it.height }
+            .filter { it.width <= target.width && it.height <= target.height }
+            .maxWithOrNull(
+                compareBy<Size> { kotlin.math.abs(it.width.toDouble() / it.height - targetAspect) < 0.2 }
+                    .thenBy { it.width.toLong() * it.height }
+                    .thenBy { -(kotlin.math.abs(it.width.toLong() * it.height - targetArea)) },
+            )
     }
 
+    /** The lowest sensor rate on offer at or above the cap; delivery is paced to the cap regardless. */
     private fun chooseFpsRange(characteristics: CameraCharacteristics, maxFps: Int): Range<Int>? {
         val ranges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList().orEmpty()
         if (ranges.isEmpty()) return null
-        // The panels offer only [15,30] and [30,30]: pick the range whose ceiling is closest to the cap
-        // without exceeding it, else the one with the lowest floor.
         return ranges.filter { it.upper <= maxFps }.maxByOrNull { it.upper }
-            ?: ranges.minByOrNull { it.lower }
+            ?: ranges.minWithOrNull(compareBy<Range<Int>> { it.upper }.thenBy { it.lower })
     }
 
     private fun toJpeg(image: Image): ByteArray {
