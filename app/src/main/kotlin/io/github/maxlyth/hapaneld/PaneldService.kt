@@ -821,6 +821,10 @@ class PaneldService : Service() {
     private lateinit var server: PaneldServer
     private lateinit var rendererPreparation: RendererPreparationCoordinator
     private lateinit var entityLearning: EntityLearningManager
+    // Voice-assistant phase authority. The voice-coordinator lane drives it via set(); this service only
+    // wires its change listener to the current MQTT bridge generation (below, alongside the learned-
+    // proximity listener) and reads it into buildMqtt()'s voiceState supplier.
+    private val voiceStateAuthority = io.github.maxlyth.hapaneld.assist.VoiceStateAuthority()
     private var storageHealthSubscription: AutoCloseable? = null
     private val storageHealthLifecycleLock = Any()
     private var storageHealthRecoveryLifecycle: StorageHealthRecoveryLifecycle? = null
@@ -1525,6 +1529,11 @@ class PaneldService : Service() {
             server.invalidateCapabilitySnapshot()
             runtime.observe()?.value?.mqtt?.notifyLearnedProximityChanged()
         }
+        // Resolves the CURRENT bridge generation rather than closing over one, so a bridge rebuild
+        // (reconfigure) never leaves a stale generation publishing a superseded voice_state.
+        voiceStateAuthority.setChangeListener {
+            runtime.observe()?.value?.mqtt?.publishVoiceState()
+        }
         // Deferred, NOT run here: opening an authenticated socket purely to watch lifecycle events must
         // not compete with the renderer's startup, which is the panel's most contended moment. The
         // renderer reports when it has settled and the demand is evaluated then. Fires immediately if it
@@ -1590,6 +1599,7 @@ class PaneldService : Service() {
             zigbeeHealth = zigbeeHealth::snapshot,
             storageHealth = StorageHealthRuntime::snapshot,
             onZigbeeExplicitRetry = zigbeeHealth::explicitRetry,
+            voiceState = { voiceStateAuthority.current().wireValue },
             stalePanelId = stalePanelId,
             profileIdentity = activeProfileIdentity,
             profileButtonEventTypes = profile.evdevButtons.mapTo(linkedSetOf()) { it.eventType },

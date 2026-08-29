@@ -33,8 +33,8 @@ class PaneldServerConfigWiringTest {
             "auto_brightness_response_percent", "auto_sleep", "companion_auto_update",
             "companion_update_channel", "cpu_governor", "ha_area", "home_dashboard", "kiosk_lock",
             "navbar_mode", "network_adb", "prevent_idle_dim", "self_update", "silence_boot_chime",
-            "touch_sound", "update_channel", "wake_on_wave", "watchdog_enabled", "webview_auto_update",
-            "zigbee_router",
+            "touch_sound", "update_channel", "voice_enabled", "wake_on_wave", "watchdog_enabled",
+            "webview_auto_update", "zigbee_router",
         )
 
         assertEquals(expectedKeys, registryKeys.toSet())

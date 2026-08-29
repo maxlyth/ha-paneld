@@ -868,6 +868,10 @@ internal class MqttBridge(
     private val zigbeeHealth: () -> ZigbeeHealthSnapshot = { ZigbeeHealthSnapshot() },
     private val storageHealth: () -> StorageHealthSnapshot = StorageHealthRuntime::snapshot,
     private val onZigbeeExplicitRetry: () -> Unit = {},
+    // Current voice-assistant phase for sensor.<panel>_voice_state (io.github.maxlyth.hapaneld.assist.
+    // VoiceState.wireValue). Owned by a service-side VoiceStateAuthority the voice-coordinator lane
+    // drives; defaults to "off" so a bridge built without that wiring reports the safe default.
+    private val voiceState: () -> String = { io.github.maxlyth.hapaneld.assist.VoiceState.OFF.wireValue },
     // A panel-id replaced by reconfiguration. Its discovery and availability are cleared by the NEW
     // connection, so cleanup cannot be lost when the old client is detached or the broker was offline.
     private val stalePanelId: String? = null,
@@ -1171,12 +1175,15 @@ internal class MqttBridge(
     private val attrWifiOutages = "ha-paneld/$panel/diag_wifi_outages_24h/attributes"
     private val cmdAutoBright = "ha-paneld/$panel/auto_brightness/set"
     private val stateAutoBright = "ha-paneld/$panel/auto_brightness/state"
+    private val cmdVoiceEnabled = "ha-paneld/$panel/voice_enabled/set"
+    private val stateVoiceEnabled = "ha-paneld/$panel/voice_enabled/state"
+    private val stateVoiceState = "ha-paneld/$panel/voice_state/state"
     private val stateCommandTopics by lazy {
         setOf(
             cmdCpuGov, cmdNetAdb, cmdScreen, cmdLed, cmdNavigate, cmdVolume, cmdHomeDashboard,
             cmdButtons, cmdNavbar, cmdWakeOnWave, cmdAutoSleep, cmdTouchSound, cmdWatchdog, cmdKiosk,
             cmdCompanionAuto, cmdCompanionChannel, cmdSelfUpdate, cmdWebViewAuto, cmdUpdateChannel,
-            cmdSilenceBootChime, cmdPreventIdleDim, cmdZigbee, cmdAutoBright,
+            cmdSilenceBootChime, cmdPreventIdleDim, cmdZigbee, cmdAutoBright, cmdVoiceEnabled,
         )
     }
     private val actionCommandTopics by lazy {
@@ -1300,6 +1307,12 @@ internal class MqttBridge(
         channel("prevent_idle_dim", statePreventIdleDim) { known(if (config.preventIdleDim) "ON" else "OFF") }
         channel("auto_brightness", stateAutoBright) { known(if (config.autoBrightness) "ON" else "OFF") }
         channel("navbar", stateNavbar) { known(config.navbarMode) }
+        channel("voice_enabled", stateVoiceEnabled) { known(if (config.voiceEnabled) "ON" else "OFF") }
+        // Hidden until exposed, exactly like the diag_* sensors: a hidden entity must not keep a
+        // retained voice-state payload alive on the broker for something nobody opted into.
+        channel("voice_state", stateVoiceState) {
+            diagnosticObservation("voice_state", config.haExposed("voice_state", false), voiceState())
+        }
 
         channel("illuminance", stateIlluminance, retain = false) {
             if (config.haExposed("illuminance", true)) lastIlluminance?.let { known(it.toString()) } ?: unknown
@@ -2240,6 +2253,7 @@ internal class MqttBridge(
         cmdPreventIdleDim -> "prevent_idle_dim"
         cmdZigbee -> "zigbee_router"
         cmdAutoBright -> "auto_brightness"
+        cmdVoiceEnabled -> "voice_enabled"
         else -> null
     }
 
@@ -2305,6 +2319,7 @@ internal class MqttBridge(
             cmdPreventIdleDim -> handlePreventIdleDim(payload)
             cmdZigbee -> handleZigbee(payload)
             cmdAutoBright -> handleAutoBright(payload)
+            cmdVoiceEnabled -> handleVoiceEnabled(payload)
             else -> Log.d(TAG, "unhandled command topic $topic")
         }
     }
@@ -2450,6 +2465,17 @@ internal class MqttBridge(
         stateConverger.reconcile("watchdog", force = true)
     }
 
+    // The wake-word listener / Assist pipeline itself is owned by the voice-coordinator lane: this only
+    // persists the switch and publishes its state, exactly like every other config-only entity here.
+    // Disabling does not force-reconcile voice_state — that stays whatever the coordinator's
+    // VoiceStateAuthority currently reports (its own default is OFF, and the coordinator is expected to
+    // fall back there once it observes the setting go off).
+    private fun handleVoiceEnabled(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        config.setVoiceEnabled(on)
+        stateConverger.reconcile("voice_enabled", force = true)
+    }
+
     private fun handleKiosk(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         check(onDirectKioskSetting(on)) { "kiosk setting was not durably acknowledged" }
@@ -2460,6 +2486,12 @@ internal class MqttBridge(
      *  MQTT/HTTP command path and must still tell HA. */
     fun publishKioskState() {
         dispatchStateWork { stateConverger.reconcile("kiosk_lock", force = true) }
+    }
+
+    /** Publish the current voice-assistant phase — called from VoiceStateAuthority's change listener,
+     *  which the voice-coordinator lane drives outside any MQTT/HTTP command path. */
+    fun publishVoiceState() {
+        dispatchStateWork { stateConverger.reconcile("voice_state", force = true) }
     }
 
     /** Publish only the already-committed channel. Staged self-update transactions call this after the
@@ -3082,6 +3114,7 @@ internal class MqttBridge(
             "silence_boot_chime" -> handleSilenceBootChime(onOff)
             "auto_brightness" -> handleAutoBright(onOff)
             "touch_sound" -> handleTouchSound(onOff)
+            "voice_enabled" -> handleVoiceEnabled(onOff)
             "network_adb" -> handleNetAdb(onOff)
             "zigbee_router" -> handleZigbee(onOff)
             "auto_brightness_minimum_percent" -> handleAutoBrightnessMinimum(value)
@@ -3309,6 +3342,16 @@ internal class MqttBridge(
         }
         registryExposable("touch_sound") {
             stateConverger.reconcile("touch_sound", force = true)
+        }
+        // Voice assistant — the switch AND the state sensor both require hasMicrophone (spec.availableWhen),
+        // so both tombstone together on a panel with no microphone. The wake-word/Assist runtime itself is
+        // the voice-coordinator lane's; this bridge only persists the switch and republishes the phase the
+        // coordinator's VoiceStateAuthority reports.
+        registryExposable("voice_enabled") {
+            stateConverger.reconcile("voice_enabled", force = true)
+        }
+        registryExposable("voice_state") {
+            publishDiag("voice_state")
         }
 
         // HA Companion app auto-update — installs/updates the minimal Companion over root (the
@@ -4107,6 +4150,7 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "light" to "${panel}_button_led3", "light" to "${panel}_button_led4",
     "select" to "${panel}_cpu_governor", "select" to "${panel}_navbar",
     "switch" to "${panel}_network_adb",
+    "switch" to "${panel}_voice_assistant", "sensor" to "${panel}_voice_state",
     "sensor" to "${panel}_diag_ip", "sensor" to "${panel}_diag_cpu",
     "sensor" to "${panel}_diag_memory", "sensor" to "${panel}_diag_soc_temp",
     "sensor" to "${panel}_diag_boot", "sensor" to "${panel}_diag_wifi_ssid",
