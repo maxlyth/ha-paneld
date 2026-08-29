@@ -235,8 +235,12 @@ class MicrophoneFanOutTest {
         clock.addAndGet(MIC_OPEN_BACKOFF_BASE_MS)
         lease.pause()
         lease.resume()
-        awaitTrue("a resume after the backoff window reopens the device") { fan.state.value is MicState.Open }
+        // Wait on the device, not on the state: clearing the error publishes Open the instant the
+        // retry is admitted, which is before the capture thread it started has opened anything.
+        awaitTrue("a resume after the backoff window reopens the device") { device.openCount.get() == 2 }
+        awaitTrue("and the holder is capturing again") { holders(fan).single().active }
         assertEquals("recovery opened the device exactly once more", 2, device.openCount.get())
+        assertTrue("the source reports itself open, state was ${fan.state.value}", fan.state.value is MicState.Open)
 
         lease.close()
     }
