@@ -287,6 +287,7 @@ object DiagReader {
         storage: StorageHealthSnapshot = StorageHealthSnapshot.UNCHECKED,
         powerSafety: io.github.maxlyth.hapaneld.control.PowerSafetyAssessment? = null,
         renderer: io.github.maxlyth.hapaneld.RendererAdmissionPresentation? = null,
+        camera: io.github.maxlyth.hapaneld.camera.CameraPresentation? = null,
         wifiStabilityChronic: Boolean = false,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
@@ -315,6 +316,10 @@ object DiagReader {
         // radios. Its values are all classified or categorical — no URL, host, credential or raw
         // exception text — so this line is as pasteable as the rest of the dump.
         renderer?.let { appendLine(it.diagnosticLine()) }
+        // Camera trial (slice 3): rendered identically here and in /api/v1/status so severity cannot
+        // drift between the two, per camera-privacy-resource-contract.md §6. Client addresses and raw
+        // exception text never enter this line — [CameraPresentation] already excludes them.
+        camera?.let { appendLine(it.diagnosticLine()) }
         zigbee?.let {
             appendLine(
                 "[zigbee-health] state=${it.state.wireValue} layout=${it.layout} package=${it.packageVersion ?: "-"} " +

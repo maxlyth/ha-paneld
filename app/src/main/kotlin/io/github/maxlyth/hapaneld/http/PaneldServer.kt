@@ -42,6 +42,11 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.camera.AbsentCameraSurface
+import io.github.maxlyth.hapaneld.camera.CameraRefusal
+import io.github.maxlyth.hapaneld.camera.CameraResolution
+import io.github.maxlyth.hapaneld.camera.CameraSurface
+import io.github.maxlyth.hapaneld.camera.SnapshotResult
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
 import io.github.maxlyth.hapaneld.control.CdpRelay
 import io.github.maxlyth.hapaneld.control.AdbController
@@ -1234,6 +1239,12 @@ class PaneldServer internal constructor(
     // Fresh observation uses the service's single serialized SQLite observation owner. Null means the
     // same-request probe stopped or was incomplete; refresh=1 then renders UNCHECKED, never stale health.
     private val refreshStorageHealth: suspend () -> StorageHealthSnapshot? = { null },
+    // Camera trial (slice 3): one session owner shared by the snapshot route, /api/v1/status and
+    // /api/v1/diag. A stable per-service instance rather than a lambda provider — unlike radioStatus
+    // or mqttState it is never reassigned on reconfigure, so no reconfigure-following indirection is
+    // needed here. AbsentCameraSurface is the default so a board with no camera owner still compiles
+    // and answers `absent` truthfully; the service wires the real session owner once profile.hasCamera.
+    private val camera: CameraSurface = AbsentCameraSurface,
 ) {
     private suspend fun authorizeSensitive(
         call: ApplicationCall,
@@ -2832,6 +2843,36 @@ class PaneldServer internal constructor(
                             call.respondText("screenshot-unavailable\n", status = HttpStatusCode.ServiceUnavailable)
                         }
                     }
+                    // Camera trial (slice 3). See camera-privacy-resource-contract.md §3, §6: the camera
+                    // opens only for the duration of this request and closes when no other subscriber
+                    // remains, so a caller must expect the open cost on every snapshot. No detail beyond
+                    // the refusal token in the body — the finer classification lives in /api/v1/status.
+                    get("/camera/snapshot.jpg") {
+                        if (!admitActiveRead(call)) return@get
+                        val requestedRaw = call.request.queryParameters["res"]
+                        val requested = when {
+                            requestedRaw == null -> null
+                            else -> CameraResolution.parse(requestedRaw) ?: run {
+                                call.respondText(
+                                    "unknown res '$requestedRaw' (480p|720p|1080p)\n",
+                                    status = HttpStatusCode.BadRequest,
+                                )
+                                return@get
+                            }
+                        }
+                        call.response.headers.append("Cache-Control", "no-store")
+                        when (val result = withContext(Dispatchers.IO) { camera.snapshot(requested) }) {
+                            is SnapshotResult.Jpeg -> call.respondBytes(result.bytes, ContentType.Image.JPEG)
+                            is SnapshotResult.Refused -> call.respondText(
+                                "${result.reason.token}\n",
+                                status = if (result.reason == CameraRefusal.ABSENT) {
+                                    HttpStatusCode.NotFound
+                                } else {
+                                    HttpStatusCode.ServiceUnavailable
+                                },
+                            )
+                        }
+                    }
                     get("/openapi.json") {
                         call.respondText(asset("openapi.json"), ContentType.Application.Json)
                     }
@@ -4111,6 +4152,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // because a consumer must never have to infer applicability from an absent field. A fleet
         // check that reads a missing object as "nothing to worry about" restates the very failure
         // this object exists to expose: a blank panel that every check still reports as green.
+        // `camera` follows the exact same rule for a board with no camera at all — CameraPresentation
+        // .absent() is emitted rather than the field being omitted, per camera-privacy-resource-
+        // contract.md §6.
         val storageProof = databaseObservationNonce?.let {
             "\"database_observation_nonce\":${jsonStr(it)},"
         }.orEmpty()
@@ -4118,6 +4162,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             storageProof +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
             "\"renderer\":${rendererAdmission().statusJson()}," +
+            "\"camera\":${camera.presentation().statusJson()}," +
             "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
     }
 
@@ -4357,6 +4402,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             storage = storageHealth(),
             powerSafety = powerSafety(),
             renderer = rendererAdmission(),
+            camera = camera.presentation(),
             wifiStabilityChronic = management.wifiChronic,
         )
     }

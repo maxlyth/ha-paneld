@@ -30,6 +30,7 @@ class ActiveGetAdmissionContractTest {
         assertRouteGatesBefore("/auto-sleep/history", "call.request.queryParameters")
         assertRouteGatesBefore("/auto-sleep/history", "autoSleepHttpApi.historyJson(hours)")
         assertRouteGatesBefore("/screenshot.png", "interactive.screenshot()")
+        assertRouteGatesBefore("/camera/snapshot.jpg", "camera.snapshot(")
         assertRouteGatesBefore("/tame/suggest", "PerfReader.touch()")
 
         val status = routeBody("/status")
