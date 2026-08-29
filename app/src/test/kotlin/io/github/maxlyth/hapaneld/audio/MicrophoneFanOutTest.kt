@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.audio
 
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -310,7 +311,7 @@ class MicrophoneFanOutTest {
         // the window shutdown used to be able to step through: a capture that had been recorded but
         // had not yet reached the hardware.
         val fan = MicrophoneFanOut(
-            device = device,
+            deviceFactory = { device },
             threadNamePrefix = "test-mic",
             threadFactory = { body, name ->
                 if (name == "test-mic") {
@@ -350,8 +351,28 @@ class MicrophoneFanOutTest {
         assertTrue("shutdown finishes once the admitted capture has gone", done.await(10L, TimeUnit.SECONDS))
         assertEquals("teardown is reported complete", true, teardown.get())
         assertEquals("a capture admitted before shutdown never opens the microphone", 0, device.openCount.get())
-        assertEquals("nothing was opened, so nothing was released", 0, device.closeCount.get())
+        // The refused generation still closes its own device, so that device is revoked for good and
+        // cannot be opened by anything that reaches it later.
+        assertEquals("and its device is closed rather than left able to open one", 1, device.closeCount.get())
         assertEquals("no holders survive shutdown", MicState.Closed, fan.state.value)
+    }
+
+    @Test
+    fun eachCaptureGenerationGetsItsOwnDevice() {
+        val built = CopyOnWriteArrayList<FakeCaptureDevice>()
+        val fan = fanOutOf({ FakeCaptureDevice().also { built.add(it) } })
+
+        val first = fan.lease(MicPurpose.ASSIST, consumer = RecordingConsumer(), queueFrames = 8)
+        awaitTrue("the first generation opens its own device") { built.size == 1 && built[0].openCount.get() == 1 }
+        first.close()
+        awaitTrue("and closes it on the way out") { built[0].closeCount.get() == 1 }
+
+        val second = fan.lease(MicPurpose.WAKE_WORD, consumer = RecordingConsumer(), queueFrames = 8)
+        awaitTrue("the next generation builds a fresh one") { built.size == 2 && built[1].openCount.get() == 1 }
+        assertEquals("a closed device is never reopened", 1, built[0].openCount.get())
+
+        second.close()
+        awaitTrue("which is closed in its turn") { built[1].closeCount.get() == 1 }
     }
 
     // ---- frame assembly --------------------------------------------------------------------------
@@ -400,9 +421,15 @@ class MicrophoneFanOutTest {
 
     // ---- harness ---------------------------------------------------------------------------------
 
-    private fun fanOut(device: PcmCaptureDevice, clock: AtomicLong = AtomicLong(0L)): MicrophoneFanOut {
+    private fun fanOut(device: PcmCaptureDevice, clock: AtomicLong = AtomicLong(0L)): MicrophoneFanOut =
+        fanOutOf({ device }, clock)
+
+    private fun fanOutOf(
+        deviceFactory: () -> PcmCaptureDevice,
+        clock: AtomicLong = AtomicLong(0L),
+    ): MicrophoneFanOut {
         val fan = MicrophoneFanOut(
-            device = device,
+            deviceFactory = deviceFactory,
             backoffClockMs = { clock.get() },
             nanoTime = { clock.get() * 1_000_000L },
             threadNamePrefix = "test-mic",

@@ -100,7 +100,13 @@ private const val MIC_OPEN_BACKOFF_MAX_SHIFT = 20
  * resuming cannot spin the hardware.
  */
 class MicrophoneFanOut(
-    private val device: PcmCaptureDevice,
+    /**
+     * Builds the capture device for one generation. A device is single-use: it is created with the
+     * capture thread that owns it and closed when that thread exits, and a later generation gets a
+     * fresh one. Nothing reopens a device, so no device needs to reset revocation state, which is
+     * what makes a missed stop impossible rather than merely unlikely.
+     */
+    private val deviceFactory: () -> PcmCaptureDevice,
     /** Clock for the open-retry backoff only; thread joins deliberately use wall time. */
     private val backoffClockMs: () -> Long = System::currentTimeMillis,
     private val nanoTime: () -> Long = System::nanoTime,
@@ -127,6 +133,10 @@ class MicrophoneFanOut(
     @Volatile private var targets: Array<LeaseImpl> = emptyArray()
 
     private var captureThread: Thread? = null
+
+    /** The current generation's device, so a stop from any thread reaches the one that is open. */
+    @Volatile private var captureDevice: PcmCaptureDevice? = null
+
     @Volatile private var capturing = false
 
     /** True only between a successful [PcmCaptureDevice.open] and the capture thread leaving its loop. */
@@ -172,6 +182,7 @@ class MicrophoneFanOut(
         val deadline = System.currentTimeMillis() + timeoutMs.coerceAtLeast(0L)
         val retiring: List<LeaseImpl>
         val capture: Thread?
+        val device: PcmCaptureDevice?
         synchronized(lock) {
             shuttingDown = true
             retiring = ArrayList(leases)
@@ -179,20 +190,19 @@ class MicrophoneFanOut(
             refreshTargetsLocked()
             capturing = false
             capture = captureThread
+            device = captureDevice
             publishLocked()
         }
         for (lease in retiring) lease.retire()
-        device.stop()
+        device?.stop()
         var complete = true
         if (capture != null && !joinBounded(capture, deadline)) complete = false
         for (worker in deliveryThreads) {
             if (!joinBounded(worker, deadline)) complete = false
         }
-        // The capture thread releases the hardware in its own finally, so shutdown closes only the
-        // case where no capture thread exists to do it. Never close under a live read — that is
-        // precisely the hazard `stop` exists to avoid — and never close behind a thread that has
-        // already released, which would be a second release of the same recorder.
-        if (capture == null) device.close()
+        // Nothing is released from here. Every device is created with the thread that owns it and
+        // closed by that thread on its way out, including a generation that was refused the hardware,
+        // so there is no device left for a teardown to release and none that could be released twice.
         if (!complete) logger("microphone teardown did not complete within ${timeoutMs}ms", null)
         return complete
     }
@@ -230,7 +240,11 @@ class MicrophoneFanOut(
         if (errorReason != null && !micOpenRetryAllowed(backoffClockMs(), nextOpenAllowedAtMs)) return
         errorReason = null
         capturing = true
-        val thread = threadFactory({ captureLoop() }, threadNamePrefix)
+        // The device and the thread that owns it are created in the same critical section, so there
+        // is never a live thread without a device to stop, nor a device nothing will ever close.
+        val device = deviceFactory()
+        captureDevice = device
+        val thread = threadFactory({ captureLoop(device) }, threadNamePrefix)
         thread.isDaemon = true
         captureThread = thread
         thread.start()
@@ -246,13 +260,15 @@ class MicrophoneFanOut(
         capturing && !shuttingDown && captureThread === Thread.currentThread()
     }
 
-    private fun captureLoop() {
+    private fun captureLoop(device: PcmCaptureDevice) {
         if (!admitCaptureStart()) {
+            device.close()
             finishCapture()
             return
         }
         if (!device.open()) {
             failCapture("microphone could not be opened")
+            device.close()
             finishCapture()
             return
         }
@@ -315,6 +331,7 @@ class MicrophoneFanOut(
             deviceOpen = false
             if (captureThread === Thread.currentThread()) {
                 captureThread = null
+                captureDevice = null
                 capturing = false
             }
             val owed = startOwed
@@ -468,6 +485,7 @@ class MicrophoneFanOut(
 
         override fun close() {
             val capture: Thread?
+            val device: PcmCaptureDevice?
             synchronized(lock) {
                 if (closed) return
                 closed = true
@@ -479,14 +497,18 @@ class MicrophoneFanOut(
                     consecutiveFailures = 0
                     nextOpenAllowedAtMs = 0L
                     capture = captureThread
+                    // Read under the same lock as the thread: the pair has to describe one
+                    // generation, or a stop could be aimed at a device the thread never had.
+                    device = captureDevice
                 } else {
                     capture = null
+                    device = null
                 }
                 publishLocked()
             }
             release()
             if (capture != null) {
-                device.stop()
+                device?.stop()
                 // The capture thread releases the hardware in its own finally, so the lease that
                 // closes last can prove the microphone is shut before it returns.
                 joinBounded(capture, System.currentTimeMillis() + CAPTURE_JOIN_MS)
