@@ -6,8 +6,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- Voice capture. The panel has one microphone and one capture client, so ha-paneld owns it and
-         shares it out; nothing records until a feature takes a lease. -->
+    <!-- Voice capture, owned by PaneldService. The panel has one microphone and Android grants one
+         capture client, so the boot-started agent owns capture and leases it out; nothing records
+         until a feature takes a lease. The microphone foreground-service type is declared on that
+         service alone, so no other component can reach the microphone — the camera trial below
+         records no audio. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -30,7 +33,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Camera trial (experimental, off by default, offered only where the profile declares hardware.camera).
          The session runs under a dedicated camera-typed foreground service so Android 11+ grants it
-         while-in-use access. RECORD_AUDIO is deliberately NOT declared: the trial ships video only. -->
+         while-in-use access. The trial ships video only and records no audio: its service carries the
+         camera type and nothing else, and the microphone permissions above belong to PaneldService. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <!-- Not required: most supported panels have no camera, and the permission alone would otherwise
