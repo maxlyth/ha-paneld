@@ -57,6 +57,28 @@ class BundledProfileParityTest {
      * No bundled profile declares either yet — turning the camera trial on is a separate change — so
      * these assertions drive the parser from constructed YAML rather than from the catalog.
      */
+    /**
+     * A microphone is only declared for hardware whose capture chain has actually produced audio.
+     * The weaker signals lie: on 2026-08-28 every panel probed reported `android.hardware.microphone`
+     * and offered `AUDIO_DEVICE_IN_BUILTIN_MIC` in its audio policy, yet a first-generation NSPanel Pro
+     * captured 65,536 frames of digital silence with its codec's own capture path selected. Only the
+     * WF1589T returned real signal, so only the WF1589T declares one.
+     */
+    @Test fun onlyHardwareWithProvenCaptureDeclaresAMicrophone() {
+        assertEquals(
+            setOf("wf1589t"),
+            bundled.filter { it.document.hardware.hasMicrophone }.map { it.document.id }.toSet(),
+        )
+        // Unknown hardware stays conservative, and the panel that captured silence must never claim one.
+        assertFalse(bundledById.getValue("generic").document.hardware.hasMicrophone)
+        assertFalse(bundledById.getValue("nspanel-pro").document.hardware.hasMicrophone)
+        // The declaration reaches the capability the voice settings gate on, not just the parsed document.
+        assertTrue(bundledById.getValue("wf1589t").profile().hasMicrophone)
+        assertFalse(bundledById.getValue("nspanel-pro").profile().hasMicrophone)
+        // A microphone is not a camera: declaring one must not imply the other on real bundled content.
+        assertFalse(bundledById.getValue("wf1589t").document.hardware.hasCamera)
+    }
+
     @Test fun cameraAndMicrophoneAreDeclaredIndependentlyAndSurviveARoundTrip() {
         listOf("hardware.camera", "hardware.microphone").forEach { path ->
             // singleOrNull, not single: a missing descriptor must fail this assertion rather than
@@ -67,10 +89,9 @@ class BundledProfileParityTest {
             assertFalse("hardware without the part must be able to omit $path", descriptor.required)
         }
 
-        // Absent means false, which is what every bundled profile relies on today.
+        // Absent means false, which is what every bundled profile without the part relies on.
         bundled.forEach {
             assertFalse("no bundled profile may declare a camera yet: ${it.document.id}", it.document.hardware.hasCamera)
-            assertFalse("no bundled profile may declare a microphone yet: ${it.document.id}", it.document.hardware.hasMicrophone)
         }
 
         // A microphone without a camera is the case that matters, and it must survive serialization.
@@ -639,7 +660,7 @@ class BundledProfileParityTest {
             "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
             "smt1019.yaml" to "3004666dd80585a9f57f846f8db5bbde9b781bb8d669921d9406ab88a5a84289",
             "tpa10.yaml" to "1aef00dc9ecde07bd2770a09dc40c48f19b6a6a303c5516202a889f005ce0653",
-            "wf1589t.yaml" to "bb077b5be035fc25c1366851a8fa55f97753b90c334ea9b07c7240e7aa797b18",
+            "wf1589t.yaml" to "97d3a3d169c33103b76337fae38c66d735b6ea4b6be147667939635eb032221b",
             "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf(
