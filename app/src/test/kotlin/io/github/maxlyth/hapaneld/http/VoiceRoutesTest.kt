@@ -67,6 +67,15 @@ class VoiceRoutesTest {
         )
     }
 
+    @Test fun `the microphone check is checked first when both are false`() {
+        // Pins the check order: a capability-less panel gets the capability reason even when it also
+        // happens to have voice_enabled off, not the (also true) disabled reason.
+        assertEquals(
+            "this panel has no microphone capability",
+            voiceTestRefusal(hasMicrophone = false, voiceEnabled = false),
+        )
+    }
+
     @Test fun `test trigger proceeds once capability and enablement both hold`() {
         assertEquals(null, voiceTestRefusal(hasMicrophone = true, voiceEnabled = true))
     }
