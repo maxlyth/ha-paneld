@@ -37,6 +37,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import io.github.maxlyth.hapaneld.audio.MicrophoneAvailability
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -3635,20 +3636,14 @@ class DashboardActivity : AppCompatActivity() {
 
         override fun onPermissionRequest(request: PermissionRequest) {
             if (!rendererCurrent(generation)) { request.deny(); return }
-            val granted = request.resources.filter { res ->
-                val perm = when (res) {
-                    // Camera trial: one owner holds the device and every consumer is its
-                    // subscriber. A page's getUserMedia() would be a second, independent owner that the
-                    // LIMITED HALs on these panels cannot share with the session, so it is refused
-                    // outright rather than following the switch. Declaring CAMERA for the service must
-                    // never arm this branch by accident.
-                    PermissionRequest.RESOURCE_VIDEO_CAPTURE -> null
-                    PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
-                    else -> null
-                }
-                perm != null && ContextCompat.checkSelfPermission(this@DashboardActivity, perm) == PackageManager.PERMISSION_GRANTED
-            }
-            if (granted.isNotEmpty()) request.grant(granted.toTypedArray()) else request.deny()
+            val granted = webViewCaptureGrants(
+                requested = request.resources,
+                permissionHeld = { permission ->
+                    ContextCompat.checkSelfPermission(this@DashboardActivity, permission) == PackageManager.PERMISSION_GRANTED
+                },
+                microphoneIdle = MicrophoneAvailability.isIdle,
+            )
+            if (granted.isNotEmpty()) request.grant(granted) else request.deny()
         }
     }
 
@@ -3700,6 +3695,31 @@ class DashboardActivity : AppCompatActivity() {
 
 internal fun shouldEnableWebViewDebugging(networkAdbEnabled: Boolean, hardenedSecurityEnabled: Boolean): Boolean =
     networkAdbEnabled && !hardenedSecurityEnabled
+
+/**
+ * Which of the capture resources a page asked for may be handed to it.
+ *
+ * Camera capture is refused outright: one owner holds the device and every consumer is its
+ * subscriber, so a page's `getUserMedia()` would be a second, independent owner that the LIMITED
+ * HALs on these panels cannot share with the session. Declaring CAMERA for the service must never
+ * arm that branch by accident.
+ *
+ * Microphone capture needs the Android permission *and* an idle shared source: the panel has one
+ * microphone and one capture client, so handing the page a recorder while ha-paneld holds a lease
+ * takes the microphone from one of them silently. A resource this build does not understand is
+ * never granted.
+ */
+internal fun webViewCaptureGrants(
+    requested: Array<String>,
+    permissionHeld: (String) -> Boolean,
+    microphoneIdle: () -> Boolean,
+): Array<String> = requested.filter { resource ->
+    when (resource) {
+        PermissionRequest.RESOURCE_AUDIO_CAPTURE ->
+            permissionHeld(Manifest.permission.RECORD_AUDIO) && microphoneIdle()
+        else -> false
+    }
+}.toTypedArray()
 
 /**
  * Pull-to-refresh that only arms for a drag beginning at the very top edge of the screen — a pull in
