@@ -5,6 +5,9 @@ import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.DashboardPath
 import io.github.maxlyth.hapaneld.util.DashboardTheme
 import io.github.maxlyth.hapaneld.util.LogShipEndpoint
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
 import java.util.Locale
 
 /**
@@ -76,6 +79,56 @@ object SettingsRegistry {
     const val FIRST_SCHEMA_WITH_SENSITIVITY = 2
     private const val MAX_PANEL_ID_INPUT_CHARS = 255
     private val HA_ILLUMINANCE_ENTITY = Regex("^sensor\\.[a-z0-9_]+$")
+
+    /** Local wake-word model ids openWakeWord ships that voice_wake_words/voice_pipelines may name. */
+    val VOICE_WAKE_WORDS: Set<String> = setOf("okay_nabu", "hey_jarvis", "hey_mycroft", "alexa")
+    private const val MAX_VOICE_WAKE_WORDS = 2
+
+    /** `voice_wake_words`: a JSON array of at most [MAX_VOICE_WAKE_WORDS] entries, each one of
+     *  [VOICE_WAKE_WORDS], with no duplicate. Re-serializes to a canonical compact form so a stored
+     *  value round-trips byte-identically regardless of the request's whitespace or key order. */
+    private fun validateVoiceWakeWords(raw: String): Validation {
+        val array = try {
+            JSONArray(raw)
+        } catch (e: JSONException) {
+            return Validation.Bad("voice_wake_words: expected a JSON array of wake-word model ids")
+        }
+        if (array.length() > MAX_VOICE_WAKE_WORDS) {
+            return Validation.Bad("voice_wake_words: at most $MAX_VOICE_WAKE_WORDS wake words")
+        }
+        val ids = ArrayList<String>(array.length())
+        for (index in 0 until array.length()) {
+            val entry = array.opt(index) as? String
+                ?: return Validation.Bad("voice_wake_words: every entry must be a string")
+            if (entry !in VOICE_WAKE_WORDS) {
+                return Validation.Bad("voice_wake_words: unknown wake word \"$entry\"")
+            }
+            if (entry in ids) return Validation.Bad("voice_wake_words: duplicate wake word \"$entry\"")
+            ids += entry
+        }
+        return Validation.Ok(JSONArray(ids).toString())
+    }
+
+    /** `voice_pipelines`: a JSON object mapping a [VOICE_WAKE_WORDS] id to a pipeline id (blank = the
+     *  Home Assistant preferred pipeline). Re-serializes with sorted keys so the persisted value is
+     *  stable regardless of the request's key order. */
+    private fun validateVoicePipelines(raw: String): Validation {
+        val obj = try {
+            JSONObject(raw)
+        } catch (e: JSONException) {
+            return Validation.Bad("voice_pipelines: expected a JSON object of wake word to pipeline id")
+        }
+        val normalized = JSONObject()
+        for (key in obj.keys().asSequence().sorted()) {
+            if (key !in VOICE_WAKE_WORDS) {
+                return Validation.Bad("voice_pipelines: unknown wake word \"$key\"")
+            }
+            val value = obj.opt(key) as? String
+                ?: return Validation.Bad("voice_pipelines: $key: expected a string pipeline id")
+            normalized.put(key, value)
+        }
+        return Validation.Ok(normalized.toString())
+    }
 
     val SPECS: List<SettingSpec> = listOf(
         // ---- Identity ----------------------------------------------------------------------------
@@ -582,6 +635,72 @@ object SettingsRegistry {
             ha = HaEntity(
                 "switch", "network_adb", "Network ADB",
                 """"command_topic":"ha-paneld/{panel}/network_adb/set","state_topic":"ha-paneld/{panel}/network_adb/state","icon":"mdi:adb","entity_category":"config"""",
+            ),
+        ),
+        // ---- Voice -------------------------------------------------------------------------------
+        // Local wake-word listening + Home Assistant Assist pipeline selection. Every spec here
+        // requires hasMicrophone, so a panel with no microphone — or one that declines a misreported
+        // capability (the gen-1 NSPanel Pro advertises FEATURE_MICROPHONE with no actual mic) — never
+        // sees the group. The pipeline runtime itself is a separate lane; this is the settings/HTTP/HA
+        // surface it drives, seamed behind AssistPipelineDirectory and VoiceTestTrigger.
+        SettingSpec(
+            key = "voice_enabled", type = SettingType.BOOL, group = "Voice",
+            label = "Voice assistant", default = "false", tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            liveApply = true,
+            help = "Run the on-panel wake-word listener and send recognised speech to Home Assistant Assist.",
+            availableWhen = { it.hasMicrophone },
+            haExposedByDefault = false,
+            ha = HaEntity(
+                "switch", "voice_assistant", "Voice assistant",
+                """"command_topic":"ha-paneld/{panel}/voice_enabled/set","state_topic":"ha-paneld/{panel}/voice_enabled/state","icon":"mdi:microphone-message","entity_category":"config"""",
+            ),
+        ),
+        SettingSpec(
+            key = "voice_wake_words", type = SettingType.STRING, group = "Voice",
+            label = "Wake words", default = "[\"okay_nabu\"]", tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            maxChars = 512,
+            help = "Up to two local wake-word models to listen for, as a JSON array: " +
+                "${VOICE_WAKE_WORDS.joinToString(", ")}.",
+            availableWhen = { it.hasMicrophone },
+            validate = ::validateVoiceWakeWords,
+        ),
+        SettingSpec(
+            key = "voice_pipelines", type = SettingType.STRING, group = "Voice",
+            label = "Wake word pipelines", default = "{}", tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            maxChars = 2_048,
+            help = "Which Home Assistant Assist pipeline each configured wake word triggers, as a JSON " +
+                "object of wake word to pipeline id. An empty value uses Home Assistant's preferred pipeline.",
+            availableWhen = { it.hasMicrophone },
+            validate = ::validateVoicePipelines,
+        ),
+        SettingSpec(
+            key = "voice_audio_source", type = SettingType.ENUM, group = "Voice",
+            label = "Audio source", default = "voice_recognition",
+            options = listOf("voice_recognition", "mic", "voice_communication"),
+            tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            help = "Android audio source the wake-word listener records from.",
+            availableWhen = { it.hasMicrophone },
+        ),
+        SettingSpec(
+            key = "voice_sensitivity", type = SettingType.ENUM, group = "Voice",
+            label = "Wake sensitivity", default = "normal",
+            options = listOf("low", "normal", "high"),
+            tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            help = "Wake-word detector threshold, applied as an offset to the model's cutoff score. Low " +
+                "requires a clearer match (fewer false wakes, more likely to miss a quiet or distant call); " +
+                "High matches more readily (faster to wake, more false triggers). Normal applies no offset.",
+            availableWhen = { it.hasMicrophone },
+        ),
+        SettingSpec(
+            key = "voice_state", type = SettingType.STRING, group = "Voice",
+            label = "Voice assistant state", default = "",
+            help = "Current voice-assistant phase: off, idle, listening, processing, responding or error.",
+            haExposedByDefault = false,
+            availableWhen = { it.hasMicrophone },
+            ha = HaEntity(
+                "sensor", "voice_state", "Voice assistant state",
+                """"state_topic":"ha-paneld/{panel}/voice_state/state","icon":"mdi:microphone-message","entity_category":"diagnostic"""",
+                readOnly = true,
             ),
         ),
         // ---- Logging -----------------------------------------------------------------------------

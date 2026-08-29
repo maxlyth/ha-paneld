@@ -1119,6 +1119,36 @@ class Config private constructor(
         durableCommit { putBoolean("kiosk_lock", on) }
     }
 
+    // Voice assistant: on-panel wake-word listener + Home Assistant Assist pipeline routing. Off by
+    // default (no microphone-capable panel exists yet); the actual pipeline runtime is a separate lane.
+    val voiceEnabled: Boolean get() = boolPref("voice_enabled")
+    fun setVoiceEnabled(on: Boolean) {
+        edit { putBoolean("voice_enabled", on) }
+    }
+
+    /** JSON array of configured wake-word model ids — SettingsRegistry validates and canonicalizes it
+     *  before it is ever committed here, so a stored value is always well-formed. */
+    val voiceWakeWords: String get() = stringPref("voice_wake_words")
+    fun setVoiceWakeWords(json: String) {
+        edit { putString("voice_wake_words", json) }
+    }
+
+    /** JSON object of wake-word model id to Home Assistant Assist pipeline id (blank = preferred). */
+    val voicePipelines: String get() = stringPref("voice_pipelines")
+    fun setVoicePipelines(json: String) {
+        edit { putString("voice_pipelines", json) }
+    }
+
+    val voiceAudioSource: String get() = stringPref("voice_audio_source")
+    fun setVoiceAudioSource(source: String) {
+        edit { putString("voice_audio_source", source) }
+    }
+
+    val voiceSensitivity: String get() = stringPref("voice_sensitivity")
+    fun setVoiceSensitivity(sensitivity: String) {
+        edit { putString("voice_sensitivity", sensitivity) }
+    }
+
     /** Device-local acknowledgement of the built-in launch screen for one exact app version. This is
      * outside SettingsRegistry, so config export/import cannot suppress an intro on another panel. */
     val lastLaunchScreenVersionCode: Long?
