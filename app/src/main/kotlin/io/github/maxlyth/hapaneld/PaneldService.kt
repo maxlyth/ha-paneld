@@ -3699,23 +3699,25 @@ class PaneldService : Service() {
      *
      * The manifest declares `specialUse|microphone`, because a type can only be claimed if it is
      * declared, but an idle panel must not be a microphone foreground service. The two-argument
-     * `startForeground` claims every type the manifest declares, so from Android 10 the set is named
-     * explicitly instead: `specialUse` alone (Android 14+, where that type exists), plus `microphone`
-     * only while something holds a lease. Android 9 and earlier ignore the attribute entirely.
+     * `startForeground` claims every type the manifest declares, so from Android 10 — where naming
+     * the set became possible — the set is named explicitly: `specialUse` on Android 14 and later,
+     * where that type exists, plus `microphone` on Android 11 and later, where *that* type exists,
+     * and then only while something holds a lease. Android 9 and earlier ignore the attribute
+     * entirely, and Android 10 has no microphone type to claim.
      */
     private fun promoteToForeground(notification: Notification, microphone: Boolean) {
-        when {
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
-                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                if (microphone) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                startForeground(NOTIF_ID, notification, types)
-            }
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
-                val types = if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
-                startForeground(NOTIF_ID, notification, types)
-            }
-            else -> startForeground(NOTIF_ID, notification)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, notification)
+            return
         }
+        var types = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+        if (microphone && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        startForeground(NOTIF_ID, notification, types)
     }
 
     /**
@@ -3724,7 +3726,8 @@ class PaneldService : Service() {
      * Call it on the main thread with `true` as the first lease opens and `false` as the last one is
      * released; it is idempotent and inert until something actually calls it. Returns whether the
      * type is now what was asked for, so a caller that needs the microphone can refuse to start
-     * capture it is not allowed to run.
+     * capture it is not allowed to run. Before Android 11 there is no microphone type to claim and
+     * no while-in-use restriction to satisfy, so it succeeds without claiming anything.
      *
      * **Android 14 will refuse a microphone foreground service that is started from the background.**
      * A `while-in-use` type may only be claimed from a state that allows it — an activity in the
