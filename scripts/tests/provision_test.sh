@@ -255,6 +255,9 @@ run_provision() {
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
   rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
+  # Runtime-permission grant state is per-run for the same reason: left behind, a run that never
+  # granted anything would still verify green off the previous run's grant.
+  rm -f "$TMP/record-audio-granted" "$TMP/post-notifications-granted"
   # The slow-health probe counter is per-run state; leaving it behind made one test's outcome
   # depend on how many health probes an earlier test happened to make.
   rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
@@ -3606,6 +3609,20 @@ assert_log_contains '^adb .* shell pm grant io\.github\.maxlyth\.hapaneld androi
 assert_log_contains '^adb .* shell pm grant io\.github\.maxlyth\.hapaneld android\.permission\.RECORD_AUDIO$' "provisioning grants the microphone permission"
 assert_log_contains 'appops get io.github.maxlyth.hapaneld WRITE_SETTINGS' "post-install WRITE_SETTINGS verification reads Android's authority"
 assert_log_contains 'settings get secure enabled_accessibility_services' "post-install accessibility verification reads Android's authority"
+# Granting is not verifying. A vendor build can accept `pm grant` and keep nothing, so the two
+# runtime permissions are read back from the package manager the same way WRITE_SETTINGS is.
+assert_contains 'microphone permission granted' "post-install verification reports the microphone permission"
+assert_contains 'notification permission granted' "post-install verification reports the notification permission"
+assert_not_contains 'Permissions . Microphone' "$LAST_OUTPUT" "a granted microphone permission offers no manual recovery"
+assert_not_contains 'ha-paneld . Notifications' "$LAST_OUTPUT" "a granted notification permission offers no manual recovery"
+# The platform-level read exists only in that verification block, so its presence is proof the block
+# ran rather than proof the command is reachable from somewhere.
+sdk_reads="$(grep -Ec '^adb .* shell getprop ro\.build\.version\.sdk$' "$MOCK_CALL_LOG" || true)"
+if [ "$sdk_reads" -eq 1 ]; then
+  pass "post-install verification reads the platform level exactly once"
+else
+  fail_test "post-install verification reads the platform level exactly once (got $sdk_reads)"
+fi
 unset MOCK_VERIFY
 
 # Package replacement can start the app before adb finishes granting permissions. The app deliberately
@@ -3626,6 +3643,38 @@ assert_failure "post-install verification rejects a disabled accessibility maste
 assert_contains 'accessibility enabled' "disabled accessibility master switch names the failed item"
 assert_contains 'Settings.*Accessibility.*ha-paneld' "disabled accessibility master switch gives manual recovery"
 assert_log_contains 'settings get secure accessibility_enabled' "final verification reads Android's accessibility master authority"
+
+# A runtime permission the panel refused is a capability quietly missing, not a cosmetic warning:
+# provisioning fails and names the Settings path that finishes the job by hand.
+MOCK_RECORD_AUDIO_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "post-install verification rejects a refused microphone grant"
+assert_contains 'microphone permission granted' "refused microphone grant names the failed item"
+assert_contains 'Permissions . Microphone' "refused microphone grant gives manual recovery"
+assert_log_contains '^adb .* shell dumpsys package io\.github\.maxlyth\.hapaneld$' "the refused microphone grant is caught by reading the package manager back"
+unset MOCK_RECORD_AUDIO_GRANT_FAIL
+
+MOCK_POST_NOTIFICATIONS_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "post-install verification rejects a refused notification grant"
+assert_contains 'notification permission granted' "refused notification grant names the failed item"
+assert_contains 'ha-paneld . Notifications' "refused notification grant gives manual recovery"
+unset MOCK_POST_NOTIFICATIONS_GRANT_FAIL
+
+# POST_NOTIFICATIONS only became a runtime permission in Android 13. Failing an older panel for a
+# grant its platform has no concept of would break provisioning across most of the supported fleet,
+# so the platform level decides whether that check applies — and the panel is told so out loud.
+MOCK_SDK=30 MOCK_POST_NOTIFICATIONS_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_success "a pre-Android-13 panel is not failed for an ungrantable notification permission"
+assert_contains 'not a runtime permission before Android 13' "a pre-Android-13 panel is told why the notification grant is not checked"
+assert_contains 'microphone permission granted' "a pre-Android-13 panel is still checked for the microphone permission"
+unset MOCK_SDK MOCK_POST_NOTIFICATIONS_GRANT_FAIL
+
+# An unreadable platform level is not a licence to skip the check: it fails closed and reports what
+# Android actually said about the grant.
+MOCK_SDK= MOCK_POST_NOTIFICATIONS_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an unreadable platform level still verifies the notification permission"
+assert_contains 'notification permission granted' "an unreadable platform level names the failed item"
+assert_not_contains 'not a runtime permission before Android 13' "$LAST_OUTPUT" "an unreadable platform level is not reported as an old platform"
+unset MOCK_SDK MOCK_POST_NOTIFICATIONS_GRANT_FAIL
 
 # Likewise, the final permission/HTTP checklist is a success gate rather than advisory output.
 MOCK_VERIFY=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame

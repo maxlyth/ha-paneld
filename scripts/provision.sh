@@ -1022,6 +1022,7 @@ preflight_storage_health() {
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
   local health diag cfg rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
+  local package_state="" sdk_level="" notifications_are_runtime=0
   health="$(curl -fsS --max-time 5 "$URL/health" 2>/dev/null || true)"
   read_storage_health_for_verify
   read_power_safety
@@ -1046,6 +1047,22 @@ verify() {
     if [ "$a11y_enabled_state" = 1 ]; then
       case ":$a11y_state:" in *":$A11Y:"*) a11y_granted=1 ;; esac
     fi
+    # The runtime permissions granted over adb above are read back from the package manager, not from
+    # the app's own report: a grant that a vendor build silently refuses leaves the app running with a
+    # capability quietly missing, and only Android knows which it kept.
+    package_state="$(run_with_deadline 5 adb_exec -s "$TARGET" shell \
+      dumpsys package "$PKG" 2>/dev/null || true)"
+    # POST_NOTIFICATIONS is a runtime permission only from Android 13. Asking an older panel for it is
+    # not a failure there, so the platform level decides whether that grant is checkable at all.
+    sdk_level="$(run_with_deadline 5 adb_exec -s "$TARGET" shell \
+      getprop ro.build.version.sdk 2>/dev/null || true)"
+    sdk_level="${sdk_level//$'\r'/}"
+    case "$sdk_level" in
+      # An unreadable or nonsense platform level is not a reason to stop checking: fail closed and let
+      # the check itself report what Android actually says.
+      ''|*[!0-9]*) notifications_are_runtime=1 ;;
+      *) if [ "$sdk_level" -ge 33 ]; then notifications_are_runtime=1; fi ;;
+    esac
   fi
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
   if printf '%s' "$cfg" | grep -Eq '"ha_auth"[[:space:]]*:[[:space:]]*\{[^}]*"oauth"[[:space:]]*:[[:space:]]*true'; then
@@ -1163,6 +1180,20 @@ verify() {
     esac
     if [ "$a11y_granted" != 1 ]; then
       echo "     ${D}Enable Settings → Accessibility → ha-paneld, then re-run this command.${X}"
+    fi
+    chk "microphone permission granted" "$package_state" 'android\.permission\.RECORD_AUDIO: granted=true'
+    case "$package_state" in
+      *'android.permission.RECORD_AUDIO: granted=true'*) : ;;
+      *) echo "     ${D}Enable Settings → Apps → ha-paneld → Permissions → Microphone, then re-run this command.${X}" ;;
+    esac
+    if [ "$notifications_are_runtime" = 1 ]; then
+      chk "notification permission granted" "$package_state" 'android\.permission\.POST_NOTIFICATIONS: granted=true'
+      case "$package_state" in
+        *'android.permission.POST_NOTIFICATIONS: granted=true'*) : ;;
+        *) echo "     ${D}Enable Settings → Apps → ha-paneld → Notifications, then re-run this command.${X}" ;;
+      esac
+    else
+      echo "   ${GRN}✓${X} notification permission: not a runtime permission before Android 13 ${D}(this panel reports API $sdk_level; notifications need no grant here)${X}"
     fi
   else
     chk "WRITE_SETTINGS granted" "$diag" "write_settings=true"

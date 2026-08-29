@@ -693,6 +693,16 @@ if [ "${1:-}" = "-s" ]; then
   shift 2
 fi
 
+# The panel's platform level, as a number the fixture can compare. A non-numeric MOCK_SDK is a test
+# bug rather than a device state, so it falls back to the default instead of breaking arithmetic.
+mock_sdk_level() {
+  local level="${MOCK_SDK-33}"
+  case "$level" in
+    ''|*[!0-9]*) level=33 ;;
+  esac
+  printf '%s\n' "$level"
+}
+
 VERIFY_GRANTS_OK=1
 if [ "${MOCK_VERIFY:-ok}" = fail ] || \
    { [ -n "${MOCK_VERIFY_FAIL_HOST:-}" ] && \
@@ -999,11 +1009,52 @@ case "${1:-}" in
         fi
         [ "${MOCK_SHIZUKU_START:-ok}" = "ok" ]
         ;;
+      # ha-paneld's own package report, which post-install verification reads the runtime permission
+      # grants back from. The versionName line is emitted first and unchanged, so the version guard
+      # that shares this command sees exactly what it saw before.
+      "dumpsys package io.github.maxlyth.hapaneld")
+        printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
+        printf '    runtime permissions:\n'
+        if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$STATE_DIR/record-audio-granted" ]; then
+          printf '      android.permission.RECORD_AUDIO: granted=true\n'
+        else
+          printf '      android.permission.RECORD_AUDIO: granted=false\n'
+        fi
+        # Before Android 13 POST_NOTIFICATIONS is not a runtime permission, so the package manager
+        # lists no grant for it at all. That absence is the branch the platform-level gate exists for.
+        if [ "$(mock_sdk_level)" -ge 33 ]; then
+          if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$STATE_DIR/post-notifications-granted" ]; then
+            printf '      android.permission.POST_NOTIFICATIONS: granted=true\n'
+          else
+            printf '      android.permission.POST_NOTIFICATIONS: granted=false\n'
+          fi
+        fi
+        ;;
       "dumpsys package "*)
         printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
         ;;
+      # Deliberately CRLF, like every other property this shell returns. MOCK_SDK is printed raw
+      # rather than normalised, so a test can model a panel whose platform level cannot be read.
+      "getprop ro.build.version.sdk")
+        printf '%s\r\n' "${MOCK_SDK-33}"
+        ;;
       "getprop ro.product.cpu.abi")
         printf '%s\n' "${MOCK_ABI:-arm64-v8a}"
+        ;;
+      # Runtime permission grants are modelled as state, not just a call-log entry, because
+      # verification now reads them back. MOCK_<PERMISSION>_GRANT_FAIL models the vendor build that
+      # refuses the grant from the adb shell: the write fails and no state file is ever written.
+      "pm grant io.github.maxlyth.hapaneld android.permission.POST_NOTIFICATIONS")
+        if [ "${MOCK_POST_NOTIFICATIONS_GRANT_FAIL:-0}" = 1 ]; then
+          exit 1
+        fi
+        : > "$STATE_DIR/post-notifications-granted"
+        ;;
+      "pm grant io.github.maxlyth.hapaneld android.permission.RECORD_AUDIO")
+        if [ "${MOCK_RECORD_AUDIO_GRANT_FAIL:-0}" = 1 ]; then
+          exit 1
+        fi
+        : > "$STATE_DIR/record-audio-granted"
         ;;
       "appops set io.github.maxlyth.hapaneld WRITE_SETTINGS allow")
         : > "$STATE_DIR/write-settings-granted"
