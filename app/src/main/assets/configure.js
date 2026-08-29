@@ -427,9 +427,25 @@
     if (f.picker === "voice_pipelines") {
       if (voicePipelinesCatalog === null) loadVoicePipelines();
       var pipelinesWrap = el("div", { class: "voice-pipelines-picker" });
-      if (voicePipelinesCatalog === null || voicePipelinesCatalog === false) {
-        var pipelinesRaw = el("textarea", { class: "voice-pipelines-raw", rows: "2", text: v == null ? "" : v });
-        pipelinesRaw.addEventListener("change", function () {
+      // The raw textarea is focused/mid-edit exactly when it is document.activeElement — checked
+      // against THIS render's about-to-be-replaced node, before reconcileConfigCards swaps it out.
+      // A catalogue fetch resolving while someone is typing must not rip the control out from under
+      // them: keep rendering the raw-textarea view for this pass even though the catalogue is now
+      // available, so nothing they typed (committed to `values` or not) or their cursor position is
+      // lost. The next render — the following keystroke's `input` event, or a blur — re-evaluates and
+      // switches to the picker once it is safe to.
+      var activeRawTextarea = document.activeElement &&
+        document.activeElement.classList && document.activeElement.classList.contains("voice-pipelines-raw") &&
+        document.activeElement.getAttribute("data-field-key") === f.key ? document.activeElement : null;
+      if (voicePipelinesCatalog === null || voicePipelinesCatalog === false || activeRawTextarea) {
+        var pipelinesRaw = el("textarea", {
+          class: "voice-pipelines-raw", rows: "2", "data-field-key": f.key, text: v == null ? "" : v,
+        });
+        // `input`, not `change`: `change` only fires on blur, so a catalogue response landing mid-
+        // keystroke previously re-rendered with whatever was last blurred, discarding anything typed
+        // since. Committing on every keystroke means `values[f.key]` is always current, so nothing
+        // typed is ever lost even if the very next render switches this field to the select picker.
+        pipelinesRaw.addEventListener("input", function () {
           values[f.key] = pipelinesRaw.value; setDirty(f.key);
         });
         pipelinesWrap.appendChild(pipelinesRaw);
@@ -461,14 +477,28 @@
         pipelineRow.appendChild(el("span", { class: "voice-pipeline-label", text: word }));
         var pipelineSelect = el("select");
         pipelineSelect.appendChild(el("option", { value: "", text: "Preferred pipeline" }));
+        var retainedPipelineId = pipelineMapping[word];
+        var matchedRetained = false;
         voicePipelinesCatalog.forEach(function (p) {
           var pid = p && p.id ? String(p.id) : "";
           if (!pid) return;
           var pname = p && p.name ? String(p.name) : pid;
           var pipelineOption = el("option", { value: pid, text: pname });
-          if (pipelineMapping[word] === pid) pipelineOption.selected = true;
+          if (retainedPipelineId === pid) { pipelineOption.selected = true; matchedRetained = true; }
           pipelineSelect.appendChild(pipelineOption);
         });
+        // A retained id Home Assistant no longer offers (the pipeline was removed/renamed there) must
+        // never render as if nothing were selected — that reads as "Preferred pipeline" (unset) while
+        // silently keeping the stale id. Represent it honestly, mirroring the renderer/package pickers'
+        // "configured external renderer"/"(not installed)" retained-value pattern, and it stays
+        // clearable through the existing empty "Preferred pipeline" option.
+        if (retainedPipelineId && !matchedRetained) {
+          var unknownOption = el("option", {
+            value: String(retainedPipelineId), text: retainedPipelineId + " · not in Home Assistant's list",
+          });
+          unknownOption.selected = true;
+          pipelineSelect.appendChild(unknownOption);
+        }
         pipelineSelect.addEventListener("change", function () {
           if (pipelineSelect.value) pipelineMapping[word] = pipelineSelect.value;
           else delete pipelineMapping[word];

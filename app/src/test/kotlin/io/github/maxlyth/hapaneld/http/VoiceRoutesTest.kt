@@ -46,6 +46,17 @@ class VoiceRoutesTest {
         assertTrue(body.contains("\"error\":\"unavailable\""))
     }
 
+    @Test fun `pipelines are refused with no microphone capability before touching the directory`() {
+        assertEquals(
+            "this panel has no microphone capability",
+            voicePipelinesRefusal(hasMicrophone = false),
+        )
+    }
+
+    @Test fun `pipelines proceed once the microphone capability holds`() {
+        assertEquals(null, voicePipelinesRefusal(hasMicrophone = true))
+    }
+
     @Test fun `the stub directory used before the coordinator lane is wired reports not configured`() {
         val (status, _) = voicePipelinesResponse(
             kotlinx.coroutines.runBlocking { AssistPipelineDirectory.NOT_WIRED.list() },

@@ -1569,7 +1569,8 @@ class PaneldService : Service() {
             // Button backlight is a distinct profiled node (TPA10), not a property of the RGB backend:
             // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
             profile.hasButtonBacklight,
-            autoBright,
+            hasMicrophone = profile.hasMicrophone,
+            autoBright = autoBright,
             onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
             autoSleepActivity = { autoSleep.activitySnapshot() },
             configUrl = { localIpv4()?.let { "http://$it:${identity.httpPort}/" } },
@@ -1651,7 +1652,12 @@ class PaneldService : Service() {
         // Network ADB must retain its durable ownership marker until the controller has cleared every
         // classic/TLS property and authoritatively read them all inactive. Persisting false here first
         // made AdbController.set(false) conclude that the listener was external and skip teardown.
-        val actuationOwnsPersistence = key == "navbar_mode" || key == "kiosk_lock" || key == "network_adb"
+        // voice_enabled must not be persisted ahead of handleVoiceEnabled's live hasMicrophone check —
+        // this generic path runs before dispatchSetting, so pre-persisting ON here would durably record
+        // the setting even when the bridge refuses to act on it for lack of a microphone. handleVoiceEnabled
+        // owns persistence itself (mirrors kiosk_lock/network_adb, whose actuators are also the sole writer).
+        val actuationOwnsPersistence =
+            key == "navbar_mode" || key == "kiosk_lock" || key == "network_adb" || key == "voice_enabled"
         if (!spec.transient && !actuationOwnsPersistence && !config.commitRaw(spec, value)) {
             return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
         }

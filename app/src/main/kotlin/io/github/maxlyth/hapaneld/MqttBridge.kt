@@ -313,6 +313,34 @@ internal fun applyAcknowledgedKioskSetting(
     return true
 }
 
+/**
+ * voice_enabled ON is durable only once [commit] (the durable [io.github.maxlyth.hapaneld.Config.
+ * commitVoiceEnabled], never the fire-and-forget async write) accepts it AND the live bridge generation
+ * has a microphone; [reconcile] runs on every path — success, capability refusal, or commit failure —
+ * so the voice_enabled channel is never left echoing a value nothing actually took effect for, whether
+ * that is a stale retained ON from before a profile switch removed the capability, or an in-memory
+ * SharedPreferences value that changed even though its commit() reported failure (the same hazard
+ * [applyAcknowledgedKioskSetting] guards against). A `false` return means the caller must report the
+ * request as failed/refused rather than applied — see handleVoiceEnabled.
+ */
+internal fun applyAcknowledgedVoiceEnabled(
+    on: Boolean,
+    hasMicrophone: Boolean,
+    commit: (Boolean) -> Boolean,
+    reconcile: () -> Unit,
+): Boolean {
+    if (on && !hasMicrophone) {
+        runCatching(reconcile)
+        return false
+    }
+    if (!runCatching { commit(on) }.getOrDefault(false)) {
+        runCatching(reconcile)
+        return false
+    }
+    runCatching(reconcile)
+    return true
+}
+
 /** One non-reentrant lane for HTTP, MQTT, and the on-device escape gesture. The kiosk controller is
  * service-owned, so it can apply synchronously without borrowing the replaceable MQTT dispatcher. */
 internal class KioskSettingCoordinator(
@@ -831,6 +859,15 @@ internal class MqttBridge(
     // Panel carries a CHT8305 room temp/humidity chip (daemon-read) — gates the opt-in Room sensors.
     private val hasCht8305: Boolean,
     private val hasButtonBacklight: Boolean,
+    // The profile-authoritative microphone capability (Capabilities.hasMicrophone, itself sourced from
+    // the active device profile), captured per bridge generation exactly like hasCht8305/
+    // hasButtonBacklight — a profile switch already forces a fresh bridge (profileIdentity), so this is
+    // never stale for longer than that. Gates both the voice_enabled command handler (refuses ON without
+    // it) and the voice_enabled/voice_state channels (report OFF rather than echoing stale state), the
+    // same defensive pattern hasProximity uses for wake_on_wave — HA discovery availability alone is not
+    // a write guard, since the command topic is subscribed unconditionally (the wildcard
+    // ha-paneld/$panel/+/set).
+    private val hasMicrophone: Boolean = false,
     // Optional service-owned adaptive-brightness engine.
     private val autoBright: AutoBrightnessController,
     private val onAutoBrightnessConfigChanged: () -> Unit = {},
@@ -1307,11 +1344,18 @@ internal class MqttBridge(
         channel("prevent_idle_dim", statePreventIdleDim) { known(if (config.preventIdleDim) "ON" else "OFF") }
         channel("auto_brightness", stateAutoBright) { known(if (config.autoBrightness) "ON" else "OFF") }
         channel("navbar", stateNavbar) { known(config.navbarMode) }
-        channel("voice_enabled", stateVoiceEnabled) { known(if (config.voiceEnabled) "ON" else "OFF") }
+        // Mirrors wake_on_wave's hasProximity gate: without the capability, report OFF rather than
+        // echoing a persisted value the panel can no longer act on — never Unknown/skip, so a stale
+        // retained ON (e.g. from before a profile switch removed the capability) is overwritten rather
+        // than left in place.
+        channel("voice_enabled", stateVoiceEnabled) { known(if (hasMicrophone && config.voiceEnabled) "ON" else "OFF") }
         // Hidden until exposed, exactly like the diag_* sensors: a hidden entity must not keep a
-        // retained voice-state payload alive on the broker for something nobody opted into.
+        // retained voice-state payload alive on the broker for something nobody opted into. Also reports
+        // "off" — not the coordinator's authority value — once the capability is gone, so a phase like
+        // "listening" can never outlive the microphone it describes.
         channel("voice_state", stateVoiceState) {
-            diagnosticObservation("voice_state", config.haExposed("voice_state", false), voiceState())
+            if (!hasMicrophone) known(io.github.maxlyth.hapaneld.assist.VoiceState.OFF.wireValue)
+            else diagnosticObservation("voice_state", config.haExposed("voice_state", false), voiceState())
         }
 
         channel("illuminance", stateIlluminance, retain = false) {
@@ -2470,10 +2514,34 @@ internal class MqttBridge(
     // Disabling does not force-reconcile voice_state — that stays whatever the coordinator's
     // VoiceStateAuthority currently reports (its own default is OFF, and the coordinator is expected to
     // fall back there once it observes the setting go off).
+    //
+    // The command topic is subscribed unconditionally (ha-paneld/$panel/+/set), so HA discovery
+    // gating alone is not a write guard: a directly-published ON must still be refused here when this
+    // bridge generation has no microphone, exactly like handleWakeOnWave refuses without hasProximity.
+    // Unlike that ignore-only refusal, this one also force-reconciles: voice_enabled's own channel now
+    // reports OFF whenever !hasMicrophone (see createStateConverger), so the reconcile call overwrites
+    // any stale retained ON left over from before the capability disappeared (e.g. a profile switch)
+    // rather than merely declining to persist the new one.
+    //
+    // A refusal or a failed durable commit THROWS rather than returning silently. dispatchSetting runs
+    // inside the HTTP live-setting path's command-dispatcher lane, whose exception handling is what
+    // converts a thrown failure into LiveSettingApplyResult.FAILED — a silent return here previously let
+    // both cases report execution SUCCEEDED, so a refused or unpersisted ON came back to the caller as
+    // APPLIED. The decision itself is the pure, directly-testable applyAcknowledgedVoiceEnabled (mirrors
+    // applyAcknowledgedKioskSetting), which always reconciles before reporting failure.
     private fun handleVoiceEnabled(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        config.setVoiceEnabled(on)
-        stateConverger.reconcile("voice_enabled", force = true)
+        if (on && !hasMicrophone) Log.w(TAG, "ignoring voice_enabled ON command without a microphone")
+        val accepted = applyAcknowledgedVoiceEnabled(
+            on = on,
+            hasMicrophone = hasMicrophone,
+            commit = config::commitVoiceEnabled,
+            reconcile = { stateConverger.reconcile("voice_enabled", force = true) },
+        )
+        check(accepted) {
+            if (on && !hasMicrophone) "this panel has no microphone capability"
+            else "voice_enabled setting commit failed"
+        }
     }
 
     private fun handleKiosk(payload: String) {

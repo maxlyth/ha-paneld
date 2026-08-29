@@ -1121,9 +1121,13 @@ class Config private constructor(
 
     // Voice assistant: on-panel wake-word listener + Home Assistant Assist pipeline routing. Off by
     // default (no microphone-capable panel exists yet); the actual pipeline runtime is a separate lane.
+    // A durable commit (not the fire-and-forget async `edit`) — the bridge's handleVoiceEnabled must be
+    // able to tell a genuine persistence failure apart from success, the same reason kiosk_lock has both
+    // setKioskLock and commitKioskLock, so an ON acknowledgement is never reported before it durably
+    // held.
     val voiceEnabled: Boolean get() = boolPref("voice_enabled")
-    fun setVoiceEnabled(on: Boolean) {
-        edit { putBoolean("voice_enabled", on) }
+    fun commitVoiceEnabled(on: Boolean): Boolean = synchronized(CONFIG_LOCK) {
+        durableCommit { putBoolean("voice_enabled", on) }
     }
 
     /** JSON array of configured wake-word model ids — SettingsRegistry validates and canonicalizes it

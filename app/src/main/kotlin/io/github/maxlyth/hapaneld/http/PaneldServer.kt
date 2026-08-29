@@ -707,6 +707,15 @@ internal fun voiceTestRefusal(hasMicrophone: Boolean, voiceEnabled: Boolean): St
     else -> null
 }
 
+/** Refuses `GET /api/v1/voice/pipelines` before [io.github.maxlyth.hapaneld.assist.AssistPipelineDirectory]
+ *  is ever called — returns the reason to report as the existing `{"error":"unavailable",reason}` 503
+ *  shape ([voicePipelinesResponse]'s `Unavailable` branch), or null to proceed to the directory. The
+ *  route's docs and OpenAPI both promise this endpoint "requires a microphone-capable panel" — the
+ *  directory itself has no live capability signal, so the capability-less case must be checked here,
+ *  exactly like [voiceTestRefusal] checks it ahead of the trigger. */
+internal fun voicePipelinesRefusal(hasMicrophone: Boolean): String? =
+    if (!hasMicrophone) "this panel has no microphone capability" else null
+
 /** Maps a [io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.Result] to the exact
  *  `POST /api/v1/voice/test` response, pure so every branch is unit-testable without a routed request. */
 internal fun voiceTestTriggerResponse(
@@ -2390,6 +2399,16 @@ class PaneldServer internal constructor(
                     // The response is decided by the pure voicePipelinesResponse() so it is unit-testable
                     // without a routed request.
                     get("/voice/pipelines") {
+                        val caps = liveCapabilities(snapStaleOk().caps)
+                        val refusal = voicePipelinesRefusal(hasMicrophone = caps.hasMicrophone)
+                        if (refusal != null) {
+                            call.respondText(
+                                "{\"error\":\"unavailable\",\"reason\":${Json.str(refusal)}}",
+                                ContentType.Application.Json,
+                                HttpStatusCode.ServiceUnavailable,
+                            )
+                            return@get
+                        }
                         val (status, body) = voicePipelinesResponse(assistPipelines.list())
                         call.respondText(body, ContentType.Application.Json, status)
                     }
