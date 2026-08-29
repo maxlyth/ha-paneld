@@ -556,14 +556,16 @@ class ConfigTransactionTest {
         assertEquals(10, tunedConfig.autoBrightnessResponsePercent)
         assertFalse(tuned.values.containsKey(SettingsRegistry.LEGACY_SENSITIVITY_KEY))
 
-        // A panel that already ran schema 6 keeps exactly what it has.
+        // A panel that already ran schema 6 keeps exactly what it has while advancing through later
+        // additive schemas.
         val current = fakePreferences(initial = mapOf(
-            "config_schema" to SettingsRegistry.SCHEMA,
+            "config_schema" to 6,
             SettingsRegistry.RESPONSE_PERCENT_KEY to 12,
         ))
         val currentConfig = Config(current.instance)
         assertTrue(currentConfig.migrateLiveStore())
         assertEquals(12, currentConfig.autoBrightnessResponsePercent)
+        assertEquals(SettingsRegistry.SCHEMA, current.values["config_schema"])
     }
 
     /**

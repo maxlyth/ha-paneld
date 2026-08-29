@@ -55,6 +55,12 @@ object Migrations {
                 rescaleSensitivity(legacy ?: SettingsRegistry.LEGACY_NEUTRAL_SENSITIVITY).toString(),
             )
         },
+        Migration { values ->
+            values.putIfAbsent("camera_enabled", "false")
+            values.putIfAbsent("camera_max_resolution", "720p")
+            values.putIfAbsent("camera_max_fps", "15")
+            values.putIfAbsent("camera_max_kbps", "2000")
+        },
     )
 
     /**

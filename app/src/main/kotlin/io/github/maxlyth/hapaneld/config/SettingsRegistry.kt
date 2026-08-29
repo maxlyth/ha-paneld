@@ -22,7 +22,7 @@ import java.util.Locale
 object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
-    const val SCHEMA = 6
+    const val SCHEMA = 7
     const val MAX_PANEL_ID_CHARS = 63
     const val DEFAULT_SILENCE_BOOT_CHIME = true
     const val DEFAULT_MQTT_ADDRESS_FAMILY = "Automatic"

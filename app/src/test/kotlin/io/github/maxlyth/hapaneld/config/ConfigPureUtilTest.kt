@@ -191,6 +191,27 @@ class MigrationsTest {
         assertTrue(w.isEmpty())
     }
 
+    @Test fun schemaSixAddsCameraDefaultsAndPreservesExplicitChoices() {
+        val (defaults, defaultWarnings) = Migrations.migrate(6, mapOf("mqtt_broker" to "tcp://ha:1883"))
+
+        assertEquals("false", defaults["camera_enabled"])
+        assertEquals("720p", defaults["camera_max_resolution"])
+        assertEquals("15", defaults["camera_max_fps"])
+        assertEquals("2000", defaults["camera_max_kbps"])
+        assertTrue(defaultWarnings.isEmpty())
+
+        val explicitValues = mapOf(
+            "camera_enabled" to "true",
+            "camera_max_resolution" to "1080p",
+            "camera_max_fps" to "24",
+            "camera_max_kbps" to "4000",
+        )
+        val (explicit, explicitWarnings) = Migrations.migrate(6, explicitValues)
+
+        explicitValues.forEach { (key, value) -> assertEquals(value, explicit[key]) }
+        assertTrue(explicitWarnings.isEmpty())
+    }
+
     @Test fun schemaFourAddsAutomaticMqttAddressFamilyPolicy() {
         val (migrated, warnings) = Migrations.migrate(4, mapOf("mqtt_broker" to "tcp://ha:1883"))
 
