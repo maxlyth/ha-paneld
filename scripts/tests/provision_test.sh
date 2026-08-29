@@ -3650,7 +3650,16 @@ MOCK_RECORD_AUDIO_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-ta
 assert_failure "post-install verification rejects a refused microphone grant"
 assert_contains 'microphone permission granted' "refused microphone grant names the failed item"
 assert_contains 'Permissions . Microphone' "refused microphone grant gives manual recovery"
-assert_log_contains '^adb .* shell dumpsys package io\.github\.maxlyth\.hapaneld$' "the refused microphone grant is caught by reading the package manager back"
+# The pre-install version probe reads the same package report, so the call appearing in the log
+# proves nothing on its own. What matters is that a read happens after the grants: a check answered
+# from the probe taken before installation would be reporting the previous run's permissions.
+last_grant_call="$(grep -n '^adb .* shell pm grant io\.github\.maxlyth\.hapaneld' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+last_package_read="$(grep -n '^adb .* shell dumpsys package io\.github\.maxlyth\.hapaneld$' "$MOCK_CALL_LOG" | tail -1 | cut -d: -f1)"
+if [ -n "$last_grant_call" ] && [ -n "$last_package_read" ] && [ "$last_package_read" -gt "$last_grant_call" ]; then
+  pass "the grant record is read back after the grants, not from the pre-install version probe"
+else
+  fail_test "the grant record is read back after the grants, not from the pre-install version probe (grant=${last_grant_call:-none} read=${last_package_read:-none})"
+fi
 unset MOCK_RECORD_AUDIO_GRANT_FAIL
 
 MOCK_POST_NOTIFICATIONS_GRANT_FAIL=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
