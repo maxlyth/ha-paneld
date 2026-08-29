@@ -23,11 +23,24 @@ package io.github.maxlyth.hapaneld.audio
 object MicrophoneAdmission {
 
     /**
+     * The two shipped answers, each named once.
+     *
+     * They were written out twice — at the field and again in [reset] — until a mutation of the
+     * declared default killed nothing: every test resets first, so the initializer had no assertion
+     * of its own and the two copies were free to drift apart. One name, one place to change, and a
+     * mutation of it is now visible to every test that asks what an unwired panel answers.
+     */
+    private val ALWAYS_IDLE: () -> Boolean = { true }
+
+    /** No page may capture: the answer until a feature that owns a real opt-in replaces it. */
+    private val REFUSE_WEB_VIEW_CAPTURE: () -> Boolean = { false }
+
+    /**
      * Whether the shared microphone is free. Answers `true` until something points it at a real
      * [MicrophoneSource], which keeps the gate inert in a build where nothing leases the microphone.
      */
     @Volatile
-    var isIdle: () -> Boolean = { true }
+    var isIdle: () -> Boolean = ALWAYS_IDLE
         private set
 
     /**
@@ -36,7 +49,7 @@ object MicrophoneAdmission {
      * question as holding the Android permission.
      */
     @Volatile
-    var webViewCaptureAllowed: () -> Boolean = { false }
+    var webViewCaptureAllowed: () -> Boolean = REFUSE_WEB_VIEW_CAPTURE
         private set
 
     /** Answer [isIdle] from a live source: idle exactly while no lease is held. */
@@ -60,7 +73,7 @@ object MicrophoneAdmission {
 
     /** Restore the defaults: idle, and no page may capture. */
     fun reset() {
-        isIdle = { true }
-        webViewCaptureAllowed = { false }
+        isIdle = ALWAYS_IDLE
+        webViewCaptureAllowed = REFUSE_WEB_VIEW_CAPTURE
     }
 }
