@@ -262,7 +262,7 @@ class DashboardActivity : AppCompatActivity() {
         if (key == "dashboard_theme_dark" || key == "dark_mode" || key == "dashboard_theme") {
             runOnUiThread { if (!destroyed) convergeStatusTheme() }
         }
-        // Camera trial (contract §1): the runtime permission is requested only once the setting is on,
+        // Camera trial: the runtime permission is requested only once the setting is on,
         // and only as a direct result of that switch turning on — never before, never as a side effect.
         if (key == "camera_enabled") {
             // The service's camera owner republishes CameraPermissionPrompt on this same change; give it
@@ -1993,13 +1993,15 @@ class DashboardActivity : AppCompatActivity() {
         redrawLifecycleBar()
     }
 
-    /** Camera trial (contract §1): request CAMERA only when [Config.cameraEnabled] is already on and the
+    /** Camera trial: request CAMERA only when [Config.cameraEnabled] is already on and the
      *  permission is not already held. Called both from the settings-change listener above (the switch
      *  flips while this activity is resumed) and from [onResume] (the switch flipped while backgrounded). */
     private fun requestCameraPermissionIfNeeded() {
-        // Camera trial (contract §1): whether to ask is the session owner's decision — it alone knows the
-        // profile declares a camera, the switch is on and the permission is missing — and the answer is
-        // remembered process-wide, so a denial survives this activity being recreated.
+        // Camera trial: whether to ask is the session owner's decision — it alone knows the profile
+        // declares a camera, the switch is on and the permission is missing — and a denial is remembered
+        // durably. Only a resumed activity may raise the dialog; a paused one cannot show it reliably and
+        // must not mark a request in flight that Android will never answer.
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) return
         if (!io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.shouldAsk()) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) return
         io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.asking()
@@ -2066,6 +2068,7 @@ class DashboardActivity : AppCompatActivity() {
         if (hasFocus) applyFullscreen()
     }
     override fun onPause() {
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.activityPaused()
         onAdmissionVisibilityChanged(false)            // the retry stays armed; only the repaint stops
         BuiltinDashboard.setActivityForeground(activityOwner, false)
         super.onPause()
@@ -3616,7 +3619,7 @@ class DashboardActivity : AppCompatActivity() {
             if (!rendererCurrent(generation)) { request.deny(); return }
             val granted = request.resources.filter { res ->
                 val perm = when (res) {
-                    // Camera trial (contract §5): one owner holds the device and every consumer is its
+                    // Camera trial: one owner holds the device and every consumer is its
                     // subscriber. A page's getUserMedia() would be a second, independent owner that the
                     // LIMITED HALs on these panels cannot share with the session, so it is refused
                     // outright rather than following the switch. Declaring CAMERA for the service must
@@ -3633,7 +3636,7 @@ class DashboardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "ha-paneld/dashboard"
-        /** Camera trial (contract §1): the CAMERA runtime-permission request raised when the camera
+        /** Camera trial: the CAMERA runtime-permission request raised when the camera
          *  setting turns on. Distinct from any other request code — this activity had none before. */
         private const val REQUEST_CAMERA_PERMISSION = 4801
         private const val SIGN_IN_LOAD_RETRIES_MAX = 4

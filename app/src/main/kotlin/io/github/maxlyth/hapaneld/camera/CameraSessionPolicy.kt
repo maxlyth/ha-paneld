@@ -9,7 +9,7 @@ package io.github.maxlyth.hapaneld.camera
  * turning off even while the reconfigure lane that also carries the change is still queued — the
  * privacy stop never waits behind a retry ladder. Recovery is bounded in both directions: a fault
  * reopens with exponential backoff up to [maxConsecutiveFailures], after which the session is declared
- * degraded and stays there, visibly, rather than spinning (contract §6).
+ * degraded and stays there, visibly, rather than spinning.
  */
 class CameraSessionPolicy(
     /** Nominal interval between frames at the negotiated rate. */

@@ -75,7 +75,7 @@ class CameraForegroundService : Service() {
             )
         }
         // The notification is a platform requirement, not the indication: a kiosk panel has no
-        // reachable shade, so the room is told by the overlay and the LED (contract §2).
+        // reachable shade, so the room is told by the overlay and the LED.
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ha-paneld")
             .setContentText("Camera in use")

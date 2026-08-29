@@ -25,12 +25,14 @@ enum class CameraRefusal(val token: String) {
     DISABLED("camera-disabled"),
     /** The switch is on but Android has not granted the app the camera permission. */
     PERMISSION("camera-permission-needed"),
-    /** The camera-in-use indicator could not be shown, so the camera did not open (contract §2). */
+    /** The camera-in-use indicator could not be shown, so the camera did not open. */
     INDICATION("camera-indication-unavailable"),
     /** Android refused the camera-typed foreground service, which happens when no activity is visible. */
     FOREGROUND("camera-foreground-refused"),
     /** The session exists but produced no frame within the bounded wait. */
     STARVED("camera-starved"),
+    /** A frame arrived but could not be encoded as JPEG; the session itself is healthy. */
+    ENCODE("camera-encode-failed"),
     /** The device could not be opened or configured; see the status object for the classified fault. */
     FAILED("camera-unavailable"),
     /** The service is tearing down. */
@@ -86,6 +88,8 @@ enum class CameraFault(val wire: String) {
     DEVICE_ERROR("device_error"),
     DISCONNECTED("disconnected"),
     STARVED("starved"),
+    /** The last frame could not be encoded; classified separately from starvation because the camera delivered. */
+    ENCODE("encode"),
 }
 
 /** Which route is telling the room the camera is on. `none` is only legal when the camera is closed. */

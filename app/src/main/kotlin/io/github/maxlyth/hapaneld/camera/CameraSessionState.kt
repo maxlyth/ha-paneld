@@ -4,16 +4,27 @@ import java.util.concurrent.CompletableFuture
 
 /**
  * The camera session's ownership state, with no Android in it. `CameraSessionOwner` is the adapter
- * that drives the device; every enable/open/lease/close decision is made here so each interleaving —
- * first and last lease, a second subscriber joining mid-open, the master switch turning off during an
- * open, an open that fails while subscribers wait, a stop at any point — is a unit test rather than
- * something a reviewer has to trace by hand.
+ * that drives the device; every enable/open/lease/close decision is made here so each interleaving is a
+ * unit test rather than something a reviewer has to trace by hand.
  *
- * The [generation] is the only identity a lease or a device callback carries. It advances exactly when
- * a new open attempt series starts and when the session closes for any reason, so a callback or frame
- * from a superseded attempt is dropped by comparison rather than by a flag somebody must remember to
- * set. A lease taken during [Phase.OPENING] carries the generation of the open it is joining, which is
- * what lets the first lease close the session it opened.
+ * Two identities, deliberately distinct:
+ *
+ * - The **session [generation]** is what a lease belongs to. It advances when a session starts from
+ *   idle and when it ends for any reason, and a lease from an ended session can never touch a later
+ *   one.
+ * - The **[attempt]** is what hardware and device callbacks belong to. Every `openCamera` — the first
+ *   one and every reopen — is its own attempt, so a callback from a superseded attempt is recognised by
+ *   its identity and can only ever release that attempt's own hardware, never a newer attempt's.
+ *
+ * Phase changes happen here, synchronously, at the moment the decision is made; hardware release trails
+ * them asynchronously and is validated against the attempt it belongs to. That is why a disable or a
+ * last-lease release leaves nothing joinable behind: the phase is already idle when the next acquire
+ * arrives, and it starts a new attempt rather than joining a cancelled one.
+ *
+ * Callers waiting for an open register a future here, so a disable, a stop or the last lease leaving
+ * settles them at once instead of leaving them to time out. Failure memory survives a session: a
+ * camera that keeps refusing is backed off between polls and declared degraded at the ceiling, so a
+ * poller cannot turn a broken camera into an unbounded retry loop.
  *
  * Not thread-safe: the owner serialises every call under one lock.
  */
@@ -25,175 +36,229 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         private set
     var generation: Long = 0L
         private set
+    var attempt: Long = 0L
+        private set
+    /** The attempt whose callbacks are currently valid, or null when no attempt is in flight or live. */
+    var currentAttempt: Long? = null
+        private set
     var consecutiveFailures: Int = 0
         private set
     var lastFrameAtMs: Long? = null
         private set
     var openedAtMs: Long = 0L
         private set
+    /** No new attempt before this instant; the backoff a poller must respect between failed opens. */
+    var retryNotBeforeMs: Long = 0L
+        private set
 
     private val leases = LinkedHashSet<Long>()
     private var nextLease = 1L
-    private val waiters = ArrayList<CompletableFuture<ByteArray?>>()
+    private val frameWaiters = ArrayList<CompletableFuture<ByteArray?>>()
+    private val openWaiters = ArrayList<CompletableFuture<CameraRefusal?>>()
     private var pendingFault: CameraFault? = null
 
     val clients: Int get() = leases.size
 
     sealed interface Admission {
         data class Refused(val reason: CameraRefusal) : Admission
-        /** The session is open or opening; the caller holds [lease] and waits for [generation]'s outcome if any. */
-        data class Join(val lease: Long, val generation: Long) : Admission
-        /** The caller's lease is the first; the owner must start open attempt [generation]. */
-        data class Open(val lease: Long, val generation: Long) : Admission
+        /** The session is open or opening; the caller holds [lease] and, if opening, waits on [awaitOpen]. */
+        data class Join(val lease: Long) : Admission
+        /** The caller's lease is the first; the owner must start attempt [attempt]. */
+        data class Open(val lease: Long, val attempt: Long) : Admission
     }
 
     /** [gate] is the classified refusal from the static gates, or null when they all pass. */
     fun acquire(gate: CameraRefusal?, nowMs: Long): Admission {
         if (phase == Phase.STOPPING) return Admission.Refused(CameraRefusal.STOPPING)
         if (gate != null) return Admission.Refused(gate)
-        val lease = nextLease++
-        leases += lease
         return when (phase) {
-            Phase.LIVE, Phase.OPENING -> Admission.Join(lease, generation)
+            Phase.LIVE, Phase.OPENING -> Admission.Join(newLease())
             Phase.IDLE, Phase.DEGRADED -> {
-                // A degraded session retries on the next subscriber: that is the documented recovery.
-                consecutiveFailures = 0
+                // Backoff is honoured across sessions: a poller retrying a broken camera waits it out.
+                if (nowMs < retryNotBeforeMs) return Admission.Refused(CameraRefusal.FAILED)
+                if (phase == Phase.DEGRADED) consecutiveFailures = 0
+                val lease = newLease()
+                phase = Phase.OPENING
+                generation++
                 beginAttempt(nowMs)
-                Admission.Open(lease, generation)
+                Admission.Open(lease, attempt)
             }
             Phase.STOPPING -> error("unreachable")
         }
     }
 
+    private fun newLease(): Long = (nextLease++).also { leases += it }
+
     private fun beginAttempt(nowMs: Long) {
-        phase = Phase.OPENING
-        generation++
+        attempt++
+        currentAttempt = attempt
         openedAtMs = nowMs
         lastFrameAtMs = null
         pendingFault = null
     }
 
-    /** True when [gen] is the live attempt and the session is now serving. */
-    fun openSucceeded(gen: Long): Boolean {
-        if (gen != generation || phase != Phase.OPENING) return false
+    /** A caller that must wait for the in-flight open registers here; settled by every outcome. */
+    fun awaitOpen(): CompletableFuture<CameraRefusal?>? {
+        if (phase != Phase.OPENING) return null
+        return CompletableFuture<CameraRefusal?>().also { openWaiters += it }
+    }
+
+    fun isCurrent(attemptId: Long): Boolean = currentAttempt == attemptId
+
+    /** True when [attemptId] is the live attempt and the session is now serving. */
+    fun openSucceeded(attemptId: Long): Boolean {
+        if (!isCurrent(attemptId) || phase != Phase.OPENING) return false
         phase = Phase.LIVE
         consecutiveFailures = 0
+        retryNotBeforeMs = 0L
+        settleOpen(null)
         return true
     }
 
     sealed interface Failure {
-        /** A superseded attempt; nothing to do. */
+        /** A superseded attempt; the owner releases only that attempt's own hardware. */
         data object Ignored : Failure
-        /** Nobody is waiting any more; the owner releases hardware and closes. */
+        /** Nobody is waiting any more; the session has ended and the owner releases the attempt. */
         data object Close : Failure
         data class Reopen(val afterMs: Long, val attempt: Int) : Failure
         data class Degrade(val attempt: Int) : Failure
     }
 
-    /** An open attempt for [gen] failed with [fault]. Subscribers keep their leases across a reopen. */
-    fun openFailed(gen: Long, fault: CameraFault): Failure {
-        if (gen != generation) return Failure.Ignored
+    /**
+     * Attempt [attemptId] failed with [fault]. Waiting callers learn the refusal now; the ladder decides
+     * what the session does next, and failure memory outlives the session so the next acquire is
+     * backed off or refused as degraded rather than retrying immediately.
+     */
+    fun openFailed(attemptId: Long, fault: CameraFault, refusal: CameraRefusal, nowMs: Long): Failure {
+        if (!isCurrent(attemptId)) return Failure.Ignored
         consecutiveFailures++
-        if (leases.isEmpty()) return Failure.Close
-        return when (val d = policy().onFailure(fault, consecutiveFailures)) {
+        settleOpen(refusal)
+        val decision = policy().onFailure(fault, consecutiveFailures)
+        if (leases.isEmpty()) {
+            endSession(Phase.IDLE)
+            retryNotBeforeMs = when (decision) {
+                is CameraSessionPolicy.Decision.Reopen -> nowMs + decision.afterMs
+                is CameraSessionPolicy.Decision.Degrade -> nowMs + policy().maxBackoffMs
+                else -> 0L
+            }
+            if (decision is CameraSessionPolicy.Decision.Degrade) phase = Phase.DEGRADED
+            return Failure.Close
+        }
+        return when (decision) {
             is CameraSessionPolicy.Decision.Degrade -> {
-                phase = Phase.DEGRADED
-                Failure.Degrade(d.attempt)
+                endSession(Phase.DEGRADED)
+                retryNotBeforeMs = nowMs + policy().maxBackoffMs
+                Failure.Degrade(decision.attempt)
             }
             is CameraSessionPolicy.Decision.Reopen -> {
-                phase = Phase.OPENING
-                Failure.Reopen(d.afterMs, d.attempt)
+                // The session and its leases live on; the next attempt gets its own identity when the
+                // owner fires it, so this attempt's late callbacks cannot touch it. The backoff is also
+                // recorded now: if the waiting caller leaves before the reopen fires, the next poll
+                // must still wait it out rather than retry at once.
+                currentAttempt = null
+                retryNotBeforeMs = nowMs + decision.afterMs
+                Failure.Reopen(decision.afterMs, decision.attempt)
             }
             else -> error("onFailure never continues or closes")
         }
     }
 
-    /** True when the caller must close the hardware: the last lease is gone. */
-    fun release(lease: Long): Boolean {
-        if (!leases.remove(lease)) return false
-        return leases.isEmpty() && phase != Phase.IDLE && phase != Phase.STOPPING
+    /** The owner is firing a reopen decided earlier: a fresh attempt with a fresh first-frame grace. */
+    fun reopenAttempt(nowMs: Long): Long? {
+        if (phase != Phase.OPENING) return null
+        beginAttempt(nowMs)
+        return attempt
     }
 
-    /** The master switch turned off. True when the owner must release hardware now, whatever the phase. */
-    fun disable(): Boolean {
-        if (phase == Phase.IDLE || phase == Phase.STOPPING) return false
-        // Advancing the generation is what makes an in-flight open's callbacks and frames stale.
-        generation++
+    /** True when the caller must release the attempt's hardware: the last lease is gone. */
+    fun release(lease: Long): Boolean {
+        if (!leases.remove(lease)) return false
+        if (leases.isNotEmpty() || phase == Phase.IDLE || phase == Phase.STOPPING) return false
+        endSession(Phase.IDLE)
         return true
     }
 
-    /** Hardware has been released; settle everyone and rest in [next]. */
-    fun closed(next: Phase) {
-        require(next == Phase.IDLE || next == Phase.STOPPING || next == Phase.DEGRADED)
+    /** The master switch turned off. True when the owner must release the current attempt's hardware. */
+    fun disable(): Boolean {
+        if (phase != Phase.OPENING && phase != Phase.LIVE) return false
+        endSession(Phase.IDLE)
+        return true
+    }
+
+    /** Service teardown. True when an attempt was holding hardware. */
+    fun stopping(): Boolean {
+        val held = phase == Phase.OPENING || phase == Phase.LIVE
+        endSession(Phase.STOPPING)
+        return held
+    }
+
+    /** Synchronous end of the session: phase, generation, leases and every waiter, all at once. */
+    private fun endSession(next: Phase) {
         phase = next
         generation++
+        currentAttempt = null
         leases.clear()
-        val drained = waiters.toList()
-        waiters.clear()
+        settleOpen(if (next == Phase.STOPPING) CameraRefusal.STOPPING else CameraRefusal.DISABLED)
+        val drained = frameWaiters.toList()
+        frameWaiters.clear()
         drained.forEach { it.complete(null) }
         pendingFault = null
     }
 
-    fun stopping(): Boolean {
-        if (phase == Phase.STOPPING) return false
-        val hadHardware = phase != Phase.IDLE
-        phase = Phase.STOPPING
-        generation++
-        return hadHardware
+    private fun settleOpen(refusal: CameraRefusal?) {
+        val pending = openWaiters.toList()
+        openWaiters.clear()
+        pending.forEach { it.complete(refusal) }
     }
 
-    /** A frame arrived for [gen]; returns the waiters to satisfy, or nothing if the frame is stale. */
-    fun frame(gen: Long, nowMs: Long): List<CompletableFuture<ByteArray?>> {
-        if (gen != generation || phase != Phase.LIVE) return emptyList()
+    /** A frame arrived for [attemptId]; returns the waiters to satisfy, or nothing if the frame is stale. */
+    fun frame(attemptId: Long, nowMs: Long): List<CompletableFuture<ByteArray?>> {
+        if (!isCurrent(attemptId) || phase != Phase.LIVE) return emptyList()
         lastFrameAtMs = nowMs
         consecutiveFailures = 0
-        val ready = waiters.toList()
-        waiters.clear()
+        val ready = frameWaiters.toList()
+        frameWaiters.clear()
         return ready
     }
 
     fun addWaiter(w: CompletableFuture<ByteArray?>) {
-        waiters += w
+        frameWaiters += w
     }
 
     fun removeWaiter(w: CompletableFuture<ByteArray?>) {
-        waiters.remove(w)
+        frameWaiters.remove(w)
     }
 
-    fun noteDeviceFault(gen: Long, fault: CameraFault): Boolean {
-        if (gen != generation) return false
+    fun noteDeviceFault(attemptId: Long, fault: CameraFault): Boolean {
+        if (!isCurrent(attemptId)) return false
         pendingFault = fault
         return true
     }
 
     /** The watchdog tick; the policy decides, this only supplies the observed facts. */
-    fun tick(nowMs: Long, enabled: Boolean, indicated: Boolean): CameraSessionPolicy.Decision {
+    fun tick(attemptId: Long, nowMs: Long, enabled: Boolean, indicated: Boolean): CameraSessionPolicy.Decision? {
+        if (!isCurrent(attemptId) || phase != Phase.LIVE) return null
         val fault = pendingFault ?: if (!indicated) CameraFault.INDICATION else null
         pendingFault = null
         return policy().onTick(
             CameraSessionPolicy.Tick(
                 nowMs = nowMs, openedAtMs = openedAtMs, lastFrameAtMs = lastFrameAtMs, clients = leases.size,
-                enabled = enabled, stopping = phase == Phase.STOPPING, deviceFault = fault,
-                consecutiveFailures = consecutiveFailures,
+                enabled = enabled, stopping = false, deviceFault = fault, consecutiveFailures = consecutiveFailures,
             ),
         )
     }
 
-    /** A reopen decided by the tick keeps the generation: the subscribers are the same. */
+    /** A live session is being torn down for a reopen: leases stay, the attempt ends, grace restarts on fire. */
     fun reopening(attempt: Int) {
         phase = Phase.OPENING
         consecutiveFailures = attempt
-        lastFrameAtMs = null
+        currentAttempt = null
         pendingFault = null
     }
 
-    fun degraded(attempt: Int) {
-        phase = Phase.DEGRADED
+    fun degraded(attempt: Int, nowMs: Long) {
+        endSession(Phase.DEGRADED)
         consecutiveFailures = attempt
-        generation++
-        leases.clear()
-        val drained = waiters.toList()
-        waiters.clear()
-        drained.forEach { it.complete(null) }
+        retryNotBeforeMs = nowMs + policy().maxBackoffMs
     }
 }

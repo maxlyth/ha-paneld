@@ -1101,7 +1101,7 @@ class Config private constructor(
     }
 
     // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request
-    // (contract §1, §4). Read-only convenience accessors; there is no corresponding setter here.
+    //. Read-only convenience accessors; there is no corresponding setter here.
     val cameraEnabled: Boolean get() = boolPref("camera_enabled")
     val cameraMaxResolution: CameraResolution
         get() = CameraResolution.parse(stringPref("camera_max_resolution")) ?: CameraResolution.P720
@@ -2098,6 +2098,13 @@ class Config private constructor(
     var lastNavigate: String
         get() = prefs.getString("last_navigate", "")!!
         set(v) { prefs.edit().putString("last_navigate", v).apply() }
+
+    /** Camera trial: true after the user declined the Android camera permission for the current enable
+     *  of `camera_enabled`. Cleared by the next fresh enable. Durable across process restarts so a
+     *  declined panel is not re-asked on every boot. */
+    var cameraPermissionDeclined: Boolean
+        get() = prefs.getBoolean("camera_permission_declined", false)
+        set(v) { prefs.edit().putBoolean("camera_permission_declined", v).apply() }
 
     /** Last LED state packed as "on,br,r,g,b" (e.g. "1,255,255,0,0"); empty if never set. */
     var lastLed: String

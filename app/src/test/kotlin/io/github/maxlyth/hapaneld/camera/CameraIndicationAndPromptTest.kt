@@ -10,6 +10,11 @@ import org.junit.Test
 /** The two small rules the Android-bound indicator and activity lean on, pinned without Android. */
 class CameraIndicationAndPromptTest {
 
+    /** Stands in for the durable preference; survives a simulated process restart below. */
+    private class DurableStore : CameraPermissionPrompt.Store {
+        override var declined: Boolean = false
+    }
+
     @Before fun resetPrompt() = CameraPermissionPrompt.reset()
     @After fun clearPrompt() = CameraPermissionPrompt.reset()
 
@@ -34,14 +39,29 @@ class CameraIndicationAndPromptTest {
         assertFalse("the dialog is up; do not ask again", CameraPermissionPrompt.shouldAsk())
     }
 
-    @Test fun aDenialIsRememberedUntilAFreshEnable() {
+    @Test fun aPausedActivityReleasesAnUnansweredRequestSoItCannotStrandTheState() {
+        CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
+        CameraPermissionPrompt.asking()
+        assertFalse(CameraPermissionPrompt.shouldAsk())
+        CameraPermissionPrompt.activityPaused()
+        assertTrue("a request Android never answered must not block the next resume", CameraPermissionPrompt.shouldAsk())
+    }
+
+    @Test fun aDenialIsRememberedDurablyUntilAFreshEnable() {
+        val store = DurableStore()
+        CameraPermissionPrompt.install(store)
         CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
         CameraPermissionPrompt.asking()
         CameraPermissionPrompt.answered(granted = false)
+        assertTrue("the denial is written through to the durable store", store.declined)
         assertFalse("denied: no re-ask on the next resume or recreation", CameraPermissionPrompt.shouldAsk())
+        // A process restart: the in-memory object is fresh, the store is the same preference.
+        CameraPermissionPrompt.reset()
+        CameraPermissionPrompt.install(store)
         CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = false)
-        assertFalse("still denied after a republish that is not a fresh enable", CameraPermissionPrompt.shouldAsk())
+        assertFalse("still denied after a restart that is not a fresh enable", CameraPermissionPrompt.shouldAsk())
         CameraPermissionPrompt.publish(wantsPermission = true, freshEnable = true)
+        assertFalse("a fresh enable clears the durable denial", store.declined)
         assertTrue("a fresh enable is the one event that asks again", CameraPermissionPrompt.shouldAsk())
     }
 

@@ -316,8 +316,8 @@ object DiagReader {
         // radios. Its values are all classified or categorical — no URL, host, credential or raw
         // exception text — so this line is as pasteable as the rest of the dump.
         renderer?.let { appendLine(it.diagnosticLine()) }
-        // Camera trial (slice 3): rendered identically here and in /api/v1/status so severity cannot
-        // drift between the two, per camera-privacy-resource-contract.md §6. Client addresses and raw
+        // Camera trial: rendered identically here and in /api/v1/status so severity cannot drift
+        // between the two. Client addresses and raw
         // exception text never enter this line — [CameraPresentation] already excludes them.
         camera?.let { appendLine(it.diagnosticLine()) }
         zigbee?.let {

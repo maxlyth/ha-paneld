@@ -35,7 +35,7 @@ object CameraIndicationPolicy {
 }
 
 /**
- * The camera-in-use light the room can see. Contract §2 in code:
+ * The camera-in-use light the room can see. In code:
  *
  * - An always-on-top, non-touchable overlay in a fixed corner, drawn with the same window type the
  *   navigation-bar and kiosk overlays use, so page content cannot cover it and a tap never hits it.

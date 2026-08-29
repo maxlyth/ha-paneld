@@ -1125,6 +1125,13 @@ class PaneldService : Service() {
         ledEffect = LedEffectController(led)
         // Camera trial. Owned here, beside the LED it borrows for off-screen indication and the screen
         // whose intended-off state decides the handover; nothing runs until a subscriber asks for a frame.
+        io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.install(
+            object : io.github.maxlyth.hapaneld.camera.CameraPermissionPrompt.Store {
+                override var declined: Boolean
+                    get() = config.cameraPermissionDeclined
+                    set(value) { config.cameraPermissionDeclined = value }
+            },
+        )
         camera = io.github.maxlyth.hapaneld.camera.CameraSessionOwner(
             context = this,
             hasCamera = profile.hasCamera,

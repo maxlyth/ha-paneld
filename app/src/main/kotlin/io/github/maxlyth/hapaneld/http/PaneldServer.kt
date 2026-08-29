@@ -2843,8 +2843,8 @@ class PaneldServer internal constructor(
                             call.respondText("screenshot-unavailable\n", status = HttpStatusCode.ServiceUnavailable)
                         }
                     }
-                    // Camera trial (slice 3). See camera-privacy-resource-contract.md §3, §6: the camera
-                    // opens only for the duration of this request and closes when no other subscriber
+                    // Camera trial. The camera opens only for the duration of this request and closes
+                    // when no other subscriber
                     // remains, so a caller must expect the open cost on every snapshot. No detail beyond
                     // the refusal token in the body — the finer classification lives in /api/v1/status.
                     get("/camera/snapshot.jpg") {
@@ -4153,8 +4153,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // check that reads a missing object as "nothing to worry about" restates the very failure
         // this object exists to expose: a blank panel that every check still reports as green.
         // `camera` follows the exact same rule for a board with no camera at all — CameraPresentation
-        // .absent() is emitted rather than the field being omitted, per camera-privacy-resource-
-        // contract.md §6.
+        // .absent() is emitted rather than the field being omitted.
         val storageProof = databaseObservationNonce?.let {
             "\"database_observation_nonce\":${jsonStr(it)},"
         }.orEmpty()
