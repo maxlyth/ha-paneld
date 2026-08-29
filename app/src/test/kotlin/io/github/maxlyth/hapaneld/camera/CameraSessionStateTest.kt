@@ -25,7 +25,12 @@ class CameraSessionStateTest {
     private val policy = CameraSessionPolicy(frameIntervalMs = 66L, maxConsecutiveFailures = 3)
     private val state = CameraSessionState { policy }
 
-    private fun open(nowMs: Long = 1_000L): Admission.Open = state.acquire(gate = null, nowMs = nowMs) as Admission.Open
+    /** Asserts rather than casts: a session that wrongly stays open answers Join here, and that must fail. */
+    private fun open(nowMs: Long = 1_000L): Admission.Open {
+        val admission = state.acquire(gate = null, nowMs = nowMs)
+        assertTrue("expected a fresh open, got $admission", admission is Admission.Open)
+        return admission as Admission.Open
+    }
 
     @Test fun theFirstLeaseOpensAndItsReleaseClosesTheSessionItOpened() {
         val first = open()
@@ -41,7 +46,9 @@ class CameraSessionStateTest {
 
     @Test fun aSecondSubscriberJoinsTheOpenInFlightSharesItsOutcomeAndTheLastOneOutCloses() {
         val first = open()
-        val second = state.acquire(gate = null, nowMs = 1_001L) as Admission.Join
+        val joined = state.acquire(gate = null, nowMs = 1_001L)
+        assertTrue("expected to join the open in flight, got $joined", joined is Admission.Join)
+        val second = joined as Admission.Join
         val wait = requireNotNull(state.awaitOpen())
         assertEquals(2, state.clients)
         assertTrue(state.openSucceeded(first.attempt))
