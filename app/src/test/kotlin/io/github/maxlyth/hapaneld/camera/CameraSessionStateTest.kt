@@ -25,6 +25,12 @@ class CameraSessionStateTest {
     private val policy = CameraSessionPolicy(frameIntervalMs = 66L, maxConsecutiveFailures = 3)
     private val state = CameraSessionState { policy }
 
+    /** A future that must already be settled; an unsettled one fails the test instead of blocking it. */
+    private fun <T> settled(future: CompletableFuture<T>, why: String): T {
+        assertTrue(why, future.isDone)
+        return future.get()
+    }
+
     /** Asserts rather than casts: a session that wrongly stays open answers Join here, and that must fail. */
     private fun open(nowMs: Long = 1_000L): Admission.Open {
         val admission = state.acquire(gate = null, nowMs = nowMs)
@@ -52,8 +58,7 @@ class CameraSessionStateTest {
         val wait = requireNotNull(state.awaitOpen())
         assertEquals(2, state.clients)
         assertTrue(state.openSucceeded(first.attempt))
-        assertTrue("the joiner learns the open succeeded", wait.isDone)
-        assertNull(wait.get())
+        assertNull(settled(wait, "the joiner learns the open succeeded"))
         assertFalse("not the last lease", state.release(first.lease))
         assertTrue(state.release(second.lease))
     }
@@ -71,9 +76,8 @@ class CameraSessionStateTest {
         state.addWaiter(frame)
         assertTrue("hardware must be released", state.disable())
         assertEquals("no joinable phase is left behind", Phase.IDLE, state.phase)
-        assertTrue("an open waiter is settled, not left to time out", waiting.isDone)
-        assertEquals(CameraRefusal.DISABLED, waiting.get())
-        assertTrue(frame.isDone)
+        assertEquals(CameraRefusal.DISABLED, settled(waiting, "an open waiter is settled, not left to time out"))
+        assertTrue("frame waiters are settled too", frame.isDone)
         assertFalse("the staled attempt's success is refused", state.openSucceeded(first.attempt))
         assertTrue(state.frame(first.attempt, 2_000L).isEmpty())
         // Re-enable before the old hardware has even been released: a brand-new attempt, never a join.
@@ -103,7 +107,7 @@ class CameraSessionStateTest {
         val first = open()
         val waiting = requireNotNull(state.awaitOpen())
         assertEquals(Failure.Reopen(1_000L, 1), state.openFailed(first.attempt, CameraFault.OPEN, CameraRefusal.FAILED, 1_000L))
-        assertEquals("the waiting caller learns the refusal at once", CameraRefusal.FAILED, waiting.get())
+        assertEquals(CameraRefusal.FAILED, settled(waiting, "the waiting caller learns the refusal at once"))
         assertEquals("the lease survives the reopen", 1, state.clients)
         val second = requireNotNull(state.reopenAttempt(2_000L))
         assertEquals(Failure.Reopen(2_000L, 2), state.openFailed(second, CameraFault.OPEN, CameraRefusal.FAILED, 2_000L))
@@ -200,7 +204,7 @@ class CameraSessionStateTest {
         val first = fresh.acquire(gate = null, nowMs = 0L) as Admission.Open
         val waiting = requireNotNull(fresh.awaitOpen())
         assertTrue("hardware was held", fresh.stopping())
-        assertEquals(CameraRefusal.STOPPING, waiting.get())
+        assertEquals(CameraRefusal.STOPPING, settled(waiting, "stopping settles the waiting caller"))
         assertFalse(fresh.openSucceeded(first.attempt))
         assertEquals(Admission.Refused(CameraRefusal.STOPPING), fresh.acquire(gate = null, nowMs = 1L))
         assertEquals(0, fresh.clients)
