@@ -301,6 +301,59 @@ class MicrophoneFanOutTest {
         gate.countDown()
     }
 
+    @Test
+    fun shutdownWaitsForAnAdmittedCaptureAndRefusesItTheHardware() {
+        val device = FakeCaptureDevice()
+        val reached = java.util.concurrent.CountDownLatch(1)
+        val release = gate()
+        // The factory parks the capture thread between being admitted and running its body, which is
+        // the window shutdown used to be able to step through: a capture that had been recorded but
+        // had not yet reached the hardware.
+        val fan = MicrophoneFanOut(
+            device = device,
+            threadNamePrefix = "test-mic",
+            threadFactory = { body, name ->
+                if (name == "test-mic") {
+                    Thread({
+                        reached.countDown()
+                        release.await(10L, TimeUnit.SECONDS)
+                        body.run()
+                    }, name)
+                } else {
+                    Thread(body, name)
+                }
+            },
+        )
+        sources.add(fan)
+
+        fan.lease(MicPurpose.ASSIST, consumer = RecordingConsumer(), queueFrames = 8)
+        assertTrue("the capture is admitted and parked short of the hardware", reached.await(5L, TimeUnit.SECONDS))
+        assertEquals("nothing has been opened yet", 0, device.openCount.get())
+
+        val teardown = AtomicReference<Boolean?>(null)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val done = java.util.concurrent.CountDownLatch(1)
+        Thread({
+            entered.countDown()
+            teardown.set(fan.shutdown(5_000L))
+            done.countDown()
+        }, "test-shutdown").start()
+        assertTrue("the teardown thread is running", entered.await(5L, TimeUnit.SECONDS))
+
+        assertFalse(
+            "shutdown must not conclude while a capture it admitted is still on its way to the microphone",
+            done.await(300L, TimeUnit.MILLISECONDS),
+        )
+
+        release.countDown()
+
+        assertTrue("shutdown finishes once the admitted capture has gone", done.await(10L, TimeUnit.SECONDS))
+        assertEquals("teardown is reported complete", true, teardown.get())
+        assertEquals("a capture admitted before shutdown never opens the microphone", 0, device.openCount.get())
+        assertEquals("nothing was opened, so nothing was released", 0, device.closeCount.get())
+        assertEquals("no holders survive shutdown", MicState.Closed, fan.state.value)
+    }
+
     // ---- frame assembly --------------------------------------------------------------------------
 
     @Test

@@ -105,6 +105,8 @@ class MicrophoneFanOut(
     private val backoffClockMs: () -> Long = System::currentTimeMillis,
     private val nanoTime: () -> Long = System::nanoTime,
     private val threadNamePrefix: String = "ha-paneld-mic",
+    /** Seam for tests that need to hold a thread between being admitted and running its body. */
+    private val threadFactory: (Runnable, String) -> Thread = { body, name -> Thread(body, name) },
     private val logger: (String, Throwable?) -> Unit = { _, _ -> },
 ) : MicrophoneSource, MicrophoneSourceLifecycle {
 
@@ -154,17 +156,15 @@ class MicrophoneFanOut(
     ): MicLease {
         require(queueFrames > 0) { "queueFrames must be positive, was $queueFrames" }
         val lease = LeaseImpl(purpose, priority, consumer, queueFrames)
-        val starting: Thread?
         synchronized(lock) {
             check(!shuttingDown) { "microphone source is shut down" }
             lease.sequence = nextSequence++
             leases.add(lease)
             refreshTargetsLocked()
-            starting = maybeStartCaptureLocked()
+            lease.startWorkerLocked()
+            ensureCaptureStartedLocked()
             publishLocked()
         }
-        lease.startWorker()
-        starting?.start()
         return lease
     }
 
@@ -203,9 +203,19 @@ class MicrophoneFanOut(
 
     // ---- capture -------------------------------------------------------------------------------
 
-    /** Caller must hold [lock]. Returns an unstarted capture thread when one is owed, else null. */
-    private fun maybeStartCaptureLocked(): Thread? {
-        if (shuttingDown || leases.isEmpty()) return null
+    /**
+     * Caller must hold [lock]. Admits and starts a capture thread when one is owed.
+     *
+     * The thread is started here, under the lock, rather than handed back to be started once the
+     * lock has been released. A thread recorded in [captureThread] but not yet started is not
+     * alive, so [shutdown] would join it instantly, report a completed teardown, and the thread
+     * would then go on to open the microphone behind it. Starting under the lock runs no foreign
+     * code and cannot block: `start()` returns as soon as the thread is alive, which is exactly the
+     * property every later join depends on. The thread's own first act is to ask [admitCaptureStart]
+     * whether it is still wanted, because being alive is not the same as having been scheduled.
+     */
+    private fun ensureCaptureStartedLocked() {
+        if (shuttingDown || leases.isEmpty()) return
         val existing = captureThread
         if (existing != null) {
             // A live thread already owns the device, or is in the middle of giving it back. Waiting
@@ -213,20 +223,34 @@ class MicrophoneFanOut(
             // capture over as its last act instead.
             if (existing.isAlive) {
                 startOwed = true
-                return null
+                return
             }
             captureThread = null
         }
-        if (errorReason != null && !micOpenRetryAllowed(backoffClockMs(), nextOpenAllowedAtMs)) return null
+        if (errorReason != null && !micOpenRetryAllowed(backoffClockMs(), nextOpenAllowedAtMs)) return
         errorReason = null
         capturing = true
-        val thread = Thread({ captureLoop() }, threadNamePrefix)
+        val thread = threadFactory({ captureLoop() }, threadNamePrefix)
         thread.isDaemon = true
         captureThread = thread
-        return thread
+        thread.start()
+    }
+
+    /**
+     * Whether this capture thread is still the one the source wants, asked before the hardware is
+     * touched. A lease can be released, or the whole source shut down, between a thread being
+     * started and it first being scheduled; refusing here is what stops a completed teardown from
+     * being followed by a microphone opening.
+     */
+    private fun admitCaptureStart(): Boolean = synchronized(lock) {
+        capturing && !shuttingDown && captureThread === Thread.currentThread()
     }
 
     private fun captureLoop() {
+        if (!admitCaptureStart()) {
+            finishCapture()
+            return
+        }
         if (!device.open()) {
             failCapture("microphone could not be opened")
             finishCapture()
@@ -287,7 +311,6 @@ class MicrophoneFanOut(
      * so an exit nobody asked to follow can never restart itself in a loop.
      */
     private fun finishCapture() {
-        val handoff: Thread?
         synchronized(lock) {
             deviceOpen = false
             if (captureThread === Thread.currentThread()) {
@@ -296,10 +319,9 @@ class MicrophoneFanOut(
             }
             val owed = startOwed
             startOwed = false
-            handoff = if (owed) maybeStartCaptureLocked() else null
+            if (owed) ensureCaptureStartedLocked()
             publishLocked()
         }
-        handoff?.start()
     }
 
     // ---- state ---------------------------------------------------------------------------------
@@ -358,17 +380,16 @@ class MicrophoneFanOut(
         @Volatile private var paused = false
         @Volatile private var closed = false
         @Volatile private var running = true
-        private var worker: Thread? = null
 
         /** The single guard on queueing: frames are taken only while this lease is held and unpaused. */
         val deliverable: Boolean get() = !closed && !paused
 
         override val active: Boolean get() = deliverable && deviceOpen
 
-        fun startWorker() {
-            val thread = Thread({ workerLoop() }, "$threadNamePrefix-${purpose.name.lowercase()}-$sequence")
+        /** Caller must hold [lock]; started there for the reason in [ensureCaptureStartedLocked]. */
+        fun startWorkerLocked() {
+            val thread = threadFactory({ workerLoop() }, "$threadNamePrefix-${purpose.name.lowercase()}-$sequence")
             thread.isDaemon = true
-            worker = thread
             deliveryThreads.add(thread)
             thread.start()
         }
@@ -437,14 +458,12 @@ class MicrophoneFanOut(
 
         override fun resume() {
             if (closed) return
-            val starting: Thread?
             synchronized(lock) {
                 if (closed || !paused) return
                 paused = false
-                starting = maybeStartCaptureLocked()
+                ensureCaptureStartedLocked()
                 publishLocked()
             }
-            starting?.start()
         }
 
         override fun close() {
