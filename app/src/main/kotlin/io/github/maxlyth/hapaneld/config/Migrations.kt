@@ -61,6 +61,22 @@ object Migrations {
             values.putIfAbsent("camera_max_fps", "15")
             values.putIfAbsent("camera_max_kbps", "2000")
         },
+        // Schema 8 adds the Voice settings group. Unlike camera_enabled (schema 7), voice_enabled and
+        // voice_state both carry an `ha` descriptor, so a pre-schema-8 bundle also needs their exposure
+        // defaults filled in — without this, importing an older bundle into a schema-8 store would leave
+        // those two keys absent, and an absent expose flag reads through to the SPEC default anyway on
+        // the live store, but a bundle re-exported at the OLD schema by a fleet member who hasn't upgraded
+        // yet must still carry an explicit, correct default rather than relying on that fallback holding
+        // on every future reader.
+        Migration { values ->
+            values.putIfAbsent("voice_enabled", "false")
+            values.putIfAbsent("voice_wake_words", "[\"okay_nabu\"]")
+            values.putIfAbsent("voice_pipelines", "{}")
+            values.putIfAbsent("voice_audio_source", "voice_recognition")
+            values.putIfAbsent("voice_sensitivity", "normal")
+            values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}voice_enabled", "false")
+            values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}voice_state", "false")
+        },
     )
 
     /**
