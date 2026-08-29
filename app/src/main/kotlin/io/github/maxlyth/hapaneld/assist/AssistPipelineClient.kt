@@ -23,7 +23,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -83,7 +85,10 @@ internal class AssistPipelineClient(
     /** Bounds the pre-buffer and the send queue together; 200 frames is 2 s at the canonical rate. */
     private val queueFrames: Int = DEFAULT_QUEUE_FRAMES,
     private val handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS,
-    private val runTimeoutMs: Long = DEFAULT_RUN_TIMEOUT_MS,
+    /** Used only when neither the caller nor Home Assistant names a deadline. */
+    private val defaultRunTimeoutMs: Long = DEFAULT_RUN_TIMEOUT_MS,
+    /** The panel's own ceiling: no caller or server value may hold the microphone open past this. */
+    private val maxRunTimeoutMs: Long = MAX_RUN_TIMEOUT_MS,
     private val playbackTimeoutMs: Long = DEFAULT_PLAYBACK_TIMEOUT_MS,
 ) {
     constructor(config: Config) : this(
@@ -153,7 +158,9 @@ internal class AssistPipelineClient(
                 // always-on service, and the exception type is kept so the failure stays diagnosable.
                 AssistOutcome(error = AssistError(CODE_UNAVAILABLE, error.javaClass.simpleName.take(MAX_DETAIL_CHARS)))
             } finally {
-                connection.socket.close()
+                // A cancelled run still has to close: without this the first suspension point in
+                // close() throws and the socket and its HTTP client are left to the collector.
+                withContext(NonCancellable) { connection.socket.close() }
             }
         }
     }
@@ -198,8 +205,27 @@ internal class AssistPipelineClient(
         var attachment: AutoCloseable? = null
         var senderJob: Job? = null
         var playbackJob: Job? = null
-        var timedOut = false
+        var deadlineJob: Job? = null
+        var playbackError: Throwable? = null
+        var armedSeconds: Int? = null
+        var deadlineArmed = false
         var outcome: AssistOutcome? = null
+
+        // The deadline is a coroutine rather than a wrapper around the loop, because the run learns
+        // its real deadline late: the caller may name one, Home Assistant reports its own at
+        // run-start, and either can replace the panel's default while the run is already open.
+        fun armDeadline() {
+            val seconds = request.timeoutSeconds ?: machine.serverTimeoutSeconds
+            if (deadlineArmed && seconds == armedSeconds) return
+            armedSeconds = seconds
+            deadlineArmed = true
+            deadlineJob?.cancel()
+            val boundedMs = boundedDeadlineMs(seconds)
+            deadlineJob = launch {
+                delay(boundedMs)
+                channel.trySend(AssistInput.Aborted(CODE_TIMEOUT, "The Assist pipeline did not finish in time"))
+            }
+        }
 
         // Every command the machine emits is performed here and nowhere else, so the run's whole
         // effect on the socket, the microphone and playback is one readable list.
@@ -222,9 +248,13 @@ internal class AssistPipelineClient(
                     }
                     is AssistCommand.PlayTts -> {
                         val url = AssistPipelineJson.resolveMediaUrl(connection.baseUrl, command.url)
-                        // A reply that will not play is a worse answer, not a failed run: the
-                        // command Home Assistant already carried out still stands.
-                        playbackJob = launch { runCatching { playback.play(url) } }
+                        // A reply the panel could not speak is not a successful run: the failure is
+                        // kept and reported beside the transcript rather than swallowed here.
+                        playbackJob = launch {
+                            playbackError = runCatching { playback.play(url) }
+                                .exceptionOrNull()
+                                ?.takeIf { it !is CancellationException }
+                        }
                     }
                     is AssistCommand.Finish -> finished = command.outcome
                 }
@@ -266,36 +296,39 @@ internal class AssistPipelineClient(
                 )
             }
             outcome = execute(machine.start())
+            armDeadline()
             if (stopPending) {
                 stopPending = false
                 channel.trySend(AssistInput.ConsumerStop)
             }
             if (outcome == null) {
-                try {
-                    // Bounds the pipeline itself. Playing the reply is waited for separately, so a
-                    // long answer can never be reported as a run that timed out.
-                    outcome = withTimeout(runTimeoutMs) {
-                        var finished: AssistOutcome? = null
-                        for (input in channel) {
-                            finished = execute(machine.on(input))
-                            if (finished != null || machine.awaitingPlayback) break
-                        }
-                        finished
-                    }
-                } catch (_: TimeoutCancellationException) {
-                    timedOut = true
+                for (input in channel) {
+                    outcome = execute(machine.on(input))
+                    if (outcome != null || machine.awaitingPlayback) break
+                    // run-start may have replaced the panel's default with the server's deadline.
+                    armDeadline()
                 }
             }
             if (outcome == null && machine.awaitingPlayback) {
-                withTimeoutOrNull(playbackTimeoutMs) { playbackJob?.join() }
-                outcome = execute(machine.on(AssistInput.PlaybackFinished))
+                // The reply is waited for on its own bound, so a long answer is never reported as a
+                // pipeline that timed out — and a reply that never finishes is never reported as
+                // one that did.
+                val completed = withTimeoutOrNull(playbackTimeoutMs) { playbackJob?.join() }
+                val failure = playbackError
+                outcome = execute(
+                    machine.on(
+                        when {
+                            completed == null ->
+                                AssistInput.Aborted(CODE_PLAYBACK_TIMEOUT, "The reply did not finish playing in time")
+                            failure != null ->
+                                AssistInput.Aborted(CODE_PLAYBACK_FAILED, failure.javaClass.simpleName.take(MAX_DETAIL_CHARS))
+                            else -> AssistInput.PlaybackFinished
+                        },
+                    ),
+                )
             }
             outcome ?: AssistOutcome(
-                error = if (timedOut) {
-                    AssistError(CODE_TIMEOUT, "The Assist pipeline did not finish in time")
-                } else {
-                    AssistError(CODE_CLOSED, "Home Assistant closed the socket before the run ended")
-                },
+                error = AssistError(CODE_CLOSED, "Home Assistant closed the socket before the run ended"),
             )
         } finally {
             inputs = null
@@ -303,11 +336,23 @@ internal class AssistPipelineClient(
             // tells Home Assistant an abandoned utterance ended normally.
             senderJob?.cancel()
             playbackJob?.cancel()
+            deadlineJob?.cancel()
             reader.cancel()
             queue.close()
             channel.close()
             runCatching { attachment?.close() }
         }
+    }
+
+    /**
+     * How long this run may take. The caller's own deadline wins, then the one Home Assistant
+     * reported at run-start, then the panel's default; the result is always bounded by
+     * [maxRunTimeoutMs] so neither a caller nor a server can hold the microphone and the socket open
+     * indefinitely, and floored so a zero cannot end a run before it starts.
+     */
+    private fun boundedDeadlineMs(seconds: Int?): Long {
+        val requested = seconds?.let { it.toLong() * 1000L } ?: defaultRunTimeoutMs
+        return requested.coerceAtLeast(MIN_RUN_TIMEOUT_MS).coerceAtMost(maxRunTimeoutMs)
     }
 
     /**
@@ -396,6 +441,14 @@ internal class AssistPipelineClient(
         const val DEFAULT_QUEUE_FRAMES = 200
         const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000L
         const val DEFAULT_RUN_TIMEOUT_MS = 60_000L
+
+        /**
+         * The panel's ceiling on any derived deadline. Matches Home Assistant's own default run
+         * timeout, so an unmodified server's value is honoured in full while a misconfigured or
+         * hostile one still cannot pin the microphone open.
+         */
+        const val MAX_RUN_TIMEOUT_MS = 300_000L
+        const val MIN_RUN_TIMEOUT_MS = 1_000L
         const val DEFAULT_PLAYBACK_TIMEOUT_MS = 60_000L
         const val CODE_AUTH_REJECTED = "auth_rejected"
         const val CODE_CREDENTIALS_UNAVAILABLE = "credentials_unavailable"
@@ -406,6 +459,8 @@ internal class AssistPipelineClient(
         const val CODE_LIST_FAILED = "list_failed"
         const val CODE_ALREADY_RUN = "run_already_used"
         const val CODE_MICROPHONE_UNAVAILABLE = "microphone_unavailable"
+        const val CODE_PLAYBACK_FAILED = "playback_failed"
+        const val CODE_PLAYBACK_TIMEOUT = "playback_timeout"
         const val MAX_DETAIL_CHARS = 120
 
         /** Canonical capture is signed 16-bit; Home Assistant reads it little-endian. */

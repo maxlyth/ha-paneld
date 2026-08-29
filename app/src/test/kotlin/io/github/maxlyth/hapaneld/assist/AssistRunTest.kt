@@ -38,6 +38,52 @@ class AssistRunTest {
         assertEquals(AssistState.Requested, run.state)
     }
 
+    @Test fun `a run request carries the caller's deadline`() {
+        val json = JSONObject(
+            (AssistRun(AssistRunRequest(timeoutSeconds = 12)).start().single() as AssistCommand.SendText).json,
+        )
+
+        // optInt, not getInt: a missing key must fail this assertion, not throw past it.
+        assertEquals(12, json.optInt("timeout", -1))
+    }
+
+    @Test fun `run-start reports the deadline Home Assistant set for the run`() {
+        val run = AssistRun(AssistRunRequest())
+        run.start()
+        assertNull(run.serverTimeoutSeconds)
+
+        run.on(runStart(200))
+
+        // The driver bounds the run by this when the caller named no deadline of its own.
+        assertEquals(300, run.serverTimeoutSeconds)
+    }
+
+    @Test fun `a driver abort keeps everything the run had already learned`() {
+        val run = AssistRun(AssistRunRequest())
+        run.start()
+        run.on(runStart(200))
+        run.on(event("stt-end", """{"stt_output":{"text":"turn on the lamp"}}"""))
+        run.on(
+            event(
+                "intent-end",
+                """{"intent_output":{"response":{"speech":{"plain":{"speech":"Done"}}},""" +
+                    """"conversation_id":"conv-4"}}""",
+            ),
+        )
+        run.on(event("tts-end", """{"tts_output":{"url":"/api/tts_proxy/reply.mp3"}}"""))
+
+        val commands = run.on(AssistInput.Aborted("playback_failed", "IOException"))
+        val outcome = (commands.last() as AssistCommand.Finish).outcome
+
+        // The failure is the last stage only; what the panel heard and answered still happened.
+        assertEquals(AssistError("playback_failed", "IOException"), outcome.error)
+        assertEquals("turn on the lamp", outcome.sttText)
+        assertEquals("Done", outcome.responseText)
+        assertEquals("conv-4", outcome.conversationId)
+        assertEquals("/api/tts_proxy/reply.mp3", outcome.ttsUrl)
+        assertTrue(run.terminal)
+    }
+
     @Test fun `a full run reports transcript, response, conversation and reply url`() {
         val run = AssistRun(AssistRunRequest())
         run.start()

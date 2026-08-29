@@ -96,8 +96,15 @@ internal sealed interface AssistInput {
     /** The caller ended the utterance: the button came up, or a local detector heard silence. */
     data object ConsumerStop : AssistInput
 
-    /** The reply finished playing, or playback gave up. */
+    /** The reply finished playing. */
     data object PlaybackFinished : AssistInput
+
+    /**
+     * The driver ended the run itself: a deadline expired, or the reply could not be played. The
+     * outcome keeps everything already learned and carries the error beside it, because what the
+     * panel heard and answered is still worth reporting when only the last stage failed.
+     */
+    data class Aborted(val code: String, val message: String) : AssistInput
 
     /** The terminal result frame for the run command itself. */
     data class Result(val success: Boolean, val code: String?, val message: String?) : AssistInput
@@ -167,6 +174,13 @@ internal class AssistRun(
     private var earlyTtsUrl: String? = null
     private var earlyTtsStreams = false
 
+    /**
+     * The deadline Home Assistant reported for this run, in seconds, once run-start has arrived.
+     * The driver bounds the run by this when the caller named no deadline of its own.
+     */
+    var serverTimeoutSeconds: Int? = null
+        private set
+
     /** True once the reply is playing and the run itself is over: nothing more will arrive. */
     val awaitingPlayback: Boolean
         get() = state is AssistState.Responding && runEnded && !playbackFinished
@@ -188,6 +202,7 @@ internal class AssistRun(
             is AssistInput.Event -> onEvent(input.event)
             AssistInput.ConsumerStop -> onConsumerStop()
             AssistInput.PlaybackFinished -> onPlaybackFinished()
+            is AssistInput.Aborted -> fail(input.code, input.message)
             is AssistInput.Result ->
                 if (input.success) {
                     emptyList()
@@ -215,6 +230,7 @@ internal class AssistRun(
     }
 
     private fun onRunStart(event: AssistEvent.RunStart): List<AssistCommand> {
+        serverTimeoutSeconds = event.timeoutSeconds
         earlyTtsUrl = event.ttsUrl
         earlyTtsStreams = event.streamResponse
         if (event.ttsUrl != null) outcome = outcome.copy(ttsUrl = event.ttsUrl)
