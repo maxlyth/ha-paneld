@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Voice capture. The panel has one microphone and one capture client, so ha-paneld owns it and
+         shares it out; nothing records until a feature takes a lease. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- TTS playback volume (STREAM_MUSIC via AudioManager). -->
@@ -133,10 +137,14 @@
         <service
             android:name=".PaneldService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <!-- Android 14+ requires declaring the specialUse subtype. ha-paneld is a
                  wall-panel hardware agent: a persistent on-LAN command/MQTT listener that
-                 has no analogue in the predefined foreground-service types. -->
+                 has no analogue in the predefined foreground-service types.
+                 microphone is declared so the service can ADD that type for as long as something
+                 holds a microphone lease; a type can only be claimed if it is declared here. The
+                 service still starts as specialUse alone and claims microphone only while capture
+                 is running, so an idle panel is not a microphone foreground service. -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="ha-paneld persistent HTTP/MQTT listener for Home Assistant panel hardware control" />

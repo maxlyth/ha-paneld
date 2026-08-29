@@ -940,6 +940,12 @@ class PaneldService : Service() {
     // nothing and must not be torn down as though it did. Never cleared: a stood-down generation stays
     // stood down for as long as the doomed process lives.
     @Volatile private var standingDown = false
+    // The text of the notification currently on screen, so re-issuing startForeground to change the
+    // claimed service types does not silently rewrite what the panel is telling its owner.
+    @Volatile private var foregroundStatusText = "Starting\u2026"
+    // Whether the microphone foreground-service type is currently claimed. Only ever true while
+    // something holds a microphone lease.
+    @Volatile private var microphoneForeground = false
     private val teardownBoundary = ServiceTeardownBoundary()
     private val restartAfterInternalBoundary = AtomicBoolean(false)
     private var upgradeShutdownClaim: UpgradeShutdownClaim? = null
@@ -3682,19 +3688,68 @@ class PaneldService : Service() {
     }
 
     private fun startForegroundCompat(statusText: String, silent: Boolean) {
+        foregroundStatusText = statusText
         val (_, channelId) = notificationChannel(silent)
-        val notification = foregroundNotification(channelId, silent, statusText)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIF_ID, notification)
-        }
+        promoteToForeground(foregroundNotification(channelId, silent, statusText), microphoneForeground)
         Log.i(TAG, "foreground service started")
+    }
+
+    /**
+     * Claim exactly the foreground-service types this service is entitled to at this moment.
+     *
+     * The manifest declares `specialUse|microphone`, because a type can only be claimed if it is
+     * declared, but an idle panel must not be a microphone foreground service. The two-argument
+     * `startForeground` claims every type the manifest declares, so from Android 10 the set is named
+     * explicitly instead: `specialUse` alone (Android 14+, where that type exists), plus `microphone`
+     * only while something holds a lease. Android 9 and earlier ignore the attribute entirely.
+     */
+    private fun promoteToForeground(notification: Notification, microphone: Boolean) {
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+                var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                if (microphone) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                startForeground(NOTIF_ID, notification, types)
+            }
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                val types = if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
+                startForeground(NOTIF_ID, notification, types)
+            }
+            else -> startForeground(NOTIF_ID, notification)
+        }
+    }
+
+    /**
+     * Add or drop the microphone foreground-service type around a microphone lease.
+     *
+     * Call it on the main thread with `true` as the first lease opens and `false` as the last one is
+     * released; it is idempotent and inert until something actually calls it. Returns whether the
+     * type is now what was asked for, so a caller that needs the microphone can refuse to start
+     * capture it is not allowed to run.
+     *
+     * **Android 14 will refuse a microphone foreground service that is started from the background.**
+     * A `while-in-use` type may only be claimed from a state that allows it — an activity in the
+     * foreground, or one of the documented exemptions — and a claim made from the background throws
+     * `ForegroundServiceStartNotAllowedException` (or, on some builds, silently omits the type).
+     * That is a policy question about *when* capture may begin, and it belongs to whatever owns the
+     * leases, not here: this method reports the failure and leaves the service running with the
+     * types it already had.
+     */
+    internal fun setMicrophoneForegroundActive(active: Boolean): Boolean {
+        if (standingDown || teardownBoundary.isStopping) return false
+        if (microphoneForeground == active) return true
+        val silent = if (::config.isInitialized) config.silenceBootChime else true
+        val (_, channelId) = notificationChannel(silent)
+        return runCatching {
+            promoteToForeground(foregroundNotification(channelId, silent, foregroundStatusText), active)
+            microphoneForeground = active
+        }.onFailure {
+            Log.w(TAG, "could not ${if (active) "claim" else "release"} the microphone foreground-service type", it)
+        }.isSuccess
     }
 
     private fun updateForegroundStatus(statusText: String) {
         if (teardownBoundary.isStopping) return
+        foregroundStatusText = statusText
         val silent = config.silenceBootChime
         val (mgr, channelId) = notificationChannel(silent)
         mgr.notify(NOTIF_ID, foregroundNotification(channelId, silent, statusText))
