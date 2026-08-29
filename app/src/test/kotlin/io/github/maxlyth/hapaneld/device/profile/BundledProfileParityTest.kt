@@ -59,8 +59,11 @@ class BundledProfileParityTest {
      */
     @Test fun cameraAndMicrophoneAreDeclaredIndependentlyAndSurviveARoundTrip() {
         listOf("hardware.camera", "hardware.microphone").forEach { path ->
-            val descriptor = ProfileMetadata.schema.fields.single { it.path == path }
-            assertEquals("boolean", descriptor.type)
+            // singleOrNull, not single: a missing descriptor must fail this assertion rather than
+            // throw out of the test, so the absence is reported as a defect and not as a broken test.
+            val descriptor = ProfileMetadata.schema.fields.singleOrNull { it.path == path }
+            assertNotNull("$path must be described to the profile editor", descriptor)
+            assertEquals("boolean", descriptor!!.type)
             assertFalse("hardware without the part must be able to omit $path", descriptor.required)
         }
 
