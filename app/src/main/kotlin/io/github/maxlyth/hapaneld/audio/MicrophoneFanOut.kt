@@ -135,6 +135,14 @@ class MicrophoneFanOut(
     private var nextOpenAllowedAtMs = 0L
     private var shuttingDown = false
 
+    /**
+     * A start was refused because the previous capture thread had not finished exiting yet. The
+     * lease that closed last and the lease that opened next can overlap by exactly the length of
+     * that exit, and without this the newcomer would hold a lease with no capture behind it until
+     * something else happened to ask again.
+     */
+    private var startOwed = false
+
     /** Every live delivery thread. Each worker removes itself as it exits, so this cannot grow. */
     private val deliveryThreads = CopyOnWriteArrayList<Thread>()
 
@@ -200,8 +208,13 @@ class MicrophoneFanOut(
         if (shuttingDown || leases.isEmpty()) return null
         val existing = captureThread
         if (existing != null) {
-            // A thread that has left its loop but not yet cleared its slot is not a live capture.
-            if (existing.isAlive) return null
+            // A live thread already owns the device, or is in the middle of giving it back. Waiting
+            // for it here would mean joining under the lock, so the exiting thread is asked to hand
+            // capture over as its last act instead.
+            if (existing.isAlive) {
+                startOwed = true
+                return null
+            }
             captureThread = null
         }
         if (errorReason != null && !micOpenRetryAllowed(backoffClockMs(), nextOpenAllowedAtMs)) return null
@@ -268,16 +281,25 @@ class MicrophoneFanOut(
         logger(reason, null)
     }
 
-    /** The capture thread's last act: retire its own slot so a later lease may open a fresh one. */
+    /**
+     * The capture thread's last act: retire its own slot, and hand capture on if a lease was taken
+     * while it was leaving. The handoff is driven by [startOwed] rather than by "are there leases?",
+     * so an exit nobody asked to follow can never restart itself in a loop.
+     */
     private fun finishCapture() {
+        val handoff: Thread?
         synchronized(lock) {
             deviceOpen = false
             if (captureThread === Thread.currentThread()) {
                 captureThread = null
                 capturing = false
             }
+            val owed = startOwed
+            startOwed = false
+            handoff = if (owed) maybeStartCaptureLocked() else null
             publishLocked()
         }
+        handoff?.start()
     }
 
     // ---- state ---------------------------------------------------------------------------------

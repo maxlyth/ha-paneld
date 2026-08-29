@@ -120,6 +120,33 @@ class MicrophoneFanOutTest {
         assertEquals("no holders remain", MicState.Closed, fan.state.value)
     }
 
+    @Test
+    fun aLeaseTakenWhileCaptureIsExitingGetsItsOwnCapture() {
+        val device = FakeCaptureDevice()
+        val fan = fanOut(device)
+        val first = fan.lease(MicPurpose.ASSIST, consumer = RecordingConsumer(), queueFrames = 8)
+        awaitTrue("the first lease opens the device") { device.openCount.get() == 1 }
+
+        // The device already calls back into the test between "capture has stopped" and "capture has
+        // finished", which is the whole width of the race. Taking the lease from there reproduces it
+        // exactly, on one thread, with no timing to get lucky about.
+        val late = RecordingConsumer()
+        val second = AtomicReference<MicLease?>()
+        device.onClose = {
+            device.onClose = null
+            second.set(fan.lease(MicPurpose.WAKE_WORD, consumer = late, queueFrames = 8))
+        }
+
+        first.close()
+
+        awaitTrue("the lease taken during the exit gets a capture of its own") { device.openCount.get() == 2 }
+        device.offerFrames(2)
+        awaitTrue("and receives frames") { late.frames.get() == 2 }
+        assertTrue("the late holder is listed as capturing", holders(fan).single().active)
+
+        second.get()?.close()
+    }
+
     // ---- (d) pause and resume --------------------------------------------------------------------
 
     @Test
@@ -362,6 +389,9 @@ private class FakeCaptureDevice(
     @Volatile var failNextRead = false
     @Volatile var closeDelayMs = 0L
 
+    /** Runs inside `close`, i.e. while the capture thread is between stopping and finishing. */
+    @Volatile var onClose: (() -> Unit)? = null
+
     val openCount = AtomicInteger()
     val closeCount = AtomicInteger()
     private val samplesRead = AtomicInteger()
@@ -422,6 +452,7 @@ private class FakeCaptureDevice(
     override fun close() {
         if (closeDelayMs > 0L) Thread.sleep(closeDelayMs)
         closeCount.incrementAndGet()
+        onClose?.invoke()
     }
 }
 
