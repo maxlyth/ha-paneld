@@ -345,6 +345,24 @@ class VoiceAssistantCoordinatorTest {
     }
 
     @Test
+    fun `the foreground claim is held until the run's capture attachment closes`() {
+        val gate = CompletableDeferred<Unit>()
+        teardownGate = gate
+        val c = coordinator()
+        c.start()
+        engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        awaitRunner(0)
+        assertEquals(listOf(true), foregroundCalls)
+        // Standing down while the run is still unwinding must not drop the claim: the run's capture
+        // attachment is still open, so the microphone is still being read.
+        c.stop()
+        assertFalse("the claim must outlive the capture it covers", foregroundCalls.contains(false))
+        gate.complete(Unit)
+        runBlocking { withTimeout(2_000) { while (!foregroundCalls.contains(false)) kotlinx.coroutines.delay(5) } }
+        assertEquals("the claim is released once the attachment has closed", listOf(true, false), foregroundCalls)
+    }
+
+    @Test
     fun `a hit from a replaced listener cannot start a run`() {
         val c = coordinator()
         c.start()
