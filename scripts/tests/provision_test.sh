@@ -5,9 +5,24 @@ set -u
 
 PROVISION_TEST_SCOPE="${PROVISION_TEST_SCOPE:-all}"
 case "$PROVISION_TEST_SCOPE" in
-  db|backup|publication|core|all) ;;
-  *) echo "PROVISION_TEST_SCOPE must be db, backup, publication, core or all" >&2; exit 2 ;;
+  db|backup|publication|core|all|\
+  shard-database-host|shard-database-runtime|\
+  shard-install-export|shard-install-runtime|shard-helper-transaction|\
+  shard-release-integrity|shard-renderer-seeding|shard-shizuku|shard-install-finish|\
+  shard-backup|shard-publication|shard-database-authority|shard-fleet-installer|\
+  shard-helper-install|shard-host-reclamation|shard-device-sweep|shard-git-bash) ;;
+  *) echo "unknown PROVISION_TEST_SCOPE: $PROVISION_TEST_SCOPE" >&2; exit 2 ;;
 esac
+
+provision_scope_is() {
+  local candidate
+  for candidate in "$@"; do
+    [ "$PROVISION_TEST_SCOPE" != "$candidate" ] || return 0
+  done
+  return 1
+}
+
+case "$PROVISION_TEST_SCOPE" in shard-*) PROVISION_TEST_INTERNAL_SHARD=1 ;; *) PROVISION_TEST_INTERNAL_SHARD=0 ;; esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROVISION="$ROOT/scripts/provision.sh"
@@ -473,6 +488,21 @@ fail_test() {
   fi
 }
 
+finish_provision_test() {
+  printf '1..%d\n' "$((passes + failures))"
+  if [ "$failures" -ne 0 ]; then
+    printf '%d assertion(s) failed\n' "$failures" >&2
+    exit 1
+  fi
+  exit 0
+}
+
+assert_count() {
+  actual="$1"; expected="$2"; description="$3"
+  if [ "$actual" -eq "$expected" ] 2>/dev/null; then pass "$description"
+  else fail_test "$description (expected $expected, got ${actual:-nothing})"; fi
+}
+
 assert_status() {
   expected="$1"
   description="$2"
@@ -621,6 +651,7 @@ NO_SIGNER_DECOY="$TMP/host-apksigner-decoy"
 mkdir -p "$NO_SIGNER_DECOY"
 printf '#!/bin/sh\nexit 0\n' > "$NO_SIGNER_DECOY/apksigner"
 chmod 755 "$NO_SIGNER_DECOY/apksigner"
+if [ "$PROVISION_TEST_INTERNAL_SHARD" -eq 0 ] || [ "$PROVISION_TEST_SCOPE" = shard-database-host ]; then
 if PATH="$NO_SIGNER_DECOY:$NO_SIGNER_FIXTURES" command -v apksigner >/dev/null 2>&1; then
   pass "a host apksigner ahead of the sandbox is findable (control)"
 else
@@ -647,6 +678,7 @@ if grep -v '^[[:space:]]*#' "$0" | grep -Eq 'PATH="\$NO_SIGNER_FIXTURES:[^"]'; t
 else
   pass "no apksigner-absence scenario re-admits the host's tool directories"
 fi
+fi
 NO_GH_FIXTURES="$TMP/fixtures-without-gh"
 mkdir -p "$NO_GH_FIXTURES"
 for fixture in "$FIXTURES"/*; do
@@ -655,7 +687,11 @@ done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
-if [ "$PROVISION_TEST_SCOPE" = db ] || [ "$PROVISION_TEST_SCOPE" = core ] || [ "$PROVISION_TEST_SCOPE" = all ]; then
+if provision_scope_is db core all \
+  shard-database-host shard-database-runtime shard-install-export shard-install-runtime \
+  shard-helper-transaction shard-release-integrity shard-renderer-seeding shard-shizuku \
+  shard-install-finish; then
+if provision_scope_is db core all shard-database-host; then
 # The host and Android gates consume one normative table. Every row whose owner can occur at a host
 # install entry point is replayed through the real provisioner; refusal rows additionally prove the
 # decision precedes every helper/package/configuration mutation, not merely that the command failed.
@@ -1031,6 +1067,10 @@ assert_failure "an unreadable incumbent signer fails closed"
 assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put|monkey -p io\.github\.maxlyth\.hapaneld|am start -n io\.github\.maxlyth\.hapaneld|/api/v1/config($|[? /])' \
   "$MOCK_CALL_LOG" "unreadable incumbent signer has zero tracked mutations"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-database-host ] || finish_provision_test
+
+if provision_scope_is db core all shard-database-runtime; then
 # Rootless panels have a distinct proof route: a same-run refreshed status can establish direct
 # compatibility, but a too-new schema can never claim an app-private recovery the host cannot read.
 MOCK_ROOT=0 MOCK_STATUS_DB_SCHEMA=14 MOCK_STATUS_DB_QUICK_CHECK=ok \
@@ -1348,12 +1388,10 @@ assert_contains 'database compatibility could not be proven' "fleet surfaces the
 assert_not_contains '^adb .* install( |$)|PREPARE_UPGRADE|/data/local/tmp/hapaneld-helper|pm clear|pm grant|appops set|settings put|/api/v1/config($|[? /])' \
   "$MOCK_CALL_LOG" "fleet database refusal has zero tracked worker mutations"
 
-if [ "$PROVISION_TEST_SCOPE" = db ]; then
-  printf '1..%d\n' "$((passes + failures))"
-  [ "$failures" -eq 0 ] || { printf '%d assertion(s) failed\n' "$failures" >&2; exit 1; }
-  exit 0
+if provision_scope_is db shard-database-runtime; then finish_provision_test; fi
 fi
 
+if provision_scope_is core all shard-install-export; then
 # A host-only logging request has one durable meaning on fresh and upgraded panels: explicit TCP.
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --log-host collector.test
 assert_success "log host without protocol provisions successfully"
@@ -1939,6 +1977,10 @@ assert_not_contains 'Root helper: needed only|system WebView is very old' "$LAST
 assert_not_contains '/api/v1/tame|action=recommended' "$MOCK_CALL_LOG" "recommendations cause no hidden mutation"
 unset MOCK_PLAN MOCK_WEBVIEW_VERSION
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-install-export ] || finish_provision_test
+
+if provision_scope_is core all shard-install-runtime; then
 # ---- host/panel time-zone advisory ---------------------------------------------------------------
 # Icing: it states both time zones, warns when they are provably different zones, and is silent about
 # everything else. It changes no clock and blocks nothing, so these four runs cover only what would
@@ -2541,6 +2583,10 @@ assert_contains 'The panel reported: INSTALL_UNCHANGED install_hybrid target_ins
 assert_not_contains 'Restarting the panel clears a wedged helper' "$LAST_OUTPUT" \
   "a hybrid capacity refusal is never given the wedged-helper advice"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-install-runtime ] || finish_provision_test
+
+if provision_scope_is core all shard-helper-transaction; then
 # The retirement case must keep its own advice: this is the one INSTALL_UNCHANGED reason where a
 # stuck process really is the blocker, and the split above is only correct if it did not take that
 # guidance away from the case that needs it.
@@ -2942,6 +2988,10 @@ assert_failure "signed provisioner without an exact helper identity fails closed
 assert_contains 'expected root-helper build identity is unavailable' "missing release helper identity names the packaging failure"
 assert_not_contains '/data/local/tmp/hapaneld-helper|^adb .* install( |$)' "$MOCK_CALL_LOG" "missing release helper identity stops before privileged staging or APK replacement"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-helper-transaction ] || finish_provision_test
+
+if provision_scope_is core all shard-release-integrity; then
 # A release describes its helper twice: the signed versioned provisioner records which helper the
 # release ships, and the authenticated helper asset carries its own stamped identity. Both are
 # verified independently, so the installer must require them to agree before anything privileged
@@ -3184,6 +3234,10 @@ assert_status 2 "invalid internal release tag is rejected as a usage error"
 assert_contains 'invalid release tag' "invalid internal release tag gives a direct correction"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-release-integrity ] || finish_provision_test
+
+if provision_scope_is core all shard-renderer-seeding; then
 # ---- built-in renderer seeds (--home-dashboard / --entity-filter) --------------------------------
 # A scripted install deliberately never asks guided setup's dashboard and entity-filter questions, so
 # without these options an unattended panel renders whatever Home Assistant calls the account default.
@@ -3391,7 +3445,10 @@ assert_contains 'skipped --home-dashboard/--entity-filter' "the skipped seed is 
 assert_not_contains 'home_dashboard=/office' "$MOCK_CALL_LOG" "a failed login writes no dashboard seed"
 unset MOCK_HA_LOGIN
 
-if [ "$PROVISION_TEST_SCOPE" = all ]; then
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-renderer-seeding ] || finish_provision_test
+
+if provision_scope_is all shard-shizuku; then
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
 # start the authenticated installed native starter. The fake checksum tool makes this deterministic without network
 # access while the call log proves the security-sensitive ordering.
@@ -3585,6 +3642,10 @@ assert_contains 'remove the manager and re-run' "untrusted Shizuku failure gives
 assert_not_contains 'shizuku-v13\.6\.0\.r1086.*-o .*/shizuku\.apk' "$MOCK_CALL_LOG" "untrusted newer Shizuku is not overwritten by a download"
 assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "untrusted Shizuku is never launched or rearmed"
 fi
+
+[ "$PROVISION_TEST_SCOPE" != shard-shizuku ] || finish_provision_test
+
+if provision_scope_is core all shard-install-finish; then
 
 # A launched app that never answers is not provisioned, even if adb install itself succeeded.
 MOCK_HEALTH=fail run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -3961,9 +4022,11 @@ assert_marker_captured "a malformed df response cannot replace the actual captur
 assert_not_contains 'shell df -P -k /data' "$MOCK_CALL_LOG" "malformed capacity data is irrelevant because the fixed gate is absent"
 
 fi
+[ "$PROVISION_TEST_SCOPE" != shard-install-finish ] || finish_provision_test
+fi
 
 # ── Data-store snapshot: acknowledged quiescence with one legacy fallback ──────────────────────
-if [ "$PROVISION_TEST_SCOPE" != publication ]; then
+if provision_scope_is backup core all shard-backup; then
 reset_db_txn_state
 MOCK_UPGRADE_PREPARE=ready run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a receipt-capable build upgrades through the quiesced direct-copy path"
@@ -4292,13 +4355,10 @@ if grep -Eq 'am force-stop[^\n]*io\.github\.maxlyth\.hapaneld|p?kill(all)?[^\n]*
   fail_test "the upgrade path never force-stops or kills ha-paneld"
 else pass "the upgrade path never force-stops or kills ha-paneld"; fi
 
-if [ "$PROVISION_TEST_SCOPE" = backup ]; then
-  printf '1..%d\n' "$((passes + failures))"
-  [ "$failures" -eq 0 ] || { printf '%d assertion(s) failed\n' "$failures" >&2; exit 1; }
-  exit 0
-fi
+if provision_scope_is backup shard-backup; then finish_provision_test; fi
 fi
 
+if provision_scope_is core all publication shard-publication; then
 # ── Data-store snapshot: one on-panel transaction (legacy fallback) ─────────────────────────────
 # The settings export is not a recovery point: configuration, the entity catalog, proximity and
 # ambient history and the revision ring all live in ha-paneld.db. The capture is ONE generated
@@ -4415,12 +4475,10 @@ fi
 rm -f "$TMP/db-cleanup-blocked-once" "$publication_int_pid_file"
 reset_db_txn_state
 
-if [ "$PROVISION_TEST_SCOPE" = publication ]; then
-  printf '1..%d\n' "$((passes + failures))"
-  [ "$failures" -eq 0 ] || { printf '%d assertion(s) failed\n' "$failures" >&2; exit 1; }
-  exit 0
+if provision_scope_is publication shard-publication; then finish_provision_test; fi
 fi
 
+if provision_scope_is core all shard-database-authority; then
 # An unanswerable package manager can prove neither an existing database nor a legitimate fresh
 # install. The database authority therefore refuses before optional snapshot policy is consulted.
 reset_db_txn_state
@@ -5031,6 +5089,10 @@ assert_failure "the installer parser run ends at the deliberate sentinel"
 assert_contains 'unknown provisioning option: --hapaneld-test-sentinel' "the public installer consumes the snapshot escape and rejects only the sentinel"
 assert_not_contains 'unknown provisioning option: --allow-missing-db-snapshot' "$LAST_OUTPUT" "the public installer accepts --allow-missing-db-snapshot"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-database-authority ] || finish_provision_test
+
+if provision_scope_is core all shard-fleet-installer; then
 # ── --reset-config ──────────────────────────────────────────────────────────────────────────────
 # A clean install must reach a genuine FIRST RUN, not a repair. Everything here exists to make the
 # irreversible erase deliberate and impossible to trigger by accident or in bulk.
@@ -5576,7 +5638,7 @@ else
   fail_test "fleet interruption leaves no orphan panel mutation"
 fi
 
-if [ "$PROVISION_TEST_SCOPE" = all ]; then
+if provision_scope_is all shard-fleet-installer; then
 # A foreground adb inspection is not one of provision.sh's explicitly tracked subprocesses. Fleet
 # ownership must still terminate it through the provisioner's dedicated process group.
 : > "$MOCK_CALL_LOG"
@@ -5902,7 +5964,7 @@ run_moving_advanced_installer() {
   LAST_STATUS=$?
 }
 
-if [ "$PROVISION_TEST_SCOPE" = all ]; then
+if provision_scope_is all shard-fleet-installer; then
 run_advanced_installer --provision panel.test --id kitchen --shizuku
 assert_failure "checkout-free advanced provisioning refuses a historical guardless provisioner on an existing panel"
 assert_contains 'historical script has no database-compatibility gate' \
@@ -5995,7 +6057,7 @@ assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases/l
 assert_contains 'historical script has no database-compatibility gate' \
   "moving stable-channel provisioning refuses the obsolete provisioner before replacement"
 
-if [ "$PROVISION_TEST_SCOPE" = all ]; then
+if provision_scope_is all shard-fleet-installer; then
 run_moving_advanced_installer --prerelease --provision panel.test --shizuku
 assert_failure "moving prerelease-channel advanced provisioning refuses a guardless provisioner on an existing panel"
 assert_log_contains '^curl .*api\.github\.com/repos/maxlyth/ha-paneld/releases\?per_page=100' \
@@ -6053,7 +6115,7 @@ LAST_OUTPUT="$TMP/provision-help.txt"
 bash "$PROVISION" --help > "$LAST_OUTPUT" 2>&1
 LAST_STATUS=$?
 assert_success "provisioner exposes help without requiring a panel"
-if [ "$PROVISION_TEST_SCOPE" = all ]; then
+if provision_scope_is all shard-fleet-installer; then
   assert_contains '^ *--shizuku +Install/start pinned Shizuku' "provisioner help advertises enhanced-access setup"
 fi
 
@@ -6167,6 +6229,10 @@ else
   fail_test "all managed layouts share one canonical supervised launch without retry"
 fi
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-fleet-installer ] || finish_provision_test
+
+if provision_scope_is core all shard-helper-install; then
 # Pins the invariant rather than one spelling of it: retirement is attempted exactly once, it ends the
 # function when it fails, and it happens before the first line that replaces anything. The gate also
 # has to name the panel as unchanged, because the host uses that to skip a rollback of nothing and to
@@ -6971,6 +7037,10 @@ assert_failure "a panel that never answered does not get a token minted for it"
 assert_contains 'refusing to mint a Home Assistant token' "the run says which side effect it refused"
 assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Home Assistant after a health timeout"
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-helper-install ] || finish_provision_test
+
+if provision_scope_is core all shard-host-reclamation; then
 # ── #76: root-helper staging must not accumulate across failing runs ────────────────────────────
 # The fixture models the panel's id-named staging as real files that survive run_provision's reset,
 # because a real panel's /data/local/tmp and /data/adb/hapaneld do. Counts are exact, never bounds —
@@ -7159,6 +7229,10 @@ case "$CLEANUP_PROBE_COMMAND" in
   *) fail_test "a promoted record's .new leftover is reclaimed once the path is owned" ;;
 esac
 
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-host-reclamation ] || finish_provision_test
+
+if provision_scope_is core all shard-device-sweep; then
 # ── #76: the panel-side sweep, executed from the shipped script ─────────────────────────────────
 # The sweep is lifted from the transaction-script heredoc exactly as generation ships it, its
 # @TRANSACTION_ID@ placeholder substituted the same way production's sed does, its absolute path
@@ -8127,7 +8201,10 @@ for verb in install_system install_systemless install_hybrid rollback_system rol
   fi
 done
 
-if [ "$PROVISION_TEST_SCOPE" = core ] || [ "$PROVISION_TEST_SCOPE" = all ]; then
+fi
+[ "$PROVISION_TEST_SCOPE" != shard-device-sweep ] || finish_provision_test
+
+if provision_scope_is core all shard-git-bash; then
 # --------------------------------------------------------------------------------------------------
 # Git Bash: every adb argument the provisioner sends, in both directions.
 #
@@ -8221,6 +8298,8 @@ fi
 assert_log_contains '/data/local/tmp/hapaneld-helper-[0-9a-f]+' \
   "the staged helper path is unchanged on Linux"
 fi
+
+[ "$PROVISION_TEST_SCOPE" != shard-git-bash ] || finish_provision_test
 
 printf '1..%d\n' "$((passes + failures))"
 if [ "$failures" -ne 0 ]; then
