@@ -141,7 +141,22 @@ class DiagCapabilityPolicyTest {
         assertFalse(css.contains(".cfg-group-contents{display:contents}"))
         assertTrue(configure.contains("""card.setAttribute("data-config-group", g)"""))
         assertTrue(configure.contains("desiredCards.splice(loggingCardIndex < 0 ? desiredCards.length : loggingCardIndex, 0, proximityCard)"))
-        assertTrue(configure.contains("document.createTextNode(\"Browser zoom.\")"))
+        assertTrue(configure.contains("""var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })]"""))
+        assertTrue(configure.contains("""} else if (f.key === "auto_sleep") {
+      help = el("small", { lang: f.helpLanguage, text: f.help });"""))
+        assertTrue(configure.contains("""var labelText = el("span", { lang: f.labelLanguage })"""))
+        assertFalse(configure.contains("document.documentElement.lang"))
+        assertTrue(server.contains("""get("/configure") {
+                    call.response.headers.append(HttpHeaders.ContentLanguage, AppLocale.ENGLISH)"""))
+        assertTrue(server.contains("""page("configure", "Configure", configureBody(), languageTag = AppLocale.ENGLISH)"""))
+        assertTrue(server.contains("""get("/config/schema") {
+                        val strings = requestStrings(call)
+                        call.response.headers.append(
+                            HttpHeaders.ContentLanguage,
+                            strings.languages.joinToString(", "),
+                        )"""))
+        assertTrue(server.contains("\\\"labelLanguage\\\":${'$'}{s(label.language)}"))
+        assertTrue(server.contains("\\\"helpLanguage\\\":${'$'}helpLanguageJson"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))
         assertTrue(configure.contains("href: \"/install#cfg-display\", text: \"Display Sizing\""))
         assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))

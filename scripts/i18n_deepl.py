@@ -648,7 +648,6 @@ def summary(plan_path: Path, run_path: Path) -> str:
         f"- Selected records: {run.get('selectedRecords', 'invalid')}",
         f"- Requested source characters: {run.get('requestedCharacters', 'invalid')}",
         f"- Run billed characters: {run.get('billedCharacters', 'invalid')} (bound: {run.get('maximumBilledCharacters', 'invalid')})",
-        f"- Account usage before/after/limit: {run.get('accountUsageBefore', 'n/a')} / {run.get('accountUsageAfter', 'n/a')} / {run.get('accountCharacterLimit', 'n/a')}",
     ])
 
 

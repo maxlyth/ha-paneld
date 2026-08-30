@@ -30,6 +30,11 @@ data class TargetString(
     val state: TranslationState,
 )
 
+data class LocalizedText(
+    val text: String,
+    val language: String,
+)
+
 /** Parsed, validated English source catalogue. */
 class SourceCatalogue private constructor(
     val locale: String,
@@ -145,26 +150,39 @@ class Strings(
 ) {
     val locale: String get() = when {
         pseudo -> AppLocale.PSEUDO
-        target?.strings?.any { (key, value) ->
-            value.sourceHash == source.strings[key]?.sourceHash &&
-                (value.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                    value.state == TranslationState.COMMUNITY_CORRECTED)
+        target?.strings?.let { translated ->
+            source.strings.all { (key, value) ->
+                translated[key]?.let { candidate ->
+                    candidate.sourceHash == value.sourceHash &&
+                        (candidate.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                            candidate.state == TranslationState.COMMUNITY_CORRECTED)
+                } == true
+            }
         } == true -> target.locale
         else -> AppLocale.ENGLISH
     }
 
-    fun get(key: String): String {
+    val languages: List<String> get() = source.strings.keys
+        .mapTo(linkedSetOf()) { resolve(it).language }
+        .sorted()
+
+    fun get(key: String): String = resolve(key).text
+
+    fun resolve(key: String): LocalizedText {
         val english = source.text(key)
-        if (pseudo) return pseudoLocalize(english)
-        val candidate = target?.strings?.get(key) ?: return english
-        if (candidate.sourceHash != source.strings.getValue(key).sourceHash) return english
+        if (pseudo) return LocalizedText(pseudoLocalize(english), AppLocale.PSEUDO)
+        val candidate = target?.strings?.get(key)
+            ?: return LocalizedText(english, AppLocale.ENGLISH)
+        if (candidate.sourceHash != source.strings.getValue(key).sourceHash) {
+            return LocalizedText(english, AppLocale.ENGLISH)
+        }
         return when (candidate.state) {
             TranslationState.MACHINE_CROSS_CHECKED,
             TranslationState.COMMUNITY_CORRECTED,
-            -> candidate.text
+            -> LocalizedText(candidate.text, target.locale)
             TranslationState.ENGLISH_FALLBACK,
             TranslationState.MACHINE_DRAFT,
-            -> english
+            -> LocalizedText(english, AppLocale.ENGLISH)
         }
     }
 }

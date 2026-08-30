@@ -1837,10 +1837,9 @@ class PaneldServer internal constructor(
                 // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
                 // other tabs are dedicated pages that consume /api/v1.
                 get("/configure") {
-                    val strings = requestStrings(call)
-                    call.response.headers.append(HttpHeaders.ContentLanguage, strings.locale)
+                    call.response.headers.append(HttpHeaders.ContentLanguage, AppLocale.ENGLISH)
                     call.respondText(
-                        page("configure", "Configure", configureBody(), languageTag = strings.locale),
+                        page("configure", "Configure", configureBody(), languageTag = AppLocale.ENGLISH),
                         ContentType.Text.Html,
                     )
                 }
@@ -1926,7 +1925,10 @@ class PaneldServer internal constructor(
                     post("/config") { handleConfigPost(call) }
                     get("/config/schema") {
                         val strings = requestStrings(call)
-                        call.response.headers.append(HttpHeaders.ContentLanguage, strings.locale)
+                        call.response.headers.append(
+                            HttpHeaders.ContentLanguage,
+                            strings.languages.joinToString(", "),
+                        )
                         call.respondText(configSchemaJson(strings), ContentType.Application.Json)
                     }
                     get("/config/home-dashboards") {
@@ -6562,17 +6564,20 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             val maxLengthJson = if (sized) spec.maxChars.toString() else nullJson
             val exposed = if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false
             val placeholderJson = placeholder?.let { s(it) } ?: nullJson
-            val label = strings.get(spec.labelKey)
-            val help = if (spec.help.isEmpty()) "" else strings.get(spec.helpKey)
+            val label = strings.resolve(spec.labelKey)
+            val help = if (spec.help.isEmpty()) null else strings.resolve(spec.helpKey)
             val helpKeyJson = if (spec.help.isEmpty()) nullJson else s(spec.helpKey)
+            val helpLanguageJson = help?.language?.let(::s) ?: nullJson
             "{" +
                 "\"key\":${s(spec.key)}," +
                 "\"type\":${s(spec.type.name)}," +
                 "\"group\":${s(spec.group)}," +
                 "\"labelKey\":${s(spec.labelKey)}," +
                 "\"helpKey\":$helpKeyJson," +
-                "\"label\":${s(label)}," +
-                "\"help\":${s(help)}," +
+                "\"label\":${s(label.text)}," +
+                "\"labelLanguage\":${s(label.language)}," +
+                "\"help\":${s(help?.text.orEmpty())}," +
+                "\"helpLanguage\":$helpLanguageJson," +
                 "\"default\":${s(spec.default)}," +
                 "\"tier\":${s(spec.tier.name)}," +
                 "\"scope\":${s(spec.scope.name)}," +

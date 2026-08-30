@@ -113,8 +113,6 @@
   }
 
   function readLocalizedSchema(response) {
-    var language = response.headers && response.headers.get ? response.headers.get("Content-Language") : "";
-    if (validLanguageTag(language)) document.documentElement.lang = language;
     return response.json();
   }
 
@@ -122,10 +120,14 @@
     if (values.ui_language !== "auto" || browserLanguageChoice() ||
         haUserStatus.phase !== "connected" || !validLanguageTag(haUserStatus.language)) return;
     var request = ++schemaLanguageRequest;
+    var generation = editGeneration;
     fetch(configSchemaUrl(haUserStatus.language), { headers: { "Accept": "application/json" }, cache: "no-store" })
-      .then(readLocalizedSchema)
+      .then(function (response) {
+        return response.json();
+      })
       .then(function (nextSchema) {
-        if (request !== schemaLanguageRequest || !Array.isArray(nextSchema)) return;
+        if (request !== schemaLanguageRequest || dirty || editGeneration !== generation ||
+            !Array.isArray(nextSchema)) return;
         schema = nextSchema;
         render();
         configCardGeometryChanged();
@@ -2316,7 +2318,7 @@
   function row(f) {
     var help = null;
     if (f.key === "dashboard_zoom") {
-      var helpKids = [document.createTextNode("Browser zoom.")];
+      var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })];
       if (f.displaySizingAvailable === true) {
         helpKids.push(document.createTextNode(" Recommend use "));
         helpKids.push(el("a", { href: "/install#cfg-display", text: "Display Sizing" }));
@@ -2327,17 +2329,17 @@
       // Name the two addresses the help text already talks about, so they can be opened or copied
       // rather than retyped. The RTSP link uses whatever host this page was reached on, which is the
       // address that will also work from Home Assistant.
-      help = el("small", {}, linkifyWords(f.help, [
+      help = el("small", { lang: f.helpLanguage }, linkifyWords(f.help, [
         ["RTSP", "rtsp://" + location.hostname + ":" + CAMERA_RTSP_PORT + "/live"],
         ["JPEG", "/api/v1/camera/snapshot.jpg"],
       ]));
     } else if (f.key === "auto_sleep") {
-      help = el("small", { text: "Automatically wake the panel when activity is detected and switch the screen off after the learned delay. Manual screen control remains separate." });
+      help = el("small", { lang: f.helpLanguage, text: f.help });
     } else if (f.help) {
-      help = el("small", { text: f.help });
+      help = el("small", { lang: f.helpLanguage, text: f.help });
     }
     var protectedSetting = !!HARDENED_APPROVAL_SETTING_KEYS[f.key];
-    var labelText = el("span");
+    var labelText = el("span", { lang: f.labelLanguage });
     if (protectedSetting) {
       // The shield is a pseudo-element, so a non-breaking space alone does not reliably bind it to
       // the label in older WebViews. Keep the final word and the shield in one non-wrapping inline run.
@@ -2359,6 +2361,7 @@
     var valueControl = f.readOnly ? null : control(f);
     if (valueControl) {
       if (!valueControl.getAttribute("aria-label")) valueControl.setAttribute("aria-label", f.label);
+      valueControl.setAttribute("lang", f.labelLanguage);
       if (protectedSetting) {
         valueControl.setAttribute("aria-describedby", "hardened-approval-conditional-description");
         valueControl.setAttribute("title", "Changing this setting may require physical on-panel approval when Hardened mode is enabled.");

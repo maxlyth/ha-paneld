@@ -92,7 +92,7 @@ jobs:
           debug_apk=app/build/outputs/apk/debug/app-debug.apk
           release_apk=app/build/outputs/apk/release/app-release-unsigned.apk
           for apk in "$debug_apk" "$release_apk"; do
-            badging="$($build_tools/aapt dump badging "$apk")"
+            badging="$("$build_tools/aapt" dump badging "$apk")"
             grep -Fq "compileSdkVersion='37'" <<<"$badging"
             grep -Fq "sdkVersion:'26'" <<<"$badging"
             grep -Fq "targetSdkVersion:'35'" <<<"$badging"

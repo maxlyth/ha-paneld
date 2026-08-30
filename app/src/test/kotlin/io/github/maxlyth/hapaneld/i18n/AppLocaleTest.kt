@@ -64,5 +64,7 @@ class AppLocaleTest {
         assertEquals("it", AppLocale.resolve(null, acceptLanguage = "x".repeat(1_025), deviceLanguageTag = "it", allowPseudo = false))
         assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=broken, fr;q=.8", deviceLanguageTag = "it", allowPseudo = false))
         assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=.9;q=.8, fr;q=.7", deviceLanguageTag = "it", allowPseudo = false))
+        assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=NaN, fr;q=.8", deviceLanguageTag = "it", allowPseudo = false))
+        assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=Infinity, fr;q=.8", deviceLanguageTag = "it", allowPseudo = false))
     }
 }

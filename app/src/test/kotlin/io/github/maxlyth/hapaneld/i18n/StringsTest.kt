@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.i18n
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -52,6 +53,27 @@ class StringsTest {
             .replace(Regex("\"settings\\.example\\.help\"\\s*:\\s*\\{.*?\\n\\s*}", RegexOption.DOT_MATCHES_ALL), "")
             .replace("\"strings\":{\n        \n      }", "\"strings\":{}")
         assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
+    }
+
+    @Test fun `page locale changes only when the complete Settings surface is promoted`() {
+        val source = SourceCatalogue.parse(File("src/main/assets/i18n/en.json").readText())
+        val draftJson = File("src/main/assets/i18n/de.json").readText()
+        val partial = TargetCatalogue.parse(
+            draftJson.replaceFirst("\"state\": \"machine-draft\"", "\"state\": \"machine-cross-checked\""),
+            source,
+        )
+        val complete = TargetCatalogue.parse(
+            draftJson.replace("\"state\": \"machine-draft\"", "\"state\": \"machine-cross-checked\""),
+            source,
+        )
+        assertEquals("en", Strings(source, partial).locale)
+        assertEquals("de", Strings(source, complete).locale)
+        assertEquals(listOf("de", "en"), Strings(source, partial).languages)
+        assertEquals(listOf("de"), Strings(source, complete).languages)
+        val promotedKey = source.strings.keys.first()
+        val fallbackKey = source.strings.keys.drop(1).first()
+        assertEquals("de", Strings(source, partial).resolve(promotedKey).language)
+        assertEquals("en", Strings(source, partial).resolve(fallbackKey).language)
     }
 
     @Test fun `current mechanical violations reject while stale records fall back per key`() {

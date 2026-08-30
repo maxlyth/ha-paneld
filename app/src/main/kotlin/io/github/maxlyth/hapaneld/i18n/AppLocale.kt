@@ -73,7 +73,7 @@ object AppLocale {
             if (qualities.size > 1) return@mapIndexedNotNull null
             val quality = qualities.singleOrNull()?.toDoubleOrNull()
                 ?: if (qualities.isEmpty()) 1.0 else return@mapIndexedNotNull null
-            if (quality <= 0.0 || quality > 1.0) null else AcceptLanguage(tag, quality, index)
+            if (!quality.isFinite() || quality <= 0.0 || quality > 1.0) null else AcceptLanguage(tag, quality, index)
         }
         .sortedWith(compareByDescending<AcceptLanguage> { it.quality }.thenBy { it.index })
         .map { it.tag }

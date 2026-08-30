@@ -70,6 +70,15 @@ jobs:
             "${locale_args[@]}" \
             --output "$RUNNER_TEMP/i18n-candidates/plan.json"
 
+      - name: Reject stale trusted base before provider access
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          python3 scripts/i18n_deepl.py check-base \
+            --expected "$GITHUB_SHA" \
+            --repository . \
+            --remote-ref origin/main
+
       # Keep the credential confined to this one step. The adapter sends it only in
       # the HTTPS Authorization header and never includes it in output or diagnostics.
       - name: Generate candidates after quota preflight
@@ -111,7 +120,14 @@ jobs:
               --target "$RUNNER_TEMP/i18n-candidates/validated/$locale.json"
           done
           cp "$RUNNER_TEMP/i18n-candidates/plan.json" "$RUNNER_TEMP/i18n-candidates/validated/plan.json"
-          cp "$RUNNER_TEMP/i18n-candidates/generated/run.json" "$RUNNER_TEMP/i18n-candidates/validated/run.json"
+          python3 - "$RUNNER_TEMP/i18n-candidates/generated/run.json" "$RUNNER_TEMP/i18n-candidates/validated/run.json" <<'PY'
+          import json, pathlib, sys
+          source, destination = map(pathlib.Path, sys.argv[1:])
+          public = json.loads(source.read_text(encoding="utf-8"))
+          for key in ("accountUsageBefore", "accountUsageAfter", "accountCharacterLimit"):
+              public.pop(key, None)
+          destination.write_text(json.dumps(public, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Recheck trusted base before publication
         if: steps.api.outputs.status == 'generated'

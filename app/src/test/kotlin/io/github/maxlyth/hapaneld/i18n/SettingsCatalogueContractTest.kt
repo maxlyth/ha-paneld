@@ -8,6 +8,7 @@ import java.io.File
 
 class SettingsCatalogueContractTest {
     private val catalogueFile = File("src/main/assets/i18n/en.json")
+    private val configureFile = File("src/main/assets/configure.js")
 
     @Test fun `authoritative English catalogue exactly covers visible Settings copy`() {
         val catalogue = SourceCatalogue.parse(catalogueFile.readText())
@@ -33,5 +34,14 @@ class SettingsCatalogueContractTest {
         }
         assertEquals(keys.size, keys.toSet().size)
         assertTrue(keys.all { it.matches(Regex("settings\\.[a-z0-9_]+\\.(label|help)")) })
+    }
+
+    @Test fun `catalogued help and delayed locale refresh preserve the live form contract`() {
+        val configure = configureFile.readText()
+        assertTrue(configure.contains("var helpKids = [el(\"span\", { lang: f.helpLanguage, text: f.help })]"))
+        assertTrue(configure.contains("""} else if (f.key === "auto_sleep") {
+      help = el("small", { lang: f.helpLanguage, text: f.help });"""))
+        assertTrue(configure.contains("var generation = editGeneration"))
+        assertTrue(configure.contains("request !== schemaLanguageRequest || dirty || editGeneration !== generation"))
     }
 }

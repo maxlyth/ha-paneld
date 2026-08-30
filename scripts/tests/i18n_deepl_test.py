@@ -360,6 +360,23 @@ class DeepLAdapterTest(unittest.TestCase):
         with self.assertRaisesRegex(DEEPL.DeepLError, "inconsistent"):
             DEEPL._validate_run(result, plan)
 
+    def test_public_summary_omits_private_account_quota_telemetry(self):
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan_path = self.root / "plan.json"
+        write_json(plan_path, plan)
+        output = self.root / "output"
+        DEEPL.generate(
+            plan_path,
+            output,
+            "key:fx",
+            FakeHttp(["Alfa", 'Behalte <x id="0">{name}</x> auf <x id="1">MQTT</x>', "Gamma DE"]),
+        )
+
+        rendered = DEEPL.summary(plan_path, output / "run.json")
+        self.assertIn("Run billed characters", rendered)
+        self.assertNotIn("Account usage", rendered)
+        self.assertNotIn("500000", rendered)
+
     def test_missing_target_capability_fails_before_usage_or_translation(self):
         plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"
