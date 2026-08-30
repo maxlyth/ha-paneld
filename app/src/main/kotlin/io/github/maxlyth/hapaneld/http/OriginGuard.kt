@@ -54,8 +54,9 @@ object OriginGuard {
         referer: String?,
         host: String?,
         fetchSite: String?,
+        accept: String?,
         userAgent: String? = null,
-        accept: String? = null,
+        allowLegacyNavigation: Boolean = false,
     ): Boolean {
         when (fetchSite?.trim()?.lowercase()) {
             "cross-site", "same-site" -> return false
@@ -76,7 +77,7 @@ object OriginGuard {
             // navigation-shaped Accept is admitted and everything else stays refused, which keeps the
             // case this guard exists for — an opaque cross-origin subresource starting camera work —
             // closed on exactly the browsers that cannot prove themselves any other way.
-            return navigationShaped(accept)
+            return allowLegacyNavigation && navigationShaped(accept)
         }
         val srcAuthority = authorityOf(src) ?: return false
         val hostAuthority = host?.trim()?.ifEmpty { null } ?: return false
@@ -96,8 +97,16 @@ object OriginGuard {
      * silent unopenability it replaces, and it disappears entirely on any browser that sends Fetch
      * Metadata, which is every current one.
      */
-    private fun navigationShaped(accept: String?): Boolean =
-        accept?.lowercase()?.contains("text/html") == true
+    private fun navigationShaped(accept: String?): Boolean = accept
+        ?.split(',')
+        ?.any { range ->
+            val parts = range.split(';').map(String::trim)
+            if (!parts.firstOrNull().orEmpty().equals("text/html", ignoreCase = true)) return@any false
+            val quality = parts.drop(1).firstOrNull {
+                it.substringBefore('=').trim().equals("q", ignoreCase = true)
+            } ?: return@any true
+            quality.substringAfter('=', "").trim().toDoubleOrNull()?.let { it > 0.0 && it <= 1.0 } == true
+        } == true
 
     private fun looksLikeBrowser(userAgent: String?): Boolean {
         val ua = userAgent?.lowercase().orEmpty()

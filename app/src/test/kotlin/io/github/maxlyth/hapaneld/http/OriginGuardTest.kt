@@ -19,21 +19,23 @@ class OriginGuardTest {
                 "http://192.168.1.50:8888/configure",
                 host,
                 "same-origin",
+                null,
             ),
         )
-        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null))
-        assertTrue(OriginGuard.activeReadAllowed(null, null, host, "none"))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null, null))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, "none", null))
     }
 
     @Test fun activeReadRefusesOpaqueCrossOriginBrowserLoads() {
-        assertFalse(OriginGuard.activeReadAllowed(null, "http://evil.example/page", host, "cross-site"))
-        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site"))
-        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null))
+        assertFalse(OriginGuard.activeReadAllowed(null, "http://evil.example/page", host, "cross-site", null))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site", null))
+        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null, null))
         assertFalse(
             OriginGuard.activeReadAllowed(
                 null,
                 null,
                 host,
+                null,
                 null,
                 "Mozilla/5.0 Chrome/120.0",
             ),
@@ -41,8 +43,8 @@ class OriginGuardTest {
     }
 
     @Test fun activeReadFailsClosedForMalformedBrowserMetadata() {
-        assertFalse(OriginGuard.activeReadAllowed("garbage", null, host, "same-origin"))
-        assertFalse(OriginGuard.activeReadAllowed("http://192.168.1.50:8888", null, null, "same-origin"))
+        assertFalse(OriginGuard.activeReadAllowed("garbage", null, host, "same-origin", null))
+        assertFalse(OriginGuard.activeReadAllowed("http://192.168.1.50:8888", null, null, "same-origin", null))
     }
 
     // --- non-browser API clients (curl, HA rest_command) send no Origin/Referer ---
@@ -139,36 +141,44 @@ class OriginGuardTest {
     @Test fun aNavigationFromABrowserWithoutFetchMetadataIsAdmitted() {
         assertTrue(
             "a typed URL must open: it asks for a document, which no subresource load does",
-            OriginGuard.activeReadAllowed(null, null, host, null, safari, navigationAccept),
+            OriginGuard.activeReadAllowed(null, null, host, null, navigationAccept, safari, true),
         )
     }
 
     @Test fun aSubresourceLoadFromThatSameBrowserStaysRefused() {
         assertFalse(
             "an <img> load is the case this guard exists for and must still be refused",
-            OriginGuard.activeReadAllowed(null, null, host, null, safari, imageAccept),
+            OriginGuard.activeReadAllowed(null, null, host, null, imageAccept, safari, true),
         )
         assertFalse(
             "a bare wildcard is not a document request",
-            OriginGuard.activeReadAllowed(null, null, host, null, safari, "*/*"),
+            OriginGuard.activeReadAllowed(null, null, host, null, "*/*", safari, true),
         )
         assertFalse(
             "no Accept at all proves nothing, so it stays refused",
-            OriginGuard.activeReadAllowed(null, null, host, null, safari, null),
+            OriginGuard.activeReadAllowed(null, null, host, null, null, safari, true),
         )
     }
 
     @Test fun theAcceptFallbackNeverOverridesFetchMetadata() {
         // A browser that does send Fetch Metadata is judged on it alone: a document Accept must not
         // rescue a cross-site read, or the fallback would become a way around the guard.
-        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "cross-site", safari, navigationAccept))
-        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site", safari, navigationAccept))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "cross-site", navigationAccept, safari, true))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site", navigationAccept, safari, true))
         // And a stated origin that is not this host still loses, whatever it asked for.
-        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null, safari, navigationAccept))
+        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null, navigationAccept, safari, true))
+    }
+
+    @Test fun legacyNavigationFallbackIsScopedAndParsesAnExactMediaRange() {
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, null, navigationAccept, safari))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, null, "text/html;q=0", safari, true))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, null, "text/htmlish", safari, true))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, null, "application/x-text/html", safari, true))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null, "TEXT/HTML; q=0.5", safari, true))
     }
 
     @Test fun headerLessAutomationIsUnaffected() {
         assertTrue("curl and fleet tooling send no user agent of this shape", OriginGuard.activeReadAllowed(null, null, host, null, null, null))
-        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null, "ha-paneld-fleet/1.0", null))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null, null, "ha-paneld-fleet/1.0"))
     }
 }

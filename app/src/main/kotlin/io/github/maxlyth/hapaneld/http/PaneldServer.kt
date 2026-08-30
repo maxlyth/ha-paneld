@@ -2944,7 +2944,7 @@ class PaneldServer internal constructor(
                     // remains, so a caller must expect the open cost on every snapshot. No detail beyond
                     // the refusal token in the body — the finer classification lives in /api/v1/status.
                     get("/camera/snapshot.jpg") {
-                        if (!admitActiveRead(call)) return@get
+                        if (!admitActiveRead(call, allowLegacyNavigation = true)) return@get
                         val requestedRaw = call.request.queryParameters["res"]
                         val requested = when {
                             requestedRaw == null -> null
@@ -3452,26 +3452,30 @@ class PaneldServer internal constructor(
     }
 
     /** Protect GET routes whose generation starts material work from opaque cross-origin browser loads. */
-    private suspend fun admitActiveRead(call: ApplicationCall): Boolean {
+    private suspend fun admitActiveRead(
+        call: ApplicationCall,
+        allowLegacyNavigation: Boolean = false,
+    ): Boolean {
         if (OriginGuard.activeReadAllowed(
-                call.request.headers["Origin"],
-                call.request.headers["Referer"],
-                call.request.headers["Host"],
-                call.request.headers["Sec-Fetch-Site"],
-                call.request.headers["User-Agent"],
-                call.request.headers["Accept"],
+                origin = call.request.headers["Origin"],
+                referer = call.request.headers["Referer"],
+                host = call.request.headers["Host"],
+                fetchSite = call.request.headers["Sec-Fetch-Site"],
+                accept = call.request.headers["Accept"],
+                userAgent = call.request.headers["User-Agent"],
+                allowLegacyNavigation = allowLegacyNavigation,
             )
         ) return true
         // Name what was actually wrong. The old text said "cross-origin" for every refusal, including
         // requests carrying no origin information at all — a misdiagnosis that sends the reader hunting
         // a CORS misconfiguration that does not exist.
         val site = call.request.headers["Sec-Fetch-Site"]?.trim()?.lowercase()
-        val message = when (site) {
-            "cross-site", "same-site" -> "refused: this panel does not serve camera reads to another site."
+        val message = when {
+            site == "cross-site" || site == "same-site" ->
+                "refused: this panel does not serve active reads to another site."
             else ->
-                "refused: this request carried no origin information, so the panel could not tell a page " +
-                    "visit from another site embedding it. Open the address directly, or use the link on " +
-                    "the panel's Configure page."
+                "refused: this active read could not be verified as same-origin. Open the address " +
+                    "directly, or use the link on the panel's Configure page."
         }
         call.respondText("$message\n", status = HttpStatusCode.Forbidden)
         return false
