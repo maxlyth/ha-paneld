@@ -23,6 +23,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MWW_DIR="$REPO_ROOT/app/src/main/cpp/microwakeword"
 THIRD_PARTY="$MWW_DIR/third_party"
+MODELS_DEST="$REPO_ROOT/app/src/main/assets/wakeword"
 ASSETS_DIR="$REPO_ROOT/app/src/main/assets/wakeword"
 MANIFEST="$REPO_ROOT/tools/wakeword/vendor-manifest.txt"
 CACHE="${VENDOR_CACHE:-${TMPDIR:-/tmp}/ha-paneld-wakeword-vendor}"
@@ -63,11 +64,16 @@ fetch_all() {
       mv "$tarball.part" "$tarball"
     fi
     printf '%s  %s\n' "$sha" "$tarball" | sha256sum -c --quiet - || die "sha256 mismatch for $name"
-    if [ ! -d "$CACHE/src/$name" ]; then
-      mkdir -p "$CACHE/src/$name.tmp"
-      tar -xzf "$tarball" -C "$CACHE/src/$name.tmp" --strip-components=1
-      mv "$CACHE/src/$name.tmp" "$CACHE/src/$name"
+    # Keyed by the pin, not just the name: a bumped commit with a warm cache would otherwise reuse the
+    # previous extraction and verify the new tarball while vendoring the old source.
+    if [ ! -d "$CACHE/src/$name-$commit" ]; then
+      rm -rf "$CACHE/src/$name-$commit.tmp"
+      mkdir -p "$CACHE/src/$name-$commit.tmp"
+      tar -xzf "$tarball" -C "$CACHE/src/$name-$commit.tmp" --strip-components=1
+      mv "$CACHE/src/$name-$commit.tmp" "$CACHE/src/$name-$commit"
     fi
+    eval "SRC_${name//-/_}=\"\$CACHE/src/\$name-\$commit\""
+
   done
 }
 
@@ -76,16 +82,16 @@ stage_full_layout() {
   local stage="$1"
   rm -rf "$stage"
   mkdir -p "$stage/kissfft/tools"
-  ln -s "$CACHE/src/tflite-micro" "$stage/tflite-micro"
-  ln -s "$CACHE/src/flatbuffers" "$stage/flatbuffers"
-  ln -s "$CACHE/src/gemmlowp" "$stage/gemmlowp"
-  ln -s "$CACHE/src/ruy" "$stage/ruy"
+  ln -s "${SRC_tflite_micro}" "$stage/tflite-micro"
+  ln -s "${SRC_flatbuffers}" "$stage/flatbuffers"
+  ln -s "${SRC_gemmlowp}" "$stage/gemmlowp"
+  ln -s "${SRC_ruy}" "$stage/ruy"
   # The TFLite micro frontend includes "tools/kiss_fftr.h"; upstream kissfft keeps it at the root.
   local f
-  for f in kiss_fft.h kiss_fft_log.h _kiss_fft_guts.h kiss_fft.c; do ln -s "$CACHE/src/kissfft/$f" "$stage/kissfft/$f"; done
-  for f in kiss_fftr.c kiss_fftr.h; do ln -s "$CACHE/src/kissfft/$f" "$stage/kissfft/tools/$f"; done
-  ln -s "$CACHE/src/kissfft/COPYING" "$stage/kissfft/COPYING"
-  ln -s "$CACHE/src/kissfft/LICENSES" "$stage/kissfft/LICENSES"
+  for f in kiss_fft.h kiss_fft_log.h _kiss_fft_guts.h kiss_fft.c; do ln -s "${SRC_kissfft}/$f" "$stage/kissfft/$f"; done
+  for f in kiss_fftr.c kiss_fftr.h; do ln -s "${SRC_kissfft}/$f" "$stage/kissfft/tools/$f"; done
+  ln -s "${SRC_kissfft}/COPYING" "$stage/kissfft/COPYING"
+  ln -s "${SRC_kissfft}/LICENSES" "$stage/kissfft/LICENSES"
 }
 
 find_ndk() {
@@ -206,10 +212,10 @@ apply_models() {
   mkdir -p "$dest"
   local m
   for m in "${MODELS[@]}"; do
-    cp "$CACHE/src/micro-wake-word-models/models/v2/$m.tflite" "$dest/$m.tflite"
-    cp "$CACHE/src/micro-wake-word-models/models/v2/$m.json" "$dest/$m.json"
+    cp "${SRC_micro_wake_word_models}/models/v2/$m.tflite" "$dest/$m.tflite"
+    cp "${SRC_micro_wake_word_models}/models/v2/$m.json" "$dest/$m.json"
   done
-  cp "$CACHE/src/micro-wake-word-models/LICENSE" "$dest/LICENSE.txt"
+  cp "${SRC_micro_wake_word_models}/LICENSE" "$dest/LICENSE.txt"
 }
 
 report() {
@@ -241,7 +247,22 @@ case "$cmd" in
     stage_full_layout "$CACHE/stage"
     apply_manifest "$MANIFEST" "$tmp/third_party" "$CACHE/stage"
     diff -r "$tmp/third_party" "$THIRD_PARTY" || die "vendored tree drift: run apply"
-    log "vendored tree matches the pinned upstreams"
+    # The models and their licence ship in the APK, so they are part of what "matches upstream" has to
+    # mean. Verifying only the C++ tree would let a model or a licence drift silently.
+    apply_models "$tmp/models"
+    m=""
+    for m in "${MODELS[@]}"; do
+      cmp -s "$tmp/models/$m.tflite" "$MODELS_DEST/$m.tflite" || die "model drift: $m.tflite"
+      cmp -s "$tmp/models/$m.json" "$MODELS_DEST/$m.json" || die "model manifest drift: $m.json"
+    done
+    cmp -s "$tmp/models/LICENSE.txt" "$MODELS_DEST/LICENSE.txt" || die "model licence drift: LICENSE.txt"
+    # The KissFFT notice is packaged as an asset because the source it covers is compiled, not shipped.
+    grep -q 'KissFFT' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" \
+      || die "packaged third-party notice is missing the KissFFT attribution"
+    cmp -s <(sed -n '/^--- KissFFT/,$p' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" | tail -n +3) \
+      "$THIRD_PARTY/kissfft/COPYING" \
+      || die "packaged KissFFT licence text does not match the vendored COPYING"
+    log "vendored tree, packaged models and licences match the pinned upstreams"
     ;;
   *)
     log "usage: $0 derive|apply|check"

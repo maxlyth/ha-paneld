@@ -40,6 +40,9 @@ class WakeWordDetector(
     private val warmupInferences: Int = DEFAULT_WARMUP_INFERENCES,
 ) : PcmConsumer, AutoCloseable {
 
+    /** True once every loaded model has stopped: the listener is armed but can no longer hear. */
+    val exhausted: Boolean get() = slots.isNotEmpty() && slots.all { it.model.scorer.let { s -> s is NativeMicroWakeWord && s.failed } }
+
     private class Slot(val model: LoadedWakeWordModel) {
         val window = IntArray(model.config.slidingWindowSize)
         var next = 0
@@ -121,11 +124,18 @@ class WakeWordDetector(
         fun loadBundled(context: Context, ids: List<String>, maxActive: Int = DEFAULT_MAX_ACTIVE): List<LoadedWakeWordModel>? {
             if (!NativeMicroWakeWord.available) return null
             val loaded = ArrayList<LoadedWakeWordModel>()
-            for (id in ids.take(maxActive)) {
-                val config = MicroWakeWordModelConfig.fromAssets(context, id)
-                val scorer = NativeMicroWakeWord.create(MicroWakeWordModelConfig.readModel(context, config), config)
-                    ?: continue
-                loaded += LoadedWakeWordModel(config, scorer)
+            try {
+                for (id in ids.take(maxActive)) {
+                    val config = MicroWakeWordModelConfig.fromAssets(context, id)
+                    val scorer = NativeMicroWakeWord.create(MicroWakeWordModelConfig.readModel(context, config), config)
+                        ?: continue
+                    loaded += LoadedWakeWordModel(config, scorer)
+                }
+            } catch (t: Throwable) {
+                // A model that fails to load leaves the ones already built holding native arenas that
+                // nothing else will ever close, because the caller never receives them.
+                loaded.forEach { runCatching { it.close() } }
+                throw t
             }
             return loaded
         }

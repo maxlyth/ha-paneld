@@ -1,0 +1,21 @@
+Third-party notices for the native wake-word engine packaged in this application.
+
+The engine is built from TensorFlow Lite Micro, FlatBuffers, gemmlowp and ruy, each under the
+Apache License 2.0 reproduced in the adjacent LICENSE.txt, and from KissFFT under the BSD
+3-Clause licence reproduced in full below. The vendored source of all five, with the exact
+upstream revision each was taken from, is recorded in the application's source tree; the
+licence text travels here because that source is compiled into the library and is not itself
+packaged.
+
+--- KissFFT (BSD 3-Clause) ---
+
+Copyright (c) 2003-2010 Mark Borgerding . All rights reserved.
+
+KISS FFT is provided under:
+
+  SPDX-License-Identifier: BSD-3-Clause
+
+Being under the terms of the BSD 3-clause "New" or "Revised" License,
+according with:
+
+  LICENSES/BSD-3-Clause

@@ -20,17 +20,40 @@ class NativeMicroWakeWord private constructor(
     val stride: Int,
 ) : WakeWordScorer {
 
+    /**
+     * True once the engine reported a result it cannot produce, which is not recoverable for this
+     * model: the arena and streaming state are gone. The detector drops a failed model rather than
+     * scoring silence through it forever.
+     */
+    @Volatile
+    var failed: Boolean = false
+        private set
+
+    // Every native call and the teardown share one monitor. Reading the handle and calling through it
+    // must be one step: closing between the two would hand the engine a pointer it has already freed,
+    // and the audio thread calls this every ten milliseconds while any thread may tear down.
+    @Synchronized
     override fun score(samples: ShortArray, count: Int): Int {
         val h = handle
-        if (h == 0L) return WakeWordScorer.NO_INFERENCE
-        return nativeProcessAudio(h, samples, count)
+        if (h == 0L || failed) return WakeWordScorer.NO_INFERENCE
+        val result = nativeProcessAudio(h, samples, count)
+        if (result < WakeWordScorer.NO_INFERENCE || result > WakeWordScorer.MAX_PROBABILITY) {
+            // Out of contract: the engine cannot score this model any more. Say so once and stop,
+            // rather than reporting a stream of silence that reads as a working listener.
+            failed = true
+            Log.w(TAG, "wake-word engine reported an unusable result ($result); this model is stopping")
+            return WakeWordScorer.NO_INFERENCE
+        }
+        return result
     }
 
+    @Synchronized
     override fun reset() {
         val h = handle
-        if (h != 0L) nativeReset(h)
+        if (h != 0L && !failed) nativeReset(h)
     }
 
+    @Synchronized
     override fun close() {
         val h = handle
         if (h != 0L) {

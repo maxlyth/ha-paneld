@@ -1,3 +1,6 @@
+// Derived from the Home Assistant Android Companion app's microwakeword module and MODIFIED for this
+// project: the logging macros are retargeted at this application's tag and log levels. The unmodified
+// upstream revision this was taken from is recorded in THIRD_PARTY.md alongside the vendored sources.
 #ifndef HAPANELD_MWW_LOGGING_H
 #define HAPANELD_MWW_LOGGING_H
 
