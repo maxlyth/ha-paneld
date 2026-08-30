@@ -349,8 +349,9 @@ class VoiceAssistantCoordinatorTest {
         assertEquals("no second wake lease may exist during a run", 1, mic.leases.count { it.purpose == MicPurpose.WAKE_WORD })
         runner.release.complete(AssistOutcome())
         awaitRunFinished(c)
-        runBlocking { withTimeout(2_000) { while (engines.size < 2) kotlinx.coroutines.delay(5) } }
-        assertTrue("the deferred change applies when the run drains", first.closed)
+        settleUntil { engines.size >= 2 }
+        assertEquals("the deferred change applies when the run drains", 2, engines.size)
+        assertTrue("the superseded listener is retired with it", first.closed)
     }
 
     @Test
