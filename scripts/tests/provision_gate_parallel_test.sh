@@ -40,6 +40,13 @@ if [ -n "${FAKE_STATE_DIR:-}" ]; then
   active="$(cat "$FAKE_STATE_DIR/active")"; printf '%s\n' "$((active - 1))" > "$FAKE_STATE_DIR/active"
   rmdir "$FAKE_STATE_DIR/lock"
 fi
+if [ "${FAKE_BLOCK_SCOPE:-}" = "$name" ]; then
+  /bin/sleep 300 &
+  blocked_child=$!
+  printf '%s\n' "$blocked_child" > "${FAKE_BLOCK_PID_FILE:?}"
+  wait "$blocked_child"
+  exit $?
+fi
 if [ "${FAKE_MALFORMED_SCOPE:-}" = "$name" ]; then printf 'ok 1 - missing plan\n'; exit 0; fi
 if [ "${FAKE_ZERO_SCOPE:-}" = "$name" ]; then printf '1..0\n'; exit 0; fi
 if [ "${FAKE_DUPLICATE_NUMBER_SCOPE:-}" = "$name" ]; then
@@ -76,6 +83,8 @@ FAKE_STATE_DIR="$STATE" FAKE_SLEEP_SECONDS=0.05 \
 status=$?
 description="the complete fake gate passes"; assert_true test "$status" -eq 0
 description="the aggregate pins all 17 shard cases"; assert_true grep -q '^AGGREGATE PASS shards=17 cases=17 failures=0 ' "$PASS_LOG"
+description="a successful full gate emits exactly one compatible totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$PASS_LOG")" -eq 1
+description="the full-gate totals marker is coherent"; assert_true grep -qx 'PROVISION_GATE_TOTALS=shards=17/17;tests=17/17;failures=0' "$PASS_LOG"
 order="$(awk '/^SHARD / {printf "%s ", $2}' "$PASS_LOG")"
 description="per-shard reports retain deterministic manifest order"; assert_true test "$order" = "database-host database-runtime install-export install-runtime helper-transaction release-integrity renderer-seeding shizuku install-finish backup publication database-authority fleet-installer helper-install host-reclamation device-sweep git-bash "
 unique_tmp="$(grep -h '^tmpdir=' "$OUT"/*/tap.log | sort -u | wc -l | tr -d ' ')"
@@ -89,6 +98,14 @@ status=$?
 description="one red shard fails the aggregate"; assert_true test "$status" -ne 0
 description="the red shard reports its TAP failure and status"; assert_true grep -q '^SHARD backup FAIL cases=1 failures=1 status=1 ' "$FAIL_LOG"
 description="a red shard produces a fail-closed aggregate"; assert_true grep -q '^AGGREGATE FAIL shards=2 cases=2 failures=1 ' "$FAIL_LOG"
+description="a failed gate emits no passing totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$FAIL_LOG" || true)" -eq 0
+
+FOCUSED_LOG="$TMP/focused.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" \
+  bash "$WRAPPER" -j 2 --output "$TMP/focused-results" database-host backup > "$FOCUSED_LOG" 2>&1
+status=$?
+description="a focused fake gate passes"; assert_true test "$status" -eq 0
+description="a focused gate emits coherent positive selected totals"; assert_true grep -qx 'PROVISION_GATE_TOTALS=shards=2/2;tests=2/2;failures=0' "$FOCUSED_LOG"
 
 MALFORMED_LOG="$TMP/malformed.log"
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MALFORMED_SCOPE=publication \
@@ -147,6 +164,35 @@ PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=18 \
 status=$?
 description="a complete-set aggregate count mismatch fails closed"; assert_true test "$status" -ne 0
 description="the exact expected and actual aggregate are reported"; assert_true grep -q '^CONTRACT FAIL expected_cases=18 actual_cases=17$' "$AGGREGATE_MISMATCH_LOG"
+description="an aggregate mismatch emits no passing totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$AGGREGATE_MISMATCH_LOG" || true)" -eq 0
+
+TERM_LOG="$TMP/term.log"
+TERM_CHILD_PID_FILE="$TMP/term-child.pid"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_BLOCK_SCOPE=publication \
+FAKE_BLOCK_PID_FILE="$TERM_CHILD_PID_FILE" \
+  bash "$WRAPPER" --output "$TMP/term-results" publication > "$TERM_LOG" 2>&1 &
+term_wrapper_pid=$!
+term_ready=0
+term_attempt=0
+while [ "$term_attempt" -lt 200 ]; do
+  if [ -s "$TERM_CHILD_PID_FILE" ]; then term_ready=1; break; fi
+  /bin/sleep 0.01
+  term_attempt=$((term_attempt + 1))
+done
+description="the blocked fixture exposes a live descendant before TERM"; assert_true test "$term_ready" -eq 1
+kill -TERM "$term_wrapper_pid"
+if wait "$term_wrapper_pid"; then term_status=0; else term_status=$?; fi
+description="TERM exits with conventional status 143"; assert_true test "$term_status" -eq 143
+term_child_pid="$(cat "$TERM_CHILD_PID_FILE")"
+term_child_gone=0
+term_attempt=0
+while [ "$term_attempt" -lt 100 ]; do
+  if ! kill -0 "$term_child_pid" 2>/dev/null; then term_child_gone=1; break; fi
+  /bin/sleep 0.02
+  term_attempt=$((term_attempt + 1))
+done
+description="TERM reaps the blocked shard descendant process group"; assert_true test "$term_child_gone" -eq 1
+description="an interrupted gate emits no passing totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$TERM_LOG" || true)" -eq 0
 
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" bash "$WRAPPER" -j 0 database-host > "$TMP/jobs.log" 2>&1
 status=$?

@@ -98,15 +98,51 @@ else
 fi
 
 pids=()
-cleanup_parallel_gate() {
-  local status=$? pid
-  trap - EXIT INT TERM
-  for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+terminate_active_groups() {
+  local pid attempt alive
+  for pid in "${pids[@]}"; do
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  done
+  attempt=0
+  while [ "$attempt" -lt 40 ]; do
+    alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 -- "-$pid" 2>/dev/null; then alive=1; break; fi
+    done
+    [ "$alive" -eq 1 ] || break
+    /bin/sleep 0.05
+    attempt=$((attempt + 1))
+  done
+  for pid in "${pids[@]}"; do
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  done
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+  pids=()
+}
+
+remove_temporary_output() {
   if [ "$TEMP_OUTPUT" -eq 1 ]; then rm -rf "$OUTPUT_DIR"; fi
+}
+
+cleanup_parallel_gate() {
+  local status=$?
+  trap - EXIT INT TERM
+  terminate_active_groups
+  remove_temporary_output
   exit "$status"
 }
-trap cleanup_parallel_gate EXIT INT TERM
+
+handle_parallel_signal() {
+  local status="$1"
+  trap - EXIT INT TERM
+  terminate_active_groups
+  remove_temporary_output
+  exit "$status"
+}
+
+trap cleanup_parallel_gate EXIT
+trap 'handle_parallel_signal 130' INT
+trap 'handle_parallel_signal 143' TERM
 
 run_shard() {
   local shard="$1" shard_dir="$OUTPUT_DIR/$1" start end status
@@ -136,15 +172,22 @@ wait_oldest() {
 }
 
 gate_start="$(date +%s)"
+# Monitor mode gives every background shard its own process group. The group
+# leader is the run_shard subshell in $!, so signal cleanup reaches the runner
+# and every process it started rather than abandoning grandchildren.
+set -m
 for shard in "${requested[@]}"; do
   while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
   run_shard "$shard" &
   pids+=("$!")
 done
 while [ "${#pids[@]}" -gt 0 ]; do wait_oldest; done
+set +m
 
 aggregate_cases=0
 aggregate_failures=0
+completed_shards=0
+passed_tests=0
 verdict=PASS
 for shard in "${requested[@]}"; do
   shard_dir="$OUTPUT_DIR/$shard"
@@ -191,7 +234,12 @@ for shard in "${requested[@]}"; do
   fi
   aggregate_cases=$((aggregate_cases + cases))
   aggregate_failures=$((aggregate_failures + failures))
-  if [ "$shard_verdict" = FAIL ]; then verdict=FAIL; fi
+  if [ "$shard_verdict" = FAIL ]; then
+    verdict=FAIL
+  else
+    completed_shards=$((completed_shards + 1))
+    passed_tests=$((passed_tests + oks))
+  fi
   printf 'SHARD %s %s cases=%d failures=%d status=%d wall=%ss\n' \
     "$shard" "$shard_verdict" "$cases" "$failures" "$status" "$wall"
 done
@@ -203,6 +251,10 @@ fi
 gate_end="$(date +%s)"
 printf 'AGGREGATE %s shards=%d cases=%d failures=%d wall=%ss\n' \
   "$verdict" "${#requested[@]}" "$aggregate_cases" "$aggregate_failures" "$((gate_end - gate_start))"
+if [ "$verdict" = PASS ]; then
+  printf 'PROVISION_GATE_TOTALS=shards=%d/%d;tests=%d/%d;failures=%d\n' \
+    "$completed_shards" "${#requested[@]}" "$passed_tests" "$aggregate_cases" "$aggregate_failures"
+fi
 if [ -n "${PROVISION_GATE_REPORT_OUTPUT:-}" ]; then printf 'RESULTS %s\n' "$OUTPUT_DIR"; fi
 
 [ "$verdict" = PASS ]
