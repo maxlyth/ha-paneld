@@ -1110,18 +1110,18 @@ class Config private constructor(
     fun setCameraEnabled(on: Boolean) {
         edit { putBoolean("camera_enabled", on) }
     }
-    val cameraMaxResolution: CameraResolution
-        get() = CameraResolution.parse(stringPref("camera_max_resolution")) ?: CameraResolution.P720
-    fun setCameraMaxResolution(value: String) {
-        edit { putString("camera_max_resolution", value) }
+    val cameraResolution: CameraResolution
+        get() = CameraResolution.parse(stringPref("camera_resolution")) ?: CameraResolution.P720
+    fun setCameraResolution(value: String) {
+        edit { putString("camera_resolution", value) }
     }
-    val cameraMaxFps: Int get() = intPref("camera_max_fps").coerceIn(1, 30)
-    fun setCameraMaxFps(fps: Int) {
-        edit { putInt("camera_max_fps", fps.coerceIn(1, 30)) }
+    val cameraFps: Int get() = intPref("camera_fps").coerceIn(1, 30)
+    fun setCameraFps(fps: Int) {
+        edit { putInt("camera_fps", fps.coerceIn(1, 30)) }
     }
-    val cameraMaxKbps: Int get() = intPref("camera_max_kbps").coerceIn(250, 8000)
-    fun setCameraMaxKbps(kbps: Int) {
-        edit { putInt("camera_max_kbps", kbps.coerceIn(250, 8000)) }
+    val cameraKbps: Int get() = intPref("camera_kbps").coerceIn(250, 8000)
+    fun setCameraKbps(kbps: Int) {
+        edit { putInt("camera_kbps", kbps.coerceIn(250, 8000)) }
     }
 
     // Experimental Android dashboard lock: hide system bars and return from other apps/Recents so a casual

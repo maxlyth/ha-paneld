@@ -4,21 +4,42 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** The URL is the configuration surface; the caps are ceilings it can never exceed. */
+/**
+ * The URL is the fine-grained configuration surface, and the settings are its defaults.
+ *
+ * They used to be ceilings a URL could not exceed. That was reversed deliberately: several viewers share
+ * one encode session, so a ceiling never did the concurrency work it appeared to, and in the deployment
+ * this feature is for nobody passes parameters at all, so it clamped nothing while making the settings
+ * impossible to name. What still bounds a request is the range the product supports.
+ */
 class StreamRequestTest {
 
-    @Test fun omittedParametersTakeTheProfileCaps() {
-        val bound = StreamRequest().bind(CameraResolution.P720, maxFps = 15, maxKbps = 2_000)
+    @Test fun omittedParametersTakeTheConfiguredDefaults() {
+        val bound = StreamRequest().bind(CameraResolution.P720, defaultFps = 15, defaultKbps = 2_000)
         assertEquals(StreamRequest.Bound(CameraResolution.P720, fps = 15, kbps = 2_000), bound)
     }
 
-    @Test fun aUrlMayAskForLessAndNeverForMore() {
+    @Test fun aUrlWinsInEitherDirectionBecauseTheSettingsAreDefaults() {
         val less = StreamRequest.fromUrl("rtsp://panel:8554/live?res=480p&fps=5&kbps=500")
-            .bind(CameraResolution.P720, maxFps = 15, maxKbps = 2_000)
+            .bind(CameraResolution.P720, defaultFps = 15, defaultKbps = 2_000)
         assertEquals(StreamRequest.Bound(CameraResolution.P480, fps = 5, kbps = 500), less)
+
+        // The case that used to be clamped back to the configured values, and is the whole reversal.
         val more = StreamRequest.fromUrl("rtsp://panel:8554/live?res=1080p&fps=30&kbps=8000")
-            .bind(CameraResolution.P720, maxFps = 15, maxKbps = 2_000)
-        assertEquals("clamped to every cap", StreamRequest.Bound(CameraResolution.P720, fps = 15, kbps = 2_000), more)
+            .bind(CameraResolution.P720, defaultFps = 15, defaultKbps = 2_000)
+        assertEquals(
+            "a URL asking for more than the configured default now gets it",
+            StreamRequest.Bound(CameraResolution.P1080, fps = 30, kbps = 8_000),
+            more,
+        )
+    }
+
+    @Test fun theProductRangeStillBoundsARequestTheOperatorDidNotSet() {
+        // Not an operator ceiling — the range the encoder and the product support. A URL cannot leave it.
+        val absurd = StreamRequest(fps = 9_000, kbps = 9_000_000)
+            .bind(CameraResolution.P720, defaultFps = 15, defaultKbps = 2_000)
+        assertEquals(StreamRequest.MAX_FPS, absurd.fps)
+        assertEquals(StreamRequest.MAX_KBPS, absurd.kbps)
     }
 
     @Test fun unrecognisedParametersAndUnparsableValuesAreIgnored() {
@@ -30,7 +51,7 @@ class StreamRequestTest {
     }
 
     @Test fun theFloorsHoldEvenWhenTheUrlAsksForNothingUsable() {
-        val bound = StreamRequest(fps = 0, kbps = 1).bind(CameraResolution.P480, maxFps = 15, maxKbps = 2_000)
+        val bound = StreamRequest(fps = 0, kbps = 1).bind(CameraResolution.P480, defaultFps = 15, defaultKbps = 2_000)
         assertEquals(StreamRequest.MIN_FPS, bound.fps)
         assertEquals(StreamRequest.MIN_KBPS, bound.kbps)
         assertEquals(StreamBinding(fps = 1, kbps = 250), bound.binding)

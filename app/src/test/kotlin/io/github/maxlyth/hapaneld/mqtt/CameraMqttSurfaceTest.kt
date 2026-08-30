@@ -73,7 +73,7 @@ class CameraMqttSurfaceTest {
     @Test fun theCameraCeilingsStayOnThePanelAndNeverBecomeEntities() {
         // The caps bound what a stream URL may ask for; they are not things to operate from a dashboard,
         // and the plan and the privacy contract both record the switch as the only camera value HA sees.
-        listOf("camera_max_resolution", "camera_max_fps", "camera_max_kbps").forEach { key ->
+        listOf("camera_resolution", "camera_fps", "camera_kbps").forEach { key ->
             val spec = SettingsRegistry.spec(key)
             assertNotNull("$key must stay in the settings registry", spec)
             assertNull("$key must not become a Home Assistant entity", spec!!.ha)

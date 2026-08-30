@@ -399,27 +399,27 @@ object SettingsRegistry {
             ),
         ),
         SettingSpec(
-            key = "camera_max_resolution", type = SettingType.ENUM, group = "Camera",
+            key = "camera_resolution", type = SettingType.ENUM, group = "Camera",
             label = "Resolution", default = "720p", scope = Scope.DEVICE,
             options = listOf("480p", "720p", "1080p"),
-            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
-                "less with ?res=, never for more.",
+            help = "What a stream gets when its URL does not ask for something else. A stream URL can " +
+                "override it with ?res=, in either direction.",
             availableWhen = { it.hasCamera },
         ),
         SettingSpec(
-            key = "camera_max_fps", type = SettingType.INT, group = "Camera",
+            key = "camera_fps", type = SettingType.INT, group = "Camera",
             label = "Frame rate", default = "15", min = 1.0, max = 30.0, step = 1.0,
             scope = Scope.DEVICE,
-            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
-                "less with ?fps=, never for more.",
+            help = "What a stream gets when its URL does not ask for something else. A stream URL can " +
+                "override it with ?fps=, in either direction.",
             availableWhen = { it.hasCamera },
         ),
         SettingSpec(
-            key = "camera_max_kbps", type = SettingType.INT, group = "Camera",
+            key = "camera_kbps", type = SettingType.INT, group = "Camera",
             label = "Bitrate (kbps)", default = "2000", min = 250.0, max = 8000.0, step = 250.0,
             scope = Scope.DEVICE,
-            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
-                "less with ?kbps=, never for more.",
+            help = "What a stream gets when its URL does not ask for something else. A stream URL can " +
+                "override it with ?kbps=, in either direction.",
             availableWhen = { it.hasCamera },
         ),
 

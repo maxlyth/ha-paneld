@@ -152,19 +152,19 @@ class CameraSurfaceContractTest {
         assertEquals("boolean", enabled.getString("type"))
         assertFalse(enabled.getBoolean("default"))
 
-        val resolution = properties.getJSONObject("camera_max_resolution")
+        val resolution = properties.getJSONObject("camera_resolution")
         assertEquals("720p", resolution.getString("default"))
         assertEquals(
             CameraResolution.entries.map { it.wire },
             resolution.getJSONArray("enum").let { array -> (0 until array.length()).map { array.getString(it) } },
         )
 
-        val fps = properties.getJSONObject("camera_max_fps")
+        val fps = properties.getJSONObject("camera_fps")
         assertEquals(1, fps.getInt("minimum"))
         assertEquals(30, fps.getInt("maximum"))
         assertEquals(15, fps.getInt("default"))
 
-        val kbps = properties.getJSONObject("camera_max_kbps")
+        val kbps = properties.getJSONObject("camera_kbps")
         assertEquals(250, kbps.getInt("minimum"))
         assertEquals(8000, kbps.getInt("maximum"))
         assertEquals(2000, kbps.getInt("default"))

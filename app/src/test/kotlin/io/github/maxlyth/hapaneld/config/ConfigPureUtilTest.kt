@@ -195,16 +195,16 @@ class MigrationsTest {
         val (defaults, defaultWarnings) = Migrations.migrate(6, mapOf("mqtt_broker" to "tcp://ha:1883"))
 
         assertEquals("false", defaults["camera_enabled"])
-        assertEquals("720p", defaults["camera_max_resolution"])
-        assertEquals("15", defaults["camera_max_fps"])
-        assertEquals("2000", defaults["camera_max_kbps"])
+        assertEquals("720p", defaults["camera_resolution"])
+        assertEquals("15", defaults["camera_fps"])
+        assertEquals("2000", defaults["camera_kbps"])
         assertTrue(defaultWarnings.isEmpty())
 
         val explicitValues = mapOf(
             "camera_enabled" to "true",
-            "camera_max_resolution" to "1080p",
-            "camera_max_fps" to "24",
-            "camera_max_kbps" to "4000",
+            "camera_resolution" to "1080p",
+            "camera_fps" to "24",
+            "camera_kbps" to "4000",
         )
         val (explicit, explicitWarnings) = Migrations.migrate(6, explicitValues)
 

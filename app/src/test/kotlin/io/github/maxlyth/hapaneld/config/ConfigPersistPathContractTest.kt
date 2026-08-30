@@ -81,7 +81,7 @@ class ConfigPersistPathContractTest {
 
     @Test fun theCameraTrialSettingsPersistThroughTheDirectMutationBatch() {
         // The regression itself, named. Each of these was reported applied and never written.
-        listOf("camera_enabled", "camera_max_resolution", "camera_max_fps", "camera_max_kbps").forEach { key ->
+        listOf("camera_enabled", "camera_resolution", "camera_fps", "camera_kbps").forEach { key ->
             assertTrue("$key must be read by the config batch so it can persist", isWired(key))
             assertTrue("$key must not be routed through the live path", key !in SettingsRegistry.liveApplyKeys())
         }

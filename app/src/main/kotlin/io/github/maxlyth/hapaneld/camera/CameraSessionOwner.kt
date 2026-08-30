@@ -68,9 +68,11 @@ class CameraSessionOwner(
     private val context: Context,
     private val hasCamera: Boolean,
     private val enabled: () -> Boolean,
-    private val maxResolution: () -> CameraResolution,
-    private val maxFps: () -> Int,
-    private val maxKbps: () -> Int,
+    // Configured defaults, not ceilings: an omitted URL parameter takes these, a supplied one wins.
+    // See StreamRequest for why the clamping was removed.
+    private val defaultResolution: () -> CameraResolution,
+    private val defaultFps: () -> Int,
+    private val defaultKbps: () -> Int,
     private val permissionGranted: () -> Boolean,
     private val indicator: CameraIndicator,
     private val foreground: CameraForegroundGate,
@@ -208,7 +210,7 @@ class CameraSessionOwner(
     // ---- CameraStreamSource ----------------------------------------------------------------------
 
     override fun acquireStream(request: StreamRequest): StreamAdmission {
-        val bound = request.bind(maxResolution(), maxFps(), maxKbps())
+        val bound = request.bind(defaultResolution(), defaultFps(), defaultKbps())
         val lease = acquireLease(bound.resolution, LeaseKind.STREAM, bound.binding)
             ?: return StreamAdmission.Refused(lastRefusal())
         val ready = synchronized(lock) {
@@ -322,7 +324,7 @@ class CameraSessionOwner(
                 }
                 is Admission.Open -> {
                     leaseId = admission.lease
-                    beginOpenLocked(admission.attempt, requested)
+                    beginOpenLocked(admission.attempt, requested, binding?.fps)
                     pending = state.awaitOpen()
                 }
                 is Admission.Join -> {
@@ -364,16 +366,21 @@ class CameraSessionOwner(
 
     // ---- open ---------------------------------------------------------------------------------------
 
-    /** Under [lock]: the first lease binds the parameters and starts attempt [attemptId] on the owned thread. */
-    private fun beginOpenLocked(attemptId: Long, requested: CameraResolution?) {
+    /**
+     * Under [lock]: the first lease binds the parameters and starts attempt [attemptId] on the owned
+     * thread. [bindingFps] is the stream's resolved rate when a stream opened the session, and null when
+     * a snapshot did; either way it is the pace the session runs at until it ends, so a later joiner
+     * gets the session's rate rather than its own. That is the same rule the encode parameters already
+     * follow — the first stream client binds them — and the reason is the same: there is one session.
+     */
+    private fun beginOpenLocked(attemptId: Long, requested: CameraResolution?, bindingFps: Int?) {
         val h = handler ?: HandlerThread("ha-paneld-camera").let { t ->
             t.start()
             thread = t
             Handler(t.looper).also { handler = it }
         }
-        val cap = maxResolution()
-        boundTarget = CameraResolution.clamp(requested ?: cap, cap)
-        boundFps = maxFps().coerceIn(1, 30)
+        boundTarget = requested ?: defaultResolution()
+        boundFps = (bindingFps ?: defaultFps()).coerceIn(1, 30)
         policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
         h.post { open(attemptId) }
     }
@@ -387,7 +394,7 @@ class CameraSessionOwner(
             if (!state.isCurrent(attemptId) || state.phase != Phase.OPENING) return
             attempt = Attempt(attemptId)
             current = attempt
-            target = boundTarget ?: maxResolution()
+            target = boundTarget ?: defaultResolution()
             fps = boundFps
         }
         if (!indicator.show()) return openFailed(attempt, CameraFault.INDICATION, CameraRefusal.INDICATION, null)
@@ -593,7 +600,9 @@ class CameraSessionOwner(
             binding = state.streamBinding
         }
         if (size == null || binding == null) return refuseEncoder("no_capture_size")
-        // Never above the caps: the binding is already clamped, and the session's own pace bounds the feed.
+        // Never faster than the feed: the session's pace is fixed when it opens, so an encoder started
+        // by a stream that joined an already-open session must not be configured above what it will be
+        // fed. This is a physical bound, not a policy one — the configured values are defaults now.
         val fps = minOf(binding.fps, boundFps)
         when (val opened = encoderFactory.open(size.width, size.height, fps, binding.kbps, h, encoderListener)) {
             is EncoderOpen.Refused -> refuseEncoder(opened.detail)

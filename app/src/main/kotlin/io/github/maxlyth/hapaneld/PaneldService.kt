@@ -1169,9 +1169,9 @@ class PaneldService : Service() {
             context = this,
             hasCamera = profile.hasCamera,
             enabled = { config.cameraEnabled },
-            maxResolution = { config.cameraMaxResolution },
-            maxFps = { config.cameraMaxFps },
-            maxKbps = { config.cameraMaxKbps },
+            defaultResolution = { config.cameraResolution },
+            defaultFps = { config.cameraFps },
+            defaultKbps = { config.cameraKbps },
             transport = cameraStream,
             permissionGranted = {
                 androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==

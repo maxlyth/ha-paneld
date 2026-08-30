@@ -57,9 +57,9 @@ object Migrations {
         },
         Migration { values ->
             values.putIfAbsent("camera_enabled", "false")
-            values.putIfAbsent("camera_max_resolution", "720p")
-            values.putIfAbsent("camera_max_fps", "15")
-            values.putIfAbsent("camera_max_kbps", "2000")
+            values.putIfAbsent("camera_resolution", "720p")
+            values.putIfAbsent("camera_fps", "15")
+            values.putIfAbsent("camera_kbps", "2000")
         },
         // Schema 8 adds the Voice settings group. Unlike camera_enabled (schema 7), voice_enabled and
         // voice_state both carry an `ha` descriptor, so a pre-schema-8 bundle also needs their exposure

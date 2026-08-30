@@ -5841,11 +5841,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     p["camera_enabled"]?.let { raw ->
                         SettingValue.parseBool(raw)?.let { config.setCameraEnabled(it) }
                     }
-                    p["camera_max_resolution"]?.trim()?.let { raw ->
-                        CameraResolution.parse(raw)?.let { config.setCameraMaxResolution(raw) }
+                    p["camera_resolution"]?.trim()?.let { raw ->
+                        CameraResolution.parse(raw)?.let { config.setCameraResolution(raw) }
                     }
-                    p["camera_max_fps"]?.trim()?.toIntOrNull()?.let { config.setCameraMaxFps(it) }
-                    p["camera_max_kbps"]?.trim()?.toIntOrNull()?.let { config.setCameraMaxKbps(it) }
+                    p["camera_fps"]?.trim()?.toIntOrNull()?.let { config.setCameraFps(it) }
+                    p["camera_kbps"]?.trim()?.toIntOrNull()?.let { config.setCameraKbps(it) }
                     // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
                     // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
                     // Detected from the POSTED value — config read-back inside the batch is pre-commit.

@@ -56,7 +56,7 @@ class ConfigAccessorDefaultCoherenceTest {
         assertEquals("stable", c.companionUpdateChannel)
         assertEquals("stable", c.updateChannel)
         assertEquals("syslog-tcp", c.logShipProtocol)
-        assertEquals("720p", c.cameraMaxResolution.wire)
+        assertEquals("720p", c.cameraResolution.wire)
 
         // Booleans that default true.
         listOf(
@@ -81,8 +81,8 @@ class ConfigAccessorDefaultCoherenceTest {
         assertEquals(514, c.logShipPort)
         assertEquals(0L, c.haTokenExpiry)
         assertEquals(0f, c.roomTempOffsetC, 0f)
-        assertEquals(15, c.cameraMaxFps)
-        assertEquals(2000, c.cameraMaxKbps)
+        assertEquals(15, c.cameraFps)
+        assertEquals(2000, c.cameraKbps)
 
         // Compound accessors whose inner default read was migrated.
         assertEquals(emptyList<String>(), c.tameVendorPackages)
@@ -149,9 +149,9 @@ class ConfigAccessorDefaultCoherenceTest {
             "ha_token_expiry" to c.haTokenExpiry.toString(),
             "room_temp_offset" to c.roomTempOffsetC.toString(),
             "camera_enabled" to c.cameraEnabled.toString(),
-            "camera_max_resolution" to c.cameraMaxResolution.wire,
-            "camera_max_fps" to c.cameraMaxFps.toString(),
-            "camera_max_kbps" to c.cameraMaxKbps.toString(),
+            "camera_resolution" to c.cameraResolution.wire,
+            "camera_fps" to c.cameraFps.toString(),
+            "camera_kbps" to c.cameraKbps.toString(),
         )
 
         rendered.forEach { (key, accessorValue) ->
