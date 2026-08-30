@@ -55,6 +55,7 @@ object OriginGuard {
         host: String?,
         fetchSite: String?,
         userAgent: String? = null,
+        accept: String? = null,
     ): Boolean {
         when (fetchSite?.trim()?.lowercase()) {
             "cross-site", "same-site" -> return false
@@ -63,15 +64,40 @@ object OriginGuard {
         }
         val src = origin?.takeIf { it.isNotBlank() } ?: referer?.takeIf { it.isNotBlank() }
         if (src == null) {
-            // Older/privacy-configured browsers can suppress Referer and predate Fetch Metadata.
-            // Header-less automation remains supported, but a browser-shaped request must provide
-            // positive same-origin/explicit-navigation metadata before it may start active work.
-            return fetchSite != null || !looksLikeBrowser(userAgent)
+            // Header-less automation, and any browser that did supply Fetch Metadata, are settled above.
+            if (fetchSite != null || !looksLikeBrowser(userAgent)) return true
+            // What is left is a browser that sent no Origin, no Referer and no Fetch Metadata at all —
+            // Safari before 16.4, and anything older or privacy-configured. Refusing the lot made these
+            // routes simply unopenable there, which is how this was found: typing the snapshot URL
+            // returned "cross-origin active read refused" on a request that was not cross-origin.
+            //
+            // The one honest signal such a browser still gives is what it asked for. A top-level
+            // navigation requests a document; an <img>, <script> or fetch subresource never does. So a
+            // navigation-shaped Accept is admitted and everything else stays refused, which keeps the
+            // case this guard exists for — an opaque cross-origin subresource starting camera work —
+            // closed on exactly the browsers that cannot prove themselves any other way.
+            return navigationShaped(accept)
         }
         val srcAuthority = authorityOf(src) ?: return false
         val hostAuthority = host?.trim()?.ifEmpty { null } ?: return false
         return srcAuthority.equals(hostAuthority, ignoreCase = true)
     }
+
+    /**
+     * Whether the request asked for a document, i.e. whether it is a top-level navigation rather than a
+     * subresource load. Deliberately strict: the header must actually name `text/html`, so the bare
+     * wildcard an image or fetch load sends does not qualify.
+     *
+     * **Residual, stated rather than hidden:** on a browser with no Fetch Metadata this also admits a
+     * cross-origin *navigation* and an `<iframe>`, both of which send a document Accept. Neither leaks a
+     * frame — the response carries `X-Frame-Options: DENY` and `frame-ancestors 'none'`, and the bytes
+     * are unreadable cross-origin — but an iframe on a hostile page could still make the camera open
+     * once, with the indicator lighting as it must. That is a smaller and more visible harm than the
+     * silent unopenability it replaces, and it disappears entirely on any browser that sends Fetch
+     * Metadata, which is every current one.
+     */
+    private fun navigationShaped(accept: String?): Boolean =
+        accept?.lowercase()?.contains("text/html") == true
 
     private fun looksLikeBrowser(userAgent: String?): Boolean {
         val ua = userAgent?.lowercase().orEmpty()

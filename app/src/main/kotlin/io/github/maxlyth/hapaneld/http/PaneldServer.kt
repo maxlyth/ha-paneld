@@ -3459,9 +3459,21 @@ class PaneldServer internal constructor(
                 call.request.headers["Host"],
                 call.request.headers["Sec-Fetch-Site"],
                 call.request.headers["User-Agent"],
+                call.request.headers["Accept"],
             )
         ) return true
-        call.respondText("cross-origin active read refused\n", status = HttpStatusCode.Forbidden)
+        // Name what was actually wrong. The old text said "cross-origin" for every refusal, including
+        // requests carrying no origin information at all — a misdiagnosis that sends the reader hunting
+        // a CORS misconfiguration that does not exist.
+        val site = call.request.headers["Sec-Fetch-Site"]?.trim()?.lowercase()
+        val message = when (site) {
+            "cross-site", "same-site" -> "refused: this panel does not serve camera reads to another site."
+            else ->
+                "refused: this request carried no origin information, so the panel could not tell a page " +
+                    "visit from another site embedding it. Open the address directly, or use the link on " +
+                    "the panel's Configure page."
+        }
+        call.respondText("$message\n", status = HttpStatusCode.Forbidden)
         return false
     }
 

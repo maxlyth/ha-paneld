@@ -122,4 +122,53 @@ class OriginGuardTest {
 
     @Test fun almostIpNotTreatedAsLiteral() =
         assertFalse("300 is not a valid octet — treat as a hostname, refuse", OriginGuard.hostAllowed("300.1.2.3", none))
+
+    // ---- a browser that sends no Fetch Metadata at all (Safari < 16.4, and anything older) ---------
+
+    private val safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 " +
+        "(KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+    private val navigationAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    private val imageAccept = "image/avif,image/webp,image/png,image/svg+xml,*/*;q=0.8"
+
+    /**
+     * The defect this covers: typing the snapshot URL into such a browser was refused, and told the
+     * reader it was cross-origin when the request carried no origin information at all. Reproduced on
+     * two panels before it was changed — the same user agent plus `Sec-Fetch-Site: none` returned the
+     * image, and without it returned 403.
+     */
+    @Test fun aNavigationFromABrowserWithoutFetchMetadataIsAdmitted() {
+        assertTrue(
+            "a typed URL must open: it asks for a document, which no subresource load does",
+            OriginGuard.activeReadAllowed(null, null, host, null, safari, navigationAccept),
+        )
+    }
+
+    @Test fun aSubresourceLoadFromThatSameBrowserStaysRefused() {
+        assertFalse(
+            "an <img> load is the case this guard exists for and must still be refused",
+            OriginGuard.activeReadAllowed(null, null, host, null, safari, imageAccept),
+        )
+        assertFalse(
+            "a bare wildcard is not a document request",
+            OriginGuard.activeReadAllowed(null, null, host, null, safari, "*/*"),
+        )
+        assertFalse(
+            "no Accept at all proves nothing, so it stays refused",
+            OriginGuard.activeReadAllowed(null, null, host, null, safari, null),
+        )
+    }
+
+    @Test fun theAcceptFallbackNeverOverridesFetchMetadata() {
+        // A browser that does send Fetch Metadata is judged on it alone: a document Accept must not
+        // rescue a cross-site read, or the fallback would become a way around the guard.
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "cross-site", safari, navigationAccept))
+        assertFalse(OriginGuard.activeReadAllowed(null, null, host, "same-site", safari, navigationAccept))
+        // And a stated origin that is not this host still loses, whatever it asked for.
+        assertFalse(OriginGuard.activeReadAllowed("http://evil.example", null, host, null, safari, navigationAccept))
+    }
+
+    @Test fun headerLessAutomationIsUnaffected() {
+        assertTrue("curl and fleet tooling send no user agent of this shape", OriginGuard.activeReadAllowed(null, null, host, null, null, null))
+        assertTrue(OriginGuard.activeReadAllowed(null, null, host, null, "ha-paneld-fleet/1.0", null))
+    }
 }
