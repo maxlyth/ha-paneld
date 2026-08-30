@@ -60,6 +60,7 @@ hardware:
     mechanism: rk3576-ioctl
     transfer: rk3576-four-bit
   screen_off: su-blpower
+  camera: true
   microphone: true
   has_button_backlight: false
   touch_click_gain: 0.16

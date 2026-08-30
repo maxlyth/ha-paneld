@@ -51,13 +51,6 @@ class BundledProfileParityTest {
     }
 
     /**
-     * `hardware.camera` and `hardware.microphone` declare what the board physically has. They are
-     * deliberately independent: the NSPanel Pro line carries a microphone and no camera, so a single
-     * combined flag would either deny the voice work its hardware or claim a camera that is not there.
-     * No bundled profile declares either yet — turning the camera trial on is a separate change — so
-     * these assertions drive the parser from constructed YAML rather than from the catalog.
-     */
-    /**
      * A microphone is only declared for hardware whose capture chain has actually produced audio.
      * The weaker signals lie: on 2026-08-28 every panel probed reported `android.hardware.microphone`
      * and offered `AUDIO_DEVICE_IN_BUILTIN_MIC` in its audio policy, yet a first-generation NSPanel Pro
@@ -75,9 +68,43 @@ class BundledProfileParityTest {
         // The declaration reaches the capability the voice settings gate on, not just the parsed document.
         assertTrue(bundledById.getValue("wf1589t").profile().hasMicrophone)
         assertFalse(bundledById.getValue("nspanel-pro").profile().hasMicrophone)
-        // A microphone is not a camera: declaring one must not imply the other on real bundled content.
-        assertFalse(bundledById.getValue("wf1589t").document.hardware.hasCamera)
+        // A camera is not a microphone. The WF1589T now declares both, so the witness that the two
+        // keys are independent on real catalog content is the TPA10: it carries a camera, and its
+        // capture chain has never produced audio, so it must declare the one and not the other.
+        assertTrue(bundledById.getValue("tpa10").document.hardware.hasCamera)
+        assertFalse(bundledById.getValue("tpa10").document.hardware.hasMicrophone)
+        assertFalse(bundledById.getValue("tpa10").profile().hasMicrophone)
     }
+
+    /**
+     * A camera is declared for the boards that carry one, which is what makes the camera trial
+     * reachable at all: `hardware.camera` is the gate in front of the camera settings, the foreground
+     * service, the snapshot route, the RTSP transport and the two Home Assistant entities. Both of
+     * these panels were probed on 2026-08-28 and each carries a GalaxyCore sensor with a working
+     * hardware AVC encoder behind it. Every other bundled profile omits the key and stays closed.
+     */
+    @Test fun onlyHardwareWithACameraDeclaresOne() {
+        assertEquals(
+            setOf("tpa10", "wf1589t"),
+            bundled.filter { it.document.hardware.hasCamera }.map { it.document.id }.toSet(),
+        )
+        // Unknown hardware stays conservative, and the NSPanel Pro line has no camera to declare.
+        assertFalse(bundledById.getValue("generic").document.hardware.hasCamera)
+        assertFalse(bundledById.getValue("nspanel-pro").document.hardware.hasCamera)
+        // The declaration must reach the capability the camera surfaces gate on, not stop at the
+        // document: a profile that parses a camera but resolves without one enables nothing.
+        assertTrue(bundledById.getValue("tpa10").profile().hasCamera)
+        assertTrue(bundledById.getValue("wf1589t").profile().hasCamera)
+        assertFalse(bundledById.getValue("nspanel-pro").profile().hasCamera)
+    }
+
+    /**
+     * `hardware.camera` and `hardware.microphone` declare what the board physically has. They are
+     * deliberately independent: the TPA10 carries a camera whose capture chain has never been proven,
+     * and the WF1589T carries both, so a single combined flag would misdescribe at least one of them.
+     * Which profiles declare what is asserted above against real catalog content; these assertions
+     * drive the parser from constructed YAML, so both keys are covered from both directions.
+     */
 
     @Test fun cameraAndMicrophoneAreDeclaredIndependentlyAndSurviveARoundTrip() {
         listOf("hardware.camera", "hardware.microphone").forEach { path ->
@@ -89,10 +116,15 @@ class BundledProfileParityTest {
             assertFalse("hardware without the part must be able to omit $path", descriptor.required)
         }
 
-        // Absent means false, which is what every bundled profile without the part relies on.
-        bundled.forEach {
-            assertFalse("no bundled profile may declare a camera yet: ${it.document.id}", it.document.hardware.hasCamera)
-        }
+        // Absent means false, which is what every bundled profile without the part relies on. The
+        // generic profile declares neither key, so it is the witness that omission reads as absence
+        // both when parsed from the catalog and after a round trip.
+        val none = bundledById.getValue("generic").document
+        assertFalse(none.hardware.hasCamera)
+        assertFalse(none.hardware.hasMicrophone)
+        val noneReparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(none)).document)
+        assertFalse("an omitted camera key must not become true across a round trip", noneReparsed.hardware.hasCamera)
+        assertFalse("an omitted microphone key must not become true across a round trip", noneReparsed.hardware.hasMicrophone)
 
         // A microphone without a camera is the case that matters, and it must survive serialization.
         val base = bundledById.getValue("nspanel-pro").document
@@ -659,8 +691,8 @@ class BundledProfileParityTest {
             "shelly-wall-display-v2.yaml" to "16415916b2cc0841fccee75709f3b10d3b6a431e3532593c53cb0d34a89fcd24",
             "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
             "smt1019.yaml" to "3004666dd80585a9f57f846f8db5bbde9b781bb8d669921d9406ab88a5a84289",
-            "tpa10.yaml" to "1aef00dc9ecde07bd2770a09dc40c48f19b6a6a303c5516202a889f005ce0653",
-            "wf1589t.yaml" to "97d3a3d169c33103b76337fae38c66d735b6ea4b6be147667939635eb032221b",
+            "tpa10.yaml" to "78a1c3559f52847306d71af701accd9854b6470531d5661b64800e0b7177b870",
+            "wf1589t.yaml" to "1562d11445d6a520db3cd56845b1ae47368851bc4de517757473301bd9392977",
             "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf(
