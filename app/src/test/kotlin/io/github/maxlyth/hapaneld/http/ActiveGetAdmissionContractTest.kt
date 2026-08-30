@@ -30,7 +30,11 @@ class ActiveGetAdmissionContractTest {
         assertRouteGatesBefore("/auto-sleep/history", "call.request.queryParameters")
         assertRouteGatesBefore("/auto-sleep/history", "autoSleepHttpApi.historyJson(hours)")
         assertRouteGatesBefore("/screenshot.png", "interactive.screenshot()")
-        assertRouteGatesBefore("/camera/snapshot.jpg", "camera.snapshot(")
+        assertRouteGatesBefore(
+            "/camera/snapshot.jpg",
+            "camera.snapshot(",
+            gate = "admitActiveRead(call, allowLegacyNavigation = true)",
+        )
         assertRouteGatesBefore("/tame/suggest", "PerfReader.touch()")
 
         val status = routeBody("/status")
@@ -61,11 +65,15 @@ class ActiveGetAdmissionContractTest {
         )
     }
 
-    private fun assertRouteGatesBefore(path: String, work: String) {
+    private fun assertRouteGatesBefore(
+        path: String,
+        work: String,
+        gate: String = "admitActiveRead(call)",
+    ) {
         val body = routeBody(path)
         assertTrue(
             "$path must gate active work",
-            body.indexOf("admitActiveRead(call)") in 0 until body.indexOf(work),
+            body.indexOf(gate) in 0 until body.indexOf(work),
         )
     }
 
