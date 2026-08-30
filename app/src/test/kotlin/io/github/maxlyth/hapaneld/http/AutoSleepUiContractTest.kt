@@ -8,6 +8,7 @@ import org.junit.Test
 class AutoSleepUiContractTest {
     @Test fun `configure UI shows bounded status and current policy replay only while enabled`() {
         val source = asset("configure.js").readText()
+        val english = asset("i18n/en.json").readText()
         val fieldLoop = source.substringAfter("fields.forEach(function (f) {")
             .substringBefore("if (g === \"Display\")")
         val rowIndex = fieldLoop.indexOf("card.appendChild(row(f));")
@@ -265,7 +266,7 @@ class AutoSleepUiContractTest {
         assertFalse("Behaviour card must not retain its obsolete subtitle", "\"Behaviour\": \"Android/app behaviour\"" in source)
         assertTrue(
             "auto sleep help must describe active screen actuation",
-            "Automatically wake the panel when activity is detected and switch the screen off after the learned delay." in source,
+            "Automatically wake the panel when activity is detected and switch the screen off after the learned delay." in english,
         )
         val css = asset("info.css").readText()
         assertTrue(
