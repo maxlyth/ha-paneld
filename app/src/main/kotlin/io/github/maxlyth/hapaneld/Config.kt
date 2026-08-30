@@ -1100,9 +1100,13 @@ class Config private constructor(
         edit { putBoolean("watchdog_enabled", on) }
     }
 
-    // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request
-    //. Read-only convenience accessors; there is no corresponding setter here.
+    // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request.
+    // Only the switch has a setter, because only the switch is operable from Home Assistant; the caps
+    // are edited on the Configure page and reach the owner through the ordinary reconfigure path.
     val cameraEnabled: Boolean get() = boolPref("camera_enabled")
+    fun setCameraEnabled(on: Boolean) {
+        edit { putBoolean("camera_enabled", on) }
+    }
     val cameraMaxResolution: CameraResolution
         get() = CameraResolution.parse(stringPref("camera_max_resolution")) ?: CameraResolution.P720
     val cameraMaxFps: Int get() = intPref("camera_max_fps").coerceIn(1, 30)

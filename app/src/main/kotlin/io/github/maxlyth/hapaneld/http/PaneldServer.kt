@@ -45,6 +45,7 @@ import io.github.maxlyth.hapaneld.config.Validation
 import io.github.maxlyth.hapaneld.camera.AbsentCameraSurface
 import io.github.maxlyth.hapaneld.camera.CameraRefusal
 import io.github.maxlyth.hapaneld.camera.CameraResolution
+import io.github.maxlyth.hapaneld.camera.CameraState
 import io.github.maxlyth.hapaneld.camera.CameraSurface
 import io.github.maxlyth.hapaneld.camera.SnapshotResult
 import io.github.maxlyth.hapaneld.control.BuiltinDashboard
@@ -4641,6 +4642,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val HA_LIFECYCLE_FACT = "HA lifecycle"
     private val HA_RENDERER_FACT = "HA renderer"
+    private val CAMERA_FACT = "Camera"
 
     // Order is the render order of the Runtime diagnostics card. "Wi-Fi stability" leads because it is
     // absent on a healthy panel and only ever appears when the network under everything else on this
@@ -4650,7 +4652,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // describes machinery that exists to keep it up.
     private val CONTEXT_KEYS = listOf(
         "Wi-Fi stability", HA_RENDERER_FACT, "MQTT state", "State convergence", "Local-state sync",
-        "App database", "Security mode", "Audio playback", "Log shipping", HA_LIFECYCLE_FACT,
+        "App database", "Security mode", "Audio playback", CAMERA_FACT, "Log shipping", HA_LIFECYCLE_FACT,
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
         "Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar",
@@ -4682,6 +4684,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             val current = when (key) {
                 HA_LIFECYCLE_FACT -> HaLifecycleRuntime.statusText() ?: ""
                 HA_RENDERER_FACT -> rendererAdmission().statusText()
+                // The camera row is live for the same reason, and it is also where a person reads the
+                // stream URL off the panel — with the warning that travels beside it, because the place
+                // the URL is copied from is the place somebody is about to paste it into a card on this
+                // very panel. A panel whose profile declares no camera has nothing to say and no row.
+                CAMERA_FACT -> camera.presentation().takeIf { it.state != CameraState.ABSENT }?.summary
                 else -> s.facts[key]
             }
             // Log shipping earns a live row only while it is on; when it is off the Behaviour card's

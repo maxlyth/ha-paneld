@@ -25,6 +25,8 @@ Set an MQTT broker on the Configure page and supported entities appear in Home A
 | `switch.<panel>_voice_assistant` | Enables the on-panel wake-word listener and Home Assistant Assist routing on panels with a microphone. Hidden from Home Assistant until exposed. |
 | `sensor.<panel>_voice_state` | Current voice-assistant phase — off, idle, listening, processing, responding or error — on panels with a microphone. Hidden from Home Assistant until exposed. |
 | `sensor.<panel>_storage_health` | Diagnostic storage and SQLite health with free-space, database-growth and bounded integrity attributes. Critical pressure or a database failure also fails installer verification; ha-paneld does not reclaim data automatically. |
+| `switch.<panel>_camera_enabled` | Master switch for the experimental camera trial, off by default and offered only on profiles that declare a camera. Turning it on arms the trial and nothing more: Android still withholds the camera until the permission is granted at the panel, and with the switch off the camera does not open for anything. |
+| `image.<panel>_camera_snapshot` | A still from the panel camera on profiles that declare one. It carries the snapshot URL rather than the picture, so Home Assistant fetches a frame when the card is actually viewed and no image is stored on the broker. It is unavailable while the camera switch is off, and it is a still rather than a live view. |
 | `button.<panel>_reload` | Reloads the built-in renderer in process or restarts the selected foreign renderer. |
 | `button.<panel>_reboot` | Reboots through an available privileged route. |
 

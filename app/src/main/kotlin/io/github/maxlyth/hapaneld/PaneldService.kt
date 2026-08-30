@@ -1574,6 +1574,18 @@ class PaneldService : Service() {
             onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
             autoSleepActivity = { autoSleep.activitySnapshot() },
             configUrl = { localIpv4()?.let { "http://$it:${identity.httpPort}/" } },
+            // Where Home Assistant fetches a still from. Re-derived per announcement like configUrl, so a
+            // DHCP move cannot leave the image entity pointing at an address this panel no longer holds.
+            cameraSnapshotUrl = {
+                localIpv4()?.let {
+                    io.github.maxlyth.hapaneld.util.LocalAdminEndpoint.url(
+                        it, identity.httpPort, "/api/v1/camera/snapshot.jpg",
+                    )
+                }
+            },
+            // A camera switch commanded from Home Assistant performs the same actuation the reconfigure
+            // fan-out performs for a Configure-page change, so the owner has one authority, not two.
+            onCameraEnabledChanged = { if (::camera.isInitialized) runCatching { camera.onEnabledChanged() } },
             // When no broker is configured, find HA on the LAN via mDNS and default to its :1883.
             discoverHaIp = { mdns.discoverHaIp() },
             // HA's advertised base URL (from zeroconf) for the "Open in HA" device link.
@@ -2261,6 +2273,9 @@ class PaneldService : Service() {
         }
         if (ownerRefresh.haLifecycle) runCatching { refreshHaLifecycleWatch() }
         if (ownerRefresh.camera && ::camera.isInitialized) runCatching { camera.onEnabledChanged() }
+        // A camera switch moved on the Configure page, by a bundle import or by provisioning must reach
+        // Home Assistant too; otherwise its switch keeps a position the panel has already left.
+        if (ownerRefresh.camera) runCatching { mqtt.publishCameraState() }
     }
 
     /**

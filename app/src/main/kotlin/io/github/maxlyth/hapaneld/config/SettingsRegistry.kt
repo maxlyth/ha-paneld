@@ -381,8 +381,8 @@ object SettingsRegistry {
             help = "Keep the network and background services running while the screen is off.",
         ),
         // Camera trial: off by default, and offered only where the device profile declares
-        // `hardware.camera`. These four settings carry no `ha` descriptor yet — the Home Assistant
-        // surface is a later slice.
+        // `hardware.camera`. Only the master switch reaches Home Assistant; the three caps stay local
+        // because they bound what a stream URL may ask for rather than being things to operate.
         SettingSpec(
             key = "camera_enabled", type = SettingType.BOOL, group = "Behaviour",
             label = "Camera (experimental trial)", default = "false", scope = Scope.DEVICE,
@@ -391,6 +391,10 @@ object SettingsRegistry {
                 "the panel unless a client is connected, and the panel shows a red light whenever the " +
                 "camera is open.",
             availableWhen = { it.hasCamera },
+            ha = HaEntity(
+                "switch", "camera_enabled", "Camera (experimental)",
+                """"command_topic":"ha-paneld/{panel}/camera_enabled/set","state_topic":"ha-paneld/{panel}/camera_enabled/state","icon":"mdi:cctv","entity_category":"config"""",
+            ),
         ),
         SettingSpec(
             key = "camera_max_resolution", type = SettingType.ENUM, group = "Behaviour",

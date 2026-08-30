@@ -218,10 +218,17 @@ internal data class AutoSleepMqttPublication(
     val retain: Boolean = true,
 )
 
+/** Discovery availability for an entity that is unavailable both when the panel is offline and when its
+ *  own precondition does not hold — `all` mode, so either topic going offline is enough. */
+internal fun dualAvailabilityFragment(
+    panelAvailabilityTopic: String,
+    entityAvailabilityTopic: String,
+): String = """"availability":[{"topic":"$panelAvailabilityTopic","payload_available":"online","payload_not_available":"offline"},{"topic":"$entityAvailabilityTopic","payload_available":"online","payload_not_available":"offline"}],"availability_mode":"all""""
+
 internal fun autoSleepAvailabilityFragment(
     panelAvailabilityTopic: String,
     policyAvailabilityTopic: String,
-): String = """"availability":[{"topic":"$panelAvailabilityTopic","payload_available":"online","payload_not_available":"offline"},{"topic":"$policyAvailabilityTopic","payload_available":"online","payload_not_available":"offline"}],"availability_mode":"all""""
+): String = dualAvailabilityFragment(panelAvailabilityTopic, policyAvailabilityTopic)
 
 internal fun autoSleepMqttProjection(snapshot: AutoSleepActivitySnapshot): AutoSleepMqttProjection {
     fun category(raw: String): String = raw.trim().lowercase(java.util.Locale.ROOT)
@@ -261,6 +268,59 @@ internal fun autoSleepMqttPublications(
     val availability = AutoSleepMqttPublication(availabilityTopic, projection.availability)
     return if (snapshot.policyHealthy) listOf(state, attributes, availability)
     else listOf(availability, state, attributes)
+}
+
+internal fun cameraSnapshotUrlTopic(panel: String): String = "ha-paneld/$panel/camera_snapshot/url"
+
+internal fun cameraSnapshotAvailabilityTopic(panel: String): String =
+    "ha-paneld/$panel/camera_snapshot/availability"
+
+/** The snapshot image entity's discovery payload. Built here rather than inline in the announcement so
+ * its shape is a fact a test can read: a URL topic, never an image topic, because image bytes on the
+ * broker would be a frame stored outside the panel, which the camera contract forbids. */
+internal fun cameraSnapshotDiscoveryJson(panel: String, availJson: String, deviceJson: String): String =
+    """{"name":"Camera snapshot (experimental)","object_id":"${panel}_camera_snapshot","unique_id":"${panel}_camera_snapshot","url_topic":"${cameraSnapshotUrlTopic(panel)}","icon":"mdi:camera",$availJson,$deviceJson}"""
+
+/** One retained publication for the snapshot image entity. Retained because Home Assistant must find the
+ * URL and the availability again after its own restart, without the panel having to notice. */
+internal data class CameraSnapshotPublication(val topic: String, val payload: String)
+
+/**
+ * What the snapshot image entity publishes for one observation of the camera surface.
+ *
+ * The URL topic never carries an empty payload while the entity exists: Home Assistant validates every
+ * message on it as a URL and logs an error for anything else, so "the camera is off" is said on the
+ * availability topic instead of by clearing the URL. Home Assistant drops its cached frame on every
+ * message, so republishing the URL is what makes an open card fetch a new one; [refreshUrl] is therefore
+ * asked only on a fresh enable and on announcement, and never on a timer, because a periodic republish
+ * would turn a card somebody left open into a schedule the panel chose.
+ *
+ * [announced] false means this profile declares no camera and the entity was not published. The retained
+ * URL is then cleared and availability goes offline, so a panel that moved to camera-less hardware leaves
+ * no readable address behind for the entity the discovery prune is removing.
+ */
+internal fun cameraSnapshotPublications(
+    panel: String,
+    announced: Boolean,
+    enabled: Boolean,
+    url: String?,
+    refreshUrl: Boolean,
+): List<CameraSnapshotPublication> {
+    val urlTopic = cameraSnapshotUrlTopic(panel)
+    val availabilityTopic = cameraSnapshotAvailabilityTopic(panel)
+    if (!announced) return listOf(
+        CameraSnapshotPublication(availabilityTopic, "offline"),
+        CameraSnapshotPublication(urlTopic, ""),
+    )
+    val live = url?.takeIf { enabled && it.isNotBlank() }
+    val availability = CameraSnapshotPublication(
+        availabilityTopic, if (live != null) "online" else "offline",
+    )
+    // The URL precedes the online edge for the reason proximity's retained state does: Home Assistant
+    // must not see the entity become available while the topic still holds an earlier address.
+    return if (refreshUrl && live != null) {
+        listOf(CameraSnapshotPublication(urlTopic, live), availability)
+    } else listOf(availability)
 }
 
 /** A mode-change signal carries no truth. The admitted bridge generation samples the service-owned
@@ -876,6 +936,13 @@ internal class MqttBridge(
     // Evaluated for every discovery announcement so DHCP/address changes never leave HA's device-page
     // Visit link pinned to the address captured when the service process started.
     private val configUrl: () -> String? = { null },
+    // The panel's own snapshot endpoint, as Home Assistant must dial it. Evaluated per announcement for
+    // the same reason as configUrl — a DHCP move must not leave a stale address published. Null when no
+    // LAN address is known, which makes the snapshot image entity unavailable rather than wrong.
+    private val cameraSnapshotUrl: () -> String? = { null },
+    // The camera master switch moved through MQTT. The service performs the same actuation its HTTP
+    // reconfigure path performs, so both routes converge on one owner rather than two.
+    private val onCameraEnabledChanged: () -> Unit = {},
     // Resolves HA's LAN IP via mDNS to default the broker when none is configured (injected by the
     // service, wired to MdnsAdvertiser). Returns null if HA isn't found / mDNS unavailable.
     private val discoverHaIp: () -> String? = { null },
@@ -1085,6 +1152,10 @@ internal class MqttBridge(
         onClearFailure = { Log.w(TAG, "could not invalidate the previous broker's MQTT family preference") },
     )
     @Volatile private var lastPublishedConfigUrl: String? = null
+    // Whether the last announcement actually published the snapshot image entity. A panel whose profile
+    // declares no camera has no such entity, so later switch or availability publishes would be retained
+    // strings on a topic nothing reads.
+    @Volatile private var cameraSnapshotAnnounced = false
 
     private val authRecovery = AuthRecovery(jitter = { base, _ ->
         // Bounded ±20% jitter prevents a fleet-wide broker restart becoming a synchronized retry storm.
@@ -1215,12 +1286,20 @@ internal class MqttBridge(
     private val cmdVoiceEnabled = "ha-paneld/$panel/voice_enabled/set"
     private val stateVoiceEnabled = "ha-paneld/$panel/voice_enabled/state"
     private val stateVoiceState = "ha-paneld/$panel/voice_state/state"
+    private val cmdCameraEnabled = "ha-paneld/$panel/camera_enabled/set"
+    private val stateCameraEnabled = "ha-paneld/$panel/camera_enabled/state"
+    // The snapshot image entity carries a URL rather than image bytes: the camera contract serves frames
+    // only over the panel's own listeners to a client that dialled in, and a retained byte payload would
+    // leave a frame sitting on the broker. HA stores this URL and fetches it when somebody actually looks
+    // at the card, so the camera opens for a viewer and never for a publish.
+    private val cameraSnapshotAvailability = cameraSnapshotAvailabilityTopic(panel)
     private val stateCommandTopics by lazy {
         setOf(
             cmdCpuGov, cmdNetAdb, cmdScreen, cmdLed, cmdNavigate, cmdVolume, cmdHomeDashboard,
             cmdButtons, cmdNavbar, cmdWakeOnWave, cmdAutoSleep, cmdTouchSound, cmdWatchdog, cmdKiosk,
             cmdCompanionAuto, cmdCompanionChannel, cmdSelfUpdate, cmdWebViewAuto, cmdUpdateChannel,
             cmdSilenceBootChime, cmdPreventIdleDim, cmdZigbee, cmdAutoBright, cmdVoiceEnabled,
+            cmdCameraEnabled,
         )
     }
     private val actionCommandTopics by lazy {
@@ -1343,6 +1422,7 @@ internal class MqttBridge(
         channel("silence_boot_chime", stateSilenceBootChime) { known(if (bootChime.isEnabled()) "ON" else "OFF") }
         channel("prevent_idle_dim", statePreventIdleDim) { known(if (config.preventIdleDim) "ON" else "OFF") }
         channel("auto_brightness", stateAutoBright) { known(if (config.autoBrightness) "ON" else "OFF") }
+        channel("camera_enabled", stateCameraEnabled) { known(if (config.cameraEnabled) "ON" else "OFF") }
         channel("navbar", stateNavbar) { known(config.navbarMode) }
         // Mirrors wake_on_wave's hasProximity gate: without the capability, report OFF rather than
         // echoing a persisted value the panel can no longer act on — never Unknown/skip, so a stale
@@ -2364,6 +2444,7 @@ internal class MqttBridge(
             cmdZigbee -> handleZigbee(payload)
             cmdAutoBright -> handleAutoBright(payload)
             cmdVoiceEnabled -> handleVoiceEnabled(payload)
+            cmdCameraEnabled -> handleCameraEnabled(payload)
             else -> Log.d(TAG, "unhandled command topic $topic")
         }
     }
@@ -2599,6 +2680,49 @@ internal class MqttBridge(
         )
         config.setWebViewAutoUpdate(on)
         stateConverger.reconcile("webview_auto_update", force = true)
+    }
+
+    /** The camera master switch, commanded from Home Assistant. Enabling arms the trial and nothing more:
+     *  Android still withholds the camera until somebody grants the permission at the panel, and on a
+     *  hardened panel the enable direction waits for a local approval first, so no remote message alone
+     *  can put this panel's camera into service. Disabling ends a live session immediately. */
+    private fun handleCameraEnabled(payload: String) {
+        val on = payload.trim().equals("ON", ignoreCase = true)
+        if (on) authorizeMqttSensitive(
+            SensitiveOperation.CAMERA_ENABLE,
+            "camera_enabled\u0000enable",
+            "Serve this panel's camera to Home Assistant",
+        )
+        config.setCameraEnabled(on)
+        // The same actuation the HTTP reconfigure path performs, so both routes converge on one owner.
+        onCameraEnabledChanged()
+        stateConverger.reconcile("camera_enabled", force = true)
+        publishCameraSnapshot(refreshUrl = on)
+    }
+
+    /** Availability for the snapshot image entity, and — on a fresh enable only — the URL republish that
+     *  makes Home Assistant drop its cached frame. The URL topic never carries an empty payload: HA
+     *  validates every message on it as a URL and logs an error for anything else, so "the camera is off"
+     *  is said on the availability topic instead of by clearing the URL. Nothing here is periodic; the
+     *  camera opens when a person looks at the card, never because the panel published. */
+    private fun publishCameraSnapshot(refreshUrl: Boolean) {
+        cameraSnapshotPublications(
+            panel = panel,
+            announced = cameraSnapshotAnnounced,
+            enabled = config.cameraEnabled,
+            url = cameraSnapshotUrl(),
+            refreshUrl = refreshUrl,
+        ).forEach { publish(it.topic, it.payload, retain = true) }
+    }
+
+    /** Republish the camera surface after a change made outside MQTT (the Configure page, a bundle
+     *  import, provisioning). The service calls this from the same reconfigure fan-out that notifies the
+     *  camera owner, so Home Assistant never keeps a switch position the panel has already left. */
+    fun publishCameraState() {
+        dispatchStateWork {
+            stateConverger.reconcile("camera_enabled", force = true)
+            publishCameraSnapshot(refreshUrl = config.cameraEnabled)
+        }
     }
 
     private fun handleUpdateChannel(
@@ -3293,6 +3417,7 @@ internal class MqttBridge(
         val device = """"device":{"identifiers":$ids,"name":"$name","manufacturer":"$mfr","model":"$mdl","sw_version":"$softwareVersion","hw_version":"$hw","serial_number":"${config.androidId}"$sa$cu}"""
         val avail = """"availability_topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline""""
         val proximityAvail = """"availability":[{"topic":"$availabilityTopic","payload_available":"online","payload_not_available":"offline"},{"topic":"$proximityAvailabilityTopic","payload_available":"online","payload_not_available":"offline"}],"availability_mode":"all""""
+        val cameraSnapshotAvail = dualAvailabilityFragment(availabilityTopic, cameraSnapshotAvailability)
 
         // Every HA entity backed by a SettingsRegistry descriptor derives its identity and discovery
         // payload from that ONE declaration (HaEntity.buildDiscoveryJson) — byte-identical to the
@@ -3455,6 +3580,26 @@ internal class MqttBridge(
         registryExposable("auto_brightness") {
             stateConverger.reconcile("auto_brightness", force = true)
         }
+        // Camera trial (experimental, off by default, offered only where the profile declares a camera).
+        // The switch is the master privacy stop: with it off the hardware does not open for anything, and
+        // turning it on here arms nothing more — Android still withholds the camera until the permission
+        // is granted at the panel.
+        registryExposable("camera_enabled") {
+            stateConverger.reconcile("camera_enabled", force = true)
+        }
+        // The snapshot as an `image` entity carrying a URL. Home Assistant stores the URL and fetches a
+        // frame only when somebody looks at the card, so a still exists without the panel ever taking one
+        // — and no frame is parked on the broker, which the camera contract forbids outright. Its own
+        // availability topic carries the master switch, so an off camera reads `unavailable` instead of
+        // showing a stale frame that would imply the panel is still watching.
+        cameraSnapshotAnnounced = capabilitySnapshot?.hasCamera == true
+        if (cameraSnapshotAnnounced) {
+            publishConfig(
+                "image", "${panel}_camera_snapshot",
+                cameraSnapshotDiscoveryJson(panel, cameraSnapshotAvail, device),
+            )
+        }
+        publishCameraSnapshot(refreshUrl = true)
         publishConfig(
             "sensor", "${panel}_storage_health",
             """{"name":"Storage health","object_id":"${panel}_storage_health","unique_id":"${panel}_storage_health","state_topic":"$stateStorageHealth","json_attributes_topic":"$attrStorageHealth","icon":"mdi:database-alert","entity_category":"diagnostic",$avail,$device}""",
@@ -4226,6 +4371,7 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "sensor" to "${panel}_diag_wifi_outages_24h", "sensor" to "${panel}_diag_wifi_outages_7d",
     "sensor" to "${panel}_diag_schema_reconcile",
     "sensor" to "${panel}_storage_health",
+    "switch" to "${panel}_camera_enabled", "image" to "${panel}_camera_snapshot",
     "button" to "${panel}_reload", "button" to "${panel}_reboot",
     "button" to "${panel}_launcher", "button" to "${panel}_home",
     "button" to "${panel}_admin_launcher",
