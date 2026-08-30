@@ -1,0 +1,7 @@
+The wake-word models in this directory (okay_nabu, hey_jarvis, hey_mycroft, alexa; .tflite plus
+the .json manifest each) are unmodified copies from https://github.com/esphome/micro-wake-word-models
+at commit 05b65922cc433c9df13e98e32a7fe520758c837e (models/v2/), licensed under the Apache
+License 2.0 reproduced in the adjacent LICENSE.txt. Each manifest names the model's author.
+
+The native engine that runs them, and its own third-party attributions, are documented in
+app/src/main/cpp/microwakeword/THIRD_PARTY.md. Re-vendor with tools/wakeword/vendor-upstream.sh.

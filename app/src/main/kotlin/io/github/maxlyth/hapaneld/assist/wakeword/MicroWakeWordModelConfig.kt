@@ -1,0 +1,99 @@
+package io.github.maxlyth.hapaneld.assist.wakeword
+
+import android.content.Context
+import org.json.JSONObject
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
+/**
+ * One bundled micro-wake-word model, described by the JSON manifest published beside each
+ * `.tflite` in `esphome/micro-wake-word-models` (`models/v2/<id>.json`). Bundled copies live under
+ * `assets/wakeword/`; see that directory's `LICENSE.txt` and `app/src/main/cpp/microwakeword/THIRD_PARTY.md`.
+ */
+data class MicroWakeWordModelConfig(
+    /** Asset id: the JSON's basename, e.g. `okay_nabu`. */
+    val id: String,
+    /** Human-readable phrase, e.g. "Okay Nabu". */
+    val wakeWord: String,
+    val author: String,
+    val website: String?,
+    /** The `.tflite` file name inside `assets/wakeword/`. */
+    val modelFile: String,
+    val trainedLanguages: List<String>,
+    val version: Int,
+    /** Detection threshold on the sliding-window mean probability, 0..1. */
+    val probabilityCutoff: Float,
+    /** Feature step in milliseconds; one feature frame per step. */
+    val featureStepSizeMs: Int,
+    /** Number of inferences averaged before comparing against [probabilityCutoff]. */
+    val slidingWindowSize: Int,
+    /** Interpreter arena the trainer measured (an ESP32 figure; the native engine adds headroom). */
+    val tensorArenaSize: Int,
+) {
+    val modelAssetPath: String get() = "$ASSET_DIR/$modelFile"
+
+    companion object {
+        const val ASSET_DIR = "wakeword"
+
+        /** Parse a manifest. Throws [IllegalArgumentException] on a malformed or non-micro manifest. */
+        fun parse(id: String, json: String): MicroWakeWordModelConfig {
+            val root = try {
+                JSONObject(json)
+            } catch (e: org.json.JSONException) {
+                throw IllegalArgumentException("wake word manifest $id is not valid JSON", e)
+            }
+            require(root.optString("type") == "micro") { "wake word manifest $id is not a micro model" }
+            val micro = root.optJSONObject("micro")
+                ?: throw IllegalArgumentException("wake word manifest $id has no micro section")
+            val cutoff = micro.optDouble("probability_cutoff", Double.NaN)
+            require(!cutoff.isNaN() && cutoff in 0.0..1.0) { "wake word manifest $id has an invalid probability_cutoff" }
+            val step = micro.optInt("feature_step_size", 0)
+            require(step > 0) { "wake word manifest $id has an invalid feature_step_size" }
+            val window = micro.optInt("sliding_window_size", 0)
+            require(window > 0) { "wake word manifest $id has an invalid sliding_window_size" }
+            val model = root.optString("model")
+            require(model.isNotEmpty() && !model.contains('/')) { "wake word manifest $id has an invalid model file" }
+            val languages = root.optJSONArray("trained_languages")?.let { array ->
+                List(array.length()) { array.getString(it) }
+            } ?: emptyList()
+            return MicroWakeWordModelConfig(
+                id = id,
+                wakeWord = root.optString("wake_word").ifEmpty { id },
+                author = root.optString("author"),
+                website = root.optString("website").ifEmpty { null },
+                modelFile = model,
+                trainedLanguages = languages,
+                version = root.optInt("version", 0),
+                probabilityCutoff = cutoff.toFloat(),
+                featureStepSizeMs = step,
+                slidingWindowSize = window,
+                tensorArenaSize = micro.optInt("tensor_arena_size", 0),
+            )
+        }
+
+        /** Ids of the bundled models (every `<id>.json` under `assets/wakeword/`), sorted. */
+        fun bundledIds(context: Context): List<String> =
+            (context.assets.list(ASSET_DIR) ?: emptyArray())
+                .filter { it.endsWith(".json") }
+                .map { it.removeSuffix(".json") }
+                .sorted()
+
+        /** Load and parse one bundled manifest by id. */
+        @Throws(IOException::class)
+        fun fromAssets(context: Context, id: String): MicroWakeWordModelConfig {
+            val text = context.assets.open("$ASSET_DIR/$id.json").bufferedReader().use { it.readText() }
+            return parse(id, text)
+        }
+
+        /** Read the model flatbuffer into a direct buffer, as the native engine requires. */
+        @Throws(IOException::class)
+        fun readModel(context: Context, config: MicroWakeWordModelConfig): ByteBuffer {
+            val bytes = context.assets.open(config.modelAssetPath).use { it.readBytes() }
+            return ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
+                put(bytes)
+                rewind()
+            }
+        }
+    }
+}
