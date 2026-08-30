@@ -100,6 +100,7 @@ cleanup_provision_resources() {
 handle_provision_signal() {
   local status="$1"
   trap - EXIT INT TERM
+  PROVISION_SIGNAL_CLEANUP=1
   cleanup_provision_resources
   exit "$status"
 }
@@ -200,6 +201,7 @@ DB_OBSERVER_HOST_SCRIPT=""
 DB_OBSERVER_REMOTE_SCRIPT=""
 DB_OBSERVER_REMOTE_STAGE=""
 DB_OBSERVER_REMOTE_OWNER=""
+PROVISION_SIGNAL_CLEANUP=0
 ADB_INSTALL_OUTPUT=""
 SHIZUKU_DIR=""
 TARGET_APK_SHA256=""
@@ -5911,6 +5913,10 @@ cleanup_root_database_observer() {
   DB_OBSERVER_REMOTE_STAGE=""
   DB_OBSERVER_REMOTE_OWNER=""
   [ -z "$host_script" ] || rm -f "$host_script" "$host_script.ready" 2>/dev/null || true
+  # Do not start a new privileged transport after INT/TERM. The staged observer owns its remote
+  # database copy with EXIT/HUP/INT/TERM traps; signal cleanup removes host bytes synchronously and
+  # preserves the caller's signal status and latency. Ordinary exits still perform the guarded sweep.
+  [ "${PROVISION_SIGNAL_CLEANUP:-0}" != 1 ] || return 0
   if [ -n "$remote_script" ]; then
     cleanup_command="rm -f $remote_script"
     if [ -n "$remote_stage" ] && [ -n "$remote_owner" ]; then
