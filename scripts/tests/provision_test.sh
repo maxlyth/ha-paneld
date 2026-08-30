@@ -8345,9 +8345,9 @@ if msys_converted_non_host_argument >/dev/null; then
 else
   fail_test "the unguarded control rewrites a device path into the Windows tree"
 fi
-assert_msys_argv "^argv=$MSYS_ROOT/data/local/tmp/hapaneld-helper-[0-9a-f]+\$" \
-  "the unguarded control reproduces the reported staging failure"
-refute_msys_argv '^argv=/data/local/tmp/hapaneld-helper-[0-9a-f]+$' \
+assert_msys_argv "^argv=$MSYS_ROOT/data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]+-script\$" \
+  "the unguarded control reproduces the first protected staging failure"
+refute_msys_argv '^argv=/data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]+-script$' \
   "the unguarded control sends no literal device path"
 
 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
