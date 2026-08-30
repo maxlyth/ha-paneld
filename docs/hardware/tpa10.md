@@ -207,6 +207,28 @@ The TPA10 has **three classes** of physical button, confirmed on-device with `ge
 
 </details>
 
+## Camera
+
+GalaxyCore **GC05A2 / GC5035**, a 2592x1944 sensor. Android reports one camera at `LIMITED` hardware level, `BACKWARD_COMPATIBLE` only, `Facing: Back`, with no flash and no autofocus, through the `legacy/0` provider (`device@3.3`).
+
+> [!NOTE]
+> The firmware's own feature flags are wrong about it: the panel declares `android.hardware.camera.front` while the HAL reports `Facing: Back`. Gate on the device profile and on what `CameraManager` actually enumerates, never on `hasSystemFeature`.
+
+1280x720 is offered in all three formats — `IMPLEMENTATION_DEFINED`, `YUV_420_888` and `BLOB` — so both the preview and the JPEG paths are available, and a 720p `BLOB` capture declares a one-frame stall at 30 fps, so stills are cheap. `android.control.aeAvailableTargetFpsRanges` offers only `[15 30]` and `[30 30]`: there is no locked 15 fps sensor mode, so a 15 fps stream comes from pacing the encoder, not from asking the sensor.
+
+The only hardware H.264 encoder is `OMX.rk.video_encoder.avc`, served by the OMX IL HAL (this panel has a `media.codec` process and no Codec2 vendor service). It declares `176x144`-`1920x1088` at `16x8` alignment, a 1-10 Mbps bitrate range and four concurrent instances. There is **no hardware HEVC encoder** — the only HEVC entry is the software `c2.android.hevc.encoder`, shipped `enabled="false"`.
+
+> [!IMPORTANT]
+> Treat the vendor's `media_codecs_performance.xml` figures as boilerplate, not measurement: the hardware and software AVC encoders report identical `measured-frame-rate` values at both 720x480 and 1280x720, which cannot be a real measurement. Assume 720p until you have measured otherwise on your own panel.
+
+A panel showing a dashboard is not idle: ha-paneld already holds two live `OMX.rk.video_decoder.avc` instances for the dashboard's own camera cards, so an encode session contends with existing decode work on the same Rockchip VPU.
+
+ha-paneld can serve this camera to Home Assistant, as an **experimental feature that is off by default**. It is enabled per panel by **Camera (experimental trial)** under Configure → Behaviour, which appears only because this device profile declares `hardware.camera`, alongside the **Camera max resolution**, **max frame rate** and **max bitrate** ceilings (720p / 15 fps / 2000 kbps by default); with the switch on, the panel serves a video-only H.264 stream at `rtsp://<panel>:8554/live` and a still at `GET /api/v1/camera/snapshot.jpg`. Home Assistant's Generic Camera takes the RTSP URL as a stream source and renders it as a WebRTC card, and go2rtc and Frigate pull it directly. The stream URL accepts `?res=`, `?fps=` and `?kbps=` to ask for *less* than the profile's ceilings and never for more; the first viewer's choice sets the single encode session and later viewers join it. Whenever the camera is open the panel draws its own red indicator that page content cannot cover, and if that indicator cannot be drawn the camera does not open. See [`GET /api/v1/status`](../api.md) for the `camera` object that reports the encoder, the delivered frame rate and bitrate, and any fault.
+
+> [!WARNING]
+> Do not put a Home Assistant camera card for **this** panel on **this** panel's own dashboard. The panel would decode its own encode in a loop, on the same video engine, for no benefit.
+
+
 ## Other silicon
 
 Camera GalaxyCore **GC05A2 / GC5035**; audio codec **ES7202**; Goodix touch; `rk808`/`rk860` PMIC.

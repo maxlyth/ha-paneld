@@ -4,8 +4,8 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
-| Tuya TPA10 | rk3566 | `avsux` sysfs (root daemon) | ToF VI5300, CHT8305 temp+humidity, CG5256 light | no | no | [tpa10.md](tpa10.md) |
-| Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx) | yes — NXP, but Android-NFC disabled | no | [wf1589t.md](wf1589t.md) |
+| Tuya TPA10 | rk3566 | `avsux` sysfs (root daemon) | ToF VI5300, CHT8305 temp+humidity, CG5256 light; **[camera](tpa10.md#camera)** (GC05A2) and ES7202 microphone | no | no | [tpa10.md](tpa10.md) |
+| Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx); **[camera](wf1589t.md#camera)** (GC05A2) and ES7202 microphone | yes — NXP, but Android-NFC disabled | no | [wf1589t.md](wf1589t.md) |
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | root helper on supplier `userdebug`; unavailable on stock firmware | GXHT30 temperature + humidity (accuracy unverified); experimental VI530x proximity | no | no | [smt1019.md](smt1019.md) |
@@ -55,6 +55,7 @@ The three panel classes form a clear ladder: **NSPanel Pro (PX30)** entry-level,
 | Display | 480×480 **square**, ~4" | 1920×1200 16:10, ~10.1"/~226 ppi | 1920×1200 16:10, ~10.1"/~226 ppi |
 | Refresh | 60 Hz | 56 Hz | 60 Hz |
 | Layout (dp) | base logical 160 dpi → 480×480 dp | base logical 240 dpi; ha-paneld recommends 212 | base logical 160 dpi → 1920×1200 dp — UI tiny, [raise density](wf1589t.md#display-density--raise-it) |
+| Camera | none | GC05A2, `Facing: Back`; H.264 encode via `OMX.rk.video_encoder.avc` | GC05A2, `Facing: Front`; H.264 encode via `c2.rk.avc.encoder` |
 | Class | entry-level | mid | high |
 
 </details>
