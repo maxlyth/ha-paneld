@@ -126,6 +126,70 @@ class CatalogueTest(unittest.TestCase):
             with self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target(target_path, i18n.validate_source(source_path), expected_locale=target_path.stem)
 
+    def test_stale_target_is_valid_and_partial_merge_preserves_unselected_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path, base_path = root / "en.json", root / "de.json"
+            candidate_path, output = root / "candidate.json", root / "merged" / "de.json"
+            source = self.source()
+            second_text = "Enable panel mode."
+            source["strings"]["settings.second.help"] = {
+                "text": second_text,
+                "sourceHash": i18n.source_hash(second_text),
+                "surface": "settings",
+                "context": "Configure second help",
+                "risk": "ordinary",
+                "siblings": [],
+                "placeholders": [],
+                "frozen": [],
+                "softMaxChars": 40,
+                "hardMaxChars": 80,
+            }
+            source["strings"] = dict(sorted(source["strings"].items()))
+            self.write(source_path, source)
+            self.write(base_path, {
+                "schema": 1, "locale": "de", "sourceRevision": "a" * 40,
+                "strings": {
+                    "settings.example.help": {
+                        "text": "Alte Übersetzung.", "sourceHash": "0" * 64,
+                        "state": "community-corrected",
+                    },
+                    "settings.second.help": {
+                        "text": "Panelmodus aktivieren.",
+                        "sourceHash": source["strings"]["settings.second.help"]["sourceHash"],
+                        "state": "machine-cross-checked",
+                    },
+                    "settings.removed.help": {
+                        "text": "Entfernter Text.", "sourceHash": "9" * 64,
+                        "state": "machine-cross-checked",
+                    },
+                },
+            })
+            i18n.validate_target(base_path, i18n.validate_source(source_path), expected_locale="de")
+            self.write(candidate_path, {
+                "schema": 1, "targetLocale": "de", "sourceRevision": "e" * 40,
+                "sourceCatalogueHash": i18n.hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                "translations": [{
+                    "key": "settings.example.help", "translation": "{name} auf MQTT behalten.",
+                }],
+            })
+            base_before = json.loads(base_path.read_text(encoding="utf-8"))
+            i18n.merge_candidate(source_path, base_path, candidate_path, output)
+            merged = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("machine-draft", merged["strings"]["settings.example.help"]["state"])
+            self.assertEqual(
+                base_before["strings"]["settings.second.help"],
+                merged["strings"]["settings.second.help"],
+            )
+            self.assertNotIn("settings.removed.help", merged["strings"])
+
+            protected = json.loads(base_path.read_text(encoding="utf-8"))
+            protected["strings"]["settings.example.help"]["sourceHash"] = source["strings"]["settings.example.help"]["sourceHash"]
+            protected["strings"]["settings.example.help"]["text"] = "{name} auf MQTT behalten."
+            self.write(base_path, protected)
+            with self.assertRaises(i18n.CatalogueError):
+                i18n.merge_candidate(source_path, base_path, candidate_path, output)
+
     def test_empty_frozen_literal_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = Path(directory) / "en.json"

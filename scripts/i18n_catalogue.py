@@ -162,23 +162,27 @@ def validate_target(
         raise CatalogueError("target root: unsupported schema or locale")
     if expected_locale is not None and root["locale"] != expected_locale:
         raise CatalogueError(f"target root: locale {root['locale']} does not match {expected_locale}")
-    if root["sourceRevision"] != source["sourceRevision"]:
-        raise CatalogueError("target root: stale sourceRevision")
+    if not isinstance(root["sourceRevision"], str) or not REV_RE.fullmatch(root["sourceRevision"]):
+        raise CatalogueError("target root: sourceRevision must be a 40-character lowercase Git SHA")
     records = root["strings"]
     if not isinstance(records, dict):
         raise CatalogueError("target root: strings must be an object")
     for key, record in records.items():
-        if key not in source["strings"] or not isinstance(record, dict):
-            raise CatalogueError(f"target contains unknown record: {key}")
+        if not KEY_RE.fullmatch(key) or not isinstance(record, dict):
+            raise CatalogueError(f"target contains invalid record: {key}")
         exact_keys(record, TARGET_RECORD_KEYS, key)
-        source_record = source["strings"][key]
         text = record["text"]
         if not isinstance(text, str) or not text:
             raise CatalogueError(f"{key}: target text must be non-empty")
-        if record["sourceHash"] != source_record["sourceHash"]:
-            raise CatalogueError(f"{key}: stale source hash")
+        if len(text) > 16_384:
+            raise CatalogueError(f"{key}: target text is unreasonably large")
+        if not isinstance(record["sourceHash"], str) or not SHA_RE.fullmatch(record["sourceHash"]):
+            raise CatalogueError(f"{key}: invalid source hash")
         if record["state"] not in STATES:
             raise CatalogueError(f"{key}: invalid state")
+        source_record = source["strings"].get(key)
+        if source_record is None or record["sourceHash"] != source_record["sourceHash"]:
+            continue
         if record["state"] == "english-fallback" and text != source_record["text"]:
             raise CatalogueError(f"{key}: English fallback does not equal its source")
         if Counter(PLACEHOLDER_RE.findall(text)) != Counter(source_record["placeholders"]):
@@ -326,6 +330,83 @@ def candidate_to_target(source_path: Path, candidate_path: Path, output: Path) -
         validate_target_value.unlink(missing_ok=True)
 
 
+def merge_candidate(
+    source_path: Path,
+    base_target_path: Path,
+    candidate_path: Path,
+    output: Path,
+) -> None:
+    source = validate_source(source_path)
+    base = validate_target(base_target_path, source, expected_locale=base_target_path.stem)
+    candidate = read_json(candidate_path)
+    exact_keys(candidate, CANDIDATE_ROOT_KEYS, "candidate root")
+    locale = candidate["targetLocale"]
+    if candidate["schema"] != SCHEMA or locale not in LOCALES or locale != base["locale"]:
+        raise CatalogueError("candidate root: unsupported or mismatched target locale")
+    if candidate["sourceRevision"] != source["sourceRevision"]:
+        raise CatalogueError("candidate root: stale sourceRevision")
+    catalogue_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    if candidate["sourceCatalogueHash"] != catalogue_hash:
+        raise CatalogueError("candidate root: stale sourceCatalogueHash")
+    translations = candidate["translations"]
+    if not isinstance(translations, list) or not translations:
+        raise CatalogueError("partial candidate translations must be a non-empty array")
+    selected: dict[str, str] = {}
+    previous_key: str | None = None
+    for index, item in enumerate(translations):
+        if not isinstance(item, dict):
+            raise CatalogueError(f"candidate record {index} must be an object")
+        exact_keys(item, CANDIDATE_RECORD_KEYS, f"candidate record {index}")
+        key, translation = item["key"], item["translation"]
+        if key not in source["strings"]:
+            raise CatalogueError(f"candidate record {index}: unknown key {key}")
+        if previous_key is not None and key <= previous_key:
+            raise CatalogueError("partial candidate keys must be unique and in canonical order")
+        previous_key = key
+        if not isinstance(translation, str) or not translation:
+            raise CatalogueError(f"{key}: empty translation")
+        old = base["strings"].get(key)
+        source_record = source["strings"][key]
+        if old and old["state"] == "community-corrected" and old["sourceHash"] == source_record["sourceHash"]:
+            raise CatalogueError(f"{key}: current community correction is protected")
+        if Counter(PLACEHOLDER_RE.findall(translation)) != Counter(source_record["placeholders"]):
+            raise CatalogueError(f"{key}: changed placeholders")
+        if any(translation.count(token) != source_record["text"].count(token) for token in source_record["frozen"]):
+            raise CatalogueError(f"{key}: changed frozen literal")
+        if len(translation) > source_record["hardMaxChars"]:
+            raise CatalogueError(f"{key}: hard length budget exceeded")
+        validate_target_language(key, translation, locale, source_record)
+        selected[key] = translation
+
+    # Removed source keys are never renderable. Drop them from the public merged artifact; any
+    # review value worth retaining belongs in the candidate plan/evidence, not an accumulating
+    # runtime catalogue orphan.
+    merged_strings = {
+        key: value for key, value in base["strings"].items()
+        if key in source["strings"]
+    }
+    for key, translation in selected.items():
+        source_record = source["strings"][key]
+        merged_strings[key] = {
+            "text": translation,
+            "sourceHash": source_record["sourceHash"],
+            "state": "machine-draft",
+        }
+    merged = {
+        "schema": SCHEMA,
+        "locale": locale,
+        "sourceRevision": source["sourceRevision"],
+        "strings": merged_strings,
+    }
+    validation_path = output.parent / f".{output.name}.validation"
+    write_json_atomic(validation_path, merged)
+    try:
+        validate_target(validation_path, source, expected_locale=locale)
+        os.replace(validation_path, output)
+    finally:
+        validation_path.unlink(missing_ok=True)
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     sub = result.add_subparsers(dest="command", required=True)
@@ -342,6 +423,11 @@ def parser() -> argparse.ArgumentParser:
     candidate.add_argument("--source", type=Path, required=True)
     candidate.add_argument("--candidate", type=Path, required=True)
     candidate.add_argument("--output", type=Path, required=True)
+    merge = sub.add_parser("merge-candidate")
+    merge.add_argument("--source", type=Path, required=True)
+    merge.add_argument("--base-target", type=Path, required=True)
+    merge.add_argument("--candidate", type=Path, required=True)
+    merge.add_argument("--output", type=Path, required=True)
     return result
 
 
@@ -360,8 +446,10 @@ def main() -> int:
                 validate_target(target, source, expected_locale=target.stem)
         elif args.command == "export":
             export_batch(args.source, args.locale, args.output, args.worktree)
-        else:
+        elif args.command == "validate-candidate":
             candidate_to_target(args.source, args.candidate, args.output)
+        else:
+            merge_candidate(args.source, args.base_target, args.candidate, args.output)
     except (CatalogueError, subprocess.CalledProcessError) as error:
         print(f"i18n catalogue error: {error}", file=os.sys.stderr)
         return 1

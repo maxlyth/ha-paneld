@@ -100,30 +100,36 @@ class TargetCatalogue private constructor(
             require(root.getInt("schema") == SCHEMA) { "unsupported target catalogue schema" }
             val locale = root.getString("locale")
             require(locale in AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH) { "unsupported target locale: $locale" }
-            val revision = root.getString("sourceRevision")
-            require(revision == source.sourceRevision) { "target sourceRevision is stale" }
+            val revision = root.getString("sourceRevision").also {
+                require(it.matches(Regex("[0-9a-f]{40}"))) { "target sourceRevision must be an exact Git SHA" }
+            }
             val records = root.getJSONObject("strings")
             val parsed = linkedMapOf<String, TargetString>()
             records.keys().asSequence().sorted().forEach { key ->
-                val sourceString = source.strings[key] ?: error("target contains unknown key: $key")
+                require(key.matches(Regex("[a-z0-9][a-z0-9._-]*"))) { "invalid target key: $key" }
+                val sourceString = source.strings[key]
                 val record = records.getJSONObject(key)
                 requireExactKeys(record, setOf("text", "sourceHash", "state"), key)
                 val text = record.getString("text")
                 require(text.isNotEmpty()) { "$key has empty target text" }
-                val hash = record.getString("sourceHash")
-                require(hash == sourceString.sourceHash) { "$key target is stale" }
+                require(text.length <= MAX_STALE_TARGET_CHARS) { "$key target text is unreasonably large" }
+                val hash = record.getString("sourceHash").also {
+                    require(it.matches(Regex("[0-9a-f]{64}"))) { "$key has an invalid source hash" }
+                }
                 val state = TranslationState.fromWireName(record.getString("state"))
                     ?: error("$key has invalid translation state")
-                require(state != TranslationState.ENGLISH_FALLBACK || text == sourceString.text) {
-                    "$key English fallback does not equal its source"
+                if (sourceString != null && hash == sourceString.sourceHash) {
+                    require(state != TranslationState.ENGLISH_FALLBACK || text == sourceString.text) {
+                        "$key English fallback does not equal its source"
+                    }
+                    require(multiset(extractPlaceholders(text)) == multiset(sourceString.placeholders)) {
+                        "$key changed placeholders"
+                    }
+                    require(sourceString.frozen.all { token ->
+                        occurrenceCount(text, token) == occurrenceCount(sourceString.text, token)
+                    }) { "$key changed a frozen literal" }
+                    require(text.length <= sourceString.hardMaxChars) { "$key exceeds its hard length budget" }
                 }
-                require(multiset(extractPlaceholders(text)) == multiset(sourceString.placeholders)) {
-                    "$key changed placeholders"
-                }
-                require(sourceString.frozen.all { token ->
-                    occurrenceCount(text, token) == occurrenceCount(sourceString.text, token)
-                }) { "$key changed a frozen literal" }
-                require(text.length <= sourceString.hardMaxChars) { "$key exceeds its hard length budget" }
                 parsed[key] = TargetString(key, text, hash, state)
             }
             return TargetCatalogue(locale, revision, parsed)
@@ -137,15 +143,12 @@ class Strings(
     private val target: TargetCatalogue? = null,
     private val pseudo: Boolean = false,
 ) {
-    init {
-        require(target == null || target.sourceRevision == source.sourceRevision)
-    }
-
     val locale: String get() = when {
         pseudo -> AppLocale.PSEUDO
-        target?.strings?.values?.any {
-            it.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                it.state == TranslationState.COMMUNITY_CORRECTED
+        target?.strings?.any { (key, value) ->
+            value.sourceHash == source.strings[key]?.sourceHash &&
+                (value.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                    value.state == TranslationState.COMMUNITY_CORRECTED)
         } == true -> target.locale
         else -> AppLocale.ENGLISH
     }
@@ -154,6 +157,7 @@ class Strings(
         val english = source.text(key)
         if (pseudo) return pseudoLocalize(english)
         val candidate = target?.strings?.get(key) ?: return english
+        if (candidate.sourceHash != source.strings.getValue(key).sourceHash) return english
         return when (candidate.state) {
             TranslationState.MACHINE_CROSS_CHECKED,
             TranslationState.COMMUNITY_CORRECTED,
@@ -164,6 +168,8 @@ class Strings(
         }
     }
 }
+
+private const val MAX_STALE_TARGET_CHARS = 16_384
 
 /** Asset-backed catalogue cache. A missing or malformed target rejects that locale to English. */
 class CatalogueLoader(private val readAsset: (String) -> String) {

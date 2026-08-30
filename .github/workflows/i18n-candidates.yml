@@ -1,0 +1,141 @@
+name: Translation candidates
+run-name: Translation candidates · ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      locales:
+        description: Comma-separated locales (de, fr, it, es, zh-Hans)
+        required: true
+        default: de,fr,it,es,zh-Hans
+  push:
+    branches: [main]
+    paths:
+      - app/src/main/assets/i18n/en.json
+      - app/src/main/assets/i18n/context/**
+      - scripts/i18n_catalogue.py
+      - scripts/i18n_deepl.py
+      - .github/workflows/i18n-candidates.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translation-candidates-main
+  cancel-in-progress: false
+
+jobs:
+  candidates:
+    name: Read-only candidate artifact
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare trusted changed-key plan
+        id: plan
+        shell: bash
+        env:
+          REQUESTED_LOCALES: ${{ github.event_name == 'workflow_dispatch' && inputs.locales || 'de,fr,it,es,zh-Hans' }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          IFS=',' read -ra requested <<<"$REQUESTED_LOCALES"
+          declare -A seen=()
+          locale_args=()
+          for locale in "${requested[@]}"; do
+            case "$locale" in
+              de|fr|it|es|zh-Hans) ;;
+              *) echo "::error::Unsupported locale selection"; exit 1 ;;
+            esac
+            if [[ -n "${seen[$locale]:-}" ]]; then
+              echo "::error::Duplicate locale selection"
+              exit 1
+            fi
+            seen[$locale]=1
+            locale_args+=(--locale "$locale")
+          done
+          if [[ ${#locale_args[@]} -eq 0 ]]; then
+            echo "::error::At least one locale is required"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/i18n-candidates"
+          python3 scripts/i18n_deepl.py plan \
+            --source app/src/main/assets/i18n/en.json \
+            --target-dir app/src/main/assets/i18n \
+            --base-revision "$GITHUB_SHA" \
+            "${locale_args[@]}" \
+            --output "$RUNNER_TEMP/i18n-candidates/plan.json"
+
+      # Keep the credential confined to this one step. The adapter sends it only in
+      # the HTTPS Authorization header and never includes it in output or diagnostics.
+      - name: Generate candidates after quota preflight
+        id: api
+        env:
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/i18n_deepl.py generate \
+            --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --output-dir "$RUNNER_TEMP/i18n-candidates/generated"
+          status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$RUNNER_TEMP/i18n-candidates/generated/run.json")"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Reject stale trusted base
+        if: steps.api.outputs.status == 'generated'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          python3 scripts/i18n_deepl.py check-base \
+            --expected "$GITHUB_SHA" \
+            --repository . \
+            --remote-ref origin/main
+
+      - name: Fail-closed validation and merge
+        if: steps.api.outputs.status == 'generated'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/i18n-candidates/validated"
+          for candidate in "$RUNNER_TEMP"/i18n-candidates/generated/candidates/*.json; do
+            locale="$(basename "$candidate" .json)"
+            python3 scripts/i18n_catalogue.py merge-candidate \
+              --source app/src/main/assets/i18n/en.json \
+              --base-target "app/src/main/assets/i18n/$locale.json" \
+              --candidate "$candidate" \
+              --output "$RUNNER_TEMP/i18n-candidates/validated/$locale.json"
+            python3 scripts/i18n_catalogue.py validate \
+              --source app/src/main/assets/i18n/en.json \
+              --target "$RUNNER_TEMP/i18n-candidates/validated/$locale.json"
+          done
+          cp "$RUNNER_TEMP/i18n-candidates/plan.json" "$RUNNER_TEMP/i18n-candidates/validated/plan.json"
+          cp "$RUNNER_TEMP/i18n-candidates/generated/run.json" "$RUNNER_TEMP/i18n-candidates/validated/run.json"
+
+      - name: Recheck trusted base before publication
+        if: steps.api.outputs.status == 'generated'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          python3 scripts/i18n_deepl.py check-base \
+            --expected "$GITHUB_SHA" \
+            --repository . \
+            --remote-ref origin/main
+
+      - name: Upload validated candidates
+        if: steps.api.outputs.status == 'generated'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: translation-candidates-${{ github.sha }}
+          path: ${{ runner.temp }}/i18n-candidates/validated
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Summarize candidate run
+        if: always() && steps.api.outcome == 'success'
+        run: |
+          python3 scripts/i18n_deepl.py summary \
+            --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --run "$RUNNER_TEMP/i18n-candidates/generated/run.json" \
+            >> "$GITHUB_STEP_SUMMARY"

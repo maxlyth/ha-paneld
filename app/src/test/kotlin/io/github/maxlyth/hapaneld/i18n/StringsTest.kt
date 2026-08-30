@@ -54,7 +54,7 @@ class StringsTest {
         assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
     }
 
-    @Test fun `stale placeholder and frozen literal targets fail closed`() {
+    @Test fun `current mechanical violations reject while stale records fall back per key`() {
         val source = SourceCatalogue.parse(english)
         assertThrows(IllegalArgumentException::class.java) {
             TargetCatalogue.parse(target("Ohne Platzhalter auf MQTT.", "machine-cross-checked"), source)
@@ -62,9 +62,13 @@ class StringsTest {
         assertThrows(IllegalArgumentException::class.java) {
             TargetCatalogue.parse(target("{name} im Broker behalten.", "machine-cross-checked"), source)
         }
-        assertThrows(IllegalArgumentException::class.java) {
-            TargetCatalogue.parse(target("{name} auf MQTT behalten.", "machine-cross-checked", "0".repeat(64)), source)
-        }
+        val stale = TargetCatalogue.parse(
+            target("Alte Übersetzung ohne aktuelle Struktur.", "machine-cross-checked", "0".repeat(64))
+                .replace(source.sourceRevision, "f".repeat(40)),
+            source,
+        )
+        assertEquals("Keep {name} on MQTT.", Strings(source, stale).get("settings.example.help"))
+        assertEquals("en", Strings(source, stale).locale)
         assertThrows(IllegalArgumentException::class.java) {
             TargetCatalogue.parse(target("{name} auf MQTT MQTT behalten.", "machine-cross-checked"), source)
         }
