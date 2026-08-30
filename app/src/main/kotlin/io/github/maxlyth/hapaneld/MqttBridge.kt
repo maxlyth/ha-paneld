@@ -401,6 +401,20 @@ internal fun applyAcknowledgedVoiceEnabled(
     return true
 }
 
+/** Camera OFF is always immediate. Camera ON is admitted only on a camera-capable profile and only
+ * after the local approval broker accepts the exact request. The caller performs no state mutation
+ * until this function returns, so a missing capability or pending/refused approval cannot pre-arm a
+ * hidden camera setting. */
+internal fun requireCameraEnableAdmission(
+    on: Boolean,
+    hasCamera: Boolean,
+    authorize: () -> Unit,
+) {
+    if (!on) return
+    check(hasCamera) { "this panel has no camera capability" }
+    authorize()
+}
+
 /** One non-reentrant lane for HTTP, MQTT, and the on-device escape gesture. The kiosk controller is
  * service-owned, so it can apply synchronously without borrowing the replaceable MQTT dispatcher. */
 internal class KioskSettingCoordinator(
@@ -928,6 +942,9 @@ internal class MqttBridge(
     // a write guard, since the command topic is subscribed unconditionally (the wildcard
     // ha-paneld/$panel/+/set).
     private val hasMicrophone: Boolean = false,
+    // Profile-authoritative camera capability. Discovery visibility is not a write guard because the
+    // wildcard command subscription still receives direct camera_enabled publications.
+    private val hasCamera: Boolean = false,
     // Optional service-owned adaptive-brightness engine.
     private val autoBright: AutoBrightnessController,
     private val onAutoBrightnessConfigChanged: () -> Unit = {},
@@ -2683,16 +2700,19 @@ internal class MqttBridge(
     }
 
     /** The camera master switch, commanded from Home Assistant. Enabling arms the trial and nothing more:
-     *  Android still withholds the camera until somebody grants the permission at the panel, and on a
-     *  hardened panel the enable direction waits for a local approval first, so no remote message alone
-     *  can put this panel's camera into service. Disabling ends a live session immediately. */
+     *  Android still withholds the camera until somebody grants the permission at the panel, and every
+     *  enable direction waits for a local approval first, so no remote message alone can put this panel's
+     *  camera into service. Disabling ends a live session immediately. */
     private fun handleCameraEnabled(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        if (on) authorizeMqttSensitive(
-            SensitiveOperation.CAMERA_ENABLE,
-            "camera_enabled\u0000enable",
-            "Serve this panel's camera to Home Assistant",
-        )
+        requireCameraEnableAdmission(on, hasCamera) {
+            authorizeMqttSensitive(
+                SensitiveOperation.CAMERA_ENABLE,
+                "camera_enabled\u0000enable",
+                "Serve this panel's camera to Home Assistant",
+                always = true,
+            )
+        }
         config.setCameraEnabled(on)
         // The same actuation the HTTP reconfigure path performs, so both routes converge on one owner.
         onCameraEnabledChanged()
@@ -2962,8 +2982,9 @@ internal class MqttBridge(
         operation: SensitiveOperation,
         payload: String,
         summary: String,
+        always: Boolean = false,
     ) {
-        if (!config.hardenedSecurityEnabled) return
+        if (!always && !config.hardenedSecurityEnabled) return
         val decision = LocalApprovalBroker.instance.request(operation, "mqtt", payload, summary).first
         check(decision == ApprovalBroker.Decision.APPROVED) {
             "approval required on the panel before ${operation.label.lowercase()}"

@@ -1570,6 +1570,7 @@ class PaneldService : Service() {
             // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
             profile.hasButtonBacklight,
             hasMicrophone = profile.hasMicrophone,
+            hasCamera = profile.hasCamera,
             autoBright = autoBright,
             onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
             autoSleepActivity = { autoSleep.activitySnapshot() },

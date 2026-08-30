@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.dualAvailabilityFragment
 import io.github.maxlyth.hapaneld.mqttKnownConfigTopics
+import io.github.maxlyth.hapaneld.requireCameraEnableAdmission
 import io.github.maxlyth.hapaneld.testsupport.TestSources
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -190,6 +191,8 @@ class CameraMqttSurfaceTest {
         assertTrue("the enable direction must ask for local approval", authorizeAt >= 0)
         assertTrue("the handler must write the master switch", writeAt >= 0)
         assertTrue("approval must precede the write, or a refusal arms the camera anyway", authorizeAt < writeAt)
+        assertTrue("camera approval must not be bypassed on Relaxed panels", handler.contains("always = true"))
+        assertTrue("direct MQTT ON must be guarded by the active profile", handler.contains("hasCamera"))
         assertTrue(handler.contains("SensitiveOperation.CAMERA_ENABLE"))
         assertTrue(
             "the owner must be actuated, not only the preference written",
@@ -206,6 +209,36 @@ class CameraMqttSurfaceTest {
         val discovery = slice(mqtt, "private fun publishDiscovery", "private fun jsonEsc")
         assertTrue(discovery.contains("""registryExposable("camera_enabled")"""))
         assertTrue(discovery.contains("cameraSnapshotDiscoveryJson(panel, cameraSnapshotAvail, device)"))
+    }
+
+    @Test fun cameraOffNeverNeedsApprovalEvenWhenTheProfileHasNoCamera() {
+        var approvals = 0
+
+        requireCameraEnableAdmission(on = false, hasCamera = false) { approvals++ }
+
+        assertEquals(0, approvals)
+    }
+
+    @Test fun cameraOnAlwaysRunsLocalApprovalOnACameraCapableProfile() {
+        var approvals = 0
+
+        requireCameraEnableAdmission(on = true, hasCamera = true) { approvals++ }
+
+        assertEquals(1, approvals)
+    }
+
+    @Test fun cameraOnIsRefusedBeforeApprovalWhenTheProfileHasNoCamera() {
+        var approvals = 0
+        var refused = false
+
+        try {
+            requireCameraEnableAdmission(on = true, hasCamera = false) { approvals++ }
+        } catch (_: IllegalStateException) {
+            refused = true
+        }
+
+        assertTrue(refused)
+        assertEquals(0, approvals)
     }
 
     @Test fun aSwitchMovedOutsideMqttStillReachesHomeAssistant() {
