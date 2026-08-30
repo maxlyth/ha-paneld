@@ -915,6 +915,19 @@ class PaneldService : Service() {
     private lateinit var navigate: NavigateController
     private lateinit var volume: VolumeController
     private lateinit var audio: AudioPlaybackCoordinator
+    private lateinit var voice: io.github.maxlyth.hapaneld.assist.VoiceAssistantCoordinator
+    // One coalesced restart per burst of voice_* changes: a bundle import writes every key in turn and
+    // must not rearm the listener once per key.
+    @Volatile private var voiceRestart: kotlinx.coroutines.Job? = null
+    private val voicePrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != null && key.startsWith("voice_")) {
+            voiceRestart?.cancel()
+            voiceRestart = scope.launch {
+                kotlinx.coroutines.delay(VOICE_SETTINGS_COALESCE_MS)
+                voice.start()
+            }
+        }
+    }
     private lateinit var system: SystemController
     private lateinit var tame: TameController
     private lateinit var navbar: NavbarController
@@ -1179,6 +1192,21 @@ class PaneldService : Service() {
             AudioPlayer.factory(cacheDir),
             onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
         )
+        // Arms only when the setting is on and the profile declares a microphone. The profile is the
+        // authority: the platform feature flag reports one on hardware that captures silence. Where the
+        // native listener cannot load, the feature is press-to-speak and holds no microphone while idle.
+        voice = io.github.maxlyth.hapaneld.assist.voiceAssistantCoordinator(
+            context = this,
+            config = config,
+            scope = scope,
+            audio = audio,
+            microphoneAvailable = { profile.hasMicrophone },
+            foregroundMicrophone = ::setMicrophoneForegroundActive,
+            state = voiceStateAuthority,
+            engineFactory = io.github.maxlyth.hapaneld.assist.MicroWakeWordEngineFactory(this),
+        )
+        config.registerChangeListener(voicePrefsListener)
+        scope.launch { voice.start() }
         system = SystemController(AndroidSystemEnv(this))
         companionDataOperationState = CompanionDataOperationState.from(this)
         entityLearning = EntityLearningManager(
@@ -1415,6 +1443,8 @@ class PaneldService : Service() {
                 }
             },
             pendingLiveSettings = liveSettingAuthority::pendingSnapshot,
+            assistPipelines = io.github.maxlyth.hapaneld.assist.HaAssistPipelineDirectory(config),
+            voiceTest = io.github.maxlyth.hapaneld.assist.VoiceTestTrigger { voice.trigger() },
             // Controller-sourced setting values (their state isn't in the config namespace) so the
             // config form/schema/dashboard show live truth. Called on Ktor IO threads (su-safe).
             configLiveValues = ::currentConfigLiveValues,
@@ -3987,6 +4017,10 @@ class PaneldService : Service() {
             if (::autoSleep.isInitialized) {
                 closeOwnerResult("auto sleep") { autoSleep.closeAndJoin(asyncTeardownDeadline.remainingMs()) }
             }
+            if (::voice.isInitialized) {
+                config.unregisterChangeListener(voicePrefsListener)
+                closeOwnerResult("voice assistant") { voice.shutdown(asyncTeardownDeadline.remainingMs()) }
+            }
             if (::haExactEntityStream.isInitialized) {
                 closeOwner("HA exact entity stream") { haExactEntityStream.close() }
                 // Identity-gated: a successor service may already have installed its own coordinator by
@@ -4695,6 +4729,8 @@ class PaneldService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        private const val VOICE_SETTINGS_COALESCE_MS = 300L
+
         private const val TAG = "ha-paneld/svc"
         private const val CHANNEL_ID = "ha-paneld"
         // Channel sound is immutable after creation. A distinct ID guarantees the silence setting can
