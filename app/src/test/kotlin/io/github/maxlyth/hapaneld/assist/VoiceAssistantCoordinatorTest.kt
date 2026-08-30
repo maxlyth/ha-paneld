@@ -12,6 +12,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -111,6 +112,11 @@ class VoiceAssistantCoordinatorTest {
             while (runners.size <= index) kotlinx.coroutines.delay(5)
             runners[index].also { it.started.await() }
         }
+    }
+
+    /** Waits for a condition but never fails on it, so the assertion that follows reports the defect. */
+    private fun settleUntil(condition: () -> Boolean) = runBlocking {
+        withTimeoutOrNull(2_000) { while (!condition()) kotlinx.coroutines.delay(5) }
     }
 
     /** Waits for the in-flight run to unwind, so a phase can be asserted rather than waited for. */
@@ -358,9 +364,9 @@ class VoiceAssistantCoordinatorTest {
         c.stop()
         assertFalse("the claim must outlive the capture it covers", foregroundCalls.contains(false))
         gate.complete(Unit)
-        // Wait for the run to unwind, which happens either way, then assert. Waiting for the release
-        // itself would let a coordinator that never releases fail by timing out rather than by being wrong.
-        awaitRunFinished(c)
+        // Give the unwinding run a bounded chance to release, then assert. Swallowing the timeout is
+        // what makes a coordinator that never releases fail on the assertion rather than by timing out.
+        settleUntil { foregroundCalls.size >= 2 }
         assertEquals("the claim is released once the attachment has closed", listOf(true, false), foregroundCalls)
     }
 
