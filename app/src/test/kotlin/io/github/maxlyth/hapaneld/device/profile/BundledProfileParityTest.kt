@@ -414,6 +414,75 @@ class BundledProfileParityTest {
         assertEquals("compound matcher must not contain duplicate predicates", 2, branch.all.size)
     }
 
+    @Test fun unofficialYcSm55pMatcherRequiresTheObservedCompoundIdentity() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.sunworld-yc-sm55p-p76s01"
+        }.document
+        val exact = DeviceFacts(
+            model = "rk3576s_u",
+            device = "rk3576s_u",
+            productVersion = "1.0.0",
+        )
+
+        assertTrue("observed compound identity no longer matches", candidate.matches(exact))
+        assertFalse("model-only identity must not match", candidate.matches(exact.copy(device = "unrelated")))
+        assertFalse("device-only identity must not match", candidate.matches(exact.copy(model = "unrelated")))
+        assertFalse(
+            "product version is part of the deliberate import check",
+            candidate.matches(exact.copy(productVersion = "2.0.0")),
+        )
+
+        val branch = candidate.match.any.single()
+        assertEquals(
+            setOf(
+                ProfilePredicate(ProfileFact.MODEL, ProfileMatchOp.EQUALS, listOf("rk3576s_u")),
+                ProfilePredicate(ProfileFact.DEVICE, ProfileMatchOp.EQUALS, listOf("rk3576s_u")),
+                ProfilePredicate(ProfileFact.PRODUCT_VERSION, ProfileMatchOp.EQUALS, listOf("1.0.0")),
+            ),
+            branch.all.toSet(),
+        )
+        assertEquals("compound matcher must not contain duplicate predicates", 3, branch.all.size)
+    }
+
+    @Test fun unofficialYcSm55pKeepsUnverifiedHardwareConservative() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.sunworld-yc-sm55p-p76s01"
+        }.document
+
+        assertEquals("0.9.7-rc3", candidate.requires.minCoreVersion)
+        assertEquals(setOf("access.android-su", "screen.brightness-zero"), candidate.requires.drivers)
+        assertEquals("android", candidate.platform.suForm)
+        assertTrue("the contributor's Magisk environment is app-accessible", candidate.platform.appCanSu)
+        assertEquals("brightness-zero", candidate.hardware.screenOff)
+        assertEquals("none", candidate.hardware.led.mechanism)
+        assertFalse("the product has no panel backlight button", candidate.hardware.hasButtonBacklight)
+        assertFalse("the reporter says the finished panel has no camera", candidate.hardware.hasCamera)
+        assertFalse("the audio capture chain has not been proved", candidate.hardware.hasMicrophone)
+        assertNull("the firmware node does not prove a fitted proximity sensor", candidate.sensors.proximityTechnology)
+        assertNull("the firmware node does not prove a usable ambient sensor", candidate.sensors.lightTechnology)
+        assertFalse("AHT20 is not declared until the physical part is proved", candidate.sensors.cht8305)
+        assertTrue("standard Android keys must not be grabbed through evdev", candidate.input.evdevButtons.isEmpty())
+        assertNull("the firmware panel dimensions are not trusted as a retail measurement", candidate.display.physicalPpi)
+        assertFalse("a community profile must remain import-only", candidate.match.fallback)
+        assertEquals(emptyList<String>(), candidate.metadata.testedFirmware)
+        assertEquals(
+            mapOf("Performance" to "performance", "Efficiency" to "powersave", "Auto" to "schedutil"),
+            candidate.cpu.governors,
+        )
+        val soc = requireNotNull(candidate.soc)
+        assertEquals("Rockchip RK3576S", soc.model)
+        assertEquals(2024, soc.introducedYear)
+        assertEquals(
+            listOf(
+                ProfileCpuCoreCluster("Arm Cortex-A72", 4),
+                ProfileCpuCoreCluster("Arm Cortex-A53", 4),
+            ),
+            soc.cpuCores,
+        )
+        assertTrue("unverified vendor package changes must stay empty", candidate.provisioning.packages.isEmpty())
+        assertTrue("unverified provisioning recipes must stay empty", candidate.provisioning.recipes.isEmpty())
+    }
+
     /**
      * The Pi 4 matcher is deliberately looser than the Echo's exact-equals pair, because the board model
      * carries a hardware revision suffix that varies per unit. It still has to stay compound: `rpi4` alone
@@ -733,16 +802,20 @@ class BundledProfileParityTest {
         val EXPECTED_UNOFFICIAL_IDS = setOf(
             "community.cronos-lineageos18",
             "community.rpi4-konstakang-lineageos",
+            "community.sunworld-yc-sm55p-p76s01",
         )
         val EXPECTED_UNOFFICIAL_FILENAMES = setOf(
             "community-cronos-lineageos18.yaml",
             "community-rpi4-konstakang-lineageos.yaml",
+            "community-sunworld-yc-sm55p-p76s01.yaml",
         )
         val EXPECTED_UNOFFICIAL_SHA256 = mapOf(
             "community-cronos-lineageos18.yaml" to
                 "c0207b2b43f46d84641d2d33683cb7fb0e8a4013544827bd3041337a40d02ea2",
             "community-rpi4-konstakang-lineageos.yaml" to
                 "e49e0db3e29d8bb77c581c32a2f70d55bc629178d4bb2077a7b55d1885bd2e29",
+            "community-sunworld-yc-sm55p-p76s01.yaml" to
+                "e2ff5c96d633251fa01731016484c8c53d8d7fb952bf8e28e481bd8a98268e5c",
         )
 
         /** Branch-level collisions belong here; matrix-level cross-profile collisions are pinned above. */

@@ -1,0 +1,86 @@
+schema: 2
+id: community.sunworld-yc-sm55p-p76s01
+version: 0.1.0
+display_name: Unofficial Sunworld YC-SM55P (P76S01)
+soc_class: rk3576
+soc:
+  model: Rockchip RK3576S
+  introduced_year: 2024
+  cpu_cores:
+    - architecture: Arm Cortex-A72
+      count: 4
+    - architecture: Arm Cortex-A53
+      count: 4
+metadata:
+  author: Community contributor
+  source: https://github.com/maxlyth/ha-paneld/issues/129
+  links:
+    - label: P76S01 board
+      url: https://www.aiportpi.com/yc-p76S01.html
+    - label: Product listing
+      url: https://www.aliexpress.us/item/3256809190421440.html
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2024/1212/2033.html
+  license: Apache-2.0
+  maturity: draft
+  tested_firmware: []
+  limitations:
+    - Evidence comes from one contributor's diagnostic report and vendor firmware. The profile has not yet been activated on the panel, maintainer-validated or fleet-qualified.
+    - The generic rk3576s_u model, device and 1.0.0 product version may be shared by other P76S01 products. This profile is import-only and must be selected manually on the named 5.5-inch panel.
+    - Optional AHT20 climate, EM3071x light/proximity and GC2145 camera devices appear in the firmware, but the reporter says the finished panel has no camera or proximity sensor. None is declared until physical testing proves a fitted, usable component.
+    - Screen off uses the conservative brightness-zero route. The firmware contains a PWM backlight, but its true panel-power route has not been tested from ha-paneld.
+    - Root on the reported panel was added with Magisk. The declaration records that known environment but does not grant root or promise it on stock firmware.
+    - The larger 15.6-inch product is not covered, even if it uses the same P76S01 board family.
+requires:
+  min_core_version: 0.9.7-rc3
+  drivers:
+    - access.android-su
+    - screen.brightness-zero
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 900
+      all:
+        - field: model
+          op: equals
+          values:
+            - rk3576s_u
+        - field: device
+          op: equals
+          values:
+            - rk3576s_u
+        - field: product_version
+          op: equals
+          values:
+            - 1.0.0
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: brightness-zero
+  has_button_backlight: false
+sensors:
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Sunworld
+  model: YC-SM55P
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: schedutil
+display: {}
+provisioning:
+  software: {}
+  display: {}
+  packages: []
+  recipes: []
