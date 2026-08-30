@@ -90,6 +90,17 @@ unique_tmp="$(grep -h '^tmpdir=' "$OUT"/*/tap.log | sort -u | wc -l | tr -d ' ')
 description="every shard receives isolated temporary state"; assert_true test "$unique_tmp" -eq 14
 description="the jobs limit permits the requested concurrency"; assert_true test "$(cat "$STATE/maximum")" -eq 2
 
+DEFAULT_STATE="$TMP/default-state"; mkdir "$DEFAULT_STATE"
+DEFAULT_LOG="$TMP/default.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_STATE_DIR="$DEFAULT_STATE" FAKE_SLEEP_SECONDS=0.5 \
+  bash "$WRAPPER" --output "$TMP/default-results" \
+    database-host database-runtime install-export install-runtime helper-transaction \
+    release-integrity renderer-seeding install-finish database-authority fleet-installer git-bash \
+    > "$DEFAULT_LOG" 2>&1
+status=$?
+description="the default-concurrency fake gate passes"; assert_true test "$status" -eq 0
+description="the default launches all eleven independent shards"; assert_true test "$(cat "$DEFAULT_STATE/maximum")" -eq 11
+
 FAIL_LOG="$TMP/fail.log"
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_FAIL_SCOPE=backup \
   bash "$WRAPPER" -j 2 --output "$TMP/fail-results" database-host backup > "$FAIL_LOG" 2>&1
@@ -167,9 +178,9 @@ description="an aggregate mismatch emits no passing totals marker"; assert_true 
 
 TERM_LOG="$TMP/term.log"
 TERM_CHILD_PID_FILE="$TMP/term-child.pid"
-PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_BLOCK_SCOPE=publication \
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_BLOCK_SCOPE=database-host \
 FAKE_BLOCK_PID_FILE="$TERM_CHILD_PID_FILE" \
-  bash "$WRAPPER" --output "$TMP/term-results" publication > "$TERM_LOG" 2>&1 &
+  bash "$WRAPPER" --output "$TMP/term-results" database-host > "$TERM_LOG" 2>&1 &
 term_wrapper_pid=$!
 term_ready=0
 term_attempt=0
