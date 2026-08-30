@@ -2779,6 +2779,9 @@ class DashboardActivity : AppCompatActivity() {
     private fun onAdmissionVisibilityChanged(visible: Boolean) {
         if (destroyed) return
         applyAdmissionPaint(admissionCountdown.onVisibilityChanged(visible))
+        // Coming forward is what makes a microphone foreground service startable again on Android 14,
+        // so a claim the platform refused while the panel was in the background is retried here.
+        if (visible) PaneldService.notifyActivityForeground()
     }
 
     /** Resolve before WebView creation; entity learning may be disabled or may never have scanned. */

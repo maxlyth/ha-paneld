@@ -110,6 +110,21 @@ class VoiceAssistantCoordinator internal constructor(
     private var foregroundClaimed = false
     private val closed = AtomicBoolean(false)
 
+    // Bumped whenever the listener is replaced or torn down. A callback carries the generation it was
+    // armed with, so a hit delivered by an engine that has since been closed or replaced is refused
+    // instead of starting a run for a listener the panel no longer has.
+    private var engineGeneration = 0L
+
+    // Settings that arrived while a run was in flight. Reconfiguring underneath a run would close the
+    // paused wake lease and open an unpaused one alongside the run's own, putting two consumers on one
+    // capture; the run's teardown applies this instead.
+    private var pendingReconfigure = false
+
+    // True from the moment a run is admitted until its capture attachment has been closed. The
+    // microphone foreground-service type must outlive that attachment: dropping it while the run is
+    // still unwinding tells the platform the microphone is closed while it is still being read.
+    private var runHoldsCapture = false
+
     // The source this coordinator actually obtained. Teardown shuts down what was opened and never
     // asks for a source: the supplier builds one on demand, so calling it here would open the
     // microphone on a panel that never used it, purely to close it again.
@@ -133,8 +148,13 @@ class VoiceAssistantCoordinator internal constructor(
             return
         }
         synchronized(lock) {
-            if (armed) disarmLocked()
             armed = true
+            if (runJob?.isActive == true) {
+                // Apply it when the run drains, not underneath it.
+                pendingReconfigure = true
+                return
+            }
+            disarmLocked()
             armEngineLocked(current)
         }
     }
@@ -199,19 +219,29 @@ class VoiceAssistantCoordinator internal constructor(
         shutdown(DEFAULT_CLOSE_TIMEOUT_MS)
     }
 
-    private fun onActivation(activation: WakeWordActivation) {
-        beginRun(activation, settings())
+    /** A hit from the listener armed at [generation]; refused once that listener has been replaced. */
+    private fun onActivation(generation: Long, activation: WakeWordActivation) {
+        beginRun(activation, settings(), generation)
     }
 
-    /** Returns false when a run is already in flight. */
-    private fun beginRun(activation: WakeWordActivation?, current: VoiceSettings): Boolean {
+    /**
+     * Returns false when the run was refused: one is already in flight, the coordinator has stood
+     * down or shut down, the setting is off, or the caller belongs to a superseded listener. The
+     * admission decision is taken inside the lock so a callback cannot pass a check that a concurrent
+     * stop has already invalidated.
+     */
+    private fun beginRun(activation: WakeWordActivation?, current: VoiceSettings, generation: Long? = null): Boolean {
         val mic = obtainSource() ?: return false
         synchronized(lock) {
+            if (closed.get()) return false
             if (runJob?.isActive == true) return false
+            if (generation != null && (generation != engineGeneration || !armed)) return false
+            if (!current.enabled) return false
             if (!claimForegroundLocked()) {
                 state.set(VoiceState.ERROR)
                 return false
             }
+            runHoldsCapture = true
             wakeLease?.pause()
             runJob = scope.launch {
                 var failed = false
@@ -220,6 +250,14 @@ class VoiceAssistantCoordinator internal constructor(
                 } finally {
                     synchronized(lock) {
                         runJob = null
+                        // The attachment is closed by the runner before it returns, so the claim has
+                        // outlived the capture it was covering and may now be reconsidered.
+                        runHoldsCapture = false
+                        if (pendingReconfigure) {
+                            pendingReconfigure = false
+                            disarmLocked()
+                            if (armed) armEngineLocked(settings())
+                        }
                         val lease = wakeLease
                         // A failure stays visible as `error` until the next run replaces it; the panel is
                         // still listening, which the resumed wake lease proves, but the operator sees why
@@ -250,7 +288,15 @@ class VoiceAssistantCoordinator internal constructor(
             state.set(VoiceState.LISTENING)
             val outcome = runnerFactory().run(
                 request,
-                attachAudio = { consumer -> mic.lease(MicPurpose.ASSIST, consumer = consumer) },
+                // Closing the attachment is the panel's own signal that it has stopped listening and is
+                // waiting on Home Assistant, which is the only phase boundary observable from here.
+                attachAudio = { consumer ->
+                    val lease = mic.lease(MicPurpose.ASSIST, consumer = consumer)
+                    AutoCloseable {
+                        lease.close()
+                        state.set(VoiceState.PROCESSING)
+                    }
+                },
                 playback = playback,
             )
             val error = outcome.error
@@ -265,8 +311,9 @@ class VoiceAssistantCoordinator internal constructor(
 
     private fun armEngineLocked(current: VoiceSettings) {
         val mic = obtainSource()
+        val generation = ++engineGeneration
         val built = if (mic != null && current.wakeWords.isNotEmpty()) {
-            engineFactory.create(current.wakeWords, ::onActivation)
+            engineFactory.create(current.wakeWords) { activation -> onActivation(generation, activation) }
         } else {
             null
         }
@@ -287,11 +334,14 @@ class VoiceAssistantCoordinator internal constructor(
     }
 
     private fun disarmLocked() {
+        // Retiring the listener invalidates its callbacks: a hit already in flight names a generation
+        // that no longer matches and is refused rather than starting a run for a closed engine.
+        engineGeneration += 1
         wakeLease?.close()
         wakeLease = null
         engine?.close()
         engine = null
-        if (runJob?.isActive != true) releaseForegroundLocked()
+        if (runJob?.isActive != true && !runHoldsCapture) releaseForegroundLocked()
     }
 
     private fun claimForegroundLocked(): Boolean {

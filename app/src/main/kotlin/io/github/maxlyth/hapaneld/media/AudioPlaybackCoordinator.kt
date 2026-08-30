@@ -68,14 +68,23 @@ internal class AudioPlaybackCoordinator(
 
     /** Accept an announcement for this service lifetime. A newer accepted request replaces older work. */
     @Synchronized
-    fun submit(url: String): Boolean {
-        if (closed) return false
+    fun submit(url: String): Boolean = submitForGeneration(url) != null
+
+    /**
+     * As [submit], but returns the generation the accepted announcement was given, or null when
+     * admission is closed. A caller that must watch its own announcement has to learn the generation
+     * in the same critical section that assigned it: reading [snapshot] afterwards can return a
+     * later announcement's generation and leave the caller watching work that is not its own.
+     */
+    @Synchronized
+    fun submitForGeneration(url: String): Long? {
+        if (closed) return null
         val request = Request(++generation, url)
         snapshot = Snapshot(State.QUEUED, request.generation)
-        if (requests.trySend(request).isSuccess) return true
+        if (requests.trySend(request).isSuccess) return request.generation
         closed = true
         snapshot = Snapshot(State.CLOSED, generation)
-        return false
+        return null
     }
 
     /** Close admission immediately so an HTTP request cannot receive a false acceptance during teardown. */

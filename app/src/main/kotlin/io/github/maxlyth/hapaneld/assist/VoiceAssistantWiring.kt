@@ -45,15 +45,19 @@ internal class HaAssistPipelineDirectory(private val config: Config) : AssistPip
 internal class AnnouncementLanePlayback(
     private val audio: AudioPlaybackCoordinator,
     private val pollMs: Long = POLL_MS,
+    /** Called once the reply has been accepted for playback, so the panel can report that it is speaking. */
+    private val onStarted: () -> Unit = {},
 ) : AssistPlayback {
     override suspend fun play(url: String) {
-        if (!audio.submit(url)) {
-            throw AssistPlaybackException(
+        // The generation comes back from the submission itself. Reading the snapshot afterwards can
+        // return a later announcement's generation, which would leave this run watching, and
+        // reporting on, playback that is not its own.
+        val generation = audio.submitForGeneration(url)
+            ?: throw AssistPlaybackException(
                 AssistPipelineClient.CODE_PLAYBACK_FAILED,
                 "The announcement coordinator is no longer accepting playback",
             )
-        }
-        val generation = audio.snapshot().generation
+        onStarted()
         while (true) {
             val now = audio.snapshot()
             if (now.generation != generation) {
@@ -139,7 +143,7 @@ internal fun voiceAssistantCoordinator(
         runnerFactory = {
             AssistRunner { request, attach, playback -> AssistPipelineClient(config).run(request, attach, playback) }
         },
-        playback = AnnouncementLanePlayback(audio),
+        playback = AnnouncementLanePlayback(audio, onStarted = { state.set(VoiceState.RESPONDING) }),
         foregroundMicrophone = foregroundMicrophone,
         state = state,
     )

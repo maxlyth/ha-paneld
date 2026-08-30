@@ -1193,8 +1193,9 @@ class PaneldService : Service() {
             onFailure = { error -> Log.w(TAG, "audio playback failed: ${error.javaClass.simpleName}") },
         )
         // Arms only when the setting is on and the profile declares a microphone. The profile is the
-        // authority: the platform feature flag reports one on hardware that captures silence. Where the
-        // native listener cannot load, the feature is press-to-speak and holds no microphone while idle.
+        // authority: the platform feature flag reports one on hardware that captures silence. No
+        // wake-word listener ships yet, so the feature is press-to-speak: it holds no microphone while
+        // idle and takes one only for the length of a run.
         voice = io.github.maxlyth.hapaneld.assist.voiceAssistantCoordinator(
             context = this,
             config = config,
@@ -1203,9 +1204,10 @@ class PaneldService : Service() {
             microphoneAvailable = { profile.hasMicrophone },
             foregroundMicrophone = ::setMicrophoneForegroundActive,
             state = voiceStateAuthority,
-            engineFactory = io.github.maxlyth.hapaneld.assist.MicroWakeWordEngineFactory(this),
+            engineFactory = io.github.maxlyth.hapaneld.assist.WakeWordEngineFactory.NONE,
         )
         config.registerChangeListener(voicePrefsListener)
+        voiceForegroundRetry = { voice.retryStart() }
         scope.launch { voice.start() }
         system = SystemController(AndroidSystemEnv(this))
         companionDataOperationState = CompanionDataOperationState.from(this)
@@ -4018,6 +4020,7 @@ class PaneldService : Service() {
                 closeOwnerResult("auto sleep") { autoSleep.closeAndJoin(asyncTeardownDeadline.remainingMs()) }
             }
             if (::voice.isInitialized) {
+                voiceForegroundRetry = null
                 config.unregisterChangeListener(voicePrefsListener)
                 closeOwnerResult("voice assistant") { voice.shutdown(asyncTeardownDeadline.remainingMs()) }
             }
@@ -4730,6 +4733,17 @@ class PaneldService : Service() {
 
     companion object {
         private const val VOICE_SETTINGS_COALESCE_MS = 300L
+
+        // The running service, if any, for the activity's foreground signal. Android refuses a
+        // microphone foreground service started from the background, so a claim the platform refused
+        // is retried the moment the panel's own activity comes forward, rather than only on the
+        // coordinator's slower timer.
+        @Volatile private var voiceForegroundRetry: (() -> Unit)? = null
+
+        /** Called by the dashboard when it becomes visible. Inert when no service or no coordinator. */
+        fun notifyActivityForeground() {
+            voiceForegroundRetry?.invoke()
+        }
 
         private const val TAG = "ha-paneld/svc"
         private const val CHANNEL_ID = "ha-paneld"

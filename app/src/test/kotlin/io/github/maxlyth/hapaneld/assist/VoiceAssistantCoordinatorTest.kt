@@ -51,27 +51,41 @@ class VoiceAssistantCoordinatorTest {
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<AssistOutcome>()
         var attachedPurpose: MicPurpose? = null
+        private var attachment: AutoCloseable? = null
+        private var playbackHandle: AssistPlayback? = null
+
+        /** Close the capture the way the real client does when the utterance ends. */
+        fun finishCapture() {
+            attachment?.close()
+            attachment = null
+        }
+
+        /** Play a reply the way the real client does once Home Assistant returns one. */
+        fun speak(url: String = "/api/tts_proxy/x.mp3") = runBlocking { playbackHandle?.play(url) }
+
         override suspend fun run(
             request: AssistRunRequest,
             attachAudio: (PcmConsumer) -> AutoCloseable,
             playback: AssistPlayback,
         ): AssistOutcome {
             requests += request
-            val attachment = attachAudio(object : PcmConsumer { override fun onFrame(frame: PcmFrame) {} })
+            attachment = attachAudio(object : PcmConsumer { override fun onFrame(frame: PcmFrame) {} })
+            playbackHandle = playback
             started.complete(Unit)
             return try {
                 release.await()
             } finally {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                     teardownGate?.await()
-                    attachment.close()
+                    attachment?.close()
+                    attachment = null
                 }
             }
         }
     }
 
     private val runners = CopyOnWriteArrayList<ScriptedRunner>()
-    private val playback = AssistPlayback { }
+    private val playback = AssistPlayback { state.set(VoiceState.RESPONDING) }
 
     private fun coordinator(retryMs: Long = 60_000, maxTurns: Int = 5) = VoiceAssistantCoordinator(
         scope = scope,
@@ -307,6 +321,67 @@ class VoiceAssistantCoordinatorTest {
         val before = sourceRequests
         assertTrue(c.shutdown(1_000))
         assertEquals("teardown must not open a microphone to close it", before, sourceRequests)
+    }
+
+    @Test
+    fun `a settings change during a run is applied only once the run drains`() {
+        val c = coordinator()
+        c.start()
+        val first = engines.single()
+        engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        val runner = awaitRunner(0)
+        assertTrue("the wake lease stands down for the run", mic.leases[0].paused)
+        // A settings write lands mid-run. Reconfiguring here would close the paused wake lease and
+        // open an unpaused one alongside the run's own, putting two consumers on one capture.
+        settings = settings.copy(wakeWords = listOf("hey_jarvis"))
+        c.start()
+        assertEquals("no listener may be rebuilt underneath a run", 1, engines.size)
+        assertFalse("the retired listener must not be closed mid-run", first.closed)
+        assertEquals("no second wake lease may exist during a run", 1, mic.leases.count { it.purpose == MicPurpose.WAKE_WORD })
+        runner.release.complete(AssistOutcome())
+        awaitRunFinished(c)
+        runBlocking { withTimeout(2_000) { while (engines.size < 2) kotlinx.coroutines.delay(5) } }
+        assertTrue("the deferred change applies when the run drains", first.closed)
+    }
+
+    @Test
+    fun `a hit from a replaced listener cannot start a run`() {
+        val c = coordinator()
+        c.start()
+        val stale = engines.single()
+        settings = settings.copy(wakeWords = listOf("hey_jarvis"))
+        c.start()
+        assertEquals("the listener was replaced", 2, engines.size)
+        stale.onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        assertTrue("a superseded listener must not start a run", runners.isEmpty())
+        assertFalse(c.running)
+    }
+
+    @Test
+    fun `a hit arriving after stop cannot start a run`() {
+        val c = coordinator()
+        c.start()
+        val engine = engines.single()
+        c.stop()
+        engine.onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        assertTrue("a hit after stand-down must not start a run", runners.isEmpty())
+        assertEquals(VoiceState.OFF, state.current())
+    }
+
+    @Test
+    fun `the panel reports processing when it stops listening and responding when it speaks`() {
+        val seen = CopyOnWriteArrayList<VoiceState>()
+        state.setChangeListener { seen += state.current() }
+        val c = coordinator()
+        c.start()
+        engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        val runner = awaitRunner(0)
+        runner.finishCapture()
+        runner.speak()
+        runner.release.complete(AssistOutcome())
+        awaitRunFinished(c)
+        assertTrue("closing capture must report processing: $seen", seen.contains(VoiceState.PROCESSING))
+        assertTrue("playing the reply must report responding: $seen", seen.contains(VoiceState.RESPONDING))
     }
 
     @Test
