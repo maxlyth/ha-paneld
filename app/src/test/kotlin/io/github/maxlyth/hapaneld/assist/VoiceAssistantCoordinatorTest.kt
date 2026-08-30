@@ -51,6 +51,8 @@ class VoiceAssistantCoordinatorTest {
         val requests = CopyOnWriteArrayList<AssistRunRequest>()
         val started = CompletableDeferred<Unit>()
         val release = CompletableDeferred<AssistOutcome>()
+        /** Completed once this run has fully unwound, including its capture attachment. */
+        val finished = CompletableDeferred<Unit>()
         var attachedPurpose: MicPurpose? = null
         private var attachment: AutoCloseable? = null
         private var playbackHandle: AssistPlayback? = null
@@ -81,6 +83,7 @@ class VoiceAssistantCoordinatorTest {
                     attachment?.close()
                     attachment = null
                 }
+                finished.complete(Unit)
             }
         }
     }
@@ -368,6 +371,48 @@ class VoiceAssistantCoordinatorTest {
         // what makes a coordinator that never releases fail on the assertion rather than by timing out.
         settleUntil { foregroundCalls.size >= 2 }
         assertEquals("the claim is released once the attachment has closed", listOf(true, false), foregroundCalls)
+    }
+
+    @Test
+    fun `a cancelled run unwinding cannot erase the run that replaced it`() {
+        val gate = CompletableDeferred<Unit>()
+        teardownGate = gate
+        val c = coordinator()
+        c.start()
+        engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
+        awaitRunner(0)
+        // Stand down and immediately start again: the first run is still unwinding behind the gate.
+        c.stop()
+        c.start()
+        assertEquals(VoiceTestTrigger.Result.Accepted, c.trigger())
+        val replacement = awaitRunner(1)
+        assertTrue("the replacement owns the coordinator", c.running)
+        gate.complete(Unit)
+        settleUntil { runners[0].finished.isCompleted }
+        assertTrue("the retiring run has unwound", runners[0].finished.isCompleted)
+        assertTrue("the retiring run must not erase its replacement", c.running)
+        assertFalse("the retiring run must not drop the replacement's claim", foregroundCalls.contains(false))
+        replacement.release.complete(AssistOutcome())
+    }
+
+    @Test
+    fun `a refused microphone claim on press-to-talk is reported as such and retried`() {
+        engineAvailable = false
+        foregroundAccepts = false
+        val c = coordinator(retryMs = 20)
+        c.start()
+        val result = c.trigger()
+        assertTrue("a refused claim is not a busy panel: $result", result is VoiceTestTrigger.Result.Unavailable)
+        assertTrue(
+            "the reason must name the microphone claim: $result",
+            (result as VoiceTestTrigger.Result.Unavailable).reason.contains("microphone"),
+        )
+        assertEquals(VoiceState.ERROR, state.current())
+        assertTrue("no run may have started", runners.isEmpty())
+        // The refusal schedules a retry, so a panel refused once does not stay mute.
+        foregroundAccepts = true
+        settleUntil { state.current() == VoiceState.IDLE }
+        assertEquals("the retry must recover the panel", VoiceState.IDLE, state.current())
     }
 
     @Test

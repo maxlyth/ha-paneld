@@ -125,6 +125,11 @@ class VoiceAssistantCoordinator internal constructor(
     // still unwinding tells the platform the microphone is closed while it is still being read.
     private var runHoldsCapture = false
 
+    // Identifies the run that currently owns the coordinator's run state. A cancelled run unwinds
+    // after `stop` has already let go of it, and a replacement can be admitted in between, so the
+    // retiring run must prove it is still the owner before clearing anything or releasing the claim.
+    private var runGeneration = 0L
+
     // The source this coordinator actually obtained. Teardown shuts down what was opened and never
     // asks for a source: the supplier builds one on demand, so calling it here would open the
     // microphone on a panel that never used it, purely to close it again.
@@ -180,18 +185,27 @@ class VoiceAssistantCoordinator internal constructor(
         state.set(VoiceState.OFF)
     }
 
-    /** Tap-to-talk: start one run with the preferred pipeline, as if a wake word had fired. */
+    /** Press-to-talk: start one run with the preferred pipeline, as if a wake word had fired. */
     fun trigger(): VoiceTestTrigger.Result {
         if (closed.get()) return VoiceTestTrigger.Result.Unavailable("voice assistant is shut down")
         val current = settings()
         if (!current.enabled) return VoiceTestTrigger.Result.Refused("voice assistant is disabled")
         if (!microphoneAvailable()) return VoiceTestTrigger.Result.Unavailable("this panel has no microphone")
-        return if (beginRun(activation = null, current)) {
-            VoiceTestTrigger.Result.Accepted
-        } else {
-            VoiceTestTrigger.Result.Refused("a voice run is already in progress")
+        return when (beginRun(activation = null, current)) {
+            RunAdmission.STARTED -> VoiceTestTrigger.Result.Accepted
+            RunAdmission.BUSY -> VoiceTestTrigger.Result.Refused("a voice run is already in progress")
+            // The platform refused the microphone foreground service, which on recent Android happens
+            // whenever the panel asks from the background. Saying "busy" would send the operator
+            // looking for a run that does not exist, and without a retry a panel that was refused once
+            // would stay mute until something else happened to rearm it.
+            RunAdmission.FOREGROUND_REFUSED ->
+                VoiceTestTrigger.Result.Unavailable("the panel could not claim the microphone; it will retry when the dashboard comes forward")
+            RunAdmission.NOT_ELIGIBLE -> VoiceTestTrigger.Result.Refused("the voice assistant is not listening")
         }
     }
+
+    /** Why a run was or was not admitted; the press-to-talk caller reports each of these differently. */
+    private enum class RunAdmission { STARTED, BUSY, FOREGROUND_REFUSED, NOT_ELIGIBLE }
 
     /**
      * Proves teardown for the service boundary. Cancels any run and waits, within [timeoutMs], first
@@ -224,31 +238,40 @@ class VoiceAssistantCoordinator internal constructor(
         beginRun(activation, settings(), generation)
     }
 
+    private fun beginRun(activation: WakeWordActivation?, current: VoiceSettings): RunAdmission =
+        beginRun(activation, current, null)
+
     /**
      * Returns false when the run was refused: one is already in flight, the coordinator has stood
      * down or shut down, the setting is off, or the caller belongs to a superseded listener. The
      * admission decision is taken inside the lock so a callback cannot pass a check that a concurrent
      * stop has already invalidated.
      */
-    private fun beginRun(activation: WakeWordActivation?, current: VoiceSettings, generation: Long? = null): Boolean {
-        val mic = obtainSource() ?: return false
+    private fun beginRun(activation: WakeWordActivation?, current: VoiceSettings, generation: Long?): RunAdmission {
+        val mic = obtainSource() ?: return RunAdmission.NOT_ELIGIBLE
         synchronized(lock) {
-            if (closed.get()) return false
-            if (runJob?.isActive == true) return false
-            if (generation != null && (generation != engineGeneration || !armed)) return false
-            if (!current.enabled) return false
+            if (closed.get()) return RunAdmission.NOT_ELIGIBLE
+            if (runJob?.isActive == true) return RunAdmission.BUSY
+            if (generation != null && (generation != engineGeneration || !armed)) return RunAdmission.NOT_ELIGIBLE
+            if (!current.enabled) return RunAdmission.NOT_ELIGIBLE
             if (!claimForegroundLocked()) {
                 state.set(VoiceState.ERROR)
-                return false
+                scheduleRetryLocked()
+                return RunAdmission.FOREGROUND_REFUSED
             }
             runHoldsCapture = true
             wakeLease?.pause()
+            val myGeneration = ++runGeneration
             runJob = scope.launch {
                 var failed = false
                 try {
                     failed = !converse(mic, activation, current)
                 } finally {
                     synchronized(lock) {
+                        // A cancelled run unwinds after stop released it, by which time a replacement
+                        // may own the coordinator. Clearing state or dropping the claim here would
+                        // erase that replacement's run and mute the panel mid-utterance.
+                        if (runGeneration != myGeneration) return@synchronized
                         runJob = null
                         // The attachment is closed by the runner before it returns, so the claim has
                         // outlived the capture it was covering and may now be reconsidered.
@@ -274,7 +297,7 @@ class VoiceAssistantCoordinator internal constructor(
                 }
             }
         }
-        return true
+        return RunAdmission.STARTED
     }
 
     /** Returns false when the exchange ended in a reportable error. */
