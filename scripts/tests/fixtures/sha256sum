@@ -18,7 +18,7 @@ case "${1:-}" in
     ;;
   # The database-capture flow authenticates its own artifacts by digest; those hashes must be real
   # or every transfer verification is comparing against a manufactured constant.
-  *.db-txn-script|*.break-glass.db|*/db-txn-sandbox/*)
+  */hapaneld-db-observer.*|*.db-txn-script|*.break-glass.db|*/db-txn-sandbox/*)
     /usr/bin/sha256sum "$1"
     ;;
   *)

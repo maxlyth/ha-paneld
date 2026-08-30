@@ -1157,8 +1157,10 @@ DB_OBSERVER_DB="$DB_OBSERVER_DIR/ha-paneld.db"
 "$HAPANELD_HOST_SQLITE3" "$DB_OBSERVER_DB.v14.premigrate" 'PRAGMA user_version=14; CREATE TABLE canary(value TEXT);'
 DB_OBSERVER_RUN="$TMP/database-compat-observer-run.sh"
 sed -e "s|^db=/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db$|db=$DB_OBSERVER_DB|" \
-    -e "s|/data/local/tmp/.hapaneld-db-observer.XXXXXX|$DB_OBSERVER_DIR/.observer.XXXXXX|" \
+    -e "s|^observer_tmp=@OBSERVER_STAGE@$|observer_tmp=$DB_OBSERVER_DIR/.observer.fixture|" \
     -e 's/^minimum=@MINIMUM@$/minimum=11/' -e 's/^maximum=@MAXIMUM@$/maximum=14/' \
+    -e 's/^primary_mode=@PRIMARY_MODE@$/primary_mode=stable/' \
+    -e 's/^observer_owner=@OBSERVER_OWNER@$/observer_owner=.owner-fixture/' \
     -e 's/@NONCE@/0123456789abcdef0123456789abcdef/g' \
     "$DB_OBSERVER_SOURCE" > "$DB_OBSERVER_RUN"
 DB_OBSERVER_BIN="$DB_OBSERVER_DIR/bin"
@@ -1167,7 +1169,7 @@ DB_OBSERVER_HOST_SED=""
 mkdir -p "$DB_OBSERVER_BIN"
 # Target Android 8.1 userspaces do not necessarily provide awk. Give the extracted device program
 # only its explicit applets so a host /usr/bin fallback cannot make a forbidden dependency look green.
-for db_observer_tool in cp find grep ls mktemp rm sed sha256sum; do
+for db_observer_tool in cp find grep ls mkdir mktemp rm sed sha256sum; do
   db_observer_tool_path="$(PATH=/usr/bin:/bin command -v "$db_observer_tool" 2>/dev/null || true)"
   if [ -n "$db_observer_tool_path" ]; then
     ln -s "$db_observer_tool_path" "$DB_OBSERVER_BIN/$db_observer_tool"
@@ -1203,6 +1205,25 @@ if printf '%s\n' "$observer_output" | grep -Fqx "HOSTDB_PRIMARY_FINGERPRINT=|:$o
    printf '%s\n' "$observer_output" | grep -Eq 'HOSTDB_INVENTORY_FINGERPRINT=.*ha-paneld\.db\.v13\.premigrate:file:[0-9a-f]{64}.*ha-paneld\.db\.v14\.premigrate:file:[0-9a-f]{64}'; then
   pass "production observer binds exact primary bytes and the complete readable recovery inventory"
 else fail_test "production observer binds exact primary bytes and the complete readable recovery inventory"; fi
+
+DB_OBSERVER_LIVE_RUN="$TMP/database-compat-observer-live-run.sh"
+sed 's/^primary_mode=stable$/primary_mode=live/' "$DB_OBSERVER_RUN" > "$DB_OBSERVER_LIVE_RUN"
+observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_LIVE_RUN")"
+if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=readable:15:ok' && \
+   grep -Fq "file:$DB_OBSERVER_DB?mode=ro .backup $DB_OBSERVER_DIR/.observer.fixture/observed.db" "$DB_OBSERVER_SQLITE_LOG"; then
+  pass "production initial observer uses one coherent read-only online SQLite backup for a live canonical database"
+else fail_test "production initial observer uses one coherent read-only online SQLite backup for a live canonical database"; fi
+mkdir -p "$DB_OBSERVER_DIR/.observer.fixture"
+: > "$DB_OBSERVER_DIR/.observer.fixture/foreign-owner"
+if ! PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_LIVE_RUN" >/dev/null 2>&1 && \
+   [ -f "$DB_OBSERVER_DIR/.observer.fixture/foreign-owner" ]; then
+  pass "production observer refuses but never removes a stage it did not create"
+else fail_test "production observer refuses but never removes a stage it did not create"; fi
+rm -rf "$DB_OBSERVER_DIR/.observer.fixture"
+observer_cleanup_source="$(sed -n '/^cleanup_root_database_observer()/,/^}/p' "$PROVISION")"
+if printf '%s\n' "$observer_cleanup_source" | grep -Fq '[ ! -f $remote_stage/$remote_owner ] || rm -rf $remote_stage'; then
+  pass "host cleanup removes a remote observer stage only through its nonce-owned marker"
+else fail_test "host cleanup removes a remote observer stage only through its nonce-owned marker"; fi
 
 # A failed parser must not turn missing output into proof that SQLite returned exactly two lines.
 # Fail only the third selector while SQLite emits a malformed extra line: this was the fail-open seam.
@@ -1242,10 +1263,10 @@ if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:
   pass "production observer inventories an out-of-bound newer recovery without selecting it"
 else fail_test "production observer inventories an out-of-bound newer recovery without selecting it"; fi
 rm -f "$DB_OBSERVER_DB.v15.premigrate"
-if [ "$(grep -c '^-readonly ' "$DB_OBSERVER_SQLITE_LOG")" -ge 2 ] && \
-   ! grep -Ev '^-readonly ' "$DB_OBSERVER_SQLITE_LOG" | grep -q .; then
-  pass "production observer opens every SQLite candidate with CLI read-only enforcement"
-else fail_test "production observer opens every SQLite candidate with CLI read-only enforcement"; fi
+if [ "$(grep -c 'PRAGMA query_only=ON; PRAGMA user_version; PRAGMA quick_check;' "$DB_OBSERVER_SQLITE_LOG")" -ge 2 ] && \
+   ! grep -q -- '^-readonly ' "$DB_OBSERVER_SQLITE_LOG"; then
+  pass "production observer applies query_only to every private SQLite candidate without the unsupported CLI flag"
+else fail_test "production observer applies query_only to every private SQLite candidate without the unsupported CLI flag"; fi
 chmod 400 "$DB_OBSERVER_DB" "$DB_OBSERVER_DB.v13.premigrate" "$DB_OBSERVER_DB.v14.premigrate"
 observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
 if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=readable:15:ok'; then
@@ -1254,14 +1275,15 @@ else fail_test "production observer reads a non-writable canonical database with
 chmod 600 "$DB_OBSERVER_DB" "$DB_OBSERVER_DB.v13.premigrate" "$DB_OBSERVER_DB.v14.premigrate"
 cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
 #!/bin/sh
-[ "\${1:-}" != -readonly ] || exit 1
+[ "\${1:-}" != -readonly ] || { echo 'sqlite3: Error: unknown option: -readonly' >&2; exit 1; }
 exec "$HAPANELD_HOST_SQLITE3" "\$@"
 EOF
 chmod 700 "$DB_OBSERVER_BIN/sqlite3"
 observer_output="$(PATH="$DB_OBSERVER_BIN" "$BASH" "$DB_OBSERVER_RUN")"
-if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=unreadable'; then
-  pass "production observer fails closed when SQLite lacks -readonly support"
-else fail_test "production observer fails closed when SQLite lacks -readonly support"; fi
+if printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_PRIMARY=readable:15:ok' && \
+   printf '%s\n' "$observer_output" | grep -qx 'HOSTDB_RECOVERY=v14:readable:14:ok'; then
+  pass "production observer does not require the unsupported -readonly CLI option"
+else fail_test "production observer does not require the unsupported -readonly CLI option"; fi
 cat > "$DB_OBSERVER_BIN/sqlite3" <<EOF
 #!/bin/sh
 exec "$HAPANELD_HOST_SQLITE3" "\$@"
@@ -4926,6 +4948,28 @@ for capture_dialect in rootjoin:'su root \"sh /data/local/tmp/\.hapaneld-db-txn'
   assert_marker_captured "the $dialect_name dialect produces whole-line captured evidence"
   assert_log_contains "$wrapper_pattern" "the $dialect_name capture ran under its exact wrapper"
 done
+
+# Database admission uses the same independently probed root dispatch, but executes only the short
+# nonce-owned staged-script path. Exercise every supported non-adbd form so the host-Bash observer
+# fixture above cannot hide quoting, prefix or double-shell regressions in the production transport.
+for observer_dialect in \
+  join:'su 0 \"sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script' \
+  shc:'su 0 sh -c \"sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script' \
+  rootjoin:'su root \"sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script' \
+  rootshc:'su root sh -c \"sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script' \
+  suc:'su -c \"sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script'; do
+  dialect_name="${observer_dialect%%:*}"; wrapper_pattern="${observer_dialect#*:}"
+  reset_db_txn_state
+  MOCK_SU_DIALECT="$dialect_name" run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+  assert_contains 'database compatible schema' "database admission succeeds through the $dialect_name root route"
+  assert_log_contains "$wrapper_pattern" "database admission executes its staged observer through the $dialect_name root route"
+done
+
+reset_db_txn_state
+MOCK_ADB_ROOT=1 MOCK_SU_DIALECT=none run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_contains 'database compatible schema' "database admission succeeds through root adbd"
+assert_log_contains 'shell sh /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script' \
+  "database admission executes its staged observer directly through root adbd"
 # The sixth form: adb-root panels run bare shell commands with no su wrapper at all.
 reset_db_txn_state
 MOCK_ADB_ROOT=1 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
@@ -5070,6 +5114,25 @@ MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' MOCK_DB_TXN=backup_fail \
 LAST_STATUS=$?
 assert_success "a fleet whose snapshots are unavailable still completes ordinary upgrades"
 assert_contains '2/2 panels OK' "snapshot availability alone does not fail a fleet wave"
+fleet_observer_pushes="$(grep -E '^adb -s panel-(a|b)\.test:5555 push .+ /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}-script$' "$MOCK_CALL_LOG" || true)"
+fleet_observer_remote_paths="$(printf '%s\n' "$fleet_observer_pushes" | awk 'NF { print $NF }')"
+fleet_observer_host_paths="$(grep -E '^sha256sum .*/hapaneld-db-observer\.[A-Za-z0-9]+$' "$MOCK_CALL_LOG" | awk 'NF { print $NF }' || true)"
+fleet_observer_cleanup_paths="$(grep -E '^adb -s panel-(a|b)\.test:5555 shell .*rm -rf /data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]{32}' "$MOCK_CALL_LOG" | sed -n 's#.*rm -rf \(/data/local/tmp/\.hapaneld-db-observer\.[0-9a-f]\{32\}\).*#\1#p')"
+fleet_observer_count="$(printf '%s\n' "$fleet_observer_remote_paths" | grep -c . || true)"
+if [ "$fleet_observer_count" -ge 2 ] &&
+   [ "$(printf '%s\n' "$fleet_observer_remote_paths" | sort -u | grep -c .)" = "$fleet_observer_count" ] &&
+   printf '%s\n' "$fleet_observer_pushes" | grep -q '^adb -s panel-a\.test:5555 ' &&
+   printf '%s\n' "$fleet_observer_pushes" | grep -q '^adb -s panel-b\.test:5555 '; then
+  pass "concurrent fleet workers use distinct nonce-owned remote observer scripts"
+else fail_test "concurrent fleet workers use distinct nonce-owned remote observer scripts"; fi
+if [ "$(printf '%s\n' "$fleet_observer_host_paths" | grep -c . || true)" = "$fleet_observer_count" ] &&
+   [ "$(printf '%s\n' "$fleet_observer_host_paths" | sort -u | grep -c .)" = "$fleet_observer_count" ]; then
+  pass "concurrent fleet workers use distinct host observer files"
+else fail_test "concurrent fleet workers use distinct host observer files"; fi
+if [ "$(printf '%s\n' "$fleet_observer_cleanup_paths" | grep -c . || true)" = "$fleet_observer_count" ] &&
+   [ "$(printf '%s\n' "$fleet_observer_cleanup_paths" | sort -u | grep -c .)" = "$fleet_observer_count" ]; then
+  pass "concurrent fleet workers clean only their nonce-owned observer stages"
+else fail_test "concurrent fleet workers clean only their nonce-owned observer stages"; fi
 reset_db_txn_state
 : > "$MOCK_CALL_LOG"
 LAST_OUTPUT="$TMP/fleet-snapshot-escape2.txt"

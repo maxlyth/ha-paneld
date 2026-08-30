@@ -83,6 +83,9 @@ cleanup_provision_resources() {
   # An interrupted database capture holds a credential-bearing copy of the whole store on the panel
   # and a partial one on the host; both are reclaimed on every exit path, never only on success.
   if type discard_db_snapshot_txn >/dev/null 2>&1; then discard_db_snapshot_txn || true; fi
+  # Database admission also stages a nonce-owned observer script and private SQLite copy. Reclaim
+  # either half if the host exits between push, verification, execution and result parsing.
+  if type cleanup_root_database_observer >/dev/null 2>&1; then cleanup_root_database_observer || true; fi
   [ -z "${SHIZUKU_DIR:-}" ] || rm -rf "$SHIZUKU_DIR" || true
   SHIZUKU_DIR=""
   [ -z "${CANDIDATE_APK_DIR:-}" ] || rm -rf "$CANDIDATE_APK_DIR" || true
@@ -193,6 +196,10 @@ ROOT_HELPER_LEASE_GUARD_PID=""
 ROOT_HELPER_LEASE_GUARD_FAILURE=""
 ROOT_HELPER_APK_INSTALL_PID=""
 ROOT_HELPER_APK_INSTALL_OUTPUT_FILE=""
+DB_OBSERVER_HOST_SCRIPT=""
+DB_OBSERVER_REMOTE_SCRIPT=""
+DB_OBSERVER_REMOTE_STAGE=""
+DB_OBSERVER_REMOTE_OWNER=""
 ADB_INSTALL_OUTPUT=""
 SHIZUKU_DIR=""
 TARGET_APK_SHA256=""
@@ -5896,18 +5903,54 @@ read_candidate_database_contract() {
   return 0
 }
 
+cleanup_root_database_observer() {
+  local host_script="${DB_OBSERVER_HOST_SCRIPT:-}" remote_script="${DB_OBSERVER_REMOTE_SCRIPT:-}" remote_stage="${DB_OBSERVER_REMOTE_STAGE:-}"
+  local remote_owner="${DB_OBSERVER_REMOTE_OWNER:-}" cleanup_command=""
+  DB_OBSERVER_HOST_SCRIPT=""
+  DB_OBSERVER_REMOTE_SCRIPT=""
+  DB_OBSERVER_REMOTE_STAGE=""
+  DB_OBSERVER_REMOTE_OWNER=""
+  [ -z "$host_script" ] || rm -f "$host_script" "$host_script.ready" 2>/dev/null || true
+  if [ -n "$remote_script" ]; then
+    cleanup_command="rm -f $remote_script"
+    if [ -n "$remote_stage" ] && [ -n "$remote_owner" ]; then
+      cleanup_command="$cleanup_command; [ ! -f $remote_stage/$remote_owner ] || rm -rf $remote_stage"
+    fi
+    run_root "$cleanup_command" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 inspect_root_database_compatibility() {
   local command out begin end primary primary_fingerprint recovery retained inventory inventory_fingerprint observation_nonce
+  local observer_stage observer_script observer_owner script_file script_sha panel_sha primary_mode
   observation_nonce="$(host_transaction_id)" || return 1
+  observer_stage="/data/local/tmp/.hapaneld-db-observer.$observation_nonce"
+  observer_script="${observer_stage}-script"
+  observer_owner=".owner-$observation_nonce"
+  if [ "${DB_GATE_PHASE:-initial}" = initial ]; then primary_mode=live
+  else primary_mode=stable; fi
   command='set -u
 # HAPANELD_DB_COMPAT_OBSERVER_BEGIN
 db=/data/data/io.github.maxlyth.hapaneld/databases/ha-paneld.db
 minimum=@MINIMUM@
 maximum=@MAXIMUM@
+primary_mode=@PRIMARY_MODE@
 sqlite3_bin=""
 if [ -x /system/bin/sqlite3 ]; then sqlite3_bin=/system/bin/sqlite3
 else sqlite3_bin=$(command -v sqlite3 2>/dev/null) || sqlite3_bin=""; fi
-observer_tmp=$(mktemp -d /data/local/tmp/.hapaneld-db-observer.XXXXXX 2>/dev/null) || observer_tmp=""
+observer_tmp=@OBSERVER_STAGE@
+observer_owner=@OBSERVER_OWNER@
+observer_stage_created=0
+cleanup_observer() {
+  [ "$observer_stage_created" = 0 ] || rm -rf "$observer_tmp" 2>/dev/null
+}
+trap cleanup_observer EXIT HUP INT TERM
+[ ! -e "$observer_tmp" ] && [ ! -L "$observer_tmp" ] || exit 1
+umask 077
+mkdir -m 700 "$observer_tmp" 2>/dev/null || exit 1
+observer_stage_created=1
+: > "$observer_tmp/$observer_owner" 2>/dev/null || exit 1
 source_digest() {
   digest_path=$1
   digest_line=$(sha256sum "$digest_path" 2>/dev/null || toybox sha256sum "$digest_path" 2>/dev/null || busybox sha256sum "$digest_path" 2>/dev/null) || return 1
@@ -5933,23 +5976,31 @@ source_fingerprint() {
 }
 inspect_database() {
   inspected_path=$1
+  inspected_mode=${2:-stable}
   [ ! -L "$inspected_path" ] || { echo not_regular; return; }
   [ -f "$inspected_path" ] || { echo not_regular; return; }
   [ -n "$sqlite3_bin" ] && [ -n "$observer_tmp" ] || { echo unreadable; return; }
-  inspected_before=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
   inspected_copy=$observer_tmp/observed.db
   rm -f "$inspected_copy" "$inspected_copy"-wal "$inspected_copy"-shm "$inspected_copy"-journal
-  cp "$inspected_path" "$inspected_copy" 2>/dev/null || { echo unreadable; return; }
-  for inspected_suffix in -wal -shm -journal; do
-    if [ -e "$inspected_path$inspected_suffix" ]; then
-      cp "$inspected_path$inspected_suffix" "$inspected_copy$inspected_suffix" 2>/dev/null || { echo unreadable; return; }
-    fi
-  done
-  inspected_after=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
-  [ "$inspected_before" = "$inspected_after" ] || { echo changed; return; }
-  inspected=$($sqlite3_bin -readonly "$inspected_copy" "PRAGMA query_only=ON; PRAGMA user_version; PRAGMA quick_check;" 2>/dev/null) || { echo unreadable; return; }
-  inspected_final=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
-  [ "$inspected_before" = "$inspected_final" ] || { echo changed; return; }
+  if [ "$inspected_mode" = live ]; then
+    inspected_source="file:$inspected_path?mode=ro"
+    "$sqlite3_bin" "$inspected_source" ".backup $inspected_copy" 2>/dev/null || { echo unreadable; return; }
+  else
+    inspected_before=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+    cp "$inspected_path" "$inspected_copy" 2>/dev/null || { echo unreadable; return; }
+    for inspected_suffix in -wal -shm -journal; do
+      if [ -e "$inspected_path$inspected_suffix" ]; then
+        cp "$inspected_path$inspected_suffix" "$inspected_copy$inspected_suffix" 2>/dev/null || { echo unreadable; return; }
+      fi
+    done
+    inspected_after=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+    [ "$inspected_before" = "$inspected_after" ] || { echo changed; return; }
+  fi
+  inspected=$("$sqlite3_bin" "$inspected_copy" "PRAGMA query_only=ON; PRAGMA user_version; PRAGMA quick_check;" 2>/dev/null) || { echo unreadable; return; }
+  if [ "$inspected_mode" != live ]; then
+    inspected_final=$(source_fingerprint "$inspected_path") || { echo unreadable; return; }
+    [ "$inspected_before" = "$inspected_final" ] || { echo changed; return; }
+  fi
   inspected_version=$(printf "%s\n" "$inspected" | sed -n "1p") || { echo unreadable; return; }
   inspected_quick=$(printf "%s\n" "$inspected" | sed -n "2p") || { echo unreadable; return; }
   inspected_extra=$(printf "%s\n" "$inspected" | sed -n "3,\$p") || { echo unreadable; return; }
@@ -6001,11 +6052,12 @@ for retained_path in \
 done
 if [ -L "$db" ] || { [ -e "$db" ] && [ ! -f "$db" ]; }; then primary=not_regular
 elif [ ! -e "$db" ]; then primary=missing
-else primary=$(inspect_database "$db"); fi
+else primary=$(inspect_database "$db" "$primary_mode"); fi
 primary_fingerprint=none
 case "$primary" in
   readable:*)
-    primary_fingerprint=$(source_fingerprint "$db") || { primary=changed; primary_fingerprint=unreadable; }
+    if [ "$primary_mode" = live ]; then primary_fingerprint=live
+    else primary_fingerprint=$(source_fingerprint "$db") || { primary=changed; primary_fingerprint=unreadable; }; fi
     ;;
   unreadable|changed|not_regular) primary_fingerprint=unreadable ;;
 esac
@@ -6054,12 +6106,50 @@ echo "HOSTDB_RETAINED=$retained"
 echo "HOSTDB_INVENTORY=$inventory"
 echo "HOSTDB_INVENTORY_FINGERPRINT=$inventory_fingerprint"
 echo HOSTDB_END:@NONCE@
-[ -z "$observer_tmp" ] || rm -rf "$observer_tmp"
 # HAPANELD_DB_COMPAT_OBSERVER_END'
   command="${command//@MINIMUM@/$DB_CANDIDATE_MIN}"
   command="${command//@MAXIMUM@/$DB_CANDIDATE_MAX}"
+  command="${command//@PRIMARY_MODE@/$primary_mode}"
   command="${command//@NONCE@/$observation_nonce}"
-  out="$(run_root "$command" 2>/dev/null | tr -d '\r')" || return 1
+  command="${command//@OBSERVER_STAGE@/$observer_stage}"
+  command="${command//@OBSERVER_OWNER@/$observer_owner}"
+  script_file="$(mktemp "${TMPDIR:-/tmp}/hapaneld-db-observer.XXXXXX")" || return 1
+  DB_OBSERVER_HOST_SCRIPT="$script_file"
+  if ! printf '%s\n' "$command" > "$script_file" || ! chmod 600 "$script_file"; then
+    cleanup_root_database_observer
+    return 1
+  fi
+  script_sha="$(host_sha256 "$script_file" 2>/dev/null)" || {
+    cleanup_root_database_observer
+    return 1
+  }
+  if ! run_root "[ ! -e $observer_script ] && [ ! -L $observer_script ] && [ ! -e $observer_stage ] && [ ! -L $observer_stage ]" >/dev/null 2>&1; then
+    cleanup_root_database_observer
+    return 1
+  fi
+  DB_OBSERVER_REMOTE_SCRIPT="$observer_script"
+  DB_OBSERVER_REMOTE_STAGE="$observer_stage"
+  DB_OBSERVER_REMOTE_OWNER="$observer_owner"
+  if ! adb -s "$TARGET" push "$script_file" "$observer_script" >/dev/null 2>&1; then
+    cleanup_root_database_observer
+    return 1
+  fi
+  panel_sha="$(run_root "sha256sum $observer_script 2>/dev/null || toybox sha256sum $observer_script 2>/dev/null || busybox sha256sum $observer_script 2>/dev/null" 2>/dev/null | tr -d '\r')" || {
+    cleanup_root_database_observer
+    return 1
+  }
+  panel_sha="${panel_sha%% *}"
+  if [ "$panel_sha" != "$script_sha" ]; then
+    cleanup_root_database_observer
+    return 1
+  fi
+  # Keep the invocation short and dialect-neutral. The comment is also a fixture-visible nonce bind;
+  # the staged script emits the authoritative begin/end pair and remains the only executed payload.
+  if ! out="$(run_root "sh $observer_script # HOSTDB_BEGIN:$observation_nonce" 2>/dev/null | tr -d '\r')"; then
+    cleanup_root_database_observer
+    return 1
+  fi
+  cleanup_root_database_observer
   begin="$(printf '%s\n' "$out" | grep -c "^HOSTDB_BEGIN:$observation_nonce$" || true)"
   end="$(printf '%s\n' "$out" | grep -c "^HOSTDB_END:$observation_nonce$" || true)"
   [ "$begin" = 1 ] && [ "$end" = 1 ] || return 1

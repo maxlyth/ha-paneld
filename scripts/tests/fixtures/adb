@@ -730,6 +730,9 @@ case "${1:-}" in
     # The capture transaction script's exact pushed bytes are saved so the fixture can hash and
     # EXECUTE what production actually sent, not a paraphrase of it.
     case "${3:-}" in
+      /data/local/tmp/.hapaneld-db-observer.*-script)
+        cp "${2:?push source missing}" "$STATE_DIR/db-observer-script.$ADB_TARGET"
+        printf '%s\n' "${3:?push destination missing}" > "$STATE_DIR/db-observer-remote.$ADB_TARGET" ;;
       /data/local/tmp/.hapaneld-db-txn.*-script)
         [ "${MOCK_DB_TXN:-ok}" = push_fail ] && exit 1
         cp "${2:?push source missing}" "$STATE_DIR/db-txn-script.$ADB_TARGET" ;;
@@ -807,11 +810,23 @@ case "${1:-}" in
   shell)
     shift
     command_text="$*"
+    case "$command_text" in
+      *sha256sum*.hapaneld-db-observer.*-script*)
+        /usr/bin/sha256sum "$STATE_DIR/db-observer-script.$ADB_TARGET" 2>/dev/null |
+          awk '{print $1"  script"}'
+        exit $? ;;
+    esac
     if printf '%s' "$command_text" | grep -Fq 'HAPANELD_INSTALLER_DB_BEGIN'; then
       emit_legacy_installer_database_inventory
       exit 0
     fi
     if printf '%s' "$command_text" | grep -Fq 'HOSTDB_BEGIN'; then
+      observer_remote="$(cat "$STATE_DIR/db-observer-remote.$ADB_TARGET" 2>/dev/null || true)"
+      [ -n "$observer_remote" ] && [ -s "$STATE_DIR/db-observer-script.$ADB_TARGET" ] || exit 1
+      printf '%s' "$command_text" | grep -Fq "sh $observer_remote " || exit 1
+      grep -Fq '# HAPANELD_DB_COMPAT_OBSERVER_BEGIN' "$STATE_DIR/db-observer-script.$ADB_TARGET" || exit 1
+      grep -Fq '# HAPANELD_DB_COMPAT_OBSERVER_END' "$STATE_DIR/db-observer-script.$ADB_TARGET" || exit 1
+      ! grep -Eq '@(MINIMUM|MAXIMUM|PRIMARY_MODE|NONCE|OBSERVER_STAGE|OBSERVER_OWNER)@' "$STATE_DIR/db-observer-script.$ADB_TARGET" || exit 1
       emit_host_database_gate
       exit 0
     fi
