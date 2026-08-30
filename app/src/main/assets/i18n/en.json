@@ -299,7 +299,7 @@
       "risk": "ordinary",
       "siblings": ["settings.cpu_governor.label"],
       "placeholders": [],
-      "frozen": ["CPU"],
+      "frozen": ["CPU", "SoC"],
       "softMaxChars": 160,
       "hardMaxChars": 160
     },
@@ -743,7 +743,7 @@
       "risk": "ordinary",
       "siblings": ["settings.diag_soc_temp.help"],
       "placeholders": [],
-      "frozen": [],
+      "frozen": ["SoC"],
       "softMaxChars": 32,
       "hardMaxChars": 32
     },
@@ -779,7 +779,7 @@
       "risk": "ordinary",
       "siblings": ["settings.diag_wifi_rssi.label"],
       "placeholders": [],
-      "frozen": ["Wi-Fi"],
+      "frozen": ["Wi-Fi", "dBm"],
       "softMaxChars": 160,
       "hardMaxChars": 160
     },
