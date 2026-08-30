@@ -183,22 +183,20 @@ owns_process_group_signals() {
 }
 
 gate_start="$(date +%s)"
+# Signal-owner shards must run before monitor mode has ever been enabled. Merely draining prior
+# background jobs is insufficient: Bash retains job-control state that changes nested process-group
+# status and timeout evidence. These three total about one minute when run in this clean context.
+for shard in "${requested[@]}"; do
+  owns_process_group_signals "$shard" || continue
+  ( run_shard "$shard" )
+done
+
 # Monitor mode gives every background shard its own process group. The group
 # leader is the run_shard subshell in $!, so signal cleanup reaches the runner
 # and every process it started rather than abandoning grandchildren.
 set -m
 for shard in "${requested[@]}"; do
-  # These shards deliberately create nested process groups and signal them to prove status,
-  # latency and descendant reclamation. Running two such owners concurrently under this wrapper's
-  # own monitor mode makes Bash process-group evidence nondeterministic even with isolated files.
-  # Drain ordinary workers, run each signal owner in a foreground subshell, then restore normal
-  # parallel scheduling. A background job remains a process-group leader even when it has no sibling
-  # jobs, which is enough to invalidate the nested signal/status assertions.
-  if owns_process_group_signals "$shard"; then
-    wait_all_active
-    ( run_shard "$shard" )
-    continue
-  fi
+  owns_process_group_signals "$shard" && continue
   while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
   run_shard "$shard" &
   pids+=("$!")
