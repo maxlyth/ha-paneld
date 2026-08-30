@@ -171,17 +171,39 @@ wait_oldest() {
   pids=("${pids[@]:1}")
 }
 
+wait_all_active() {
+  while [ "${#pids[@]}" -gt 0 ]; do wait_oldest; done
+}
+
+owns_process_group_signals() {
+  case "$1" in
+    backup|publication|host-reclamation) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 gate_start="$(date +%s)"
 # Monitor mode gives every background shard its own process group. The group
 # leader is the run_shard subshell in $!, so signal cleanup reaches the runner
 # and every process it started rather than abandoning grandchildren.
 set -m
 for shard in "${requested[@]}"; do
+  # These shards deliberately create nested process groups and signal them to prove status,
+  # latency and descendant reclamation. Running two such owners concurrently under this wrapper's
+  # own monitor mode makes Bash process-group evidence nondeterministic even with isolated files.
+  # Drain ordinary workers, run each signal owner alone, then restore normal parallel scheduling.
+  if owns_process_group_signals "$shard"; then
+    wait_all_active
+    run_shard "$shard" &
+    pids+=("$!")
+    wait_all_active
+    continue
+  fi
   while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
   run_shard "$shard" &
   pids+=("$!")
 done
-while [ "${#pids[@]}" -gt 0 ]; do wait_oldest; done
+wait_all_active
 set +m
 
 aggregate_cases=0
