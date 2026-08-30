@@ -8,9 +8,9 @@ case "$PROVISION_TEST_SCOPE" in
   db|backup|publication|core|all|\
   shard-database-host|shard-database-runtime|\
   shard-install-export|shard-install-runtime|shard-helper-transaction|\
-  shard-release-integrity|shard-renderer-seeding|shard-shizuku|shard-install-finish|\
+  shard-release-integrity|shard-renderer-seeding|shard-install-finish|\
   shard-backup|shard-publication|shard-database-authority|shard-fleet-installer|\
-  shard-helper-install|shard-host-reclamation|shard-device-sweep|shard-git-bash) ;;
+  shard-host-reclamation|shard-git-bash) ;;
   *) echo "unknown PROVISION_TEST_SCOPE: $PROVISION_TEST_SCOPE" >&2; exit 2 ;;
 esac
 
@@ -687,9 +687,11 @@ done
 
 # Export is a recovery operation. It must be possible before resolving or installing an APK.
 EXPORT="$TMP/panel-backup.json"
+RESTORE="$TMP/restore.json"
+printf '{"kind":"ha-paneld-config","schema":1,"values":{}}\n' > "$RESTORE"
 if provision_scope_is db core all \
   shard-database-host shard-database-runtime shard-install-export shard-install-runtime \
-  shard-helper-transaction shard-release-integrity shard-renderer-seeding shard-shizuku \
+  shard-helper-transaction shard-release-integrity shard-renderer-seeding \
   shard-install-finish; then
 if provision_scope_is db core all shard-database-host; then
 # The host and Android gates consume one normative table. Every row whose owner can occur at a host
@@ -3235,7 +3237,6 @@ assert_contains 'invalid release tag' "invalid internal release tag gives a dire
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "invalid release tag is rejected before APK install"
 
 fi
-[ "$PROVISION_TEST_SCOPE" != shard-release-integrity ] || finish_provision_test
 
 if provision_scope_is core all shard-renderer-seeding; then
 # ---- built-in renderer seeds (--home-dashboard / --entity-filter) --------------------------------
@@ -3448,7 +3449,7 @@ unset MOCK_HA_LOGIN
 fi
 [ "$PROVISION_TEST_SCOPE" != shard-renderer-seeding ] || finish_provision_test
 
-if provision_scope_is all shard-shizuku; then
+if provision_scope_is all shard-release-integrity; then
 # A panel without the manager must receive the exact pinned APK, verify it before installation, and
 # start the authenticated installed native starter. The fake checksum tool makes this deterministic without network
 # access while the call log proves the security-sensitive ordering.
@@ -3643,7 +3644,7 @@ assert_not_contains 'shizuku-v13\.6\.0\.r1086.*-o .*/shizuku\.apk' "$MOCK_CALL_L
 assert_not_contains '^adb .* shell (monkey -p moe\.shizuku|sh .*/moe\.shizuku.*start\.sh|pm grant moe\.shizuku)' "$MOCK_CALL_LOG" "untrusted Shizuku is never launched or rearmed"
 fi
 
-[ "$PROVISION_TEST_SCOPE" != shard-shizuku ] || finish_provision_test
+[ "$PROVISION_TEST_SCOPE" != shard-release-integrity ] || finish_provision_test
 
 if provision_scope_is core all shard-install-finish; then
 
@@ -6230,9 +6231,8 @@ else
 fi
 
 fi
-[ "$PROVISION_TEST_SCOPE" != shard-fleet-installer ] || finish_provision_test
 
-if provision_scope_is core all shard-helper-install; then
+if provision_scope_is core all shard-fleet-installer; then
 # Pins the invariant rather than one spelling of it: retirement is attempted exactly once, it ends the
 # function when it fails, and it happens before the first line that replaces anything. The gate also
 # has to name the panel as unchanged, because the host uses that to skip a rollback of nothing and to
@@ -7038,7 +7038,7 @@ assert_contains 'refusing to mint a Home Assistant token' "the run says which si
 assert_not_contains 'auth/token' "$MOCK_CALL_LOG" "no token is minted against Home Assistant after a health timeout"
 
 fi
-[ "$PROVISION_TEST_SCOPE" != shard-helper-install ] || finish_provision_test
+[ "$PROVISION_TEST_SCOPE" != shard-fleet-installer ] || finish_provision_test
 
 if provision_scope_is core all shard-host-reclamation; then
 # ── #76: root-helper staging must not accumulate across failing runs ────────────────────────────
@@ -7230,9 +7230,8 @@ case "$CLEANUP_PROBE_COMMAND" in
 esac
 
 fi
-[ "$PROVISION_TEST_SCOPE" != shard-host-reclamation ] || finish_provision_test
 
-if provision_scope_is core all shard-device-sweep; then
+if provision_scope_is core all shard-host-reclamation; then
 # ── #76: the panel-side sweep, executed from the shipped script ─────────────────────────────────
 # The sweep is lifted from the transaction-script heredoc exactly as generation ships it, its
 # @TRANSACTION_ID@ placeholder substituted the same way production's sed does, its absolute path
@@ -8202,7 +8201,7 @@ for verb in install_system install_systemless install_hybrid rollback_system rol
 done
 
 fi
-[ "$PROVISION_TEST_SCOPE" != shard-device-sweep ] || finish_provision_test
+[ "$PROVISION_TEST_SCOPE" != shard-host-reclamation ] || finish_provision_test
 
 if provision_scope_is core all shard-git-bash; then
 # --------------------------------------------------------------------------------------------------

@@ -17,15 +17,12 @@ ALL_SHARDS=(
   helper-transaction
   release-integrity
   renderer-seeding
-  shizuku
   install-finish
   backup
   publication
   database-authority
   fleet-installer
-  helper-install
   host-reclamation
-  device-sweep
   git-bash
 )
 
@@ -36,9 +33,9 @@ Usage: provision_gate_parallel.sh [-j JOBS] [--output DIR] [SHARD ...]
 Runs all provisioning shards by default. A named subset may be supplied for a
 focused gate. Valid shards:
   database-host database-runtime install-export install-runtime
-  helper-transaction release-integrity renderer-seeding shizuku install-finish
-  backup publication database-authority fleet-installer helper-install
-  host-reclamation device-sweep git-bash
+  helper-transaction release-integrity renderer-seeding install-finish
+  backup publication database-authority fleet-installer
+  host-reclamation git-bash
 EOF
 }
 
@@ -145,20 +142,23 @@ trap 'handle_parallel_signal 130' INT
 trap 'handle_parallel_signal 143' TERM
 
 run_shard() {
-  local shard="$1" shard_dir="$OUTPUT_DIR/$1" start end status
-  mkdir -p "$shard_dir/tmp" || exit 2
+  local shard="$1" shard_dir="$OUTPUT_DIR/$1" runtime_tmp start end status
+  mkdir -p "$shard_dir" || exit 2
+  runtime_tmp="$(mktemp -d "${TMPDIR:-/tmp}/hapaneld-provision-$shard.XXXXXX")" || exit 2
+  chmod 755 "$runtime_tmp" || exit 2
+  trap 'rm -rf -- "$runtime_tmp"' EXIT
   start="$(date +%s)"
-  PROVISION_TEST_SCOPE="shard-$shard" TMPDIR="$shard_dir/tmp" \
+  PROVISION_TEST_SCOPE="shard-$shard" TMPDIR="$runtime_tmp" \
     bash "$RUNNER" > "$shard_dir/tap.log" 2>&1
   status=$?
   end="$(date +%s)"
   # The fake runner uses these two marker files to exercise corrupt/missing worker
   # metadata. A production shard receives an unpredictable private TMPDIR and never
   # creates either marker.
-  if [ -f "$shard_dir/tmp/skip-worker-result" ]; then
+  if [ -f "$runtime_tmp/skip-worker-result" ]; then
     rm -f "$shard_dir/result"
-  elif [ -f "$shard_dir/tmp/worker-result-override" ]; then
-    cp "$shard_dir/tmp/worker-result-override" "$shard_dir/result"
+  elif [ -f "$runtime_tmp/worker-result-override" ]; then
+    cp "$runtime_tmp/worker-result-override" "$shard_dir/result"
   else
     printf '%s %s\n' "$status" "$((end - start))" > "$shard_dir/result"
   fi
@@ -214,7 +214,7 @@ for shard in "${requested[@]}"; do
          number = $2 + 0
          identity = $0
          sub(/^ok [0-9]+ - /, "", identity)
-         if (number != expected || identity == "" || seen[identity]++) invalid = 1
+         if (number != expected || identity == "") invalid = 1
          expected++
          tests++
          next

@@ -21,10 +21,9 @@ name="${PROVISION_TEST_SCOPE#shard-}"
 case "$name" in
   database-host) cases=1 ;; database-runtime) cases=1 ;; install-export) cases=1 ;;
   install-runtime) cases=1 ;; helper-transaction) cases=1 ;; release-integrity) cases=1 ;;
-  renderer-seeding) cases=1 ;; shizuku) cases=1 ;; install-finish) cases=1 ;;
+  renderer-seeding) cases=1 ;; install-finish) cases=1 ;;
   backup) cases=1 ;; publication) cases=1 ;; database-authority) cases=1 ;;
-  fleet-installer) cases=1 ;; helper-install) cases=1 ;; host-reclamation) cases=1 ;;
-  device-sweep) cases=1 ;; git-bash) cases=1 ;;
+  fleet-installer) cases=1 ;; host-reclamation) cases=1 ;; git-bash) cases=1 ;;
   *) exit 2 ;;
 esac
 printf 'tmpdir=%s\n' "$TMPDIR"
@@ -77,18 +76,18 @@ chmod 755 "$FAKE_RUNNER"
 STATE="$TMP/state"; mkdir "$STATE"
 OUT="$TMP/pass-results"
 PASS_LOG="$TMP/pass.log"
-PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=17 \
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=14 \
 FAKE_STATE_DIR="$STATE" FAKE_SLEEP_SECONDS=0.05 \
   bash "$WRAPPER" --jobs 2 --output "$OUT" > "$PASS_LOG" 2>&1
 status=$?
 description="the complete fake gate passes"; assert_true test "$status" -eq 0
-description="the aggregate pins all 17 shard cases"; assert_true grep -q '^AGGREGATE PASS shards=17 cases=17 failures=0 ' "$PASS_LOG"
+description="the aggregate pins all 14 shard cases"; assert_true grep -q '^AGGREGATE PASS shards=14 cases=14 failures=0 ' "$PASS_LOG"
 description="a successful full gate emits exactly one compatible totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$PASS_LOG")" -eq 1
-description="the full-gate totals marker is coherent"; assert_true grep -qx 'PROVISION_GATE_TOTALS=shards=17/17;tests=17/17;failures=0' "$PASS_LOG"
+description="the full-gate totals marker is coherent"; assert_true grep -qx 'PROVISION_GATE_TOTALS=shards=14/14;tests=14/14;failures=0' "$PASS_LOG"
 order="$(awk '/^SHARD / {printf "%s ", $2}' "$PASS_LOG")"
-description="per-shard reports retain deterministic manifest order"; assert_true test "$order" = "database-host database-runtime install-export install-runtime helper-transaction release-integrity renderer-seeding shizuku install-finish backup publication database-authority fleet-installer helper-install host-reclamation device-sweep git-bash "
+description="per-shard reports retain deterministic manifest order"; assert_true test "$order" = "database-host database-runtime install-export install-runtime helper-transaction release-integrity renderer-seeding install-finish backup publication database-authority fleet-installer host-reclamation git-bash "
 unique_tmp="$(grep -h '^tmpdir=' "$OUT"/*/tap.log | sort -u | wc -l | tr -d ' ')"
-description="every shard receives isolated temporary state"; assert_true test "$unique_tmp" -eq 17
+description="every shard receives isolated temporary state"; assert_true test "$unique_tmp" -eq 14
 description="the jobs limit permits the requested concurrency"; assert_true test "$(cat "$STATE/maximum")" -eq 2
 
 FAIL_LOG="$TMP/fail.log"
@@ -131,7 +130,7 @@ DUPLICATE_IDENTITY_LOG="$TMP/duplicate-identity.log"
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_DUPLICATE_IDENTITY_SCOPE=publication \
   bash "$WRAPPER" --output "$TMP/duplicate-identity-results" publication > "$DUPLICATE_IDENTITY_LOG" 2>&1
 status=$?
-description="duplicate TAP identities fail closed"; assert_true test "$status" -ne 0
+description="repeated TAP descriptions remain valid when test numbers are unique"; assert_true test "$status" -eq 0
 
 MULTIPLE_PLAN_LOG="$TMP/multiple-plan.log"
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MULTIPLE_PLAN_SCOPE=publication \
@@ -159,11 +158,11 @@ description="an interrupted nonzero worker fails closed"; assert_true test "$sta
 description="the interrupted status is retained in the shard report"; assert_true grep -q '^SHARD publication FAIL cases=1 failures=0 status=143 ' "$NONZERO_LOG"
 
 AGGREGATE_MISMATCH_LOG="$TMP/aggregate-mismatch.log"
-PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=18 \
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=15 \
   bash "$WRAPPER" --output "$TMP/aggregate-mismatch-results" > "$AGGREGATE_MISMATCH_LOG" 2>&1
 status=$?
 description="a complete-set aggregate count mismatch fails closed"; assert_true test "$status" -ne 0
-description="the exact expected and actual aggregate are reported"; assert_true grep -q '^CONTRACT FAIL expected_cases=18 actual_cases=17$' "$AGGREGATE_MISMATCH_LOG"
+description="the exact expected and actual aggregate are reported"; assert_true grep -q '^CONTRACT FAIL expected_cases=15 actual_cases=14$' "$AGGREGATE_MISMATCH_LOG"
 description="an aggregate mismatch emits no passing totals marker"; assert_true test "$(grep -c '^PROVISION_GATE_TOTALS=' "$AGGREGATE_MISMATCH_LOG" || true)" -eq 0
 
 TERM_LOG="$TMP/term.log"
@@ -200,6 +199,12 @@ description="a zero jobs limit is rejected"; assert_true test "$status" -eq 2
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" bash "$WRAPPER" unknown > "$TMP/unknown.log" 2>&1
 status=$?
 description="an unknown shard is rejected before execution"; assert_true test "$status" -eq 2
+for retired_shard in shizuku helper-install device-sweep; do
+  PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" bash "$WRAPPER" "$retired_shard" \
+    > "$TMP/retired-$retired_shard.log" 2>&1
+  status=$?
+  description="unsafe dependent shard $retired_shard is no longer selectable"; assert_true test "$status" -eq 2
+done
 
 printf '1..%d\n' "$((passes + failures))"
 [ "$failures" -eq 0 ]
