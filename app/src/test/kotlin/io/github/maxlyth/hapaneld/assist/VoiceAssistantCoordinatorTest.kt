@@ -358,7 +358,9 @@ class VoiceAssistantCoordinatorTest {
         c.stop()
         assertFalse("the claim must outlive the capture it covers", foregroundCalls.contains(false))
         gate.complete(Unit)
-        runBlocking { withTimeout(2_000) { while (!foregroundCalls.contains(false)) kotlinx.coroutines.delay(5) } }
+        // Wait for the run to unwind, which happens either way, then assert. Waiting for the release
+        // itself would let a coordinator that never releases fail by timing out rather than by being wrong.
+        awaitRunFinished(c)
         assertEquals("the claim is released once the attachment has closed", listOf(true, false), foregroundCalls)
     }
 
