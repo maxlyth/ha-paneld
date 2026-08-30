@@ -123,12 +123,10 @@ class VoiceAssistantCoordinator internal constructor(
     // True from the moment a run is admitted until its capture attachment has been closed. The
     // microphone foreground-service type must outlive that attachment: dropping it while the run is
     // still unwinding tells the platform the microphone is closed while it is still being read.
-    private var runHoldsCapture = false
-
-    // Identifies the run that currently owns the coordinator's run state. A cancelled run unwinds
-    // after `stop` has already let go of it, and a replacement can be admitted in between, so the
-    // retiring run must prove it is still the owner before clearing anything or releasing the claim.
-    private var runGeneration = 0L
+    // A run occupies the coordinator from admission until its own cleanup has finished, cancellation
+    // included. Only the run that set this clears it, and nothing else is admitted meanwhile: one
+    // owner at a time is what makes the shared microphone claim, the phase the panel reports and the
+    // capture attachment unambiguous, without any of them needing to be reasoned about separately.
 
     // The source this coordinator actually obtained. Teardown shuts down what was opened and never
     // asks for a source: the supplier builds one on demand, so calling it here would open the
@@ -139,7 +137,7 @@ class VoiceAssistantCoordinator internal constructor(
     val listening: Boolean get() = synchronized(lock) { wakeLease != null }
 
     /** True while a pipeline run is in flight. */
-    val running: Boolean get() = synchronized(lock) { runJob?.isActive == true }
+    val running: Boolean get() = synchronized(lock) { runJob != null }
 
     /**
      * Apply the current settings: arm when enabled on a microphone-capable panel, otherwise stand
@@ -154,7 +152,7 @@ class VoiceAssistantCoordinator internal constructor(
         }
         synchronized(lock) {
             armed = true
-            if (runJob?.isActive == true) {
+            if (runJob != null) {
                 // Apply it when the run drains, not underneath it.
                 pendingReconfigure = true
                 return
@@ -166,7 +164,7 @@ class VoiceAssistantCoordinator internal constructor(
 
     /** Retry a start that the platform refused, for a caller that knows the app just came forward. */
     fun retryStart() {
-        val shouldRetry = synchronized(lock) { armed && wakeLease == null && engine == null && runJob?.isActive != true }
+        val shouldRetry = synchronized(lock) { armed && wakeLease == null && engine == null && runJob == null }
         if (shouldRetry) start()
     }
 
@@ -177,8 +175,9 @@ class VoiceAssistantCoordinator internal constructor(
             armed = false
             retryJob?.cancel()
             retryJob = null
+            // Deliberately not cleared here. The run clears it when its cleanup has drained, so a
+            // replacement cannot be admitted alongside a run that is still holding capture.
             job = runJob
-            runJob = null
             disarmLocked()
         }
         job?.cancel()
@@ -196,10 +195,10 @@ class VoiceAssistantCoordinator internal constructor(
             RunAdmission.BUSY -> VoiceTestTrigger.Result.Refused("a voice run is already in progress")
             // The platform refused the microphone foreground service, which on recent Android happens
             // whenever the panel asks from the background. Saying "busy" would send the operator
-            // looking for a run that does not exist, and without a retry a panel that was refused once
-            // would stay mute until something else happened to rearm it.
+            // looking for a run that does not exist. It says to try again rather than promising a
+            // retry: nothing here retains the request, and no wake-word listener ships to rearm it.
             RunAdmission.FOREGROUND_REFUSED ->
-                VoiceTestTrigger.Result.Unavailable("the panel could not claim the microphone; it will retry when the dashboard comes forward")
+                VoiceTestTrigger.Result.Unavailable("the panel could not claim the microphone; bring the dashboard forward and try again")
             RunAdmission.NOT_ELIGIBLE -> VoiceTestTrigger.Result.Refused("the voice assistant is not listening")
         }
     }
@@ -251,31 +250,23 @@ class VoiceAssistantCoordinator internal constructor(
         val mic = obtainSource() ?: return RunAdmission.NOT_ELIGIBLE
         synchronized(lock) {
             if (closed.get()) return RunAdmission.NOT_ELIGIBLE
-            if (runJob?.isActive == true) return RunAdmission.BUSY
+            if (runJob != null) return RunAdmission.BUSY
             if (generation != null && (generation != engineGeneration || !armed)) return RunAdmission.NOT_ELIGIBLE
             if (!current.enabled) return RunAdmission.NOT_ELIGIBLE
             if (!claimForegroundLocked()) {
                 state.set(VoiceState.ERROR)
-                scheduleRetryLocked()
                 return RunAdmission.FOREGROUND_REFUSED
             }
-            runHoldsCapture = true
             wakeLease?.pause()
-            val myGeneration = ++runGeneration
             runJob = scope.launch {
                 var failed = false
                 try {
                     failed = !converse(mic, activation, current)
                 } finally {
                     synchronized(lock) {
-                        // A cancelled run unwinds after stop released it, by which time a replacement
-                        // may own the coordinator. Clearing state or dropping the claim here would
-                        // erase that replacement's run and mute the panel mid-utterance.
-                        if (runGeneration != myGeneration) return@synchronized
+                        // This run is the only one the coordinator has admitted, so its cleanup owns
+                        // the shared state outright and releases the seat for the next request.
                         runJob = null
-                        // The attachment is closed by the runner before it returns, so the claim has
-                        // outlived the capture it was covering and may now be reconsidered.
-                        runHoldsCapture = false
                         if (pendingReconfigure) {
                             pendingReconfigure = false
                             disarmLocked()
@@ -364,7 +355,7 @@ class VoiceAssistantCoordinator internal constructor(
         wakeLease = null
         engine?.close()
         engine = null
-        if (runJob?.isActive != true && !runHoldsCapture) releaseForegroundLocked()
+        if (runJob == null) releaseForegroundLocked()
     }
 
     private fun claimForegroundLocked(): Boolean {
