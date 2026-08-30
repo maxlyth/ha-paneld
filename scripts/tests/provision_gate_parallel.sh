@@ -191,12 +191,12 @@ for shard in "${requested[@]}"; do
   # These shards deliberately create nested process groups and signal them to prove status,
   # latency and descendant reclamation. Running two such owners concurrently under this wrapper's
   # own monitor mode makes Bash process-group evidence nondeterministic even with isolated files.
-  # Drain ordinary workers, run each signal owner alone, then restore normal parallel scheduling.
+  # Drain ordinary workers, run each signal owner in a foreground subshell, then restore normal
+  # parallel scheduling. A background job remains a process-group leader even when it has no sibling
+  # jobs, which is enough to invalidate the nested signal/status assertions.
   if owns_process_group_signals "$shard"; then
     wait_all_active
-    run_shard "$shard" &
-    pids+=("$!")
-    wait_all_active
+    ( run_shard "$shard" )
     continue
   fi
   while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
