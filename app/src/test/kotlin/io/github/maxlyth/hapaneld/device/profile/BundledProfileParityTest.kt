@@ -106,6 +106,41 @@ class BundledProfileParityTest {
      * drive the parser from constructed YAML, so both keys are covered from both directions.
      */
 
+    /**
+     * A camera panel must say where its lens is. The camera-in-use light is an arc centred on the lens,
+     * so without this it is centred on a default that is wrong on both boards — measured from
+     * photographs, the lens sits 63 px above the active area on the TPA10 and 43 px on the WF1589T, and
+     * the arc visibly missed on each until they were declared. A board with no camera declares nothing.
+     */
+    @Test fun everyCameraPanelDeclaresWhereItsLensIs() {
+        val cameras = bundled.filter { it.document.hardware.hasCamera }
+        assertTrue("this test is vacuous without a camera profile", cameras.isNotEmpty())
+        cameras.forEach {
+            val offset = it.document.hardware.cameraLensOffsetPx
+            assertNotNull("${it.document.id} declares a camera but not where the lens is", offset)
+            assertTrue("${it.document.id}: a lens offset must be a real distance", offset!! > 0)
+        }
+        assertEquals(63, bundledById.getValue("tpa10").document.hardware.cameraLensOffsetPx)
+        assertEquals(43, bundledById.getValue("wf1589t").document.hardware.cameraLensOffsetPx)
+        // It reaches the resolved profile the indicator reads, not just the parsed document.
+        assertEquals(63, bundledById.getValue("tpa10").profile().cameraLensOffsetPx)
+        // A board with no camera has no lens to describe.
+        assertNull(bundledById.getValue("nspanel-pro").document.hardware.cameraLensOffsetPx)
+        assertNull(bundledById.getValue("generic").document.hardware.cameraLensOffsetPx)
+    }
+
+    @Test fun theLensOffsetIsDescribedToTheEditorAndSurvivesARoundTrip() {
+        val descriptor = ProfileMetadata.schema.fields.singleOrNull { it.path == "hardware.camera_lens_offset_px" }
+        assertNotNull("the lens offset must be described to the profile editor", descriptor)
+        assertEquals("integer", descriptor!!.type)
+        assertFalse("a board with no camera must be able to omit it", descriptor.required)
+
+        val document = bundledById.getValue("tpa10").document
+        val reparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(document)).document)
+        assertEquals(63, reparsed.hardware.cameraLensOffsetPx)
+        assertEquals(document, reparsed)
+    }
+
     @Test fun cameraAndMicrophoneAreDeclaredIndependentlyAndSurviveARoundTrip() {
         listOf("hardware.camera", "hardware.microphone").forEach { path ->
             // singleOrNull, not single: a missing descriptor must fail this assertion rather than
@@ -691,8 +726,8 @@ class BundledProfileParityTest {
             "shelly-wall-display-v2.yaml" to "16415916b2cc0841fccee75709f3b10d3b6a431e3532593c53cb0d34a89fcd24",
             "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
             "smt1019.yaml" to "3004666dd80585a9f57f846f8db5bbde9b781bb8d669921d9406ab88a5a84289",
-            "tpa10.yaml" to "78a1c3559f52847306d71af701accd9854b6470531d5661b64800e0b7177b870",
-            "wf1589t.yaml" to "1562d11445d6a520db3cd56845b1ae47368851bc4de517757473301bd9392977",
+            "tpa10.yaml" to "412bfc2feace3ff54f9aa2f0ea1cac2dff8cb6533f766f8d862352a7fdd29fa3",
+            "wf1589t.yaml" to "8b464dbecb5a4ee4758add457937ac663b0bb3bd92e045ff4c620059bf02897c",
             "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf(

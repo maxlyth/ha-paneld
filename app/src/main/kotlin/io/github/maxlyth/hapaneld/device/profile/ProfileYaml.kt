@@ -181,6 +181,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val hardware = map(root["hardware"], "hardware", setOf(
             "led", "screen_off", "has_button_backlight", "zigbee_gateway_dir", "relay_base",
             "relay_base_fallbacks", "button_led_gpio_base", "touch_click_gain", "camera", "microphone",
+            "camera_lens_offset_px",
         ), required = true).orEmpty()
         val led = map(hardware["led"], "hardware.led", setOf("mechanism", "transfer"), required = true).orEmpty()
         val sensors = map(
@@ -281,6 +282,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
                 touchClickGain = float(hardware, "touch_click_gain", "hardware"),
                 hasCamera = boolean(hardware, "camera", "hardware") ?: false,
                 hasMicrophone = boolean(hardware, "microphone", "hardware") ?: false,
+                cameraLensOffsetPx = integer(hardware, "camera_lens_offset_px", "hardware"),
             ),
             sensors = ProfileSensors(
                 proximityTechnology = string(sensors, "proximity_technology", "sensors"),
@@ -624,6 +626,7 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
         "touch_click_gain" to hardware.touchClickGain,
         "camera" to hardware.hasCamera,
         "microphone" to hardware.hasMicrophone,
+        "camera_lens_offset_px" to hardware.cameraLensOffsetPx,
     ).withoutNullValues(),
     "sensors" to linkedMapOf(
         "proximity_technology" to sensors.proximityTechnology,

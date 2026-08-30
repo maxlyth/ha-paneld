@@ -116,6 +116,17 @@ data class ProfileHardware(
     // hardware has one without the other (e.g. a microphone with no camera).
     val hasCamera: Boolean = false,
     val hasMicrophone: Boolean = false,
+    /**
+     * How far the camera lens centre sits above the top of the active display area, in screen pixels.
+     *
+     * A bezel measurement, so it belongs to the board rather than to the app: the camera-in-use light is
+     * drawn as an arc centred on the lens, and without this it can only be centred on a guess. Measured
+     * from photographs of the two camera panels on 2026-08-30 — 63 px on the TPA10 and 43 px on the
+     * WF1589T, about 7.0 mm and 5.2 mm — which is why it cannot be one shared constant.
+     *
+     * Null means unmeasured; the indicator then falls back to its own default rather than refusing.
+     */
+    val cameraLensOffsetPx: Int? = null,
 )
 
 data class ProfileLed(

@@ -61,6 +61,7 @@ hardware:
     transfer: rk3576-four-bit
   screen_off: su-blpower
   camera: true
+  camera_lens_offset_px: 43
   microphone: true
   has_button_backlight: false
   touch_click_gain: 0.16

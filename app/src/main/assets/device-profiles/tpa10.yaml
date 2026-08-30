@@ -61,6 +61,7 @@ hardware:
     transfer: identity
   screen_off: daemon-blpower
   camera: true
+  camera_lens_offset_px: 63
   has_button_backlight: true
   touch_click_gain: 0.12
 sensors:

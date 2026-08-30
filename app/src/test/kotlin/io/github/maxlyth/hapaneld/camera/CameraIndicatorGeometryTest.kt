@@ -1,71 +1,89 @@
 package io.github.maxlyth.hapaneld.camera
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * The camera light's shape and movement, asserted where they are decided rather than in a photograph.
  *
- * Both camera panels centre the lens on the top bezel, so the indicator is the lowest third of a circle
- * whose centre sits *above* the screen edge — on screen it reads as an arc curving under the lens. The
- * numbers below are the ones a person can see, so they are pinned: get the centre offset wrong and the
- * arc becomes a half-disc or a sliver, and nothing else in the suite would notice.
+ * Both camera panels centre the lens on the top bezel, so the indicator is the visible bottom of a circle
+ * centred *on the lens* — on screen it reads as an arc curving under the camera. The first version derived
+ * that centre from an invented visible fraction, which silently asserted the lens was 27 px above the
+ * active area; photographs of both panels put it at 63 px and 43 px, and the arc looked wrong on each.
+ * These assertions pin the relationship that fixes it, so a future change cannot quietly reintroduce a
+ * centre that is merely close.
  */
 class CameraIndicatorGeometryTest {
 
-    @Test fun theCircleIsThreeTabBarsLessTheMargin() {
-        assertEquals(56, CameraIndicatorGeometry.TAB_BAR_PX)
-        assertEquals(8, CameraIndicatorGeometry.MARGIN_PX)
-        assertEquals(
-            "the diameter is three tab bars minus the margin",
-            56 * 3 - 8,
-            CameraIndicatorGeometry.DIAMETER_PX,
-        )
-        assertEquals(160, CameraIndicatorGeometry.DIAMETER_PX)
+    // Measured from photographs of both panels on 2026-08-30, cross-checked two ways per photo.
+    private val tpa10 = 63
+    private val wf1589t = 43
+
+    @Test fun theCircleIsCentredOnTheLensRatherThanOnAGuess() {
+        listOf(tpa10, wf1589t).forEach { lens ->
+            assertEquals(
+                "the centre must sit exactly on the lens, which is what makes the arc wrap it",
+                -lens.toFloat(),
+                CameraIndicatorGeometry.centreY(lens),
+                0.01f,
+            )
+        }
+        // The two camera panels genuinely differ, which is why this cannot be one shared constant.
+        assertNotEquals(CameraIndicatorGeometry.centreY(tpa10), CameraIndicatorGeometry.centreY(wf1589t))
     }
 
-    @Test fun theWindowIsAsWideAsTheCircleAndAsTallAsTheVisibleBand() {
-        assertEquals(
-            "the window spans the circle's full width, or the arc's ends would be clipped",
-            CameraIndicatorGeometry.DIAMETER_PX,
-            CameraIndicatorGeometry.windowWidthPx,
-        )
-        assertEquals(
-            "the window is exactly the visible band, so the arc meets the screen edge",
-            Math.round(160 * 0.33f),
-            CameraIndicatorGeometry.windowHeightPx,
-        )
-        assertEquals(53, CameraIndicatorGeometry.windowHeightPx)
+    @Test fun theVisibleBandIsConstantWhateverTheLensOffset() {
+        // Pin the value as well as the relationship. Comparing the computed band against the constant it
+        // is derived from is a tautology that cannot fail when the constant moves — the mutation battery
+        // caught exactly that, so the height a person actually sees is asserted here as a literal.
+        assertEquals("the visible band is what the room sees; it is not free to drift", 53, CameraIndicatorGeometry.VISIBLE_BAND_PX)
+        listOf(tpa10, wf1589t, 10, 120).forEach { lens ->
+            val bottomOfCircle = CameraIndicatorGeometry.centreY(lens) + CameraIndicatorGeometry.radiusPx(lens)
+            assertEquals(
+                "what the room sees stays the same height however deep the bezel is",
+                CameraIndicatorGeometry.VISIBLE_BAND_PX.toFloat(),
+                bottomOfCircle,
+                0.01f,
+            )
+            assertEquals(CameraIndicatorGeometry.VISIBLE_BAND_PX, CameraIndicatorGeometry.windowHeightPx)
+        }
     }
 
-    @Test fun theCircleCentreSitsAboveTheScreenEdgeSoOnlyTheBottomThirdShows() {
-        val r = CameraIndicatorGeometry.radiusPx
-        val cy = CameraIndicatorGeometry.centreY()
-        assertTrue("the centre must be above the screen edge, not on or below it: $cy", cy < 0f)
-
-        // What the room sees: from the window's top edge (y = 0) down to the bottom of the circle.
-        val visible = (cy + r) - 0f
-        assertEquals(
-            "the visible band is the bottom third of the circle",
-            CameraIndicatorGeometry.DIAMETER_PX * CameraIndicatorGeometry.VISIBLE_FRACTION,
-            visible,
-            0.5f,
+    @Test fun aDeeperBezelMeansABiggerFlatterArc() {
+        assertTrue(
+            "the TPA10's lens is higher, so its circle must be larger",
+            CameraIndicatorGeometry.radiusPx(tpa10) > CameraIndicatorGeometry.radiusPx(wf1589t),
         )
-        // A half-disc is the shape this deliberately is NOT; that would put the centre exactly on 0.
-        assertTrue("the bottom third is shorter than a half-disc would be", visible < r)
+        assertEquals(63f + 53f, CameraIndicatorGeometry.radiusPx(tpa10), 0.01f)
+        assertEquals(43f + 53f, CameraIndicatorGeometry.radiusPx(wf1589t), 0.01f)
+        assertEquals(232, CameraIndicatorGeometry.windowWidthPx(tpa10))
+        assertEquals(192, CameraIndicatorGeometry.windowWidthPx(wf1589t))
+    }
+
+    @Test fun anUnmeasuredProfileFallsBackInsteadOfCollapsing() {
+        assertEquals(
+            CameraIndicatorGeometry.DEFAULT_LENS_OFFSET_PX,
+            CameraIndicatorGeometry.lensOffsetOrDefault(null),
+        )
+        assertEquals(
+            "a zero or negative measurement is not a lens position",
+            CameraIndicatorGeometry.DEFAULT_LENS_OFFSET_PX,
+            CameraIndicatorGeometry.lensOffsetOrDefault(0),
+        )
+        assertEquals(tpa10, CameraIndicatorGeometry.lensOffsetOrDefault(tpa10))
     }
 
     @Test fun theArcIsCentredAndInsetByTheStrokeSoTheOutlineIsNotClipped() {
-        assertEquals(80f, CameraIndicatorGeometry.centreX(160), 0.01f)
+        assertEquals(116f, CameraIndicatorGeometry.centreX(232), 0.01f)
         val stroke = 4f
         assertEquals(
-            "the radius is inset by half the stroke, so the white ring stays inside the window",
-            CameraIndicatorGeometry.radiusPx - stroke / 2f,
-            CameraIndicatorGeometry.radius(stroke),
+            CameraIndicatorGeometry.radiusPx(tpa10) - stroke / 2f,
+            CameraIndicatorGeometry.radius(tpa10, stroke),
             0.01f,
         )
-        assertTrue(CameraIndicatorGeometry.radius(stroke) < CameraIndicatorGeometry.radiusPx)
+        assertTrue(CameraIndicatorGeometry.radius(tpa10, stroke) < CameraIndicatorGeometry.radiusPx(tpa10))
     }
 
     /**

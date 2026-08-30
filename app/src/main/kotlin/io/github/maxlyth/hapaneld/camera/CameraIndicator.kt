@@ -39,46 +39,60 @@ object CameraIndicationPolicy {
  * screenshot can check.
  *
  * Both camera-bearing panels put the lens at the **top centre** of the bezel, so a light in a corner
- * points at nothing. The indicator is the lowest third of a circle whose centre sits above the screen
- * edge: on screen it reads as an arc curving under the lens, flush to the bezel. A margin here would
- * detach the arc from the bezel and lose that, so there is none.
+ * points at nothing. The indicator is the visible bottom of a circle **centred on the lens itself**: on
+ * screen it reads as an arc curving under the camera, flush to the bezel. A margin here would detach the
+ * arc from the bezel and lose that, so there is none.
+ *
+ * Where the lens is, is a per-board measurement (`hardware.camera_lens_offset_px`), not something the
+ * app can infer — the two camera panels differ by 20 px.
  */
 object CameraIndicatorGeometry {
     /**
-     * Height of the dashboard's own tab bar, in screen pixels. The indicator is sized against on-screen
-     * content rather than in dp, because it has to look right *next to that bar* — a dp size would drift
-     * away from it as soon as the two panels' densities differ, which they do (226 and 212).
+     * Height of the visible arc, in screen pixels — what the room actually sees below the screen edge.
+     * This is the design choice; the circle's size follows from it and from where the lens is.
      */
-    const val TAB_BAR_PX = 56
+    const val VISIBLE_BAND_PX = 53
 
-    /** Margin taken off the circle so the arc does not crowd the bar it is measured against. */
-    const val MARGIN_PX = 8
+    /**
+     * Fallback for a profile that has not measured its lens. Deliberately the value the first version of
+     * this indicator assumed implicitly, so an unmeasured panel is no worse off than before.
+     */
+    const val DEFAULT_LENS_OFFSET_PX = 27
 
-    /** Full circle diameter: three tab bars, less the margin. Only its lowest third is on-screen. */
-    const val DIAMETER_PX = TAB_BAR_PX * 3 - MARGIN_PX
-
-    /** Fraction of the circle's height that is visible below the screen edge. */
-    const val VISIBLE_FRACTION = 0.33f
-
-    val radiusPx: Float get() = DIAMETER_PX / 2f
+    /**
+     * Radius: far enough that the circle's centre lands on the lens while its bottom stays
+     * [VISIBLE_BAND_PX] below the screen edge. A higher lens means a bigger, flatter arc.
+     *
+     * Note what this trades away. The first version fixed the diameter at three dashboard headers less a
+     * margin, and *derived* the centre from a visible fraction — which silently asserted the lens was 27
+     * px above the active area. It is not: measured from photographs of both panels, it is 63 px on the
+     * TPA10 and 43 px on the WF1589T. Diameter, lens-centring and band height are three constraints on
+     * two degrees of freedom, so one had to give; the fixed diameter is the one that was never observable
+     * from the room, while the other two are exactly what a person looking at the panel judges.
+     */
+    fun radiusPx(lensOffsetPx: Int): Float = (lensOffsetPx + VISIBLE_BAND_PX).toFloat()
 
     /** Overlay window width — the circle's full width. */
-    val windowWidthPx: Int get() = DIAMETER_PX
+    fun windowWidthPx(lensOffsetPx: Int): Int = Math.round(radiusPx(lensOffsetPx) * 2f)
 
     /** Overlay window height — the visible band, so the arc meets the screen edge exactly. */
-    val windowHeightPx: Int get() = Math.round(DIAMETER_PX * VISIBLE_FRACTION)
+    val windowHeightPx: Int get() = VISIBLE_BAND_PX
 
     /** Circle centre within the window, horizontally centred. */
     fun centreX(widthPx: Int): Float = widthPx / 2f
 
     /**
-     * Circle centre's y within the window — negative, i.e. above the screen edge, by however much of
-     * the circle is hidden. Showing the bottom [VISIBLE_FRACTION] means hiding `r - visible` of it.
+     * Circle centre's y within the window: negative by exactly the lens offset, which is what puts the
+     * centre *on the lens* rather than somewhere that happens to look close.
      */
-    fun centreY(): Float = -(radiusPx - DIAMETER_PX * VISIBLE_FRACTION)
+    fun centreY(lensOffsetPx: Int): Float = -lensOffsetPx.toFloat()
 
     /** Radius inset by half the stroke so the outline is not clipped by the window edge. */
-    fun radius(strokePx: Float): Float = radiusPx - strokePx / 2f
+    fun radius(lensOffsetPx: Int, strokePx: Float): Float = radiusPx(lensOffsetPx) - strokePx / 2f
+
+    /** A profile's measurement, or the fallback when it has none. */
+    fun lensOffsetOrDefault(profileValue: Int?): Int =
+        profileValue?.takeIf { it > 0 } ?: DEFAULT_LENS_OFFSET_PX
 }
 
 /**
@@ -133,8 +147,11 @@ class CameraIndicator(
     private val restoreLed: () -> Unit,
     /** True while the screen is intended off, including the never-blank dim floor. */
     private val screenOff: () -> Boolean,
+    /** The active profile's measured lens offset in screen px; null falls back to the default. */
+    private val cameraLensOffsetPx: Int? = null,
     private val holdAfterCloseMs: Long = HOLD_AFTER_CLOSE_MS,
 ) {
+    private val lensOffsetPx = CameraIndicatorGeometry.lensOffsetOrDefault(cameraLensOffsetPx)
     private val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val main = Handler(Looper.getMainLooper())
     private val lock = Any()
@@ -191,9 +208,9 @@ class CameraIndicator(
                     attached = true
                     return@onMain
                 }
-                val candidate = IndicatorView(context)
+                val candidate = IndicatorView(context, lensOffsetPx)
                 val params = WindowManager.LayoutParams(
-                    CameraIndicatorGeometry.windowWidthPx,
+                    CameraIndicatorGeometry.windowWidthPx(lensOffsetPx),
                     CameraIndicatorGeometry.windowHeightPx,
                     overlayType(),
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -332,7 +349,7 @@ class CameraIndicator(
     }
 
     /** A red disc with a white ring: legible at walking-past distance, unmistakable as "recording". */
-    private class IndicatorView(context: Context) : View(context) {
+    private class IndicatorView(context: Context, private val lensOffsetPx: Int) : View(context) {
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(220, 30, 30) }
         private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -344,8 +361,8 @@ class CameraIndicator(
             // A whole circle whose centre sits above the screen edge, so the window clips everything
             // but its lowest third — the arc that curves under the lens.
             val cx = CameraIndicatorGeometry.centreX(width)
-            val cy = CameraIndicatorGeometry.centreY()
-            val r = CameraIndicatorGeometry.radius(ring.strokeWidth)
+            val cy = CameraIndicatorGeometry.centreY(lensOffsetPx)
+            val r = CameraIndicatorGeometry.radius(lensOffsetPx, ring.strokeWidth)
             canvas.drawCircle(cx, cy, r, fill)
             canvas.drawCircle(cx, cy, r, ring)
         }

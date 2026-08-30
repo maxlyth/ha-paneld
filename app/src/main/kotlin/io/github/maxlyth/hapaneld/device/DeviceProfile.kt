@@ -104,6 +104,9 @@ interface DeviceProfile {
     /** Board carries a usable camera. Default false: only declare it once verified on the hardware. */
     val hasCamera: Boolean get() = false
 
+    /** Screen pixels from the top of the active area up to the lens centre; null when unmeasured. */
+    val cameraLensOffsetPx: Int? get() = null
+
     /** Board carries a usable microphone, independent of [hasCamera] — some hardware has one without
      *  the other. Default false: only declare it once verified on the hardware. */
     val hasMicrophone: Boolean get() = false

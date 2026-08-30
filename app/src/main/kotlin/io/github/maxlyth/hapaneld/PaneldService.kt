@@ -1183,6 +1183,7 @@ class PaneldService : Service() {
                 // Re-derive from persisted intent through whichever bridge is current, never a snapshot.
                 restoreLed = { runCatching { runtime.current().mqtt.reapplyStoredLed() } },
                 screenOff = { screen.isIntendedOff() },
+                cameraLensOffsetPx = profile.cameraLensOffsetPx,
             ),
             foreground = io.github.maxlyth.hapaneld.camera.AndroidCameraForegroundGate(this),
         )
