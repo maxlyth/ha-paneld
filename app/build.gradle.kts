@@ -73,7 +73,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the release line/candidate; publication remains a separate explicit action.
-        versionCode = 653
+        versionCode = 654
         versionName = "0.9.7-rc3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
