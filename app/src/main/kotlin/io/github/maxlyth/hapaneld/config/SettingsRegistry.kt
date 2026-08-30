@@ -25,10 +25,12 @@ import java.util.Locale
 object SettingsRegistry {
 
     /** Bump whenever the persisted shape changes; drives bundle migration. */
-    const val SCHEMA = 8
+    const val SCHEMA = 9
     const val MAX_PANEL_ID_CHARS = 63
     const val DEFAULT_SILENCE_BOOT_CHIME = true
     const val DEFAULT_MQTT_ADDRESS_FAMILY = "Automatic"
+    const val DEFAULT_UI_LANGUAGE = "auto"
+    val UI_LANGUAGES: List<String> = listOf(DEFAULT_UI_LANGUAGE, "en", "de", "fr", "it", "es", "zh-Hans")
 
     /**
      * Lowest automatic screen percentage the actuator can actually distinguish, and therefore the floor
@@ -573,6 +575,14 @@ object SettingsRegistry {
         ),
 
         // ---- System ------------------------------------------------------------------------------
+        SettingSpec(
+            key = "ui_language", type = SettingType.ENUM, group = "System",
+            label = "Interface language", default = DEFAULT_UI_LANGUAGE, tier = Tier.BASIC,
+            scope = Scope.DEVICE,
+            options = UI_LANGUAGES,
+            help = "Language used by ha-paneld's own interface. Automatic follows the Home Assistant " +
+                "user language when available, then the browser or device language. Unsupported languages use English.",
+        ),
         SettingSpec(
             key = "self_update", type = SettingType.BOOL, group = "System",
             label = "ha-paneld auto-update", default = "true", scope = Scope.DEVICE,

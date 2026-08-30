@@ -17,6 +17,19 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ConfigTransactionTest {
+    @Test fun uiLanguageDefaultsToAutoAndRoundTripsAnExplicitChoice() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+
+        assertEquals(SettingsRegistry.DEFAULT_UI_LANGUAGE, config.uiLanguage)
+        assertFalse(prefs.values.containsKey("ui_language"))
+
+        config.setUiLanguage("zh-Hans")
+
+        assertEquals("zh-Hans", prefs.values["ui_language"])
+        assertEquals("zh-Hans", Config(prefs.instance).uiLanguage)
+    }
+
     @Test fun cachedHaVersionIsScopedToTheExactCurrentRendererEndpoint() {
         val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.example"))
         val config = Config(prefs.instance)

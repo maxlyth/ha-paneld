@@ -1,0 +1,98 @@
+package io.github.maxlyth.hapaneld.i18n
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Test
+
+class StringsTest {
+    private val english = """{
+      "schema":1,
+      "locale":"en",
+      "sourceRevision":"e7c01506e9519d51b57fcf0e2b0b969a1ce44a6e",
+      "strings":{
+        "settings.example.help":{
+          "text":"Keep {name} on MQTT.",
+          "sourceHash":"${sourceHash("Keep {name} on MQTT.")}",
+          "surface":"settings",
+          "context":"Configure example help",
+          "risk":"ordinary",
+          "siblings":[],
+          "placeholders":["{name}"],
+          "frozen":["MQTT"],
+          "softMaxChars":40,
+          "hardMaxChars":80
+        }
+      }
+    }""".trimIndent()
+
+    private fun target(text: String, state: String, hash: String = sourceHash("Keep {name} on MQTT.")) = """{
+      "schema":1,
+      "locale":"de",
+      "sourceRevision":"e7c01506e9519d51b57fcf0e2b0b969a1ce44a6e",
+      "strings":{
+        "settings.example.help":{
+          "text":"$text",
+          "sourceHash":"$hash",
+          "state":"$state"
+        }
+      }
+    }""".trimIndent()
+
+    @Test fun `cross checked target resolves while draft falls back to English`() {
+        val source = SourceCatalogue.parse(english)
+        val checked = TargetCatalogue.parse(target("{name} auf MQTT behalten.", "machine-cross-checked"), source)
+        val draft = TargetCatalogue.parse(target("{name} auf MQTT behalten.", "machine-draft"), source)
+        assertEquals("{name} auf MQTT behalten.", Strings(source, checked).get("settings.example.help"))
+        assertEquals("Keep {name} on MQTT.", Strings(source, draft).get("settings.example.help"))
+    }
+
+    @Test fun `missing target key falls back per key`() {
+        val source = SourceCatalogue.parse(english)
+        val emptyTarget = target("{name} auf MQTT behalten.", "machine-draft")
+            .replace(Regex("\"settings\\.example\\.help\"\\s*:\\s*\\{.*?\\n\\s*}", RegexOption.DOT_MATCHES_ALL), "")
+            .replace("\"strings\":{\n        \n      }", "\"strings\":{}")
+        assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
+    }
+
+    @Test fun `stale placeholder and frozen literal targets fail closed`() {
+        val source = SourceCatalogue.parse(english)
+        assertThrows(IllegalArgumentException::class.java) {
+            TargetCatalogue.parse(target("Ohne Platzhalter auf MQTT.", "machine-cross-checked"), source)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TargetCatalogue.parse(target("{name} im Broker behalten.", "machine-cross-checked"), source)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TargetCatalogue.parse(target("{name} auf MQTT behalten.", "machine-cross-checked", "0".repeat(64)), source)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TargetCatalogue.parse(target("{name} auf MQTT MQTT behalten.", "machine-cross-checked"), source)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TargetCatalogue.parse(target("{name} auf MQTT behalten.", "english-fallback"), source)
+        }
+    }
+
+    @Test fun `pseudolocale expands prose without changing placeholders`() {
+        val strings = Strings(SourceCatalogue.parse(english), pseudo = true)
+        assertEquals("［Këëp {name} ôn MQTT.］", strings.get("settings.example.help"))
+    }
+
+    @Test fun `asset loader rejects a malformed or missing target catalogue to English`() {
+        val malformed = CatalogueLoader { path -> if (path == "i18n/en.json") english else "not-json" }
+        val missing = CatalogueLoader { path ->
+            if (path == "i18n/en.json") english else error("missing")
+        }
+        assertEquals("Keep {name} on MQTT.", malformed.strings("de").get("settings.example.help"))
+        assertEquals("Keep {name} on MQTT.", missing.strings("de").get("settings.example.help"))
+    }
+
+    @Test fun `asset loader rejects a target whose declared locale differs from its path`() {
+        val wrongLocale = CatalogueLoader { path ->
+            if (path == "i18n/en.json") english else target("{name} auf MQTT behalten.", "machine-cross-checked")
+                .replace("\"locale\":\"de\"", "\"locale\":\"fr\"")
+        }
+        assertEquals("Keep {name} on MQTT.", wrongLocale.strings("de").get("settings.example.help"))
+        assertEquals("en", wrongLocale.strings("de").locale)
+    }
+}

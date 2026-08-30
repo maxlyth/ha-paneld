@@ -42,6 +42,9 @@ import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.TamePackagePolicy
 import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.i18n.AppLocale
+import io.github.maxlyth.hapaneld.i18n.CatalogueLoader
+import io.github.maxlyth.hapaneld.i18n.Strings as AppStrings
 import io.github.maxlyth.hapaneld.camera.AbsentCameraSurface
 import io.github.maxlyth.hapaneld.camera.CameraRefusal
 import io.github.maxlyth.hapaneld.camera.CameraResolution
@@ -1412,6 +1415,7 @@ class PaneldServer internal constructor(
     private val haOAuthFlow = HaOAuthFlow()
     private val haOAuthStartLock = Any()
     private val haCurrentUser = HaCurrentUserClient(config)
+    private val catalogueLoader by lazy { CatalogueLoader(::asset) }
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
@@ -1832,7 +1836,14 @@ class PaneldServer internal constructor(
                 }
                 // Tabbed multi-page shell. `/` stays the existing dashboard (now with a tab bar); the
                 // other tabs are dedicated pages that consume /api/v1.
-                get("/configure") { call.respondText(page("configure", "Configure", configureBody()), ContentType.Text.Html) }
+                get("/configure") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.ContentLanguage, strings.locale)
+                    call.respondText(
+                        page("configure", "Configure", configureBody(), languageTag = strings.locale),
+                        ContentType.Text.Html,
+                    )
+                }
                 get("/setup") {
                     // No data-cfg, unlike every other page: buildwatch.js reloads /configure when settings
                     // change underneath it, and that same reload mid-step would throw away what the user is
@@ -1913,7 +1924,11 @@ class PaneldServer internal constructor(
                     }
                     get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
                     post("/config") { handleConfigPost(call) }
-                    get("/config/schema") { call.respondText(configSchemaJson(), ContentType.Application.Json) }
+                    get("/config/schema") {
+                        val strings = requestStrings(call)
+                        call.response.headers.append(HttpHeaders.ContentLanguage, strings.locale)
+                        call.respondText(configSchemaJson(strings), ContentType.Application.Json)
+                    }
                     get("/config/home-dashboards") {
                         val catalog = entityLearning.homeDashboardCatalog()
                         val items = catalog.items.joinToString(",") { dashboard ->
@@ -3615,6 +3630,7 @@ class PaneldServer internal constructor(
         rightControls: String,
         body: String,
         extraScripts: String = "",
+        languageTag: String = AppLocale.ENGLISH,
     ): String {
         // Capture panel identity once so title, switcher metadata and visible name cannot disagree if a
         // concurrent config save replaces the live identity while this response is being rendered.
@@ -3623,7 +3639,7 @@ class PaneldServer internal constructor(
         val panelId = esc(rawPanelId)
         val friendlyName = esc(rawFriendlyName)
         val title = esc(panelBrowserTitle(rawFriendlyName, sectionTitle))
-        return """<!doctype html><html lang="en"><head><meta charset="utf-8">
+        return """<!doctype html><html lang="$languageTag"><head><meta charset="utf-8">
 <script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -3645,7 +3661,7 @@ $extraScripts<script src="/assets/power-safety.js"></script>
     }
 
     /** Shared page shell (header + tab bar + body) for the non-dashboard tabs. */
-    private fun page(active: String, title: String, body: String): String {
+    private fun page(active: String, title: String, body: String, languageTag: String = AppLocale.ENGLISH): String {
         val haLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener">Open in HA</a>""" else ""
         val approvalKey = if (active in setOf("configure", "install")) hardenedApprovalKey(top = active == "install") else ""
@@ -3668,6 +3684,7 @@ $extraScripts<script src="/assets/power-safety.js"></script>
 $approvalKeyBefore
 $body
 $approvalKeyAfter""",
+            languageTag = languageTag,
         )
     }
 
@@ -5815,6 +5832,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     ) {
                     panelId?.let { config.setPanelId(it) }
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
+                    p["ui_language"]?.let { config.setUiLanguage(it) }
                     val prevDash = config.dashboardPackage
                     dashboardPackage?.let { config.setDashboardPackage(it) }
                     val dashChanged = dashboardPackage?.let { it != prevDash } == true
@@ -6507,7 +6525,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      * whether the setting is an HA entity and currently exposed), capability-gated to this panel.
      * Values themselves come from GET /config; this endpoint is metadata only.
      */
-    private fun configSchemaJson(): String {
+    private fun configSchemaJson(): String = configSchemaJson(catalogueLoader.strings(AppLocale.ENGLISH))
+
+    private fun configSchemaJson(strings: AppStrings): String {
         fun s(v: String) = Json.str(v)
         val caps = liveCapabilities(snapStaleOk().caps) // learned eligibility is fail-closed and live
         val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
@@ -6542,12 +6562,17 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             val maxLengthJson = if (sized) spec.maxChars.toString() else nullJson
             val exposed = if (isHa) config.haExposed(spec.key, spec.haExposedByDefault) else false
             val placeholderJson = placeholder?.let { s(it) } ?: nullJson
+            val label = strings.get(spec.labelKey)
+            val help = if (spec.help.isEmpty()) "" else strings.get(spec.helpKey)
+            val helpKeyJson = if (spec.help.isEmpty()) nullJson else s(spec.helpKey)
             "{" +
                 "\"key\":${s(spec.key)}," +
                 "\"type\":${s(spec.type.name)}," +
                 "\"group\":${s(spec.group)}," +
-                "\"label\":${s(spec.label)}," +
-                "\"help\":${s(spec.help)}," +
+                "\"labelKey\":${s(spec.labelKey)}," +
+                "\"helpKey\":$helpKeyJson," +
+                "\"label\":${s(label)}," +
+                "\"help\":${s(help)}," +
                 "\"default\":${s(spec.default)}," +
                 "\"tier\":${s(spec.tier.name)}," +
                 "\"scope\":${s(spec.scope.name)}," +
@@ -6567,6 +6592,18 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 "}"
         }
         return "[$items]"
+    }
+
+    private fun requestStrings(call: ApplicationCall): AppStrings {
+        val locale = AppLocale.resolve(
+            explicit = call.request.queryParameters["lang"],
+            persisted = config.uiLanguage,
+            haUser = call.request.queryParameters["ha_lang"],
+            acceptLanguage = call.request.headers[HttpHeaders.AcceptLanguage],
+            deviceLanguageTag = java.util.Locale.getDefault().toLanguageTag(),
+            allowPseudo = BuildConfig.DEBUG,
+        )
+        return catalogueLoader.strings(locale)
     }
 
     /** A setting's effective current value: controller-sourced live state where it exists, identity

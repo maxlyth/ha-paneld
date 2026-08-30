@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
-  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, apps = [], rendererChoices = [], radio = null;
+  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, schemaLanguageRequest = 0, apps = [], rendererChoices = [], radio = null;
   var savedValues = {}, savedExpose = {};
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
@@ -62,6 +62,76 @@
   var haOauthButton = null, haOauthStatus = null, haOauthLinks = null;
   var haOauthAuthorizationUrl = "", haOauthTargetUrl = "";
   var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
+
+  function validLanguageTag(value) {
+    return typeof value === "string" && value.length <= 63 &&
+      /^[A-Za-z0-9]{1,8}(?:[-_][A-Za-z0-9]{1,8})*$/.test(value);
+  }
+
+  function storeBrowserLanguage(value) {
+    try {
+      if (value) window.localStorage.setItem("selectedLanguage", JSON.stringify(value));
+      else window.localStorage.removeItem("selectedLanguage");
+    } catch (_) {}
+  }
+
+  function stripLanguageQuery() {
+    if (!window.history || !window.history.replaceState) return;
+    var params = new URLSearchParams(window.location.search);
+    if (!params.has("lang")) return;
+    params.delete("lang");
+    var query = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
+  }
+
+  // HA uses this JSON-encoded localStorage key for its own browser language choice. The same shape
+  // gives Configure a durable browser override without inventing another client-side authority.
+  function browserLanguageChoice() {
+    var query = new URLSearchParams(window.location.search).get("lang");
+    if (query && query.toLowerCase() === "auto") {
+      storeBrowserLanguage("");
+      stripLanguageQuery();
+      return "";
+    }
+    if (validLanguageTag(query)) {
+      storeBrowserLanguage(query);
+      return query;
+    }
+    try {
+      var stored = JSON.parse(window.localStorage.getItem("selectedLanguage") || "null");
+      return validLanguageTag(stored) ? stored : "";
+    } catch (_) { return ""; }
+  }
+
+  function configSchemaUrl(haLanguage) {
+    var params = new URLSearchParams();
+    var explicit = browserLanguageChoice();
+    if (explicit) params.set("lang", explicit);
+    if (validLanguageTag(haLanguage)) params.set("ha_lang", haLanguage);
+    var query = params.toString();
+    return "/api/v1/config/schema" + (query ? "?" + query : "");
+  }
+
+  function readLocalizedSchema(response) {
+    var language = response.headers && response.headers.get ? response.headers.get("Content-Language") : "";
+    if (validLanguageTag(language)) document.documentElement.lang = language;
+    return response.json();
+  }
+
+  function reloadSchemaForHaLanguage() {
+    if (values.ui_language !== "auto" || browserLanguageChoice() ||
+        haUserStatus.phase !== "connected" || !validLanguageTag(haUserStatus.language)) return;
+    var request = ++schemaLanguageRequest;
+    fetch(configSchemaUrl(haUserStatus.language), { headers: { "Accept": "application/json" }, cache: "no-store" })
+      .then(readLocalizedSchema)
+      .then(function (nextSchema) {
+        if (request !== schemaLanguageRequest || !Array.isArray(nextSchema)) return;
+        schema = nextSchema;
+        render();
+        configCardGeometryChanged();
+      })
+      .catch(function () {});
+  }
   var configCardRoot = document.getElementById("cfg-groups");
   var configCardExpected = { core: true, radio: true, brightness: true };
   var configCardReady = Object.create(null), configCardMemoryReady = false;
@@ -255,7 +325,8 @@
       })
       .then(function () {
         if (request === haUserStatusRequest) { renderHaConnectionStatus(); if (succeeded && typeof window !== "undefined" && window.configCardSizeSourceReady) {
-          window.configCardSizeSourceReady("ha");if (window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged(); } }
+          window.configCardSizeSourceReady("ha");if (window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged(); }
+          if (succeeded) reloadSchemaForHaLanguage(); }
       });
   }
 
@@ -2849,8 +2920,10 @@
 
   function load(done, forceHaUserStatusRefresh, refreshAutoSleepPrerequisite) {
     ++haAreaSeedGeneration;
+    ++schemaLanguageRequest;
+    var schemaUrl = configSchemaUrl(haUserStatus.phase === "connected" ? haUserStatus.language : "");
     Promise.all([
-      fetch("/api/v1/config/schema").then(function (r) { return r.json(); }),
+      fetch(schemaUrl).then(readLocalizedSchema),
       fetch("/api/v1/config").then(function (r) { return r.json(); }),
       // Installed launchable apps for the package pickers; tolerate failure (picker falls back to text).
       fetch("/api/v1/apps").then(function (r) { return r.json(); }).catch(function () { return { apps: [] }; }),

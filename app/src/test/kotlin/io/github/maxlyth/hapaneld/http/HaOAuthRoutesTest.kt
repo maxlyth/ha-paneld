@@ -27,13 +27,13 @@ import java.net.URI
 import java.net.URLDecoder
 
 class HaOAuthRoutesTest {
-    @Test fun `status exposes only the display name and is never cached`() = testApplication {
+    @Test fun `status exposes only the display name and language and is never cached`() = testApplication {
         val harness = Harness()
         application {
             routing {
                 route("/api/v1") {
                     haOAuthRoutes(harness.dependencies().copy(
-                        status = { HaCurrentUserStatus.Connected("Alice") },
+                        status = { HaCurrentUserStatus.Connected("Alice", "de-DE") },
                     ))
                 }
             }
@@ -47,7 +47,27 @@ class HaOAuthRoutesTest {
         val json = JSONObject(response.bodyAsText())
         assertEquals("connected", json.getString("phase"))
         assertEquals("Alice", json.getString("display_name"))
-        assertEquals(setOf("phase", "display_name"), json.keys().asSequence().toSet())
+        assertEquals("de-DE", json.getString("language"))
+        assertEquals(setOf("phase", "display_name", "language"), json.keys().asSequence().toSet())
+    }
+
+    @Test fun `connected status keeps an exact nullable language key`() = testApplication {
+        val harness = Harness()
+        application {
+            routing {
+                route("/api/v1") {
+                    haOAuthRoutes(harness.dependencies().copy(
+                        status = { HaCurrentUserStatus.Connected("Alice", null) },
+                    ))
+                }
+            }
+        }
+
+        val json = JSONObject(client.get("/api/v1/ha/oauth/status").bodyAsText())
+
+        assertTrue(json.has("language"))
+        assertTrue(json.isNull("language"))
+        assertEquals(setOf("phase", "display_name", "language"), json.keys().asSequence().toSet())
     }
 
     @Test fun `start validates bounds and panel origin and returns a no-store explicit link`() = testApplication {

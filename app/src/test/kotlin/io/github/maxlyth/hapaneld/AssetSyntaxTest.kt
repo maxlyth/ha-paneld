@@ -61,6 +61,49 @@ class AssetSyntaxTest {
         }
     }
 
+    @Test fun configureLanguageSignalsUseOneBoundedBrowserOverrideContract() {
+        val dir = assetsDir
+        assumeTrue("assets dir not found (skipping)", dir != null)
+        assumeTrue("node not available (skipping)", nodeAvailable())
+        val script = """
+            const fs=require('fs'),vm=require('vm');
+            const source=fs.readFileSync(process.argv[1],'utf8');
+            function take(name){
+              const start=source.indexOf('function '+name+'(');if(start<0)throw new Error('missing '+name);
+              const open=source.indexOf('{',start);let depth=0,quote='',escaped=false;
+              for(let i=open;i<source.length;i++){
+                const c=source[i];
+                if(quote){if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c===quote)quote='';continue}
+                if(c==='"'||c==="'"||c==='`'){quote=c;continue}
+                if(c==='{')depth++;else if(c==='}'&&--depth===0)return source.slice(start,i+1);
+              }
+              throw new Error('unterminated '+name);
+            }
+            const data={};
+            const location={search:'?lang=zh_CN&theme=dark',pathname:'/configure',hash:'#language'};
+            global.window={location,localStorage:{
+              setItem(k,v){data[k]=v},getItem(k){return Object.prototype.hasOwnProperty.call(data,k)?data[k]:null},removeItem(k){delete data[k]}
+            },history:{replaceState(_a,_b,url){
+              const q=url.indexOf('?'),h=url.indexOf('#');
+              location.search=q<0?'':url.slice(q,h<0?url.length:h);location.hash=h<0?'':url.slice(h);
+            }}};
+            global.URLSearchParams=URLSearchParams;
+            vm.runInThisContext(['validLanguageTag','storeBrowserLanguage','stripLanguageQuery','browserLanguageChoice','configSchemaUrl'].map(take).join('\n'));
+            if(browserLanguageChoice()!=='zh_CN'||data.selectedLanguage!=='"zh_CN"')process.exit(2);
+            if(configSchemaUrl('fr')!=='/api/v1/config/schema?lang=zh_CN&ha_lang=fr')process.exit(3);
+            location.search='?lang=auto&theme=dark';
+            if(browserLanguageChoice()!==''||data.selectedLanguage!==undefined||location.search!=='?theme=dark')process.exit(4);
+            data.selectedLanguage='"fr"';location.search='';
+            if(browserLanguageChoice()!=='fr'||configSchemaUrl('de')!=='/api/v1/config/schema?lang=fr&ha_lang=de')process.exit(5);
+            delete data.selectedLanguage;
+            if(configSchemaUrl('zh-Hans')!=='/api/v1/config/schema?ha_lang=zh-Hans')process.exit(6);
+            data.selectedLanguage='"bad language"';
+            if(configSchemaUrl('de')!=='/api/v1/config/schema?ha_lang=de')process.exit(7);
+        """.trimIndent()
+        val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
+        assertEquals("Configure language signal contract failed:\n$out", 0, code)
+    }
+
     @Test fun configureAutoSleepHistoryWaitsForReadinessWithoutUserRetry() {
         val dir = assetsDir
         assumeTrue("assets dir not found (skipping)", dir != null)

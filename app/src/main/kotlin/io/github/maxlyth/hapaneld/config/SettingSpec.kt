@@ -193,6 +193,10 @@ data class SettingSpec(
     val optionRequires: Map<String, (Capabilities) -> Boolean> = emptyMap(),
     val validate: (String) -> Validation = { Validation.Ok(it) },
 ) {
+    /** Stable catalogue ids derived from the durable setting key, never from editable English copy. */
+    val labelKey: String get() = "settings.$key.label"
+    val helpKey: String get() = "settings.$key.help"
+
     /** True for publish-only sensor entities that have no settable value. */
     val readOnly: Boolean get() = ha?.readOnly == true
 

@@ -60,7 +60,7 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
             }
             val json = when (status) {
                 is HaCurrentUserStatus.Connected ->
-                    """{"phase":"connected","display_name":${status.displayName?.let(Json::str) ?: "null"}}"""
+                    """{"phase":"connected","display_name":${status.displayName?.let(Json::str) ?: "null"},"language":${status.language?.let(Json::str) ?: "null"}}"""
                 HaCurrentUserStatus.NotConfigured -> """{"phase":"not_configured"}"""
                 HaCurrentUserStatus.Rejected -> """{"phase":"rejected"}"""
                 HaCurrentUserStatus.Unavailable -> """{"phase":"unavailable"}"""

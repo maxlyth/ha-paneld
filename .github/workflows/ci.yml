@@ -152,7 +152,11 @@ jobs:
           scripts/tests/gitbash_path_conversion_test.sh
 
       - name: Test dashboard performance collector
-        run: python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
+        run: |
+          python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
+          python3 scripts/i18n_catalogue.py validate \
+            --source app/src/main/assets/i18n/en.json \
+            --target-dir app/src/main/assets/i18n
 
   dependency-integrity:
     name: Dependency integrity

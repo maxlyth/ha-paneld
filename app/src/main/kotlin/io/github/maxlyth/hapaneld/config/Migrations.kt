@@ -77,6 +77,11 @@ object Migrations {
             values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}voice_enabled", "false")
             values.putIfAbsent("${SettingsRegistry.HA_EXPOSE_PREFIX}voice_state", "false")
         },
+        // Schema 9 adds the per-panel interface-language preference. `auto` preserves the existing
+        // locale-selection behaviour; an explicit value must survive unchanged when a bundle advances.
+        Migration { values ->
+            values.putIfAbsent("ui_language", SettingsRegistry.DEFAULT_UI_LANGUAGE)
+        },
     )
 
     /**

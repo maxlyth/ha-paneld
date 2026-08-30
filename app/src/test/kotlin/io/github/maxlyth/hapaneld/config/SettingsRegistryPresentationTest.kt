@@ -8,6 +8,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRegistryPresentationTest {
+    @Test fun interfaceLanguageIsBasicDeviceLocalAndDoesNotApplyLive() {
+        val spec = requireNotNull(SettingsRegistry.spec("ui_language"))
+
+        assertEquals("System", spec.group)
+        assertEquals("Interface language", spec.label)
+        assertEquals(SettingsRegistry.DEFAULT_UI_LANGUAGE, spec.default)
+        assertEquals(SettingsRegistry.UI_LANGUAGES, spec.options)
+        assertEquals(Tier.BASIC, spec.tier)
+        assertEquals(Scope.DEVICE, spec.scope)
+        assertFalse(spec.liveApply)
+        SettingsRegistry.UI_LANGUAGES.forEach { language ->
+            assertEquals(language, (SettingValue.validate(spec, language) as Validation.Ok).normalized)
+        }
+        assertTrue(SettingValue.validate(spec, "pt-BR") is Validation.Bad)
+        assertEquals(
+            "Language used by ha-paneld's own interface. Automatic follows the Home Assistant " +
+                "user language when available, then the browser or device language. Unsupported languages use English.",
+            spec.help,
+        )
+    }
+
     @Test fun keepPanelResponsiveExplainsScreenOffBehaviorAndDefaultsOn() {
         val spec = SettingsRegistry.spec("keep_awake")!!
         assertEquals("Keep panel responsive", spec.label)

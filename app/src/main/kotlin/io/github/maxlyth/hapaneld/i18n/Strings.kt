@@ -1,0 +1,243 @@
+package io.github.maxlyth.hapaneld.i18n
+
+import org.json.JSONObject
+import java.security.MessageDigest
+
+enum class TranslationState(val wireName: String) {
+    ENGLISH_FALLBACK("english-fallback"),
+    MACHINE_DRAFT("machine-draft"),
+    MACHINE_CROSS_CHECKED("machine-cross-checked"),
+    COMMUNITY_CORRECTED("community-corrected");
+
+    companion object {
+        fun fromWireName(value: String): TranslationState? = entries.firstOrNull { it.wireName == value }
+    }
+}
+
+data class SourceString(
+    val key: String,
+    val text: String,
+    val sourceHash: String,
+    val placeholders: List<String>,
+    val frozen: List<String>,
+    val hardMaxChars: Int,
+)
+
+data class TargetString(
+    val key: String,
+    val text: String,
+    val sourceHash: String,
+    val state: TranslationState,
+)
+
+/** Parsed, validated English source catalogue. */
+class SourceCatalogue private constructor(
+    val locale: String,
+    val sourceRevision: String,
+    val strings: Map<String, SourceString>,
+) {
+    fun text(key: String): String = strings[key]?.text ?: error("unknown i18n key: $key")
+
+    companion object {
+        const val SCHEMA = 1
+
+        fun parse(json: String): SourceCatalogue {
+            val root = JSONObject(json)
+            requireExactKeys(root, setOf("schema", "locale", "sourceRevision", "strings"), "source root")
+            require(root.getInt("schema") == SCHEMA) { "unsupported source catalogue schema" }
+            require(root.getString("locale") == AppLocale.ENGLISH) { "source catalogue must be English" }
+            val revision = root.getString("sourceRevision").also {
+                require(it.matches(Regex("[0-9a-f]{40}"))) { "sourceRevision must be an exact Git SHA" }
+            }
+            val records = root.getJSONObject("strings")
+            val parsed = linkedMapOf<String, SourceString>()
+            records.keys().asSequence().sorted().forEach { key ->
+                require(key.matches(Regex("[a-z0-9][a-z0-9._-]*"))) { "invalid i18n key: $key" }
+                val record = records.getJSONObject(key)
+                val required = setOf(
+                    "text", "sourceHash", "surface", "context", "risk", "siblings",
+                    "placeholders", "frozen", "softMaxChars", "hardMaxChars",
+                )
+                requireExactKeys(record, required, key)
+                val text = record.getString("text")
+                require(text.isNotEmpty()) { "$key has empty English text" }
+                val hash = record.getString("sourceHash")
+                require(hash == sourceHash(text)) { "$key sourceHash does not match its English text" }
+                require(record.getString("surface") == "settings") { "$key has unsupported surface" }
+                require(record.getString("context").isNotBlank()) { "$key has no context" }
+                require(record.getString("risk") in setOf("ordinary", "setup", "consequential")) {
+                    "$key has invalid risk"
+                }
+                val softMax = record.getInt("softMaxChars")
+                val hardMax = record.getInt("hardMaxChars")
+                require(softMax > 0 && hardMax >= softMax) { "$key has invalid layout budget" }
+                val placeholders = stringArray(record, "placeholders")
+                val frozen = stringArray(record, "frozen")
+                require(placeholders == extractPlaceholders(text)) { "$key placeholder metadata is stale" }
+                require(frozen == frozen.distinct()) { "$key repeats a frozen literal" }
+                require(frozen.all { occurrenceCount(text, it) > 0 }) { "$key has a missing frozen literal" }
+                stringArray(record, "siblings")
+                parsed[key] = SourceString(key, text, hash, placeholders, frozen, hardMax)
+            }
+            require(parsed.isNotEmpty()) { "source catalogue is empty" }
+            return SourceCatalogue(AppLocale.ENGLISH, revision, parsed)
+        }
+    }
+}
+
+/** Parsed target catalogue. Mechanical violations reject the whole file before resolution. */
+class TargetCatalogue private constructor(
+    val locale: String,
+    val sourceRevision: String,
+    val strings: Map<String, TargetString>,
+) {
+    companion object {
+        const val SCHEMA = 1
+
+        fun parse(json: String, source: SourceCatalogue): TargetCatalogue {
+            val root = JSONObject(json)
+            requireExactKeys(root, setOf("schema", "locale", "sourceRevision", "strings"), "target root")
+            require(root.getInt("schema") == SCHEMA) { "unsupported target catalogue schema" }
+            val locale = root.getString("locale")
+            require(locale in AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH) { "unsupported target locale: $locale" }
+            val revision = root.getString("sourceRevision")
+            require(revision == source.sourceRevision) { "target sourceRevision is stale" }
+            val records = root.getJSONObject("strings")
+            val parsed = linkedMapOf<String, TargetString>()
+            records.keys().asSequence().sorted().forEach { key ->
+                val sourceString = source.strings[key] ?: error("target contains unknown key: $key")
+                val record = records.getJSONObject(key)
+                requireExactKeys(record, setOf("text", "sourceHash", "state"), key)
+                val text = record.getString("text")
+                require(text.isNotEmpty()) { "$key has empty target text" }
+                val hash = record.getString("sourceHash")
+                require(hash == sourceString.sourceHash) { "$key target is stale" }
+                val state = TranslationState.fromWireName(record.getString("state"))
+                    ?: error("$key has invalid translation state")
+                require(state != TranslationState.ENGLISH_FALLBACK || text == sourceString.text) {
+                    "$key English fallback does not equal its source"
+                }
+                require(multiset(extractPlaceholders(text)) == multiset(sourceString.placeholders)) {
+                    "$key changed placeholders"
+                }
+                require(sourceString.frozen.all { token ->
+                    occurrenceCount(text, token) == occurrenceCount(sourceString.text, token)
+                }) { "$key changed a frozen literal" }
+                require(text.length <= sourceString.hardMaxChars) { "$key exceeds its hard length budget" }
+                parsed[key] = TargetString(key, text, hash, state)
+            }
+            return TargetCatalogue(locale, revision, parsed)
+        }
+    }
+}
+
+/** Provider-neutral resolver. Unsafe, stale, missing and draft targets fall back per key to English. */
+class Strings(
+    private val source: SourceCatalogue,
+    private val target: TargetCatalogue? = null,
+    private val pseudo: Boolean = false,
+) {
+    init {
+        require(target == null || target.sourceRevision == source.sourceRevision)
+    }
+
+    val locale: String get() = when {
+        pseudo -> AppLocale.PSEUDO
+        target?.strings?.values?.any {
+            it.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                it.state == TranslationState.COMMUNITY_CORRECTED
+        } == true -> target.locale
+        else -> AppLocale.ENGLISH
+    }
+
+    fun get(key: String): String {
+        val english = source.text(key)
+        if (pseudo) return pseudoLocalize(english)
+        val candidate = target?.strings?.get(key) ?: return english
+        return when (candidate.state) {
+            TranslationState.MACHINE_CROSS_CHECKED,
+            TranslationState.COMMUNITY_CORRECTED,
+            -> candidate.text
+            TranslationState.ENGLISH_FALLBACK,
+            TranslationState.MACHINE_DRAFT,
+            -> english
+        }
+    }
+}
+
+/** Asset-backed catalogue cache. A missing or malformed target rejects that locale to English. */
+class CatalogueLoader(private val readAsset: (String) -> String) {
+    private val source: SourceCatalogue by lazy { SourceCatalogue.parse(readAsset("i18n/en.json")) }
+    private val targets = mutableMapOf<String, TargetCatalogue?>()
+
+    @Synchronized
+    fun strings(locale: String): Strings = when (locale) {
+        AppLocale.PSEUDO -> Strings(source, pseudo = true)
+        AppLocale.ENGLISH -> Strings(source)
+        else -> {
+            val target = if (locale in targets) targets[locale] else runCatching {
+                TargetCatalogue.parse(readAsset("i18n/$locale.json"), source).also {
+                    require(it.locale == locale) { "target locale does not match its asset name" }
+                }
+            }.getOrNull().also { targets[locale] = it }
+            Strings(source, target)
+        }
+    }
+}
+
+internal fun sourceHash(text: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(text.toByteArray(Charsets.UTF_8))
+    .joinToString("") { "%02x".format(it) }
+
+internal fun extractPlaceholders(text: String): List<String> =
+    Regex("%(?:\\d+\\$)?[a-zA-Z]|\\{[a-zA-Z_][a-zA-Z0-9_]*}")
+        .findAll(text)
+        .map { it.value }
+        .toList()
+
+private fun multiset(values: List<String>): Map<String, Int> = values.groupingBy { it }.eachCount()
+
+private fun occurrenceCount(text: String, token: String): Int {
+    require(token.isNotEmpty()) { "frozen literals must not be empty" }
+    var count = 0
+    var start = 0
+    while (true) {
+        val found = text.indexOf(token, start)
+        if (found < 0) return count
+        count++
+        start = found + token.length
+    }
+}
+
+private fun requireExactKeys(json: JSONObject, expected: Set<String>, owner: String) {
+    val actual = json.keys().asSequence().toSet()
+    require(actual == expected) { "$owner keys differ: expected=$expected actual=$actual" }
+}
+
+private fun stringArray(json: JSONObject, name: String): List<String> {
+    val array = json.getJSONArray(name)
+    return List(array.length()) { index ->
+        array.getString(index).also { require(it.isNotEmpty()) { "$name contains an empty value" } }
+    }
+}
+
+private fun pseudoLocalize(text: String): String {
+    val accents = mapOf(
+        'a' to 'à', 'A' to 'À', 'e' to 'ë', 'E' to 'Ë', 'i' to 'ï', 'I' to 'Ï',
+        'o' to 'ô', 'O' to 'Ô', 'u' to 'ü', 'U' to 'Ü', 'y' to 'ÿ', 'Y' to 'Ÿ',
+    )
+    val protected = extractPlaceholders(text).toSet()
+    val output = StringBuilder(text.length + 8)
+    var index = 0
+    while (index < text.length) {
+        val placeholder = protected.firstOrNull { text.startsWith(it, index) }
+        if (placeholder != null) {
+            output.append(placeholder)
+            index += placeholder.length
+        } else {
+            output.append(accents[text[index]] ?: text[index])
+            index++
+        }
+    }
+    return "［$output］"
+}

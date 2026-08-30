@@ -1213,6 +1213,12 @@ class Config private constructor(
         edit { putString("companion_update_channel", v) }
     }
 
+    /** Language used by ha-paneld's own interface; `auto` delegates to the locale resolver. */
+    val uiLanguage: String get() = stringPref("ui_language")
+    fun setUiLanguage(language: String) {
+        edit { putString("ui_language", language) }
+    }
+
     // ha-paneld self-update: when on, ha-paneld installs a newer build of ITSELF from GitHub releases on
     // the selected [updateChannel] (root/Shizuku verified-install route; no Play Store on these panels).
     // Default ON only where the runtime exposes verified app install; the Configure schema hides it and

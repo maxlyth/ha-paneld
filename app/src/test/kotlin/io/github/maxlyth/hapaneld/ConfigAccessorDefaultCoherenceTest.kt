@@ -55,6 +55,7 @@ class ConfigAccessorDefaultCoherenceTest {
         assertEquals("Off", c.navbarMode)
         assertEquals("stable", c.companionUpdateChannel)
         assertEquals("stable", c.updateChannel)
+        assertEquals("auto", c.uiLanguage)
         assertEquals("syslog-tcp", c.logShipProtocol)
         assertEquals("720p", c.cameraResolution.wire)
 
@@ -121,6 +122,7 @@ class ConfigAccessorDefaultCoherenceTest {
             "navbar_mode" to c.navbarMode,
             "companion_update_channel" to c.companionUpdateChannel,
             "update_channel" to c.updateChannel,
+            "ui_language" to c.uiLanguage,
             "log_ship_protocol" to c.logShipProtocol,
             "dark_mode" to c.darkMode.toString(),
             "wake_on_wave" to c.wakeOnWave.toString(),

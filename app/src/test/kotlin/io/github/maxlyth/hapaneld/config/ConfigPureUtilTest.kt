@@ -143,6 +143,10 @@ class ConfigBundleTest {
 }
 
 class MigrationsTest {
+    @Test fun migrationChainHasExactlyOneTransformPerSchemaBoundary() {
+        assertEquals(SettingsRegistry.SCHEMA - 1, Migrations.CHAIN.size)
+    }
+
     @Test fun publicV095ConfigFixtureUpgradesInOneStepAndPreservesEveryValue() {
         val fixture = requireNotNull(javaClass.getResource("/fixtures/config-v0.9.5.json"))
             .readText()
@@ -239,6 +243,19 @@ class MigrationsTest {
 
         explicitValues.forEach { (key, value) -> assertEquals(value, explicit[key]) }
         assertTrue(explicitWarnings.isEmpty())
+    }
+
+    @Test fun schemaEightAddsAutomaticUiLanguageAndPreservesExplicitChoices() {
+        val (defaults, defaultWarnings) = Migrations.migrate(8, mapOf("mqtt_broker" to "tcp://ha:1883"))
+
+        assertEquals(SettingsRegistry.DEFAULT_UI_LANGUAGE, defaults["ui_language"])
+        assertTrue(defaultWarnings.isEmpty())
+
+        SettingsRegistry.UI_LANGUAGES.forEach { language ->
+            val (explicit, explicitWarnings) = Migrations.migrate(8, mapOf("ui_language" to language))
+            assertEquals(language, explicit["ui_language"])
+            assertTrue(explicitWarnings.isEmpty())
+        }
     }
 
     @Test fun schemaFourAddsAutomaticMqttAddressFamilyPolicy() {
