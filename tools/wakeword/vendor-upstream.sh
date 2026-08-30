@@ -257,11 +257,22 @@ case "$cmd" in
     done
     cmp -s "$tmp/models/LICENSE.txt" "$MODELS_DEST/LICENSE.txt" || die "model licence drift: LICENSE.txt"
     # The KissFFT notice is packaged as an asset because the source it covers is compiled, not shipped.
-    grep -q 'KissFFT' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" \
-      || die "packaged third-party notice is missing the KissFFT attribution"
-    cmp -s <(sed -n '/^--- KissFFT/,$p' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" | tail -n +3) \
-      "$THIRD_PARTY/kissfft/COPYING" \
-      || die "packaged KissFFT licence text does not match the vendored COPYING"
+    # Upstream COPYING only identifies the licence — it points at LICENSES/BSD-3-Clause for the
+    # conditions and the disclaimer, which is what a binary distribution actually has to carry. Both
+    # are compared against the authoritative vendored files, so packaging the pointer alone fails here.
+    kiss_notice="$tmp/kissfft-notice"
+    sed -n '/^=== KissFFT: copyright/,/^=== KissFFT: full/p' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" \
+      | sed -e '1,2d' -e '$d' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' >"$kiss_notice"
+    cmp -s "$kiss_notice" "$THIRD_PARTY/kissfft/COPYING" \
+      || die "packaged KissFFT copyright notice does not match the vendored COPYING"
+    kiss_terms="$tmp/kissfft-terms"
+    sed -n '/^=== KissFFT: full/,$p' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" | tail -n +3 >"$kiss_terms"
+    cmp -s "$kiss_terms" "$THIRD_PARTY/kissfft/LICENSES/BSD-3-Clause" \
+      || die "packaged KissFFT licence text does not match the vendored LICENSES/BSD-3-Clause"
+    grep -q 'Redistributions of source code' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" \
+      || die "packaged KissFFT licence is missing the BSD redistribution conditions"
+    grep -q 'DISCLAIMED' "$MODELS_DEST/THIRD_PARTY_LICENSES.txt" \
+      || die "packaged KissFFT licence is missing the warranty disclaimer"
     log "vendored tree, packaged models and licences match the pinned upstreams"
     ;;
   *)
