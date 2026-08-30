@@ -215,7 +215,7 @@
       "risk": "ordinary",
       "siblings": ["settings.camera_kbps.help"],
       "placeholders": [],
-      "frozen": [],
+      "frozen": ["kbps"],
       "softMaxChars": 32,
       "hardMaxChars": 32
     },
@@ -623,7 +623,7 @@
       "risk": "ordinary",
       "siblings": ["settings.dashboard_zoom.help"],
       "placeholders": [],
-      "frozen": [],
+      "frozen": ["%"],
       "softMaxChars": 32,
       "hardMaxChars": 32
     },
