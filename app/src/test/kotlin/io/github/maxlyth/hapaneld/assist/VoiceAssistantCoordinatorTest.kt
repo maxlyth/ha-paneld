@@ -99,6 +99,11 @@ class VoiceAssistantCoordinatorTest {
         }
     }
 
+    /** Waits for the in-flight run to unwind, so a phase can be asserted rather than waited for. */
+    private fun awaitRunFinished(c: VoiceAssistantCoordinator) = runBlocking {
+        withTimeout(2_000) { while (c.running) kotlinx.coroutines.delay(5) }
+    }
+
     private fun awaitState(expected: VoiceState) = runBlocking {
         withTimeout(2_000) { while (state.current() != expected) kotlinx.coroutines.delay(5) }
     }
@@ -197,13 +202,17 @@ class VoiceAssistantCoordinatorTest {
         c.start()
         engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
         awaitRunner(0).release.complete(AssistOutcome(error = AssistError("timeout", "no reply")))
-        awaitState(VoiceState.ERROR)
+        // Wait for the run to finish, then assert the phase. Waiting for the phase itself would let a
+        // coordinator that never reports the failure fail by timing out rather than by being wrong.
+        awaitRunFinished(c)
+        assertEquals("a failed run must stay visibly failed", VoiceState.ERROR, state.current())
         assertFalse(mic.leases[0].paused)
         engines.single().onActivation(WakeWordActivation("okay_nabu", "okay nabu"))
         val second = awaitRunner(1)
         assertEquals(VoiceState.LISTENING, state.current())
         second.release.complete(AssistOutcome(error = AssistError(AssistError.DUPLICATE_WAKE_UP, "dup")))
-        awaitState(VoiceState.IDLE)
+        awaitRunFinished(c)
+        assertEquals("a duplicate wake-up is not a failure the panel reports", VoiceState.IDLE, state.current())
     }
 
     @Test
