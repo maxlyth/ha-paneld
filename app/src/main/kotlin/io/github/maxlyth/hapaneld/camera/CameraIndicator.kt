@@ -84,13 +84,14 @@ object CameraIndicatorGeometry {
 /**
  * How the camera light moves. Two levels, stepped, once a second — deliberately not an animator.
  *
- * Cost is the whole argument. Measured on a live panel, the compositor spends about 6.8 ms of CPU per
- * composited frame, so a stepped two-level pulse costs two layer updates a second — under 1.4% of one
- * core in the worst case, and effectively nothing while the dashboard is already compositing. Driving
- * the same effect with a `ValueAnimator` on alpha would redraw at the display refresh rate whether or
- * not the value visibly changed, which measures around 41% of a core: an order of magnitude too much
- * for something that only decorates a warning light. The project's ceiling for that kind of work is
- * 5% of a core, and only the stepped form is inside it.
+ * Cost is the whole argument, and duty cycle is why it matters here: this light can be up for as long
+ * as a camera session lasts, so whatever it costs, it costs continuously. Measured on a live panel, the
+ * compositor spends about 6.8 ms of CPU per composited frame, so a stepped two-level pulse costs two
+ * layer updates a second — under 1.4% of one core in the worst case, and effectively nothing while the
+ * dashboard is already compositing. Driving the same effect with a `ValueAnimator` on alpha would
+ * redraw at the display refresh rate whether or not the value visibly changed, which measures around
+ * 41% of a core. For an effect that ends in a second that might be a fair trade; for one that may run
+ * for hours beside a rendering dashboard it is not.
  *
  * [DIM] is a visible level rather than transparent on purpose. A hard blink costs exactly the same but
  * leaves nothing on screen for half of every second, and the privacy contract already refuses an
@@ -148,8 +149,8 @@ class CameraIndicator(
      *
      * It keeps running while the screen is intended off, and that is a deliberate choice rather than an
      * oversight: pausing it would need its own resume path on every route back, and two layer updates a
-     * second sits far inside the 5% budget even on a dark panel. The window only exists while a camera
-     * session does, which bounds it.
+     * second is negligible even on a dark panel. The window only exists while a camera session does,
+     * which bounds it.
      */
     private val pulse = object : Runnable {
         override fun run() {

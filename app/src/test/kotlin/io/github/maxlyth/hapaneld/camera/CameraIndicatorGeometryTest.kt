@@ -70,8 +70,8 @@ class CameraIndicatorGeometryTest {
 
     /**
      * The pulse is two stepped levels once a second. Cost is why: a stepped pulse is two layer updates
-     * a second, while an animator on alpha redraws at the display rate — about 41% of a core against a
-     * 5% ceiling for decoration. These assertions pin the cheap shape, not the look.
+     * a second, while an animator on alpha redraws at the display rate — about 41% of a core, charged
+     * for as long as the camera is open. These assertions pin the cheap shape, not the look.
      */
     @Test fun thePulseIsTwoSteppedLevelsASecond() {
         assertEquals(1_000L, CameraIndicatorPulse.PERIOD_MS)
