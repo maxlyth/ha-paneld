@@ -41,6 +41,25 @@ if [ -n "${FAKE_STATE_DIR:-}" ]; then
   rmdir "$FAKE_STATE_DIR/lock"
 fi
 if [ "${FAKE_MALFORMED_SCOPE:-}" = "$name" ]; then printf 'ok 1 - missing plan\n'; exit 0; fi
+if [ "${FAKE_ZERO_SCOPE:-}" = "$name" ]; then printf '1..0\n'; exit 0; fi
+if [ "${FAKE_DUPLICATE_NUMBER_SCOPE:-}" = "$name" ]; then
+  printf 'ok 1 - first\nok 1 - second\n1..2\n'; exit 0
+fi
+if [ "${FAKE_DUPLICATE_IDENTITY_SCOPE:-}" = "$name" ]; then
+  printf 'ok 1 - repeated\nok 2 - repeated\n1..2\n'; exit 0
+fi
+if [ "${FAKE_MULTIPLE_PLAN_SCOPE:-}" = "$name" ]; then
+  printf 'ok 1 - duplicate plan\n1..1\n1..1\n'; exit 0
+fi
+if [ "${FAKE_MALFORMED_RESULT_SCOPE:-}" = "$name" ]; then
+  printf 'not two numeric fields\n' > "$TMPDIR/worker-result-override"
+fi
+if [ "${FAKE_MISSING_RESULT_SCOPE:-}" = "$name" ]; then
+  : > "$TMPDIR/skip-worker-result"
+fi
+if [ "${FAKE_NONZERO_SCOPE:-}" = "$name" ]; then
+  printf 'ok 1 - interrupted worker\n1..1\n'; exit 143
+fi
 if [ "${FAKE_FAIL_SCOPE:-}" = "$name" ]; then
   printf 'not ok - injected failure\n1..1\n'; exit 1
 fi
@@ -77,6 +96,57 @@ PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MALFORMED_SCOPE=publication \
 status=$?
 description="missing TAP plan fails closed"; assert_true test "$status" -ne 0
 description="malformed TAP is identified as a failed shard"; assert_true grep -q '^SHARD publication FAIL cases=0 ' "$MALFORMED_LOG"
+
+ZERO_LOG="$TMP/zero.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_ZERO_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/zero-results" publication > "$ZERO_LOG" 2>&1
+status=$?
+description="a focused shard with zero tests fails closed"; assert_true test "$status" -ne 0
+description="the zero-test shard is reported as failed"; assert_true grep -q '^SHARD publication FAIL cases=0 ' "$ZERO_LOG"
+
+DUPLICATE_NUMBER_LOG="$TMP/duplicate-number.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_DUPLICATE_NUMBER_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/duplicate-number-results" publication > "$DUPLICATE_NUMBER_LOG" 2>&1
+status=$?
+description="duplicate TAP numbering fails closed"; assert_true test "$status" -ne 0
+
+DUPLICATE_IDENTITY_LOG="$TMP/duplicate-identity.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_DUPLICATE_IDENTITY_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/duplicate-identity-results" publication > "$DUPLICATE_IDENTITY_LOG" 2>&1
+status=$?
+description="duplicate TAP identities fail closed"; assert_true test "$status" -ne 0
+
+MULTIPLE_PLAN_LOG="$TMP/multiple-plan.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MULTIPLE_PLAN_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/multiple-plan-results" publication > "$MULTIPLE_PLAN_LOG" 2>&1
+status=$?
+description="multiple TAP plans fail closed"; assert_true test "$status" -ne 0
+
+MALFORMED_RESULT_LOG="$TMP/malformed-result.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MALFORMED_RESULT_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/malformed-result-results" publication > "$MALFORMED_RESULT_LOG" 2>&1
+status=$?
+description="malformed worker metadata fails closed"; assert_true test "$status" -ne 0
+
+MISSING_RESULT_LOG="$TMP/missing-result.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_MISSING_RESULT_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/missing-result-results" publication > "$MISSING_RESULT_LOG" 2>&1
+status=$?
+description="missing worker metadata fails closed"; assert_true test "$status" -ne 0
+
+NONZERO_LOG="$TMP/nonzero.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" FAKE_NONZERO_SCOPE=publication \
+  bash "$WRAPPER" --output "$TMP/nonzero-results" publication > "$NONZERO_LOG" 2>&1
+status=$?
+description="an interrupted nonzero worker fails closed"; assert_true test "$status" -ne 0
+description="the interrupted status is retained in the shard report"; assert_true grep -q '^SHARD publication FAIL cases=1 failures=0 status=143 ' "$NONZERO_LOG"
+
+AGGREGATE_MISMATCH_LOG="$TMP/aggregate-mismatch.log"
+PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" PROVISION_GATE_EXPECTED_TOTAL=18 \
+  bash "$WRAPPER" --output "$TMP/aggregate-mismatch-results" > "$AGGREGATE_MISMATCH_LOG" 2>&1
+status=$?
+description="a complete-set aggregate count mismatch fails closed"; assert_true test "$status" -ne 0
+description="the exact expected and actual aggregate are reported"; assert_true grep -q '^CONTRACT FAIL expected_cases=18 actual_cases=17$' "$AGGREGATE_MISMATCH_LOG"
 
 PROVISION_GATE_SHARD_RUNNER="$FAKE_RUNNER" bash "$WRAPPER" -j 0 database-host > "$TMP/jobs.log" 2>&1
 status=$?

@@ -116,7 +116,16 @@ run_shard() {
     bash "$RUNNER" > "$shard_dir/tap.log" 2>&1
   status=$?
   end="$(date +%s)"
-  printf '%s %s\n' "$status" "$((end - start))" > "$shard_dir/result"
+  # The fake runner uses these two marker files to exercise corrupt/missing worker
+  # metadata. A production shard receives an unpredictable private TMPDIR and never
+  # creates either marker.
+  if [ -f "$shard_dir/tmp/skip-worker-result" ]; then
+    rm -f "$shard_dir/result"
+  elif [ -f "$shard_dir/tmp/worker-result-override" ]; then
+    cp "$shard_dir/tmp/worker-result-override" "$shard_dir/result"
+  else
+    printf '%s %s\n' "$status" "$((end - start))" > "$shard_dir/result"
+  fi
   exit 0
 }
 
@@ -143,17 +152,41 @@ for shard in "${requested[@]}"; do
   result="$shard_dir/result"
   status=125
   wall=0
-  [ ! -f "$result" ] || read -r status wall < "$result"
+  metadata_valid=0
+  if [ -f "$result" ] && [ "$(wc -l < "$result" | tr -d ' ')" -eq 1 ] &&
+     grep -Eq '^[0-9]+ [0-9]+$' "$result"; then
+    read -r status wall < "$result"
+    metadata_valid=1
+  fi
   plan_count="$(grep -Ec '^1\.\.[0-9]+$' "$log" 2>/dev/null || true)"
   plan_line="$(grep -E '^1\.\.[0-9]+$' "$log" 2>/dev/null | tail -1 || true)"
   cases="${plan_line#1..}"
   oks="$(grep -Ec '^ok [0-9]+ - ' "$log" 2>/dev/null || true)"
   failures="$(grep -Ec '^not ok([[:space:]]|$)' "$log" 2>/dev/null || true)"
+  tap_valid=0
+  if [ "$plan_count" -eq 1 ] && [ -n "$plan_line" ] && [ "$cases" -gt 0 ] 2>/dev/null &&
+     awk -v plan="$cases" '
+       BEGIN { expected = 1; tests = 0; invalid = 0 }
+       /^ok [0-9]+ - / {
+         number = $2 + 0
+         identity = $0
+         sub(/^ok [0-9]+ - /, "", identity)
+         if (number != expected || identity == "" || seen[identity]++) invalid = 1
+         expected++
+         tests++
+         next
+       }
+       /^not ok([[:space:]]|$)/ { invalid = 1 }
+       END { exit !(!invalid && tests == plan && expected == plan + 1) }
+     ' "$log"; then
+    tap_valid=1
+  fi
   shard_verdict=PASS
   if [ "$plan_count" -ne 1 ] || [ -z "$plan_line" ]; then
     cases=0
     shard_verdict=FAIL
-  elif [ "$status" -ne 0 ] || [ "$failures" -ne 0 ] || [ "$((oks + failures))" -ne "$cases" ]; then
+  elif [ "$metadata_valid" -ne 1 ] || [ "$tap_valid" -ne 1 ] ||
+       [ "$status" -ne 0 ] || [ "$failures" -ne 0 ] || [ "$oks" -ne "$cases" ]; then
     shard_verdict=FAIL
   fi
   aggregate_cases=$((aggregate_cases + cases))
