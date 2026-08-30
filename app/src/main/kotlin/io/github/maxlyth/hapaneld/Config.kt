@@ -1101,16 +1101,28 @@ class Config private constructor(
     }
 
     // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request.
-    // Only the switch has a setter, because only the switch is operable from Home Assistant; the caps
-    // are edited on the Configure page and reach the owner through the ordinary reconfigure path.
+    // Every one of these needs a setter. An earlier comment here claimed the caps reached the owner
+    // "through the ordinary reconfigure path" and so needed none — there is no ordinary path. The HTTP
+    // config route persists a non-live setting only if it has an explicit line in the direct-mutation
+    // batch, so a registry key with neither a live-apply handler nor a setter called from that batch is
+    // reported saved and silently discarded. That is what happened to all four of these.
     val cameraEnabled: Boolean get() = boolPref("camera_enabled")
     fun setCameraEnabled(on: Boolean) {
         edit { putBoolean("camera_enabled", on) }
     }
     val cameraMaxResolution: CameraResolution
         get() = CameraResolution.parse(stringPref("camera_max_resolution")) ?: CameraResolution.P720
+    fun setCameraMaxResolution(value: String) {
+        edit { putString("camera_max_resolution", value) }
+    }
     val cameraMaxFps: Int get() = intPref("camera_max_fps").coerceIn(1, 30)
+    fun setCameraMaxFps(fps: Int) {
+        edit { putInt("camera_max_fps", fps.coerceIn(1, 30)) }
+    }
     val cameraMaxKbps: Int get() = intPref("camera_max_kbps").coerceIn(250, 8000)
+    fun setCameraMaxKbps(kbps: Int) {
+        edit { putInt("camera_max_kbps", kbps.coerceIn(250, 8000)) }
+    }
 
     // Experimental Android dashboard lock: hide system bars and return from other apps/Recents so a casual
     // user does not remain away from the dashboard. Persisted, off by default, with recovery routes and a

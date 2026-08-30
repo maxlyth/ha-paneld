@@ -5831,6 +5831,21 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     p["voice_pipelines"]?.let { config.setVoicePipelines(it) }
                     p["voice_audio_source"]?.let { config.setVoiceAudioSource(it) }
                     p["voice_sensitivity"]?.let { config.setVoiceSensitivity(it) }
+                    // Camera trial settings — plain local prefs with no live-apply handler, so like the
+                    // voice caps above they persist here or not at all. They had no line here at all and
+                    // were therefore reported saved and silently discarded on every submit, which is the
+                    // same defect dashboard_idle_return_min carried; the reconfigure path downstream was
+                    // already correct (configOwnerRefreshPlan watches camera_enabled and re-actuates the
+                    // owner), so this batch was the only gap. Values arrive registry-validated, and the
+                    // parse/clamp here is a second gate rather than the only one.
+                    p["camera_enabled"]?.let { raw ->
+                        SettingValue.parseBool(raw)?.let { config.setCameraEnabled(it) }
+                    }
+                    p["camera_max_resolution"]?.trim()?.let { raw ->
+                        CameraResolution.parse(raw)?.let { config.setCameraMaxResolution(raw) }
+                    }
+                    p["camera_max_fps"]?.trim()?.toIntOrNull()?.let { config.setCameraMaxFps(it) }
+                    p["camera_max_kbps"]?.trim()?.toIntOrNull()?.let { config.setCameraMaxKbps(it) }
                     // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
                     // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
                     // Detected from the POSTED value — config read-back inside the batch is pre-commit.
