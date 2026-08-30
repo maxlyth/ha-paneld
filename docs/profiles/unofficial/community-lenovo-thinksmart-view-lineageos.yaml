@@ -1,0 +1,77 @@
+schema: 2
+id: community.lenovo-thinksmart-view-lineageos
+version: 0.1.0
+display_name: Unofficial Lenovo ThinkSmart View (LineageOS)
+soc_class: Qualcomm MSM8953
+soc:
+  model: Qualcomm Snapdragon 624
+  cpu_cores:
+    - architecture: Arm Cortex-A53
+      count: 8
+metadata:
+  author: Community contributor
+  source: https://github.com/maxlyth/ha-paneld/issues/130
+  links:
+    - label: Lenovo specifications
+      url: https://psrefstuff.lenovo.com/syspool/Sys/PDF/ThinkSmart/ThinkSmart_View/ThinkSmart_View_Spec.html
+  license: Apache-2.0
+  maturity: draft
+  tested_firmware: []
+  limitations:
+    - Evidence comes from one contributor's ThinkSmart View running a community LineageOS 8.1 image. The profile has not yet been activated on the panel, maintainer-validated or fleet-qualified.
+    - This profile does not support the Lenovo firmware supplied with the retail product. Flashing, recovery and maintenance of the community Android image remain outside the ha-paneld project.
+    - KEYCODE_SLEEP turns this panel fully off, but touch is not a wake source. A volume button wakes it locally; Home Assistant wake through ha-paneld's wakelock pulse still needs an attended test.
+    - A direct KEYCODE_WAKEUP command did not wake the reported firmware. The keyevent route does not rely on that command alone, but the complete wake path must be proved before the profile is relied on unattended.
+    - Android brightness requires the Modify system settings permission. Without it, brightness commands fail even though the keyevent screen route may still be available.
+    - The profile draft reported Android ambient-light and proximity sensors, and Lenovo lists both for this product. Their readings have not been characterized on this installation.
+    - Camera and microphone hardware are not declared because their Android capture paths have not been tested on the community firmware.
+requires:
+  min_core_version: 0.9.7-rc3
+  drivers:
+    - access.android-su
+    - screen.keyevent
+    - sensor.android
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 950
+      all:
+        - field: model
+          op: equals
+          values:
+            - lenovo starview
+        - field: device
+          op: equals
+          values:
+            - starfire
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+  has_native_navbar: false
+hardware:
+  led:
+    mechanism: none
+    transfer: identity
+  screen_off: keyevent
+  has_button_backlight: false
+sensors:
+  proximity_technology: Android proximity sensor
+  light_technology: Ambient light
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Lenovo
+  model: ThinkSmart View
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display:
+  physical_ppi: 189
+provisioning:
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

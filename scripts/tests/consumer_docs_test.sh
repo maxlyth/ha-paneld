@@ -13,6 +13,7 @@ checkout_free_docs=(
   docs/provisioning-safety.md
   docs/built-in-renderer.md
   docs/profiles/unofficial/echo-show-5-gen2.md
+  docs/profiles/unofficial/lenovo-thinksmart-view-lineageos.md
   docs/profiles/unofficial/sunworld-yc-sm55p-p76s01.md
   docs/hardware/zx-smt156.md
   docs/profiles/unofficial/README.md

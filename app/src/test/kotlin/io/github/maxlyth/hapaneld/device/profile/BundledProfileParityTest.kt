@@ -414,6 +414,62 @@ class BundledProfileParityTest {
         assertEquals("compound matcher must not contain duplicate predicates", 2, branch.all.size)
     }
 
+    @Test fun unofficialThinkSmartMatcherRequiresTheObservedCompoundIdentity() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.lenovo-thinksmart-view-lineageos"
+        }.document
+        val exact = DeviceFacts(
+            model = "lenovo starview",
+            device = "starfire",
+            productVersion = "",
+        )
+
+        assertTrue("observed compound identity no longer matches", candidate.matches(exact))
+        assertFalse("model-only identity must not match", candidate.matches(exact.copy(device = "unrelated")))
+        assertFalse("device-only identity must not match", candidate.matches(exact.copy(model = "unrelated")))
+
+        val branch = candidate.match.any.single()
+        assertEquals(
+            setOf(
+                ProfilePredicate(ProfileFact.MODEL, ProfileMatchOp.EQUALS, listOf("lenovo starview")),
+                ProfilePredicate(ProfileFact.DEVICE, ProfileMatchOp.EQUALS, listOf("starfire")),
+            ),
+            branch.all.toSet(),
+        )
+        assertEquals("compound matcher must not contain duplicate predicates", 2, branch.all.size)
+    }
+
+    @Test fun unofficialThinkSmartSelectsProvenSleepAndConservativeHardware() {
+        val candidate = BundledProfileFixtures.unofficial.single {
+            it.document.id == "community.lenovo-thinksmart-view-lineageos"
+        }.document
+
+        assertEquals("0.9.7-rc3", candidate.requires.minCoreVersion)
+        assertEquals(setOf("access.android-su", "screen.keyevent", "sensor.android"), candidate.requires.drivers)
+        assertEquals("android", candidate.platform.suForm)
+        assertTrue("the contributor proved app-accessible su", candidate.platform.appCanSu)
+        assertFalse("a native navigation bar was not reported", candidate.platform.hasNativeNavbar)
+        assertEquals("keyevent", candidate.hardware.screenOff)
+        assertEquals("none", candidate.hardware.led.mechanism)
+        assertFalse("no panel button backlight was reported", candidate.hardware.hasButtonBacklight)
+        assertFalse("the community firmware camera path has not been proved", candidate.hardware.hasCamera)
+        assertFalse("the community firmware microphone path has not been proved", candidate.hardware.hasMicrophone)
+        assertEquals("Android proximity sensor", candidate.sensors.proximityTechnology)
+        assertEquals("Ambient light", candidate.sensors.lightTechnology)
+        assertFalse("the panel uses ordinary Android sensors rather than CHT8305", candidate.sensors.cht8305)
+        assertTrue("standard Android volume keys must not be grabbed through evdev", candidate.input.evdevButtons.isEmpty())
+        assertEquals(189, candidate.display.physicalPpi)
+        assertFalse("a community profile must remain import-only", candidate.match.fallback)
+        assertEquals(emptyList<String>(), candidate.metadata.testedFirmware)
+        assertNull("no CPU governor policy was proved", candidate.cpu.governors)
+        val soc = requireNotNull(candidate.soc)
+        assertEquals("Qualcomm Snapdragon 624", soc.model)
+        assertNull("the product source does not establish an introduction year", soc.introducedYear)
+        assertEquals(listOf(ProfileCpuCoreCluster("Arm Cortex-A53", 8)), soc.cpuCores)
+        assertTrue("unverified vendor package changes must stay empty", candidate.provisioning.packages.isEmpty())
+        assertTrue("unverified provisioning recipes must stay empty", candidate.provisioning.recipes.isEmpty())
+    }
+
     @Test fun unofficialYcSm55pMatcherRequiresTheObservedCompoundIdentity() {
         val candidate = BundledProfileFixtures.unofficial.single {
             it.document.id == "community.sunworld-yc-sm55p-p76s01"
@@ -801,17 +857,21 @@ class BundledProfileParityTest {
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf(
             "community.cronos-lineageos18",
+            "community.lenovo-thinksmart-view-lineageos",
             "community.rpi4-konstakang-lineageos",
             "community.sunworld-yc-sm55p-p76s01",
         )
         val EXPECTED_UNOFFICIAL_FILENAMES = setOf(
             "community-cronos-lineageos18.yaml",
+            "community-lenovo-thinksmart-view-lineageos.yaml",
             "community-rpi4-konstakang-lineageos.yaml",
             "community-sunworld-yc-sm55p-p76s01.yaml",
         )
         val EXPECTED_UNOFFICIAL_SHA256 = mapOf(
             "community-cronos-lineageos18.yaml" to
                 "c0207b2b43f46d84641d2d33683cb7fb0e8a4013544827bd3041337a40d02ea2",
+            "community-lenovo-thinksmart-view-lineageos.yaml" to
+                "cb31af531c3e7b22a3ea10864217e4a5e0879bd7d02eee2c5d860deb438695b2",
             "community-rpi4-konstakang-lineageos.yaml" to
                 "e49e0db3e29d8bb77c581c32a2f70d55bc629178d4bb2077a7b55d1885bd2e29",
             "community-sunworld-yc-sm55p-p76s01.yaml" to

@@ -294,6 +294,7 @@ class ProfileAuthoritySourceContractTest {
         )
         val UNOFFICIAL_PROFILE_IDS = setOf(
             "community.cronos-lineageos18",
+            "community.lenovo-thinksmart-view-lineageos",
             "community.rpi4-konstakang-lineageos",
             "community.sunworld-yc-sm55p-p76s01",
         )
