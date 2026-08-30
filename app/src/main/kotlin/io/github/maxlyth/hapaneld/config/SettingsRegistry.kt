@@ -385,11 +385,13 @@ object SettingsRegistry {
         // because they bound what a stream URL may ask for rather than being things to operate.
         SettingSpec(
             key = "camera_enabled", type = SettingType.BOOL, group = "Camera",
-            label = "Camera (experimental trial)", default = "false", scope = Scope.DEVICE,
-            help = "Experimental trial, off by default. Serves the panel's camera as a video-only RTSP " +
-                "stream on port 8554 and as a JPEG snapshot for Home Assistant to pull; no frames leave " +
-                "the panel unless a client is connected, and the panel shows a red light whenever the " +
-                "camera is open.",
+            label = "Camera", default = "false", scope = Scope.DEVICE,
+            // The card heading already says this is experimental, so the label does not repeat it. The
+            // Configure page turns the words RTSP and JPEG into links to the two addresses; the text is
+            // written so it still reads correctly where those links are not rendered.
+            help = "Off by default. Serves the panel's camera as a video-only RTSP stream and as a JPEG " +
+                "snapshot for Home Assistant to pull; no frames leave the panel unless a client is " +
+                "connected, and the panel shows a red light whenever the camera is open.",
             availableWhen = { it.hasCamera },
             ha = HaEntity(
                 "switch", "camera_enabled", "Camera (experimental)",
@@ -398,23 +400,26 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "camera_max_resolution", type = SettingType.ENUM, group = "Camera",
-            label = "Camera max resolution", default = "720p", scope = Scope.DEVICE,
+            label = "Resolution", default = "720p", scope = Scope.DEVICE,
             options = listOf("480p", "720p", "1080p"),
-            help = "Hard ceiling on the resolution a stream URL may request; a higher request is clamped to this.",
+            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
+                "less with ?res=, never for more.",
             availableWhen = { it.hasCamera },
         ),
         SettingSpec(
             key = "camera_max_fps", type = SettingType.INT, group = "Camera",
-            label = "Camera max frame rate", default = "15", min = 1.0, max = 30.0, step = 1.0,
+            label = "Frame rate", default = "15", min = 1.0, max = 30.0, step = 1.0,
             scope = Scope.DEVICE,
-            help = "Hard ceiling on the requested frame rate; a higher request is clamped to this.",
+            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
+                "less with ?fps=, never for more.",
             availableWhen = { it.hasCamera },
         ),
         SettingSpec(
             key = "camera_max_kbps", type = SettingType.INT, group = "Camera",
-            label = "Camera max bitrate (kbps)", default = "2000", min = 250.0, max = 8000.0, step = 250.0,
+            label = "Bitrate (kbps)", default = "2000", min = 250.0, max = 8000.0, step = 250.0,
             scope = Scope.DEVICE,
-            help = "Hard ceiling on the requested bitrate in kbps; a higher request is clamped to this.",
+            help = "What a stream gets when its URL does not ask for something else. A URL may ask for " +
+                "less with ?kbps=, never for more.",
             availableWhen = { it.hasCamera },
         ),
 

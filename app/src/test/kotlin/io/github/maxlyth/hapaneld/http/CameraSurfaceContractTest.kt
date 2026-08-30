@@ -10,6 +10,7 @@ import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,6 +25,48 @@ class CameraSurfaceContractTest {
     private val server by lazy { TestSources.kotlin("http/PaneldServer.kt").readText() }
     private val diag by lazy { TestSources.kotlin("http/DiagReader.kt").readText() }
     private val openApi by lazy { JSONObject(File("src/main/assets/openapi.json").readText()) }
+    private val configureJs by lazy { File("src/main/assets/configure.js").readText() }
+    private val transport by lazy { TestSources.kotlin("camera/CameraRtspServer.kt").readText() }
+
+    /**
+     * The Configure page builds an openable RTSP address out of the page's own host and a port literal,
+     * because a link is only useful if it is the address the transport is actually listening on. The
+     * literal therefore has to track `CameraRtspServer.DEFAULT_PORT`, and nothing else would notice if
+     * it stopped doing so: the link would render, look right, and go nowhere.
+     */
+    @Test fun theConfigurePageLinksTheRtspPortTheTransportActuallyListensOn() {
+        val declared = Regex("""DEFAULT_PORT = (\d+)""").find(transport)?.groupValues?.get(1)
+        assertNotNull("CameraRtspServer must declare a default port", declared)
+        assertTrue(
+            "configure.js must use the transport's port, not its own: expected $declared",
+            configureJs.contains("var CAMERA_RTSP_PORT = $declared;"),
+        )
+        assertTrue("the link must be built for the /live mount", configureJs.contains("\":\" + CAMERA_RTSP_PORT + \"/live\""))
+    }
+
+    /**
+     * The two addresses are linked from the words the settings registry already uses, so the wording
+     * stays in one place. That only works while the registry keeps saying them.
+     */
+    @Test fun theCameraHelpNamesTheWordsTheConfigurePageTurnsIntoLinks() {
+        val registry = TestSources.kotlin("config/SettingsRegistry.kt").readText()
+        // From `help = ` onward, not from the key onward: the comment above the help text also names
+        // RTSP and JPEG, so a region-wide search is satisfied by the comment even when the user-visible
+        // string has lost the word. The mutation battery caught exactly that.
+        val help = registry
+            .substringAfter("key = \"camera_enabled\"")
+            .substringAfter("help = ")
+            .substringBefore("availableWhen")
+        assertFalse("the help region must not have swallowed the comment above it", help.contains("//"))
+        listOf("RTSP", "JPEG").forEach {
+            assertTrue("the camera help must still contain the word $it for the link to attach to", help.contains(it))
+            assertTrue("configure.js must linkify $it", configureJs.contains("[\"$it\", "))
+        }
+        assertTrue(
+            "the snapshot link must be the real route",
+            configureJs.contains("\"/api/v1/camera/snapshot.jpg\""),
+        )
+    }
 
     @Test fun theStatusEndpointEmitsTheCameraObjectUnconditionally() {
         assertTrue(server.contains("\\\"camera\\\":\${camera.presentation().statusJson()}"))

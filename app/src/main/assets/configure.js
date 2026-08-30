@@ -2213,6 +2213,35 @@
     return btn;
   }
 
+  // The RTSP port the camera transport listens on. Must equal CameraRtspServer.DEFAULT_PORT;
+  // CameraSurfaceContractTest asserts the two agree so this cannot drift silently.
+  var CAMERA_RTSP_PORT = 8554;
+
+  /**
+   * Turn named words inside a help string into links, leaving the wording itself in the settings
+   * registry. Each pair is [word, href]; the first occurrence of each word becomes an anchor and
+   * everything else stays plain text, so re-wording the help does not have to be mirrored here.
+   */
+  function linkifyWords(text, pairs) {
+    var nodes = [document.createTextNode(text)];
+    pairs.forEach(function (pair) {
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.nodeType !== 3) continue;
+        var at = node.textContent.indexOf(pair[0]);
+        if (at < 0) continue;
+        var before = node.textContent.slice(0, at);
+        var after = node.textContent.slice(at + pair[0].length);
+        var link = el("a", { href: pair[1], text: pair[0] });
+        if (pair[1].indexOf("rtsp:") !== 0) link.setAttribute("target", "_blank");
+        link.setAttribute("title", pair[1]);
+        nodes.splice(i, 1, document.createTextNode(before), link, document.createTextNode(after));
+        break;
+      }
+    });
+    return nodes;
+  }
+
   function row(f) {
     var help = null;
     if (f.key === "dashboard_zoom") {
@@ -2223,6 +2252,14 @@
         helpKids.push(document.createTextNode(" for better results"));
       }
       help = el("small", {}, helpKids);
+    } else if (f.key === "camera_enabled") {
+      // Name the two addresses the help text already talks about, so they can be opened or copied
+      // rather than retyped. The RTSP link uses whatever host this page was reached on, which is the
+      // address that will also work from Home Assistant.
+      help = el("small", {}, linkifyWords(f.help, [
+        ["RTSP", "rtsp://" + location.hostname + ":" + CAMERA_RTSP_PORT + "/live"],
+        ["JPEG", "/api/v1/camera/snapshot.jpg"],
+      ]));
     } else if (f.key === "auto_sleep") {
       help = el("small", { text: "Automatically wake the panel when activity is detected and switch the screen off after the learned delay. Manual screen control remains separate." });
     } else if (f.help) {
