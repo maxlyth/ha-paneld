@@ -398,6 +398,14 @@ class CatalogueTest(unittest.TestCase):
             self.assertIn("must not overwrite a target catalogue", failed.stderr)
             self.assertEqual(target_before, target_path.read_bytes())
 
+            alias_path = source_path.parent / "fr.json"
+            alias_path.symlink_to(output_path.name)
+            output_before = output_path.read_bytes()
+            failed = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("must not overwrite a target catalogue", failed.stderr)
+            self.assertEqual(output_before, output_path.read_bytes())
+
             with self.assertRaisesRegex(
                 i18n.CatalogueError,
                 "report requires at least one target catalogue",
