@@ -73,6 +73,16 @@
       "state": "machine-draft",
       "text": "Kamera"
     },
+    "settings.camera_exposure.help": {
+      "sourceHash": "d4e4bf5fd6847ee7dd6f270be1d2caebac7f390231c8208ac96f2f43cb921169",
+      "state": "machine-draft",
+      "text": "Belichtungskorrektur in Blendenstufen für eine Kamera, die einen Raum dunkler oder heller wiedergibt, als er aussieht. 0 lässt die automatische Belichtung der Kamera unverändert; das Panel begrenzt den Wert auf den Bereich, den der Sensor tatsächlich unterstützt."
+    },
+    "settings.camera_exposure.label": {
+      "sourceHash": "cc5454a4b7ce211370dcd2aa0ae58d6b564eee7940b42de516d05f5b269c414b",
+      "state": "machine-draft",
+      "text": "Belichtung"
+    },
     "settings.camera_fps.help": {
       "sourceHash": "194e9997f15b4e317b0e0ac24fa823fd48ebe5c87df022fc116d669f7468b631",
       "state": "machine-draft",
