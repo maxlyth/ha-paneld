@@ -1550,12 +1550,30 @@ run_provision "$MOCK_TARGET" --verify
 assert_success "verify-only succeeds for a healthy panel"
 assert_contains 'Detected panel: Test Panel' "verify-only displays the app-owned hardware profile guidance"
 assert_contains 'storage health: healthy' "verify-only reports healthy storage"
+assert_contains 'Configuration schema: ready' "verify-only proves the Configure settings schema is usable"
 assert_contains 'panel power safety: safe' "verify-only reports the app-owned power classification"
 assert_log_contains '^curl .* /api/v1/status$|^curl .*http://panel\.test:8888/api/v1/status$' "verify-only reads the shared storage-health status"
+assert_log_contains '^curl .* /api/v1/config/schema$|^curl .*http://panel\.test:8888/api/v1/config/schema$' "verify-only reads the Configuration settings schema"
 assert_log_contains '^curl .* /api/v1/power-safety/state$|^curl .*http://panel\.test:8888/api/v1/power-safety/state$' "verify-only reads the one-token app-owned power state"
 assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://panel\.test:8888/api/v1/provisioning/plan\.txt$' "verify-only reads the provisioning plan"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start|monkey -p io\.github\.maxlyth\.hapaneld))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
+
+MOCK_CONFIG_SCHEMA=transport-fail run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects an unavailable Configuration schema"
+assert_contains 'Configuration schema: unavailable or malformed' "schema transport failure names the broken user surface"
+
+MOCK_CONFIG_SCHEMA=malformed run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects a malformed Configuration schema"
+assert_contains 'Configuration schema: unavailable or malformed' "malformed schema names the broken user surface"
+
+MOCK_CONFIG_SCHEMA=invalid-fields run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects schema entries without string keys and labels"
+assert_contains 'Configuration schema: unavailable or malformed' "invalid schema fields name the broken user surface"
+
+MOCK_CONFIG_SCHEMA=reordered run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only accepts a compatible schema independent of object-member order"
+assert_contains 'Configuration schema: ready' "reordered compatible schema remains usable"
 
 MOCK_POWER_SAFETY=caution run_provision "$MOCK_TARGET" --verify
 assert_success "a caution power classification remains advisory"

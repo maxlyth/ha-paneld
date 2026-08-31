@@ -1030,7 +1030,7 @@ preflight_storage_health() {
 
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
-  local health diag cfg rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
+  local health diag cfg schema schema_flat rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
   local package_state="" sdk_level="" notifications_are_runtime=0
   health="$(curl -fsS --max-time 5 "$URL/health" 2>/dev/null || true)"
   read_storage_health_for_verify
@@ -1074,6 +1074,8 @@ verify() {
     esac
   fi
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
+  schema="$(curl -fsS --max-time 5 "$URL/api/v1/config/schema" 2>/dev/null || true)"
+  schema_flat="$(printf '%s' "$schema" | tr -d '\r\n\t ')"
   if printf '%s' "$cfg" | grep -Eq '"ha_auth"[[:space:]]*:[[:space:]]*\{[^}]*"oauth"[[:space:]]*:[[:space:]]*true'; then
     HA_OAUTH_CONFIGURED=1
   else
@@ -1081,6 +1083,15 @@ verify() {
   fi
   chk() { if printf '%s' "$2" | grep -q "$3"; then echo "   ${GRN}✓${X} $1"; else echo "   ${RED}✗ $1${X}"; rc=1; fi; }
   chk "HTTP server reachable"  "$health" "ha-paneld"
+  if printf '%s' "$schema_flat" | grep -Eq '^\[\{.*\}\]$' &&
+     printf '%s' "$schema_flat" | grep -Eq '"key":"[^"]+"' &&
+     printf '%s' "$schema_flat" | grep -Eq '"label":"[^"]+"'; then
+    echo "   ${GRN}✓${X} Configuration schema: ready"
+  else
+    echo "   ${RED}✗ Configuration schema: unavailable or malformed${X}"
+    echo "     ${D}Open $URL/configure only after $URL/api/v1/config/schema returns a non-empty JSON settings array.${X}"
+    rc=1
+  fi
   case "$STORAGE_HEALTH_RESULT:$STORAGE_HEALTH_STATE" in
     valid:healthy)
       echo "   ${GRN}✓${X} storage health: healthy"

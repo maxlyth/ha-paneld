@@ -214,7 +214,7 @@ internal fun sourceHash(text: String): String = MessageDigest.getInstance("SHA-2
     .joinToString("") { "%02x".format(it) }
 
 internal fun extractPlaceholders(text: String): List<String> =
-    Regex("%(?:\\d+\\$)?[a-zA-Z]|\\{[a-zA-Z_][a-zA-Z0-9_]*}")
+    Regex("%(?:\\d+\\$)?[a-zA-Z]|\\{[a-zA-Z_][a-zA-Z0-9_]*\\}")
         .findAll(text)
         .map { it.value }
         .toList()

@@ -437,6 +437,15 @@ JSON
       *) printf '{"queried":true,"items":[{"path":"/lovelace","title":"Home","icon":"","group":"lovelace"},{"path":"/office","title":"Office","icon":"","group":"lovelace"}],"default":{"explicit":true,"path":"/lovelace"}}\n' ;;
     esac
     ;;
+  */api/v1/config/schema)
+    case "${MOCK_CONFIG_SCHEMA:-ok}" in
+      transport-fail) exit 22 ;;
+      malformed) printf 'not-json\n' ;;
+      invalid-fields) printf '[{"key":,"label":}]\n' ;;
+      reordered) printf '[{"label":"Panel ID","key":"panel_id","helpLanguage":null,"help":"","labelLanguage":"en"}]\n' ;;
+      *) printf '[{"key":"panel_id","label":"Panel ID","labelLanguage":"en","help":"","helpLanguage":null}]\n' ;;
+    esac
+    ;;
   */api/v1/setup/home-dashboard|*/api/v1/setup/entity-filter)
     [ "${MOCK_SETUP_ANSWER:-ok}" = "ok" ] || exit 22
     printf '{"ok":true}\n'
