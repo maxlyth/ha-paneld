@@ -1258,6 +1258,83 @@ browserTest('Configure accepts durable pending apply without retrying or losing 
   assert.equal(await page.locator('#cfg-touch_sound [role=switch]').getAttribute('aria-checked'), 'true');
 });
 
+browserTest('Configure restores its shared save affordance after a control replaces its node', async (t) => {
+  const schema = [{ key: 'friendly_name', label: 'Friendly name', group: 'Identity', type: 'STRING', available: true }];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { friendly_name: 'Example Panel' }, ha_expose: {}, ha_auth: { configured: false },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/leave') return { body: 'left' };
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  const input = page.locator('#cfg-friendly_name input');
+  await input.evaluate((node) => node.addEventListener('input', () => {
+    node.replaceWith(node.cloneNode(true));
+    document.getElementById('savebar').hidden = true;
+    document.getElementById('savebtn').disabled = true;
+  }, { once: true }));
+  await input.fill('Example Panel changed');
+  await page.waitForFunction(() => !document.getElementById('savebar').hidden);
+  assert.equal(await page.locator('#savebar').isVisible(), true);
+  assert.equal(await page.locator('#savebtn').isDisabled(), false);
+});
+
+browserTest('Configure guards link navigation only while settings are dirty', async (t) => {
+  const schema = [{ key: 'friendly_name', label: 'Friendly name', group: 'Identity', type: 'STRING', available: true }];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { friendly_name: 'Example Panel' }, ha_expose: {}, ha_auth: { configured: false },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/leave') return { body: 'left' };
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.evaluate(() => {
+    const link = document.createElement('a');
+    link.id = 'leave-configure'; link.href = '/leave'; link.textContent = 'Dashboard';
+    document.body.prepend(link);
+  });
+
+  const input = page.locator('#cfg-friendly_name input');
+  await input.fill('Example Panel changed');
+  assert.equal(await page.locator('#savebar').isVisible(), true);
+  assert.equal(await page.locator('#savebtn').isDisabled(), false);
+
+  const dialogPromise = page.waitForEvent('dialog', { timeout: 2_000 });
+  const navigation = page.locator('#leave-configure').click().catch(() => null);
+  const dialog = await dialogPromise;
+  assert.equal(dialog.type(), 'beforeunload');
+  await dialog.dismiss();
+  await navigation;
+  assert.equal(new URL(page.url()).pathname, '/');
+
+  await input.fill('Example Panel');
+  await page.waitForFunction(() => document.getElementById('savebar').hidden);
+  assert.equal(await page.locator('#savebtn').isDisabled(), true);
+  let cleanDialogs = 0;
+  page.on('dialog', async (unexpected) => { cleanDialogs++; await unexpected.dismiss(); });
+  await page.locator('#leave-configure').click();
+  await page.waitForURL(`${harness.url}/leave`);
+  assert.equal(new URL(page.url()).pathname, '/leave');
+  assert.equal(cleanDialogs, 0);
+});
+
 browserTest('Persistent pending apply does not rebuild auto-sleep or reset the HA identity', async (t) => {
   let configGets = 0;
   let historyGets = 0;

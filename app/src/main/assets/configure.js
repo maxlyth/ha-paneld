@@ -196,6 +196,7 @@
     button.textContent = saving ? "Saving…" : "Save changes";
     bar.hidden = !dirty && !saving;
     document.body.classList.toggle("cfg-dirty", dirty || saving);
+    syncUnsavedNavigationGuard();
   }
   function recomputeDirty() {
     dirtyValues = Object.create(null);
@@ -218,6 +219,35 @@
     dirtyValues = Object.create(null);
     dirtyExpose = Object.create(null);
     updateSaveUi();
+  }
+
+  // Individual controls own their value normalization, but the shared save affordance must be the
+  // final writer after an input event. Capture the event while its target still belongs to the form,
+  // then reconcile after target handlers have finished (including handlers that replace that target).
+  var dirtyUiReconcileQueued = false;
+  function queueDirtyUiReconcile(event) {
+    var groups = document.getElementById("cfg-groups");
+    if (!groups || !event.target || !groups.contains(event.target) || dirtyUiReconcileQueued) return;
+    dirtyUiReconcileQueued = true;
+    setTimeout(function () {
+      dirtyUiReconcileQueued = false;
+      recomputeDirty();
+      updateSaveUi();
+    }, 0);
+  }
+
+  function guardUnsavedNavigation(event) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+
+  var unsavedNavigationGuardArmed = false;
+  function syncUnsavedNavigationGuard() {
+    var shouldArm = dirty || saving;
+    if (shouldArm === unsavedNavigationGuardArmed) return;
+    unsavedNavigationGuardArmed = shouldArm;
+    if (shouldArm) window.addEventListener("beforeunload", guardUnsavedNavigation);
+    else window.removeEventListener("beforeunload", guardUnsavedNavigation);
   }
 
   function validHaUrlForOAuth() {
@@ -3191,6 +3221,9 @@
   }
 
   if (window.addEventListener) {
+    document.addEventListener("input", queueDirtyUiReconcile, true);
+    document.addEventListener("change", queueDirtyUiReconcile, true);
+    document.addEventListener("click", queueDirtyUiReconcile, true);
     window.addEventListener("focus", scheduleAutoSleepPrerequisite);
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") scheduleAutoSleepPrerequisite();
