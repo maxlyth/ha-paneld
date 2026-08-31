@@ -693,6 +693,16 @@ if [ "${1:-}" = "-s" ]; then
   shift 2
 fi
 
+# Runtime permissions belong to one Android target. Fleet workers deliberately share the fixture
+# directory, so unqualified markers let one mock panel observe another panel's permission state.
+grant_state_suffix=""
+if [ -n "$ADB_TARGET" ]; then
+  grant_state_suffix=".$(printf '%s' "$ADB_TARGET" | tr -c 'A-Za-z0-9._-' '_')"
+fi
+record_audio_grant_state="$STATE_DIR/record-audio-granted$grant_state_suffix"
+post_notifications_grant_state="$STATE_DIR/post-notifications-granted$grant_state_suffix"
+write_settings_grant_state="$STATE_DIR/write-settings-granted$grant_state_suffix"
+
 # The panel's platform level, as a number the fixture can compare. A non-numeric MOCK_SDK is a test
 # bug rather than a device state, so it falls back to the default instead of breaking arithmetic.
 mock_sdk_level() {
@@ -1030,7 +1040,7 @@ case "${1:-}" in
       "dumpsys package io.github.maxlyth.hapaneld")
         printf 'versionName=%s\n' "${MOCK_INSTALLED_VERSION:-0.9.1}"
         printf '    runtime permissions:\n'
-        if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$STATE_DIR/record-audio-granted" ]; then
+        if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$record_audio_grant_state" ]; then
           printf '      android.permission.RECORD_AUDIO: granted=true\n'
         else
           printf '      android.permission.RECORD_AUDIO: granted=false\n'
@@ -1038,7 +1048,7 @@ case "${1:-}" in
         # Before Android 13 POST_NOTIFICATIONS is not a runtime permission, so the package manager
         # lists no grant for it at all. That absence is the branch the platform-level gate exists for.
         if [ "$(mock_sdk_level)" -ge 33 ]; then
-          if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$STATE_DIR/post-notifications-granted" ]; then
+          if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$post_notifications_grant_state" ]; then
             printf '      android.permission.POST_NOTIFICATIONS: granted=true\n'
           else
             printf '      android.permission.POST_NOTIFICATIONS: granted=false\n'
@@ -1063,19 +1073,19 @@ case "${1:-}" in
         if [ "${MOCK_POST_NOTIFICATIONS_GRANT_FAIL:-0}" = 1 ]; then
           exit 1
         fi
-        : > "$STATE_DIR/post-notifications-granted"
+        : > "$post_notifications_grant_state"
         ;;
       "pm grant io.github.maxlyth.hapaneld android.permission.RECORD_AUDIO")
         if [ "${MOCK_RECORD_AUDIO_GRANT_FAIL:-0}" = 1 ]; then
           exit 1
         fi
-        : > "$STATE_DIR/record-audio-granted"
+        : > "$record_audio_grant_state"
         ;;
       "appops set io.github.maxlyth.hapaneld WRITE_SETTINGS allow")
-        : > "$STATE_DIR/write-settings-granted"
+        : > "$write_settings_grant_state"
         ;;
       "appops get io.github.maxlyth.hapaneld WRITE_SETTINGS")
-        if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$STATE_DIR/write-settings-granted" ]; then
+        if [ "$VERIFY_GRANTS_OK" = 1 ] && [ -f "$write_settings_grant_state" ]; then
           printf 'WRITE_SETTINGS: allow\n'
         else
           printf 'WRITE_SETTINGS: deny\n'

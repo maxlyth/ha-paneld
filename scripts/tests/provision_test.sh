@@ -269,10 +269,10 @@ run_provision() {
   : > "$MSYS_ARGV_LOG"
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
-  rm -f "$TMP/diag-attempts" "$TMP/write-settings-granted" "$TMP/accessibility-services" "$TMP/accessibility-enabled"
+  rm -f "$TMP/diag-attempts" "$TMP"/write-settings-granted* "$TMP/accessibility-services" "$TMP/accessibility-enabled"
   # Runtime-permission grant state is per-run for the same reason: left behind, a run that never
   # granted anything would still verify green off the previous run's grant.
-  rm -f "$TMP/record-audio-granted" "$TMP/post-notifications-granted"
+  rm -f "$TMP"/record-audio-granted* "$TMP"/post-notifications-granted*
   # The slow-health probe counter is per-run state; leaving it behind made one test's outcome
   # depend on how many health probes an earlier test happened to make.
   rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
@@ -4658,10 +4658,11 @@ reset_db_txn_state
 
 # A concluded unknown is consumed, never re-derived: with the escape flag the refused capture may
 # continue, but the helper phase reads the SAME verdict and stops before any mutation — without
-# re-asking the panel, whose hung probe might answer differently a second time.
+# re-asking the panel. Use a deterministic post-escalation transport drop here; the preceding tests
+# separately prove the hung-probe and aggregate-deadline behavior.
 rm -f "$TMP/adb-root-escalated"
 : > "$MOCK_CALL_LOG"
-PRIVILEGE_INSPECTION_TIMEOUT_SECONDS=1 MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_hang \
+MOCK_ROOT=0 MOCK_ADB_ROOT=escalates_then_drop MOCK_SNAPSHOT_TRANSPORT=dead_after_escalation \
   run_provision "$MOCK_TARGET" --apk "$APK" --no-tame --allow-missing-db-snapshot
 assert_failure "the escape flag does not let the helper phase re-open a hung root resolution"
 assert_not_contains 'continuing .*WITHOUT a database restore point' "$LAST_OUTPUT" \
@@ -5265,6 +5266,7 @@ done
 # applying it to every panel is exactly what it is for. Proven POSITIVELY — the mode-tagged import must
 # reach BOTH panels — because "the wrapper did not refuse it" is also true of a silently dropped flag.
 : > "$MOCK_CALL_LOG"
+rm -f "$TMP"/record-audio-granted.* "$TMP"/post-notifications-granted.* "$TMP"/write-settings-granted.*
 LAST_OUTPUT="$TMP/fleet-restore-fleet-output.txt"
 MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' \
   bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame --restore-fleet "$RESTORE" \
@@ -5284,6 +5286,7 @@ fi
 FLEET_AUTO_BACKUP_DIR="$TMP/fleet-auto-backups"
 rm -rf "$FLEET_AUTO_BACKUP_DIR"
 : > "$MOCK_CALL_LOG"
+rm -f "$TMP"/record-audio-granted.* "$TMP"/post-notifications-granted.* "$TMP"/write-settings-granted.*
 LAST_OUTPUT="$TMP/fleet-auto-export-output.txt"
 MOCK_TARGETS='panel-a.test:5555 panel-b.test:5555' HAPANELD_CONFIG_BACKUP_DIR="$FLEET_AUTO_BACKUP_DIR" \
   bash "$UPDATE_FLEET" --apk "$APK" --allow-unsigned-helper --no-tame \
