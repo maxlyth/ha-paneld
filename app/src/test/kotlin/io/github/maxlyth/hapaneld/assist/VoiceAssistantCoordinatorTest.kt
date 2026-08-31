@@ -195,7 +195,8 @@ class VoiceAssistantCoordinatorTest {
         c.start()
 
         val wakeLease = mic.leases.single { it.purpose == MicPurpose.WAKE_WORD }
-        wakeLease.consumer.onFrame(PcmFrame(shortArrayOf(1000), timestampNs = 1L))
+        val wakeDelivered = ShortArray(1) { 1000 }
+        wakeLease.consumer.onFrame(PcmFrame(wakeDelivered, timestampNs = 1L))
 
         engines.single().onActivation(WakeWordActivation("hey_jarvis", "hey jarvis"))
         awaitRunner(0)
@@ -204,6 +205,7 @@ class VoiceAssistantCoordinatorTest {
         assistLease.consumer.onFrame(PcmFrame(delivered, timestampNs = 2L))
 
         assertTrue("pipeline audio should be amplified, got ${delivered[0]}", delivered[0] > 3000)
+        assertEquals("the wake-word listener must see the unamplified signal", 1000, wakeDelivered[0].toInt())
     }
 
     @Test

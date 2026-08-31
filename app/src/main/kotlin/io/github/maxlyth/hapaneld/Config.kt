@@ -1173,7 +1173,7 @@ class Config private constructor(
     val voiceMicGainDb: Int get() =
         intPref("voice_mic_gain_db").coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB)
     fun setVoiceMicGainDb(db: Int) {
-        edit { putString("voice_mic_gain_db", db.coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB).toString()) }
+        edit { putInt("voice_mic_gain_db", db.coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB)) }
     }
 
     /** Device-local acknowledgement of the built-in launch screen for one exact app version. This is
