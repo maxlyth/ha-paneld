@@ -180,6 +180,45 @@ class VoiceAssistantCoordinatorTest {
         assertTrue(mic.leases[1].closed)
     }
 
+    /**
+     * The gain setting exists because these panels expose no platform noise suppression or automatic
+     * gain control, so a far-field panel transcribes badly even when it wakes reliably. It must reach
+     * the pipeline audio and nothing else: microWakeWord's frontend already applies PCAN adaptive gain
+     * in its own feature domain, and amplifying its input would move it off the levels the models were
+     * trained on and cost detections to clipping. So the two leases must see different signals for the
+     * same utterance, and this is the test that fails if a future change collapses them.
+     */
+    @Test
+    fun `configured gain amplifies the pipeline audio and never the wake-word listener`() {
+        settings = settings.copy(micGainDb = 12)
+        val c = coordinator()
+        c.start()
+
+        val wakeLease = mic.leases.single { it.purpose == MicPurpose.WAKE_WORD }
+        wakeLease.consumer.onFrame(PcmFrame(shortArrayOf(1000), timestampNs = 1L))
+
+        engines.single().onActivation(WakeWordActivation("hey_jarvis", "hey jarvis"))
+        awaitRunner(0)
+        val assistLease = mic.leases.single { it.purpose == MicPurpose.ASSIST }
+        val delivered = ShortArray(1) { 1000 }
+        assistLease.consumer.onFrame(PcmFrame(delivered, timestampNs = 2L))
+
+        assertTrue("pipeline audio should be amplified, got ${delivered[0]}", delivered[0] > 3000)
+    }
+
+    @Test
+    fun `zero gain leaves the pipeline audio exactly as captured`() {
+        settings = settings.copy(micGainDb = 0)
+        val c = coordinator()
+        c.start()
+        engines.single().onActivation(WakeWordActivation("hey_jarvis", "hey jarvis"))
+        awaitRunner(0)
+        val assistLease = mic.leases.single { it.purpose == MicPurpose.ASSIST }
+        val delivered = ShortArray(1) { 1000 }
+        assistLease.consumer.onFrame(PcmFrame(delivered, timestampNs = 2L))
+        assertEquals(1000, delivered[0].toInt())
+    }
+
     @Test
     fun `an unmapped wake word runs the preferred pipeline`() {
         val c = coordinator()
