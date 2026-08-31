@@ -556,6 +556,51 @@ browserTest('Configure badges the Voice card as skunk-works and leaves settled c
   assert.equal(await page.locator('[data-config-group="Dashboard"] .cardbadge').count(), 0);
 });
 
+browserTest('Configure help wraps a frozen URL without applying break-all globally', async (t) => {
+  const help = 'Built-in renderer: Home Assistant base URL, e.g. http://homeassistant.local:8123. Blank disables it.';
+  const schema = [{
+    key: 'ha_url', label: 'Home Assistant URL', help, group: 'Dashboard', tier: 'BASIC',
+    type: 'STRING', available: true,
+  }];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { ha_url: '' }, ha_expose: {}, ha_auth: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=test' };
+    return null;
+  }, configureVisualFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 1361, height: 720 } });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  const helpNode = page.locator('.frow .flabel small', { hasText: help });
+  await helpNode.waitFor();
+  const layout = await helpNode.evaluate((node) => {
+    const ordinary = document.createElement('p');
+    ordinary.textContent = 'ordinary prose';
+    document.body.appendChild(ordinary);
+    const helpStyle = getComputedStyle(node);
+    const ordinaryStyle = getComputedStyle(ordinary);
+    return {
+      helpClientWidth: node.clientWidth,
+      helpScrollWidth: node.scrollWidth,
+      helpOverflowWrap: helpStyle.overflowWrap,
+      helpWordBreak: helpStyle.wordBreak,
+      ordinaryOverflowWrap: ordinaryStyle.overflowWrap,
+      ordinaryWordBreak: ordinaryStyle.wordBreak,
+    };
+  });
+
+  assert.equal(layout.helpScrollWidth, layout.helpClientWidth, `Configure help must not overflow: ${JSON.stringify(layout)}`);
+  assert.equal(layout.helpOverflowWrap, 'anywhere');
+  assert.equal(layout.helpWordBreak, 'normal');
+  assert.equal(layout.ordinaryOverflowWrap, 'normal');
+  assert.equal(layout.ordinaryWordBreak, 'normal');
+});
+
 browserTest('Configure rejects an invalid brightness floor before a save request', async (t) => {
   let configPosts = 0;
   const schema = [

@@ -264,7 +264,7 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .frow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--config-divider)}
 .card>h2+.frow{border-top:0}
 .frow .flabel{flex:1;min-width:0}
-.frow .flabel small{display:block;color:var(--dim);font-weight:400;font-size:.8em;margin-top:2px}
+.frow .flabel small{display:block;color:var(--dim);font-weight:400;font-size:.8em;margin-top:2px;overflow-wrap:anywhere}
 .frow .fctl{flex:0 0 auto;display:flex;align-items:center;gap:12px;max-width:50%}
 .frow.dependency-disabled{opacity:.48}
 /* Keep native dropdowns aligned with the text fields beside them.  WebView's native select
