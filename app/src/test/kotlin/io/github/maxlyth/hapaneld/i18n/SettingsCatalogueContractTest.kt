@@ -18,8 +18,8 @@ class SettingsCatalogueContractTest {
             if (spec.help.isNotEmpty()) expected[spec.helpKey] = spec.help
         }
 
-        assertEquals(86, SettingsRegistry.SPECS.size)
-        assertEquals(171, expected.size)
+        assertEquals(87, SettingsRegistry.SPECS.size)
+        assertEquals(173, expected.size)
         assertEquals(expected.keys, catalogue.strings.keys.toSet())
         expected.forEach { (key, text) ->
             val record = checkNotNull(catalogue.strings[key])

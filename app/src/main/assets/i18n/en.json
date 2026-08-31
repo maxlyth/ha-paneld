@@ -171,6 +171,30 @@
       "softMaxChars": 32,
       "hardMaxChars": 32
     },
+    "settings.camera_exposure.help": {
+      "text": "Exposure bias in stops, for a camera that reads a room darker or brighter than it looks. 0 leaves the camera's own automatic exposure alone; the panel clamps this to whatever range the sensor actually supports.",
+      "sourceHash": "d4e4bf5fd6847ee7dd6f270be1d2caebac7f390231c8208ac96f2f43cb921169",
+      "surface": "settings",
+      "context": "Configure > Camera > Exposure: supporting help for the camera_exposure setting.",
+      "risk": "ordinary",
+      "siblings": ["settings.camera_exposure.label"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 280,
+      "hardMaxChars": 373
+    },
+    "settings.camera_exposure.label": {
+      "text": "Exposure",
+      "sourceHash": "cc5454a4b7ce211370dcd2aa0ae58d6b564eee7940b42de516d05f5b269c414b",
+      "surface": "settings",
+      "context": "Configure > Camera: label for the camera_exposure setting.",
+      "risk": "ordinary",
+      "siblings": ["settings.camera_exposure.help"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 32,
+      "hardMaxChars": 32
+    },
     "settings.camera_fps.help": {
       "text": "What a stream gets when its URL does not ask for something else. A stream URL can override it with ?fps=, in either direction.",
       "sourceHash": "194e9997f15b4e317b0e0ac24fa823fd48ebe5c87df022fc116d669f7468b631",
