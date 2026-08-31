@@ -758,6 +758,16 @@
       "state": "machine-draft",
       "text": "Sprachassistent"
     },
+    "settings.voice_mic_gain_db.help": {
+      "sourceHash": "57348c1118f9fba6177e8afa32f8b8674508d0af983d33e952cc03f95f0af645",
+      "state": "machine-draft",
+      "text": "Verstärkt das Audio, das zur Transkription an Home Assistant gesendet wird. Diese Panels bieten keine plattformseitige Rauschunterdrückung und keine automatische Verstärkungsregelung. Ein Panel, das quer durch den Raum hört, kann daher zuverlässig aufwachen und trotzdem schlecht transkribiert werden – die Aktivierungswort-Erkennung passt sich einem leisen Signal selbst an, die Spracherkennung nicht. Erhöhen Sie diesen Wert, wenn Befehle fehlen oder falsch erkannt werden, während das Aktivierungswort funktioniert. Die Aktivierungswort-Erkennung arbeitet bewusst weiterhin mit dem unverstärkten Signal."
+    },
+    "settings.voice_mic_gain_db.label": {
+      "sourceHash": "a7a629b565b5b9af548257a8fc82ad7df360f3d32c88e48f12f4cadd365a34c8",
+      "state": "machine-draft",
+      "text": "Mikrofonverstärkung (dB)"
+    },
     "settings.voice_pipelines.help": {
       "sourceHash": "9a5deb161029eecc2820836dda2ae9066979d266d70caf0ab2ae93c4e128eebc",
       "state": "machine-draft",

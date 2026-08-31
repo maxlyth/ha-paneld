@@ -1815,6 +1815,30 @@
       "softMaxChars": 32,
       "hardMaxChars": 32
     },
+    "settings.voice_mic_gain_db.help": {
+      "text": "Amplifies the audio sent to Home Assistant for transcription. These panels expose no platform noise suppression or automatic gain control, so a panel heard from across the room may wake reliably and still transcribe poorly — wake-word detection adapts to a quiet signal on its own and speech-to-text does not. Raise this if commands are missed or mistranscribed while the wake word works. Wake-word detection is deliberately left on the unamplified signal.",
+      "sourceHash": "57348c1118f9fba6177e8afa32f8b8674508d0af983d33e952cc03f95f0af645",
+      "surface": "settings",
+      "context": "Configure > Voice > Microphone gain (dB): supporting help for the voice_mic_gain_db setting.",
+      "risk": "ordinary",
+      "siblings": ["settings.voice_mic_gain_db.label"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 616,
+      "hardMaxChars": 821
+    },
+    "settings.voice_mic_gain_db.label": {
+      "text": "Microphone gain (dB)",
+      "sourceHash": "a7a629b565b5b9af548257a8fc82ad7df360f3d32c88e48f12f4cadd365a34c8",
+      "surface": "settings",
+      "context": "Configure > Voice: label for the voice_mic_gain_db setting.",
+      "risk": "ordinary",
+      "siblings": ["settings.voice_mic_gain_db.help"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 32,
+      "hardMaxChars": 36
+    },
     "settings.voice_pipelines.help": {
       "text": "Which Home Assistant Assist pipeline each configured wake word triggers, as a JSON object of wake word to pipeline id. An empty value uses Home Assistant's preferred pipeline.",
       "sourceHash": "9a5deb161029eecc2820836dda2ae9066979d266d70caf0ab2ae93c4e128eebc",

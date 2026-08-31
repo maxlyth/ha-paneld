@@ -68,6 +68,13 @@ hardware:
     mechanism: none
     transfer: identity
   screen_off: su-blpower
+  # Verified by capture on three panels — two 86P and one 120P. The microphone is a PDM part on
+  # ALSA card 0 device 1, and it is the only path that carries it: the analog codec device reports
+  # `Capture MIC Path: Main Mic` and returns exact zeros. The PDM DAI accepts two to eight channels
+  # and only channels 2 and 3 are live, so a two-channel capture reads a dead pair and looks like
+  # a panel with no microphone. Android's own input path is what the app uses; this flag records
+  # that the hardware is present, not how it is reached.
+  microphone: true
   has_button_backlight: false
   touch_click_gain: 0.45
   zigbee_gateway_dir: /vendor/bin/siliconlabs_host

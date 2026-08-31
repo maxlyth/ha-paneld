@@ -5867,6 +5867,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     p["voice_pipelines"]?.let { config.setVoicePipelines(it) }
                     p["voice_audio_source"]?.let { config.setVoiceAudioSource(it) }
                     p["voice_sensitivity"]?.let { config.setVoiceSensitivity(it) }
+                    p["voice_mic_gain_db"]?.toIntOrNull()?.let { config.setVoiceMicGainDb(it) }
                     // Camera trial settings — plain local prefs with no live-apply handler, so like the
                     // voice caps above they persist here or not at all. They had no line here at all and
                     // were therefore reported saved and silently discarded on every submit, which is the

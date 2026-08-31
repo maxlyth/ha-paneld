@@ -136,7 +136,14 @@ internal fun voiceAssistantCoordinator(
     val source = ConfiguredMicrophoneSource(context.applicationContext, config)
     return VoiceAssistantCoordinator(
         scope = scope,
-        settings = { VoiceSettings.parse(config.voiceEnabled, config.voiceWakeWords, config.voicePipelines) },
+        settings = {
+            VoiceSettings.parse(
+                config.voiceEnabled,
+                config.voiceWakeWords,
+                config.voicePipelines,
+                config.voiceMicGainDb,
+            )
+        },
         microphoneAvailable = microphoneAvailable,
         source = { source.get() },
         engineFactory = engineFactory,

@@ -53,21 +53,32 @@ class BundledProfileParityTest {
     /**
      * A microphone is only declared for hardware whose capture chain has actually produced audio.
      * The weaker signals lie: on 2026-08-28 every panel probed reported `android.hardware.microphone`
-     * and offered `AUDIO_DEVICE_IN_BUILTIN_MIC` in its audio policy, yet a first-generation NSPanel Pro
-     * captured 65,536 frames of digital silence with its codec's own capture path selected. Only the
-     * WF1589T returned real signal, so only the WF1589T declares one.
+     * and offered `AUDIO_DEVICE_IN_BUILTIN_MIC` in its audio policy, while the analog capture device
+     * returned digital silence with the codec's own `Capture MIC Path` set to `Main Mic`.
+     *
+     * But a capture can lie about its own shape, and this one did. That probe read two channels,
+     * because two is what the analog device accepts, and concluded the NSPanel Pro had no microphone.
+     * Its PDM capture device accepts **two to eight**, and only channels 2 and 3 carry the part; the
+     * first pair is dead and yields a stationary floor that reads exactly like an idle ADC. Captured
+     * with all eight on 2026-08-31, channels 2 and 3 returned real room audio on three panels — two
+     * 86P and one 120P — comparable to the WF1589T. So the NSPanel Pro declares a microphone too.
+     *
+     * The lesson the contract now carries is not "trust captures over flags". It is that a capture
+     * proves a microphone only when it covers every channel of every capture device on the card, and
+     * is scored against known-good hardware. A negative from a subset of channels proves nothing, and
+     * it is more dangerous than a wrong flag because it looks like evidence.
      */
     @Test fun onlyHardwareWithProvenCaptureDeclaresAMicrophone() {
         assertEquals(
-            setOf("wf1589t"),
+            setOf("wf1589t", "nspanel-pro"),
             bundled.filter { it.document.hardware.hasMicrophone }.map { it.document.id }.toSet(),
         )
-        // Unknown hardware stays conservative, and the panel that captured silence must never claim one.
+        // Unknown hardware stays conservative: a profile earns the declaration by capture, never by
+        // resembling one that has it.
         assertFalse(bundledById.getValue("generic").document.hardware.hasMicrophone)
-        assertFalse(bundledById.getValue("nspanel-pro").document.hardware.hasMicrophone)
         // The declaration reaches the capability the voice settings gate on, not just the parsed document.
         assertTrue(bundledById.getValue("wf1589t").profile().hasMicrophone)
-        assertFalse(bundledById.getValue("nspanel-pro").profile().hasMicrophone)
+        assertTrue(bundledById.getValue("nspanel-pro").profile().hasMicrophone)
         // A camera is not a microphone. The WF1589T now declares both, so the witness that the two
         // keys are independent on real catalog content is the TPA10: it carries a camera, and its
         // capture chain has never produced audio, so it must declare the one and not the other.
@@ -846,7 +857,7 @@ class BundledProfileParityTest {
         )
         val EXPECTED_BUNDLED_SHA256 = mapOf(
             "generic.yaml" to "c95dd07e605c826b092c141c111f5f1181e98f5f4833d426f9f6bebab4ab5eb9",
-            "nspanel-pro.yaml" to "86f6b9071e205a073353c57e14346fc4fceba06a16ab021a1b1adcfc863456b1",
+            "nspanel-pro.yaml" to "950da4fbb71f04f9ca52d47d0d405b304a04c959d9cc0903c852e6c5203ea152",
             "s9e.yaml" to "b01253348e986d91516788ee3e56f43825b058fecc02d367f5bb0ea73b83abd8",
             "shelly-wall-display-v2.yaml" to "16415916b2cc0841fccee75709f3b10d3b6a431e3532593c53cb0d34a89fcd24",
             "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",

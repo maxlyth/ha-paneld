@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.config
 
+import io.github.maxlyth.hapaneld.audio.MicrophoneGain
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.DashboardPath
@@ -708,6 +709,19 @@ object SettingsRegistry {
             help = "Wake-word detector threshold, applied as an offset to the model's cutoff score. Low " +
                 "requires a clearer match (fewer false wakes, more likely to miss a quiet or distant call); " +
                 "High matches more readily (faster to wake, more false triggers). Normal applies no offset.",
+            availableWhen = { it.hasMicrophone },
+        ),
+        SettingSpec(
+            key = "voice_mic_gain_db", type = SettingType.INT, group = "Voice",
+            label = "Microphone gain (dB)", default = "0",
+            min = MicrophoneGain.MIN_DB.toDouble(), max = MicrophoneGain.MAX_DB.toDouble(), step = 1.0,
+            tier = Tier.ADVANCED, scope = Scope.DEVICE,
+            help = "Amplifies the audio sent to Home Assistant for transcription. These panels expose no " +
+                "platform noise suppression or automatic gain control, so a panel heard from across the " +
+                "room may wake reliably and still transcribe poorly \u2014 wake-word detection adapts to a " +
+                "quiet signal on its own and speech-to-text does not. Raise this if commands are missed " +
+                "or mistranscribed while the wake word works. Wake-word detection is deliberately left " +
+                "on the unamplified signal.",
             availableWhen = { it.hasMicrophone },
         ),
         SettingSpec(

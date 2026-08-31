@@ -7,6 +7,7 @@ import android.content.res.Resources
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import io.github.maxlyth.hapaneld.audio.MicrophoneGain
 import io.github.maxlyth.hapaneld.camera.CameraResolution
 import io.github.maxlyth.hapaneld.config.Migrations
 import io.github.maxlyth.hapaneld.config.SettingSpec
@@ -1167,6 +1168,12 @@ class Config private constructor(
     val voiceSensitivity: String get() = stringPref("voice_sensitivity")
     fun setVoiceSensitivity(sensitivity: String) {
         edit { putString("voice_sensitivity", sensitivity) }
+    }
+
+    val voiceMicGainDb: Int get() =
+        intPref("voice_mic_gain_db").coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB)
+    fun setVoiceMicGainDb(db: Int) {
+        edit { putString("voice_mic_gain_db", db.coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB).toString()) }
     }
 
     /** Device-local acknowledgement of the built-in launch screen for one exact app version. This is

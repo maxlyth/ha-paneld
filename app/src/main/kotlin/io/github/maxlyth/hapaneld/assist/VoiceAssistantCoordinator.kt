@@ -1,7 +1,9 @@
 package io.github.maxlyth.hapaneld.assist
 
+import io.github.maxlyth.hapaneld.audio.GainStage
 import io.github.maxlyth.hapaneld.audio.MicLease
 import io.github.maxlyth.hapaneld.audio.MicPurpose
+import io.github.maxlyth.hapaneld.audio.MicrophoneGain
 import io.github.maxlyth.hapaneld.audio.MicrophoneSource
 import io.github.maxlyth.hapaneld.audio.MicrophoneSourceLifecycle
 import io.github.maxlyth.hapaneld.audio.PcmConsumer
@@ -22,6 +24,8 @@ data class VoiceSettings(
     val wakeWords: List<String>,
     /** Wake-word model id to Assist pipeline id; an absent or blank value means the preferred pipeline. */
     val pipelines: Map<String, String>,
+    /** Decibels of pre-amplification for the pipeline audio only; the wake-word listener never sees it. */
+    val micGainDb: Int = 0,
 ) {
     fun pipelineFor(modelId: String?): String? = modelId?.let { pipelines[it] }?.takeIf { it.isNotBlank() }
 
@@ -29,7 +33,12 @@ data class VoiceSettings(
         const val MAX_ACTIVE_WAKE_WORDS = 2
 
         /** Tolerant of malformed JSON: the registry validates on write, but a hand-edited store must not crash the service. */
-        fun parse(enabled: Boolean, wakeWordsJson: String?, pipelinesJson: String?): VoiceSettings {
+        fun parse(
+            enabled: Boolean,
+            wakeWordsJson: String?,
+            pipelinesJson: String?,
+            micGainDb: Int = 0,
+        ): VoiceSettings {
             val words = runCatching {
                 val array = JSONArray(wakeWordsJson ?: "[]")
                 (0 until array.length()).mapNotNull { array.optString(it).takeIf { s -> s.isNotBlank() } }
@@ -38,7 +47,12 @@ data class VoiceSettings(
                 val obj = JSONObject(pipelinesJson ?: "{}")
                 obj.keys().asSequence().associateWith { obj.optString(it) }
             }.getOrDefault(emptyMap())
-            return VoiceSettings(enabled, words, map)
+            return VoiceSettings(
+                enabled,
+                words,
+                map,
+                micGainDb.coerceIn(MicrophoneGain.MIN_DB, MicrophoneGain.MAX_DB),
+            )
         }
     }
 }
@@ -305,7 +319,10 @@ class VoiceAssistantCoordinator internal constructor(
                 // Closing the attachment is the panel's own signal that it has stopped listening and is
                 // waiting on Home Assistant, which is the only phase boundary observable from here.
                 attachAudio = { consumer ->
-                    val lease = mic.lease(MicPurpose.ASSIST, consumer = consumer)
+                    val lease = mic.lease(
+                        MicPurpose.ASSIST,
+                        consumer = GainStage(consumer, current.micGainDb),
+                    )
                     AutoCloseable {
                         lease.close()
                         state.set(VoiceState.PROCESSING)
