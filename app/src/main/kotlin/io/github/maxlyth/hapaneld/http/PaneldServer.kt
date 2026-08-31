@@ -1924,8 +1924,14 @@ class PaneldServer internal constructor(
                     configReadRoutes(
                         currentConfigJson = ::configJson,
                         localizedSchema = { call ->
-                            val strings = requestStrings(call)
-                            LocalizedConfigSchema(configSchemaJson(strings), strings.languages)
+                            localizedConfigSchema(
+                                call = call,
+                                persistedLanguage = config.uiLanguage,
+                                deviceLanguageTag = java.util.Locale.getDefault().toLanguageTag(),
+                                allowPseudo = BuildConfig.DEBUG,
+                                catalogueLoader = catalogueLoader,
+                                render = ::configSchemaJson,
+                            )
                         },
                     )
                     post("/config") { handleConfigPost(call) }
@@ -6597,18 +6603,6 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 "}"
         }
         return "[$items]"
-    }
-
-    private fun requestStrings(call: ApplicationCall): AppStrings {
-        val locale = AppLocale.resolve(
-            explicit = call.request.queryParameters["lang"],
-            persisted = config.uiLanguage,
-            haUser = call.request.queryParameters["ha_lang"],
-            acceptLanguage = call.request.headers[HttpHeaders.AcceptLanguage],
-            deviceLanguageTag = java.util.Locale.getDefault().toLanguageTag(),
-            allowPseudo = BuildConfig.DEBUG,
-        )
-        return catalogueLoader.strings(locale)
     }
 
     /** A setting's effective current value: controller-sourced live state where it exists, identity

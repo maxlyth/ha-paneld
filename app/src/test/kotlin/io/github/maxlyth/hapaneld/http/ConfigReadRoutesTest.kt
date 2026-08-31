@@ -1,5 +1,8 @@
 package io.github.maxlyth.hapaneld.http
 
+import io.github.maxlyth.hapaneld.i18n.CatalogueLoader
+import io.github.maxlyth.hapaneld.i18n.Strings
+import io.github.maxlyth.hapaneld.i18n.sourceHash
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
@@ -10,6 +13,7 @@ import io.ktor.server.testing.testApplication
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.json.JSONObject
 
 class ConfigReadRoutesTest {
     @Test fun `dynamic config reads are never cached and only localized schema varies by language`() = testApplication {
@@ -42,5 +46,116 @@ class ConfigReadRoutesTest {
         assertEquals(HttpHeaders.AcceptLanguage, schema.headers[HttpHeaders.Vary])
         assertEquals("de", schema.headers[HttpHeaders.ContentLanguage])
         assertEquals("{\"language\":\"de\"}", schema.bodyAsText())
+    }
+
+    @Test fun `schema endpoint applies production locale precedence and reports emitted languages`() = testApplication {
+        var persisted = "de"
+        var device = "zh-CN"
+        val loader = syntheticCatalogueLoader()
+        application {
+            routing {
+                route("/api/v1") {
+                    configReadRoutes(
+                        currentConfigJson = { "{}" },
+                        localizedSchema = { call ->
+                            localizedConfigSchema(
+                                call = call,
+                                persistedLanguage = persisted,
+                                deviceLanguageTag = device,
+                                allowPseudo = false,
+                                catalogueLoader = loader,
+                                render = ::renderSyntheticSchema,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
+        suspend fun assertSchema(
+            path: String,
+            acceptLanguage: String?,
+            expectedText: String,
+            expectedLanguages: String,
+        ) {
+            val response = client.get(path) {
+                acceptLanguage?.let { header(HttpHeaders.AcceptLanguage, it) }
+            }
+            assertEquals(expectedLanguages, response.headers[HttpHeaders.ContentLanguage])
+            val body = JSONObject(response.bodyAsText())
+            assertEquals(expectedText, body.getString("checked"))
+            assertEquals(expectedText.substringBefore(':'), body.getString("checkedLanguage"))
+            assertEquals("English fallback", body.getString("draft"))
+            assertEquals("en", body.getString("draftLanguage"))
+        }
+
+        // Explicit browser choice wins every inherited signal.
+        assertSchema("/api/v1/config/schema?lang=fr&ha_lang=it", "es", "fr:Checked", "en, fr")
+        // A persisted non-auto panel choice wins HA, browser, and device signals.
+        assertSchema("/api/v1/config/schema?ha_lang=it", "es", "de:Checked", "de, en")
+        // Automatic persistence admits the connected HA user's language.
+        persisted = "auto"
+        assertSchema("/api/v1/config/schema?ha_lang=it", "es", "it:Checked", "en, it")
+        // Without an HA choice, Accept-Language wins the Android/device locale.
+        assertSchema("/api/v1/config/schema", "nl, es-MX;q=.8", "es:Checked", "en, es")
+        // Unsupported inherited languages fall through to the Android/device locale.
+        assertSchema("/api/v1/config/schema", "nl", "zh-Hans:Checked", "en, zh-Hans")
+        // English is the final fallback when every signal is unsupported.
+        device = "ja-JP"
+        assertSchema("/api/v1/config/schema?ha_lang=nl", "ar", "en:Checked", "en")
+    }
+
+    private fun renderSyntheticSchema(strings: Strings): String {
+        val checked = strings.resolve("settings.checked.label")
+        val draft = strings.resolve("settings.draft.help")
+        return JSONObject()
+            .put("checked", checked.text)
+            .put("checkedLanguage", checked.language)
+            .put("draft", draft.text)
+            .put("draftLanguage", draft.language)
+            .toString()
+    }
+
+    private fun syntheticCatalogueLoader(): CatalogueLoader {
+        val revision = "a".repeat(40)
+        val checkedEnglish = "en:Checked"
+        val draftEnglish = "English fallback"
+        val source = """{
+          "schema":1,
+          "locale":"en",
+          "sourceRevision":"$revision",
+          "strings":{
+            "settings.checked.label":{
+              "text":"$checkedEnglish","sourceHash":"${sourceHash(checkedEnglish)}",
+              "surface":"settings","context":"Checked label","risk":"ordinary",
+              "siblings":[],"placeholders":[],"frozen":[],"softMaxChars":40,"hardMaxChars":80
+            },
+            "settings.draft.help":{
+              "text":"$draftEnglish","sourceHash":"${sourceHash(draftEnglish)}",
+              "surface":"settings","context":"Draft help","risk":"ordinary",
+              "siblings":[],"placeholders":[],"frozen":[],"softMaxChars":40,"hardMaxChars":80
+            }
+          }
+        }""".trimIndent()
+        return CatalogueLoader { path ->
+            if (path == "i18n/en.json") source else {
+                val locale = path.removePrefix("i18n/").removeSuffix(".json")
+                """{
+                  "schema":1,
+                  "locale":"$locale",
+                  "sourceRevision":"$revision",
+                  "strings":{
+                    "settings.checked.label":{
+                      "text":"$locale:Checked","sourceHash":"${sourceHash(checkedEnglish)}",
+                      "state":"machine-cross-checked"
+                    },
+                    "settings.draft.help":{
+                      "text":"$locale:Draft","sourceHash":"${sourceHash(draftEnglish)}",
+                      "state":"machine-draft"
+                    }
+                  }
+                }""".trimIndent()
+            }
+        }
     }
 }
