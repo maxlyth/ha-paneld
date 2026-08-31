@@ -35,6 +35,7 @@ PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[a-zA-Z]|\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
+REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 
 
 class CatalogueError(ValueError):
@@ -67,6 +68,13 @@ def exact_keys(value: dict[str, Any], expected: set[str], owner: str) -> None:
 
 def source_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def contains_literal(text: str, literal: str) -> bool:
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(literal)}(?![A-Za-z0-9_])",
+        text,
+    ) is not None
 
 
 def unprotected_text(text: str, source_record: dict[str, Any]) -> str:
@@ -144,6 +152,14 @@ def validate_source(path: Path) -> dict[str, Any]:
         frozen = string_list(record["frozen"], f"{key}.frozen")
         if any(token not in text for token in frozen):
             raise CatalogueError(f"{key}: frozen literal missing from English text")
+        missing_required = [
+            literal for literal in REQUIRED_FROZEN_LITERALS
+            if contains_literal(text, literal) and literal not in frozen
+        ]
+        if missing_required:
+            raise CatalogueError(
+                f"{key}: required frozen literal missing: {', '.join(missing_required)}"
+            )
         soft, hard = record["softMaxChars"], record["hardMaxChars"]
         if not isinstance(soft, int) or not isinstance(hard, int) or soft <= 0 or hard < soft or hard < len(text):
             raise CatalogueError(f"{key}: invalid layout budget")

@@ -1847,7 +1847,7 @@
       "risk": "ordinary",
       "siblings": ["settings.voice_mic_gain_db.label"],
       "placeholders": [],
-      "frozen": [],
+      "frozen": ["Home Assistant"],
       "softMaxChars": 616,
       "hardMaxChars": 821
     },
@@ -1859,7 +1859,7 @@
       "risk": "ordinary",
       "siblings": ["settings.voice_mic_gain_db.help"],
       "placeholders": [],
-      "frozen": [],
+      "frozen": ["dB"],
       "softMaxChars": 32,
       "hardMaxChars": 36
     },

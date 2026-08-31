@@ -199,6 +199,40 @@ class CatalogueTest(unittest.TestCase):
             with self.assertRaises(i18n.CatalogueError):
                 i18n.validate_source(source_path)
 
+    def test_product_name_and_exact_db_unit_require_frozen_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "en.json"
+            for literal, text in (
+                ("Home Assistant", "Send audio to Home Assistant."),
+                ("dB", "Microphone gain (dB)"),
+            ):
+                with self.subTest(literal=literal):
+                    source = self.source()
+                    record = source["strings"]["settings.example.help"]
+                    record["text"] = text
+                    record["sourceHash"] = i18n.source_hash(text)
+                    record["placeholders"] = []
+                    record["frozen"] = []
+                    record["hardMaxChars"] = max(80, len(text))
+                    self.write(source_path, source)
+                    with self.assertRaisesRegex(
+                        i18n.CatalogueError,
+                        f"required frozen literal missing: {literal}",
+                    ):
+                        i18n.validate_source(source_path)
+                    record["frozen"] = [literal]
+                    self.write(source_path, source)
+                    i18n.validate_source(source_path)
+
+            source = self.source()
+            record = source["strings"]["settings.example.help"]
+            record["text"] = "Wi-Fi signal in dBm."
+            record["sourceHash"] = i18n.source_hash(record["text"])
+            record["placeholders"] = []
+            record["frozen"] = ["dBm"]
+            self.write(source_path, source)
+            i18n.validate_source(source_path)
+
     def test_zh_hans_requires_han_text_and_rejects_residual_source_words(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
