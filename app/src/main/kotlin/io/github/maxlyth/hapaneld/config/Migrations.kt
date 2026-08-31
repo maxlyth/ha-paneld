@@ -82,11 +82,12 @@ object Migrations {
         Migration { values ->
             values.putIfAbsent("ui_language", SettingsRegistry.DEFAULT_UI_LANGUAGE)
         },
-        // Schema 10 adds the Assist pre-amplification gain. It carries no `ha` descriptor, so unlike the
-        // schema-8 voice keys it needs no exposure default; 0 dB is unity, which is what every store
-        // predating this key was effectively doing.
+        // Schema 10 adds the Assist pre-amplification gain and camera exposure bias. Neither carries an
+        // `ha` descriptor, so unlike the schema-8 voice keys they need no exposure defaults. Zero preserves
+        // both prior behaviours: unity gain and the camera's own automatic exposure.
         Migration { values ->
             values.putIfAbsent("voice_mic_gain_db", "0")
+            values.putIfAbsent("camera_exposure", "0")
         },
     )
 

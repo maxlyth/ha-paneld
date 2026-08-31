@@ -216,19 +216,25 @@ class MigrationsTest {
         assertTrue(explicitWarnings.isEmpty())
     }
 
-    @Test fun schemaNineAddsUnityMicrophoneGainAndPreservesAnExplicitOne() {
+    @Test fun schemaNineAddsZeroGainAndExposureDefaultsAndPreservesExplicitValues() {
         val (defaults, defaultWarnings) = Migrations.migrate(9, mapOf("mqtt_broker" to "tcp://ha:1883"))
 
-        // 0 dB is unity, which is exactly what a store predating the key was already doing, so an
-        // upgrade must not change what any existing panel sends to Home Assistant.
+        // Both zero values preserve what stores predating the keys already did: unity microphone gain
+        // and no bias over the camera's own automatic exposure.
         assertEquals("0", defaults["voice_mic_gain_db"])
-        // Unlike the schema-8 voice keys, this one carries no `ha` descriptor, so it gains no exposure
-        // default; inventing one would publish an entity nothing reads.
+        assertEquals("0", defaults["camera_exposure"])
+        // Unlike the schema-8 voice keys, neither setting carries an `ha` descriptor. Inventing exposure
+        // defaults would publish entities nothing reads.
         assertNull(defaults["${SettingsRegistry.HA_EXPOSE_PREFIX}voice_mic_gain_db"])
+        assertNull(defaults["${SettingsRegistry.HA_EXPOSE_PREFIX}camera_exposure"])
         assertTrue(defaultWarnings.isEmpty())
 
-        val (explicit, explicitWarnings) = Migrations.migrate(9, mapOf("voice_mic_gain_db" to "-6"))
+        val (explicit, explicitWarnings) = Migrations.migrate(
+            9,
+            mapOf("voice_mic_gain_db" to "-6", "camera_exposure" to "1.5"),
+        )
         assertEquals("-6", explicit["voice_mic_gain_db"])
+        assertEquals("1.5", explicit["camera_exposure"])
         assertTrue(explicitWarnings.isEmpty())
     }
 
