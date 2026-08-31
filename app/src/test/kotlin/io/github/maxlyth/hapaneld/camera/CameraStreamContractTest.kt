@@ -105,4 +105,23 @@ class CameraStreamContractTest {
         val api = TestSources.repoFile("docs/api.md").readText()
         assertTrue("the self-render warning sits beside the URL where a person copies it", api.contains("Do not put this panel's own camera card on this panel's dashboard"))
     }
+
+    /**
+     * The capture session must be given a real capture callback. It used to be passed `null`, which is
+     * why a snapshot could only answer with the first frame that arrived: with no callback there is no
+     * `CONTROL_AE_STATE` to read, so the session cannot know whether exposure has converged. Reverting
+     * that one argument would silently restore the dark-snapshot defect and no behavioural test would
+     * notice, because the Android wiring is not reachable from a JVM test.
+     */
+    @Test fun theCaptureSessionGetsACallbackSoExposureStateIsObservable() {
+        val owner = TestSources.kotlin("camera/CameraSessionOwner.kt").readText()
+        assertTrue(
+            "the repeating request must carry a capture callback, not null",
+            owner.contains("s.setRepeatingRequest(request, exposureWatcher(attempt), h)"),
+        )
+        assertFalse("a null callback is the defect this replaced", owner.contains("setRepeatingRequest(request, null,"))
+        listOf("CONTROL_AE_STATE_CONVERGED", "CONTROL_AE_STATE_LOCKED", "CONTROL_AE_STATE_FLASH_REQUIRED").forEach {
+            assertTrue("$it must count as settled", owner.contains(it))
+        }
+    }
 }

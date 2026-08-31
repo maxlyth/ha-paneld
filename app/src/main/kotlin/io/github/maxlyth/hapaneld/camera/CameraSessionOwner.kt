@@ -10,6 +10,8 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
@@ -103,6 +105,12 @@ class CameraSessionOwner(
 
     /** One open attempt and the hardware it alone owns. */
     private inner class Attempt(val id: Long) {
+        /**
+         * Whether the device has reported converged auto-exposure for this attempt. Written from the
+         * capture callback on the camera thread and read under no lock, so it is volatile; a stale read
+         * costs at most one more frame of waiting, never a wrong picture.
+         */
+        @Volatile var exposureSettled: Boolean = false
         var reader: ImageReader? = null
         var device: CameraDevice? = null
         var session: CameraCaptureSession? = null
@@ -185,7 +193,7 @@ class CameraSessionOwner(
         val lease = acquire(requested) ?: return SnapshotResult.Refused(lastRefusal())
         val waiter = CompletableFuture<ByteArray?>()
         try {
-            synchronized(lock) { state.addWaiter(waiter) }
+            synchronized(lock) { state.addWaiter(waiter, nowMs()) }
             val bytes = runCatching { waiter.get(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()
             if (bytes != null) return SnapshotResult.Jpeg(bytes)
             // Null means one of three things, told apart by what the session did meanwhile: a teardown
@@ -469,7 +477,14 @@ class CameraSessionOwner(
                             addTarget(r.surface)
                             fpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                         }.build()
-                        s.setRepeatingRequest(request, null, h)
+                        // A real callback, where there used to be null. Without it the session had no
+                        // way to know whether exposure had converged, so a snapshot could only answer
+                        // with the first frame that arrived — which off a cold sensor is taken before
+                        // auto-exposure has done anything, and is what made stills far darker than the
+                        // stream. Only the transition to settled is recorded; nothing here un-settles a
+                        // session, because a converged sensor that briefly re-hunts should not send an
+                        // already-waiting snapshot back to the start.
+                        s.setRepeatingRequest(request, exposureWatcher(attempt), h)
                     } catch (e: Exception) {
                         openFailed(attempt, CameraFault.CONFIGURE, CameraRefusal.FAILED, e.javaClass.simpleName)
                         return
@@ -696,15 +711,15 @@ class CameraSessionOwner(
     private fun onFrame(image: Image, attempt: Attempt) {
         image.use { img ->
             val now = nowMs()
-            val ready: List<CompletableFuture<ByteArray?>>
+            val ready: List<SnapshotWaiter>
             val enc: VideoEncoder?
             synchronized(lock) {
-                ready = state.frame(attempt.id, now) ?: return
+                ready = state.frame(attempt.id, now, attempt.exposureSettled) ?: return
                 // The frame-rate cap bounds delivery: a frame arriving sooner than the cap allows is
                 // observed for liveness but not handed on to anyone.
                 val interval = 1_000L / boundFps
                 if (now - lastDeliveredAtMs < interval) {
-                    ready.forEach { state.addWaiter(it) }
+                    ready.forEach { state.requeue(it) }
                     return
                 }
                 lastDeliveredAtMs = now
@@ -723,7 +738,30 @@ class CameraSessionOwner(
                     outcome = "ok"
                 }
             }
-            ready.forEach { it.complete(jpeg) }
+            ready.forEach { it.future.complete(jpeg) }
+        }
+    }
+
+    /**
+     * Records converged auto-exposure for [attempt]. `CONVERGED`, `LOCKED` and `FLASH_REQUIRED` all mean
+     * the sensor has finished deciding; a device that reports no AE state at all simply never settles
+     * here and the snapshot falls back on [SnapshotExposure.SETTLE_BUDGET_MS], which is why that budget
+     * exists rather than a precondition.
+     */
+    private fun exposureWatcher(attempt: Attempt) = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult,
+        ) {
+            if (attempt.exposureSettled) return
+            val ae = result.get(CaptureResult.CONTROL_AE_STATE) ?: return
+            if (ae == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+                ae == CaptureResult.CONTROL_AE_STATE_LOCKED ||
+                ae == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED
+            ) {
+                attempt.exposureSettled = true
+            }
         }
     }
 

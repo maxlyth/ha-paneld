@@ -9,6 +9,43 @@ enum class LeaseKind { SNAPSHOT, STREAM }
 data class StreamBinding(val fps: Int, val kbps: Int)
 
 /**
+ * When a captured frame is good enough to answer a snapshot.
+ *
+ * The camera runs auto-exposure from the moment it opens, and the first frames off a cold sensor are
+ * taken before it has done anything. Answering with the first frame that arrives therefore returns a
+ * badly under-exposed picture whenever the camera was not already streaming — measured on a WF1589T on
+ * 2026-08-31 as a bimodal mean luma of about 21 against about 69 on an unchanging scene, with the dark
+ * result in seven of ten back-to-back snapshots. The video stream never showed it because it runs
+ * continuously and settles within the first second.
+ *
+ * So a snapshot waits for the device to report converged exposure — but only for a bounded time, because
+ * a device that never reports convergence must still produce a picture rather than a timeout. That
+ * fallback is the whole reason this is a budget and not a precondition.
+ */
+object SnapshotExposure {
+    /**
+     * How long a snapshot may wait for auto-exposure. Comfortably inside the snapshot request timeout,
+     * and at the paced frame rate it is enough frames for a sensor to settle: about 18 at 15 fps.
+     */
+    const val SETTLE_BUDGET_MS = 1_200L
+
+    /**
+     * Whether a frame may satisfy a waiter that has been waiting [waitedMs]. A converged frame always
+     * may; an unconverged one only once the budget is spent.
+     */
+    fun admits(exposureSettled: Boolean, waitedMs: Long, budgetMs: Long = SETTLE_BUDGET_MS): Boolean = when {
+        // A settled sensor has nothing left to wait for.
+        exposureSettled -> true
+        // Otherwise the budget decides, and spending it is what guarantees a picture on a device that
+        // never reports its exposure state at all.
+        else -> waitedMs >= budgetMs
+    }
+}
+
+/** A pending snapshot, with the moment it started waiting so the settle budget can be spent honestly. */
+data class SnapshotWaiter(val future: CompletableFuture<ByteArray?>, val addedAtMs: Long)
+
+/**
  * The camera session's ownership state, with no Android in it. `CameraSessionOwner` is the adapter
  * that drives the device; every enable/open/lease/close decision is made here so each interleaving is a
  * unit test rather than something a reviewer has to trace by hand.
@@ -72,7 +109,7 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
 
     private val leases = LinkedHashMap<Long, LeaseKind>()
     private var nextLease = 1L
-    private val frameWaiters = ArrayList<CompletableFuture<ByteArray?>>()
+    private val frameWaiters = ArrayList<SnapshotWaiter>()
     private val openWaiters = ArrayList<CompletableFuture<CameraRefusal?>>()
     private var pendingFault: CameraFault? = null
 
@@ -274,7 +311,7 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         settleOpen(if (next == Phase.STOPPING) CameraRefusal.STOPPING else CameraRefusal.DISABLED)
         val drained = frameWaiters.toList()
         frameWaiters.clear()
-        drained.forEach { it.complete(null) }
+        drained.forEach { it.future.complete(null) }
         pendingFault = null
     }
 
@@ -289,21 +326,28 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
      * list is the snapshot waiters to satisfy — empty when nobody is waiting for a JPEG, which is the
      * ordinary case while only the encoder is consuming.
      */
-    fun frame(attemptId: Long, nowMs: Long): List<CompletableFuture<ByteArray?>>? {
+    fun frame(attemptId: Long, nowMs: Long, exposureSettled: Boolean = true): List<SnapshotWaiter>? {
         if (!isCurrent(attemptId) || phase != Phase.LIVE) return null
         lastFrameAtMs = nowMs
         consecutiveFailures = 0
-        val ready = frameWaiters.toList()
-        frameWaiters.clear()
+        // Liveness is recorded above for every frame, converged or not: a session producing frames the
+        // exposure gate is holding is still alive, and the watchdog must not read it as starved.
+        val ready = frameWaiters.filter { SnapshotExposure.admits(exposureSettled, nowMs - it.addedAtMs) }
+        frameWaiters.removeAll(ready.toSet())
         return ready
     }
 
-    fun addWaiter(w: CompletableFuture<ByteArray?>) {
-        frameWaiters += w
+    fun addWaiter(w: CompletableFuture<ByteArray?>, nowMs: Long) {
+        frameWaiters += SnapshotWaiter(w, nowMs)
+    }
+
+    /** Put a waiter back with its original clock, so a re-queue never buys it a fresh budget. */
+    fun requeue(waiter: SnapshotWaiter) {
+        frameWaiters += waiter
     }
 
     fun removeWaiter(w: CompletableFuture<ByteArray?>) {
-        frameWaiters.remove(w)
+        frameWaiters.removeAll { it.future === w }
     }
 
     fun noteDeviceFault(attemptId: Long, fault: CameraFault): Boolean {

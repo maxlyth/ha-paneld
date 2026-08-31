@@ -91,7 +91,7 @@ class CameraSessionStateTest {
         val first = open()
         val waiting = requireNotNull(state.awaitOpen())
         val frame = CompletableFuture<ByteArray?>()
-        state.addWaiter(frame)
+        state.addWaiter(frame, 0L)
         assertTrue("hardware must be released", state.disable())
         assertEquals("no joinable phase is left behind", Phase.IDLE, state.phase)
         assertEquals(CameraRefusal.DISABLED, settled(waiting, "an open waiter is settled, not left to time out"))
@@ -176,11 +176,11 @@ class CameraSessionStateTest {
         assertTrue(state.openSucceeded(first.attempt))
         val a = CompletableFuture<ByteArray?>()
         val b = CompletableFuture<ByteArray?>()
-        state.addWaiter(a)
-        state.addWaiter(b)
-        assertEquals(listOf(a, b), state.frame(first.attempt, 1_500L))
+        state.addWaiter(a, 0L)
+        state.addWaiter(b, 0L)
+        assertEquals(listOf(a, b), state.frame(first.attempt, 1_500L)?.map { it.future })
         assertEquals(1_500L, state.lastFrameAtMs)
-        assertEquals("the queue drains but the frame is still live", emptyList<CompletableFuture<ByteArray?>>(), state.frame(first.attempt, 1_600L))
+        assertEquals("the queue drains but the frame is still live", emptyList<SnapshotWaiter>(), state.frame(first.attempt, 1_600L))
     }
 
     @Test fun aFrameFromAnEarlierAttemptNeverTouchesTheCurrentSession() {
@@ -423,5 +423,79 @@ class CameraSessionStateTest {
         val delivered = state.frame(stream.attempt, 1_500L)
         assertEquals("live, nobody waiting for a JPEG", emptyList<CompletableFuture<ByteArray?>>(), delivered)
         assertEquals(1_500L, state.lastFrameAtMs)
+    }
+
+    // ---- the exposure gate: why snapshots used to come back dark -------------------------------------
+
+    @Test fun anUnconvergedFrameDoesNotSatisfyASnapshotUntilTheBudgetIsSpent() {
+        val first = open()
+        assertTrue(state.openSucceeded(first.attempt))
+        val shot = CompletableFuture<ByteArray?>()
+        state.addWaiter(shot, 1_000L)
+
+        // Frames are arriving, but exposure has not settled: the snapshot waits rather than answering
+        // with the under-exposed first frame off a cold sensor.
+        assertEquals(emptyList<SnapshotWaiter>(), state.frame(first.attempt, 1_100L, exposureSettled = false))
+        assertEquals(emptyList<SnapshotWaiter>(), state.frame(first.attempt, 2_000L, exposureSettled = false))
+
+        // Liveness is still recorded for every held frame, or the watchdog would read a working session
+        // as starved purely because the gate was doing its job.
+        assertEquals(2_000L, state.lastFrameAtMs)
+
+        // Once the budget is spent it answers anyway: a device that never reports convergence must still
+        // produce a picture rather than time out.
+        val late = state.frame(first.attempt, 1_000L + SnapshotExposure.SETTLE_BUDGET_MS, exposureSettled = false)
+        assertEquals(listOf(shot), late?.map { it.future })
+    }
+
+    @Test fun aConvergedFrameSatisfiesImmediately() {
+        val first = open()
+        assertTrue(state.openSucceeded(first.attempt))
+        val shot = CompletableFuture<ByteArray?>()
+        state.addWaiter(shot, 1_000L)
+        assertEquals(
+            "a settled sensor has nothing to wait for",
+            listOf(shot),
+            state.frame(first.attempt, 1_010L, exposureSettled = true)?.map { it.future },
+        )
+    }
+
+    @Test fun aRequeuedWaiterKeepsItsOriginalClock() {
+        // The frame pacer puts an admitted waiter back when a frame arrives too soon. If that reset the
+        // clock, a snapshot on a device that never converges would be deferred for ever, one pacing
+        // interval at a time, and the budget would never expire.
+        val first = open()
+        assertTrue(state.openSucceeded(first.attempt))
+        val shot = CompletableFuture<ByteArray?>()
+        state.addWaiter(shot, 1_000L)
+        val admitted = state.frame(first.attempt, 1_000L + SnapshotExposure.SETTLE_BUDGET_MS, exposureSettled = false)
+        assertEquals(listOf(shot), admitted?.map { it.future })
+        admitted!!.forEach { state.requeue(it) }
+        assertEquals(
+            "the budget stays spent across a requeue",
+            listOf(shot),
+            state.frame(first.attempt, 1_000L + SnapshotExposure.SETTLE_BUDGET_MS + 1, exposureSettled = false)?.map { it.future },
+        )
+    }
+
+    @Test fun theGateItselfIsJustTwoRules() {
+        assertTrue("converged always admits", SnapshotExposure.admits(exposureSettled = true, waitedMs = 0))
+        assertFalse("unconverged inside the budget waits", SnapshotExposure.admits(exposureSettled = false, waitedMs = 0))
+        assertFalse(SnapshotExposure.admits(exposureSettled = false, waitedMs = SnapshotExposure.SETTLE_BUDGET_MS - 1))
+        assertTrue("unconverged past the budget admits", SnapshotExposure.admits(exposureSettled = false, waitedMs = SnapshotExposure.SETTLE_BUDGET_MS))
+        // The budget has to leave room inside the request timeout, or the fallback is unreachable.
+        assertTrue("the settle budget must fit inside the snapshot timeout", SnapshotExposure.SETTLE_BUDGET_MS < 5_000L)
+    }
+
+    @Test fun aDrainedWaiterIsCompletedWhateverTheExposureWas() {
+        val first = open()
+        assertTrue(state.openSucceeded(first.attempt))
+        val shot = CompletableFuture<ByteArray?>()
+        state.addWaiter(shot, 1_000L)
+        assertEquals(emptyList<SnapshotWaiter>(), state.frame(first.attempt, 1_100L, exposureSettled = false))
+        // A teardown must not strand a waiter the gate is holding.
+        assertTrue(state.endNow())
+        assertTrue("a held waiter is still drained by teardown", shot.isDone)
+        assertNull(shot.get())
     }
 }
