@@ -216,6 +216,22 @@ class MigrationsTest {
         assertTrue(explicitWarnings.isEmpty())
     }
 
+    @Test fun schemaNineAddsUnityMicrophoneGainAndPreservesAnExplicitOne() {
+        val (defaults, defaultWarnings) = Migrations.migrate(9, mapOf("mqtt_broker" to "tcp://ha:1883"))
+
+        // 0 dB is unity, which is exactly what a store predating the key was already doing, so an
+        // upgrade must not change what any existing panel sends to Home Assistant.
+        assertEquals("0", defaults["voice_mic_gain_db"])
+        // Unlike the schema-8 voice keys, this one carries no `ha` descriptor, so it gains no exposure
+        // default; inventing one would publish an entity nothing reads.
+        assertNull(defaults["${SettingsRegistry.HA_EXPOSE_PREFIX}voice_mic_gain_db"])
+        assertTrue(defaultWarnings.isEmpty())
+
+        val (explicit, explicitWarnings) = Migrations.migrate(9, mapOf("voice_mic_gain_db" to "-6"))
+        assertEquals("-6", explicit["voice_mic_gain_db"])
+        assertTrue(explicitWarnings.isEmpty())
+    }
+
     @Test fun schemaSevenAddsVoiceDefaultsAndExposureAndPreservesExplicitChoices() {
         val (defaults, defaultWarnings) = Migrations.migrate(7, mapOf("mqtt_broker" to "tcp://ha:1883"))
 
