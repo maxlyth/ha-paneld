@@ -31,6 +31,9 @@ class ApiRouteSpecContractTest {
         val provisioning = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ProvisioningRoutes.kt").readText()
         literalRoutes(provisioning).mapTo(active) { (method, path) -> "$method /api/v1/provisioning$path" }
 
+        val configReads = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ConfigReadRoutes.kt").readText()
+        literalRoutes(configReads).mapTo(active) { (method, path) -> "$method /api/v1$path" }
+
         val haOAuth = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/HaOAuthRoutes.kt").readText()
         literalRoutes(haOAuth).mapTo(active) { (method, path) -> "$method /api/v1/ha/oauth$path" }
 
