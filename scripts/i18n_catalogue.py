@@ -491,13 +491,48 @@ def selected_targets(
     source_path: Path,
     target_paths: list[Path],
     target_dir: Path | None,
+    *,
+    excluded: set[Path] | None = None,
 ) -> list[Path]:
+    excluded = excluded or set()
     selected = list(target_paths)
     if target_dir:
         selected.extend(
             path for path in sorted(target_dir.glob("*.json"))
-            if path.resolve() != source_path.resolve()
+            if path.resolve() != source_path.resolve() and path.resolve() not in excluded
         )
+    return selected
+
+
+def report_targets(
+    source_path: Path,
+    target_paths: list[Path],
+    target_dir: Path | None,
+    output: Path | None,
+) -> list[Path]:
+    if output is None:
+        return selected_targets(source_path, target_paths, target_dir)
+
+    output_path = output.resolve()
+    if output_path == source_path.resolve():
+        raise CatalogueError("report output must not overwrite the source catalogue")
+    if any(output_path == path.resolve() for path in target_paths):
+        raise CatalogueError("report output must not overwrite a target catalogue")
+    if (
+        target_dir is not None
+        and output_path.parent == target_dir.resolve()
+        and output_path.stem in LOCALES
+    ):
+        raise CatalogueError("report output must not overwrite a target catalogue")
+
+    selected = selected_targets(
+        source_path,
+        target_paths,
+        target_dir,
+        excluded={output_path},
+    )
+    if any(output_path == path.resolve() for path in selected):
+        raise CatalogueError("report output must not overwrite a target catalogue")
     return selected
 
 
@@ -543,7 +578,12 @@ def main() -> int:
         elif args.command == "report":
             report = catalogue_report(
                 args.source,
-                selected_targets(args.source, args.target, args.target_dir),
+                report_targets(
+                    args.source,
+                    args.target,
+                    args.target_dir,
+                    args.output,
+                ),
             )
             if args.output:
                 write_json_atomic(args.output, report)

@@ -307,7 +307,7 @@ class CatalogueTest(unittest.TestCase):
             root = Path(directory)
             source_path = root / "catalogues" / "en.json"
             target_path = root / "catalogues" / "de.json"
-            output_path = root / "report.json"
+            output_path = root / "catalogues" / "report.json"
             source = self.report_source()
             self.write(source_path, source)
             hashes = {key: record["sourceHash"] for key, record in source["strings"].items()}
@@ -383,6 +383,20 @@ class CatalogueTest(unittest.TestCase):
             self.assertEqual(expected, json.loads(first_bytes))
             subprocess.run(command, check=True)
             self.assertEqual(first_bytes, output_path.read_bytes())
+
+            source_before = source_path.read_bytes()
+            source_collision = command[:-1] + [str(source_path)]
+            failed = subprocess.run(source_collision, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("must not overwrite the source catalogue", failed.stderr)
+            self.assertEqual(source_before, source_path.read_bytes())
+
+            target_before = target_path.read_bytes()
+            target_collision = command[:-1] + [str(target_path)]
+            failed = subprocess.run(target_collision, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("must not overwrite a target catalogue", failed.stderr)
+            self.assertEqual(target_before, target_path.read_bytes())
 
             with self.assertRaisesRegex(
                 i18n.CatalogueError,
