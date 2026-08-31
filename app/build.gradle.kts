@@ -15,6 +15,12 @@ val featureCostsEnabled = providers.gradleProperty("featureCosts").orNull
 val keystoreProps = rootProject.file("keystore.properties")
 val hasReleaseSigning = keystoreProps.exists()
 
+// Keep packaged Android resources inside the same finite locale boundary advertised by the app.
+// The product catalogue lives in assets/i18n rather than values-*/strings.xml, so AGP cannot infer
+// this list through generateLocaleConfig. PlatformLocaleContractTest keeps this build-time list,
+// res/xml/locales_config.xml, and AppLocale.RELEASE_LOCALES in lockstep.
+val releaseLocaleFilters = listOf("en", "de", "fr", "it", "es", "b+zh+Hans")
+
 // The compatibility boundary is signed into every APK as one finite manifest value. Keep the
 // database schema object as the source of truth: release tags/versionNames are presentation, not a
 // statement about which on-disk structures a candidate can safely open.
@@ -89,6 +95,10 @@ android {
         }
     }
 
+    androidResources {
+        localeFilters += releaseLocaleFilters
+    }
+
     // Clean-room rk3576 /dev/ledjni ioctl driver (app/src/main/cpp/led_jni.c → libhapaneld_led.so).
     externalNativeBuild {
         cmake {
@@ -139,6 +149,7 @@ android {
             // Keep production ABIs unchanged while allowing the optional Shizuku integration job to
             // install the real app/native library on an x86_64 Android emulator.
             ndk.abiFilters += "x86_64"
+            isPseudoLocalesEnabled = true
         }
         release {
             if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
