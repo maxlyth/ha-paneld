@@ -105,11 +105,16 @@ class CameraSessionOwner(
     private var boundFps = 15
 
     /**
-     * Whether a stream opened this session. One repeating request serves both the snapshot and the
-     * stream, so the processing budget is chosen here rather than per frame: a still can afford the
-     * expensive pipeline, fifteen frames a second of it cannot.
+     * What the current repeating request was built for, or null before one exists.
+     *
+     * One repeating request serves both the snapshot and the stream, so the processing budget cannot be
+     * per frame — but it must not be fixed at session open either. Deciding it once was the defect the
+     * first submission carried: a stream that joined a snapshot-opened session inherited the expensive
+     * pipeline on every frame, which is exactly the cost the policy exists to avoid, and a snapshot on a
+     * stream-opened session was stuck with the cheap one. The request now follows demand, and this field
+     * exists so an unchanged demand does not re-issue it for nothing.
      */
-    private var openedForStream = false
+    private var appliedForStream: Boolean? = null
     private var lastDeliveredAtMs = 0L
 
     /** One open attempt and the hardware it alone owns. */
@@ -125,6 +130,10 @@ class CameraSessionOwner(
         var session: CameraCaptureSession? = null
         /** The capture size this attempt configured; the encoder, if wanted, encodes exactly this. */
         var size: Size? = null
+
+        /** Kept so the repeating request can be rebuilt when stream demand changes. */
+        var characteristics: CameraCharacteristics? = null
+        var fpsRange: Range<Int>? = null
 
         fun release() {
             val s: CameraCaptureSession?
@@ -398,7 +407,7 @@ class CameraSessionOwner(
         }
         boundTarget = requested ?: defaultResolution()
         boundFps = (bindingFps ?: defaultFps()).coerceIn(1, 30)
-        openedForStream = bindingFps != null
+        appliedForStream = null
         policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
         h.post { open(attemptId) }
     }
@@ -485,14 +494,23 @@ class CameraSessionOwner(
             camera.createCaptureSession(listOf(r.surface), object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     val live = synchronized(lock) {
-                        if (state.isCurrent(attempt.id) && state.phase == Phase.OPENING) { attempt.session = s; true } else false
+                        if (state.isCurrent(attempt.id) && state.phase == Phase.OPENING) {
+                            attempt.session = s
+                            attempt.characteristics = characteristics
+                            attempt.fpsRange = fpsRange
+                            true
+                        } else false
                     }
                     if (!live) { s.close(); return }
+                    val forStream = synchronized(lock) {
+                        appliedForStream = state.encoderWanted
+                        state.encoderWanted
+                    }
                     try {
                         val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                             addTarget(r.surface)
                             fpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
-                            applyProcessing(this, characteristics)
+                            applyProcessing(this, characteristics, forStream)
                         }.build()
                         // A real callback, where there used to be null. Without it the session had no
                         // way to know whether exposure had converged, so a snapshot could only answer
@@ -638,11 +656,15 @@ class CameraSessionOwner(
         val fps = minOf(binding.fps, boundFps)
         when (val opened = encoderFactory.open(size.width, size.height, fps, binding.kbps, h, encoderListener)) {
             is EncoderOpen.Refused -> refuseEncoder(opened.detail)
-            is EncoderOpen.Ready -> synchronized(lock) {
-                encoder = opened.encoder
-                encoderPacer = FramePacer(fps)
-                streamParams = null
-                stats.reset()
+            is EncoderOpen.Ready -> {
+                synchronized(lock) {
+                    encoder = opened.encoder
+                    encoderPacer = FramePacer(fps)
+                    streamParams = null
+                    stats.reset()
+                }
+                // A stream is now being served: drop to the cheap pipeline for every frame.
+                refreshProcessing(attemptId)
             }
         }
     }
@@ -677,6 +699,8 @@ class CameraSessionOwner(
             streamReady = CompletableFuture()
         }
         stopEncoder()
+        // Nobody is streaming any more, so a snapshot may have the expensive pipeline again.
+        synchronized(lock) { state.currentAttempt }?.let { refreshProcessing(it) }
         settled.complete(StreamOutcome.Refused(CameraRefusal.FAILED))
     }
 
@@ -783,6 +807,49 @@ class CameraSessionOwner(
     }
 
     /**
+     * Rebuild the repeating request when stream demand changes, so the processing budget follows what the
+     * session is actually serving rather than what opened it.
+     *
+     * Called on both transitions the session already has — an encoder starting and an encoder stopping —
+     * and it does nothing when the demand is unchanged, so an ordinary snapshot on a quiet session costs
+     * one comparison. Changing noise reduction and edge enhancement are request keys, not session keys,
+     * so this re-issues a request rather than reconfiguring the capture session, and the attempt's
+     * settled-exposure flag is deliberately left alone: a viewer arriving must not send an already
+     * waiting snapshot back to the start.
+     */
+    private fun refreshProcessing(attemptId: Long) {
+        val h = synchronized(lock) { handler } ?: return
+        h.post {
+            val attempt: Attempt
+            val session: CameraCaptureSession
+            val reader: ImageReader
+            val forStream: Boolean
+            synchronized(lock) {
+                if (!state.isCurrent(attemptId) || state.phase != Phase.LIVE) return@post
+                val a = current?.takeIf { it.id == attemptId } ?: return@post
+                session = a.session ?: return@post
+                reader = a.reader ?: return@post
+                forStream = state.encoderWanted
+                if (appliedForStream == forStream) return@post
+                appliedForStream = forStream
+                attempt = a
+            }
+            runCatching {
+                val device = synchronized(lock) { attempt.device } ?: return@runCatching
+                val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                    addTarget(reader.surface)
+                    attempt.fpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                    applyProcessing(this, attempt.characteristics, forStream)
+                }.build()
+                session.setRepeatingRequest(request, exposureWatcher(attempt), h)
+            }.onFailure {
+                Log.w(TAG, "processing refresh failed: ${it.javaClass.simpleName}")
+                synchronized(lock) { appliedForStream = null }
+            }
+        }
+    }
+
+    /**
      * The processing these sensors actually offer, applied at session configure.
      *
      * Every value is taken from what the device advertises and skipped when it advertises none, so a
@@ -790,17 +857,17 @@ class CameraSessionOwner(
      * report `BACKWARD_COMPATIBLE` only, so bracketed capture and per-frame exposure — what HDR is made
      * of — do not exist to build on. These are the levers that do.
      */
-    private fun applyProcessing(builder: CaptureRequest.Builder, c: CameraCharacteristics?) {
+    private fun applyProcessing(builder: CaptureRequest.Builder, c: CameraCharacteristics?, forStream: Boolean) {
         if (c == null) return
         CameraProcessing.qualityMode(
-            forStream = openedForStream,
+            forStream = forStream,
             available = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES),
             fast = CaptureRequest.NOISE_REDUCTION_MODE_FAST,
             highQuality = CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
         )?.let { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
 
         CameraProcessing.qualityMode(
-            forStream = openedForStream,
+            forStream = forStream,
             available = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES),
             fast = CaptureRequest.EDGE_MODE_FAST,
             highQuality = CaptureRequest.EDGE_MODE_HIGH_QUALITY,

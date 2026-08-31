@@ -134,16 +134,29 @@ class CameraStreamContractTest {
         val owner = TestSources.kotlin("camera/CameraSessionOwner.kt").readText()
         assertTrue(
             "the request builder must be handed the processing policy",
-            owner.contains("applyProcessing(this, characteristics)"),
+            owner.contains("applyProcessing(this, characteristics, forStream)"),
         )
         listOf(
             "CaptureRequest.NOISE_REDUCTION_MODE",
             "CaptureRequest.EDGE_MODE",
             "CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION",
         ).forEach { assertTrue("$it must be set from the policy", owner.contains(it)) }
+        // The split must follow live stream demand, not whatever opened the session. Deciding it once
+        // at open was the defect the first submission carried: a stream joining a snapshot-opened
+        // session inherited the expensive pipeline on every frame, and a snapshot on a stream-opened
+        // session was stuck with the cheap one.
+        assertFalse(
+            "the open-time flag is the defect; it must not come back",
+            owner.contains("openedForStream"),
+        )
         assertTrue(
-            "the still/stream split is what makes the expensive pipeline affordable",
-            owner.contains("forStream = openedForStream"),
+            "the request must be rebuilt from live stream demand",
+            owner.contains("forStream = state.encoderWanted"),
+        )
+        assertEquals(
+            "one definition and both stream-demand transitions: an encoder starting and one stopping",
+            3,
+            Regex("refreshProcessing\\(").findAll(owner).count(),
         )
     }
 }

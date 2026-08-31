@@ -427,7 +427,11 @@ object SettingsRegistry {
         ),
         SettingSpec(
             key = "camera_exposure", type = SettingType.FLOAT, group = "Camera",
-            label = "Exposure", default = "0", min = -2.0, max = 2.0, step = 0.33,
+            // Half a stop, not a third. The sensor counts in thirds, but the browser applies this step
+            // as a validity grid from `min`, and a third-stop grid starting at -2 does not contain 0 —
+            // so the documented default, and +/-1 and +/-2, were all rejected before the form could save.
+            // Halves keep every offered value on the grid; the panel rounds each to the sensor's own step.
+            label = "Exposure", default = "0", min = -2.0, max = 2.0, step = 0.5,
             scope = Scope.DEVICE,
             help = "Exposure bias in stops, for a camera that reads a room darker or brighter than it " +
                 "looks. 0 leaves the camera's own automatic exposure alone; the panel clamps this to " +

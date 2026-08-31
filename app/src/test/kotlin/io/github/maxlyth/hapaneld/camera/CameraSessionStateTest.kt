@@ -498,4 +498,45 @@ class CameraSessionStateTest {
         assertTrue("a held waiter is still drained by teardown", shot.isDone)
         assertNull(shot.get())
     }
+
+    // ---- stream demand in both lease orderings -------------------------------------------------------
+    // The processing budget follows `encoderWanted`, so these pin the signal the repeating request reads.
+    // Keying it on whatever opened the session instead was the defect the first submission carried.
+
+    @Test fun aSnapshotOpenedSessionReportsStreamDemandOnceAStreamJoins() {
+        val snap = open()
+        assertTrue(state.openSucceeded(snap.attempt))
+        assertFalse("a still-only session wants no encoder, so it may have the expensive pipeline", state.encoderWanted)
+
+        val joined = state.acquire(gate = null, nowMs = 1_100L, kind = LeaseKind.STREAM, binding = binding)
+        assertTrue("a stream joins the live session", joined is Admission.Join)
+        assertTrue("demand is now a stream: every frame must drop to the cheap pipeline", state.encoderWanted)
+    }
+
+    @Test fun aStreamOpenedSessionStillReportsDemandWhileASnapshotJoins() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        assertTrue(state.encoderWanted)
+
+        val snap = state.acquire(gate = null, nowMs = 1_100L, kind = LeaseKind.SNAPSHOT, binding = null)
+        assertTrue(snap is Admission.Join)
+        assertTrue(
+            "a snapshot joining a live stream must not buy the expensive pipeline for the stream's frames",
+            state.encoderWanted,
+        )
+    }
+
+    @Test fun demandFallsBackWhenTheLastStreamLeaves() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        val snap = state.acquire(gate = null, nowMs = 1_100L, kind = LeaseKind.SNAPSHOT, binding = null)
+        assertTrue(snap is Admission.Join)
+        assertTrue(state.encoderWanted)
+
+        state.release(stream.lease)
+        assertFalse(
+            "with the stream gone the session is still open for the snapshot, and may have quality again",
+            state.encoderWanted,
+        )
+    }
 }
