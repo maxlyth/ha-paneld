@@ -62,10 +62,30 @@
   var haOauthButton = null, haOauthStatus = null, haOauthLinks = null;
   var haOauthAuthorizationUrl = "", haOauthTargetUrl = "";
   var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
+  var UI_LANGUAGE_LABELS = {
+    "auto": "Automatic", "en": "English", "de": "Deutsch", "fr": "Français",
+    "it": "Italiano", "es": "Español", "zh-Hans": "简体中文"
+  };
 
   function validLanguageTag(value) {
     return typeof value === "string" && value.length <= 63 &&
       /^[A-Za-z0-9]{1,8}(?:[-_][A-Za-z0-9]{1,8})*$/.test(value);
+  }
+
+  // Keep HA's syntactically valid selectedLanguage value intact even when this release cannot render
+  // it. Only an admitted locale is an override: an unsupported stored tag must not suppress the
+  // connected HA user's later, supported language signal.
+  function admittedBrowserLanguage(value) {
+    if (!validLanguageTag(value)) return false;
+    var lower = value.replace(/_/g, "-").toLowerCase();
+    return lower === "en" || lower.indexOf("en-") === 0 ||
+      lower === "de" || lower.indexOf("de-") === 0 ||
+      lower === "fr" || lower.indexOf("fr-") === 0 ||
+      lower === "it" || lower.indexOf("it-") === 0 ||
+      lower === "es" || lower.indexOf("es-") === 0 ||
+      lower === "zh" || lower === "zh-hans" || lower.indexOf("zh-hans-") === 0 ||
+      lower === "zh-cn" || lower.indexOf("zh-cn-") === 0 ||
+      lower === "zh-sg" || lower.indexOf("zh-sg-") === 0;
   }
 
   function storeBrowserLanguage(value) {
@@ -117,7 +137,7 @@
   }
 
   function reloadSchemaForHaLanguage() {
-    if (values.ui_language !== "auto" || browserLanguageChoice() ||
+    if (values.ui_language !== "auto" || admittedBrowserLanguage(browserLanguageChoice()) ||
         haUserStatus.phase !== "connected" || !validLanguageTag(haUserStatus.language)) return;
     var request = ++schemaLanguageRequest;
     var generation = editGeneration;
@@ -464,7 +484,9 @@
     if (f.type === "ENUM") {
       var s = el("select");
       f.options.forEach(function (o) {
-        var op = el("option", { value: o, text: o }); if (o === v) op.selected = true; s.appendChild(op);
+        var label = f.key === "ui_language" && Object.prototype.hasOwnProperty.call(UI_LANGUAGE_LABELS, o)
+          ? UI_LANGUAGE_LABELS[o] : o;
+        var op = el("option", { value: o, text: label }); if (o === v) op.selected = true; s.appendChild(op);
       });
       s.addEventListener("change", function () {
         values[f.key] = s.value; setDirty(f.key);
@@ -2962,8 +2984,8 @@
     ++schemaLanguageRequest;
     var schemaUrl = configSchemaUrl(haUserStatus.phase === "connected" ? haUserStatus.language : "");
     Promise.all([
-      fetch(schemaUrl).then(readLocalizedSchema),
-      fetch("/api/v1/config").then(function (r) { return r.json(); }),
+      fetch(schemaUrl, { headers: { "Accept": "application/json" }, cache: "no-store" }).then(readLocalizedSchema),
+      fetch("/api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" }).then(function (r) { return r.json(); }),
       // Installed launchable apps for the package pickers; tolerate failure (picker falls back to text).
       fetch("/api/v1/apps").then(function (r) { return r.json(); }).catch(function () { return { apps: [] }; }),
     ]).then(function (res) {

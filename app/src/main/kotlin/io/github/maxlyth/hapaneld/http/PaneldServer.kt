@@ -1921,16 +1921,14 @@ class PaneldServer internal constructor(
                     get("/health") {
                         call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}\n")
                     }
-                    get("/config") { call.respondText(configJson(), ContentType.Application.Json) }
+                    configReadRoutes(
+                        currentConfigJson = ::configJson,
+                        localizedSchema = { call ->
+                            val strings = requestStrings(call)
+                            LocalizedConfigSchema(configSchemaJson(strings), strings.languages)
+                        },
+                    )
                     post("/config") { handleConfigPost(call) }
-                    get("/config/schema") {
-                        val strings = requestStrings(call)
-                        call.response.headers.append(
-                            HttpHeaders.ContentLanguage,
-                            strings.languages.joinToString(", "),
-                        )
-                        call.respondText(configSchemaJson(strings), ContentType.Application.Json)
-                    }
                     get("/config/home-dashboards") {
                         val catalog = entityLearning.homeDashboardCatalog()
                         val items = catalog.items.joinToString(",") { dashboard ->

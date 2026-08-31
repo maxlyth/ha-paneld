@@ -86,6 +86,7 @@ class DiagCapabilityPolicyTest {
         val script = java.io.File("src/main/assets/info.js").readText()
         val configure = java.io.File("src/main/assets/configure.js").readText()
         val server = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val configReadRoutes = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/ConfigReadRoutes.kt").readText()
 
         assertTrue(script.contains("function paintNoisy(entities,identified)"))
         assertTrue(script.contains("['Top entities','Rate','Payload']"))
@@ -149,12 +150,9 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains("""get("/configure") {
                     call.response.headers.append(HttpHeaders.ContentLanguage, AppLocale.ENGLISH)"""))
         assertTrue(server.contains("""page("configure", "Configure", configureBody(), languageTag = AppLocale.ENGLISH)"""))
-        assertTrue(server.contains("""get("/config/schema") {
-                        val strings = requestStrings(call)
-                        call.response.headers.append(
-                            HttpHeaders.ContentLanguage,
-                            strings.languages.joinToString(", "),
-                        )"""))
+        assertTrue(server.contains("configReadRoutes("))
+        assertTrue(server.contains("LocalizedConfigSchema(configSchemaJson(strings), strings.languages)"))
+        assertTrue(configReadRoutes.contains("HttpHeaders.ContentLanguage"))
         assertTrue(server.contains("\\\"labelLanguage\\\":${'$'}{s(label.language)}"))
         assertTrue(server.contains("\\\"helpLanguage\\\":${'$'}helpLanguageJson"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))

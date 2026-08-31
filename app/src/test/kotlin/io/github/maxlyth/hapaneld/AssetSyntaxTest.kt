@@ -88,7 +88,7 @@ class AssetSyntaxTest {
               location.search=q<0?'':url.slice(q,h<0?url.length:h);location.hash=h<0?'':url.slice(h);
             }}};
             global.URLSearchParams=URLSearchParams;
-            vm.runInThisContext(['validLanguageTag','storeBrowserLanguage','stripLanguageQuery','browserLanguageChoice','configSchemaUrl'].map(take).join('\n'));
+            vm.runInThisContext(['validLanguageTag','admittedBrowserLanguage','storeBrowserLanguage','stripLanguageQuery','browserLanguageChoice','configSchemaUrl'].map(take).join('\n'));
             if(browserLanguageChoice()!=='zh_CN'||data.selectedLanguage!=='"zh_CN"')process.exit(2);
             if(configSchemaUrl('fr')!=='/api/v1/config/schema?lang=zh_CN&ha_lang=fr')process.exit(3);
             location.search='?lang=auto&theme=dark';
@@ -99,6 +99,11 @@ class AssetSyntaxTest {
             if(configSchemaUrl('zh-Hans')!=='/api/v1/config/schema?ha_lang=zh-Hans')process.exit(6);
             data.selectedLanguage='"bad language"';
             if(configSchemaUrl('de')!=='/api/v1/config/schema?ha_lang=de')process.exit(7);
+            data.selectedLanguage='"nl-NL"';
+            if(browserLanguageChoice()!=='nl-NL'||admittedBrowserLanguage(browserLanguageChoice())!==false||
+               configSchemaUrl('de')!=='/api/v1/config/schema?lang=nl-NL&ha_lang=de')process.exit(8);
+            data.selectedLanguage='"de-DE"';
+            if(admittedBrowserLanguage(browserLanguageChoice())!==true)process.exit(9);
         """.trimIndent()
         val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))
         assertEquals("Configure language signal contract failed:\n$out", 0, code)

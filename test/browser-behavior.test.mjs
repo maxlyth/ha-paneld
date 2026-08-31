@@ -73,6 +73,48 @@ function deferred() {
   return { promise, resolve };
 }
 
+browserTest('Configure bypasses caches and lets a supported HA language supersede an unsupported stored tag', async (t) => {
+  const reads = [];
+  const schema = (label) => [
+    { key: 'friendly_name', label, group: 'Identity', type: 'STRING', available: true },
+    { key: 'ui_language', label: 'Interface language', group: 'System', type: 'ENUM', available: true,
+      options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+  ];
+  const harness = await startHarness((path, request) => {
+    if (path === '/api/v1/config/schema') {
+      const url = new URL(request.url, 'http://panel.test');
+      reads.push({ path, url: url.pathname + url.search, cacheControl: request.headers['cache-control'] });
+      return json(schema(url.searchParams.get('ha_lang') === 'de-DE' ? 'Anzeigename' : 'Friendly name'));
+    }
+    if (path === '/api/v1/config') {
+      reads.push({ path, url: request.url, cacheControl: request.headers['cache-control'] });
+      return json({ settings: { friendly_name: 'Panel', ui_language: 'auto' }, ha_expose: {}, ha_auth: { configured: true } });
+    }
+    if (path === '/api/v1/ha/oauth/status') return json({ phase: 'connected', display_name: 'Owner', language: 'de-DE' });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/discovery') return json({});
+    if (path === '/api/v1/config/home-dashboards') return json({ queried: true, items: [], default: { explicit: false, path: '' } });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => localStorage.setItem('selectedLanguage', JSON.stringify('nl-NL')));
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.getByText('Anzeigename', { exact: true }).waitFor();
+
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('selectedLanguage'))), 'nl-NL');
+  assert.deepEqual(await page.locator('#cfg-ui_language option').allTextContents(),
+    ['Automatic', 'English', 'Deutsch', 'Français', 'Italiano', 'Español', '简体中文']);
+  assert.deepEqual(reads.filter((read) => read.path === '/api/v1/config/schema').map((read) => read.url), [
+    '/api/v1/config/schema?lang=nl-NL',
+    '/api/v1/config/schema?lang=nl-NL&ha_lang=de-DE',
+  ]);
+  for (const read of reads) assert.equal(read.cacheControl, 'no-cache');
+});
+
 function autoSleepHistory({ included = true, label = 'Office ceiling motion', hours = 6, laneCount = 1, areaName = 'Office', areaKey = 'a'.repeat(64) } = {}) {
   const end = Date.now();
   const start = end - hours * 60 * 60 * 1000;
