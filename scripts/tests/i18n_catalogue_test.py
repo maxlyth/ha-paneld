@@ -1,6 +1,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -36,7 +38,28 @@ class CatalogueTest(unittest.TestCase):
         }
 
     def write(self, path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def report_source(self):
+        source = self.source()
+        strings = {}
+        for suffix in ("a", "b", "c", "d", "e", "f"):
+            text = f"English setting {suffix}."
+            strings[f"settings.{suffix}.label"] = {
+                "text": text,
+                "sourceHash": i18n.source_hash(text),
+                "surface": "settings",
+                "context": f"Configure setting {suffix}",
+                "risk": "ordinary",
+                "siblings": [],
+                "placeholders": [],
+                "frozen": [],
+                "softMaxChars": 40,
+                "hardMaxChars": 80,
+            }
+        source["strings"] = strings
+        return source
 
     def test_source_and_target_validate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -278,6 +301,94 @@ class CatalogueTest(unittest.TestCase):
             })
             with self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target(target_path, i18n.validate_source(source_path))
+
+    def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "catalogues" / "en.json"
+            target_path = root / "catalogues" / "de.json"
+            output_path = root / "report.json"
+            source = self.report_source()
+            self.write(source_path, source)
+            hashes = {key: record["sourceHash"] for key, record in source["strings"].items()}
+            self.write(target_path, {
+                "schema": 1,
+                "locale": "de",
+                "sourceRevision": "a" * 40,
+                "strings": {
+                    "settings.a.label": {
+                        "text": "Deutsche Einstellung A.",
+                        "sourceHash": hashes["settings.a.label"],
+                        "state": "machine-cross-checked",
+                    },
+                    "settings.b.label": {
+                        "text": "Deutsche Einstellung B.",
+                        "sourceHash": hashes["settings.b.label"],
+                        "state": "community-corrected",
+                    },
+                    "settings.c.label": {
+                        "text": "Deutsche Einstellung C.",
+                        "sourceHash": hashes["settings.c.label"],
+                        "state": "machine-draft",
+                    },
+                    "settings.d.label": {
+                        "text": "Veraltete Einstellung D.",
+                        "sourceHash": "0" * 64,
+                        "state": "machine-cross-checked",
+                    },
+                    "settings.e.label": {
+                        "text": "English setting e.",
+                        "sourceHash": hashes["settings.e.label"],
+                        "state": "english-fallback",
+                    },
+                    "settings.removed.label": {
+                        "text": "Entfernte Einstellung.",
+                        "sourceHash": "9" * 64,
+                        "state": "machine-draft",
+                    },
+                },
+            })
+
+            expected = {
+                "schema": 1,
+                "source": {"locale": "en", "revision": "e" * 40, "strings": 6},
+                "locales": {"de": {
+                    "catalogueRecords": 6,
+                    "sourceRevision": "a" * 40,
+                    "sourceRevisionMatches": False,
+                    "stateCounts": {
+                        "community-corrected": 1,
+                        "english-fallback": 1,
+                        "machine-cross-checked": 2,
+                        "machine-draft": 2,
+                    },
+                    "missing": {"count": 1, "percent": 16.67},
+                    "stale": {"count": 1, "percent": 16.67},
+                    "current": {"count": 4, "percent": 66.67},
+                    "translated": {"count": 2, "percent": 33.33},
+                    "fallback": {"count": 4, "percent": 66.67},
+                    "extra": 1,
+                }},
+            }
+            self.assertEqual(expected, i18n.catalogue_report(source_path, [target_path]))
+
+            command = [
+                sys.executable, str(SCRIPT), "report",
+                "--source", str(source_path),
+                "--target-dir", str(source_path.parent),
+                "--output", str(output_path),
+            ]
+            subprocess.run(command, check=True)
+            first_bytes = output_path.read_bytes()
+            self.assertEqual(expected, json.loads(first_bytes))
+            subprocess.run(command, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+
+            with self.assertRaisesRegex(
+                i18n.CatalogueError,
+                "report requires at least one target catalogue",
+            ):
+                i18n.catalogue_report(source_path, [])
 
 
 if __name__ == "__main__":

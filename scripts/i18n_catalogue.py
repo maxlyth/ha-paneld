@@ -36,6 +36,7 @@ LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
+RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
 
 
 class CatalogueError(ValueError):
@@ -423,6 +424,83 @@ def merge_candidate(
         validation_path.unlink(missing_ok=True)
 
 
+def coverage(count: int, total: int) -> dict[str, int | float]:
+    return {
+        "count": count,
+        "percent": round(count * 100 / total, 2),
+    }
+
+
+def catalogue_report(source_path: Path, target_paths: list[Path]) -> dict[str, Any]:
+    """Return deterministic per-locale catalogue and runtime-fallback counts."""
+    if not target_paths:
+        raise CatalogueError("report requires at least one target catalogue")
+    source = validate_source(source_path)
+    source_strings = source["strings"]
+    source_keys = set(source_strings)
+    total = len(source_keys)
+    locales: dict[str, Any] = {}
+
+    for path in target_paths:
+        target = validate_target(path, source, expected_locale=path.stem)
+        locale = target["locale"]
+        if locale in locales:
+            raise CatalogueError(f"duplicate target locale: {locale}")
+
+        records = target["strings"]
+        record_keys = set(records)
+        present_keys = source_keys & record_keys
+        missing_keys = source_keys - record_keys
+        stale_keys = {
+            key for key in present_keys
+            if records[key]["sourceHash"] != source_strings[key]["sourceHash"]
+        }
+        current_keys = present_keys - stale_keys
+        translated_keys = {
+            key for key in current_keys
+            if records[key]["state"] in RENDERABLE_STATES
+        }
+        fallback_keys = source_keys - translated_keys
+        state_counts = Counter(record["state"] for record in records.values())
+
+        locales[locale] = {
+            "catalogueRecords": len(records),
+            "sourceRevision": target["sourceRevision"],
+            "sourceRevisionMatches": target["sourceRevision"] == source["sourceRevision"],
+            "stateCounts": {state: state_counts[state] for state in sorted(STATES)},
+            "missing": coverage(len(missing_keys), total),
+            "stale": coverage(len(stale_keys), total),
+            "current": coverage(len(current_keys), total),
+            "translated": coverage(len(translated_keys), total),
+            "fallback": coverage(len(fallback_keys), total),
+            "extra": len(record_keys - source_keys),
+        }
+
+    return {
+        "schema": SCHEMA,
+        "source": {
+            "locale": source["locale"],
+            "revision": source["sourceRevision"],
+            "strings": total,
+        },
+        "locales": {locale: locales[locale] for locale in sorted(locales)},
+    }
+
+
+def selected_targets(
+    source_path: Path,
+    target_paths: list[Path],
+    target_dir: Path | None,
+) -> list[Path]:
+    selected = list(target_paths)
+    if target_dir:
+        selected.extend(
+            path for path in sorted(target_dir.glob("*.json"))
+            if path.resolve() != source_path.resolve()
+        )
+    return selected
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser()
     sub = result.add_subparsers(dest="command", required=True)
@@ -430,6 +508,14 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("--source", type=Path, required=True)
     validate.add_argument("--target", type=Path, action="append", default=[])
     validate.add_argument("--target-dir", type=Path)
+    report = sub.add_parser(
+        "report",
+        help="report per-locale catalogue state, currency, and runtime fallback coverage as JSON",
+    )
+    report.add_argument("--source", type=Path, required=True)
+    report.add_argument("--target", type=Path, action="append", default=[])
+    report.add_argument("--target-dir", type=Path)
+    report.add_argument("--output", type=Path)
     export = sub.add_parser("export")
     export.add_argument("--source", type=Path, required=True)
     export.add_argument("--locale", required=True)
@@ -452,14 +538,17 @@ def main() -> int:
     try:
         if args.command == "validate":
             source = validate_source(args.source)
-            targets = list(args.target)
-            if args.target_dir:
-                targets.extend(
-                    path for path in sorted(args.target_dir.glob("*.json"))
-                    if path.resolve() != args.source.resolve()
-                )
-            for target in targets:
+            for target in selected_targets(args.source, args.target, args.target_dir):
                 validate_target(target, source, expected_locale=target.stem)
+        elif args.command == "report":
+            report = catalogue_report(
+                args.source,
+                selected_targets(args.source, args.target, args.target_dir),
+            )
+            if args.output:
+                write_json_atomic(args.output, report)
+            else:
+                print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         elif args.command == "export":
             export_batch(args.source, args.locale, args.output, args.worktree)
         elif args.command == "validate-candidate":
