@@ -1172,6 +1172,7 @@ class PaneldService : Service() {
             defaultResolution = { config.cameraResolution },
             defaultFps = { config.cameraFps },
             defaultKbps = { config.cameraKbps },
+            exposureEv = { config.cameraExposureEv },
             transport = cameraStream,
             permissionGranted = {
                 androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) ==

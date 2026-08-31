@@ -124,4 +124,26 @@ class CameraStreamContractTest {
             assertTrue("$it must count as settled", owner.contains(it))
         }
     }
+
+    /**
+     * The processing choices must actually reach the capture request. Like the exposure callback, this
+     * is Android wiring no JVM test can execute: deleting the call would leave every unit test green
+     * while the panel silently went back to the pipeline defaults.
+     */
+    @Test fun theCaptureRequestGetsTheProcessingChoices() {
+        val owner = TestSources.kotlin("camera/CameraSessionOwner.kt").readText()
+        assertTrue(
+            "the request builder must be handed the processing policy",
+            owner.contains("applyProcessing(this, characteristics)"),
+        )
+        listOf(
+            "CaptureRequest.NOISE_REDUCTION_MODE",
+            "CaptureRequest.EDGE_MODE",
+            "CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION",
+        ).forEach { assertTrue("$it must be set from the policy", owner.contains(it)) }
+        assertTrue(
+            "the still/stream split is what makes the expensive pipeline affordable",
+            owner.contains("forStream = openedForStream"),
+        )
+    }
 }

@@ -425,6 +425,15 @@ object SettingsRegistry {
                 "override it with ?kbps=, in either direction.",
             availableWhen = { it.hasCamera },
         ),
+        SettingSpec(
+            key = "camera_exposure", type = SettingType.FLOAT, group = "Camera",
+            label = "Exposure", default = "0", min = -2.0, max = 2.0, step = 0.33,
+            scope = Scope.DEVICE,
+            help = "Exposure bias in stops, for a camera that reads a room darker or brighter than it " +
+                "looks. 0 leaves the camera's own automatic exposure alone; the panel clamps this to " +
+                "whatever range the sensor actually supports.",
+            availableWhen = { it.hasCamera },
+        ),
 
         // ---- Dashboard ---------------------------------------------------------------------------
         // Which app renders the dashboard + how the built-in renderer connects to HA.

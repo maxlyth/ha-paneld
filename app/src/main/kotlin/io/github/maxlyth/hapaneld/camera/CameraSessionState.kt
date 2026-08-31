@@ -42,6 +42,51 @@ object SnapshotExposure {
     }
 }
 
+/**
+ * The processing knobs these panels actually expose, and how to choose them.
+ *
+ * Kept pure because the choice is a policy, and because what the hardware offers differs per board:
+ * enumerated on both camera panels on 2026-08-31, `availableCapabilities` is a single byte —
+ * `BACKWARD_COMPATIBLE` and nothing else — so there is no `MANUAL_SENSOR`, no `BURST_CAPTURE` and no
+ * `RAW`, which is why multi-frame HDR is not merely unimplemented but unavailable, and why the vendor
+ * extensions CameraX would surface do not exist here either. What is left is worth using.
+ */
+object CameraProcessing {
+    /**
+     * Noise reduction and edge enhancement for a session, given what the device offers.
+     *
+     * There is one repeating request serving both the snapshot and the stream, so this is decided when
+     * the session opens rather than per frame. A session opened for a still can afford the expensive
+     * pipeline — it produces one frame a person looks at. A session serving a stream cannot: the same
+     * cost lands on every frame, fifteen times a second, on a panel already rendering a dashboard.
+     *
+     * Returns null when the mode is unavailable, so an unsupported device is left at its own default
+     * rather than handed a value it never advertised.
+     */
+    fun qualityMode(forStream: Boolean, available: IntArray?, fast: Int, highQuality: Int): Int? {
+        val modes = available?.toSet().orEmpty()
+        val wanted = if (forStream) fast else highQuality
+        return wanted.takeIf { it in modes }
+    }
+
+    /**
+     * Exposure bias in device steps, clamped to what the device supports.
+     *
+     * Both panels report a range of -6..+6 at 1/3 EV, i.e. plus or minus two stops. The setting is in EV
+     * so it means the same thing on a board with a different step size, and a device advertising no
+     * range at all gets no bias rather than an invented one.
+     */
+    fun exposureSteps(requestedEv: Double, lower: Int, upper: Int, stepNumerator: Int, stepDenominator: Int): Int {
+        // No guard for an empty range: coercing into 0..0 already yields no bias, and a redundant check
+        // that cannot change an answer is worse than none — it reads as protection that is not there.
+        // The step guard is load-bearing, because a zero denominator would divide by zero.
+        if (stepNumerator <= 0 || stepDenominator <= 0) return 0
+        val evPerStep = stepNumerator.toDouble() / stepDenominator.toDouble()
+        val steps = Math.round(requestedEv / evPerStep).toInt()
+        return steps.coerceIn(lower, upper)
+    }
+}
+
 /** A pending snapshot, with the moment it started waiting so the settle budget can be spent honestly. */
 data class SnapshotWaiter(val future: CompletableFuture<ByteArray?>, val addedAtMs: Long)
 

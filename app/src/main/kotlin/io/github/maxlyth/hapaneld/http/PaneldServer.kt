@@ -5883,6 +5883,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     }
                     p["camera_fps"]?.trim()?.toIntOrNull()?.let { config.setCameraFps(it) }
                     p["camera_kbps"]?.trim()?.toIntOrNull()?.let { config.setCameraKbps(it) }
+                    p["camera_exposure"]?.let { config.setCameraExposureEv(it) }
                     // Live-apply a fullscreen toggle: a bare foreground relaunch of the running renderer re-runs
                     // onResume → applyFullscreen with the new value, without touching the page (no reload flag).
                     // Detected from the POSTED value — config read-back inside the batch is pre-commit.

@@ -75,6 +75,8 @@ class CameraSessionOwner(
     private val defaultResolution: () -> CameraResolution,
     private val defaultFps: () -> Int,
     private val defaultKbps: () -> Int,
+    /** Exposure bias in stops; clamped to the sensor's advertised range at configure time. */
+    private val exposureEv: () -> Float = { 0f },
     private val permissionGranted: () -> Boolean,
     private val indicator: CameraIndicator,
     private val foreground: CameraForegroundGate,
@@ -101,6 +103,13 @@ class CameraSessionOwner(
     private var current: Attempt? = null
     private var boundTarget: CameraResolution? = null
     private var boundFps = 15
+
+    /**
+     * Whether a stream opened this session. One repeating request serves both the snapshot and the
+     * stream, so the processing budget is chosen here rather than per frame: a still can afford the
+     * expensive pipeline, fifteen frames a second of it cannot.
+     */
+    private var openedForStream = false
     private var lastDeliveredAtMs = 0L
 
     /** One open attempt and the hardware it alone owns. */
@@ -389,6 +398,7 @@ class CameraSessionOwner(
         }
         boundTarget = requested ?: defaultResolution()
         boundFps = (bindingFps ?: defaultFps()).coerceIn(1, 30)
+        openedForStream = bindingFps != null
         policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
         h.post { open(attemptId) }
     }
@@ -433,7 +443,7 @@ class CameraSessionOwner(
                         if (state.isCurrent(attempt.id) && state.phase == Phase.OPENING) { attempt.device = camera; true } else false
                     }
                     if (!live) { camera.close(); return }
-                    configure(attempt, camera, r, fpsRange)
+                    configure(attempt, camera, r, fpsRange, chosen.second)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -462,7 +472,13 @@ class CameraSessionOwner(
         }
     }
 
-    private fun configure(attempt: Attempt, camera: CameraDevice, r: ImageReader, fpsRange: Range<Int>?) {
+    private fun configure(
+        attempt: Attempt,
+        camera: CameraDevice,
+        r: ImageReader,
+        fpsRange: Range<Int>?,
+        characteristics: CameraCharacteristics?,
+    ) {
         val h = synchronized(lock) { handler } ?: return
         try {
             @Suppress("DEPRECATION")
@@ -476,6 +492,7 @@ class CameraSessionOwner(
                         val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                             addTarget(r.surface)
                             fpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                            applyProcessing(this, characteristics)
                         }.build()
                         // A real callback, where there used to be null. Without it the session had no
                         // way to know whether exposure had converged, so a snapshot could only answer
@@ -762,6 +779,44 @@ class CameraSessionOwner(
             ) {
                 attempt.exposureSettled = true
             }
+        }
+    }
+
+    /**
+     * The processing these sensors actually offer, applied at session configure.
+     *
+     * Every value is taken from what the device advertises and skipped when it advertises none, so a
+     * board that supports none of this is left exactly as it was. Nothing here is HDR: these cameras
+     * report `BACKWARD_COMPATIBLE` only, so bracketed capture and per-frame exposure — what HDR is made
+     * of — do not exist to build on. These are the levers that do.
+     */
+    private fun applyProcessing(builder: CaptureRequest.Builder, c: CameraCharacteristics?) {
+        if (c == null) return
+        CameraProcessing.qualityMode(
+            forStream = openedForStream,
+            available = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES),
+            fast = CaptureRequest.NOISE_REDUCTION_MODE_FAST,
+            highQuality = CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY,
+        )?.let { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, it) }
+
+        CameraProcessing.qualityMode(
+            forStream = openedForStream,
+            available = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES),
+            fast = CaptureRequest.EDGE_MODE_FAST,
+            highQuality = CaptureRequest.EDGE_MODE_HIGH_QUALITY,
+        )?.let { builder.set(CaptureRequest.EDGE_MODE, it) }
+
+        val range = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+        val step = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+        if (range != null && step != null) {
+            val steps = CameraProcessing.exposureSteps(
+                requestedEv = exposureEv().toDouble(),
+                lower = range.lower,
+                upper = range.upper,
+                stepNumerator = step.numerator,
+                stepDenominator = step.denominator,
+            )
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, steps)
         }
     }
 

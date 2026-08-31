@@ -1121,6 +1121,13 @@ class Config private constructor(
         edit { putInt("camera_fps", fps.coerceIn(1, 30)) }
     }
     val cameraKbps: Int get() = intPref("camera_kbps").coerceIn(250, 8000)
+
+    /** Exposure bias in stops; the owner clamps it to whatever range the sensor advertises. */
+    val cameraExposureEv: Float get() = floatPref("camera_exposure").coerceIn(-2f, 2f)
+    fun setCameraExposureEv(raw: String) {
+        val value = raw.trim().toFloatOrNull() ?: return
+        edit { putFloat("camera_exposure", value.coerceIn(-2f, 2f)) }
+    }
     fun setCameraKbps(kbps: Int) {
         edit { putInt("camera_kbps", kbps.coerceIn(250, 8000)) }
     }

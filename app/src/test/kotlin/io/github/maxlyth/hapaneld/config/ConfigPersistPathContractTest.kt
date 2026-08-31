@@ -90,7 +90,11 @@ class ConfigPersistPathContractTest {
     @Test fun theCameraSettingsAreTheirOwnConfigureCardAndSayTheyAreExperimental() {
         val camera = SettingsRegistry.SPECS.filter { it.key.startsWith("camera_") }
         assertEquals("every camera setting belongs to the Camera card", setOf("Camera"), camera.map { it.group }.toSet())
-        assertEquals("the camera card must hold exactly the four trial settings", 4, camera.size)
+        assertEquals(
+            "the camera card holds the switch, the three stream defaults and the exposure bias",
+            listOf("camera_enabled", "camera_resolution", "camera_fps", "camera_kbps", "camera_exposure"),
+            camera.map { it.key },
+        )
 
         val configureJs = File(BundledProfileFixtures.mainKotlinDirectory, "../assets/configure.js")
         assertTrue("configure.js must be readable", configureJs.isFile)
