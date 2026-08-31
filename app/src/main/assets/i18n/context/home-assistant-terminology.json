@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "id": "home-assistant-terminology",
+  "productContext": "ha-paneld is an Android wall-panel client for Home Assistant. These strings configure the panel, its dashboard, display, network, and device integrations.",
+  "instruction": "When a supplied term has the stated meaning, use its supplied target-language wording consistently. Treat Home Assistant as an untranslated product name.",
+  "license": "Apache-2.0",
+  "notice": "This small terminology subset is derived from pinned Apache-2.0 Home Assistant frontend and Companion sources. It is not a complete translation corpus and does not imply Home Assistant endorsement.",
+  "sources": [
+    {
+      "id": "android",
+      "repository": "https://github.com/home-assistant/android",
+      "revision": "cfe57e5d46bfaa3bc69db7b42ce7b1324e08be29",
+      "artifact": "Home Assistant Companion for Android 2026.8.3 strings.zip",
+      "artifactSha256": "32d04d2e74401c14bf946457a21b7fee84372d2a6e1e101fff2e0d1fa34cfe5a",
+      "license": "Apache-2.0"
+    },
+    {
+      "id": "frontend",
+      "repository": "https://github.com/home-assistant/frontend",
+      "revision": "8a4202ea19b2bf92f477045efa822baad8bb9471",
+      "artifact": "home-assistant-frontend 20260826.0 wheel",
+      "artifactSha256": "c84e46c49fb4d63c2461e9a1d4b7b6b1548577936b4129e8dfa8c2f31ceee699",
+      "license": "Apache-2.0"
+    }
+  ],
+  "terms": [
+    {
+      "id": "brightness",
+      "meaning": "Display or light brightness as a level.",
+      "english": "Brightness",
+      "source": "frontend",
+      "sourceKey": "ui.card.light.brightness",
+      "translations": {
+        "de": "Helligkeit",
+        "es": "Brillo",
+        "fr": "Luminosité",
+        "it": "Luminosità",
+        "zh-Hans": "亮度"
+      }
+    },
+    {
+      "id": "connected-to-home-assistant",
+      "meaning": "Live connection state: connected to Home Assistant.",
+      "english": "Connected to Home Assistant",
+      "source": "android",
+      "sourceKey": "websocket_listening",
+      "translations": {
+        "de": "Mit Home Assistant verbunden",
+        "es": "Conectado a Home Assistant",
+        "fr": "Connecté à Home Assistant",
+        "it": "Connesso a Home Assistant",
+        "zh-Hans": "已连接到 Home Assistant"
+      }
+    },
+    {
+      "id": "connection-failed",
+      "meaning": "The app could not connect to Home Assistant.",
+      "english": "Unable to connect to Home Assistant.",
+      "source": "android",
+      "sourceKey": "error_connection_failed",
+      "translations": {
+        "de": "Verbindung zu Home Assistant nicht möglich.",
+        "es": "No se ha podido conectar con Home Assistant.",
+        "fr": "Impossible de se connecter à Home Assistant.",
+        "it": "Impossibile connettersi a Home Assistant.",
+        "zh-Hans": "无法连接到 Home Assistant 。"
+      }
+    },
+    {
+      "id": "device-language",
+      "meaning": "Use the device language rather than an explicit app language.",
+      "english": "Device language",
+      "source": "android",
+      "sourceKey": "lang_option_label_default",
+      "translations": {
+        "de": "Gerätesprache",
+        "es": "Idioma del dispositivo",
+        "fr": "Langue de l'appareil",
+        "it": "Lingua del dispositivo",
+        "zh-Hans": "设备语言"
+      }
+    },
+    {
+      "id": "entity",
+      "meaning": "A Home Assistant entity, not a generic object or device.",
+      "english": "Entity",
+      "source": "frontend",
+      "sourceKey": "ui.components.entity.entity-picker.entity",
+      "translations": {
+        "de": "Entität",
+        "es": "Entidad",
+        "fr": "Entité",
+        "it": "Entità",
+        "zh-Hans": "实体"
+      }
+    },
+    {
+      "id": "language",
+      "meaning": "The user-interface language selector.",
+      "english": "Language",
+      "source": "frontend",
+      "sourceKey": "ui.components.language-picker.language",
+      "translations": {
+        "de": "Sprache",
+        "es": "Idioma",
+        "fr": "Langue",
+        "it": "Lingua",
+        "zh-Hans": "语言"
+      }
+    },
+    {
+      "id": "network",
+      "meaning": "Network configuration or network navigation category.",
+      "english": "Network",
+      "source": "frontend",
+      "sourceKey": "ui.dialogs.quick-bar.commands.navigation.network",
+      "translations": {
+        "de": "Netzwerk",
+        "es": "Red",
+        "fr": "Réseau",
+        "it": "Rete",
+        "zh-Hans": "网络"
+      }
+    },
+    {
+      "id": "reload",
+      "meaning": "Reload the current Home Assistant frontend page.",
+      "english": "Reload",
+      "source": "frontend",
+      "sourceKey": "ui.dialogs.quick-bar.commands.types.reload",
+      "translations": {
+        "de": "Neu laden",
+        "es": "Recargar",
+        "fr": "Recharger",
+        "it": "Ricarica",
+        "zh-Hans": "重载"
+      }
+    },
+    {
+      "id": "security",
+      "meaning": "Security configuration category, not a security guarantee.",
+      "english": "Security",
+      "source": "frontend",
+      "sourceKey": "panel.security",
+      "translations": {
+        "de": "Sicherheit",
+        "es": "Seguridad",
+        "fr": "Sécurité",
+        "it": "Sicurezza",
+        "zh-Hans": "安全"
+      }
+    },
+    {
+      "id": "settings",
+      "meaning": "The ha-paneld settings surface or settings action.",
+      "english": "Settings",
+      "source": "frontend",
+      "sourceKey": "panel.config",
+      "translations": {
+        "de": "Einstellungen",
+        "es": "Configuración",
+        "fr": "Paramètres",
+        "it": "Impostazioni",
+        "zh-Hans": "设置"
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ QUOTA_RESERVE = 50_000
 MAX_RESPONSE_BYTES = 1_048_576
 PLAN_SCHEMA = 1
 RUN_SCHEMA = 1
+CONTEXT_SCHEMA = 1
 TARGETS = {
     "de": ("DE", "less"),
     "fr": ("FR", "more"),
@@ -35,6 +36,12 @@ TARGETS = {
 }
 TARGET_RECORD_KEYS = {"text", "sourceHash", "state"}
 HTTP = Callable[[urllib.request.Request], bytes]
+
+CONTEXT_ROOT_KEYS = {
+    "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",
+}
+CONTEXT_SOURCE_KEYS = {"id", "repository", "revision", "artifact", "artifactSha256", "license"}
+CONTEXT_TERM_KEYS = {"id", "meaning", "english", "source", "sourceKey", "translations"}
 
 
 class DeepLError(ValueError):
@@ -54,6 +61,87 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 
 def _source_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_context(path: Path) -> tuple[dict[str, Any], str, int]:
+    raw = path.read_bytes()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise DeepLError("terminology context is not valid UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        raise DeepLError("terminology context root must be an object")
+    catalogue.exact_keys(value, CONTEXT_ROOT_KEYS, "terminology context root")
+    if (
+        value["schema"] != CONTEXT_SCHEMA
+        or not isinstance(value["id"], str)
+        or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value["id"])
+        or not isinstance(value["productContext"], str)
+        or not value["productContext"].strip()
+        or not isinstance(value["instruction"], str)
+        or not value["instruction"].strip()
+        or value["license"] != "Apache-2.0"
+        or not isinstance(value["notice"], str)
+        or not value["notice"].strip()
+        or not isinstance(value["sources"], list)
+        or not value["sources"]
+        or not isinstance(value["terms"], list)
+        or not value["terms"]
+    ):
+        raise DeepLError("malformed terminology context")
+
+    source_ids: list[str] = []
+    for source in value["sources"]:
+        if not isinstance(source, dict):
+            raise DeepLError("malformed terminology context source")
+        catalogue.exact_keys(source, CONTEXT_SOURCE_KEYS, "terminology context source")
+        if (
+            not isinstance(source["id"], str)
+            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", source["id"])
+            or not isinstance(source["repository"], str)
+            or not source["repository"].startswith("https://github.com/home-assistant/")
+            or not isinstance(source["revision"], str)
+            or not catalogue.REV_RE.fullmatch(source["revision"])
+            or not isinstance(source["artifact"], str)
+            or not source["artifact"].strip()
+            or not isinstance(source["artifactSha256"], str)
+            or not catalogue.SHA_RE.fullmatch(source["artifactSha256"])
+            or source["license"] != "Apache-2.0"
+        ):
+            raise DeepLError("malformed terminology context source value")
+        source_ids.append(source["id"])
+    if source_ids != sorted(source_ids) or len(source_ids) != len(set(source_ids)):
+        raise DeepLError("terminology context sources are not unique canonical ids")
+
+    term_ids: list[str] = []
+    sources = set(source_ids)
+    for term in value["terms"]:
+        if not isinstance(term, dict):
+            raise DeepLError("malformed terminology context term")
+        catalogue.exact_keys(term, CONTEXT_TERM_KEYS, "terminology context term")
+        translations = term["translations"]
+        if (
+            not isinstance(term["id"], str)
+            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", term["id"])
+            or not isinstance(term["meaning"], str)
+            or not term["meaning"].strip()
+            or not isinstance(term["english"], str)
+            or not term["english"].strip()
+            or term["source"] not in sources
+            or not isinstance(term["sourceKey"], str)
+            or not term["sourceKey"].strip()
+            or not isinstance(translations, dict)
+            or not translations
+            or any(locale not in TARGETS for locale in translations)
+            or any(not isinstance(text, str) or not text.strip() for text in translations.values())
+        ):
+            raise DeepLError("malformed terminology context term value")
+        if list(translations) != sorted(translations):
+            raise DeepLError("terminology context translations are not in canonical locale order")
+        term_ids.append(term["id"])
+    if term_ids != sorted(term_ids) or len(term_ids) != len(set(term_ids)):
+        raise DeepLError("terminology context terms are not unique canonical ids")
+    return value, hashlib.sha256(raw).hexdigest(), len(raw)
 
 
 def _target_records(path: Path, locale: str) -> dict[str, Any]:
@@ -108,6 +196,7 @@ def _selected_record(key: str, record: dict[str, Any], source: dict[str, Any]) -
 def build_plan(
     source_path: Path,
     target_dir: Path,
+    context_path: Path,
     locales: list[str],
     base_revision: str,
     reconsider: set[str],
@@ -117,6 +206,7 @@ def build_plan(
     if not locales or len(locales) != len(set(locales)) or any(locale not in TARGETS for locale in locales):
         raise DeepLError("locales must be a non-empty, duplicate-free supported locale list")
     source = catalogue.validate_source(source_path)
+    context, context_hash, context_bytes = _load_context(context_path)
     unknown = reconsider - set(source["strings"])
     if unknown:
         raise DeepLError(f"unknown reconsidered keys: {', '.join(sorted(unknown))}")
@@ -155,6 +245,9 @@ def build_plan(
         "baseRevision": base_revision,
         "sourceRevision": source["sourceRevision"],
         "sourceCatalogueHash": _source_digest(source_path),
+        "contextArtifactId": context["id"],
+        "contextArtifactHash": context_hash,
+        "contextArtifactBytes": context_bytes,
         "requestedCharacters": requested,
         "maximumBilledCharacters": sum(
             record["maximumBilledCharacters"]
@@ -293,12 +386,28 @@ def _check_capabilities(locales: list[str], key: str, http: HTTP) -> None:
             raise DeepLError(f"{locale}: configured formality is unsupported")
 
 
-def _translate(record: dict[str, Any], locale: str, key: str, http: HTTP) -> tuple[str, int]:
-    protected_text, protected = _protected_xml(record)
+def _translation_context(record: dict[str, Any], locale: str, context: dict[str, Any]) -> str:
+    lines = [record["context"]]
     sibling_text = "\n".join(item["english"] for item in record["siblings"])
-    context = record["context"]
     if sibling_text:
-        context += "\nRelated strings on the same interface:\n" + sibling_text
+        lines.extend(["Related strings on the same interface:", sibling_text])
+    lines.extend([context["productContext"], "Pinned Home Assistant terminology for this locale:"])
+    lines.extend(
+        f"{term['english']} = {term['translations'][locale]} ({term['meaning']})"
+        for term in context["terms"]
+        if locale in term["translations"]
+    )
+    return "\n".join(lines)
+
+
+def _translate(
+    record: dict[str, Any],
+    locale: str,
+    context: dict[str, Any],
+    key: str,
+    http: HTTP,
+) -> tuple[str, int]:
+    protected_text, protected = _protected_xml(record)
     target_lang, formality = TARGETS[locale]
     response = _request_json(
         "/v2/translate",
@@ -308,12 +417,13 @@ def _translate(record: dict[str, Any], locale: str, key: str, http: HTTP) -> tup
             "text": [protected_text],
             "source_lang": "EN",
             "target_lang": target_lang,
-            "context": context,
+            "context": _translation_context(record, locale, context),
             "show_billed_characters": True,
             "formality": formality,
             "model_type": "quality_optimized",
             "custom_instructions": [
                 "Use concise software settings UI language. Preserve meaning; do not add actions, warnings, or guarantees.",
+                context["instruction"],
             ],
             "tag_handling": "xml",
             "tag_handling_version": "v2",
@@ -345,6 +455,7 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         plan,
         {
             "schema", "baseRevision", "sourceRevision", "sourceCatalogueHash", "requestedCharacters",
+            "contextArtifactId", "contextArtifactHash", "contextArtifactBytes",
             "maximumBilledCharacters", "batches",
         },
         "plan root",
@@ -357,6 +468,13 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         or not catalogue.REV_RE.fullmatch(plan["sourceRevision"])
         or not isinstance(plan["sourceCatalogueHash"], str)
         or not catalogue.SHA_RE.fullmatch(plan["sourceCatalogueHash"])
+        or not isinstance(plan["contextArtifactId"], str)
+        or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plan["contextArtifactId"])
+        or not isinstance(plan["contextArtifactHash"], str)
+        or not catalogue.SHA_RE.fullmatch(plan["contextArtifactHash"])
+        or isinstance(plan["contextArtifactBytes"], bool)
+        or not isinstance(plan["contextArtifactBytes"], int)
+        or plan["contextArtifactBytes"] <= 0
         or isinstance(plan["requestedCharacters"], bool)
         or not isinstance(plan["requestedCharacters"], int)
         or plan["requestedCharacters"] < 0
@@ -455,7 +573,8 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
         {
             "schema", "status", "baseRevision", "requestedCharacters", "selectedRecords",
             "maximumBilledCharacters", "billedCharacters", "accountUsageBefore", "accountUsageAfter",
-            "accountCharacterLimit", "resultHashes",
+            "accountCharacterLimit", "contextArtifactId", "contextArtifactHash",
+            "contextArtifactBytes", "resultHashes",
         },
         "run root",
     )
@@ -463,6 +582,9 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
         run["schema"] != RUN_SCHEMA
         or run["status"] not in {"no-changes", "skipped-quota", "generated"}
         or run["baseRevision"] != plan["baseRevision"]
+        or run["contextArtifactId"] != plan["contextArtifactId"]
+        or run["contextArtifactHash"] != plan["contextArtifactHash"]
+        or run["contextArtifactBytes"] != plan["contextArtifactBytes"]
         or run["requestedCharacters"] != plan["requestedCharacters"]
         or run["maximumBilledCharacters"] != plan["maximumBilledCharacters"]
         or isinstance(run["billedCharacters"], bool)
@@ -515,9 +637,22 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
         raise DeepLError("run result hash coverage mismatch")
 
 
-def generate(plan_path: Path, output_dir: Path, api_key: str, http: HTTP = _default_http) -> dict[str, Any]:
+def generate(
+    plan_path: Path,
+    context_path: Path,
+    output_dir: Path,
+    api_key: str,
+    http: HTTP = _default_http,
+) -> dict[str, Any]:
     plan = catalogue.read_json(plan_path)
     _validate_plan(plan)
+    context, context_hash, context_bytes = _load_context(context_path)
+    if (
+        context["id"] != plan["contextArtifactId"]
+        or context_hash != plan["contextArtifactHash"]
+        or context_bytes != plan["contextArtifactBytes"]
+    ):
+        raise DeepLError("terminology context drifted after the plan was created")
     if output_dir.exists():
         raise DeepLError("output directory already exists")
 
@@ -531,6 +666,9 @@ def generate(plan_path: Path, output_dir: Path, api_key: str, http: HTTP = _defa
             "maximumBilledCharacters": 0,
             "billedCharacters": 0,
             "selectedRecords": 0,
+            "contextArtifactId": plan["contextArtifactId"],
+            "contextArtifactHash": plan["contextArtifactHash"],
+            "contextArtifactBytes": plan["contextArtifactBytes"],
             "accountUsageBefore": None,
             "accountUsageAfter": None,
             "accountCharacterLimit": None,
@@ -554,6 +692,9 @@ def generate(plan_path: Path, output_dir: Path, api_key: str, http: HTTP = _defa
             "maximumBilledCharacters": plan["maximumBilledCharacters"],
             "billedCharacters": 0,
             "selectedRecords": selected_count,
+            "contextArtifactId": plan["contextArtifactId"],
+            "contextArtifactHash": plan["contextArtifactHash"],
+            "contextArtifactBytes": plan["contextArtifactBytes"],
             "accountUsageBefore": before,
             "accountUsageAfter": before,
             "accountCharacterLimit": limit,
@@ -575,7 +716,7 @@ def generate(plan_path: Path, output_dir: Path, api_key: str, http: HTTP = _defa
             locale = batch["locale"]
             translations = []
             for record in batch["records"]:
-                translation, billed = _translate(record, locale, api_key, http)
+                translation, billed = _translate(record, locale, context, api_key, http)
                 billed_characters += billed
                 translations.append({"key": record["key"], "translation": translation})
             if billed_characters > plan["maximumBilledCharacters"]:
@@ -606,6 +747,9 @@ def generate(plan_path: Path, output_dir: Path, api_key: str, http: HTTP = _defa
             "maximumBilledCharacters": plan["maximumBilledCharacters"],
             "billedCharacters": billed_characters,
             "selectedRecords": selected_count,
+            "contextArtifactId": plan["contextArtifactId"],
+            "contextArtifactHash": plan["contextArtifactHash"],
+            "contextArtifactBytes": plan["contextArtifactBytes"],
             "accountUsageBefore": before,
             "accountUsageAfter": after,
             "accountCharacterLimit": limit,
@@ -644,6 +788,7 @@ def summary(plan_path: Path, run_path: Path) -> str:
         "",
         f"- Status: `{run.get('status', 'invalid')}`",
         f"- Trusted base: `{plan['baseRevision']}`",
+        f"- Terminology context: `{plan['contextArtifactId']}` (`{plan['contextArtifactHash']}`, {plan['contextArtifactBytes']} bytes)",
         f"- Locales with selected records: {locales}",
         f"- Selected records: {run.get('selectedRecords', 'invalid')}",
         f"- Requested source characters: {run.get('requestedCharacters', 'invalid')}",
@@ -657,12 +802,14 @@ def parser() -> argparse.ArgumentParser:
     plan = commands.add_parser("plan")
     plan.add_argument("--source", type=Path, required=True)
     plan.add_argument("--target-dir", type=Path, required=True)
+    plan.add_argument("--context", type=Path, required=True)
     plan.add_argument("--locale", action="append", required=True)
     plan.add_argument("--base-revision", required=True)
     plan.add_argument("--reconsider", action="append", default=[])
     plan.add_argument("--output", type=Path, required=True)
     create = commands.add_parser("generate")
     create.add_argument("--plan", type=Path, required=True)
+    create.add_argument("--context", type=Path, required=True)
     create.add_argument("--output-dir", type=Path, required=True)
     base = commands.add_parser("check-base")
     base.add_argument("--expected", required=True)
@@ -679,11 +826,12 @@ def main() -> int:
     try:
         if args.command == "plan":
             plan = build_plan(
-                args.source, args.target_dir, args.locale, args.base_revision, set(args.reconsider),
+                args.source, args.target_dir, args.context, args.locale, args.base_revision,
+                set(args.reconsider),
             )
             _write_json(args.output, plan)
         elif args.command == "generate":
-            generate(args.plan, args.output_dir, os.environ.get("DEEPL_API_KEY", ""))
+            generate(args.plan, args.context, args.output_dir, os.environ.get("DEEPL_API_KEY", ""))
         elif args.command == "check-base":
             check_base(args.expected, args.repository, args.remote_ref)
         else:

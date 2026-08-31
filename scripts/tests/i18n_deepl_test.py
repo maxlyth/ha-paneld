@@ -76,6 +76,10 @@ class DeepLAdapterTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.source_path = self.root / "en.json"
         self.target_dir = self.root / "targets"
+        self.context_path = self.root / "context.json"
+        self.context_path.write_bytes(
+            (ROOT / "app/src/main/assets/i18n/context/home-assistant-terminology.json").read_bytes()
+        )
         self.source = {
             "schema": 1,
             "locale": "en",
@@ -112,7 +116,7 @@ class DeepLAdapterTest(unittest.TestCase):
                 "state": "machine-cross-checked",
             },
         }, source_revision="3" * 40)
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         records = plan["batches"][0]["records"]
         self.assertEqual([item["key"] for item in records], ["settings.beta.help", "settings.gamma.label"])
         self.assertEqual(records[0]["sourceHash"], self.source["strings"]["settings.beta.help"]["sourceHash"])
@@ -137,8 +141,34 @@ class DeepLAdapterTest(unittest.TestCase):
         })
         with self.assertRaisesRegex(DEEPL.DeepLError, "community correction"):
             DEEPL.build_plan(
-                self.source_path, self.target_dir, ["fr"], REVISION, {"settings.alpha.label"},
+                self.source_path, self.target_dir, self.context_path, ["fr"], REVISION,
+                {"settings.alpha.label"},
             )
+
+    def test_plan_binds_exact_terminology_context_bytes(self):
+        plan = DEEPL.build_plan(
+            self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set(),
+        )
+
+        self.assertEqual(plan["contextArtifactId"], "home-assistant-terminology")
+        self.assertEqual(plan["contextArtifactHash"], DEEPL._source_digest(self.context_path))
+        self.assertEqual(plan["contextArtifactBytes"], len(self.context_path.read_bytes()))
+
+    def test_generate_rejects_context_byte_drift_before_provider_access(self):
+        plan = DEEPL.build_plan(
+            self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set(),
+        )
+        plan_path = self.root / "plan.json"
+        write_json(plan_path, plan)
+        self.context_path.write_bytes(self.context_path.read_bytes() + b"\n")
+        fake = FakeHttp([])
+        output = self.root / "output"
+
+        with self.assertRaisesRegex(DEEPL.DeepLError, "context drifted"):
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
+
+        self.assertEqual(fake.requests, [])
+        self.assertFalse(output.exists())
 
     def test_protected_xml_round_trip_requires_exact_tokens(self):
         record = DEEPL._selected_record(
@@ -204,7 +234,7 @@ class DeepLAdapterTest(unittest.TestCase):
                 "state": "machine-draft",
             },
         })
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         self.assertEqual(len(plan["batches"][0]["records"]), 3)
 
     def test_generate_preflights_translates_once_and_postflights(self):
@@ -215,7 +245,7 @@ class DeepLAdapterTest(unittest.TestCase):
                 "state": "community-corrected",
             },
         })
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         self.assertEqual(
             plan["batches"][0]["records"][0]["priorTarget"]["text"],
             "previous private review context",
@@ -225,7 +255,7 @@ class DeepLAdapterTest(unittest.TestCase):
         fake = FakeHttp(["Alfa", 'Behalte <x id="0">{name}</x> auf <x id="1">MQTT</x>', "Gamma DE"])
         output = self.root / "output"
 
-        result = DEEPL.generate(plan_path, output, "secret-value:fx", fake)
+        result = DEEPL.generate(plan_path, self.context_path, output, "secret-value:fx", fake)
 
         self.assertEqual(result["status"], "generated")
         self.assertEqual([request.full_url for request in fake.requests], [
@@ -243,13 +273,18 @@ class DeepLAdapterTest(unittest.TestCase):
         self.assertEqual(request_body["tag_handling_version"], "v2")
         self.assertIs(request_body["show_billed_characters"], True)
         self.assertIn("software settings UI", request_body["custom_instructions"][0])
+        self.assertIn("supplied term", request_body["custom_instructions"][1])
         self.assertIn("A concise setting label.", request_body["context"])
+        self.assertIn("ha-paneld is an Android wall-panel client", request_body["context"])
+        self.assertIn("Entity = Entität", request_body["context"])
         self.assertNotIn("previous private review context", json.dumps([
             json.loads(request.data)
             for request in fake.requests
             if request.data is not None
         ]))
         self.assertNotIn("secret-value", json.dumps(result))
+        self.assertEqual(result["contextArtifactHash"], plan["contextArtifactHash"])
+        self.assertEqual(result["contextArtifactBytes"], plan["contextArtifactBytes"])
         self.assertEqual(result["billedCharacters"], result["maximumBilledCharacters"])
         candidate = json.loads((output / "candidates/de.json").read_text())
         self.assertEqual(candidate["sourceRevision"], SOURCE_REVISION)
@@ -258,14 +293,14 @@ class DeepLAdapterTest(unittest.TestCase):
         self.assertEqual(result["resultHashes"]["de"], DEEPL._source_digest(output / "candidates/de.json"))
 
     def test_insufficient_quota_is_a_no_op_with_reserve(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["fr"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["fr"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         requested = plan["requestedCharacters"]
         fake = FakeHttp([], usages=((450_000 - requested + 1, 500_000),))
         output = self.root / "output"
 
-        result = DEEPL.generate(plan_path, output, "key:fx", fake)
+        result = DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
 
         self.assertEqual(result["status"], "skipped-quota")
         self.assertFalse((output / "candidates").exists())
@@ -281,15 +316,15 @@ class DeepLAdapterTest(unittest.TestCase):
             for key, record in self.source["strings"].items()
         }
         self.target("fr", current)
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["fr"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["fr"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         output = self.root / "output"
-        result = DEEPL.generate(plan_path, output, "")
+        result = DEEPL.generate(plan_path, self.context_path, output, "")
         self.assertEqual(result["status"], "no-changes")
 
     def test_ambiguous_translation_failure_is_not_retried_or_published(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["es"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["es"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         calls = []
@@ -304,22 +339,22 @@ class DeepLAdapterTest(unittest.TestCase):
 
         output = self.root / "output"
         with self.assertRaisesRegex(DEEPL.DeepLError, "ambiguous; not retrying"):
-            DEEPL.generate(plan_path, output, "key:fx", failing)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", failing)
         self.assertEqual(len(calls), 3)
         self.assertFalse(output.exists())
 
     def test_malformed_postflight_discards_all_candidates(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["it"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["it"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         fake = FakeHttp(["Alfa", 'Tieni <x id="0">{name}</x> su <x id="1">MQTT</x>', "Gamma IT"], usages=((0, 500_000), (50, 400_000)))
         output = self.root / "output"
         with self.assertRaisesRegex(DEEPL.DeepLError, "inconsistent"):
-            DEEPL.generate(plan_path, output, "key:fx", fake)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
         self.assertFalse(output.exists())
 
     def test_decreasing_postflight_usage_discards_all_candidates(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         fake = FakeHttp(
@@ -329,11 +364,11 @@ class DeepLAdapterTest(unittest.TestCase):
         output = self.root / "output"
 
         with self.assertRaisesRegex(DEEPL.DeepLError, "inconsistent"):
-            DEEPL.generate(plan_path, output, "key:fx", fake)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
         self.assertFalse(output.exists())
 
     def test_postflight_usage_must_corroborate_reported_billing(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["fr"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["fr"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         billed = plan["maximumBilledCharacters"]
@@ -344,29 +379,30 @@ class DeepLAdapterTest(unittest.TestCase):
         output = self.root / "output"
 
         with self.assertRaisesRegex(DEEPL.DeepLError, "inconsistent"):
-            DEEPL.generate(plan_path, output, "key:fx", fake)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
         self.assertFalse(output.exists())
 
     def test_run_validation_rejects_uncorroborated_generated_billing(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["it"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["it"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         fake = FakeHttp(
             ["Alfa", 'Tieni <x id="0">{name}</x> su <x id="1">MQTT</x>', "Gamma IT"],
         )
-        result = DEEPL.generate(plan_path, self.root / "output", "key:fx", fake)
+        result = DEEPL.generate(plan_path, self.context_path, self.root / "output", "key:fx", fake)
         result["accountUsageAfter"] = result["accountUsageBefore"] + result["billedCharacters"] - 1
 
         with self.assertRaisesRegex(DEEPL.DeepLError, "inconsistent"):
             DEEPL._validate_run(result, plan)
 
     def test_public_summary_omits_private_account_quota_telemetry(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         output = self.root / "output"
         DEEPL.generate(
             plan_path,
+            self.context_path,
             output,
             "key:fx",
             FakeHttp(["Alfa", 'Behalte <x id="0">{name}</x> auf <x id="1">MQTT</x>', "Gamma DE"]),
@@ -378,7 +414,7 @@ class DeepLAdapterTest(unittest.TestCase):
         self.assertNotIn("500000", rendered)
 
     def test_missing_target_capability_fails_before_usage_or_translation(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         fake = FakeHttp([], languages=[
@@ -386,23 +422,23 @@ class DeepLAdapterTest(unittest.TestCase):
         ])
         output = self.root / "output"
         with self.assertRaisesRegex(DEEPL.DeepLError, "target language is unavailable"):
-            DEEPL.generate(plan_path, output, "key:fx", fake)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", fake)
         self.assertEqual(len(fake.requests), 1)
         self.assertFalse(output.exists())
 
     def test_unsupported_configured_formality_fails_before_billing(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["fr"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["fr"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         fake = FakeHttp([], languages=[
             {"language": "FR", "name": "French", "supports_formality": False},
         ])
         with self.assertRaisesRegex(DEEPL.DeepLError, "formality is unsupported"):
-            DEEPL.generate(plan_path, self.root / "output", "key:fx", fake)
+            DEEPL.generate(plan_path, self.context_path, self.root / "output", "key:fx", fake)
         self.assertEqual(len(fake.requests), 1)
 
     def test_missing_billed_characters_discards_candidate_without_retry(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["es"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["es"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
         calls = []
@@ -417,12 +453,12 @@ class DeepLAdapterTest(unittest.TestCase):
 
         output = self.root / "output"
         with self.assertRaisesRegex(DEEPL.DeepLError, "billed_characters"):
-            DEEPL.generate(plan_path, output, "key:fx", missing_billing)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", missing_billing)
         self.assertEqual(len(calls), 3)
         self.assertFalse(output.exists())
 
     def test_excessive_reported_billing_discards_candidate(self):
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, ["de"], REVISION, set())
+        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"
         write_json(plan_path, plan)
 
@@ -435,7 +471,7 @@ class DeepLAdapterTest(unittest.TestCase):
 
         output = self.root / "output"
         with self.assertRaisesRegex(DEEPL.DeepLError, "excessive billed_characters"):
-            DEEPL.generate(plan_path, output, "key:fx", excessive_billing)
+            DEEPL.generate(plan_path, self.context_path, output, "key:fx", excessive_billing)
         self.assertFalse(output.exists())
 
     def test_usage_rejects_unparseable_limit(self):

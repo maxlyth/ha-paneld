@@ -66,6 +66,7 @@ jobs:
           python3 scripts/i18n_deepl.py plan \
             --source app/src/main/assets/i18n/en.json \
             --target-dir app/src/main/assets/i18n \
+            --context app/src/main/assets/i18n/context/home-assistant-terminology.json \
             --base-revision "$GITHUB_SHA" \
             "${locale_args[@]}" \
             --output "$RUNNER_TEMP/i18n-candidates/plan.json"
@@ -89,6 +90,7 @@ jobs:
           set -euo pipefail
           python3 scripts/i18n_deepl.py generate \
             --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --context app/src/main/assets/i18n/context/home-assistant-terminology.json \
             --output-dir "$RUNNER_TEMP/i18n-candidates/generated"
           status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$RUNNER_TEMP/i18n-candidates/generated/run.json")"
           echo "status=$status" >> "$GITHUB_OUTPUT"
