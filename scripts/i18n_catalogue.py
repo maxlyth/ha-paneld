@@ -491,15 +491,12 @@ def selected_targets(
     source_path: Path,
     target_paths: list[Path],
     target_dir: Path | None,
-    *,
-    excluded: set[Path] | None = None,
 ) -> list[Path]:
-    excluded = excluded or set()
     selected = list(target_paths)
     if target_dir:
         selected.extend(
             path for path in sorted(target_dir.glob("*.json"))
-            if path.resolve() != source_path.resolve() and Path(os.path.abspath(path)) not in excluded
+            if path.resolve() != source_path.resolve()
         )
     return selected
 
@@ -525,12 +522,15 @@ def report_targets(
     ):
         raise CatalogueError("report output must not overwrite a target catalogue")
 
-    selected = selected_targets(
-        source_path,
-        target_paths,
-        target_dir,
-        excluded={Path(os.path.abspath(output))},
+    output_entry = Path(os.path.abspath(output))
+    same_resolved_parent = (
+        target_dir is not None and output_path.parent == target_dir.resolve()
     )
+    selected = [
+        path for path in selected_targets(source_path, target_paths, target_dir)
+        if Path(os.path.abspath(path)) != output_entry
+        and not (same_resolved_parent and path.name == output.name)
+    ]
     if any(output_path == path.resolve() for path in selected):
         raise CatalogueError("report output must not overwrite a target catalogue")
     return selected

@@ -384,6 +384,15 @@ class CatalogueTest(unittest.TestCase):
             subprocess.run(command, check=True)
             self.assertEqual(first_bytes, output_path.read_bytes())
 
+            directory_alias = root / "catalogue-alias"
+            directory_alias.symlink_to(source_path.parent, target_is_directory=True)
+            aliased_command = list(command)
+            aliased_command[aliased_command.index("--target-dir") + 1] = str(directory_alias)
+            subprocess.run(aliased_command, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+            subprocess.run(aliased_command, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+
             source_before = source_path.read_bytes()
             source_collision = command[:-1] + [str(source_path)]
             failed = subprocess.run(source_collision, capture_output=True, text=True)
