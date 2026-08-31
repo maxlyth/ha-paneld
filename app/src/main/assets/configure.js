@@ -243,6 +243,7 @@
 
   var unsavedNavigationGuardArmed = false;
   function syncUnsavedNavigationGuard() {
+    if (typeof window.addEventListener !== "function" || typeof window.removeEventListener !== "function") return;
     var shouldArm = dirty || saving;
     if (shouldArm === unsavedNavigationGuardArmed) return;
     unsavedNavigationGuardArmed = shouldArm;
