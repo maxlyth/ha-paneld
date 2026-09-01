@@ -1,0 +1,99 @@
+name: Translation correction
+description: Suggest clearer or more accurate wording for an existing translation
+title: "[Translation]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve a translation. Submit one correction per issue so it can be reviewed and applied safely.
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      description: Select the language and variant shown on the panel.
+      options:
+        - German (de)
+        - French (fr)
+        - Italian (it)
+        - Spanish (es)
+        - Simplified Chinese (zh-Hans)
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_wording
+    attributes:
+      label: Current wording
+      description: Copy the wording exactly as it currently appears, including punctuation and placeholders.
+      placeholder: Paste the current translated wording here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_wording
+    attributes:
+      label: Proposed wording
+      description: Provide the complete replacement, preserving any placeholders such as `{name}` or `%s`.
+      placeholder: Enter the proposed translated wording here.
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Location or screen
+      description: Where does this wording appear in ha-paneld?
+      placeholder: e.g. Settings > Display > Screen timeout
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: ha-paneld version
+      description: Shown on the panel info page and in `/health`.
+      placeholder: e.g. 0.9.7
+    validations:
+      required: true
+
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why is this correction better?
+      description: Explain the accuracy, grammar, tone, regional usage, or context improved by the proposed wording.
+    validations:
+      required: true
+
+  - type: input
+    id: stable_key
+    attributes:
+      label: Translation key (optional)
+      description: Include the stable catalogue key if you know it.
+      placeholder: e.g. settings.display.screen_timeout
+
+  - type: input
+    id: source_hash
+    attributes:
+      label: Source hash (optional)
+      description: Include the catalogue source hash if it is available to you.
+      placeholder: SHA-256 source hash
+
+  - type: input
+    id: current_target_hash
+    attributes:
+      label: Current-target hash (optional)
+      description: Include the SHA-256 of the exact UTF-8 current wording if it is available to you.
+      placeholder: SHA-256 current-target hash
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmation
+      options:
+        - label: I know the selected language and variant well enough to propose this correction.
+          required: true
+        - label: I authored the proposed wording and have the right to submit it.
+          required: true
+        - label: I agree that this contribution may be distributed under the project's Apache License 2.0.
+          required: true
