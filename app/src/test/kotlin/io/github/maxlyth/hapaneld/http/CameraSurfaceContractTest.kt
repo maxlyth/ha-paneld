@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.camera.CameraFault
 import io.github.maxlyth.hapaneld.camera.CameraIndication
 import io.github.maxlyth.hapaneld.camera.CameraPresentation
+import io.github.maxlyth.hapaneld.camera.CameraRefusal
 import io.github.maxlyth.hapaneld.camera.CameraResolution
 import io.github.maxlyth.hapaneld.camera.CameraState
 import io.github.maxlyth.hapaneld.testsupport.TestSources
@@ -139,6 +140,39 @@ class CameraSurfaceContractTest {
         val responses = get.getJSONObject("responses")
         listOf("200", "400", "403", "404", "503").forEach {
             assertTrue("missing response $it", responses.has(it))
+        }
+    }
+
+    /**
+     * The route's own 503 prose is the only place a consumer learns which bodies to expect, and it
+     * drifted: `CameraFault.ENCODE` has mapped to `camera-encode-failed` since slice 3 while the
+     * enumeration still named seven bodies (found 2026-08-30). Reachability is read from the code rather
+     * than assumed: every refusal the owner's `snapshot()` names, and every refusal the enum carries that
+     * is not produced only on the stream path, must be named in the documented response for its status.
+     */
+    @Test fun everyRefusalTheSnapshotRouteCanReturnIsNamedInItsDocumentedOutcome() {
+        val owner = TestSources.kotlin("camera/CameraSessionOwner.kt").readText()
+        val state = TestSources.kotlin("camera/CameraSessionState.kt").readText()
+        val snapshotFn = owner.substring(owner.indexOf("override fun snapshot("))
+        val snapshotBody = snapshotFn.substring(0, snapshotFn.indexOf("\n    }\n") + 7)
+        val namedInSnapshot = Regex("CameraRefusal\\.([A-Z_]+)").findAll(snapshotBody).map { it.groupValues[1] }.toSet()
+        assertTrue("the waiter path names its refusals in snapshot()", namedInSnapshot.isNotEmpty())
+        // Produced only where a stream is admitted or its encoder fails; a snapshot never sees them.
+        val streamOnly = setOf(CameraRefusal.STREAM_ENCODER, CameraRefusal.BUSY)
+        streamOnly.forEach {
+            assertFalse("${it.name} is stream-only, so the snapshot path must not name it", it.name in namedInSnapshot)
+            assertTrue("${it.name} is produced on the stream path", "CameraRefusal.${it.name}" in transport || "CameraRefusal.${it.name}" in state)
+        }
+        val reachable = CameraRefusal.entries.filter { it !in streamOnly }
+        namedInSnapshot.forEach { name -> assertTrue("$name named in snapshot() is reachable", reachable.any { it.name == name }) }
+        // The route sends exactly one refusal as 404 and every other as 503.
+        assertTrue("result.reason == CameraRefusal.ABSENT" in server)
+        val responses = openApi.getJSONObject("paths").getJSONObject("/api/v1/camera/snapshot.jpg").getJSONObject("get").getJSONObject("responses")
+        val notFound = responses.getJSONObject("404").getString("description")
+        val unavailable = responses.getJSONObject("503").getString("description")
+        reachable.forEach { refusal ->
+            val documented = if (refusal == CameraRefusal.ABSENT) notFound else unavailable
+            assertTrue("${refusal.token} is a reachable snapshot outcome and must be named in its documented response", refusal.token in documented)
         }
     }
 
