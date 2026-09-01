@@ -41,6 +41,7 @@ CONTEXT_ROOT_KEYS = {
     "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",
 }
 CONTEXT_SOURCE_KEYS = {"id", "repository", "revision", "artifact", "artifactSha256", "license"}
+CONTEXT_TERM_KEYS = {"id", "meaning", "english", "source", "sourceKey", "translations"}
 
 
 class CatalogueError(ValueError):
@@ -493,6 +494,13 @@ def context_report(path: Path) -> dict[str, Any]:
         root["schema"] != SCHEMA
         or not isinstance(root["id"], str)
         or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", root["id"])
+        or not isinstance(root["productContext"], str)
+        or not root["productContext"].strip()
+        or not isinstance(root["instruction"], str)
+        or not root["instruction"].strip()
+        or root["license"] != "Apache-2.0"
+        or not isinstance(root["notice"], str)
+        or not root["notice"].strip()
         or not isinstance(root["sources"], list)
         or not root["sources"]
         or not isinstance(root["terms"], list)
@@ -509,10 +517,15 @@ def context_report(path: Path) -> dict[str, Any]:
         if (
             not isinstance(source["id"], str)
             or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", source["id"])
+            or not isinstance(source["repository"], str)
+            or not source["repository"].startswith("https://github.com/home-assistant/")
             or not isinstance(source["revision"], str)
             or not REV_RE.fullmatch(source["revision"])
+            or not isinstance(source["artifact"], str)
+            or not source["artifact"].strip()
             or not isinstance(source["artifactSha256"], str)
             or not SHA_RE.fullmatch(source["artifactSha256"])
+            or source["license"] != "Apache-2.0"
         ):
             raise CatalogueError("malformed terminology context source pin")
         source_ids.append(source["id"])
@@ -523,6 +536,35 @@ def context_report(path: Path) -> dict[str, Any]:
         })
     if source_ids != sorted(source_ids) or len(source_ids) != len(set(source_ids)):
         raise CatalogueError("terminology context sources are not unique canonical ids")
+
+    term_ids: list[str] = []
+    known_sources = set(source_ids)
+    for term in root["terms"]:
+        if not isinstance(term, dict):
+            raise CatalogueError("malformed terminology context term")
+        exact_keys(term, CONTEXT_TERM_KEYS, "terminology context term")
+        translations = term["translations"]
+        if (
+            not isinstance(term["id"], str)
+            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", term["id"])
+            or not isinstance(term["meaning"], str)
+            or not term["meaning"].strip()
+            or not isinstance(term["english"], str)
+            or not term["english"].strip()
+            or term["source"] not in known_sources
+            or not isinstance(term["sourceKey"], str)
+            or not term["sourceKey"].strip()
+            or not isinstance(translations, dict)
+            or not translations
+            or any(locale not in LOCALES for locale in translations)
+            or any(not isinstance(text, str) or not text.strip() for text in translations.values())
+        ):
+            raise CatalogueError("malformed terminology context term value")
+        if list(translations) != sorted(translations):
+            raise CatalogueError("terminology context translations are not in canonical locale order")
+        term_ids.append(term["id"])
+    if term_ids != sorted(term_ids) or len(term_ids) != len(set(term_ids)):
+        raise CatalogueError("terminology context terms are not unique canonical ids")
 
     return {
         "id": root["id"],
@@ -631,8 +673,19 @@ def report_targets(
     output: Path | None,
     context_path: Path | None = None,
 ) -> list[Path]:
+    selected = selected_targets(source_path, target_paths, target_dir)
+    if context_path is not None:
+        context_entry = Path(os.path.abspath(context_path))
+        same_context_parent = (
+            target_dir is not None and context_path.resolve().parent == target_dir.resolve()
+        )
+        selected = [
+            path for path in selected
+            if Path(os.path.abspath(path)) != context_entry
+            and not (same_context_parent and path.name == context_path.name)
+        ]
     if output is None:
-        return selected_targets(source_path, target_paths, target_dir)
+        return selected
 
     output_path = output.resolve()
     if output_path == source_path.resolve():
@@ -653,7 +706,7 @@ def report_targets(
         target_dir is not None and output_path.parent == target_dir.resolve()
     )
     selected = [
-        path for path in selected_targets(source_path, target_paths, target_dir)
+        path for path in selected
         if Path(os.path.abspath(path)) != output_entry
         and not (same_resolved_parent and path.name == output.name)
     ]

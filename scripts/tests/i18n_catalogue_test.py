@@ -495,6 +495,25 @@ class CatalogueTest(unittest.TestCase):
             subprocess.run(aliased_command, check=True)
             self.assertEqual(first_bytes, output_path.read_bytes())
 
+            explicit_context_path = source_path.parent / "terminology.json"
+            self.write(explicit_context_path, self.report_context())
+            explicit_command = command[:-2] + [
+                "--context", str(explicit_context_path), "--output", str(output_path),
+            ]
+            subprocess.run(explicit_command, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+            explicit_aliased_dir = list(explicit_command)
+            explicit_aliased_dir[explicit_aliased_dir.index("--target-dir") + 1] = str(directory_alias)
+            subprocess.run(explicit_aliased_dir, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+            explicit_context_alias = list(explicit_command)
+            explicit_context_alias[explicit_context_alias.index("--context") + 1] = str(
+                directory_alias / explicit_context_path.name
+            )
+            subprocess.run(explicit_context_alias, check=True)
+            self.assertEqual(first_bytes, output_path.read_bytes())
+            explicit_context_path.unlink()
+
             source_before = source_path.read_bytes()
             source_collision = command[:-1] + [str(source_path)]
             failed = subprocess.run(source_collision, capture_output=True, text=True)
@@ -552,14 +571,27 @@ class CatalogueTest(unittest.TestCase):
                 "sourceRevision": "e" * 40,
                 "strings": {},
             })
+            malformed = []
             context = self.report_context()
             context["sources"][0]["artifactSha256"] = "not-a-pin"
-            self.write(context_path, context)
-            with self.assertRaisesRegex(
-                i18n.CatalogueError,
-                "malformed terminology context source pin",
-            ):
-                i18n.catalogue_report(source_path, [target_path], context_path)
+            malformed.append(context)
+            context = self.report_context()
+            context["sources"][0]["repository"] = 7
+            malformed.append(context)
+            context = self.report_context()
+            context["sources"][0]["license"] = "Proprietary"
+            malformed.append(context)
+            context = self.report_context()
+            context["terms"] = [None]
+            malformed.append(context)
+            context = self.report_context()
+            context["terms"][0]["source"] = "missing-source"
+            malformed.append(context)
+            for index, context in enumerate(malformed):
+                with self.subTest(index=index):
+                    self.write(context_path, context)
+                    with self.assertRaises(i18n.CatalogueError):
+                        i18n.catalogue_report(source_path, [target_path], context_path)
 
 
 if __name__ == "__main__":
