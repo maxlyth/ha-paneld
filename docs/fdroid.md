@@ -15,11 +15,11 @@
 In the F-Droid app, go to **Settings → Repositories → ➕ (add)** and enter:
 
 ```text
-https://maxlyth.github.io/ha-paneld/fdroid/repo?fingerprint=ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
+https://fdroid.ha-paneld.com/fdroid/repo?fingerprint=ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
 ```
 
 > [!TIP]
-> Keep the whole URL including `?fingerprint=…` — it pins the repository to ha-paneld's signing key so nothing else can impersonate it. You can also open the [repo landing page](https://maxlyth.github.io/ha-paneld/) and scan its QR code instead of typing the URL.
+> Keep the whole URL including `?fingerprint=…` — it pins the repository to ha-paneld's signing key so nothing else can impersonate it. You can also open the [repo landing page](https://fdroid.ha-paneld.com/index.html) to copy the URL.
 
 ## 3. Install and update
 
@@ -35,4 +35,4 @@ Only **stable** releases appear here; pre-releases (`…-rcN`) are intentionally
 
 ## How the repository works (maintainers)
 
-The repo is rebuilt from the GitHub releases on every stable release and served from GitHub Pages. It's signed with the **same key as the release APKs**, so an F-Droid install cleanly updates a build that was sideloaded by hand (no signature clash). Maintainer setup + CI details: [`fdroid/README.md`](../fdroid/README.md).
+The repo is rebuilt from the GitHub releases on every stable release and served from a dedicated Cloudflare R2 bucket. It's signed with the **same key as the release APKs**, so an F-Droid install cleanly updates a build that was sideloaded by hand (no signature clash). Maintainer setup + CI details: [`tools/fdroid/README.md`](../tools/fdroid/README.md).

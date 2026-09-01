@@ -46,8 +46,8 @@ test/node_modules/
 vendor-firmwares
 
 # F-Droid repo build outputs — generated in CI from GitHub Releases, never committed.
-fdroid/repo/
-fdroid/archive/
-fdroid/tmp/
-fdroid/.apkcache
+tools/fdroid/repo/
+tools/fdroid/archive/
+tools/fdroid/tmp/
+tools/fdroid/.apkcache
 _site/

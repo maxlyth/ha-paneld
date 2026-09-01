@@ -110,7 +110,7 @@ updates:
       include: scope
 
   - package-ecosystem: pip
-    directory: /fdroid
+    directory: /tools/fdroid
     schedule:
       interval: weekly
       day: monday
