@@ -81,4 +81,31 @@ class FramePacerTest {
         assertFalse(pacer.admit(5_066L))
         assertTrue(pacer.admit(5_100L))
     }
+
+    /**
+     * The cadence the two camera boards actually deliver: 30 fps is 33.33 ms, which lands on 33, 33, 34
+     * in whole milliseconds, with a millisecond of jitter either way. A bare "at least one interval since
+     * the last delivery" gate — the owner's before this test existed — drops every frame that lands a
+     * millisecond early and then waits a whole extra sensor frame, so it delivers ten of a fifteen cap
+     * and twenty of a thirty cap. The pacer's slop is what makes the cap hold on real hardware.
+     */
+    @Test fun theRealSensorCadenceWithJitterStillDeliversTheWholeCap() {
+        listOf(15 to 30, 30 to 30).forEach { (cap, sensor) ->
+            val pacer = FramePacer(fps = cap)
+            var t = 0L
+            var admitted = 0
+            var lastAdmitted = -1L
+            var i = 0
+            val end = 60_000L
+            while (t < end) {
+                if (pacer.admit(t)) { admitted++; lastAdmitted = t }
+                // 33, 33, 34 keeps the long-run period at 33.33 ms; the jitter alternates -1, 0, +1.
+                t += 1_000L / sensor + (if (i % 3 == 2) 1 else 0) + ((i % 3) - 1)
+                i++
+            }
+            val rate = (admitted - 1) * 1_000.0 / lastAdmitted
+            assertTrue("cap $cap from a $sensor fps sensor delivered $rate fps", rate >= cap * 0.99)
+            assertTrue("never above the cap: $admitted", admitted <= 60 * cap + 1)
+        }
+    }
 }

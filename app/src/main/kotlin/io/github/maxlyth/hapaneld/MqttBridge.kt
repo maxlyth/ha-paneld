@@ -288,6 +288,40 @@ internal fun applyAutoSleepSetting(
 internal fun hiddenReadOnlyStateTopic(key: String, panel: String): String? =
     SettingsRegistry.spec(key)?.ha?.takeIf { it.readOnly }?.stateTopic(panel)
 
+internal const val MQTT_MEASUREMENT_REFRESH_AFTER_ACK_MS = 5L * 60L * 1_000L
+
+/** A finite opt-in threshold keeps refreshes on graphable measurements rather than every state topic. */
+internal fun mqttMeasurementRefreshAfterAckMs(key: String): Long? =
+    SettingsRegistry.spec(key)?.ha
+        ?.takeIf { it.periodicRefresh }
+        ?.let { MQTT_MEASUREMENT_REFRESH_AFTER_ACK_MS }
+
+internal fun mqttMeasurementPayloadIsRefreshable(payload: String): Boolean =
+    payload.toDoubleOrNull()?.isFinite() == true
+
+internal fun mqttStateChannel(
+    key: String,
+    topic: String,
+    retain: Boolean = true,
+    equivalent: (String, String) -> Boolean = String::equals,
+    observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
+): io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel {
+    val refreshAfterAckMs = mqttMeasurementRefreshAfterAckMs(key)
+    return io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(
+        key = key,
+        topic = topic,
+        retain = retain,
+        observe = observe,
+        equivalent = equivalent,
+        refreshEligible = if (refreshAfterAckMs != null) {
+            ::mqttMeasurementPayloadIsRefreshable
+        } else {
+            { true }
+        },
+        maxSilenceMs = refreshAfterAckMs,
+    )
+}
+
 private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
 
 /** Whether the published count is a total or a known lower bound, so HA never records a floor as exact. */
@@ -1544,7 +1578,7 @@ internal class MqttBridge(
             retain: Boolean = true,
             equivalent: (String, String) -> Boolean = String::equals,
             observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
-        ) = c.register(io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(key, topic, retain, observe, equivalent))
+        ) = c.register(mqttStateChannel(key, topic, retain, equivalent, observe))
 
         channel("storage_health", stateStorageHealth) {
             known(storageHealth().severity.name.lowercase(Locale.ROOT))
@@ -4010,8 +4044,9 @@ internal class MqttBridge(
             }
         }
 
-        // Diagnostic sensors — refresh each exposed one, deadbanded so slow drift (temperature, memory,
-        // CPU average) never floods the broker. Boot time is constant, so it's not re-published here.
+        // Diagnostic sensors — refresh each exposed one. Deadbands still publish meaningful changes;
+        // selected measurement sensors also have a bounded maximum broker-ACK silence. Boot time is
+        // constant and is therefore published only at exposure/reconnect.
         runCatching { syncDiagnostics() }
 
         // Architectural safety net: audit every registered state channel from its declared authority.
@@ -4048,8 +4083,9 @@ internal class MqttBridge(
         stateConverger.reconcile(key, force = true)
     }
 
-    /** Per-tick refresh of the numeric/IP diagnostic sensors, gated on expose + a per-metric deadband
-     *  so steady state costs zero messages. Boot time (constant) is published only at expose. */
+    /** Per-tick refresh of the numeric/IP diagnostic sensors, gated on expose + a per-metric deadband.
+     *  Measurement sensors may additionally publish one unchanged value after the bounded maximum
+     *  silence. Boot time (constant) is published only at expose. */
     private fun syncDiagnostics() {
         val keys = if (hasCht8305) DIAG_KEYS + ROOM_KEYS else DIAG_KEYS
         for (key in keys) {

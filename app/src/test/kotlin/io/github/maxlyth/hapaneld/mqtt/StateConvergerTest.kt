@@ -13,9 +13,10 @@ import org.junit.Test
 
 class StateConvergerTest {
     private data class Sent(val topic: String, val payload: String, val retain: Boolean, val done: (Boolean) -> Unit)
-    private fun converger(sent: MutableList<Sent>) = StateConverger(
+    private fun converger(sent: MutableList<Sent>, monotonicMs: () -> Long = { 0L }) = StateConverger(
         sender = { topic, payload, retain, done -> sent += Sent(topic, payload, retain, done) },
         schedule = { it() },
+        monotonicMs = monotonicMs,
     )
 
     @Test fun closeDeadlineDoesNotPretendABlockedObservationDrained() {
@@ -77,6 +78,274 @@ class StateConvergerTest {
         c.reconcile("screen")
 
         assertEquals(1, sent.size)
+    }
+
+    @Test fun stableStateRepublishesOnlyAtTheMaximumAcknowledgedSilence() {
+        var now = 0L
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("cpu", "cpu/state", observe = {
+            StateConverger.Observation.Known("50")
+        }, maxSilenceMs = 300_000L))
+
+        c.reconcile("cpu")
+        sent.single().done(true)
+        now = 299_999L
+        c.reconcile("cpu")
+        assertEquals(1, sent.size)
+
+        now = 300_000L
+        c.reconcile("cpu")
+        assertEquals(listOf("50", "50"), sent.map { it.payload })
+        c.reconcile("cpu")
+        assertEquals("an identical in-flight refresh must not duplicate", 2, sent.size)
+        sent.last().done(true)
+
+        now = 599_999L
+        c.reconcile("cpu")
+        assertEquals(2, sent.size)
+        now = 600_000L
+        c.reconcile("cpu")
+        assertEquals(3, sent.size)
+    }
+
+    @Test fun oneMinuteAuditChecksTheFiveMinuteThresholdBeforeSixMinutesOfSilence() {
+        var now = 0L
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("cpu", "cpu/state", observe = {
+            StateConverger.Observation.Known("50")
+        }, maxSilenceMs = 300_000L))
+
+        c.reconcile("cpu")
+        now = 1L // Model a PUBACK arriving just after the minute audit admitted the publish.
+        sent.single().done(true)
+        for (minute in 1..5) {
+            now = minute * 60_000L
+            c.reconcile("cpu")
+        }
+        assertEquals(1, sent.size)
+
+        now = 360_000L
+        c.reconcile("cpu")
+        assertEquals(2, sent.size)
+        assertTrue(now - 1L < 6L * 60L * 1_000L)
+    }
+
+    @Test fun noisyValuesKeepTheirDeadbandBaselineAcrossTheRefresh() {
+        var now = 0L
+        var value = "50"
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("cpu", "cpu/state", observe = {
+            StateConverger.Observation.Known(value)
+        }, equivalent = StateConverger.numericDeadband(5.0), maxSilenceMs = 300_000L))
+
+        c.reconcile("cpu")
+        sent.single().done(true)
+        value = "54"
+        now = 60_000L
+        c.reconcile("cpu")
+        assertEquals(1, sent.size)
+
+        now = 300_000L
+        c.reconcile("cpu")
+        assertEquals("cadence repeats the acknowledged representative", "50", sent.last().payload)
+        sent.last().done(true)
+
+        value = "55"
+        now++
+        c.reconcile("cpu")
+        assertEquals("a real five-point change still publishes immediately", "55", sent.last().payload)
+        assertEquals(3, sent.size)
+    }
+
+    @Test fun failedRefreshDoesNotAdvanceTheAcknowledgedDeadline() {
+        var now = 0L
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("memory", "memory/state", observe = {
+            StateConverger.Observation.Known("62")
+        }, maxSilenceMs = 300_000L))
+
+        c.reconcile("memory")
+        sent.single().done(true)
+        now = 300_000L
+        c.reconcile("memory")
+        sent.last().done(false)
+        c.reconcile("memory")
+
+        assertEquals(listOf("62", "62", "62"), sent.map { it.payload })
+        assertEquals(1, c.status().inFlight)
+    }
+
+    @Test fun failedCadenceAcknowledgementCannotBecomeFreshnessEvidence() {
+        var now = 0L
+        var observation: StateConverger.Observation = StateConverger.Observation.Known("62")
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel(
+            "memory",
+            "memory/state",
+            observe = { observation },
+            maxSilenceMs = 300_000L,
+        ))
+
+        c.reconcile("memory")
+        sent.single().done(true)
+        now = 300_000L
+        c.reconcile("memory")
+        sent.last().done(false)
+
+        // An unreadable sample clears the ordinary dirty retry. When authority returns, the failed
+        // PUBACK must not suppress the still-due cadence report.
+        observation = StateConverger.Observation.Unknown
+        c.reconcile("memory")
+        observation = StateConverger.Observation.Known("62")
+        now++
+        c.reconcile("memory")
+
+        assertEquals(listOf("62", "62", "62"), sent.map { it.payload })
+        assertEquals(1, c.status().inFlight)
+    }
+
+    @Test fun unknownAndUnavailableStatesNeverReceiveCadenceDuplicates() {
+        var now = 0L
+        var observation: StateConverger.Observation = StateConverger.Observation.Known("42")
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("cpu", "cpu/state", observe = { observation }, maxSilenceMs = 300_000L))
+
+        c.reconcile("cpu")
+        sent.single().done(true)
+        now = 300_000L
+        observation = StateConverger.Observation.Unknown
+        c.reconcile("cpu")
+        assertEquals(1, sent.size)
+
+        observation = StateConverger.Observation.Unavailable
+        c.reconcile("cpu")
+        assertEquals(listOf("42", ""), sent.map { it.payload })
+        sent.last().done(true)
+        now = 600_000L
+        c.reconcile("cpu")
+        assertEquals("an unavailable tombstone is not a heartbeat", 2, sent.size)
+    }
+
+    @Test fun semanticUnknownMeasurementPublishesOnceButDoesNotReceiveCadenceDuplicates() {
+        var now = 0L
+        var value = "50"
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel(
+            "cpu",
+            "cpu/state",
+            observe = { StateConverger.Observation.Known(value) },
+            equivalent = StateConverger.numericDeadband(5.0),
+            refreshEligible = { it.toDoubleOrNull()?.isFinite() == true },
+            maxSilenceMs = 300_000L,
+        ))
+
+        c.reconcile("cpu")
+        sent.single().done(true)
+        value = "unknown"
+        now = 60_000L
+        c.reconcile("cpu")
+        sent.last().done(true)
+        now = 600_000L
+        c.reconcile("cpu")
+
+        assertEquals(listOf("50", "unknown"), sent.map { it.payload })
+    }
+
+    @Test fun staleConnectionAcknowledgementCannotResetTheRefreshClock() {
+        var now = 0L
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        c.register(StateConverger.Channel("cpu", "cpu/state", observe = {
+            StateConverger.Observation.Known("50")
+        }, maxSilenceMs = 300_000L))
+
+        c.reconcile("cpu")
+        val oldConnection = sent.single()
+        c.markAllDirty()
+        now = 10_000L
+        oldConnection.done(true)
+        c.reconcile("cpu")
+        sent.last().done(true)
+
+        now = 309_999L
+        c.reconcile("cpu")
+        assertEquals(2, sent.size)
+        now = 310_000L
+        c.reconcile("cpu")
+        assertEquals(3, sent.size)
+    }
+
+    @Test fun eightPanelFleetRefreshCountIsBoundedAtFiveMinutes() {
+        var now = 0L
+        var publications = 0
+        val convergers = List(8) { panel ->
+            StateConverger(
+                sender = { _, _, _, done -> publications++; done(true) },
+                schedule = { it() },
+                monotonicMs = { now },
+            ).also { converger ->
+                repeat(11) { sensor ->
+                    converger.register(StateConverger.Channel(
+                        key = "p${panel}s$sensor",
+                        topic = "panel/$panel/sensor/$sensor",
+                        observe = { StateConverger.Observation.Known("50") },
+                        maxSilenceMs = 300_000L,
+                    ))
+                }
+                converger.reconcileAll()
+            }
+        }
+        val initial = publications
+
+        for (minute in 1..1_440) {
+            now = minute * 60_000L
+            convergers.forEach { it.reconcileAll() }
+        }
+
+        assertEquals(8 * 11, initial)
+        assertEquals(25_344, publications - initial)
+    }
+
+    @Test fun dueMeasurementBurstStillUsesTheFourMessagePhysicalOutbox() {
+        var now = 0L
+        val sent = mutableListOf<Sent>()
+        val c = converger(sent) { now }
+        repeat(11) { sensor ->
+            c.register(StateConverger.Channel(
+                key = "sensor_$sensor",
+                topic = "sensor/$sensor/state",
+                observe = { StateConverger.Observation.Known("50") },
+                maxSilenceMs = 300_000L,
+            ))
+        }
+
+        c.reconcileAll()
+        var completed = 0
+        while (completed < sent.size || c.status().inFlight > 0) {
+            sent[completed++].done(true)
+        }
+        assertEquals(11, sent.size)
+
+        now = 300_000L
+        c.reconcileAll()
+        assertEquals(4, c.status().inFlight)
+        assertEquals(15, sent.size)
+        var maximumInFlight = c.status().inFlight
+        while (completed < sent.size || c.status().inFlight > 0) {
+            sent[completed++].done(true)
+            maximumInFlight = maxOf(maximumInFlight, c.status().inFlight)
+        }
+
+        assertEquals(4, maximumInFlight)
+        assertEquals("exactly one cadence report per eligible channel", 22, sent.size)
+        assertEquals(0, c.status().inFlight)
     }
 
     @Test fun failedPublishRemainsDirtyAndRetries() {
@@ -419,6 +688,9 @@ class StateConvergerTest {
         assertTrue(equivalent("50", "53"))
         assertEquals(false, equivalent("50", "OFF"))
         assertEquals(false, equivalent("unknown", "50"))
+        assertTrue(equivalent("unknown", "unknown"))
+        assertTrue(equivalent("NaN", "NaN"))
+        assertEquals(false, equivalent("NaN", "50"))
     }
 
     private fun costOperation(costs: FeatureCostRegistry): JSONObject {

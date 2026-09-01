@@ -8,9 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Golden tests: the registry-driven discovery builder must emit payloads byte-identical to the
- * legacy hand-written `MqttBridge.publishDiscovery` JSON, so existing HA installs see no entity
- * churn when the discovery loop is switched to the registry (Stage C).
+ * Golden tests: the registry-driven discovery builder must preserve legacy payloads except for
+ * descriptor-level policy fields that are asserted explicitly below.
  */
 class DiscoveryParityTest {
     @Test fun silenceBootChimeDefaultHasOneAuthority() {
@@ -97,9 +96,26 @@ class DiscoveryParityTest {
 
     @Test fun ambientLightSensorMatchesLegacyDiscovery() {
         assertEquals(
-            """{"name":"Illuminance","object_id":"test_illuminance","unique_id":"test_illuminance","state_topic":"ha-paneld/test/illuminance/state","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement",$avail,$device}""",
+            """{"name":"Illuminance","object_id":"test_illuminance","unique_id":"test_illuminance","state_topic":"ha-paneld/test/illuminance/state","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement","force_update":true,$avail,$device}""",
             build("illuminance"),
         )
+    }
+
+    @Test fun forceUpdateIsLimitedToTheBoundedMeasurementRefreshSet() {
+        val expected = setOf(
+            "illuminance", "proximity_level", "temperature", "humidity",
+            "diag_cpu", "diag_memory", "diag_soc_temp", "diag_wifi_rssi",
+            "diag_wifi_outages_24h", "room_temp", "room_humidity",
+        )
+        val periodic = SettingsRegistry.haCapable().filter { it.ha!!.periodicRefresh }
+
+        assertEquals(expected, periodic.mapTo(linkedSetOf()) { it.key })
+        periodic.forEach { spec ->
+            assertTrue(build(spec.key).contains("\"force_update\":true"))
+        }
+        SettingsRegistry.haCapable().filterNot { it.ha!!.periodicRefresh }.forEach { spec ->
+            assertFalse("${spec.key} must stay change-only", build(spec.key).contains("\"force_update\""))
+        }
     }
 
     @Test fun physicalSensorDiscoveryComesFromRegistryDescriptors() {
@@ -109,11 +125,11 @@ class DiscoveryParityTest {
             "proximity" to
                 """{"name":"Proximity","object_id":"test_proximity","unique_id":"test_proximity","state_topic":"ha-paneld/test/proximity/state","device_class":"occupancy","payload_on":"ON","payload_off":"OFF",$proximityAvail,$device}""",
             "proximity_level" to
-                """{"name":"Proximity level","object_id":"test_proximity_level","unique_id":"test_proximity_level","state_topic":"ha-paneld/test/proximity_level/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:hand-wave",$proximityAvail,$device}""",
+                """{"name":"Proximity level","object_id":"test_proximity_level","unique_id":"test_proximity_level","state_topic":"ha-paneld/test/proximity_level/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:hand-wave","force_update":true,$proximityAvail,$device}""",
             "temperature" to
-                """{"name":"Temperature","object_id":"test_temperature","unique_id":"test_temperature","state_topic":"ha-paneld/test/temperature/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement",$avail,$device}""",
+                """{"name":"Temperature","object_id":"test_temperature","unique_id":"test_temperature","state_topic":"ha-paneld/test/temperature/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement","force_update":true,$avail,$device}""",
             "humidity" to
-                """{"name":"Humidity","object_id":"test_humidity","unique_id":"test_humidity","state_topic":"ha-paneld/test/humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement",$avail,$device}""",
+                """{"name":"Humidity","object_id":"test_humidity","unique_id":"test_humidity","state_topic":"ha-paneld/test/humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement","force_update":true,$avail,$device}""",
         )
 
         expected.forEach { (key, payload) ->
@@ -157,14 +173,14 @@ class DiscoveryParityTest {
 
     @Test fun wifiSignalUsesHomeAssistantDiagnosticSignalSchema() {
         assertEquals(
-            """{"name":"Wi-Fi signal strength","object_id":"test_diag_wifi_rssi","unique_id":"test_diag_wifi_rssi","state_topic":"ha-paneld/test/diag_wifi_rssi/state","device_class":"signal_strength","unit_of_measurement":"dBm","state_class":"measurement","icon":"mdi:wifi","entity_category":"diagnostic",$avail,$device}""",
+            """{"name":"Wi-Fi signal strength","object_id":"test_diag_wifi_rssi","unique_id":"test_diag_wifi_rssi","state_topic":"ha-paneld/test/diag_wifi_rssi/state","device_class":"signal_strength","unit_of_measurement":"dBm","state_class":"measurement","icon":"mdi:wifi","entity_category":"diagnostic","force_update":true,$avail,$device}""",
             build("diag_wifi_rssi"),
         )
     }
 
     @Test fun wifiOutageCountersAreDiagnosticMeasurementSensors() {
         assertEquals(
-            """{"name":"Wi-Fi outages (24 h)","object_id":"test_diag_wifi_outages_24h","unique_id":"test_diag_wifi_outages_24h","state_topic":"ha-paneld/test/diag_wifi_outages_24h/state","json_attributes_topic":"ha-paneld/test/diag_wifi_outages_24h/attributes","state_class":"measurement","icon":"mdi:wifi-alert","entity_category":"diagnostic",$avail,$device}""",
+            """{"name":"Wi-Fi outages (24 h)","object_id":"test_diag_wifi_outages_24h","unique_id":"test_diag_wifi_outages_24h","state_topic":"ha-paneld/test/diag_wifi_outages_24h/state","json_attributes_topic":"ha-paneld/test/diag_wifi_outages_24h/attributes","state_class":"measurement","icon":"mdi:wifi-alert","entity_category":"diagnostic","force_update":true,$avail,$device}""",
             build("diag_wifi_outages_24h"),
         )
     }

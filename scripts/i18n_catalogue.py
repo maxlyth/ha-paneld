@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from typing import Any
+import unicodedata
 
 SCHEMA = 1
 SOURCE_ROOT_KEYS = {"schema", "locale", "sourceRevision", "strings"}
@@ -114,6 +115,16 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
             raise CatalogueError(f"{key}: target is unchanged English")
 
 
+def validate_target_text_hygiene(key: str, text: str) -> None:
+    unsafe = sorted({
+        f"U+{ord(character):04X}"
+        for character in text
+        if unicodedata.category(character) in {"Cc", "Cf"}
+    })
+    if unsafe:
+        raise CatalogueError(f"{key}: target contains unsafe control or format characters: {', '.join(unsafe)}")
+
+
 def string_list(value: Any, owner: str, *, distinct: bool = True) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise CatalogueError(f"{owner}: expected an array of strings")
@@ -196,6 +207,7 @@ def validate_target(
         text = record["text"]
         if not isinstance(text, str) or not text:
             raise CatalogueError(f"{key}: target text must be non-empty")
+        validate_target_text_hygiene(key, text)
         if len(text) > 16_384:
             raise CatalogueError(f"{key}: target text is unreasonably large")
         if not isinstance(record["sourceHash"], str) or not SHA_RE.fullmatch(record["sourceHash"]):
@@ -235,6 +247,25 @@ def require_clean(worktree: Path) -> None:
     ).stdout
     if status:
         raise CatalogueError("translation input must be exported from a clean committed worktree")
+
+
+def require_committed_catalogue(worktree: Path, path: Path, relative_path: Path, owner: str) -> None:
+    canonical = worktree.resolve() / relative_path
+    if path.resolve() != canonical:
+        raise CatalogueError(f"{owner} must be the canonical catalogue inside the selected worktree")
+    committed = subprocess.run(
+        ["git", "show", f"HEAD:{relative_path.as_posix()}"],
+        cwd=worktree,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+    try:
+        current = path.read_bytes()
+    except OSError as error:
+        raise CatalogueError(f"{owner}: {error}") from error
+    if current != committed:
+        raise CatalogueError(f"{owner} bytes do not match the selected Git HEAD")
 
 
 def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
@@ -422,6 +453,108 @@ def merge_candidate(
     }
     validation_path = output.parent / f".{output.name}.validation"
     write_json_atomic(validation_path, merged)
+    try:
+        validate_target(validation_path, source, expected_locale=locale)
+        os.replace(validation_path, output)
+    finally:
+        validation_path.unlink(missing_ok=True)
+
+
+def paths_alias(first: Path, second: Path) -> bool:
+    if first.resolve() == second.resolve() or entry_identity(first) == entry_identity(second):
+        return True
+    try:
+        return first.exists() and second.exists() and os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def apply_community_correction(
+    worktree: Path,
+    source_path: Path,
+    base_target_path: Path,
+    locale: str,
+    key: str,
+    expected_source_hash: str,
+    expected_target_hash: str,
+    replacement_path: Path,
+    output: Path,
+) -> None:
+    if locale not in LOCALES:
+        raise CatalogueError(f"unsupported target locale: {locale}")
+    if not SHA_RE.fullmatch(expected_source_hash):
+        raise CatalogueError("expected source hash must be a lowercase SHA-256")
+    if not SHA_RE.fullmatch(expected_target_hash):
+        raise CatalogueError("expected target hash must be a lowercase SHA-256")
+    require_clean(worktree)
+    worktree_root = worktree.resolve()
+    resolved_output = output.resolve()
+    if resolved_output == worktree_root or worktree_root in resolved_output.parents:
+        raise CatalogueError("correction output must be outside the selected worktree")
+    catalogue_dir = Path("app/src/main/assets/i18n")
+    require_committed_catalogue(worktree, source_path, catalogue_dir / "en.json", "source")
+    require_committed_catalogue(
+        worktree,
+        base_target_path,
+        catalogue_dir / f"{locale}.json",
+        "target",
+    )
+    for input_path, owner in (
+        (source_path, "source catalogue"),
+        (base_target_path, "target catalogue"),
+        (replacement_path, "replacement file"),
+    ):
+        if paths_alias(output, input_path):
+            raise CatalogueError(f"correction output must not overwrite the {owner}")
+
+    source = validate_source(source_path)
+    base = validate_target(base_target_path, source, expected_locale=locale)
+    source_record = source["strings"].get(key)
+    if source_record is None:
+        raise CatalogueError(f"unknown source key: {key}")
+    current = base["strings"].get(key)
+    if current is None:
+        raise CatalogueError(f"target has no current record for key: {key}")
+    if source_record["sourceHash"] != expected_source_hash:
+        raise CatalogueError(f"{key}: expected English source hash is stale")
+    if current["sourceHash"] != source_record["sourceHash"]:
+        raise CatalogueError(f"{key}: target record is stale against the English source")
+    if source_hash(current["text"]) != expected_target_hash:
+        raise CatalogueError(f"{key}: expected current target hash is stale")
+    if current["state"] == "community-corrected":
+        raise CatalogueError(f"{key}: current community correction is protected")
+    try:
+        replacement = replacement_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise CatalogueError(f"{replacement_path}: {error}") from error
+    if not replacement:
+        raise CatalogueError(f"{key}: empty community correction")
+    if len(replacement) > 16_384:
+        raise CatalogueError(f"{key}: community correction is unreasonably large")
+
+    corrected = {
+        "schema": SCHEMA,
+        "locale": locale,
+        "sourceRevision": source["sourceRevision"],
+        "strings": dict(base["strings"]),
+    }
+    corrected["strings"][key] = {
+        "text": replacement,
+        "sourceHash": source_record["sourceHash"],
+        "state": "community-corrected",
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=output.parent,
+        prefix=f".{output.name}.validation.",
+        delete=False,
+    ) as handle:
+        validation_path = Path(handle.name)
+        handle.write(json.dumps(corrected, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     try:
         validate_target(validation_path, source, expected_locale=locale)
         os.replace(validation_path, output)
@@ -743,6 +876,19 @@ def parser() -> argparse.ArgumentParser:
     merge.add_argument("--base-target", type=Path, required=True)
     merge.add_argument("--candidate", type=Path, required=True)
     merge.add_argument("--output", type=Path, required=True)
+    correction = sub.add_parser(
+        "apply-community-correction",
+        help="apply one reviewed contributor correction to a separate target catalogue output",
+    )
+    correction.add_argument("--source", type=Path, required=True)
+    correction.add_argument("--worktree", type=Path, default=Path.cwd())
+    correction.add_argument("--base-target", type=Path, required=True)
+    correction.add_argument("--locale", required=True)
+    correction.add_argument("--key", required=True)
+    correction.add_argument("--expected-source-hash", required=True)
+    correction.add_argument("--expected-target-hash", required=True)
+    correction.add_argument("--replacement-file", type=Path, required=True)
+    correction.add_argument("--output", type=Path, required=True)
     return result
 
 
@@ -774,8 +920,22 @@ def main() -> int:
             export_batch(args.source, args.locale, args.output, args.worktree)
         elif args.command == "validate-candidate":
             candidate_to_target(args.source, args.candidate, args.output)
-        else:
+        elif args.command == "merge-candidate":
             merge_candidate(args.source, args.base_target, args.candidate, args.output)
+        elif args.command == "apply-community-correction":
+            apply_community_correction(
+                args.worktree,
+                args.source,
+                args.base_target,
+                args.locale,
+                args.key,
+                args.expected_source_hash,
+                args.expected_target_hash,
+                args.replacement_file,
+                args.output,
+            )
+        else:
+            raise CatalogueError(f"unsupported command: {args.command}")
     except (CatalogueError, subprocess.CalledProcessError) as error:
         print(f"i18n catalogue error: {error}", file=os.sys.stderr)
         return 1

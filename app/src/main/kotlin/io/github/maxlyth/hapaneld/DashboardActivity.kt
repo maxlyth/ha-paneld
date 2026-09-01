@@ -111,6 +111,13 @@ internal fun deferReadyEntityBootstrapUntilWake(screenAwake: Boolean): Boolean =
 
 internal fun shouldKeepBuiltInRendererScreenOn(preventIdleDim: Boolean): Boolean = preventIdleDim
 
+internal fun entityFilterAttentionDetail(blockingIssues: Int): String {
+    require(blockingIssues > 0) { "blocking issue count must be positive" }
+    return "Nothing is wrong with Home Assistant. The panel needs an answer about safety checks " +
+        "found while reading your entities before it can open the dashboard. " +
+        "Number requiring review: $blockingIssues."
+}
+
 private data class EntityFilterNativeHold(val error: String, val detail: String)
 
 private class EntityFilterInterceptorUnavailable(cause: Throwable) : RuntimeException(cause)
@@ -3228,7 +3235,7 @@ class DashboardActivity : AppCompatActivity() {
                     "${filterHold.detail} Home Assistant has not been opened, because loading every entity would make this panel slow. Try again, or turn the entity filter off under Configure, in the Dashboard settings."
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
-                        "Nothing is wrong with Home Assistant. The panel flagged $blockingIssues safety ${if (blockingIssues == 1) "check" else "checks"} while reading your entities, and needs an answer before it can open the dashboard."
+                        entityFilterAttentionDetail(blockingIssues)
                     } else {
                         "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open entity settings to simplify the dashboard, or tap Disable entity filter."
                     }

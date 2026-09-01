@@ -16,6 +16,7 @@ class StateConverger(
     private val sender: (topic: String, payload: String, retain: Boolean, done: (Boolean) -> Unit) -> Unit,
     private val schedule: (() -> Unit) -> Unit = ::dispatch,
     private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
+    private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     sealed interface Observation {
         data class Known(val payload: String) : Observation
@@ -29,6 +30,12 @@ class StateConverger(
         val retain: Boolean = true,
         val observe: () -> Observation,
         val equivalent: (acknowledged: String, observed: String) -> Boolean = String::equals,
+        /** Whether a known payload is meaningful enough to repeat solely for freshness. Semantic
+         *  changes still publish normally even when this returns false. */
+        val refreshEligible: (String) -> Boolean = { true },
+        /** Maximum broker-acknowledged silence for this state topic. Null keeps change-only
+         *  publication. The deadline never republishes Unknown or Unavailable observations. */
+        val maxSilenceMs: Long? = null,
     )
 
     private data class Runtime(
@@ -41,6 +48,7 @@ class StateConverger(
         var dirty: Boolean = true,
         var unknown: Boolean = false,
         var sentAtMs: Long = 0,
+        var acknowledgedAtMs: Long? = null,
         var cost: FeatureCostRegistry.Span? = null,
     )
 
@@ -54,6 +62,9 @@ class StateConverger(
     fun register(channel: Channel) {
         check(!closed) { "state converger is closed" }
         check(channel.key !in channels) { "duplicate state channel ${channel.key}" }
+        require(channel.maxSilenceMs == null || channel.maxSilenceMs > 0L) {
+            "maxSilenceMs must be positive"
+        }
         channels[channel.key] = Runtime(channel)
     }
 
@@ -69,7 +80,7 @@ class StateConverger(
 
     private fun reconcileAdmitted(key: String, force: Boolean, admit: () -> Boolean) {
         val runtime = synchronized(this) { if (closed) null else channels[key] } ?: return
-        val payload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
+        val observedPayload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
             is Observation.Known -> observation.payload.also {
                 synchronized(this) {
                     if (closed) return
@@ -96,9 +107,23 @@ class StateConverger(
         }
 
         val generation: Long
+        val payload: String
         var admittedCost: FeatureCostRegistry.Span? = null
         synchronized(this) {
             if (closed) return
+            val acknowledged = runtime.acknowledged
+            val equivalent = acknowledged?.let { runtime.channel.equivalent(it, observedPayload) } == true
+            val refreshDue = !runtime.unknown && runtime.channel.refreshEligible(observedPayload) &&
+                runtime.channel.maxSilenceMs?.let { maximum ->
+                runtime.acknowledgedAtMs?.let { acknowledgedAt ->
+                    (monotonicMs() - acknowledgedAt).coerceAtLeast(0L) >= maximum
+                }
+            } == true
+            // A cadence report repeats the acknowledged representative after freshly observing an
+            // equivalent value. This proves freshness without allowing sub-deadband drift to move the
+            // baseline a little every interval. Semantic/deadband-crossing and forced updates send the
+            // current observation as before.
+            payload = if (!force && refreshDue && equivalent) requireNotNull(acknowledged) else observedPayload
             if (runtime.inFlight && runtime.sent == payload) return
             if (runtime.inFlight) {
                 // Exactly one physical publish per channel. The observer remains the latest-value
@@ -109,7 +134,7 @@ class StateConverger(
                 updateBacklog()
                 return
             }
-            if (!force && !runtime.dirty && runtime.acknowledged?.let { runtime.channel.equivalent(it, payload) } == true) return
+            if (!force && !runtime.dirty && equivalent && !refreshDue) return
             if (channels.values.count { it.inFlight } >= MAX_IN_FLIGHT) {
                 // A capacity refusal must not lose the observation. A CLEAN channel reconciled here
                 // (e.g. just commanded during a burst) would otherwise stay silent until the next
@@ -144,6 +169,7 @@ class StateConverger(
                 if (success) {
                     successes++
                     runtime.acknowledged = payload
+                    runtime.acknowledgedAtMs = monotonicMs()
                 } else {
                     failures++
                 }
@@ -192,6 +218,7 @@ class StateConverger(
             it.cost = null
             it.generation++
             it.acknowledged = null
+            it.acknowledgedAtMs = null
             it.sent = null
             it.dirty = true
             it.inFlight = false
@@ -274,7 +301,11 @@ class StateConverger(
         fun numericDeadband(deadband: Double): (String, String) -> Boolean = { acknowledged, observed ->
             val old = acknowledged.toDoubleOrNull()
             val new = observed.toDoubleOrNull()
-            old != null && new != null && kotlin.math.abs(new - old) < deadband
+            if (old != null && old.isFinite() && new != null && new.isFinite()) {
+                kotlin.math.abs(new - old) < deadband
+            } else {
+                acknowledged == observed
+            }
         }
     }
 }

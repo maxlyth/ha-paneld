@@ -42,6 +42,19 @@ class CatalogueTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8")
 
+    def committed_catalogues(self, root, source, locale, target):
+        worktree = root / "repo"
+        catalogue_dir = worktree / "app/src/main/assets/i18n"
+        source_path, target_path = catalogue_dir / "en.json", catalogue_dir / f"{locale}.json"
+        self.write(source_path, source)
+        self.write(target_path, target)
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=worktree, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=worktree, check=True)
+        subprocess.run(["git", "add", "app/src/main/assets/i18n"], cwd=worktree, check=True)
+        subprocess.run(["git", "commit", "-qm", "test fixture"], cwd=worktree, check=True)
+        return worktree, source_path, target_path
+
     def report_source(self):
         source = self.source()
         strings = {}
@@ -239,6 +252,264 @@ class CatalogueTest(unittest.TestCase):
             self.write(base_path, protected)
             with self.assertRaises(i18n.CatalogueError):
                 i18n.merge_candidate(source_path, base_path, candidate_path, output)
+
+    def test_apply_community_correction_changes_exactly_one_current_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replacement_path, output = root / "replacement.txt", root / "out" / "de.json"
+            source = self.source()
+            second_text = "Enable panel mode."
+            source["strings"]["settings.second.help"] = {
+                "text": second_text,
+                "sourceHash": i18n.source_hash(second_text),
+                "surface": "settings",
+                "context": "Configure second help",
+                "risk": "ordinary",
+                "siblings": [],
+                "placeholders": [],
+                "frozen": [],
+                "softMaxChars": 40,
+                "hardMaxChars": 80,
+            }
+            source["strings"] = dict(sorted(source["strings"].items()))
+            current_text = "{name} auf MQTT behalten."
+            base = {
+                "schema": 1,
+                "locale": "de",
+                "sourceRevision": "a" * 40,
+                "strings": {
+                    "settings.example.help": {
+                        "text": current_text,
+                        "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                        "state": "machine-cross-checked",
+                    },
+                    "settings.second.help": {
+                        "text": "Panelmodus aktivieren.",
+                        "sourceHash": source["strings"]["settings.second.help"]["sourceHash"],
+                        "state": "machine-draft",
+                    },
+                },
+            }
+            worktree, source_path, base_path = self.committed_catalogues(root, source, "de", base)
+            replacement_path.write_text("{name} in MQTT beibehalten.", encoding="utf-8")
+
+            i18n.apply_community_correction(
+                worktree,
+                source_path,
+                base_path,
+                "de",
+                "settings.example.help",
+                source["strings"]["settings.example.help"]["sourceHash"],
+                i18n.source_hash(current_text),
+                replacement_path,
+                output,
+            )
+
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(source["sourceRevision"], result["sourceRevision"])
+            self.assertEqual(
+                {
+                    "text": "{name} in MQTT beibehalten.",
+                    "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                    "state": "community-corrected",
+                },
+                result["strings"]["settings.example.help"],
+            )
+            self.assertEqual(base["strings"]["settings.second.help"], result["strings"]["settings.second.help"])
+            self.assertEqual(base, json.loads(base_path.read_text(encoding="utf-8")))
+            i18n.validate_target(output, i18n.validate_source(source_path), expected_locale="de")
+            report = i18n.catalogue_report(source_path, [output])
+            self.assertEqual(1, report["locales"]["de"]["stateCounts"]["community-corrected"])
+
+    def test_apply_community_correction_fails_closed_for_stale_or_invalid_input(self):
+        invalid_replacements = {
+            "placeholder": "Ohne Namen auf MQTT behalten.",
+            "frozen": "{name} ohne Broker behalten.",
+            "hard budget": "{name} auf MQTT behalten. " + "x" * 80,
+            "script": "{name} auf MQTT behalten. Ελληνικά",
+            "NUL control": "{name} auf MQTT behalten.\x00",
+            "bidi override": "{name} auf MQTT behalten.\u202e",
+            "empty": "",
+        }
+        for name, replacement in invalid_replacements.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                replacement_path, output = root / "replacement.txt", root / "out" / "de.json"
+                source = self.source()
+                current_text = "{name} auf MQTT behalten."
+                base = {
+                    "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                    "strings": {"settings.example.help": {
+                        "text": current_text,
+                        "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                        "state": "machine-cross-checked",
+                    }},
+                }
+                worktree, source_path, base_path = self.committed_catalogues(root, source, "de", base)
+                replacement_path.write_text(replacement, encoding="utf-8")
+                with self.assertRaises(i18n.CatalogueError):
+                    i18n.apply_community_correction(
+                        worktree, source_path, base_path, "de", "settings.example.help",
+                        source["strings"]["settings.example.help"]["sourceHash"],
+                        i18n.source_hash(current_text), replacement_path, output,
+                    )
+                self.assertFalse(output.exists())
+                self.assertEqual(base, json.loads(base_path.read_text(encoding="utf-8")))
+
+    def test_apply_community_correction_rejects_drift_protected_records_and_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replacement_path, output = root / "replacement.txt", root / "corrected.json"
+            source = self.source()
+            current_text = "{name} auf MQTT behalten."
+            base = {
+                "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                "strings": {"settings.example.help": {
+                    "text": current_text,
+                    "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                    "state": "machine-cross-checked",
+                }},
+            }
+            worktree, source_path, base_path = self.committed_catalogues(root, source, "de", base)
+            replacement_path.write_text("{name} in MQTT beibehalten.", encoding="utf-8")
+            valid_args = (
+                worktree, source_path, base_path, "de", "settings.example.help",
+                source["strings"]["settings.example.help"]["sourceHash"],
+                i18n.source_hash(current_text), replacement_path, output,
+            )
+            mutations = (
+                ("stale English", valid_args[:5] + ("0" * 64,) + valid_args[6:]),
+                ("changed target", valid_args[:6] + ("0" * 64,) + valid_args[7:]),
+                ("unsupported locale", valid_args[:3] + ("nl",) + valid_args[4:]),
+                ("unknown key", valid_args[:4] + ("settings.unknown.help",) + valid_args[5:]),
+                ("source output alias", valid_args[:-1] + (source_path,)),
+                ("target output alias", valid_args[:-1] + (base_path,)),
+                ("replacement output alias", valid_args[:-1] + (replacement_path,)),
+                (
+                    "other locale output",
+                    valid_args[:-1] + (worktree / "app/src/main/assets/i18n/fr.json",),
+                ),
+            )
+            for name, args in mutations:
+                with self.subTest(name=name), self.assertRaises(i18n.CatalogueError):
+                    i18n.apply_community_correction(*args)
+
+            noncanonical_source = root / "en-copy.json"
+            self.write(noncanonical_source, source)
+            with self.assertRaisesRegex(i18n.CatalogueError, "source must be the canonical catalogue"):
+                i18n.apply_community_correction(
+                    worktree, noncanonical_source, *valid_args[2:]
+                )
+
+            self.assertFalse(output.exists())
+
+    def test_apply_community_correction_rejects_stale_protected_and_uncommitted_catalogues(self):
+        cases = ("stale target", "protected", "oversized")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = self.source()
+                if case == "oversized":
+                    source["strings"]["settings.example.help"]["hardMaxChars"] = 20_000
+                current_text = "{name} auf MQTT behalten."
+                target = {
+                    "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                    "strings": {"settings.example.help": {
+                        "text": current_text,
+                        "sourceHash": (
+                            "0" * 64 if case == "stale target"
+                            else source["strings"]["settings.example.help"]["sourceHash"]
+                        ),
+                        "state": "community-corrected" if case == "protected" else "machine-cross-checked",
+                    }},
+                }
+                worktree, source_path, base_path = self.committed_catalogues(root, source, "de", target)
+                replacement_path, output = root / "replacement.txt", root / "corrected.json"
+                replacement = (
+                    "{name} auf MQTT " + "x" * 16_384
+                    if case == "oversized" else "{name} in MQTT beibehalten."
+                )
+                replacement_path.write_text(replacement, encoding="utf-8")
+                expected_error = {
+                    "stale target": "target record is stale",
+                    "protected": "community correction is protected",
+                    "oversized": "unreasonably large",
+                }[case]
+                with self.assertRaisesRegex(i18n.CatalogueError, expected_error):
+                    i18n.apply_community_correction(
+                        worktree, source_path, base_path, "de", "settings.example.help",
+                        source["strings"]["settings.example.help"]["sourceHash"],
+                        i18n.source_hash(current_text), replacement_path, output,
+                    )
+                self.assertFalse(output.exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.source()
+            current_text = "{name} auf MQTT behalten."
+            target = {
+                "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                "strings": {"settings.example.help": {
+                    "text": current_text,
+                    "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                    "state": "machine-cross-checked",
+                }},
+            }
+            worktree, source_path, base_path = self.committed_catalogues(root, source, "de", target)
+            replacement_path, output = root / "replacement.txt", root / "corrected.json"
+            replacement_path.write_text("{name} in MQTT beibehalten.", encoding="utf-8")
+            target["sourceRevision"] = "a" * 40
+            self.write(base_path, target)
+            with self.assertRaisesRegex(i18n.CatalogueError, "clean committed worktree"):
+                i18n.apply_community_correction(
+                    worktree, source_path, base_path, "de", "settings.example.help",
+                    source["strings"]["settings.example.help"]["sourceHash"],
+                    i18n.source_hash(current_text), replacement_path, output,
+                )
+
+    def test_apply_community_correction_preserves_existing_staging_name_and_cli_dispatches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.source()
+            current_text = "{name} auf MQTT behalten."
+            target = {
+                "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                "strings": {"settings.example.help": {
+                    "text": current_text,
+                    "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                    "state": "machine-cross-checked",
+                }},
+            }
+            worktree, source_path, base_path = self.committed_catalogues(root, source, "de", target)
+            replacement_path = root / "replacement.txt"
+            output = root / "out" / "de.json"
+            old_staging = output.parent / ".de.json.validation"
+            replacement_path.write_text("{name} in MQTT beibehalten.", encoding="utf-8")
+            old_staging.parent.mkdir(parents=True)
+            old_staging.write_text("unrelated marker", encoding="utf-8")
+            command = [
+                sys.executable, str(SCRIPT), "apply-community-correction",
+                "--worktree", str(worktree),
+                "--source", str(source_path),
+                "--base-target", str(base_path),
+                "--locale", "de",
+                "--key", "settings.example.help",
+                "--expected-source-hash", source["strings"]["settings.example.help"]["sourceHash"],
+                "--expected-target-hash", i18n.source_hash(current_text),
+                "--replacement-file", str(replacement_path),
+                "--output", str(output),
+            ]
+            subprocess.run(command, check=True)
+            self.assertEqual("unrelated marker", old_staging.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "community-corrected",
+                json.loads(output.read_text(encoding="utf-8"))["strings"]["settings.example.help"]["state"],
+            )
+            failed_command = list(command)
+            failed_command[failed_command.index("--expected-target-hash") + 1] = "0" * 64
+            failed_command[failed_command.index("--output") + 1] = str(root / "failed.json")
+            failed = subprocess.run(failed_command, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
 
     def test_empty_frozen_literal_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

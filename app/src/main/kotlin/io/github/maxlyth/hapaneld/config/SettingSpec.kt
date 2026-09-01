@@ -98,8 +98,8 @@ data class Capabilities(
  *
  * [body] holds the entity-specific middle of the discovery JSON — every field between `unique_id`
  * and the shared `availability` + `device` fragments — with `{panel}` as the topic placeholder.
- * Keeping the body verbatim (rather than re-deriving field order) guarantees the generated payload
- * is byte-identical to today's hand-written discovery, so existing HA installs see no entity churn.
+ * Keeping the body verbatim (rather than re-deriving field order) keeps discovery stable apart from
+ * explicit descriptor-level policy fields such as the bounded measurement refresh below.
  */
 data class HaEntity(
     val component: String,        // light | switch | number | select | sensor | binary_sensor | text | button | event
@@ -110,12 +110,17 @@ data class HaEntity(
     // the spec carries `optionRequires`, so every other entity's payload stays a fixed string.
     val body: String,
     val readOnly: Boolean = false,// publish-only (sensors): no /api/v1/config row, value comes from the runtime
+    /** Opt this numeric measurement into bounded unchanged-value reports. Home Assistant needs
+     *  force_update to turn those reports into graph/recorder points; controls and attributes must not
+     *  inherit it because their duplicate reports can wake automations or grow unrelated history. */
+    val periodicRefresh: Boolean = false,
 ) {
     /** State topic this entity reports on, e.g. `ha-paneld/<panel>/wake_on_wave/state`. */
     fun stateTopic(panel: String): String = "ha-paneld/$panel/$objectSuffix/state"
 
     /**
-     * Build the retained discovery payload, byte-identical to the legacy hand-written JSON.
+     * Build the discovery payload. Entities without an explicit descriptor-level policy remain
+     * byte-identical to the legacy hand-written JSON.
      * [deviceJson] is the shared `"device":{...}` fragment, [availJson] the shared availability
      * fragment — both produced once per publish by the caller. [enabledByDefault]=false appends the
      * soft-hide flag (entity exists in HA but disabled → no recorder load) for the advanced hide mode.
@@ -130,12 +135,13 @@ data class HaEntity(
         optionsJson: String? = null,
     ): String {
         val edb = if (enabledByDefault) "" else ""","enabled_by_default":false"""
+        val forceUpdate = if (periodicRefresh) ""","force_update":true""" else ""
         // object_id keys the HA entity_id to the stable panel_id, not the cosmetic device name —
         // matches the hand-written discovery payloads (discovery-identity anchoring).
         return "{\"name\":\"${jsonEsc(name)}\",\"object_id\":\"${panel}_$objectSuffix\"," +
             "\"unique_id\":\"${panel}_$objectSuffix\"," +
             body.replace("{panel}", panel).replace("{options}", optionsJson.orEmpty()) +
-            edb + ",$availJson,$deviceJson}"
+            forceUpdate + edb + ",$availJson,$deviceJson}"
     }
 
     companion object {

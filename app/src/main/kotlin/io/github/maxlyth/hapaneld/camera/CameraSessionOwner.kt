@@ -115,7 +115,15 @@ class CameraSessionOwner(
      * exists so an unchanged demand does not re-issue it for nothing.
      */
     private var appliedForStream: Boolean? = null
-    private var lastDeliveredAtMs = 0L
+    /**
+     * Paces delivery to the session's bound rate. A [FramePacer] rather than a bare "at least one interval
+     * since the last delivery" comparison: the sensor ticks every 33.3 ms and a 15 fps interval is 66 ms,
+     * so a frame landing one millisecond early failed the bare comparison, the next one passed 100 ms
+     * after the last delivery, and two thirds of the cap was all that ever reached anyone (10 of 15 and
+     * 20 of 30, measured on both camera boards). The pacer's slop admits that frame; its cumulative due
+     * times keep the long-run rate at the cap.
+     */
+    private var deliveryPacer = FramePacer(15)
 
     /** One open attempt and the hardware it alone owns. */
     private inner class Attempt(val id: Long) {
@@ -409,6 +417,7 @@ class CameraSessionOwner(
         boundFps = (bindingFps ?: defaultFps()).coerceIn(1, 30)
         appliedForStream = null
         policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
+        deliveryPacer = FramePacer(boundFps)
         h.post { open(attemptId) }
     }
 
@@ -659,7 +668,7 @@ class CameraSessionOwner(
             is EncoderOpen.Ready -> {
                 synchronized(lock) {
                     encoder = opened.encoder
-                    encoderPacer = FramePacer(fps)
+                    encoderPacer = if (fps < boundFps) FramePacer(fps) else null
                     streamParams = null
                     stats.reset()
                 }
@@ -757,14 +766,14 @@ class CameraSessionOwner(
             synchronized(lock) {
                 ready = state.frame(attempt.id, now, attempt.exposureSettled) ?: return
                 // The frame-rate cap bounds delivery: a frame arriving sooner than the cap allows is
-                // observed for liveness but not handed on to anyone.
-                val interval = 1_000L / boundFps
-                if (now - lastDeliveredAtMs < interval) {
+                // observed for liveness but not handed on to anyone. The encoder has its own pacer only
+                // when its stream runs slower than the session; at the session's rate a second pacer
+                // with its own origin would drop frames the first one had already spaced correctly.
+                if (!deliveryPacer.admit(now)) {
                     ready.forEach { state.requeue(it) }
                     return
                 }
-                lastDeliveredAtMs = now
-                enc = encoder?.takeIf { encoderPacer?.admit(now) == true }
+                enc = encoder?.takeIf { encoderPacer?.admit(now) ?: true }
             }
             enc?.feed(img, now * 1_000L)
             if (ready.isEmpty()) return
