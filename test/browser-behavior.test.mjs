@@ -2091,7 +2091,9 @@ browserTest('Auto-sleep requires an assigned Area before OFF can be switched ON'
   let prerequisiteAssigned = false;
   const firstPrerequisite = deferred();
   const schema = [{
-    key: 'auto_sleep', label: 'Auto sleep', help: 'obsolete passive copy', group: 'Behaviour',
+    key: 'auto_sleep', label: 'Auto sleep',
+    help: 'Automatically wake the panel when activity is detected and switch the screen off after the learned delay. Manual screen control remains separate.',
+    group: 'Behaviour',
     type: 'BOOL', available: true,
   }];
   const harness = await startHarness((path, request) => {
