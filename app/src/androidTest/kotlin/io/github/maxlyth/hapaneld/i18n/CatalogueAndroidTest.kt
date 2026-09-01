@@ -33,14 +33,14 @@ class CatalogueAndroidTest {
 
         (AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH).forEach { locale ->
             val localized = loader.strings(locale)
-            if (locale == eligibleLocale) {
-                assertEquals(eligibleText, localized.get(key))
-                assertEquals(eligibleLocale, localized.resolve(key).language)
-            } else {
-                assertEquals(english, localized.get(key))
-                assertEquals(AppLocale.ENGLISH, localized.resolve(key).language)
-            }
-            loader.strings(locale).get(key)
+            val expectedText = if (locale == eligibleLocale) eligibleText else english
+            val expectedLanguage = if (locale == eligibleLocale) eligibleLocale else AppLocale.ENGLISH
+            assertEquals(expectedText, localized.get(key))
+            assertEquals(expectedLanguage, localized.resolve(key).language)
+
+            val cached = loader.strings(locale)
+            assertEquals(expectedText, cached.get(key))
+            assertEquals(expectedLanguage, cached.resolve(key).language)
         }
         assertEquals(AppLocale.RELEASE_LOCALES.map { "i18n/$it.json" }, reads)
     }
