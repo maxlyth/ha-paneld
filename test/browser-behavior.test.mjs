@@ -115,6 +115,427 @@ browserTest('Configure bypasses caches and lets a supported HA language supersed
   for (const read of reads) assert.equal(read.cacheControl, 'no-cache');
 });
 
+function localizedField(key, label, labelLanguage, help, helpLanguage, group = 'Identity') {
+  return { key, label, labelLanguage, help, helpLanguage, group, type: 'STRING', available: true };
+}
+
+browserTest('Configure renders translated, fallback and mixed schema fields with per-string language tags', async (t) => {
+  const schema = [
+    localizedField('friendly_name', 'Anzeigename', 'de', 'Name dieses Panels.', 'de'),
+    localizedField('manufacturer', 'Manufacturer', 'en', 'Optional manufacturer override.', 'en'),
+    localizedField('model', 'Modell', 'de', 'Optional model override.', 'en'),
+    localizedField('mqtt_broker', 'MQTT broker', 'en', 'Adresse des MQTT-Brokers.', 'de', 'MQTT'),
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { friendly_name: 'Panel', manufacturer: '', model: '', mqtt_broker: '' },
+      ha_expose: {}, ha_auth: { configured: false },
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.locator('#cfg-mqtt_broker').waitFor();
+
+  const rendered = await page.locator('.frow').evaluateAll((rows) => Object.fromEntries(rows.map((row) => {
+    const label = row.querySelector('.flabel > span');
+    const help = row.querySelector('.flabel > small');
+    const control = row.querySelector('.fctl input');
+    return [row.id, {
+      label: label?.textContent, labelLanguage: label?.getAttribute('lang'),
+      help: help?.textContent, helpLanguage: help?.getAttribute('lang'),
+      controlLanguage: control?.getAttribute('lang'),
+    }];
+  })));
+  assert.deepEqual(rendered['cfg-friendly_name'], {
+    label: 'Anzeigename', labelLanguage: 'de', help: 'Name dieses Panels.', helpLanguage: 'de', controlLanguage: 'de',
+  });
+  assert.deepEqual(rendered['cfg-manufacturer'], {
+    label: 'Manufacturer', labelLanguage: 'en', help: 'Optional manufacturer override.', helpLanguage: 'en', controlLanguage: 'en',
+  });
+  assert.deepEqual(rendered['cfg-model'], {
+    label: 'Modell', labelLanguage: 'de', help: 'Optional model override.', helpLanguage: 'en', controlLanguage: 'de',
+  });
+  assert.deepEqual(rendered['cfg-mqtt_broker'], {
+    label: 'MQTT broker', labelLanguage: 'en', help: 'Adresse des MQTT-Brokers.', helpLanguage: 'de', controlLanguage: 'en',
+  });
+});
+
+for (const scenario of [
+  { name: 'German', initial: 'auto', saved: 'de', finalLabel: 'Anzeigename', haLanguage: '', queryOverride: true },
+  { name: 'English', initial: 'auto', saved: 'en', finalLabel: 'Friendly name', haLanguage: '', queryOverride: false },
+  { name: 'Automatic', initial: 'en', saved: 'auto', finalLabel: 'Anzeigename', haLanguage: 'de-DE', queryOverride: true },
+]) {
+  browserTest(`Saving ${scenario.name} releases a supported browser override and recreates Configure`, async (t) => {
+    const state = { uiLanguage: scenario.initial, documents: 0, posts: [], schemaUrls: [] };
+    const schemaFor = (language) => [
+      localizedField('friendly_name', language === 'de' ? 'Anzeigename' : 'Friendly name', language, '', null),
+      { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+        group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+    ];
+    const harness = await startHarness(async (path, request) => {
+      if (path === '/api/v1/config/schema') {
+        const url = new URL(request.url, 'http://panel.test');
+        state.schemaUrls.push(url.pathname + url.search);
+        const explicit = url.searchParams.get('lang');
+        const ha = url.searchParams.get('ha_lang');
+        const language = explicit === 'fr' ? 'fr' : state.uiLanguage !== 'auto' ? state.uiLanguage : ha === 'de-DE' ? 'de' : 'en';
+        return json(schemaFor(language));
+      }
+      if (path === '/api/v1/config') {
+        if (request.method === 'POST') {
+          const body = new URLSearchParams(await requestBody(request));
+          state.uiLanguage = body.get('ui_language');
+          state.posts.push(state.uiLanguage);
+          return json({ ok: true, message: 'Saved.' });
+        }
+        return json({
+          settings: { friendly_name: 'Panel', ui_language: state.uiLanguage }, ha_expose: {},
+          ha_auth: { configured: !!scenario.haLanguage },
+        });
+      }
+      if (path === '/api/v1/ha/oauth/status') {
+        return json({ phase: 'connected', display_name: 'Owner', language: scenario.haLanguage });
+      }
+      if (path === '/api/v1/apps') return json({ apps: [] });
+      if (path === '/api/v1/radio') return json({ present: false });
+      if (path === '/api/v1/proximity') return json({ present: false });
+      if (path === '/api/v1/config/discovery') return json({});
+      if (path === '/health') return { body: 'ok cfg=locale' };
+    }, () => { state.documents++; return fixture(); });
+    const browser = await chromium.launch({ executablePath: chrome, headless: true });
+    const page = await browser.newPage();
+    page.setDefaultTimeout(3_000);
+    t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem('locale-test-seeded')) return;
+      sessionStorage.setItem('locale-test-seeded', '1');
+      localStorage.setItem('selectedLanguage', JSON.stringify('fr'));
+    });
+    await page.goto(harness.url + (scenario.queryOverride ? '?lang=fr' : ''), { waitUntil: 'domcontentloaded', timeout: 5_000 });
+    await page.locator('#cfg-ui_language select').selectOption(scenario.saved);
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+      page.locator('#savebtn').click(),
+    ]);
+    await page.getByText(scenario.finalLabel, { exact: true }).waitFor();
+
+    assert.deepEqual(state.posts, [scenario.saved]);
+    assert.equal(state.documents, 2);
+    assert.equal(new URL(page.url()).searchParams.has('lang'), false);
+    assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);
+    const postReloadSchemas = state.schemaUrls.slice(state.schemaUrls.lastIndexOf('/api/v1/config/schema?lang=fr') + 1);
+    assert.ok(postReloadSchemas.length > 0);
+    assert.equal(postReloadSchemas.some((url) => new URL(url, 'http://panel.test').searchParams.has('lang')), false);
+    if (scenario.haLanguage) assert.ok(postReloadSchemas.includes('/api/v1/config/schema?ha_lang=de-DE'));
+  });
+}
+
+browserTest('A locale save waits for newer edits before its one document recreation', async (t) => {
+  const firstSave = deferred();
+  const firstSaveSeen = deferred();
+  const state = { uiLanguage: 'auto', friendlyName: 'Panel', documents: 0, posts: [] };
+  const schema = [
+    localizedField('friendly_name', 'Friendly name', 'en', '', null),
+    { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.posts.push(Object.fromEntries(body));
+        if (body.has('ui_language')) {
+          state.uiLanguage = body.get('ui_language');
+          firstSaveSeen.resolve();
+          return firstSave.promise;
+        }
+        state.friendlyName = body.get('friendly_name');
+        return json({ ok: true, message: 'Saved.' });
+      }
+      return json({
+        settings: { friendly_name: state.friendlyName, ui_language: state.uiLanguage },
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=locale-concurrent' };
+  }, () => { state.documents++; return fixture(); });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('locale-concurrent-seeded')) return;
+    sessionStorage.setItem('locale-concurrent-seeded', '1');
+    localStorage.setItem('selectedLanguage', JSON.stringify('fr'));
+  });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-ui_language select').selectOption('de');
+  await page.locator('#savebtn').click();
+  await firstSaveSeen.promise;
+  await page.locator('#cfg-friendly_name input').fill('Newer panel name');
+  firstSave.resolve(json({ ok: true, message: 'Saved.' }));
+  await page.getByText('Saved; newer changes still need saving.', { exact: true }).waitFor();
+  assert.equal(state.documents, 1);
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);
+  assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Newer panel name');
+
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    page.locator('#savebtn').click(),
+  ]);
+  await page.locator('#cfg-friendly_name input').waitFor();
+  assert.equal(state.documents, 2);
+  assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Newer panel name');
+  assert.deepEqual(state.posts, [
+    { ui_language: 'de' },
+    { friendly_name: 'Newer panel name' },
+  ]);
+});
+
+browserTest('Reverting a newer edit before locale save completion reloads without an unsaved dialog', async (t) => {
+  const localeSave = deferred();
+  const localeSaveSeen = deferred();
+  const state = { uiLanguage: 'auto', documents: 0, dialogs: 0 };
+  const schema = [
+    localizedField('friendly_name', 'Friendly name', 'en', '', null),
+    { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.uiLanguage = body.get('ui_language');
+        localeSaveSeen.resolve();
+        return localeSave.promise;
+      }
+      return json({
+        settings: { friendly_name: 'Panel', ui_language: state.uiLanguage },
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=locale-pre-response-revert' };
+  }, () => { state.documents++; return fixture(); });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  page.on('dialog', async (dialog) => { state.dialogs++; await dialog.accept(); });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('locale-pre-response-revert-seeded')) return;
+    sessionStorage.setItem('locale-pre-response-revert-seeded', '1');
+    localStorage.setItem('selectedLanguage', JSON.stringify('fr'));
+  });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-ui_language select').selectOption('de');
+  await page.locator('#savebtn').click();
+  await localeSaveSeen.promise;
+  await page.locator('#cfg-friendly_name input').fill('Temporary newer name');
+  await page.locator('#cfg-friendly_name input').fill('Panel');
+  const navigation = page.waitForNavigation({ waitUntil: 'domcontentloaded' });
+  localeSave.resolve(json({ ok: true, message: 'Saved.' }));
+  await navigation;
+
+  assert.equal(state.dialogs, 0);
+  assert.equal(state.documents, 2);
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);
+  assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Panel');
+});
+
+browserTest('Reverting the newer edit releases a deferred locale document recreation', async (t) => {
+  const localeSave = deferred();
+  const localeSaveSeen = deferred();
+  const state = { uiLanguage: 'auto', documents: 0, posts: [] };
+  const schema = [
+    localizedField('friendly_name', 'Friendly name', 'en', '', null),
+    { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.posts.push(Object.fromEntries(body));
+        state.uiLanguage = body.get('ui_language');
+        localeSaveSeen.resolve();
+        return localeSave.promise;
+      }
+      return json({
+        settings: { friendly_name: 'Panel', ui_language: state.uiLanguage },
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=locale-revert' };
+  }, () => { state.documents++; return fixture(); });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('locale-revert-seeded')) return;
+    sessionStorage.setItem('locale-revert-seeded', '1');
+    localStorage.setItem('selectedLanguage', JSON.stringify('fr'));
+  });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-ui_language select').selectOption('de');
+  await page.locator('#savebtn').click();
+  await localeSaveSeen.promise;
+  await page.locator('#cfg-friendly_name input').fill('Temporary newer name');
+  localeSave.resolve(json({ ok: true, message: 'Saved.' }));
+  await page.getByText('Saved; newer changes still need saving.', { exact: true }).waitFor();
+
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    page.locator('#cfg-friendly_name input').fill('Panel'),
+  ]);
+  await page.locator('#cfg-friendly_name input').waitFor();
+  assert.equal(state.documents, 2);
+  assert.deepEqual(state.posts, [{ ui_language: 'de' }]);
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);
+  assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Panel');
+});
+
+browserTest('A partially applied locale save releases overrides and preserves its failure message', async (t) => {
+  const partialSave = deferred();
+  const partialSaveSeen = deferred();
+  const state = { uiLanguage: 'auto', documents: 0, posts: [], dialogs: 0 };
+  const schemaFor = (language) => [
+    localizedField('friendly_name', language === 'de' ? 'Anzeigename' : 'Friendly name', language, '', null),
+    { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+    { key: 'touch_sound', label: 'Touch sound', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'Behaviour', type: 'BOOL', available: true },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') {
+      const url = new URL(request.url, 'http://panel.test');
+      const language = url.searchParams.get('lang') === 'fr' ? 'fr' : state.uiLanguage === 'de' ? 'de' : 'en';
+      return json(schemaFor(language));
+    }
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.posts.push(Object.fromEntries(body));
+        state.uiLanguage = body.get('ui_language');
+        partialSaveSeen.resolve();
+        return partialSave.promise;
+      }
+      return json({
+        settings: { friendly_name: 'Panel', ui_language: state.uiLanguage, touch_sound: false },
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=locale-partial' };
+  }, () => { state.documents++; return fixture(); });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  page.on('dialog', async (dialog) => { state.dialogs++; await dialog.accept(); });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('locale-partial-seeded')) return;
+    sessionStorage.setItem('locale-partial-seeded', '1');
+    localStorage.setItem('selectedLanguage', JSON.stringify('fr'));
+  });
+  await page.goto(harness.url + '?lang=fr', { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-ui_language select').selectOption('de');
+  await page.locator('#cfg-touch_sound [role=switch]').click();
+  await page.locator('#savebtn').click();
+  await partialSaveSeen.promise;
+  await page.locator('#cfg-touch_sound [role=switch]').click();
+  const navigation = page.waitForNavigation({ waitUntil: 'domcontentloaded' });
+  partialSave.resolve(json({
+    ok: false, status: 'saved-partial', applied: ['ui_language'], pending: [], rejected: ['touch_sound'],
+    message: 'Language was saved, but touch sound was rejected.',
+  }, 500));
+  await navigation;
+  await page.getByText('Language was saved, but touch sound was rejected.', { exact: true }).waitFor();
+  await page.getByText('Anzeigename', { exact: true }).waitFor();
+  assert.equal(state.dialogs, 0);
+  assert.equal(state.documents, 2);
+  assert.deepEqual(state.posts, [{ ui_language: 'de', touch_sound: 'true' }]);
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);
+  assert.equal(new URL(page.url()).searchParams.has('lang'), false);
+  assert.equal(await page.locator('#cfg-touch_sound [role=switch]').getAttribute('aria-checked'), 'false');
+});
+
+browserTest('Unrelated and failed saves preserve the supported browser language override', async (t) => {
+  const state = { friendlyName: 'Panel', documents: 0, posts: [] };
+  const schema = [
+    localizedField('friendly_name', 'Friendly name', 'en', '', null),
+    { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
+      group: 'System', type: 'ENUM', available: true, options: ['auto', 'en', 'de', 'fr', 'it', 'es', 'zh-Hans'] },
+  ];
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        const body = new URLSearchParams(await requestBody(request));
+        state.posts.push(Object.fromEntries(body));
+        if (body.has('ui_language')) return json({ error: 'save-refused', message: 'Locale save refused.' }, 500);
+        state.friendlyName = body.get('friendly_name');
+        return json({ ok: true, message: 'Saved.' });
+      }
+      return json({
+        settings: { friendly_name: state.friendlyName, ui_language: 'auto' },
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=locale-negative' };
+  }, () => { state.documents++; return fixture(); });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(3_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript(() => localStorage.setItem('selectedLanguage', JSON.stringify('fr')));
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-friendly_name input').fill('Renamed panel');
+  await page.locator('#savebtn').click();
+  await page.getByText('Saved.', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), '"fr"');
+  assert.equal(state.documents, 1);
+
+  await page.locator('#cfg-ui_language select').selectOption('en');
+  await page.locator('#savebtn').click();
+  await page.getByText('Locale save refused.', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), '"fr"');
+  assert.equal(state.documents, 1);
+  assert.deepEqual(state.posts, [
+    { friendly_name: 'Renamed panel' },
+    { ui_language: 'en' },
+  ]);
+});
+
 function autoSleepHistory({ included = true, label = 'Office ceiling motion', hours = 6, laneCount = 1, areaName = 'Office', areaKey = 'a'.repeat(64) } = {}) {
   const end = Date.now();
   const start = end - hours * 60 * 60 * 1000;

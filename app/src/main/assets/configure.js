@@ -62,6 +62,9 @@
   var haOauthButton = null, haOauthStatus = null, haOauthLinks = null;
   var haOauthAuthorizationUrl = "", haOauthTargetUrl = "";
   var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
+  var localeDocumentReloadPending = false;
+  var localeDocumentReloadScheduled = false;
+  var localeReloadMessageKey = "ha-paneld-config-locale-reload-message";
   var UI_LANGUAGE_LABELS = {
     "auto": "Automatic", "en": "English", "de": "Deutsch", "fr": "Français",
     "it": "Italiano", "es": "Español", "zh-Hans": "简体中文"
@@ -130,6 +133,33 @@
     if (validLanguageTag(haLanguage)) params.set("ha_lang", haLanguage);
     var query = params.toString();
     return "/api/v1/config/schema" + (query ? "?" + query : "");
+  }
+
+  // The Configure selector is the explicit panel setting. Once its save is confirmed, an older
+  // browser/query override must not continue to outrank the value the user just chose. Recreate the
+  // document so every localized field is fetched under the resulting precedence; a concurrent edit
+  // can defer that reload, but cannot lose it.
+  function acceptSavedUiLanguage(submittedValues) {
+    if (!Object.prototype.hasOwnProperty.call(submittedValues, "ui_language")) return;
+    storeBrowserLanguage("");
+    stripLanguageQuery();
+    localeDocumentReloadPending = true;
+  }
+
+  function reloadForSavedLocale(message) {
+    if (message) {
+      try { window.sessionStorage.setItem(localeReloadMessageKey, message); } catch (_) {}
+    }
+    window.location.reload();
+  }
+
+  function reloadSavedLocaleWhenSettled() {
+    if (!localeDocumentReloadPending || dirty || saving || localeDocumentReloadScheduled) return;
+    localeDocumentReloadScheduled = true;
+    setTimeout(function () {
+      localeDocumentReloadScheduled = false;
+      if (localeDocumentReloadPending && !dirty && !saving) reloadForSavedLocale();
+    }, 0);
   }
 
   function readLocalizedSchema(response) {
@@ -233,6 +263,7 @@
     updateSaveUi();
     syncHaOAuthAvailability();
     syncBehaviourCardSignature();
+    reloadSavedLocaleWhenSettled();
   }
   function clearDirty() {
     dirty = false;
@@ -253,6 +284,7 @@
       dirtyUiReconcileQueued = false;
       recomputeDirty();
       updateSaveUi();
+      reloadSavedLocaleWhenSettled();
     }, 0);
   }
 
@@ -2906,6 +2938,7 @@
         if (autoBrightnessSourceChanged) beginAutoBrightnessSourceTransition(submittedValues.auto_brightness_ha_entity);
         Object.keys(submittedValues).forEach(function (key) { savedValues[key] = submittedValues[key]; });
         Object.keys(submittedExpose).forEach(function (key) { savedExpose[key] = submittedExpose[key]; });
+        acceptSavedUiLanguage(submittedValues);
         recomputeDirty();
         loadRadio();
         restampConfigWatchBaseline();
@@ -2924,11 +2957,15 @@
           });
           scheduleApplyPendingPoll();
           saving = false;
+          updateSaveUi();
+          if (localeDocumentReloadPending && !dirty) {
+            reloadForSavedLocale();
+            return;
+          }
           msg.textContent = dirty ?
             ((outcome && outcome.pending && outcome.pending.length) ?
               outcomeMessage + " Newer changes still need saving." : "Saved; newer changes still need saving.") :
             outcomeMessage;
-          updateSaveUi();
           if (autoSleepInputsChanged && values.auto_sleep === "true") setTimeout(loadAutoSleepData, 0);
           if (autoBrightnessSourceChanged) setTimeout(function () { loadAutoBrightnessData(true); }, 0);
           return;
@@ -2936,8 +2973,8 @@
         saving = false;
         msg.textContent = "Saving…"; clearDirty();
         // The optional Presence & wake card is server-rendered only while Wake on wave is enabled.
-        if (Object.prototype.hasOwnProperty.call(submittedValues, "wake_on_wave")) {
-          window.location.reload();
+        if (localeDocumentReloadPending || Object.prototype.hasOwnProperty.call(submittedValues, "wake_on_wave")) {
+          reloadForSavedLocale();
           return;
         }
         // Reload the form from the server, then land on a terminal message — don't leave a
@@ -2968,7 +3005,27 @@
       .catch(function (e) {
         saving = false;
         if (e && e.configOutcome && e.configOutcome.status === "saved-partial") {
+          var applied = Array.isArray(e.configOutcome.applied) ? e.configOutcome.applied : [];
+          var appliedValues = {};
+          applied.forEach(function (key) {
+            if (!Object.prototype.hasOwnProperty.call(submittedValues, key)) return;
+            appliedValues[key] = submittedValues[key];
+            savedValues[key] = submittedValues[key];
+          });
+          acceptSavedUiLanguage(appliedValues);
+          if (localeDocumentReloadPending) {
+            recomputeDirty();
+            updateSaveUi();
+            if (!dirty) {
+              reloadForSavedLocale(e.message);
+              return;
+            }
+          }
           load(function () {
+            if (localeDocumentReloadPending) {
+              reloadForSavedLocale(e.message);
+              return;
+            }
             msg.textContent = e.message;
             updateSaveUi();
           }, false);
@@ -3258,6 +3315,13 @@
     });
   }
 
-  load(null, true);
+  load(function () {
+    var reloadMessage = "";
+    try {
+      reloadMessage = window.sessionStorage.getItem(localeReloadMessageKey) || "";
+      window.sessionStorage.removeItem(localeReloadMessageKey);
+    } catch (_) {}
+    if (reloadMessage) document.getElementById("cfg-msg").textContent = reloadMessage;
+  }, true);
   loadRadio();
 })();
