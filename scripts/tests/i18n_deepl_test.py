@@ -560,6 +560,14 @@ class DeepLAdapterTest(unittest.TestCase):
             )
         self.assertFalse((self.root / "bundle-substitution").exists())
 
+        plan_path.write_bytes(plan_path.read_bytes() + b"\n")
+        with self.assertRaisesRegex(DEEPL.DeepLError, "run plan hash mismatch"):
+            DEEPL.build_bundle(
+                self.source_path, self.target_dir, self.context_path, plan_path,
+                generated / "run.json", generated / "candidates", self.root / "bundle-plan-drift",
+            )
+        self.assertFalse((self.root / "bundle-plan-drift").exists())
+
     def test_missing_target_capability_fails_before_usage_or_translation(self):
         plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
         plan_path = self.root / "plan.json"

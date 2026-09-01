@@ -605,11 +605,15 @@ def _validate_plan_inputs(
     return source, context
 
 
-def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
+def _validate_run(
+    run: dict[str, Any],
+    plan: dict[str, Any],
+    expected_plan_hash: str | None = None,
+) -> None:
     catalogue.exact_keys(
         run,
         {
-            "schema", "status", "baseRevision", "requestedCharacters", "selectedRecords",
+            "schema", "status", "baseRevision", "planHash", "requestedCharacters", "selectedRecords",
             "maximumBilledCharacters", "billedCharacters", "accountUsageBefore", "accountUsageAfter",
             "accountCharacterLimit", "contextArtifactId", "contextArtifactHash",
             "contextArtifactBytes", "resultHashes",
@@ -620,6 +624,8 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
         run["schema"] != RUN_SCHEMA
         or run["status"] not in {"no-changes", "skipped-quota", "generated"}
         or run["baseRevision"] != plan["baseRevision"]
+        or not isinstance(run["planHash"], str)
+        or not catalogue.SHA_RE.fullmatch(run["planHash"])
         or run["contextArtifactId"] != plan["contextArtifactId"]
         or run["contextArtifactHash"] != plan["contextArtifactHash"]
         or run["contextArtifactBytes"] != plan["contextArtifactBytes"]
@@ -640,6 +646,8 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
     selected = sum(len(batch["records"]) for batch in plan["batches"])
     if run["selectedRecords"] != selected:
         raise DeepLError("run selectedRecords mismatch")
+    if expected_plan_hash is not None and run["planHash"] != expected_plan_hash:
+        raise DeepLError("run plan hash mismatch")
     if run["status"] != "generated" and run["billedCharacters"] != 0:
         raise DeepLError("non-generated run reports billed characters")
     account_values = (
@@ -686,6 +694,7 @@ def generate(
 ) -> dict[str, Any]:
     plan = catalogue.read_json(plan_path)
     _, context = _validate_plan_inputs(plan, source_path, target_dir, context_path)
+    plan_hash = _source_digest(plan_path)
     if output_dir.exists():
         raise DeepLError("output directory already exists")
 
@@ -695,6 +704,7 @@ def generate(
             "schema": RUN_SCHEMA,
             "status": "no-changes",
             "baseRevision": plan["baseRevision"],
+            "planHash": plan_hash,
             "requestedCharacters": 0,
             "maximumBilledCharacters": 0,
             "billedCharacters": 0,
@@ -721,6 +731,7 @@ def generate(
             "schema": RUN_SCHEMA,
             "status": "skipped-quota",
             "baseRevision": plan["baseRevision"],
+            "planHash": plan_hash,
             "requestedCharacters": plan["requestedCharacters"],
             "maximumBilledCharacters": plan["maximumBilledCharacters"],
             "billedCharacters": 0,
@@ -776,6 +787,7 @@ def generate(
             "schema": RUN_SCHEMA,
             "status": "generated",
             "baseRevision": plan["baseRevision"],
+            "planHash": plan_hash,
             "requestedCharacters": plan["requestedCharacters"],
             "maximumBilledCharacters": plan["maximumBilledCharacters"],
             "billedCharacters": billed_characters,
@@ -899,7 +911,7 @@ def build_bundle(
     plan = catalogue.read_json(plan_path)
     source, _ = _validate_plan_inputs(plan, source_path, target_dir, context_path)
     run = catalogue.read_json(run_path)
-    _validate_run(run, plan)
+    _validate_run(run, plan, _source_digest(plan_path))
     if run["status"] != "generated":
         raise DeepLError("only a generated run can produce a candidate bundle")
     if output_dir.exists():
@@ -944,7 +956,7 @@ def build_bundle(
             "schema": RECEIPT_SCHEMA,
             "status": "generated",
             "baseRevision": plan["baseRevision"],
-            "planHash": _source_digest(plan_path),
+            "planHash": run["planHash"],
             "sourceCatalogueHash": plan["sourceCatalogueHash"],
             "contextArtifactId": plan["contextArtifactId"],
             "contextArtifactHash": plan["contextArtifactHash"],
@@ -986,7 +998,7 @@ def summary(plan_path: Path, run_path: Path) -> str:
     plan = catalogue.read_json(plan_path)
     _validate_plan(plan)
     run = catalogue.read_json(run_path)
-    _validate_run(run, plan)
+    _validate_run(run, plan, _source_digest(plan_path))
     locales = ", ".join(batch["locale"] for batch in plan["batches"] if batch["records"]) or "none"
     return "\n".join([
         "## Translation candidate run",
