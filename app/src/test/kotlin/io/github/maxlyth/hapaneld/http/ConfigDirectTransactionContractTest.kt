@@ -17,7 +17,7 @@ class ConfigDirectTransactionContractTest {
             source.indexOf("private fun recordLiveApplyOutcome"),
         )
         assertTrue(handler.indexOf("planDirectConfigMutation(") < handler.indexOf("config.applyBatch"))
-        assertTrue(handler.contains("for ((key, raw) in mutationPlan.changedLive)"))
+        assertTrue(handler.contains("dispatchDirectConfigLiveSettings(mutationPlan.changedLive)"))
         assertFalse(handler.contains("for (key in HTTP_LIVE_KEYS)"))
         assertTrue(handler.contains("mutationPlan.changedLive.firstOrNull { it.first == \"home_dashboard\" }"))
     }
@@ -38,8 +38,9 @@ class ConfigDirectTransactionContractTest {
             source.indexOf("private fun recordLiveApplyOutcome"),
         )
 
-        assertTrue(handler.contains("broker != null || user != null || pw != null || mqttAddressFamily != null"))
-        assertTrue(handler.contains("pw, mqttAddressFamily,"))
+        assertTrue(handler.contains("stageDirectCredentialSettings(config, postedValues)"))
+        assertTrue(source.contains("broker != null || user != null || password != null || mqttAddressFamily != null"))
+        assertTrue(source.contains("password,\n            mqttAddressFamily,"))
         assertTrue(source.contains("\\\"mqtt_address_family\\\":\${s(config.mqttAddressFamily)}"))
     }
 
@@ -50,7 +51,7 @@ class ConfigDirectTransactionContractTest {
         )
         val admission = handler.indexOf("InstallProgress.startConfigMutation()")
         val persistence = handler.indexOf("config.applyBatch")
-        val dispatch = handler.indexOf("for ((key, raw) in mutationPlan.changedLive)")
+        val dispatch = handler.indexOf("dispatchDirectConfigLiveSettings(mutationPlan.changedLive)")
         val release = handler.indexOf("InstallProgress.finishConfigMutation(configMutationTicket)")
 
         assertTrue(admission in 0 until persistence)

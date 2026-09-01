@@ -83,6 +83,44 @@ import java.util.Locale
 import java.util.WeakHashMap
 import org.json.JSONObject
 
+/** Independent, production-used map from registry live keys to their concrete MqttBridge effect owner.
+ * Keeping dispatch exhaustive over this enum means a newly declared live setting cannot acquire HTTP
+ * and MQTT classification merely because both classifications derive from the same registry flag. */
+internal enum class LiveSettingEffectOwner(val settingKey: String) {
+    WAKE_ON_WAVE("wake_on_wave"),
+    AUTO_SLEEP("auto_sleep"),
+    PREVENT_IDLE_DIM("prevent_idle_dim"),
+    WATCHDOG("watchdog_enabled"),
+    KIOSK("kiosk_lock"),
+    BOOT_CHIME("silence_boot_chime"),
+    AUTO_BRIGHTNESS("auto_brightness"),
+    TOUCH_SOUND("touch_sound"),
+    VOICE("voice_enabled"),
+    NETWORK_ADB("network_adb"),
+    ZIGBEE("zigbee_router"),
+    AUTO_BRIGHTNESS_MINIMUM("auto_brightness_minimum_percent"),
+    AUTO_BRIGHTNESS_RESPONSE("auto_brightness_response_percent"),
+    AUTO_BRIGHTNESS_HA_ENTITY("auto_brightness_ha_entity"),
+    CPU_GOVERNOR("cpu_governor"),
+    NAVBAR("navbar_mode"),
+    COMPANION_AUTO_UPDATE("companion_auto_update"),
+    COMPANION_UPDATE_CHANNEL("companion_update_channel"),
+    SELF_UPDATE("self_update"),
+    WEBVIEW_AUTO_UPDATE("webview_auto_update"),
+    UPDATE_CHANNEL("update_channel"),
+    HOME_DASHBOARD("home_dashboard"),
+    HA_AREA_PUBLISH_ONLY("ha_area"),
+    ;
+
+    companion object {
+        private val bySettingKey = entries.associateBy(LiveSettingEffectOwner::settingKey)
+        internal val settingKeys: Set<String> = bySettingKey.keys
+
+        fun requireFor(key: String): LiveSettingEffectOwner =
+            bySettingKey[key] ?: error("live setting declared without a dispatcher: $key")
+    }
+}
+
 internal fun liveSettingApplyResult(
     result: MqttCommandDispatcher.RunResult,
 ): LiveSettingApplyResult = when {
@@ -3315,37 +3353,41 @@ internal class MqttBridge(
         sensitiveApprovalRequired: Boolean = true,
     ) {
         val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
-        when (key) {
-            "wake_on_wave" -> handleWakeOnWave(onOff)
-            "auto_sleep" -> handleAutoSleep(onOff)
-            "prevent_idle_dim" -> handlePreventIdleDim(
+        when (LiveSettingEffectOwner.requireFor(key)) {
+            LiveSettingEffectOwner.WAKE_ON_WAVE -> handleWakeOnWave(onOff)
+            LiveSettingEffectOwner.AUTO_SLEEP -> handleAutoSleep(onOff)
+            LiveSettingEffectOwner.PREVENT_IDLE_DIM -> handlePreventIdleDim(
                 if (sensitiveApprovalRequired) value else onOff,
                 approvalRequired = sensitiveApprovalRequired,
             )
-            "watchdog_enabled" -> handleWatchdog(onOff)
-            "kiosk_lock" -> handleKiosk(onOff)
-            "silence_boot_chime" -> handleSilenceBootChime(onOff)
-            "auto_brightness" -> handleAutoBright(onOff)
-            "touch_sound" -> handleTouchSound(onOff)
-            "voice_enabled" -> handleVoiceEnabled(onOff)
-            "network_adb" -> handleNetAdb(onOff)
-            "zigbee_router" -> handleZigbee(onOff)
-            "auto_brightness_minimum_percent" -> handleAutoBrightnessMinimum(value)
-            "auto_brightness_response_percent" -> handleAutoBrightnessSensitivity(value)
-            "auto_brightness_ha_entity" -> handleAutoBrightnessHaEntity(value)
-            "cpu_governor" -> handleCpuGov(value)
-            "navbar_mode" -> handleNavbar(value)
-            "companion_auto_update" -> handleCompanionAuto(onOff, approvalRequired = sensitiveApprovalRequired)
-            "companion_update_channel" -> handleCompanionChannel(value, previousValue, sensitiveApprovalRequired)
-            "self_update" -> handleSelfUpdate(onOff, approvalRequired = sensitiveApprovalRequired)
-            "webview_auto_update" -> handleWebViewAuto(onOff, approvalRequired = sensitiveApprovalRequired)
-            "update_channel" -> handleUpdateChannel(value, previousValue, sensitiveApprovalRequired)
-            "home_dashboard" -> handleHomeDashboard(value, previousValue)
+            LiveSettingEffectOwner.WATCHDOG -> handleWatchdog(onOff)
+            LiveSettingEffectOwner.KIOSK -> handleKiosk(onOff)
+            LiveSettingEffectOwner.BOOT_CHIME -> handleSilenceBootChime(onOff)
+            LiveSettingEffectOwner.AUTO_BRIGHTNESS -> handleAutoBright(onOff)
+            LiveSettingEffectOwner.TOUCH_SOUND -> handleTouchSound(onOff)
+            LiveSettingEffectOwner.VOICE -> handleVoiceEnabled(onOff)
+            LiveSettingEffectOwner.NETWORK_ADB -> handleNetAdb(onOff)
+            LiveSettingEffectOwner.ZIGBEE -> handleZigbee(onOff)
+            LiveSettingEffectOwner.AUTO_BRIGHTNESS_MINIMUM -> handleAutoBrightnessMinimum(value)
+            LiveSettingEffectOwner.AUTO_BRIGHTNESS_RESPONSE -> handleAutoBrightnessSensitivity(value)
+            LiveSettingEffectOwner.AUTO_BRIGHTNESS_HA_ENTITY -> handleAutoBrightnessHaEntity(value)
+            LiveSettingEffectOwner.CPU_GOVERNOR -> handleCpuGov(value)
+            LiveSettingEffectOwner.NAVBAR -> handleNavbar(value)
+            LiveSettingEffectOwner.COMPANION_AUTO_UPDATE ->
+                handleCompanionAuto(onOff, approvalRequired = sensitiveApprovalRequired)
+            LiveSettingEffectOwner.COMPANION_UPDATE_CHANNEL ->
+                handleCompanionChannel(value, previousValue, sensitiveApprovalRequired)
+            LiveSettingEffectOwner.SELF_UPDATE ->
+                handleSelfUpdate(onOff, approvalRequired = sensitiveApprovalRequired)
+            LiveSettingEffectOwner.WEBVIEW_AUTO_UPDATE ->
+                handleWebViewAuto(onOff, approvalRequired = sensitiveApprovalRequired)
+            LiveSettingEffectOwner.UPDATE_CHANNEL ->
+                handleUpdateChannel(value, previousValue, sensitiveApprovalRequired)
+            LiveSettingEffectOwner.HOME_DASHBOARD -> handleHomeDashboard(value, previousValue)
             // Deliberately nothing to do live: discovery embeds suggested_area at its next publish, and
             // the Home Assistant write-back runs as the server's own post-commit side effect. Declared
             // live so the key cannot drag a full network reconfigure behind a wizard save.
-            "ha_area" -> Unit
-            else -> error("live setting declared without a dispatcher: $key")
+            LiveSettingEffectOwner.HA_AREA_PUBLISH_ONLY -> Unit
         }
     }
 

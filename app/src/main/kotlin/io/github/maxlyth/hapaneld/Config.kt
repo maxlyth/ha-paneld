@@ -2228,7 +2228,10 @@ class Config private constructor(
         SettingType.BOOL -> prefs.getBoolean(spec.key, spec.defaultBool()).toString()
         SettingType.INT -> prefs.getInt(spec.key, spec.defaultInt()).toString()
         SettingType.LONG -> prefs.getLong(spec.key, spec.defaultLong()).toString()
-        SettingType.FLOAT -> prefs.getFloat(spec.key, spec.defaultFloat()).toString()
+        SettingType.FLOAT -> (SettingValue.validate(
+            spec,
+            prefs.getFloat(spec.key, spec.defaultFloat()).toString(),
+        ) as Validation.Ok).normalized
         else -> when (spec.key) {
             "navbar_mode" -> navbarMode
             // A pre-UDP panel has the retired "syslog" spelling on disk. Canonicalize here so the
@@ -2250,6 +2253,15 @@ class Config private constructor(
             SettingType.FLOAT -> editor.putFloat(spec.key, normalized.toFloatOrNull() ?: 0f)
             else -> editor.putString(spec.key, normalized)
         }
+    }
+
+    /** Stage one already-normalized registry value through the same batch-aware writer as bespoke
+     * Config setters. Direct HTTP uses this as its catalogue-wide persistence floor; specialized
+     * setters still add their secondary-key and post-commit semantics in the same transaction. */
+    internal fun setRaw(spec: SettingSpec, normalized: String) {
+        val value = (SettingValue.validate(spec, normalized) as? Validation.Ok)?.normalized
+            ?: throw IllegalArgumentException("${spec.key}: invalid normalized value")
+        edit { stage(this, spec, value) }
     }
 
     /** Synchronously persist one validated registry value before a low-frequency live actuator is
