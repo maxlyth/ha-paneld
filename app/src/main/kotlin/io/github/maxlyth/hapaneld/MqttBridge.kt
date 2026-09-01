@@ -121,17 +121,42 @@ internal enum class LiveSettingEffectOwner(val settingKey: String) {
     }
 }
 
+/**
+ * The complete external MQTT surface for registry-backed live settings.
+ *
+ * This is deliberately narrower than [LiveSettingEffectOwner]: HTTP can apply adaptive-brightness
+ * tuning/source fields, while `ha_area` is followed by server-owned HA registry work and its bridge
+ * owner is intentionally publish-only. The wildcard subscription must not turn those HTTP-only/no-op
+ * owners into undocumented MQTT writers.
+ */
+internal val externalMqttLiveSettingOwners: Map<String, String> = linkedMapOf(
+    "cpu_governor" to "cpu_governor",
+    "network_adb" to "network_adb",
+    "home_dashboard" to "home_dashboard",
+    "navbar" to "navbar_mode",
+    "wake_on_wave" to "wake_on_wave",
+    "auto_sleep" to "auto_sleep",
+    "touch_sound" to "touch_sound",
+    "watchdog" to "watchdog_enabled",
+    "kiosk_lock" to "kiosk_lock",
+    "companion_auto_update" to "companion_auto_update",
+    "companion_update_channel" to "companion_update_channel",
+    "self_update" to "self_update",
+    "webview_auto_update" to "webview_auto_update",
+    "update_channel" to "update_channel",
+    "silence_boot_chime" to "silence_boot_chime",
+    "prevent_idle_dim" to "prevent_idle_dim",
+    "zigbee_router" to "zigbee_router",
+    "auto_brightness" to "auto_brightness",
+    "voice_enabled" to "voice_enabled",
+)
+
 /** Resolve an admitted MQTT setting topic to the same registry key used by HTTP live application. */
 internal fun externalLiveSettingKey(panel: String, topic: String): String? {
     val prefix = "ha-paneld/$panel/"
     if (!topic.startsWith(prefix) || !topic.endsWith("/set")) return null
     val leaf = topic.removePrefix(prefix).removeSuffix("/set")
-    val key = when (leaf) {
-        "navbar" -> "navbar_mode"
-        "watchdog" -> "watchdog_enabled"
-        else -> leaf
-    }
-    return key.takeIf { it in LiveSettingEffectOwner.settingKeys }
+    return externalMqttLiveSettingOwners[leaf]
 }
 
 /**

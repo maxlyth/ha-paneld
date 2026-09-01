@@ -205,7 +205,7 @@ class LiveSettingHandlerBindingTest {
 
     @Test fun `admitted MQTT topic leaves resolve to their exact registry owner keys`() {
         val panel = "contract-panel"
-        val expected = mapOf(
+        val expected = linkedMapOf(
             "cpu_governor" to "cpu_governor",
             "network_adb" to "network_adb",
             "home_dashboard" to "home_dashboard",
@@ -227,11 +227,29 @@ class LiveSettingHandlerBindingTest {
             "voice_enabled" to "voice_enabled",
         )
 
+        assertEquals(expected, externalMqttLiveSettingOwners)
         expected.forEach { (leaf, key) ->
             assertEquals(key, externalLiveSettingKey(panel, "ha-paneld/$panel/$leaf/set"))
         }
         assertEquals(null, externalLiveSettingKey(panel, "ha-paneld/$panel/not_a_setting/set"))
         assertEquals(null, externalLiveSettingKey(panel, "ha-paneld/other/watchdog/set"))
         assertEquals(null, externalLiveSettingKey(panel, "ha-paneld/$panel/watchdog/state"))
+    }
+
+    @Test fun `HTTP-only and publish-only live owners are rejected from external MQTT admission`() {
+        val panel = "contract-panel"
+        val admitted = externalMqttLiveSettingOwners.values.toSet()
+        val rejected = LiveSettingEffectOwner.settingKeys - admitted
+        val expectedRejected = setOf(
+            "auto_brightness_minimum_percent",
+            "auto_brightness_response_percent",
+            "auto_brightness_ha_entity",
+            "ha_area",
+        )
+
+        assertEquals(expectedRejected, rejected)
+        rejected.forEach { key ->
+            assertEquals(key, null, externalLiveSettingKey(panel, "ha-paneld/$panel/$key/set"))
+        }
     }
 }

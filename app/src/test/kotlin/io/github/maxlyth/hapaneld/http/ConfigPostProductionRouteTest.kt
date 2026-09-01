@@ -4,15 +4,21 @@ import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.LiveSettingApplyResult
 import io.github.maxlyth.hapaneld.LiveSettingAuthority
 import io.github.maxlyth.hapaneld.LiveSettingRequestOutcome
+import io.github.maxlyth.hapaneld.MqttBridge
+import io.github.maxlyth.hapaneld.dispatchLiveSetting
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.control.PowerRiskLevel
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
 import io.github.maxlyth.hapaneld.control.PowerSafetyObservation
 import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
+import io.github.maxlyth.hapaneld.control.SystemController
 import io.github.maxlyth.hapaneld.persistence.SqliteStatePreferences
 import io.github.maxlyth.hapaneld.persistence.StateMutation
 import io.github.maxlyth.hapaneld.persistence.StateNamespacePersistence
+import io.github.maxlyth.hapaneld.platform.ActivityRef
+import io.github.maxlyth.hapaneld.platform.SystemEnv
+import io.github.maxlyth.hapaneld.mqtt.StateConverger
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.shizuku.ShizukuBridge
 import io.github.maxlyth.hapaneld.shizuku.ShizukuState
@@ -37,7 +43,6 @@ import org.json.JSONObject
 import org.junit.Test
 import sun.misc.Unsafe
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ConfigPostProductionRouteTest {
@@ -52,16 +57,26 @@ class ConfigPostProductionRouteTest {
                 config.setPanelId("contract-panel")
                 config.setFriendlyName("Contract panel")
                 config.setHardware("Contract manufacturer", "Contract model")
+                config.setDashboardPackage("com.example.dashboard")
             })
-            val spec = requireNotNull(SettingsRegistry.spec("touch_sound"))
-            val dispatched = mutableListOf<Pair<String, String>>()
+            val spec = requireNotNull(SettingsRegistry.spec("home_dashboard"))
+            val runtimeRefreshes = mutableListOf<Unit>()
+            val bridge = liveEffectBridge(config) { runtimeRefreshes += Unit }
             val authority = LiveSettingAuthority(setOf(spec.key))
             val server = routeServer(config) { key, normalized ->
-                authority.applyOrQueueOutcome(key, normalized, config.getRaw(spec)) { appliedKey, value, _ ->
+                authority.applyOrQueueOutcome(key, normalized, config.getRaw(spec)) { appliedKey, value, previous ->
                     assertEquals(spec.key, appliedKey)
-                    assertTrue(config.commitRaw(spec, value))
-                    dispatched += appliedKey to value
-                    LiveSettingApplyResult.APPLIED
+                    dispatchLiveSetting(
+                        key = appliedKey,
+                        value = value,
+                        previousValue = previous,
+                        handlers = bridge,
+                    )
+                    if (config.getRaw(spec) == value) {
+                        LiveSettingApplyResult.APPLIED
+                    } else {
+                        LiveSettingApplyResult.FAILED
+                    }
                 }
             }
 
@@ -78,7 +93,7 @@ class ConfigPostProductionRouteTest {
 
                 val response = client.submitForm(
                     url = "/api/v1/config",
-                    formParameters = Parameters.build { append(spec.key, "0") },
+                    formParameters = Parameters.build { append(spec.key, "/lovelace/kitchen") },
                 ) { accept(ContentType.Application.Json) }
 
                 val responseText = response.bodyAsText()
@@ -88,19 +103,39 @@ class ConfigPostProductionRouteTest {
                 assertEquals(listOf(spec.key), body.getJSONArray("applied").let { array ->
                     List(array.length()) { array.getString(it) }
                 })
-                assertFalse(body.getJSONObject("settings").getBoolean(spec.key))
+                assertEquals("/lovelace/kitchen", body.getJSONObject("settings").getString(spec.key))
             }
 
-            assertEquals(listOf(spec.key to "false"), dispatched)
-            assertEquals("false", config.getRaw(spec))
+            assertEquals(1, runtimeRefreshes.size, "the concrete MqttBridge effect owner must run")
+            assertEquals("/lovelace/kitchen", config.getRaw(spec))
             val reopened = Config(SqliteStatePreferences(JdbcStatePersistence(database), reopenedWriter))
-            assertEquals("false", reopened.getRaw(spec), "a new production preference owner must read SQLite")
+            assertEquals(
+                "/lovelace/kitchen",
+                reopened.getRaw(spec),
+                "a new production preference owner must read SQLite",
+            )
         } finally {
             writer.shutdownNow()
             reopenedWriter.shutdownNow()
             directory.deleteRecursively()
         }
     }
+
+    /**
+     * Build the smallest genuine production effect owner needed by this route case. The bridge's
+     * home-dashboard handler owns both the durable Config write and the entity-learning target refresh; an empty
+     * converger is sufficient because publication is deliberately a no-op without a registered channel.
+     */
+    private fun liveEffectBridge(config: Config, onDashboardTargetChanged: () -> Unit): MqttBridge =
+        allocate(MqttBridge::class.java).also { bridge ->
+            setField(bridge, "config", config)
+            setField(bridge, "onDashboardTargetChanged", onDashboardTargetChanged)
+            setField(
+                bridge,
+                "stateConverger",
+                StateConverger(sender = { _, _, _, _ -> error("no state channel should publish") }),
+            )
+        }
 
     /**
      * Allocate only the production handler owner, then populate the collaborators the direct-config route
@@ -116,7 +151,7 @@ class ConfigPostProductionRouteTest {
         val sensors = allocate(SensorReporter::class.java)
         val renderer = RendererPreparationCoordinator(
             builtinPackage = "builtin",
-            state = { RendererPreparationState("", "") },
+            state = { RendererPreparationState("com.example.dashboard", "") },
             borrow = { null },
             persist = { true },
         )
@@ -144,6 +179,14 @@ class ConfigPostProductionRouteTest {
         val snapCache = Cached<Any>(Long.MAX_VALUE) { snap }.also { it.set(snap) }
 
         setField(server, "config", config)
+        setField(server, "system", SystemController(object : SystemEnv {
+            override val ownPackage = "io.github.maxlyth.hapaneld"
+            override fun isInstalled(pkg: String) = pkg == "com.example.dashboard"
+            override fun launchComponent(pkg: String): String? = null
+            override fun homeActivities(): List<ActivityRef> = emptyList()
+            override fun defaultHome(): ActivityRef? = null
+            override fun directStart(component: String) = Unit
+        }))
         setField(server, "sensors", sensors)
         setField(server, "applySetting", applySetting)
         setField(server, "pendingLiveSettings", { emptyMap<String, String>() })
