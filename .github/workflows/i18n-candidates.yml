@@ -12,6 +12,11 @@ on:
     branches: [main]
     paths:
       - app/src/main/assets/i18n/en.json
+      - app/src/main/assets/i18n/de.json
+      - app/src/main/assets/i18n/es.json
+      - app/src/main/assets/i18n/fr.json
+      - app/src/main/assets/i18n/it.json
+      - app/src/main/assets/i18n/zh-Hans.json
       - app/src/main/assets/i18n/context/**
       - scripts/i18n_catalogue.py
       - scripts/i18n_deepl.py
@@ -71,6 +76,16 @@ jobs:
             "${locale_args[@]}" \
             --output "$RUNNER_TEMP/i18n-candidates/plan.json"
 
+      - name: Verify adapter and exact selected inputs before provider access
+        run: |
+          set -euo pipefail
+          python3 -m unittest scripts.tests.i18n_deepl_test
+          python3 scripts/i18n_deepl.py validate-inputs \
+            --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --source app/src/main/assets/i18n/en.json \
+            --target-dir app/src/main/assets/i18n \
+            --context app/src/main/assets/i18n/context/home-assistant-terminology.json
+
       - name: Reject stale trusted base before provider access
         run: |
           set -euo pipefail
@@ -90,6 +105,8 @@ jobs:
           set -euo pipefail
           python3 scripts/i18n_deepl.py generate \
             --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --source app/src/main/assets/i18n/en.json \
+            --target-dir app/src/main/assets/i18n \
             --context app/src/main/assets/i18n/context/home-assistant-terminology.json \
             --output-dir "$RUNNER_TEMP/i18n-candidates/generated"
           status="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' "$RUNNER_TEMP/i18n-candidates/generated/run.json")"
@@ -105,31 +122,21 @@ jobs:
             --repository . \
             --remote-ref origin/main
 
-      - name: Fail-closed validation and merge
+      - name: Build and validate public candidate bundle
         if: steps.api.outputs.status == 'generated'
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/i18n-candidates/validated"
-          for candidate in "$RUNNER_TEMP"/i18n-candidates/generated/candidates/*.json; do
-            locale="$(basename "$candidate" .json)"
-            python3 scripts/i18n_catalogue.py merge-candidate \
-              --source app/src/main/assets/i18n/en.json \
-              --base-target "app/src/main/assets/i18n/$locale.json" \
-              --candidate "$candidate" \
-              --output "$RUNNER_TEMP/i18n-candidates/validated/$locale.json"
-            python3 scripts/i18n_catalogue.py validate \
-              --source app/src/main/assets/i18n/en.json \
-              --target "$RUNNER_TEMP/i18n-candidates/validated/$locale.json"
-          done
-          cp "$RUNNER_TEMP/i18n-candidates/plan.json" "$RUNNER_TEMP/i18n-candidates/validated/plan.json"
-          python3 - "$RUNNER_TEMP/i18n-candidates/generated/run.json" "$RUNNER_TEMP/i18n-candidates/validated/run.json" <<'PY'
-          import json, pathlib, sys
-          source, destination = map(pathlib.Path, sys.argv[1:])
-          public = json.loads(source.read_text(encoding="utf-8"))
-          for key in ("accountUsageBefore", "accountUsageAfter", "accountCharacterLimit"):
-              public.pop(key, None)
-          destination.write_text(json.dumps(public, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-          PY
+          python3 scripts/i18n_deepl.py bundle \
+            --source app/src/main/assets/i18n/en.json \
+            --target-dir app/src/main/assets/i18n \
+            --context app/src/main/assets/i18n/context/home-assistant-terminology.json \
+            --plan "$RUNNER_TEMP/i18n-candidates/plan.json" \
+            --run "$RUNNER_TEMP/i18n-candidates/generated/run.json" \
+            --candidate-dir "$RUNNER_TEMP/i18n-candidates/generated/candidates" \
+            --output-dir "$RUNNER_TEMP/i18n-candidates/validated"
+          python3 scripts/i18n_deepl.py validate-bundle \
+            --source app/src/main/assets/i18n/en.json \
+            --bundle-dir "$RUNNER_TEMP/i18n-candidates/validated"
 
       - name: Recheck trusted base before publication
         if: steps.api.outputs.status == 'generated'

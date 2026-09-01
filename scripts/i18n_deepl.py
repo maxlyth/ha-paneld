@@ -24,8 +24,10 @@ import i18n_catalogue as catalogue
 API_ORIGIN = "https://api-free.deepl.com"
 QUOTA_RESERVE = 50_000
 MAX_RESPONSE_BYTES = 1_048_576
+MAX_REQUEST_BYTES = 131_072
 PLAN_SCHEMA = 1
 RUN_SCHEMA = 1
+RECEIPT_SCHEMA = 1
 CONTEXT_SCHEMA = 1
 TARGETS = {
     "de": ("DE", "less"),
@@ -34,7 +36,6 @@ TARGETS = {
     "es": ("ES", "less"),
     "zh-Hans": ("ZH-HANS", "default"),
 }
-TARGET_RECORD_KEYS = {"text", "sourceHash", "state"}
 HTTP = Callable[[urllib.request.Request], bytes]
 
 CONTEXT_ROOT_KEYS = {
@@ -42,6 +43,12 @@ CONTEXT_ROOT_KEYS = {
 }
 CONTEXT_SOURCE_KEYS = {"id", "repository", "revision", "artifact", "artifactSha256", "license"}
 CONTEXT_TERM_KEYS = {"id", "meaning", "english", "source", "sourceKey", "translations"}
+RECEIPT_KEYS = {
+    "schema", "status", "baseRevision", "planHash", "sourceCatalogueHash",
+    "contextArtifactId", "contextArtifactHash", "contextArtifactBytes",
+    "requestedCharacters", "maximumBilledCharacters", "billedCharacters",
+    "selectedRecords", "baseTargetHashes", "providerCandidateHashes", "catalogueHashes",
+}
 
 
 class DeepLError(ValueError):
@@ -63,10 +70,19 @@ def _source_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DeepLError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def _load_context(path: Path) -> tuple[dict[str, Any], str, int]:
     raw = path.read_bytes()
     try:
-        value = json.loads(raw.decode("utf-8"))
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
     except (UnicodeError, json.JSONDecodeError) as error:
         raise DeepLError("terminology context is not valid UTF-8 JSON") from error
     if not isinstance(value, dict):
@@ -144,31 +160,10 @@ def _load_context(path: Path) -> tuple[dict[str, Any], str, int]:
     return value, hashlib.sha256(raw).hexdigest(), len(raw)
 
 
-def _target_records(path: Path, locale: str) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    root = catalogue.read_json(path)
-    catalogue.exact_keys(root, catalogue.TARGET_ROOT_KEYS, f"{locale} target root")
-    if root["schema"] != catalogue.SCHEMA or root["locale"] != locale:
-        raise DeepLError(f"{locale}: target has unsupported schema or locale")
-    if not isinstance(root["sourceRevision"], str) or not catalogue.REV_RE.fullmatch(root["sourceRevision"]):
-        raise DeepLError(f"{locale}: target sourceRevision is invalid")
-    records = root["strings"]
-    if not isinstance(records, dict):
-        raise DeepLError(f"{locale}: target strings must be an object")
-    for key, record in records.items():
-        if not catalogue.KEY_RE.fullmatch(key) or not isinstance(record, dict):
-            raise DeepLError(f"{locale}: invalid target record {key}")
-        catalogue.exact_keys(record, TARGET_RECORD_KEYS, f"{locale}.{key}")
-        if (
-            not isinstance(record["text"], str)
-            or not record["text"]
-            or not isinstance(record["sourceHash"], str)
-            or not catalogue.SHA_RE.fullmatch(record["sourceHash"])
-            or record["state"] not in catalogue.STATES
-        ):
-            raise DeepLError(f"{locale}: malformed target record {key}")
-    return records
+def _target_catalogue(path: Path, locale: str, source: dict[str, Any]) -> dict[str, Any]:
+    if not path.is_file():
+        raise DeepLError(f"{locale}: base target catalogue is missing")
+    return catalogue.validate_target(path, source, expected_locale=locale)
 
 
 def _selected_record(key: str, record: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
@@ -214,7 +209,9 @@ def build_plan(
     batches: list[dict[str, Any]] = []
     requested = 0
     for locale in locales:
-        target = _target_records(target_dir / f"{locale}.json", locale)
+        target_path = target_dir / f"{locale}.json"
+        target_root = _target_catalogue(target_path, locale, source)
+        target = target_root["strings"]
         selected: list[dict[str, Any]] = []
         for key, source_record in source["strings"].items():
             current = target.get(key)
@@ -238,7 +235,11 @@ def build_plan(
                 }
             selected.append(selected_record)
             requested += len(source_record["text"])
-        batches.append({"locale": locale, "records": selected})
+        batches.append({
+            "locale": locale,
+            "baseTargetHash": _source_digest(target_path),
+            "records": selected,
+        })
 
     return {
         "schema": PLAN_SCHEMA,
@@ -327,6 +328,8 @@ def _request_json(
     body: dict[str, Any] | None = None,
 ) -> Any:
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    if data is not None and len(data) > MAX_REQUEST_BYTES:
+        raise DeepLError(f"{endpoint}: request body is too large")
     headers = {
         "Authorization": f"DeepL-Auth-Key {key}",
         "User-Agent": "ha-paneld-i18n-candidates/1",
@@ -336,7 +339,7 @@ def _request_json(
     request = urllib.request.Request(API_ORIGIN + endpoint, data=data, headers=headers, method="GET" if data is None else "POST")
     raw = http(request)
     try:
-        value = json.loads(raw.decode("utf-8"))
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
     except (UnicodeError, json.JSONDecodeError) as error:
         raise DeepLError(f"{endpoint}: malformed JSON response") from error
     return value
@@ -487,10 +490,16 @@ def _validate_plan(plan: dict[str, Any]) -> None:
     locales: set[str] = set()
     calculated = 0
     for batch in plan["batches"]:
-        if not isinstance(batch, dict) or set(batch) != {"locale", "records"}:
+        if not isinstance(batch, dict) or set(batch) != {"locale", "baseTargetHash", "records"}:
             raise DeepLError("malformed plan batch")
         locale, records = batch["locale"], batch["records"]
-        if locale not in TARGETS or locale in locales or not isinstance(records, list):
+        if (
+            locale not in TARGETS
+            or locale in locales
+            or not isinstance(batch["baseTargetHash"], str)
+            or not catalogue.SHA_RE.fullmatch(batch["baseTargetHash"])
+            or not isinstance(records, list)
+        ):
             raise DeepLError("malformed plan locale batch")
         locales.add(locale)
         keys: list[str] = []
@@ -567,6 +576,35 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         raise DeepLError("plan maximumBilledCharacters mismatch")
 
 
+def _validate_plan_inputs(
+    plan: dict[str, Any],
+    source_path: Path,
+    target_dir: Path,
+    context_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    _validate_plan(plan)
+    source = catalogue.validate_source(source_path)
+    if (
+        source["sourceRevision"] != plan["sourceRevision"]
+        or _source_digest(source_path) != plan["sourceCatalogueHash"]
+    ):
+        raise DeepLError("source catalogue drifted after the plan was created")
+    context, context_hash, context_bytes = _load_context(context_path)
+    if (
+        context["id"] != plan["contextArtifactId"]
+        or context_hash != plan["contextArtifactHash"]
+        or context_bytes != plan["contextArtifactBytes"]
+    ):
+        raise DeepLError("terminology context drifted after the plan was created")
+    for batch in plan["batches"]:
+        locale = batch["locale"]
+        target_path = target_dir / f"{locale}.json"
+        _target_catalogue(target_path, locale, source)
+        if _source_digest(target_path) != batch["baseTargetHash"]:
+            raise DeepLError(f"{locale}: base target drifted after the plan was created")
+    return source, context
+
+
 def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
     catalogue.exact_keys(
         run,
@@ -639,20 +677,15 @@ def _validate_run(run: dict[str, Any], plan: dict[str, Any]) -> None:
 
 def generate(
     plan_path: Path,
+    source_path: Path,
+    target_dir: Path,
     context_path: Path,
     output_dir: Path,
     api_key: str,
     http: HTTP = _default_http,
 ) -> dict[str, Any]:
     plan = catalogue.read_json(plan_path)
-    _validate_plan(plan)
-    context, context_hash, context_bytes = _load_context(context_path)
-    if (
-        context["id"] != plan["contextArtifactId"]
-        or context_hash != plan["contextArtifactHash"]
-        or context_bytes != plan["contextArtifactBytes"]
-    ):
-        raise DeepLError("terminology context drifted after the plan was created")
+    _, context = _validate_plan_inputs(plan, source_path, target_dir, context_path)
     if output_dir.exists():
         raise DeepLError("output directory already exists")
 
@@ -763,6 +796,178 @@ def generate(
         raise
 
 
+def _validate_hash_map(value: Any, owner: str, expected: set[str]) -> None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != expected
+        or list(value) != sorted(value)
+        or any(locale not in TARGETS for locale in value)
+        or any(
+            not isinstance(digest, str) or not catalogue.SHA_RE.fullmatch(digest)
+            for digest in value.values()
+        )
+    ):
+        raise DeepLError(f"malformed {owner}")
+
+
+def _validate_receipt(receipt: dict[str, Any], plan: dict[str, Any]) -> None:
+    catalogue.exact_keys(receipt, RECEIPT_KEYS, "public receipt root")
+    active = {
+        batch["locale"] for batch in plan["batches"] if batch["records"]
+    }
+    all_locales = {batch["locale"] for batch in plan["batches"]}
+    if (
+        receipt["schema"] != RECEIPT_SCHEMA
+        or receipt["status"] != "generated"
+        or receipt["baseRevision"] != plan["baseRevision"]
+        or not isinstance(receipt["planHash"], str)
+        or not catalogue.SHA_RE.fullmatch(receipt["planHash"])
+        or receipt["sourceCatalogueHash"] != plan["sourceCatalogueHash"]
+        or receipt["contextArtifactId"] != plan["contextArtifactId"]
+        or receipt["contextArtifactHash"] != plan["contextArtifactHash"]
+        or receipt["contextArtifactBytes"] != plan["contextArtifactBytes"]
+        or receipt["requestedCharacters"] != plan["requestedCharacters"]
+        or receipt["maximumBilledCharacters"] != plan["maximumBilledCharacters"]
+        or isinstance(receipt["billedCharacters"], bool)
+        or not isinstance(receipt["billedCharacters"], int)
+        or receipt["billedCharacters"] < 0
+        or receipt["billedCharacters"] > plan["maximumBilledCharacters"]
+        or isinstance(receipt["selectedRecords"], bool)
+        or not isinstance(receipt["selectedRecords"], int)
+        or receipt["selectedRecords"] != sum(len(batch["records"]) for batch in plan["batches"])
+    ):
+        raise DeepLError("malformed public receipt")
+    _validate_hash_map(receipt["baseTargetHashes"], "receipt base target hashes", all_locales)
+    _validate_hash_map(receipt["providerCandidateHashes"], "receipt provider candidate hashes", active)
+    _validate_hash_map(receipt["catalogueHashes"], "receipt catalogue hashes", active)
+    if receipt["baseTargetHashes"] != {
+        batch["locale"]: batch["baseTargetHash"] for batch in plan["batches"]
+    }:
+        raise DeepLError("receipt base target hashes do not match the plan")
+
+
+def validate_bundle(bundle_dir: Path, source_path: Path) -> dict[str, Any]:
+    if not bundle_dir.is_dir() or bundle_dir.is_symlink():
+        raise DeepLError("candidate bundle is not a directory")
+    plan_path = bundle_dir / "plan.json"
+    receipt_path = bundle_dir / "receipt.json"
+    if (
+        not plan_path.is_file()
+        or plan_path.is_symlink()
+        or not receipt_path.is_file()
+        or receipt_path.is_symlink()
+    ):
+        raise DeepLError("candidate bundle plan or receipt is not a regular file")
+    plan = catalogue.read_json(plan_path)
+    _validate_plan(plan)
+    receipt = catalogue.read_json(receipt_path)
+    _validate_receipt(receipt, plan)
+    if _source_digest(plan_path) != receipt["planHash"]:
+        raise DeepLError("candidate bundle plan hash mismatch")
+    source = catalogue.validate_source(source_path)
+    if (
+        source["sourceRevision"] != plan["sourceRevision"]
+        or _source_digest(source_path) != plan["sourceCatalogueHash"]
+    ):
+        raise DeepLError("candidate bundle source catalogue mismatch")
+    expected_files = {
+        "plan.json", "receipt.json",
+        *(f"{locale}.json" for locale in receipt["catalogueHashes"]),
+    }
+    actual_files = {entry.name for entry in bundle_dir.iterdir()}
+    if actual_files != expected_files:
+        raise DeepLError("candidate bundle file coverage mismatch")
+    for locale, expected_hash in receipt["catalogueHashes"].items():
+        target_path = bundle_dir / f"{locale}.json"
+        if not target_path.is_file() or target_path.is_symlink():
+            raise DeepLError(f"{locale}: bundled catalogue is not a regular file")
+        if _source_digest(target_path) != expected_hash:
+            raise DeepLError(f"{locale}: bundled catalogue hash mismatch")
+        catalogue.validate_target(target_path, source, expected_locale=locale)
+    return receipt
+
+
+def build_bundle(
+    source_path: Path,
+    target_dir: Path,
+    context_path: Path,
+    plan_path: Path,
+    run_path: Path,
+    candidate_dir: Path,
+    output_dir: Path,
+) -> dict[str, Any]:
+    plan = catalogue.read_json(plan_path)
+    source, _ = _validate_plan_inputs(plan, source_path, target_dir, context_path)
+    run = catalogue.read_json(run_path)
+    _validate_run(run, plan)
+    if run["status"] != "generated":
+        raise DeepLError("only a generated run can produce a candidate bundle")
+    if output_dir.exists():
+        raise DeepLError("candidate bundle output already exists")
+    if not candidate_dir.is_dir() or candidate_dir.is_symlink():
+        raise DeepLError("provider candidate input is not a directory")
+
+    active_batches = [batch for batch in plan["batches"] if batch["records"]]
+    expected_candidates = {f"{batch['locale']}.json" for batch in active_batches}
+    if {entry.name for entry in candidate_dir.iterdir()} != expected_candidates:
+        raise DeepLError("provider candidate file coverage mismatch")
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.", dir=output_dir.parent))
+    try:
+        catalogue_hashes: dict[str, str] = {}
+        for batch in active_batches:
+            locale = batch["locale"]
+            candidate_path = candidate_dir / f"{locale}.json"
+            if not candidate_path.is_file() or candidate_path.is_symlink():
+                raise DeepLError(f"{locale}: provider candidate is not a regular file")
+            if _source_digest(candidate_path) != run["resultHashes"][locale]:
+                raise DeepLError(f"{locale}: provider candidate hash mismatch")
+            candidate = catalogue.read_json(candidate_path)
+            translations = candidate.get("translations")
+            if not isinstance(translations, list) or [
+                item.get("key") if isinstance(item, dict) else None for item in translations
+            ] != [record["key"] for record in batch["records"]]:
+                raise DeepLError(f"{locale}: provider candidate does not match plan selection")
+            target_path = temporary / f"{locale}.json"
+            catalogue.merge_candidate(
+                source_path,
+                target_dir / f"{locale}.json",
+                candidate_path,
+                target_path,
+            )
+            catalogue.validate_target(target_path, source, expected_locale=locale)
+            catalogue_hashes[locale] = _source_digest(target_path)
+
+        shutil.copyfile(plan_path, temporary / "plan.json")
+        receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "generated",
+            "baseRevision": plan["baseRevision"],
+            "planHash": _source_digest(plan_path),
+            "sourceCatalogueHash": plan["sourceCatalogueHash"],
+            "contextArtifactId": plan["contextArtifactId"],
+            "contextArtifactHash": plan["contextArtifactHash"],
+            "contextArtifactBytes": plan["contextArtifactBytes"],
+            "requestedCharacters": plan["requestedCharacters"],
+            "maximumBilledCharacters": plan["maximumBilledCharacters"],
+            "billedCharacters": run["billedCharacters"],
+            "selectedRecords": run["selectedRecords"],
+            "baseTargetHashes": dict(sorted(
+                (batch["locale"], batch["baseTargetHash"]) for batch in plan["batches"]
+            )),
+            "providerCandidateHashes": dict(sorted(run["resultHashes"].items())),
+            "catalogueHashes": dict(sorted(catalogue_hashes.items())),
+        }
+        _write_json(temporary / "receipt.json", receipt)
+        validate_bundle(temporary, source_path)
+        os.replace(temporary, output_dir)
+        return receipt
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+
 def check_base(expected: str, repository: Path, remote_ref: str) -> None:
     if not catalogue.REV_RE.fullmatch(expected):
         raise DeepLError("expected base must be a full lowercase Git SHA")
@@ -809,8 +1014,26 @@ def parser() -> argparse.ArgumentParser:
     plan.add_argument("--output", type=Path, required=True)
     create = commands.add_parser("generate")
     create.add_argument("--plan", type=Path, required=True)
+    create.add_argument("--source", type=Path, required=True)
+    create.add_argument("--target-dir", type=Path, required=True)
     create.add_argument("--context", type=Path, required=True)
     create.add_argument("--output-dir", type=Path, required=True)
+    inputs = commands.add_parser("validate-inputs")
+    inputs.add_argument("--plan", type=Path, required=True)
+    inputs.add_argument("--source", type=Path, required=True)
+    inputs.add_argument("--target-dir", type=Path, required=True)
+    inputs.add_argument("--context", type=Path, required=True)
+    bundle = commands.add_parser("bundle")
+    bundle.add_argument("--source", type=Path, required=True)
+    bundle.add_argument("--target-dir", type=Path, required=True)
+    bundle.add_argument("--context", type=Path, required=True)
+    bundle.add_argument("--plan", type=Path, required=True)
+    bundle.add_argument("--run", type=Path, required=True)
+    bundle.add_argument("--candidate-dir", type=Path, required=True)
+    bundle.add_argument("--output-dir", type=Path, required=True)
+    verify_bundle = commands.add_parser("validate-bundle")
+    verify_bundle.add_argument("--source", type=Path, required=True)
+    verify_bundle.add_argument("--bundle-dir", type=Path, required=True)
     base = commands.add_parser("check-base")
     base.add_argument("--expected", required=True)
     base.add_argument("--repository", type=Path, default=Path.cwd())
@@ -831,7 +1054,20 @@ def main() -> int:
             )
             _write_json(args.output, plan)
         elif args.command == "generate":
-            generate(args.plan, args.context, args.output_dir, os.environ.get("DEEPL_API_KEY", ""))
+            generate(
+                args.plan, args.source, args.target_dir, args.context, args.output_dir,
+                os.environ.get("DEEPL_API_KEY", ""),
+            )
+        elif args.command == "validate-inputs":
+            plan = catalogue.read_json(args.plan)
+            _validate_plan_inputs(plan, args.source, args.target_dir, args.context)
+        elif args.command == "bundle":
+            build_bundle(
+                args.source, args.target_dir, args.context, args.plan, args.run,
+                args.candidate_dir, args.output_dir,
+            )
+        elif args.command == "validate-bundle":
+            validate_bundle(args.bundle_dir, args.source)
         elif args.command == "check-base":
             check_base(args.expected, args.repository, args.remote_ref)
         else:
