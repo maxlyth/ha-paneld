@@ -121,6 +121,9 @@ import io.github.maxlyth.hapaneld.sensors.DashboardHaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaExactEntityStreamOwner
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleCoordinator
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
+import io.github.maxlyth.hapaneld.sensors.HaNetworkPathMonitor
+import io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
@@ -898,6 +901,7 @@ class PaneldService : Service() {
     private lateinit var haAmbientLux: HaAmbientLuxSubscriber
     private lateinit var haExactEntityStream: HaExactEntityStreamOwner
     private lateinit var haLifecycle: HaLifecycleCoordinator
+    private lateinit var haNetworkPath: HaNetworkPathMonitor
     private val rendererSettledForLifecycle: () -> Unit = { runCatching { refreshHaLifecycleWatch() } }
     private lateinit var haSiteMetadata: HaSiteMetadataClient
     private var brightnessObserver: ContentObserver? = null
@@ -1096,14 +1100,18 @@ class PaneldService : Service() {
         haSiteMetadata = HaSiteMetadataClient(config)
         val haSessionAuthority = DashboardHaApiSessionProvider(config)
         val haApi = KtorHaAmbientTransport()
+        // ONE monotonic clock for the socket owner and its transport: the round trip is the owner's
+        // send stamp against the transport's decode stamp, and two clocks would make it meaningless.
+        val haSocketClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }
         haExactEntityStream = HaExactEntityStreamOwner(
             scope = scope,
             auth = haSessionAuthority,
             transport = KtorHaExactEntityStreamTransport(
                 haApi,
                 socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
+                monotonicMillis = haSocketClock,
             ),
-            monotonicMillis = { android.os.SystemClock.elapsedRealtime() },
+            monotonicMillis = haSocketClock,
         )
         haLifecycle = HaLifecycleCoordinator(
             // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to
@@ -1117,6 +1125,24 @@ class PaneldService : Service() {
             },
         )
         haExactEntityStream.bindLifecycle(haLifecycle)
+        // The network-path monitor rides the same socket, the same clock and the same renderer poke.
+        // Installed BEFORE it is bound, because binding announces the current demand at once and that
+        // first verdict must already be readable by whoever the poke wakes.
+        haNetworkPath = HaNetworkPathMonitor(
+            nowMs = haSocketClock,
+            // Second attribution signal: while Home Assistant has announced a shutdown or a start
+            // (over the socket, or the broker will on a non-admin account), an unanswered probe is
+            // the server's doing and must not be counted as loss. Read outside the monitor's lock.
+            haRestarting = {
+                when (HaLifecycleRuntime.snapshot()?.state) {
+                    HaLifecycleState.SHUTTING_DOWN, HaLifecycleState.STARTING -> true
+                    else -> false
+                }
+            },
+            onChanged = { BuiltinDashboard.onHaLifecycleChanged() },
+        )
+        HaNetworkPathRuntime.install(haNetworkPath)
+        haExactEntityStream.bindNetworkPath(haNetworkPath)
         // One atomic install: the coordinator and its MQTT read arrive together, so no reader can pair
         // this service's coordinator with a predecessor's bridge. The supplier reads the bridge's
         // canonical serialized connection state through the runtime owner, so it follows reconfigure()'s
@@ -4033,6 +4059,11 @@ class PaneldService : Service() {
                 // successor's live tracking. Only when THIS service's installation was actually cleared
                 // is the renderer poked, so a card rendering the dead state is re-read and hidden.
                 if (HaLifecycleRuntime.uninstall(haLifecycle)) BuiltinDashboard.onHaLifecycleChanged()
+                // Same identity gate for the network-path owner: a successor's installation survives a
+                // late predecessor teardown, and only a real clearing re-pokes the chip to hide.
+                if (::haNetworkPath.isInitialized && HaNetworkPathRuntime.uninstall(haNetworkPath)) {
+                    BuiltinDashboard.onHaLifecycleChanged()
+                }
                 BuiltinDashboard.clearRendererSettledListener(rendererSettledForLifecycle)
             }
             closeOwner("sensors") { sensorPersistenceClosed.set(sensors.stop()) }

@@ -355,7 +355,7 @@ class HaAmbientLuxSubscriberTest {
                 dispatcher,
                 auth,
                 transport,
-                livenessIntervalMs = 100,
+                probeIntervalMs = 100,
                 pongTimeoutMs = 50,
                 reconnectBaseMs = 10,
                 reconnectMaxMs = 10,
@@ -402,7 +402,7 @@ class HaAmbientLuxSubscriberTest {
         dispatcher: CoroutineDispatcher,
         auth: HaApiSessionProvider,
         transport: FakeTransport,
-        livenessIntervalMs: Long = 45_000L,
+        probeIntervalMs: Long = 45_000L,
         pongTimeoutMs: Long = 15_000L,
         reconnectBaseMs: Long = 1_000L,
         reconnectMaxMs: Long = 60_000L,
@@ -411,10 +411,11 @@ class HaAmbientLuxSubscriberTest {
         auth = auth,
         transport = transport,
         workerDispatcher = dispatcher,
-        livenessIntervalMs = livenessIntervalMs,
+        probeIntervalMs = probeIntervalMs,
         pongTimeoutMs = pongTimeoutMs,
         reconnectBaseMs = reconnectBaseMs,
         reconnectMaxMs = reconnectMaxMs,
+        monotonicMillis = { testScheduler.currentTime },
     )
 
     private class FakeConnection(private val autoPong: Boolean = true) : HaExactEntityConnection {

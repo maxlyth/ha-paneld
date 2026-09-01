@@ -126,7 +126,7 @@ function drawResp(hist){
 function fmtRate(n,unit){return n<10?n.toFixed(1)+' '+unit:Math.round(n)+' '+unit;}
 function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB/s';if(n>=1024)return (n/1024).toFixed(1)+' KB/s';return Math.round(n)+' B/s';}
 function fmtByteTotal(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB';if(n>=1024)return (n/1024).toFixed(1)+' KB';return Math.round(n)+' B';}
-function causeLabel(c){return ({state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
+function causeLabel(c){return ({ha_network_path:'Network path to Home Assistant',state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
  rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
  memory_or_renderer_instability:'Renderer or memory instability',dashboard_or_state_proxy:'Dashboard or state load (proxy)',
  no_clear_dominant_cause:'No clear dominant cause'})[c]||'Collecting evidence';}

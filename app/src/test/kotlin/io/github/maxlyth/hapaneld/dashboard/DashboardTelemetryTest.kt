@@ -148,6 +148,41 @@ class DashboardTelemetryTest {
         assertEquals("low", json.getString("confidence"))
     }
 
+    @Test fun aMeasuredDegradedPathToHomeAssistantIsNamedBeforeAnyInPanelBurden() {
+        DashboardTelemetry.reset()
+        DashboardTelemetry.installed()
+        // The same state-stream pressure that names state_stream above...
+        val bins = LongArray(10).also { it[5] = 3 }
+        DashboardTelemetry.record(batch(
+            updates = 500,
+            payloadBytes = 512_000,
+            stateTaskMicros = 1_500_000,
+            bins = bins,
+            interactionMaxMicros = 700_000,
+            inputMicros = 200_000,
+            processingMicros = 300_000,
+            presentationMicros = 200_000,
+            blockingMicros = 750_000,
+        ))
+        // ...yields to the measured path when it is severe, with high confidence...
+        val severe = JSONObject(DashboardTelemetry.json(
+            builtinActive = true, filterActive = true, entityCount = 42, reloads24h = 3, networkPath = "severe",
+        ))
+        assertEquals("ha_network_path", severe.getString("likelyCause"))
+        assertEquals("high", severe.getString("confidence"))
+        // ...and to a warning with medium confidence...
+        val warning = JSONObject(DashboardTelemetry.json(
+            builtinActive = true, filterActive = true, entityCount = 42, reloads24h = 0, networkPath = "warning",
+        ))
+        assertEquals("ha_network_path", warning.getString("likelyCause"))
+        assertEquals("medium", warning.getString("confidence"))
+        // ...while a healthy or unmeasured path (null) leaves the existing verdict untouched.
+        val untouched = JSONObject(DashboardTelemetry.json(
+            builtinActive = true, filterActive = true, entityCount = 42, reloads24h = 0, networkPath = null,
+        ))
+        assertEquals("state_stream", untouched.getString("likelyCause"))
+    }
+
     @Test fun builtinWithoutObserverIsNotMisreportedAsCompanionProxy() {
         DashboardTelemetry.reset()
         val json = JSONObject(DashboardTelemetry.json(

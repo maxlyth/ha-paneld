@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.sensors.HaLifecycle
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
+import io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceUpdate
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisite
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisitePhase
@@ -2085,7 +2086,7 @@ class PaneldServer internal constructor(
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
                 }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
@@ -2122,7 +2123,7 @@ class PaneldServer internal constructor(
                         )
                     } ?: unavailableProfileRoutes()
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
                     }
                     configReadRoutes(
                         currentConfigJson = ::configJson,
@@ -3862,6 +3863,7 @@ ${navBar(active)}</div>
      content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
 <script src="/assets/switcher.js"></script>
 <div id="halifebar" class="setup" style="display:none"></div>
+<div id="hanetbar" class="setup" style="display:none"></div>
 <div id="verbar" class="setup" style="display:none">⟳ A newer ha-paneld is installed — <a href="#" onclick="location.reload();return false">reload</a> to refresh this page.</div>
 $body
 $extraScripts<script src="/assets/power-safety.js"></script>
@@ -4498,6 +4500,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
             storageProof +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
+            // `ha_network` follows the same unconditional rule: idle with measuring=false when no
+            // socket is held, never absent.
+            "\"ha_network\":${HaNetworkPathRuntime.statusJson()}," +
             "\"renderer\":${rendererAdmission().statusJson()}," +
             "\"camera\":${camera.presentation().statusJson()}," +
             "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
@@ -4741,6 +4746,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             renderer = rendererAdmission(),
             camera = camera.presentation(),
             wifiStabilityChronic = management.wifiChronic,
+            haNetwork = HaNetworkPathRuntime.diagnosticLine(),
         )
     }
 
@@ -4883,6 +4889,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private val NET_KEYS = listOf("Local IP", "Local IPv6", "HTTP port", "MQTT", "mDNS", "Network ADB")
     private val HA_LIFECYCLE_FACT = "HA lifecycle"
+    private val HA_NETWORK_FACT = "HA network path"
     private val HA_RENDERER_FACT = "HA renderer"
     private val CAMERA_FACT = "Camera"
 
@@ -4891,9 +4898,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     // card has been dropping out — so when it IS shown it explains the rows below it, and reading it
     // last is reading it too late. "HA renderer" follows it for the same reason one place down: it is
     // the panel's headline outcome — whether the dashboard is actually up — and every row below it
-    // describes machinery that exists to keep it up.
+    // describes machinery that exists to keep it up. "HA network path" sits between them: it is the
+    // measured path to the server every row below depends on, and the likeliest reason a dashboard
+    // that IS rendered still feels broken.
     private val CONTEXT_KEYS = listOf(
-        "Wi-Fi stability", HA_RENDERER_FACT, "MQTT state", "State convergence", "Local-state sync",
+        "Wi-Fi stability", HA_NETWORK_FACT, HA_RENDERER_FACT, "MQTT state", "State convergence", "Local-state sync",
         "App database", "Security mode", "Audio playback", CAMERA_FACT, "Log shipping", HA_LIFECYCLE_FACT,
     )
     private val BEHAVIOUR_FACT_KEYS = setOf(
@@ -4925,6 +4934,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             // TTL — precisely the reassuring-but-wrong answer this row exists to stop giving.
             val current = when (key) {
                 HA_LIFECYCLE_FACT -> HaLifecycleRuntime.statusText() ?: ""
+                // Live and always present for the same reasons as the lifecycle row: the verdict
+                // changes while the page is open, and the poll fills the cell from the same `/health`
+                // observation that drives the banner. One read of the one state owner.
+                HA_NETWORK_FACT -> HaNetworkPathRuntime.statusText() ?: ""
                 HA_RENDERER_FACT -> rendererAdmission().statusText()
                 // The camera row is live for the same reason, and it is also where a person reads the
                 // stream URL off the panel — with the warning that travels beside it, because the place
@@ -4937,7 +4950,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             // "Ship logs" already says so, and a permanent "off" here is noise.
             current?.takeUnless { key == "Log shipping" && it == LOG_SHIP_STATUS_OFF }?.let { value ->
                 val label = if (key == "MQTT state") "MQTT connection / auth timing" else key
-                val cellId = if (key == HA_LIFECYCLE_FACT) " id=\"halifecell\"" else ""
+                val cellId = when (key) {
+                    HA_LIFECYCLE_FACT -> " id=\"halifecell\""
+                    HA_NETWORK_FACT -> " id=\"hanetcell\""
+                    else -> ""
+                }
                 "<tr><th>${esc(label)}</th><td$cellId>${esc(value)}</td></tr>"
             }
         }.toMutableList()
@@ -4973,6 +4990,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      */
     private fun haLifecycleHealthToken(): String =
         haLifecycleHealthToken(HaLifecycleRuntime.watching, HaLifecycleRuntime.snapshot())
+
+    /**
+     * The network-path tokens ride the same `/health` line and the same ten-second poll as the
+     * lifecycle token, so the banner, the diagnostics row and the native chip all render one
+     * observation. Empty while no service owns the monitor or no socket is held.
+     */
+    private fun haNetworkHealthToken(): String = HaNetworkPathRuntime.healthToken()
 
     private fun bannersHtml(s: Snap, h: HealthInputs): String {
         val storage = HealthAudit.storage(storageHealth())

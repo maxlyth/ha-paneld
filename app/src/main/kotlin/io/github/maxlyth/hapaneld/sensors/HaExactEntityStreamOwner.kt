@@ -112,7 +112,13 @@ internal sealed interface HaExactSocketMessage {
         constructor(json: JSONObject) : this(json.optString("entity_id"), json)
     }
     data class Missing(val entityId: String) : HaExactSocketMessage
-    data class Pong(val id: Int) : HaExactSocketMessage
+
+    /**
+     * A pong, stamped where the frame was DECODED so the round trip excludes the channel hop and the
+     * consumer coroutine's scheduling on a loaded panel. `-1` means the transport did not stamp it
+     * and the owner falls back to its own clock at the moment of matching.
+     */
+    data class Pong(val id: Int, val receivedAtMs: Long = -1L) : HaExactSocketMessage
     data object RegistryChanged : HaExactSocketMessage
 
     /**
@@ -284,6 +290,47 @@ internal interface HaExactEntityStreamTransport {
 private class HaExactEntitySetupException(message: String) : RuntimeException(message)
 
 /**
+ * A probe went unanswered for the whole pong timeout. A protocol failure for the reconnect policy
+ * (unchanged), but distinguished so the network-path report is made once, where it was detected,
+ * and not again as a server failure in the generic protocol catch.
+ */
+internal class HaStreamLivenessException : HaProtocolException("Home Assistant stream liveness check timed out")
+
+/**
+ * Attribute one failed connection attempt to the path or to the server, from the exception chain.
+ *
+ * Pure so every branch is assertable. The rule: an I/O failure that means "nothing answered" is the
+ * path (a connect that timed out, a host that could not be resolved, no route); an I/O failure that
+ * means "something answered and said no" is the server (connection refused: the host is reachable
+ * and the port is closed, which is a Home Assistant that is down or restarting, not a lost link).
+ * A closed channel is the peer or our own teardown closing an established socket, so it is the
+ * server's doing. Everything that is not I/O at all (an HTTP upgrade error, a bad frame, a JSON
+ * failure) came over a working path and is the server's as well.
+ *
+ * Order matters: Ktor's `ConnectTimeoutException` EXTENDS `java.net.ConnectException` (verified in
+ * ktor-client-core-jvm 3.5.2), so the timeout must be tested before its refused-connection parent.
+ */
+internal fun haPathFailureKind(error: Throwable): HaPathFailureKind {
+    for (cause in generateSequence(error) { it.cause }) {
+        when (cause) {
+            is HaAuthenticationException -> return HaPathFailureKind.AUTH
+            is io.ktor.client.network.sockets.ConnectTimeoutException,
+            is java.net.UnknownHostException,
+            is java.net.NoRouteToHostException,
+            is java.net.SocketTimeoutException,
+            -> return HaPathFailureKind.NETWORK
+            is java.net.ConnectException -> return HaPathFailureKind.SERVER
+            // ENETUNREACH / EHOSTUNREACH arrive as a plain SocketException on Android and Linux
+            // ("Network is unreachable", "Host is unreachable"): no path at all. Every other
+            // SocketException (reset, broken pipe) is a peer that was there and went away.
+            is java.net.SocketException ->
+                if (cause.message?.contains("unreachable", ignoreCase = true) == true) return HaPathFailureKind.NETWORK
+        }
+    }
+    return HaPathFailureKind.SERVER
+}
+
+/**
  * The service-owned lifecycle authority for the bounded union of exact Home Assistant entities.
  *
  * Ambient light and automatic sleep share one authenticated exact-entity union, hydration pass,
@@ -296,7 +343,13 @@ internal class HaExactEntityStreamOwner(
     private val auth: HaApiSessionProvider,
     private val transport: HaExactEntityStreamTransport,
     private val workerDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val livenessIntervalMs: Long = DEFAULT_LIVENESS_INTERVAL_MS,
+    /**
+     * Fixed probe cadence while LIVE, regardless of entity traffic. It used to be an idle timer that
+     * pinged only after this long with no inbound frame, so a busy subscription never pinged at all
+     * and the one path measurement the panel has was biased to exactly the quiet moments. The pong
+     * timeout and the teardown it triggers are unchanged; only WHEN a ping goes out has changed.
+     */
+    private val probeIntervalMs: Long = HaNetworkPath.PROBE_INTERVAL_MS,
     private val pongTimeoutMs: Long = DEFAULT_PONG_TIMEOUT_MS,
     private val reconnectBaseMs: Long = DEFAULT_RECONNECT_BASE_MS,
     private val reconnectMaxMs: Long = DEFAULT_RECONNECT_MAX_MS,
@@ -375,6 +428,7 @@ internal class HaExactEntityStreamOwner(
     @Volatile private var presenceObserver: HaPresenceFeedObserver? = null
     @Volatile private var registryChangeObserver: (() -> Unit)? = null
     @Volatile private var lifecycleObserver: HaLifecycleObserver? = null
+    @Volatile private var networkPathObserver: HaNetworkPathObserver? = null
     private var drainingCallbacks = false
     private var presenceRevision = 0L
     private var presencePhase = HaExactEntityStreamPhase.DISABLED
@@ -446,6 +500,26 @@ internal class HaExactEntityStreamOwner(
     }
 
     /**
+     * Bind the network-path monitor. It is told the CURRENT demand at once so a monitor bound after
+     * the socket was demanded does not sit unreportable until the next demand change.
+     */
+    fun bindNetworkPath(next: HaNetworkPathObserver) {
+        val active = synchronized(lock) {
+            check(!stopped) { "exact entity stream owner is closed" }
+            check(networkPathObserver == null || networkPathObserver === next) {
+                "network-path observer is already bound"
+            }
+            networkPathObserver = next
+            request.active
+        }
+        safeCallback { next.onSocketState(if (active) HaSocketState.CONNECTING else HaSocketState.STOPPED) }
+    }
+
+    fun unbindNetworkPath() {
+        synchronized(lock) { networkPathObserver = null }
+    }
+
+    /**
      * Keeps the shared Home Assistant socket alive for lifecycle events. Unlike the entity and registry
      * demands this can be the ONLY reason a socket exists, which is deliberate: a panel that renders a
      * dashboard needs to explain a server outage even when it subscribes to no entity at all.
@@ -499,11 +573,15 @@ internal class HaExactEntityStreamOwner(
         var run = 0L
         var next = Request(null, emptySet())
         var changed = false
+        var demandChanged = false
+        var pathObserver: HaNetworkPathObserver? = null
         synchronized(lock) {
             check(!stopped) { "exact entity stream owner is closed" }
             next = transform(request)
             if (next == request && sourceJob?.isActive == true) return
             changed = true
+            demandChanged = next.active != request.active
+            pathObserver = networkPathObserver
             sourceJob?.cancel()
             sourceJob = null
             request = next
@@ -512,6 +590,13 @@ internal class HaExactEntityStreamOwner(
             if (next.active) sourceJob = scope.launch { runSource(run, next) }
         }
         if (!changed) return
+        // Demand on or off is what makes the path verdict reportable; a change of union or watch
+        // bits with the socket still wanted is not a demand change and is not announced.
+        if (demandChanged) pathObserver?.let { observer ->
+            safeCallback {
+                observer.onSocketState(if (next.active) HaSocketState.CONNECTING else HaSocketState.STOPPED)
+            }
+        }
         if (next.ambient == null) publishAmbientStatus(
             run,
             HaExactEntityStreamStatus(phase = HaExactEntityStreamPhase.DISABLED),
@@ -521,12 +606,17 @@ internal class HaExactEntityStreamOwner(
 
     override fun close() {
         var drain = false
+        var pathObserver: HaNetworkPathObserver? = null
+        var hadDemand = false
         synchronized(lock) {
             if (stopped) return
             stopped = true
             generation.incrementAndGet()
             sourceJob?.cancel()
             sourceJob = null
+            hadDemand = request.active
+            pathObserver = networkPathObserver
+            networkPathObserver = null
             request = Request(null, emptySet())
             callbackQueue.clear()
             ambientObserver?.let {
@@ -550,7 +640,18 @@ internal class HaExactEntityStreamOwner(
                 drain = true
             }
         }
+        // A closed owner holds no socket, so the verdict it fed becomes unreportable with it.
+        if (hadDemand) pathObserver?.let { observer -> safeCallback { observer.onSocketState(HaSocketState.STOPPED) } }
         if (drain) drainCallbacks()
+    }
+
+    private fun reportPath(kind: HaPathFailureKind) {
+        networkPathObserver?.let { observer -> safeCallback { observer.onConnectionFailure(kind) } }
+    }
+
+    /** Publish the socket's own state to the network-path monitor; it owns nothing else. */
+    private fun reportSocketState(state: HaSocketState) {
+        networkPathObserver?.let { observer -> safeCallback { observer.onSocketState(state) } }
     }
 
     private suspend fun runSource(run: Long, expected: Request) {
@@ -560,9 +661,11 @@ internal class HaExactEntityStreamOwner(
         var protocolFailures = 0
         var acceptedOwner: HaAuthOwner? = null
         var registryConnectedOnce = false
+        try {
         while (scope.isActive && current(run, expected)) {
             var connection: HaExactEntityConnection? = null
             try {
+                reportSocketState(HaSocketState.CONNECTING)
                 publishTransportStatus(run, expected, HaExactEntityStreamPhase.AUTHENTICATING, attempt = attempt)
                 val session = resolveSession(forceAuth)
                 val resolvedOwner = checkNotNull(session.owner)
@@ -591,10 +694,19 @@ internal class HaExactEntityStreamOwner(
                     attempt = 0
                     authRefreshAttempted = false
                     protocolFailures = 0
+                    // Authenticated and subscribed: only now is there a Home Assistant application
+                    // path to describe, so only now does a measurement start.
+                    reportSocketState(HaSocketState.LIVE)
                 }
                 throw HaProtocolException("Home Assistant stream closed")
             } catch (timeout: TimeoutCancellationException) {
                 currentCoroutineContext().ensureActive()
+                // The outer subscribe/hydration deadlines. A path that cannot be connected fails
+                // FASTER than this, as a per-route connect timeout inside the transport (an
+                // IOException, classified below); reaching this deadline means the host accepted the
+                // connection and Home Assistant itself stalled on auth, subscribe or REST hydration,
+                // which is a slow or restarting server, not a lost path.
+                reportPath(HaPathFailureKind.SERVER)
                 attempt = nextAttempt(attempt)
                 publishTransportStatus(
                     run, expected, HaExactEntityStreamPhase.RECONNECTING,
@@ -603,6 +715,7 @@ internal class HaExactEntityStreamOwner(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (rejected: HaAuthenticationException) {
+                reportPath(HaPathFailureKind.AUTH)
                 if (authRefreshAttempted) {
                     publishTransportStatus(
                         run, expected, HaExactEntityStreamPhase.AUTH_FAILED,
@@ -624,6 +737,9 @@ internal class HaExactEntityStreamOwner(
                 )
                 return
             } catch (error: HaProtocolException) {
+                // A liveness timeout was already reported as a network miss where it was detected;
+                // every other protocol failure is Home Assistant closing, refusing or mis-answering.
+                if (error !is HaStreamLivenessException) reportPath(HaPathFailureKind.SERVER)
                 protocolFailures = nextAttempt(protocolFailures)
                 attempt = nextAttempt(attempt)
                 publishTransportStatus(
@@ -632,6 +748,7 @@ internal class HaExactEntityStreamOwner(
                 )
                 if (protocolFailures >= MAX_PROTOCOL_ATTEMPTS) return
             } catch (error: Exception) {
+                reportPath(haPathFailureKind(error))
                 attempt = nextAttempt(attempt)
                 publishTransportStatus(
                     run, expected, HaExactEntityStreamPhase.RECONNECTING,
@@ -653,6 +770,15 @@ internal class HaExactEntityStreamOwner(
             }
             if (!current(run, expected)) return
             delay(reconnectDelay(attempt))
+        }
+        } finally {
+            // The loop ended while this generation is still the live one, so it PARKED — a refused
+            // sign-in after refresh, repeated protocol failures, a setup error or a non-transient
+            // failure — and no probe will ever follow. Measurement stops, and the surfaces say
+            // "not measured" rather than carrying a verdict nothing is refreshing. A SUPERSEDED
+            // generation reports nothing: replaceRequest and close have already published the state
+            // that replaced it, and a late report from a cancelled generation would overwrite it.
+            if (current(run, expected)) reportSocketState(HaSocketState.STOPPED)
         }
     }
 
@@ -806,16 +932,39 @@ internal class HaExactEntityStreamOwner(
             publishTransportStatus(run, expected, HaExactEntityStreamPhase.LIVE)
 
             var pingId = FIRST_PING_ID
+            // Deadline-based, not idle-based: entity traffic keeps the receive returning early, so
+            // the wait is recomputed against a fixed next-probe instant and a probe goes out on the
+            // cadence whether or not frames arrived in between. One consumer only: `messages` is a
+            // single-consumer channel and a second ticker draining it would steal entity frames.
+            var nextProbeAtMs = monotonicMillis() + probeIntervalMs
             while (isActive && current(run, expected)) {
-                val message = withTimeoutOrNull(livenessIntervalMs) { messages.receive() }
+                val wait = nextProbeAtMs - monotonicMillis()
+                val message = if (wait > 0L) withTimeoutOrNull(wait) { messages.receive() } else null
                 if (message != null) {
                     applyMessage(run, expected, message, initial = false)
                     continue
                 }
                 val expectedPong = pingId++
+                val sentAtMs = monotonicMillis()
                 connection.ping(expectedPong)
-                val alive = awaitPong(messages, expectedPong, run, expected)
-                if (!alive) throw HaProtocolException("Home Assistant stream liveness check timed out")
+                when (val wait = awaitPong(messages, expectedPong, run, expected)) {
+                    is PongWait.Answered -> networkPathObserver?.let { observer ->
+                        safeCallback { observer.onRoundTrip((wait.receivedAtMs - sentAtMs).coerceAtLeast(0L)) }
+                    }
+                    // Frames kept arriving while the pong did not: the socket and the path are
+                    // demonstrably alive and Home Assistant is what is slow to answer. That is the
+                    // server's condition, never loss, and it must not tear down the shared stream
+                    // that ambient light, presence, auto-sleep and lifecycle ride — an overloaded
+                    // instance would otherwise be interrupted every probe for as long as it stayed
+                    // busy. The abandoned ping's late pong is ignored like any stray pong.
+                    PongWait.BusyTimeout -> reportPath(HaPathFailureKind.SERVER)
+                    // Silence for the whole pong timeout is the original liveness verdict: dead.
+                    PongWait.SilentTimeout -> {
+                        networkPathObserver?.let { observer -> safeCallback { observer.onProbeTimeout() } }
+                        throw HaStreamLivenessException()
+                    }
+                }
+                nextProbeAtMs = monotonicMillis() + probeIntervalMs
             }
         } finally {
             reader.cancel()
@@ -824,20 +973,57 @@ internal class HaExactEntityStreamOwner(
         }
     }
 
+    /** How one probe's wait ended. */
+    private sealed interface PongWait {
+        /** The instant the pong was decoded (the transport's stamp when given, else this clock). */
+        class Answered(val receivedAtMs: Long) : PongWait
+
+        /** No pong, but at least one other frame arrived during the wait: the socket is alive. */
+        data object BusyTimeout : PongWait
+
+        /** No pong and no other frame for the whole pong timeout: the socket is dead. */
+        data object SilentTimeout : PongWait
+    }
+
+    /**
+     * Drain frames until the expected pong or the pong timeout, counting every OTHER frame seen on
+     * the way. A missing pong means two different things depending on that count, and only the
+     * silent case is a liveness failure.
+     */
     private suspend fun awaitPong(
         messages: Channel<HaExactSocketMessage>,
         expectedPong: Int,
         run: Long,
         expected: Request,
-    ): Boolean = withTimeoutOrNull(pongTimeoutMs) {
-        while (current(run, expected)) {
-            when (val message = messages.receive()) {
-                is HaExactSocketMessage.Pong -> if (message.id == expectedPong) return@withTimeoutOrNull true
-                else -> applyMessage(run, expected, message, initial = false)
+    ): PongWait {
+        var inboundWhileWaiting = 0
+        val answeredAtMs = withTimeoutOrNull(pongTimeoutMs) {
+            while (current(run, expected)) {
+                when (val message = messages.receive()) {
+                    is HaExactSocketMessage.Pong -> if (message.id == expectedPong) {
+                        return@withTimeoutOrNull if (message.receivedAtMs >= 0L) message.receivedAtMs else monotonicMillis()
+                    } else {
+                        // A LATE pong for an abandoned earlier probe. Its round trip is not
+                        // attributable any more, but the frame itself is proof the socket is
+                        // delivering — so it counts as inbound traffic like any other frame. Not
+                        // counting it is how a server answering one probe-interval late made every
+                        // subsequent wait look SILENT and tore down a demonstrably live socket.
+                        inboundWhileWaiting++
+                    }
+                    else -> {
+                        inboundWhileWaiting++
+                        applyMessage(run, expected, message, initial = false)
+                    }
+                }
             }
+            null
         }
-        false
-    } ?: false
+        return when {
+            answeredAtMs != null -> PongWait.Answered(answeredAtMs)
+            inboundWhileWaiting > 0 -> PongWait.BusyTimeout
+            else -> PongWait.SilentTimeout
+        }
+    }
 
     private fun applyMessage(
         run: Long,
@@ -1184,7 +1370,6 @@ internal class HaExactEntityStreamOwner(
         const val MAX_PROTOCOL_ATTEMPTS = 3
         const val MAX_RECONNECT_ATTEMPT = 1_000_000
         const val FIRST_PING_ID = 10
-        const val DEFAULT_LIVENESS_INTERVAL_MS = 45_000L
         const val DEFAULT_PONG_TIMEOUT_MS = 15_000L
         const val DEFAULT_RECONNECT_BASE_MS = 1_000L
         const val DEFAULT_RECONNECT_MAX_MS = 60_000L
@@ -1197,6 +1382,11 @@ internal class HaExactEntityStreamOwner(
 internal class KtorHaExactEntityStreamTransport(
     private val rest: HaAmbientTransport = KtorHaAmbientTransport(),
     private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy = { MqttAddressFamilyPolicy.AUTOMATIC },
+    /**
+     * Stamps each pong at decode time for the round-trip measurement. Must be the SAME clock the
+     * owner sends on, which is why the service passes its `elapsedRealtime` lambda to both.
+     */
+    private val monotonicMillis: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) : HaExactEntityStreamTransport {
     override suspend fun subscribe(
         baseUrl: String,
@@ -1262,6 +1452,7 @@ internal class KtorHaExactEntityStreamTransport(
                 ids.registryIds,
                 ids.lifecycleIds,
                 ids.pingIdOffset,
+                monotonicMillis,
             )
         } catch (error: Exception) {
             runCatching { socket?.close() }
@@ -1302,6 +1493,7 @@ internal class KtorHaExactEntityStreamTransport(
         private val registrySubscriptionIds: Set<Int>,
         private val lifecycleSubscriptionIds: Map<Int, HaLifecycleEvent>,
         private val pingIdOffset: Int,
+        private val monotonicMillis: () -> Long,
     ) : HaExactEntityConnection {
         private val pending = ArrayDeque<HaExactSocketMessage>()
 
@@ -1339,6 +1531,7 @@ internal class KtorHaExactEntityStreamTransport(
                     }
                     "pong" -> HaExactSocketMessage.Pong(
                         (json.optLong("id", -1L) - pingIdOffset.toLong()).toInt(),
+                        receivedAtMs = monotonicMillis(),
                     )
                     else -> HaExactSocketMessage.Other
                 }

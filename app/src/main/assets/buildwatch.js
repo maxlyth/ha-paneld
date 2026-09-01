@@ -56,12 +56,56 @@
     if (state === "connection_lost") { row.textContent = "connection lost"; return; }
     row.textContent = refused ? HA_ROW_REFUSED : "watching";
   }
+  // Home Assistant network path. /health carries `ha_net=<healthy|warning|severe>` plus terse numbers
+  // only while the panel holds a Home Assistant socket, so an absent token means "not measured", and
+  // the banner and row are rendered from the SAME observation as the lifecycle pair above. The banner
+  // reuses the existing severe-warning presentation (`setup crit`) for the severe verdict and the soft
+  // amber `setup` tone for a warning; both retract themselves on the next poll after recovery.
+  var HA_NET_TEXT = {
+    warning: "⚠ The network path to Home Assistant is slow",
+    severe: "⚠ The network path to Home Assistant is severely degraded"
+  };
+  var HA_NET_ADVICE = "Dashboard actions will lag. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.";
+  var HA_NET_ROW = { healthy: "healthy", warning: "slow", severe: "severely degraded" };
+  // An empty window is two facts: a socket that has only just connected, and a stream that parked
+  // and stopped probing. Only the age of the last reply tells them apart (same wording as Kotlin).
+  function haNetAge(ms) { return ms < 60000 ? Math.floor(ms / 1000) + " s" : Math.floor(ms / 60000) + " min"; }
+  function haNetEvidence(p95, n, miss, age) {
+    if (!n) {
+      return age < 0 ? "no probes yet in the last 5 min"
+        : "no probe answered in the last 5 min; last reply " + haNetAge(age) + " ago";
+    }
+    var head = p95 < 0 ? "no reply" : "p95 " + Number(p95).toLocaleString("en-GB") + " ms";
+    var misses = miss > 0 ? miss + " of " + n + " probes missed" : "no misses";
+    return head + ", " + misses + " in the last 5 min";
+  }
+  function haNetBanner(state, p95, n, miss, age) {
+    var b = document.getElementById("hanetbar");
+    if (b) {
+      var text = HA_NET_TEXT[state];
+      if (!text) { b.style.display = "none"; } else {
+        b.textContent = text + ": " + haNetEvidence(p95, n, miss, age) + ". " + HA_NET_ADVICE;
+        b.className = state === "severe" ? "setup crit" : "setup";
+        b.style.display = "";
+      }
+    }
+    var row = document.getElementById("hanetcell");
+    if (!row) return;
+    if (!state) { row.textContent = ""; return; }
+    row.textContent = (HA_NET_ROW[state] || state) + "; " + haNetEvidence(p95, n, miss, age);
+  }
   function vc() {
     fetch("/health").then(function (r) { return r.text(); }).then(function (t) {
       var mh = t.match(/ha=(\S+)/);
       var ms = t.match(/ha_src=(\S+)/);
       var mr = t.match(/ha_refused=1/);
       haBanner(mh ? mh[1] : "", ms ? ms[1] : "", !!mr);
+      var mn = t.match(/ha_net=(\S+)/);
+      var mp = t.match(/ha_net_p95=(-?\d+)/);
+      var mc = t.match(/ha_net_n=(\d+)/);
+      var mm = t.match(/ha_net_miss=(\d+)/);
+      var ma = t.match(/ha_net_age=(-?\d+)/);
+      haNetBanner(mn ? mn[1] : "", mp ? parseInt(mp[1], 10) : -1, mc ? parseInt(mc[1], 10) : 0, mm ? parseInt(mm[1], 10) : 0, ma ? parseInt(ma[1], 10) : -1);
       var mb = t.match(/build=(\S+)/);
       if (mb && LB && mb[1] !== LB) {
         if (dirty()) banner("A newer ha-paneld is installed"); else location.reload();

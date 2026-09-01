@@ -493,7 +493,7 @@ class HaExactEntityStreamOwnerTest {
             transport,
             observer,
             auth,
-            livenessIntervalMs = 100,
+            probeIntervalMs = 100,
             pongTimeoutMs = 50,
             reconnectBaseMs = 10,
             reconnectMaxMs = 10,
@@ -825,7 +825,7 @@ class HaExactEntityStreamOwnerTest {
         auth: HaApiSessionProvider = HaApiSessionProvider {
             HaApiSession("https://ha.example", "token", owner = OWNER)
         },
-        livenessIntervalMs: Long = 45_000L,
+        probeIntervalMs: Long = 45_000L,
         pongTimeoutMs: Long = 15_000L,
         reconnectBaseMs: Long = 1_000L,
         reconnectMaxMs: Long = 60_000L,
@@ -837,8 +837,11 @@ class HaExactEntityStreamOwnerTest {
         auth = auth,
         transport = transport,
         workerDispatcher = dispatcher,
-        livenessIntervalMs = livenessIntervalMs,
+        probeIntervalMs = probeIntervalMs,
         pongTimeoutMs = pongTimeoutMs,
+        // The probe deadline is computed on this clock while the waits run on the scheduler's; the
+        // two must agree or a slow host makes the deadline fall due early and probes over-fire.
+        monotonicMillis = { testScheduler.currentTime },
         reconnectBaseMs = reconnectBaseMs,
         reconnectMaxMs = reconnectMaxMs,
         subscribeTimeoutMs = subscribeTimeoutMs,

@@ -9,6 +9,8 @@ import kotlin.math.ceil
  * seconds; no event payload, entity id, DOM target, or script URL crosses the bridge.
  */
 object DashboardTelemetry {
+    /** The likely-cause code for a measured degraded path; one name shared with its state owner. */
+    private const val NETWORK_PATH_CAUSE = io.github.maxlyth.hapaneld.sensors.HaNetworkPathPresentation.LIKELY_CAUSE
     private const val MAX_BUCKETS = 48
     private const val INTERACTION_BINS = 10
     private val lock = Any()
@@ -61,6 +63,12 @@ object DashboardTelemetry {
         rendererMainPct: Double? = null,
         topEntities: JSONArray = JSONArray(),
         nowElapsedMs: Long = monotonicElapsedMs(),
+        /**
+         * The measured Home Assistant network-path verdict (`warning` / `severe`), or null when the
+         * path is healthy or not measured. Read from the one state owner by the caller so this
+         * classifier stays pure.
+         */
+        networkPath: String? = null,
     ): String = synchronized(lock) {
         val values = buckets.toList()
         val latest = values.lastOrNull()
@@ -93,6 +101,7 @@ object DashboardTelemetry {
             reloads24h = reloads24h,
             systemCpuPct = systemCpuPct,
             rendererMainPct = rendererMainPct.takeIf { !builtinActive },
+            networkPath = networkPath,
         )
         JSONObject()
             .put("schema", 1)
@@ -157,7 +166,15 @@ object DashboardTelemetry {
         reloads24h: Int,
         systemCpuPct: Int?,
         rendererMainPct: Double?,
+        networkPath: String? = null,
     ): Pair<String, String> {
+        // A measured slow or lossy path to Home Assistant is named BEFORE any in-panel burden: every
+        // server-backed action waits on that path, so entity filtering, card JavaScript and panel CPU
+        // are not to be blamed while the round trip itself is the bottleneck.
+        when (networkPath) {
+            "severe" -> return NETWORK_PATH_CAUSE to "high"
+            "warning" -> return NETWORK_PATH_CAUSE to "medium"
+        }
         if (interactionP95 >= 200.0 && occupancyP95 >= 100.0 &&
             (updateP95 >= 50.0 || payloadP95 >= 64.0 * 1024.0)
         ) return "state_stream" to if (occupancyP95 >= 250.0) "high" else "medium"

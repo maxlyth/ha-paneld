@@ -289,6 +289,7 @@ object DiagReader {
         renderer: io.github.maxlyth.hapaneld.RendererAdmissionPresentation? = null,
         camera: io.github.maxlyth.hapaneld.camera.CameraPresentation? = null,
         wifiStabilityChronic: Boolean = false,
+        haNetwork: String? = null,
     ): String {
         val deadline = MonotonicDeadline(DUMP_TIMEOUT_MS)
         val routes = privilege
@@ -316,6 +317,10 @@ object DiagReader {
         // radios. Its values are all classified or categorical — no URL, host, credential or raw
         // exception text — so this line is as pasteable as the rest of the dump.
         renderer?.let { appendLine(it.diagnosticLine()) }
+        // The measured path to Home Assistant comes next: it is the first thing to rule in or out
+        // when the renderer line says "rendered" and the report still complains of a slow dashboard.
+        // Classified state and terse aggregates only; the presentation never carries a host.
+        haNetwork?.let { appendLine(it) }
         // Camera trial: rendered identically here and in /api/v1/status so severity cannot drift
         // between the two. Client addresses and raw
         // exception text never enter this line — [CameraPresentation] already excludes them.

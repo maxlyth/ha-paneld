@@ -257,6 +257,10 @@ object PerfReader {
             BuiltinDashboard.rendererPerf(android.os.SystemClock.elapsedRealtime()).reloads24h
         } else 0
         val top = runCatching { JSONArray(EntityLearningRuntime.performanceSummaryJson()) }.getOrDefault(JSONArray())
+        // One read of the one network-path owner; only a degraded verdict is passed, so the
+        // classifier sees null for healthy and not-measured alike.
+        val networkPath = io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime.snapshot()
+            ?.takeIf { it.degraded }?.severity?.wireValue
         return DashboardTelemetry.json(
             builtinActive = builtin,
             filterActive = filterActive,
@@ -265,6 +269,7 @@ object PerfReader {
             systemCpuPct = latestCpu,
             rendererMainPct = rendererPct,
             topEntities = top,
+            networkPath = networkPath,
         )
     }
 

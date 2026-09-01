@@ -52,7 +52,7 @@ class RendererHealthSurfaceContractTest {
         assertTrue(server.contains("HA_RENDERER_FACT -> rendererAdmission().statusText()"))
         assertTrue(
             server.replace(Regex("\\s+"), " ").contains(
-                "\"Wi-Fi stability\", HA_RENDERER_FACT, \"MQTT state\"",
+                "\"Wi-Fi stability\", HA_NETWORK_FACT, HA_RENDERER_FACT, \"MQTT state\"",
             ),
         )
         // It is a live row, so it must never also be a cached panel fact: two sources for one value

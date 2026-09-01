@@ -204,6 +204,7 @@ class DashboardActivity : AppCompatActivity() {
     private var swipe: SwipeRefreshLayout? = null
     private var root: FrameLayout? = null                       // holds the swipe layout + fullscreen video
     private var lifecycleBar: HaLifecycleBar? = null            // native HA outage bar, lives inside `root`
+    private var networkChip: HaNetworkChip? = null              // native "HA network slow" chip, same root
 
     /**
      * Marshals to the UI thread because the state machine is driven from the service's IO scope.
@@ -223,12 +224,17 @@ class DashboardActivity : AppCompatActivity() {
         // no service owns lifecycle tracking — which hides the bar, so a card cannot outlive the
         // service whose state it was rendering.
         lifecycleBar?.update(io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime.snapshot())
+        // The network-path chip answers the same poke from ITS one owner: one atomic snapshot, null
+        // (hidden) when no service owns the monitor or no socket is held.
+        networkChip?.update(io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime.snapshot())
     }
 
-    /** Drop the bar with its container. Every content-view swap must reach here, or it outlives its root. */
+    /** Drop the bar and chip with their container. Every content-view swap must reach here, or they outlive their root. */
     private fun detachLifecycleBar() {
         lifecycleBar?.detach()
         lifecycleBar = null
+        networkChip?.detach()
+        networkChip = null
     }
     private var entityFilterSignature = "disabled"
     // The colour-scheme policy baked into the live WebView's document-start script. Document-start
@@ -3121,7 +3127,8 @@ class DashboardActivity : AppCompatActivity() {
         // underneath. Seeded from the CURRENT state because a renderer rebuilt mid-outage must not come
         // up looking calm.
         lifecycleBar = HaLifecycleBar.attach(this, container)
-            .also { redrawLifecycleBar() }
+        networkChip = HaNetworkChip.attach(this, container)
+        redrawLifecycleBar()
         val target = currentUrl(config)
         noteAppNavigationTarget(android.net.Uri.parse(target).path.orEmpty())
         expectPageStart(target)

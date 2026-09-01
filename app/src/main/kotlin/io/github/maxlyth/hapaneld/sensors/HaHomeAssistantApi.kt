@@ -76,7 +76,7 @@ internal interface HaAmbientTransport {
 
 internal class HaAuthenticationException(message: String) : RuntimeException(message)
 
-internal class HaProtocolException(message: String) : RuntimeException(message)
+internal open class HaProtocolException(message: String) : RuntimeException(message)
 
 internal fun haHistoryPath(entityId: String, startEpochMs: Long, endEpochMs: Long): String {
     validateEntityId(entityId)

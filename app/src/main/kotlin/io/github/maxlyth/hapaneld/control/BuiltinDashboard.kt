@@ -325,7 +325,11 @@ object BuiltinDashboard {
         }
     }
 
-    /** The service calls this when the lifecycle state changed; no-op when no renderer is listening. */
+    /**
+     * The service calls this when the lifecycle state OR the network-path verdict changed; no-op when
+     * no renderer is listening. One poke for both because the renderer re-reads both holders on it,
+     * and a second listener would be a second registration, clearing and ordering contract to keep.
+     */
     internal fun onHaLifecycleChanged() {
         val listener = synchronized(haLifecycleListenerLock) { haLifecycleListener }
         listener?.invoke()
