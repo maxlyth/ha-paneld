@@ -815,7 +815,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "illuminance", "Illuminance",
                 """"state_topic":"ha-paneld/{panel}/illuminance/state","device_class":"illuminance","unit_of_measurement":"lx","state_class":"measurement"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -839,7 +839,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "proximity_level", "Proximity level",
                 """"state_topic":"ha-paneld/{panel}/proximity_level/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:hand-wave"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -862,7 +862,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "temperature", "Temperature",
                 """"state_topic":"ha-paneld/{panel}/temperature/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -874,7 +874,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "humidity", "Humidity",
                 """"state_topic":"ha-paneld/{panel}/humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
 
@@ -901,7 +901,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "diag_cpu", "CPU usage",
                 """"state_topic":"ha-paneld/{panel}/diag_cpu/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:cpu-64-bit","entity_category":"diagnostic"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -912,7 +912,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "diag_memory", "Memory usage",
                 """"state_topic":"ha-paneld/{panel}/diag_memory/state","unit_of_measurement":"%","state_class":"measurement","icon":"mdi:memory","entity_category":"diagnostic"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -923,7 +923,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "diag_soc_temp", "SoC temperature",
                 """"state_topic":"ha-paneld/{panel}/diag_soc_temp/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement","entity_category":"diagnostic"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -958,7 +958,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "diag_wifi_rssi", "Wi-Fi signal strength",
                 """"state_topic":"ha-paneld/{panel}/diag_wifi_rssi/state","device_class":"signal_strength","unit_of_measurement":"dBm","state_class":"measurement","icon":"mdi:wifi","entity_category":"diagnostic"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         // Rolling Wi-Fi outage counts — actual loss of the panel's Wi-Fi default network, observed
@@ -973,7 +973,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "diag_wifi_outages_24h", "Wi-Fi outages (24 h)",
                 """"state_topic":"ha-paneld/{panel}/diag_wifi_outages_24h/state","json_attributes_topic":"ha-paneld/{panel}/diag_wifi_outages_24h/attributes","state_class":"measurement","icon":"mdi:wifi-alert","entity_category":"diagnostic"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
 
@@ -989,7 +989,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "room_temp", "Room temperature",
                 """"state_topic":"ha-paneld/{panel}/room_temp/state","device_class":"temperature","unit_of_measurement":"°C","state_class":"measurement"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         SettingSpec(
@@ -1000,7 +1000,7 @@ object SettingsRegistry {
             ha = HaEntity(
                 "sensor", "room_humidity", "Room humidity",
                 """"state_topic":"ha-paneld/{panel}/room_humidity/state","device_class":"humidity","unit_of_measurement":"%","state_class":"measurement"""",
-                readOnly = true,
+                readOnly = true, periodicRefresh = true,
             ),
         ),
         // Self-heat calibration trim (°C) added to the reported room temperature. Advanced + local-only
