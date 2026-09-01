@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.i18n
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.maxlyth.hapaneld.CoreInstrumentation
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,19 +13,34 @@ import org.junit.runner.RunWith
 @CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class CatalogueAndroidTest {
-    @Test fun productionLoaderReadsPackagedTargetsAndFallsBackFromDraftsOnAndroid() {
+    @Test fun productionLoaderReadsPackagedTargetsAndSeparatesEligibleFromDraftFallbackOnAndroid() {
         val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
+        val key = "settings.auto_brightness.label"
+        val eligibleLocale = "de"
+        val eligibleText = JSONObject(assets.readText("i18n/$eligibleLocale.json"))
+            .getJSONObject("strings")
+            .getJSONObject(key)
+            .getString("text")
         val reads = mutableListOf<String>()
         val loader = CatalogueLoader { path ->
             reads += path
-            assets.readText(path)
+            val packaged = assets.readText(path)
+            if (path != "i18n/$eligibleLocale.json") packaged else JSONObject(packaged).apply {
+                getJSONObject("strings").getJSONObject(key).put("state", "machine-cross-checked")
+            }.toString()
         }
-        val english = loader.strings(AppLocale.ENGLISH).get("settings.auto_brightness.label")
+        val english = loader.strings(AppLocale.ENGLISH).get(key)
 
         (AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH).forEach { locale ->
             val localized = loader.strings(locale)
-            assertEquals(english, localized.get("settings.auto_brightness.label"))
-            assertEquals(AppLocale.ENGLISH, localized.resolve("settings.auto_brightness.label").language)
+            if (locale == eligibleLocale) {
+                assertEquals(eligibleText, localized.get(key))
+                assertEquals(eligibleLocale, localized.resolve(key).language)
+            } else {
+                assertEquals(english, localized.get(key))
+                assertEquals(AppLocale.ENGLISH, localized.resolve(key).language)
+            }
+            loader.strings(locale).get(key)
         }
         assertEquals(AppLocale.RELEASE_LOCALES.map { "i18n/$it.json" }, reads)
     }
