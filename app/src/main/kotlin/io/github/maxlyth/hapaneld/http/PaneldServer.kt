@@ -177,6 +177,7 @@ import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
@@ -2136,7 +2137,7 @@ class PaneldServer internal constructor(
                             )
                         },
                     )
-                    post("/config") { handleConfigPost(call) }
+                    installDirectConfigPostRoute()
                     get("/config/home-dashboards") {
                         val catalog = entityLearning.homeDashboardCatalog()
                         val items = catalog.items.joinToString(",") { dashboard ->
@@ -5719,11 +5720,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      * identity/MQTT/logging/tame keys is preserved; the formerly MQTT-only behaviour keys are applied
      * through [applySetting] (same path as an HA command), and per-row HA-exposure toggles are stored.
      */
-    private suspend fun handleConfigPost(call: ApplicationCall) {
+    /**
+     * Install the canonical direct-config mutation route. The optional capability provider is a narrow
+     * JVM-test seam: production always uses the request-scoped management snapshot, while route tests can
+     * avoid constructing Android sensor/probe owners without replacing either Ktor routing or this handler.
+     */
+    internal fun Route.installDirectConfigPostRoute(
+        capabilityProvider: (() -> Capabilities)? = null,
+    ) {
+        post("/config") { handleConfigPost(call, capabilityProvider) }
+    }
+
+    private suspend fun handleConfigPost(
+        call: ApplicationCall,
+        capabilityProvider: (() -> Capabilities)? = null,
+    ) {
         val received = receiveBoundedConfigParameters(call) ?: return
         // Same capability snapshot the Configure form was rendered from, so a choice the form offered is
         // the same set this admission step accepts.
-        val postCaps = liveCapabilities(snapStaleOk().caps)
+        val postCaps = capabilityProvider?.invoke() ?: liveCapabilities(snapStaleOk().caps)
         val normalizedPost = when (val result = normalizeConfigPostParameters(received, postCaps)) {
             is ConfigPostParameters.Ok -> result.values
             is ConfigPostParameters.Bad -> {
@@ -5741,9 +5756,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val admissionBaselineHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues())
         val enablingAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) == true && !config.autoSleep
         var autoSleepPrerequisiteOwner: HaAuthOwner? = null
-        val prerequisiteAndroidId = config.androidId
+        var prerequisiteAndroidId: String? = null
         val prerequisitePanelId = config.panelId
         if (enablingAutoSleep) {
+            prerequisiteAndroidId = config.androidId
             val connectionChanged = p["ha_url"]?.trimEnd('/')?.let { it != config.haUrl.trimEnd('/') } == true ||
                 listOf("ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id").any { p[it] != null }
             val identityChanged = p["panel_id"]?.let { it != prerequisitePanelId } == true
@@ -6484,10 +6500,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         changedKeys: Collection<String>,
         discovery: DiscoveryResult,
     ): String? {
-        if (!effectiveDashboardIsBuiltin()) return null
-        if (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) return null
         val onboardingKeys = setOf("mqtt_broker", "mqtt_user", "mqtt_password", "ha_url", "dashboard_package")
         if (!haUrlDiscovered && changedKeys.none { it in onboardingKeys }) return null
+        if (!effectiveDashboardIsBuiltin()) return null
+        if (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) return null
         if (config.haUrl.isBlank()) {
             val next = "MQTT settings saved. Next: enter the Home Assistant URL in the Home Assistant " +
                 "connection card below."
@@ -9174,6 +9190,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     /** Last successfully queried catalog for the current owner; never blocks a config response. */
     private fun haAreaCatalogJson(): String? {
+        val credentialed = config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()
+        if (!HaAreaProtocol.canQueryUnprompted(config.haUrl, credentialed)) return null
         val snapshot = captureHaAreaSnapshot()
         val entry = haAreaCatalogCache
         val now = System.nanoTime() / 1_000_000L

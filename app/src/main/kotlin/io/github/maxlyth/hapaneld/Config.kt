@@ -2220,7 +2220,15 @@ class Config private constructor(
     private fun boolPref(key: String): Boolean = prefs.getBoolean(key, specOf(key).defaultBool())
     private fun intPref(key: String): Int = prefs.getInt(key, specOf(key).defaultInt())
     private fun longPref(key: String): Long = prefs.getLong(key, specOf(key).defaultLong())
-    private fun floatPref(key: String): Float = prefs.getFloat(key, specOf(key).defaultFloat())
+    private fun floatPref(key: String): Float {
+        val spec = specOf(key)
+        val default = spec.defaultFloat()
+        val persisted = prefs.getFloat(key, default)
+        val normalized = (SettingValue.validate(spec, persisted.toString()) as? Validation.Ok)?.normalized
+            ?: (SettingValue.validate(spec, default.toString()) as? Validation.Ok)?.normalized
+            ?: default.toString()
+        return normalized.toFloatOrNull() ?: default
+    }
     private fun stringPref(key: String): String = prefs.getString(key, specOf(key).default) ?: specOf(key).default
 
     /** Current raw string value for a registry key (the spec default if unset). */
@@ -2228,10 +2236,12 @@ class Config private constructor(
         SettingType.BOOL -> prefs.getBoolean(spec.key, spec.defaultBool()).toString()
         SettingType.INT -> prefs.getInt(spec.key, spec.defaultInt()).toString()
         SettingType.LONG -> prefs.getLong(spec.key, spec.defaultLong()).toString()
-        SettingType.FLOAT -> (SettingValue.validate(
-            spec,
-            prefs.getFloat(spec.key, spec.defaultFloat()).toString(),
-        ) as Validation.Ok).normalized
+        SettingType.FLOAT -> {
+            // Legacy stores and restored databases can bypass current write admission. [floatPref]
+            // gives both typed runtime accessors and this raw projection the same validated effective
+            // value; read-back deliberately does not mutate persistence.
+            (SettingValue.validate(spec, floatPref(spec.key).toString()) as Validation.Ok).normalized
+        }
         else -> when (spec.key) {
             "navbar_mode" -> navbarMode
             // A pre-UDP panel has the retired "syslog" spelling on disk. Canonicalize here so the

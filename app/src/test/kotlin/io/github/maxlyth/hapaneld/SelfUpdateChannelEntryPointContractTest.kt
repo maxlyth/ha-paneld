@@ -30,7 +30,7 @@ class SelfUpdateChannelEntryPointContractTest {
         val bridge = source("src/main/kotlin/io/github/maxlyth/hapaneld/MqttBridge.kt")
         val stage = bridge.substring(bridge.indexOf("internal fun stageSelfUpdateChannelChange"), bridge.indexOf("internal class MqttBridge"))
         assertTrue(stage.indexOf("requestAdmittedInstall(requested, current)") < stage.lastIndexOf("publishCurrent()"))
-        val handler = bridge.substring(bridge.indexOf("private fun handleUpdateChannel("), bridge.indexOf("private fun handleCompanionChannel("))
+        val handler = bridge.substring(bridge.indexOf("override fun handleUpdateChannel("), bridge.indexOf("override fun handleCompanionChannel("))
         assertTrue(handler.contains("stageSelfUpdateChannelChange("))
         assertFalse(handler.contains("config.setUpdateChannel(requested)"))
 
