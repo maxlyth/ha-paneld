@@ -37,6 +37,10 @@ HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
+CONTEXT_ROOT_KEYS = {
+    "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",
+}
+CONTEXT_SOURCE_KEYS = {"id", "repository", "revision", "artifact", "artifactSha256", "license"}
 
 
 class CatalogueError(ValueError):
@@ -424,14 +428,115 @@ def merge_candidate(
         validation_path.unlink(missing_ok=True)
 
 
-def coverage(count: int, total: int) -> dict[str, int | float]:
-    return {
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def coverage(
+    count: int,
+    total: int,
+    *,
+    keys: set[str] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "count": count,
         "percent": round(count * 100 / total, 2),
     }
+    if keys is not None:
+        result["keys"] = sorted(keys)
+    return result
 
 
-def catalogue_report(source_path: Path, target_paths: list[Path]) -> dict[str, Any]:
+def grouped_counts(
+    source_strings: dict[str, Any],
+    records: dict[str, Any],
+    stale_keys: set[str],
+    translated_keys: set[str],
+    dimension: str,
+) -> dict[str, Any]:
+    groups: dict[str, set[str]] = {}
+    for key, record in source_strings.items():
+        groups.setdefault(record[dimension], set()).add(key)
+
+    result: dict[str, Any] = {}
+    record_keys = set(records)
+    for name in sorted(groups):
+        keys = groups[name]
+        present_keys = keys & record_keys
+        group_stale = keys & stale_keys
+        group_current = present_keys - group_stale
+        group_translated = keys & translated_keys
+        states = Counter(records[key]["state"] for key in present_keys)
+        result[name] = {
+            "source": len(keys),
+            "stateCounts": {state: states[state] for state in sorted(STATES)},
+            "missing": len(keys - record_keys),
+            "stale": len(group_stale),
+            "current": len(group_current),
+            "translated": len(group_translated),
+            "fallback": len(keys - group_translated),
+        }
+    return result
+
+
+def report_context_path(source_path: Path, context_path: Path | None) -> Path | None:
+    if context_path is not None:
+        return context_path
+    candidate = source_path.parent / "context" / "home-assistant-terminology.json"
+    return candidate if candidate.is_file() else None
+
+
+def context_report(path: Path) -> dict[str, Any]:
+    root = read_json(path)
+    exact_keys(root, CONTEXT_ROOT_KEYS, "terminology context root")
+    if (
+        root["schema"] != SCHEMA
+        or not isinstance(root["id"], str)
+        or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", root["id"])
+        or not isinstance(root["sources"], list)
+        or not root["sources"]
+        or not isinstance(root["terms"], list)
+        or not root["terms"]
+    ):
+        raise CatalogueError("malformed terminology context")
+
+    pins: list[dict[str, str]] = []
+    source_ids: list[str] = []
+    for source in root["sources"]:
+        if not isinstance(source, dict):
+            raise CatalogueError("malformed terminology context source")
+        exact_keys(source, CONTEXT_SOURCE_KEYS, "terminology context source")
+        if (
+            not isinstance(source["id"], str)
+            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", source["id"])
+            or not isinstance(source["revision"], str)
+            or not REV_RE.fullmatch(source["revision"])
+            or not isinstance(source["artifactSha256"], str)
+            or not SHA_RE.fullmatch(source["artifactSha256"])
+        ):
+            raise CatalogueError("malformed terminology context source pin")
+        source_ids.append(source["id"])
+        pins.append({
+            "id": source["id"],
+            "revision": source["revision"],
+            "artifactSha256": source["artifactSha256"],
+        })
+    if source_ids != sorted(source_ids) or len(source_ids) != len(set(source_ids)):
+        raise CatalogueError("terminology context sources are not unique canonical ids")
+
+    return {
+        "id": root["id"],
+        "fileSha256": file_hash(path),
+        "terms": len(root["terms"]),
+        "sourcePins": pins,
+    }
+
+
+def catalogue_report(
+    source_path: Path,
+    target_paths: list[Path],
+    context_path: Path | None = None,
+) -> dict[str, Any]:
     """Return deterministic per-locale catalogue and runtime-fallback counts."""
     if not target_paths:
         raise CatalogueError("report requires at least one target catalogue")
@@ -465,26 +570,44 @@ def catalogue_report(source_path: Path, target_paths: list[Path]) -> dict[str, A
 
         locales[locale] = {
             "catalogueRecords": len(records),
+            "fileSha256": file_hash(path),
             "sourceRevision": target["sourceRevision"],
             "sourceRevisionMatches": target["sourceRevision"] == source["sourceRevision"],
             "stateCounts": {state: state_counts[state] for state in sorted(STATES)},
-            "missing": coverage(len(missing_keys), total),
-            "stale": coverage(len(stale_keys), total),
+            "surfaces": grouped_counts(
+                source_strings, records, stale_keys, translated_keys, "surface",
+            ),
+            "risks": grouped_counts(
+                source_strings, records, stale_keys, translated_keys, "risk",
+            ),
+            "missing": coverage(len(missing_keys), total, keys=missing_keys),
+            "stale": coverage(len(stale_keys), total, keys=stale_keys),
             "current": coverage(len(current_keys), total),
             "translated": coverage(len(translated_keys), total),
             "fallback": coverage(len(fallback_keys), total),
             "extra": len(record_keys - source_keys),
         }
 
-    return {
+    resolved_context = report_context_path(source_path, context_path)
+    result = {
         "schema": SCHEMA,
         "source": {
             "locale": source["locale"],
             "revision": source["sourceRevision"],
+            "fileSha256": file_hash(source_path),
             "strings": total,
+            "surfaceCounts": dict(sorted(Counter(
+                record["surface"] for record in source_strings.values()
+            ).items())),
+            "riskCounts": dict(sorted(Counter(
+                record["risk"] for record in source_strings.values()
+            ).items())),
         },
         "locales": {locale: locales[locale] for locale in sorted(locales)},
     }
+    if resolved_context is not None:
+        result["context"] = context_report(resolved_context)
+    return result
 
 
 def selected_targets(
@@ -506,6 +629,7 @@ def report_targets(
     target_paths: list[Path],
     target_dir: Path | None,
     output: Path | None,
+    context_path: Path | None = None,
 ) -> list[Path]:
     if output is None:
         return selected_targets(source_path, target_paths, target_dir)
@@ -513,6 +637,8 @@ def report_targets(
     output_path = output.resolve()
     if output_path == source_path.resolve():
         raise CatalogueError("report output must not overwrite the source catalogue")
+    if context_path is not None and output_path == context_path.resolve():
+        raise CatalogueError("report output must not overwrite the context artifact")
     if any(output_path == path.resolve() for path in target_paths):
         raise CatalogueError("report output must not overwrite a target catalogue")
     if (
@@ -550,6 +676,7 @@ def parser() -> argparse.ArgumentParser:
     report.add_argument("--source", type=Path, required=True)
     report.add_argument("--target", type=Path, action="append", default=[])
     report.add_argument("--target-dir", type=Path)
+    report.add_argument("--context", type=Path)
     report.add_argument("--output", type=Path)
     export = sub.add_parser("export")
     export.add_argument("--source", type=Path, required=True)
@@ -576,6 +703,7 @@ def main() -> int:
             for target in selected_targets(args.source, args.target, args.target_dir):
                 validate_target(target, source, expected_locale=target.stem)
         elif args.command == "report":
+            context_path = report_context_path(args.source, args.context)
             report = catalogue_report(
                 args.source,
                 report_targets(
@@ -583,7 +711,9 @@ def main() -> int:
                     args.target,
                     args.target_dir,
                     args.output,
+                    context_path,
                 ),
+                context_path,
             )
             if args.output:
                 write_json_atomic(args.output, report)

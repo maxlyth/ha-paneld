@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -44,14 +45,14 @@ class CatalogueTest(unittest.TestCase):
     def report_source(self):
         source = self.source()
         strings = {}
-        for suffix in ("a", "b", "c", "d", "e", "f"):
+        for index, suffix in enumerate(("a", "b", "c", "d", "e", "f")):
             text = f"English setting {suffix}."
             strings[f"settings.{suffix}.label"] = {
                 "text": text,
                 "sourceHash": i18n.source_hash(text),
                 "surface": "settings",
                 "context": f"Configure setting {suffix}",
-                "risk": "ordinary",
+                "risk": ("ordinary", "setup", "consequential")[index // 2],
                 "siblings": [],
                 "placeholders": [],
                 "frozen": [],
@@ -60,6 +61,32 @@ class CatalogueTest(unittest.TestCase):
             }
         source["strings"] = strings
         return source
+
+    def report_context(self):
+        return {
+            "schema": 1,
+            "id": "test-terminology",
+            "productContext": "Test product context.",
+            "instruction": "Use the pinned term.",
+            "license": "Apache-2.0",
+            "notice": "Synthetic test fixture.",
+            "sources": [{
+                "id": "frontend",
+                "repository": "https://github.com/home-assistant/frontend",
+                "revision": "b" * 40,
+                "artifact": "synthetic frontend artifact",
+                "artifactSha256": "c" * 64,
+                "license": "Apache-2.0",
+            }],
+            "terms": [{
+                "id": "settings",
+                "meaning": "Settings surface.",
+                "english": "Settings",
+                "source": "frontend",
+                "sourceKey": "panel.config",
+                "translations": {"de": "Einstellungen"},
+            }],
+        }
 
     def test_source_and_target_validate(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -308,8 +335,10 @@ class CatalogueTest(unittest.TestCase):
             source_path = root / "catalogues" / "en.json"
             target_path = root / "catalogues" / "de.json"
             output_path = root / "catalogues" / "report.json"
+            context_path = source_path.parent / "context" / "home-assistant-terminology.json"
             source = self.report_source()
             self.write(source_path, source)
+            self.write(context_path, self.report_context())
             hashes = {key: record["sourceHash"] for key, record in source["strings"].items()}
             self.write(target_path, {
                 "schema": 1,
@@ -351,9 +380,27 @@ class CatalogueTest(unittest.TestCase):
 
             expected = {
                 "schema": 1,
-                "source": {"locale": "en", "revision": "e" * 40, "strings": 6},
+                "source": {
+                    "locale": "en",
+                    "revision": "e" * 40,
+                    "fileSha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                    "strings": 6,
+                    "surfaceCounts": {"settings": 6},
+                    "riskCounts": {"consequential": 2, "ordinary": 2, "setup": 2},
+                },
+                "context": {
+                    "id": "test-terminology",
+                    "fileSha256": hashlib.sha256(context_path.read_bytes()).hexdigest(),
+                    "terms": 1,
+                    "sourcePins": [{
+                        "id": "frontend",
+                        "revision": "b" * 40,
+                        "artifactSha256": "c" * 64,
+                    }],
+                },
                 "locales": {"de": {
                     "catalogueRecords": 6,
+                    "fileSha256": hashlib.sha256(target_path.read_bytes()).hexdigest(),
                     "sourceRevision": "a" * 40,
                     "sourceRevisionMatches": False,
                     "stateCounts": {
@@ -362,8 +409,63 @@ class CatalogueTest(unittest.TestCase):
                         "machine-cross-checked": 2,
                         "machine-draft": 2,
                     },
-                    "missing": {"count": 1, "percent": 16.67},
-                    "stale": {"count": 1, "percent": 16.67},
+                    "surfaces": {"settings": {
+                        "source": 6,
+                        "stateCounts": {
+                            "community-corrected": 1,
+                            "english-fallback": 1,
+                            "machine-cross-checked": 2,
+                            "machine-draft": 1,
+                        },
+                        "missing": 1,
+                        "stale": 1,
+                        "current": 4,
+                        "translated": 2,
+                        "fallback": 4,
+                    }},
+                    "risks": {
+                        "consequential": {
+                            "source": 2,
+                            "stateCounts": {
+                                "community-corrected": 0,
+                                "english-fallback": 1,
+                                "machine-cross-checked": 0,
+                                "machine-draft": 0,
+                            },
+                            "missing": 1, "stale": 0, "current": 1,
+                            "translated": 0, "fallback": 2,
+                        },
+                        "ordinary": {
+                            "source": 2,
+                            "stateCounts": {
+                                "community-corrected": 1,
+                                "english-fallback": 0,
+                                "machine-cross-checked": 1,
+                                "machine-draft": 0,
+                            },
+                            "missing": 0, "stale": 0, "current": 2,
+                            "translated": 2, "fallback": 0,
+                        },
+                        "setup": {
+                            "source": 2,
+                            "stateCounts": {
+                                "community-corrected": 0,
+                                "english-fallback": 0,
+                                "machine-cross-checked": 1,
+                                "machine-draft": 1,
+                            },
+                            "missing": 0, "stale": 1, "current": 1,
+                            "translated": 0, "fallback": 2,
+                        },
+                    },
+                    "missing": {
+                        "count": 1, "percent": 16.67,
+                        "keys": ["settings.f.label"],
+                    },
+                    "stale": {
+                        "count": 1, "percent": 16.67,
+                        "keys": ["settings.d.label"],
+                    },
                     "current": {"count": 4, "percent": 66.67},
                     "translated": {"count": 2, "percent": 33.33},
                     "fallback": {"count": 4, "percent": 66.67},
@@ -407,6 +509,21 @@ class CatalogueTest(unittest.TestCase):
             self.assertIn("must not overwrite a target catalogue", failed.stderr)
             self.assertEqual(target_before, target_path.read_bytes())
 
+            context_before = context_path.read_bytes()
+            context_collision = command[:-1] + [str(context_path)]
+            failed = subprocess.run(context_collision, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("must not overwrite the context artifact", failed.stderr)
+            self.assertEqual(context_before, context_path.read_bytes())
+
+            context_alias = root / "context-output.json"
+            context_alias.symlink_to(context_path)
+            context_alias_collision = command[:-1] + [str(context_alias)]
+            failed = subprocess.run(context_alias_collision, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("must not overwrite the context artifact", failed.stderr)
+            self.assertEqual(context_before, context_path.read_bytes())
+
             alias_path = source_path.parent / "fr.json"
             alias_path.symlink_to(output_path.name)
             output_before = output_path.read_bytes()
@@ -420,6 +537,29 @@ class CatalogueTest(unittest.TestCase):
                 "report requires at least one target catalogue",
             ):
                 i18n.catalogue_report(source_path, [])
+
+    def test_report_rejects_malformed_public_context_pin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "en.json"
+            target_path = root / "de.json"
+            context_path = root / "context.json"
+            source = self.source()
+            self.write(source_path, source)
+            self.write(target_path, {
+                "schema": 1,
+                "locale": "de",
+                "sourceRevision": "e" * 40,
+                "strings": {},
+            })
+            context = self.report_context()
+            context["sources"][0]["artifactSha256"] = "not-a-pin"
+            self.write(context_path, context)
+            with self.assertRaisesRegex(
+                i18n.CatalogueError,
+                "malformed terminology context source pin",
+            ):
+                i18n.catalogue_report(source_path, [target_path], context_path)
 
 
 if __name__ == "__main__":
