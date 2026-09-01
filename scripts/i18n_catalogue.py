@@ -667,6 +667,11 @@ def selected_targets(
     return selected
 
 
+def entry_identity(path: Path) -> tuple[Path, str]:
+    absolute = Path(os.path.abspath(path))
+    return absolute.parent.resolve(), absolute.name
+
+
 def report_targets(
     source_path: Path,
     target_paths: list[Path],
@@ -676,14 +681,10 @@ def report_targets(
 ) -> list[Path]:
     selected = selected_targets(source_path, target_paths, target_dir)
     if context_path is not None:
-        context_entry = Path(os.path.abspath(context_path))
-        same_context_parent = (
-            target_dir is not None and context_path.resolve().parent == target_dir.resolve()
-        )
+        context_entry = entry_identity(context_path)
         selected = [
             path for path in selected
-            if Path(os.path.abspath(path)) != context_entry
-            and not (same_context_parent and path.name == context_path.name)
+            if entry_identity(path) != context_entry
         ]
     if output is None:
         return selected
@@ -702,14 +703,10 @@ def report_targets(
     ):
         raise CatalogueError("report output must not overwrite a target catalogue")
 
-    output_entry = Path(os.path.abspath(output))
-    same_resolved_parent = (
-        target_dir is not None and output_path.parent == target_dir.resolve()
-    )
+    output_entry = entry_identity(output)
     selected = [
         path for path in selected
-        if Path(os.path.abspath(path)) != output_entry
-        and not (same_resolved_parent and path.name == output.name)
+        if entry_identity(path) != output_entry
     ]
     if any(output_path == path.resolve() for path in selected):
         raise CatalogueError("report output must not overwrite a target catalogue")

@@ -495,8 +495,10 @@ class CatalogueTest(unittest.TestCase):
             subprocess.run(aliased_command, check=True)
             self.assertEqual(first_bytes, output_path.read_bytes())
 
+            external_context_path = root / "external" / "terminology.json"
+            self.write(external_context_path, self.report_context())
             explicit_context_path = source_path.parent / "terminology.json"
-            self.write(explicit_context_path, self.report_context())
+            explicit_context_path.symlink_to(external_context_path)
             explicit_command = command[:-2] + [
                 "--context", str(explicit_context_path), "--output", str(output_path),
             ]
@@ -598,6 +600,35 @@ class CatalogueTest(unittest.TestCase):
                     self.write(context_path, context)
                     with self.assertRaises(i18n.CatalogueError):
                         i18n.catalogue_report(source_path, [target_path], context_path)
+
+    def test_report_context_entry_does_not_hide_same_named_external_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalogue_dir = root / "catalogues"
+            source_path = catalogue_dir / "en.json"
+            context_path = catalogue_dir / "de.json"
+            external_target = root / "target" / "de.json"
+            backing_context = root / "external" / "context.json"
+            aliased_target = root / "alias-target" / "de.json"
+            self.write(source_path, self.source())
+            self.write(backing_context, self.report_context())
+            context_path.symlink_to(backing_context)
+            self.write(external_target, {
+                "schema": 1, "locale": "de", "sourceRevision": "e" * 40, "strings": {},
+            })
+            aliased_target.parent.mkdir(parents=True)
+            aliased_target.symlink_to(backing_context)
+
+            self.assertEqual(
+                [external_target, aliased_target],
+                i18n.report_targets(
+                    source_path,
+                    [external_target, aliased_target],
+                    catalogue_dir,
+                    None,
+                    context_path,
+                ),
+            )
 
 
 if __name__ == "__main__":
