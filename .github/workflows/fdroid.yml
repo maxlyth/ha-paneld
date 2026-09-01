@@ -246,7 +246,11 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name != 'workflow_dispatch' || inputs.publish_r2
+    # Credentialed publication is allowed only from the repository's current default branch. Manual
+    # dispatches from any other ref remain useful as build-only validation runs.
+    if: >-
+      (github.event_name != 'workflow_dispatch' || inputs.publish_r2) &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
     environment:
       name: fdroid
