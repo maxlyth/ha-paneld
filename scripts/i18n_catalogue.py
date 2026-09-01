@@ -551,6 +551,7 @@ def context_report(path: Path) -> dict[str, Any]:
             or not term["meaning"].strip()
             or not isinstance(term["english"], str)
             or not term["english"].strip()
+            or not isinstance(term["source"], str)
             or term["source"] not in known_sources
             or not isinstance(term["sourceKey"], str)
             or not term["sourceKey"].strip()

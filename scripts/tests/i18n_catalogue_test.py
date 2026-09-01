@@ -587,6 +587,12 @@ class CatalogueTest(unittest.TestCase):
             context = self.report_context()
             context["terms"][0]["source"] = "missing-source"
             malformed.append(context)
+            context = self.report_context()
+            context["terms"][0]["source"] = ["frontend"]
+            malformed.append(context)
+            context = self.report_context()
+            context["terms"][0]["source"] = {"id": "frontend"}
+            malformed.append(context)
             for index, context in enumerate(malformed):
                 with self.subTest(index=index):
                     self.write(context_path, context)
