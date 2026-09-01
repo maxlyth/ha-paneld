@@ -143,6 +143,13 @@ class CameraSessionOwner(
         var characteristics: CameraCharacteristics? = null
         var fpsRange: Range<Int>? = null
 
+        /**
+         * Releases the foreground standing this attempt promoted. Teardown runs out of order — an
+         * ended session's finish can reach here after the next session has opened and promoted — so
+         * the release names this attempt and does nothing once a newer one holds standing.
+         */
+        fun releaseStanding() = foreground.demote(id)
+
         fun release() {
             val s: CameraCaptureSession?
             val d: CameraDevice?
@@ -434,7 +441,7 @@ class CameraSessionOwner(
             fps = boundFps
         }
         if (!indicator.show()) return openFailed(attempt, CameraFault.INDICATION, CameraRefusal.INDICATION, null)
-        if (!foreground.promote(FOREGROUND_WAIT_MS)) {
+        if (!foreground.promote(attempt.id, FOREGROUND_WAIT_MS)) {
             return openFailed(attempt, CameraFault.FOREGROUND, CameraRefusal.FOREGROUND, null)
         }
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -577,7 +584,7 @@ class CameraSessionOwner(
         when (decision) {
             Failure.Ignored -> Unit
             Failure.Close -> {
-                foreground.demote()
+                attempt.releaseStanding()
                 indicator.hide()
                 synchronized(lock) {
                     recovery = if (state.phase == Phase.DEGRADED) "reattach a client after the hold or toggle the camera setting"
@@ -587,7 +594,7 @@ class CameraSessionOwner(
                 endStreamIfStillEnded(refusal, generation)
             }
             is Failure.Reopen -> {
-                foreground.demote()
+                attempt.releaseStanding()
                 indicator.hide()
                 synchronized(lock) { recovery = "reopening in ${decision.afterMs}ms (attempt ${decision.attempt})" }
                 scheduleReopen(decision.afterMs)
@@ -962,14 +969,14 @@ class CameraSessionOwner(
                 // session; stream clients keep their place and joiners ride the reopen out.
                 stopEncoder()
                 attempt.release()
-                foreground.demote()
+                attempt.releaseStanding()
                 indicator.hide()
                 scheduleReopen(action.afterMs)
             }
             is TickAction.Degrade -> {
                 stopEncoder()
                 attempt.release()
-                foreground.demote()
+                attempt.releaseStanding()
                 indicator.hide()
                 quitThread()
                 endStreamIfStillEnded(CameraRefusal.FAILED, action.generation)
@@ -997,7 +1004,7 @@ class CameraSessionOwner(
     private fun degrade(attempt: Attempt, f: CameraFault, count: Int) {
         // openFailed() has already moved the state machine to DEGRADED for this attempt; this only
         // brings the hardware side down and records the presentation.
-        foreground.demote()
+        attempt.releaseStanding()
         indicator.hide()
         val generation: Long
         synchronized(lock) {
@@ -1026,7 +1033,9 @@ class CameraSessionOwner(
     private fun finishAttempt(attempt: Attempt?, stopping: Boolean, endedGeneration: Long) {
         stopEncoder()
         attempt?.release()
-        foreground.demote()
+        // Stopping outright takes standing whoever holds it, because nothing newer can be coming; a
+        // session merely ending releases only its own, because a newer session may already hold it.
+        if (stopping) foreground.demoteAll() else attempt?.releaseStanding()
         if (stopping) indicator.forceHide() else indicator.hide()
         quitThread()
         endStreamIfStillEnded(if (stopping) CameraRefusal.STOPPING else lastRefusal(), endedGeneration)

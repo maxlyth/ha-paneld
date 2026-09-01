@@ -11,18 +11,23 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * How the camera owner asks Android for camera-typed foreground standing before it opens the device.
  * Injectable so the owner's lifecycle can be exercised without a real service.
  */
 interface CameraForegroundGate {
-    /** True only once Android has confirmed the camera-typed foreground service. Blocking. */
-    fun promote(timeoutMs: Long): Boolean
-    fun demote()
+    /**
+     * True only once Android has confirmed the camera-typed foreground service. Blocking. [owner] is
+     * the session attempt the standing belongs to, and the only token that can release it again.
+     */
+    fun promote(owner: Long, timeoutMs: Long): Boolean
+
+    /** Releases [owner]'s standing. A release by anyone but the current holder does nothing. */
+    fun demote(owner: Long)
+
+    /** Releases standing whoever holds it. Only for the camera subsystem stopping outright. */
+    fun demoteAll()
 }
 
 /**
@@ -37,12 +42,25 @@ interface CameraForegroundGate {
  * eligibility is unambiguous on every supported Android version.
  *
  * `START_NOT_STICKY`: Android must never resurrect a camera session on its own; idle cost is zero.
+ *
+ * Every start calls `startForeground` first, whatever has happened since it was issued: a start that
+ * is stopped before that call kills the process. Whether the service then stays or stops itself is
+ * [CameraForegroundPromotions]' decision, which also issues the owner's start and stop under its own
+ * lock so neither can interleave with the other. A stop names its own `startId`: `stopSelfResult` is
+ * refused by Android when a newer start has been delivered since, so a burst start that arrived after
+ * this one's decision is never brought down unanswered — the same crash by another route. Standing
+ * itself is owned by the session that asked for it, so an ended session tearing down out of order
+ * cannot stop the service that a live session is using.
  */
 class CameraForegroundService : Service() {
+
+    /** Whether this instance has served a start; its destroy answers a promotion only if it has not. */
+    private var served = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        served = true
         val outcome = runCatching {
             val notification = notification()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -51,19 +69,18 @@ class CameraForegroundService : Service() {
                 startForeground(NOTIF_ID, notification)
             }
         }
-        val promoted = outcome.isSuccess
         outcome.onFailure {
             // Android 12+ throws here when no activity is visible; Android 11 succeeds silently and
             // refuses at openCamera instead, which the owner classifies separately.
             Log.w(TAG, "camera foreground promotion refused: ${it.javaClass.simpleName}")
-            stopSelf()
         }
-        promotion.getAndSet(null)?.complete(promoted)
+        val keep = promotions.started(outcome.isSuccess)
+        if (!keep) stopSelfResult(startId)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        promotion.getAndSet(null)?.complete(false)
+        promotions.destroyed(served)
         super.onDestroy()
     }
 
@@ -91,32 +108,44 @@ class CameraForegroundService : Service() {
         private const val CHANNEL_ID = "ha-paneld-camera"
         private const val NOTIF_ID = 7
 
-        /** The pending promotion the next `onStartCommand` completes; one at a time by construction. */
-        private val promotion = AtomicReference<CompletableFuture<Boolean>?>(null)
-
-        internal fun request(): CompletableFuture<Boolean> {
-            val future = CompletableFuture<Boolean>()
-            promotion.getAndSet(future)?.complete(false)
-            return future
-        }
+        /** Shared by the gate and every instance: the process-wide truth about starts and stops. */
+        internal val promotions = CameraForegroundPromotions()
     }
 }
 
 class AndroidCameraForegroundGate(private val context: Context) : CameraForegroundGate {
-    override fun promote(timeoutMs: Long): Boolean {
-        val future = CameraForegroundService.request()
+    override fun promote(owner: Long, timeoutMs: Long): Boolean {
+        val promotions = CameraForegroundService.promotions
         val intent = Intent(context, CameraForegroundService::class.java)
-        val started = runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
-        }.onFailure {
-            Log.w(TAG, "camera foreground start refused: ${it.javaClass.simpleName}")
-        }.isSuccess
-        if (!started) return false
-        return runCatching { future.get(timeoutMs, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        // The start is issued inside the request, under the registry's lock: no stop can land between
+        // the request being recorded and Android accepting the start.
+        val promotion = promotions.request(owner) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                else context.startService(intent)
+            }.onFailure {
+                Log.w(TAG, "camera foreground start refused: ${it.javaClass.simpleName}")
+            }.isSuccess
+        }
+        val granted = promotions.await(promotion, timeoutMs)
+        if (!granted && promotions.hasUnansweredStart) {
+            Log.w(TAG, "camera foreground promotion not answered within ${timeoutMs}ms; its start will stop itself")
+        }
+        return granted
     }
 
-    override fun demote() {
+    override fun demote(owner: Long) {
+        // The stop is issued inside the release, under the registry's lock, and only when no start is
+        // unanswered; otherwise that start stops itself once it has called startForeground. A release
+        // from a session that no longer holds standing does nothing at all.
+        CameraForegroundService.promotions.release(owner) { stopService() }
+    }
+
+    override fun demoteAll() {
+        CameraForegroundService.promotions.releaseAll { stopService() }
+    }
+
+    private fun stopService() {
         runCatching { context.stopService(Intent(context, CameraForegroundService::class.java)) }
     }
 
