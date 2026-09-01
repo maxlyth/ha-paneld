@@ -115,6 +115,37 @@ browserTest('Configure bypasses caches and lets a supported HA language supersed
   for (const read of reads) assert.equal(read.cacheControl, 'no-cache');
 });
 
+browserTest('Configure consumes a locale reload message exactly once when initial loading fails', async (t) => {
+  const storageKey = 'ha-paneld-config-locale-reload-message';
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json({ error: 'schema-unavailable' }, 503);
+    if (path === '/api/v1/config') return json({ settings: {}, ha_expose: {}, ha_auth: { configured: false } });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.addInitScript((key) => {
+    sessionStorage.setItem(key, 'Language saved; another setting was rejected.');
+    window.localeReloadMessageRemovals = 0;
+    const removeItem = Storage.prototype.removeItem;
+    Storage.prototype.removeItem = function (candidate) {
+      if (this === sessionStorage && candidate === key) window.localeReloadMessageRemovals++;
+      return removeItem.call(this, candidate);
+    };
+  }, storageKey);
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.getByText('Language saved; another setting was rejected.', { exact: true }).waitFor();
+  await page.getByText(/Could not load settings/).waitFor();
+
+  assert.deepEqual(await page.evaluate((key) => ({
+    stored: sessionStorage.getItem(key), removals: window.localeReloadMessageRemovals,
+  }), storageKey), { stored: null, removals: 1 });
+});
+
 function localizedField(key, label, labelLanguage, help, helpLanguage, group = 'Identity') {
   return { key, label, labelLanguage, help, helpLanguage, group, type: 'STRING', available: true };
 }
@@ -420,7 +451,7 @@ browserTest('Reverting the newer edit releases a deferred locale document recrea
 browserTest('A partially applied locale save releases overrides and preserves its failure message', async (t) => {
   const partialSave = deferred();
   const partialSaveSeen = deferred();
-  const state = { uiLanguage: 'auto', documents: 0, posts: [], dialogs: 0 };
+  const state = { uiLanguage: 'auto', documents: 0, posts: [], dialogs: 0, haStatusGets: 0 };
   const schemaFor = (language) => [
     localizedField('friendly_name', language === 'de' ? 'Anzeigename' : 'Friendly name', language, '', null),
     { key: 'ui_language', label: 'Interface language', labelLanguage: 'en', help: '', helpLanguage: null,
@@ -444,8 +475,12 @@ browserTest('A partially applied locale save releases overrides and preserves it
       }
       return json({
         settings: { friendly_name: 'Panel', ui_language: state.uiLanguage, touch_sound: false },
-        ha_expose: {}, ha_auth: { configured: false },
+        ha_expose: {}, ha_auth: { configured: true },
       });
+    }
+    if (path === '/api/v1/ha/oauth/status') {
+      state.haStatusGets++;
+      return json({ phase: 'connected', display_name: 'Owner', language: 'en' });
     }
     if (path === '/api/v1/apps') return json({ apps: [] });
     if (path === '/api/v1/radio') return json({ present: false });
@@ -478,6 +513,7 @@ browserTest('A partially applied locale save releases overrides and preserves it
   await page.getByText('Language was saved, but touch sound was rejected.', { exact: true }).waitFor();
   await page.getByText('Anzeigename', { exact: true }).waitFor();
   assert.equal(state.dialogs, 0);
+  assert.equal(state.haStatusGets, 2);
   assert.equal(state.documents, 2);
   assert.deepEqual(state.posts, [{ ui_language: 'de', touch_sound: 'true' }]);
   assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), null);

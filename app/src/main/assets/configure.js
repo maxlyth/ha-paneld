@@ -64,6 +64,7 @@
   var haUserStatus = { phase: "unknown" }, haUserStatusRequest = 0;
   var localeDocumentReloadPending = false;
   var localeDocumentReloadScheduled = false;
+  var localeReloadMessageConsumed = false;
   var localeReloadMessageKey = "ha-paneld-config-locale-reload-message";
   var UI_LANGUAGE_LABELS = {
     "auto": "Automatic", "en": "English", "de": "Deutsch", "fr": "Français",
@@ -160,6 +161,17 @@
       localeDocumentReloadScheduled = false;
       if (localeDocumentReloadPending && !dirty && !saving) reloadForSavedLocale();
     }, 0);
+  }
+
+  function consumeLocaleReloadMessage() {
+    if (localeReloadMessageConsumed) return;
+    localeReloadMessageConsumed = true;
+    var reloadMessage = "";
+    try {
+      reloadMessage = window.sessionStorage.getItem(localeReloadMessageKey) || "";
+      window.sessionStorage.removeItem(localeReloadMessageKey);
+    } catch (_) {}
+    if (reloadMessage) document.getElementById("cfg-msg").textContent = reloadMessage;
   }
 
   function readLocalizedSchema(response) {
@@ -3101,9 +3113,11 @@
       if (haConnectionChanged) loadHaUserStatus();
       configCardSourceReady("core");
       configCardGeometryChanged();
+      consumeLocaleReloadMessage();
       if (done) done(true);
     }).catch(function (e) {
       document.getElementById("cfg-status").textContent = "Could not load settings (" + e + ").";
+      consumeLocaleReloadMessage();
       if (done) done(false);
     });
   }
@@ -3315,13 +3329,6 @@
     });
   }
 
-  load(function () {
-    var reloadMessage = "";
-    try {
-      reloadMessage = window.sessionStorage.getItem(localeReloadMessageKey) || "";
-      window.sessionStorage.removeItem(localeReloadMessageKey);
-    } catch (_) {}
-    if (reloadMessage) document.getElementById("cfg-msg").textContent = reloadMessage;
-  }, true);
+  load(null, true);
   loadRadio();
 })();

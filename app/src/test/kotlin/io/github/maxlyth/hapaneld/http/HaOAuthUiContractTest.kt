@@ -30,7 +30,11 @@ class HaOAuthUiContractTest {
         assertTrue("unrelated saves must preserve the current identity without another HA probe", "}, haConnectionInputsChanged);" in source && "if (haConnectionChanged) loadHaUserStatus();" in source)
         assertTrue(
             "only an explicit refresh or a changed HA identity may discard connection state",
-            "forceHaUserStatusRefresh === true ||" in source && "load(null, true);" in source,
+            "forceHaUserStatusRefresh === true ||" in source,
+        )
+        assertTrue(
+            "Configure startup must explicitly force a fresh HA identity probe",
+            Regex("""load\(null,\s*true\);""").containsMatchIn(source),
         )
         assertTrue(
             "HA connection edits must clear the previous identity before probing",
