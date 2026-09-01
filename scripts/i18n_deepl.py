@@ -74,7 +74,7 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise DeepLError(f"duplicate JSON key: {key}")
+            raise DeepLError("duplicate JSON key")
         result[key] = value
     return result
 

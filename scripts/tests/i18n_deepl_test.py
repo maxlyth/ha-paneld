@@ -339,8 +339,12 @@ class DeepLAdapterTest(unittest.TestCase):
         with self.assertRaisesRegex(DEEPL.DeepLError, "duplicate JSON key"):
             DEEPL._load_context(self.context_path)
 
-        with self.assertRaisesRegex(DEEPL.DeepLError, "duplicate JSON key"):
-            DEEPL._request_json("/v2/usage", "key:fx", lambda _request: b'{"x":1,"x":2}')
+        attacker_key = "::error::provider echoed key:fx"
+        encoded_key = json.dumps(attacker_key)
+        response = f'{{{encoded_key}:1,{encoded_key}:2}}'.encode()
+        with self.assertRaisesRegex(DEEPL.DeepLError, "^duplicate JSON key$") as raised:
+            DEEPL._request_json("/v2/usage", "key:fx", lambda _request: response)
+        self.assertNotIn(attacker_key, str(raised.exception))
 
     def test_outgoing_request_body_is_bounded_before_http(self):
         calls = []
