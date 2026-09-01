@@ -12,6 +12,23 @@ import org.junit.runner.RunWith
 @CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class CatalogueAndroidTest {
+    @Test fun productionLoaderReadsPackagedTargetsAndFallsBackFromDraftsOnAndroid() {
+        val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
+        val reads = mutableListOf<String>()
+        val loader = CatalogueLoader { path ->
+            reads += path
+            assets.readText(path)
+        }
+        val english = loader.strings(AppLocale.ENGLISH).get("settings.auto_brightness.label")
+
+        (AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH).forEach { locale ->
+            val localized = loader.strings(locale)
+            assertEquals(english, localized.get("settings.auto_brightness.label"))
+            assertEquals(AppLocale.ENGLISH, localized.resolve("settings.auto_brightness.label").language)
+        }
+        assertEquals(AppLocale.RELEASE_LOCALES.map { "i18n/$it.json" }, reads)
+    }
+
     @Test fun allBundledReleaseCataloguesParseOnAndroid() {
         val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
         val source = SourceCatalogue.parse(assets.readText("i18n/en.json"))
