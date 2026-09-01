@@ -217,7 +217,7 @@ class EcosystemInventoryTest(unittest.TestCase):
             ("github-actions", "/"),
             ("npm", "/test"),
             ("npm", "/tools/profile-editor"),
-            ("pip", "/fdroid"),
+            ("pip", "/tools/fdroid"),
             ("docker", "/.devcontainer"),
         ):
             self.assertIn(

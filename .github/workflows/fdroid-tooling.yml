@@ -5,19 +5,19 @@ on:
   push:
     branches: [main]
     paths:
-      - fdroid/requirements.in
-      - fdroid/requirements.txt
-      - fdroid/build-requirements.in
-      - fdroid/build-requirements.txt
+      - tools/fdroid/requirements.in
+      - tools/fdroid/requirements.txt
+      - tools/fdroid/build-requirements.in
+      - tools/fdroid/build-requirements.txt
       - .github/workflows/fdroid.yml
       - .github/workflows/fdroid-tooling.yml
   pull_request:
     branches: [main]
     paths:
-      - fdroid/requirements.in
-      - fdroid/requirements.txt
-      - fdroid/build-requirements.in
-      - fdroid/build-requirements.txt
+      - tools/fdroid/requirements.in
+      - tools/fdroid/requirements.txt
+      - tools/fdroid/build-requirements.in
+      - tools/fdroid/build-requirements.txt
       - .github/workflows/fdroid.yml
       - .github/workflows/fdroid-tooling.yml
   workflow_dispatch:
@@ -42,11 +42,11 @@ jobs:
 
       - name: Install hash-locked F-Droid tooling
         run: |
-          python -m pip install --require-hashes -r fdroid/build-requirements.txt
-          python -m pip install --require-hashes --no-build-isolation -r fdroid/requirements.txt
+          python -m pip install --require-hashes -r tools/fdroid/build-requirements.txt
+          python -m pip install --require-hashes --no-build-isolation -r tools/fdroid/requirements.txt
 
       - name: Verify installed F-Droid version
         run: |
-          expected="$(sed -nE 's/^fdroidserver==([^[:space:]\\]+).*/\1/p' fdroid/requirements.in)"
+          expected="$(sed -nE 's/^fdroidserver==([^[:space:]\\]+).*/\1/p' tools/fdroid/requirements.in)"
           test -n "$expected"
           test "$(fdroid --version)" = "$expected"

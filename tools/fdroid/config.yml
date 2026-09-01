@@ -4,7 +4,7 @@
 # .github/workflows/fdroid.yml (reusing the same ANDROID_KEYSTORE_* secrets that sign the release APKs,
 # so the repo index and the APKs share one identity). NEVER commit keystore material here.
 
-repo_url: "https://maxlyth.github.io/ha-paneld/fdroid/repo"
+repo_url: "https://fdroid.ha-paneld.com/fdroid/repo"
 repo_name: "ha-paneld"
 repo_description: >-
   Self-hosted F-Droid repository for ha-paneld — the open-source Home Assistant agent for Android wall
