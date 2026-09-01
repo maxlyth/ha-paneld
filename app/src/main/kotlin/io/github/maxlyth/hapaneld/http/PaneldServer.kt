@@ -177,6 +177,7 @@ import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
@@ -768,6 +769,14 @@ internal fun normalizeConfigPostParameters(
             val accepted = when {
                 spec != null -> {
                     if (spec.readOnly) return ConfigPostParameters.Bad("$name: read-only")
+                    if (name in SettingsRegistry.directPostExcludedKeys) {
+                        val owner = if (name in SettingsRegistry.machineOwnedKeys) {
+                            "machine-owned state"
+                        } else {
+                            "specialized Entities API state"
+                        }
+                        return ConfigPostParameters.Bad("$name: $owner is not directly postable")
+                    }
                     when (val result = SettingValue.validate(spec, value)) {
                         is Validation.Ok -> {
                             // A choice can be valid vocabulary yet unavailable on this hardware. Refuse it
@@ -1001,6 +1010,200 @@ internal data class DirectConfigMutationPlan(
     val isNoOp: Boolean get() = changedKeys.isEmpty()
     val requiresReconfigure: Boolean get() = changedKeys.any { it !in SettingsRegistry.liveApplyKeys() }
 }
+
+/** Direct settings whose real writer is a post-commit subsystem transition rather than Config's
+ * registry writer. The list is exact: adding a key requires an owner callback and walker evidence. */
+internal val DIRECT_CONFIG_DELEGATED_KEYS: Set<String> = setOf("dashboard_entity_learning")
+
+/**
+ * Catalogue-wide persistence floor for ordinary direct-POST settings. The bespoke block which follows
+ * still owns coupled credentials, secondary keys and effect planning, but no newly registered ordinary
+ * setting can be silently read and dropped: a validated changed value reaches Config automatically.
+ */
+internal fun stageDirectConfigRegistryValues(
+    config: Config,
+    posted: Map<String, String>,
+    changedKeys: Set<String>,
+): Set<String> = buildSet {
+    SettingsRegistry.directPostable().forEach { spec ->
+        if (spec.liveApply || spec.key in DIRECT_CONFIG_DELEGATED_KEYS || spec.key !in changedKeys) return@forEach
+        val raw = posted[spec.key] ?: return@forEach
+        val normalized = (SettingValue.validate(spec, raw) as? Validation.Ok)?.normalized ?: return@forEach
+        config.setRaw(spec, normalized)
+        add(spec.key)
+    }
+}
+
+/** Route the exact post-commit owner-managed subset through an injected real owner. */
+internal fun applyDirectConfigDelegatedSettings(
+    posted: Map<String, String>,
+    changedKeys: Set<String>,
+    apply: (String, String) -> Boolean,
+): Set<String> = buildSet {
+    DIRECT_CONFIG_DELEGATED_KEYS.forEach { key ->
+        if (key in changedKeys && posted[key]?.let { apply(key, it) } == true) add(key)
+    }
+}
+
+internal data class DirectCredentialEffects(val haChanged: Boolean)
+
+/** Stage the three coupled log destination fields through the endpoint owner which honours a scheme
+ * or port embedded in the host value. */
+internal fun stageDirectLogShipping(config: Config, posted: Map<String, String>) {
+    val enabled = posted["log_ship_enabled"]?.toBooleanStrictOrNull()
+    val host = posted["log_ship_host"]
+    val port = posted["log_ship_port"]?.toIntOrNull()
+    val protocol = posted["log_ship_protocol"]
+    if (enabled != null || host != null || port != null || protocol != null) {
+        config.setLogShipping(
+            enabled ?: config.logShipEnabled,
+            host ?: config.logShipHost,
+            port ?: config.logShipPort,
+            protocol ?: config.logShipProtocol,
+        )
+    }
+}
+
+/** Stage the direct form's coupled credential groups through their real Config owners. Blank secret
+ * placeholders preserve existing credentials except where an owner field is explicitly cleared or a
+ * hardened origin changes. Kept production-used so mutations to those dependent clears reach the JVM
+ * contract instead of surviving behind a per-key writer test. */
+internal fun stageDirectCredentialSettings(
+    config: Config,
+    posted: Map<String, String>,
+): DirectCredentialEffects {
+    val broker = posted["mqtt_broker"]
+    val user = posted["mqtt_user"]
+    val mqttAddressFamily = posted["mqtt_address_family"]
+    val brokerChanged = broker != null && broker != config.mqttBroker
+    val password = when {
+        user != null && user.isEmpty() -> ""
+        brokerChanged && config.hardenedSecurityEnabled -> posted["mqtt_password"]?.takeIf(String::isNotEmpty) ?: ""
+        else -> posted["mqtt_password"]?.takeIf(String::isNotEmpty)
+    }
+    if (broker != null || user != null || password != null || mqttAddressFamily != null) {
+        config.setMqtt(
+            broker ?: config.mqttBroker,
+            user ?: config.mqttUser,
+            password,
+            mqttAddressFamily,
+        )
+    }
+
+    val previousUrl = config.haUrl
+    val previousToken = config.haToken
+    val previousRefresh = config.haRefreshToken
+    val previousExpiry = config.haTokenExpiry
+    val previousClientId = config.haClientId
+    val url = posted["ha_url"]
+    val hardenedOriginChange = config.hardenedSecurityEnabled && url != null &&
+        url.trimEnd('/') != previousUrl.trimEnd('/')
+    val token = when {
+        url != null && url.isEmpty() -> ""
+        hardenedOriginChange -> posted["ha_token"]?.takeIf(String::isNotEmpty) ?: ""
+        else -> posted["ha_token"]?.takeIf(String::isNotEmpty)
+    }
+    if (url != null || token != null) config.setHaConnection(url ?: previousUrl, token)
+
+    val clearingHa = url != null && url.isEmpty()
+    val refresh = when {
+        clearingHa -> ""
+        hardenedOriginChange -> posted["ha_refresh_token"]?.takeIf(String::isNotEmpty) ?: ""
+        else -> posted["ha_refresh_token"]?.takeIf(String::isNotEmpty)
+    }
+    refresh?.let(config::setHaRefreshToken)
+    val expiry = posted["ha_token_expiry"]?.toLongOrNull() ?: if (hardenedOriginChange) 0L else null
+    val clientId = posted["ha_client_id"]?.let { if (clearingHa) "" else it }
+        ?: if (hardenedOriginChange) "" else null
+    expiry?.let(config::setHaTokenExpiry)
+    clientId?.let(config::setHaClientId)
+    if (clearingHa) config.setHaRefreshToken("")
+
+    val refreshCleared = token != null && token.isNotEmpty() && refresh == null && previousRefresh.isNotEmpty()
+    if (refreshCleared) {
+        config.setHaRefreshToken("")
+        config.setHaTokenExpiry(0L)
+    }
+    return DirectCredentialEffects(
+        haChanged = (url != null && url != previousUrl) ||
+            (token != null && token != previousToken) ||
+            (refresh != null && refresh != previousRefresh) || refreshCleared ||
+            (expiry != null && expiry != previousExpiry) ||
+            (clientId != null && clientId != previousClientId),
+    )
+}
+
+/** Production-used iteration seam between HTTP planning and the shared service dispatcher. */
+internal fun dispatchDirectConfigLiveSettings(
+    changedLive: List<Pair<String, String>>,
+    dispatch: (String, String) -> Unit,
+) {
+    changedLive.forEach { (key, value) -> dispatch(key, value) }
+}
+
+internal data class DirectConfigOrdinaryOutcomes(
+    val applied: Set<String>,
+    val rejected: Set<String>,
+)
+
+/** Canonical values a successful direct write must read back. Compute this while the transaction still
+ * sees pre-commit state: a legacy log host may carry an embedded scheme/port which outranks a partial
+ * update, and that precedence is no longer recoverable after the owner canonicalizes the stored host. */
+internal fun directConfigExpectedReadBack(
+    config: Config,
+    posted: Map<String, String>,
+): Map<String, String> = posted.toMutableMap().apply {
+    LogShipEndpoint.canonicalUpdate(
+        posted,
+        config.logShipHost,
+        config.logShipPort,
+        config.logShipProtocol,
+    )?.forEach { (key, value) -> if (key in posted) put(key, value) }
+}
+
+/** The compatibility preflight proves a plan is admissible; only committed read-back proves its
+ * special in-batch writer actually ran. */
+internal fun directUpdateChannelCommitted(
+    requestedChanged: Boolean,
+    changedKeys: Set<String>,
+    requested: String?,
+    actual: String,
+): Boolean = requestedChanged && "update_channel" in changedKeys && requested == actual
+
+/**
+ * Describe durable outcomes from committed read-back, never from the planned changed-key set. This is
+ * intentionally independent of which writer claimed a key: a read-then-drop handler and a setter whose
+ * storage owner failed both compare unequal and therefore cannot be reported as applied.
+ */
+internal fun directConfigOrdinaryOutcomes(
+    config: Config,
+    posted: Map<String, String>,
+    changedKeys: Set<String>,
+    expectedReadBack: Map<String, String> = posted,
+): DirectConfigOrdinaryOutcomes {
+    val applied = linkedSetOf<String>()
+    val rejected = linkedSetOf<String>()
+    changedKeys.filterNot { it in SettingsRegistry.liveApplyKeys() }.forEach { key ->
+        val expected = expectedReadBack[key] ?: return@forEach
+        val spec = SettingsRegistry.spec(key)
+        val actual = when {
+            key in SettingsRegistry.directPostExcludedKeys -> null
+            spec != null -> config.getRaw(spec)
+            SettingsRegistry.parseExposure(key) != null -> {
+                val exposed = requireNotNull(SettingsRegistry.parseExposure(key))
+                config.haExposed(exposed.key, exposed.haExposedByDefault).toString()
+            }
+            key == "http_allowed_hosts" -> config.httpAllowedHostsRaw
+            else -> null
+        }
+        if (actual == expected) applied += key else rejected += key
+    }
+    return DirectConfigOrdinaryOutcomes(applied, rejected)
+}
+
+/** Name post-commit effect failures separately from their already-durable desired setting. */
+internal fun directConfigEffectFailureOwner(entityLearningTransitionIncomplete: Boolean): String =
+    if (entityLearningTransitionIncomplete) "dashboard_entity_learning_effect" else "renderer"
 
 /** An exact channel candidate prepared without changing configuration, helper state, or packages. */
 internal sealed interface SelfUpdateChannelPreflight {
@@ -1934,7 +2137,7 @@ class PaneldServer internal constructor(
                             )
                         },
                     )
-                    post("/config") { handleConfigPost(call) }
+                    installDirectConfigPostRoute()
                     get("/config/home-dashboards") {
                         val catalog = entityLearning.homeDashboardCatalog()
                         val items = catalog.items.joinToString(",") { dashboard ->
@@ -5517,11 +5720,25 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
      * identity/MQTT/logging/tame keys is preserved; the formerly MQTT-only behaviour keys are applied
      * through [applySetting] (same path as an HA command), and per-row HA-exposure toggles are stored.
      */
-    private suspend fun handleConfigPost(call: ApplicationCall) {
+    /**
+     * Install the canonical direct-config mutation route. The optional capability provider is a narrow
+     * JVM-test seam: production always uses the request-scoped management snapshot, while route tests can
+     * avoid constructing Android sensor/probe owners without replacing either Ktor routing or this handler.
+     */
+    internal fun Route.installDirectConfigPostRoute(
+        capabilityProvider: (() -> Capabilities)? = null,
+    ) {
+        post("/config") { handleConfigPost(call, capabilityProvider) }
+    }
+
+    private suspend fun handleConfigPost(
+        call: ApplicationCall,
+        capabilityProvider: (() -> Capabilities)? = null,
+    ) {
         val received = receiveBoundedConfigParameters(call) ?: return
         // Same capability snapshot the Configure form was rendered from, so a choice the form offered is
         // the same set this admission step accepts.
-        val postCaps = liveCapabilities(snapStaleOk().caps)
+        val postCaps = capabilityProvider?.invoke() ?: liveCapabilities(snapStaleOk().caps)
         val normalizedPost = when (val result = normalizeConfigPostParameters(received, postCaps)) {
             is ConfigPostParameters.Ok -> result.values
             is ConfigPostParameters.Bad -> {
@@ -5531,6 +5748,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         }
         val onboardingPost = augmentPostWithDiscoveredHaUrlForMqttOnboarding(normalizedPost)
         val p = onboardingPost.parameters
+        val postedValues = p.names().associateWith { p[it].orEmpty() }
         if (rejectHardenedNetworkAdb(call, p["network_adb"])) return
         // Fence every baseline-dependent admission decision below. The direct mutation lane rechecks
         // this complete effective snapshot before persistence, so a concurrent save cannot bypass an
@@ -5538,9 +5756,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val admissionBaselineHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues())
         val enablingAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) == true && !config.autoSleep
         var autoSleepPrerequisiteOwner: HaAuthOwner? = null
-        val prerequisiteAndroidId = config.androidId
+        var prerequisiteAndroidId: String? = null
         val prerequisitePanelId = config.panelId
         if (enablingAutoSleep) {
+            prerequisiteAndroidId = config.androidId
             val connectionChanged = p["ha_url"]?.trimEnd('/')?.let { it != config.haUrl.trimEnd('/') } == true ||
                 listOf("ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id").any { p[it] != null }
             val identityChanged = p["panel_id"]?.let { it != prerequisitePanelId } == true
@@ -5724,7 +5943,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         selfUpdateChannelMutation(
             currentChannel = config.updateChannel,
             currentSelfUpdate = config.selfUpdate,
-            requestedValues = p.names().associateWith { p[it].orEmpty() },
+            requestedValues = postedValues,
         )?.let { request ->
             when (val preflight = prepareSelfUpdateChannel(request.requested, request.force)) {
                 is SelfUpdateChannelPreflight.Ready -> {
@@ -5760,6 +5979,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
         }
         lateinit var mutationPlan: DirectConfigMutationPlan
+        lateinit var expectedReadBack: Map<String, String>
         // Partial-merge: apply ONLY keys present, so a fleet tool can set one field without clobbering
         // the rest. The UI form sends every key (blank = clear), preserving its full-replace behaviour.
         val panelId = p["panel_id"]
@@ -5801,9 +6021,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         return@synchronizedTransaction false
                     }
                     mutationPlan = planDirectConfigMutation(
-                        posted = p.names().associateWith { p[it].orEmpty() },
+                        posted = postedValues,
                         before = directMutationValues(),
                     )
+                    expectedReadBack = directConfigExpectedReadBack(config, postedValues)
                     if (mutationPlan.isNoOp) return@synchronizedTransaction true
                     if (ambientSourceOwner != null &&
                         (config.haAuthSnapshot().stableOwner() != ambientSourceOwner || config.autoBrightnessHaEntity != previousAmbientSource)
@@ -5836,6 +6057,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                             if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
                         },
                     ) {
+                    stageDirectConfigRegistryValues(config, postedValues, mutationPlan.changedKeys)
                     panelId?.let { config.setPanelId(it) }
                     p["friendly_name"]?.let { config.setFriendlyName(it.trim()) }
                     p["ui_language"]?.let { config.setUiLanguage(it) }
@@ -5942,94 +6164,19 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     val postedThemePolicy = p["dashboard_theme"]?.let { DashboardTheme.policy(it) }
                     postedThemePolicy?.let { config.setDashboardTheme(it) }
                     themePolicyChanged = postedThemePolicy != null && postedThemePolicy != prevThemePolicy
-                    val logEnabled = p["log_ship_enabled"]?.let { it.trim().equals("true", ignoreCase = true) || it.trim() == "1" }
-                    val logHost = p["log_ship_host"]?.trim()
-                    val logPort = p["log_ship_port"]?.trim()?.toIntOrNull()
-                    val logProto = p["log_ship_protocol"]?.trim()
-                    if (logEnabled != null || logHost != null || logPort != null || logProto != null) {
-                        config.setLogShipping(
-                            logEnabled ?: config.logShipEnabled,
-                            logHost ?: config.logShipHost,
-                            logPort ?: config.logShipPort,
-                            logProto ?: config.logShipProtocol,
-                        )
-                    }
+                    stageDirectLogShipping(config, postedValues)
                     val mfr = p["manufacturer"]?.trim()
                     val mdl = p["model"]?.trim()
                     if (mfr != null || mdl != null) config.setHardware(
                         mfr ?: config.manufacturerRaw,
                         mdl ?: config.modelRaw,
                     )
-                    val broker = p["mqtt_broker"]?.trim()
-                    val user = p["mqtt_user"]?.trim()
-                    val mqttAddressFamily = p["mqtt_address_family"]?.trim()
-                    // Blank password keeps the current one; clearing the username clears the password too.
-                    val brokerChanged = broker != null && broker != config.mqttBroker
-                    val pw = when {
-                        user != null && user.isEmpty() -> ""
-                        brokerChanged && config.hardenedSecurityEnabled ->
-                            p["mqtt_password"]?.takeIf { it.isNotEmpty() } ?: ""
-                        else -> p["mqtt_password"]?.takeIf { it.isNotEmpty() }
-                    }
-                    if (broker != null || user != null || pw != null || mqttAddressFamily != null) config.setMqtt(
-                        broker ?: config.mqttBroker, user ?: config.mqttUser, pw, mqttAddressFamily,
-                    )
-                    // Built-in renderer connection — same semantics: blank token keeps the current one;
-                    // clearing the URL clears the token too (no orphaned HA credential on the panel).
-                    val prevHaUrl = config.haUrl
-                    val prevHaToken = config.haToken
-                    val prevHaRefresh = config.haRefreshToken
-                    val prevHaExpiry = config.haTokenExpiry
-                    val prevHaClientId = config.haClientId
-                    val haUrl = p["ha_url"]?.trim()
-                    val hardenedHaOriginChange = config.hardenedSecurityEnabled && haUrl != null &&
-                        haUrl.trimEnd('/') != prevHaUrl.trimEnd('/')
-                    val haToken = when {
-                        haUrl != null && haUrl.isEmpty() -> ""
-                        hardenedHaOriginChange -> p["ha_token"]?.takeIf { it.isNotEmpty() } ?: ""
-                        else -> p["ha_token"]?.takeIf { it.isNotEmpty() }
-                    }
-                    if (haUrl != null || haToken != null) config.setHaConnection(
-                        haUrl ?: config.haUrl, haToken,
-                    )
-                    // Refresh token (+ optional access-token expiry) from a provisioning login. Blank keeps the
-                    // current; clearing the URL clears it too. When set with an access token + expiry, persist
-                    // the whole session so the renderer's lazy refresh has a valid starting point.
-                    val clearingHa = haUrl != null && haUrl.isEmpty()
-                    val haRefresh = when {
-                        clearingHa -> ""
-                        hardenedHaOriginChange -> p["ha_refresh_token"]?.takeIf { it.isNotEmpty() } ?: ""
-                        else -> p["ha_refresh_token"]?.takeIf { it.isNotEmpty() }
-                    }
-                    haRefresh?.let { config.setHaRefreshToken(it) }
-                    val haExpiry = p["ha_token_expiry"]?.trim()?.toLongOrNull()
-                        ?: if (hardenedHaOriginChange) 0L else null
-                    val haClientId = p["ha_client_id"]?.trim()?.let { if (clearingHa) "" else it }
-                        ?: if (hardenedHaOriginChange) "" else null
-                    haExpiry?.let(config::setHaTokenExpiry)
-                    haClientId?.let(config::setHaClientId)
-                    if (clearingHa) config.setHaRefreshToken("")
-                    // A NEW access token (with no new refresh token beside it) is an explicit re-credential:
-                    // drop the stored refresh token + expiry so the renderer actually uses it. Without this a
-                    // revoked refresh token could never be cleared from the form ("blank keeps current") and
-                    // DashboardAuth would keep preferring the dead refresh model — the auth latch's own "set a
-                    // new access token" fix instructions wouldn't work.
-                    val refreshCleared = haToken != null && haToken.isNotEmpty() && haRefresh == null && prevHaRefresh.isNotEmpty()
-                    if (refreshCleared) { config.setHaRefreshToken(""); config.setHaTokenExpiry(0L) }
-                    // A CHANGED built-in-renderer credential/URL takes effect immediately: reloadDashboard is
-                    // the privileged-first relaunch (a plain startActivity from a service context is silently
-                    // blocked by Android 10+ background-activity-launch rules), flags reload-intent for
-                    // onNewIntent, and clears the crash latch — the "fix the token on Configure" path the
-                    // latch's on-panel message points at. Change-gated, not presence-gated: the form posts
-                    // every key on every save, and relaunching on presence would reload the dashboard on every
-                    // unrelated settings save.
-                    val haChanged = (haUrl != null && haUrl != prevHaUrl) ||
-                        (haToken != null && haToken != prevHaToken) ||
-                        (haRefresh != null && haRefresh != prevHaRefresh) || refreshCleared ||
-                        (haExpiry != null && haExpiry != prevHaExpiry) ||
-                        (haClientId != null && haClientId != prevHaClientId)
-                    relaunchForHa = haChanged
-                    entityTargetChanged = haChanged
+                    // Credential groups carry dependent-clear semantics which cannot be represented as
+                    // independent generic keys. Keep their actual owner in one production-used helper so
+                    // the behavioural contract can prove username/password and HA session transitions.
+                    val credentialEffects = stageDirectCredentialSettings(config, postedValues)
+                    relaunchForHa = credentialEffects.haChanged
+                    entityTargetChanged = credentialEffects.haChanged
                     // Live-apply a renderer switch: re-anchor HOME to the new renderer and bring it up now —
                     // previously changing "Dashboard app" did nothing until the next boot. Off-thread (su/daemon).
                     // The kiosk/watchdog loops read dashboard_package per tick, so they retarget on their own.
@@ -6045,7 +6192,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     }
                 }
                 if (persisted) {
-                    committedChannel = requestedChannelChanged && "update_channel" in mutationPlan.changedKeys
+                    committedChannel = directUpdateChannelCommitted(
+                        requestedChannelChanged,
+                        mutationPlan.changedKeys,
+                        postedValues["update_channel"],
+                        config.updateChannel,
+                    )
                 }
                 if (persisted && !mutationPlan.isNoOp) {
                     revisions.snapshot(requireNotNull(previous))
@@ -6069,7 +6221,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                             entityLearning.onTargetConfigurationChanged()
                         }
                         entityLearningChanged?.let { enabled ->
-                            check(entityLearning.setEnabled(enabled)) { "entity-learning transition failed" }
+                            val delegated = applyDirectConfigDelegatedSettings(
+                                postedValues,
+                                mutationPlan.changedKeys,
+                            ) { key, value ->
+                                key == "dashboard_entity_learning" &&
+                                    entityLearning.setEnabled(value.toBoolean())
+                            }
+                            check("dashboard_entity_learning" in delegated) {
+                                "entity-learning transition failed"
+                            }
                             entityLearningChanged = null
                         }
                         applyRendererEffects(
@@ -6092,14 +6253,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 if (saved && !mutationPlan.isNoOp) {
                     // Keep equality planning, persistence and hardware admission in one request lane. A
                     // concurrent retry therefore observes this request's durable desired state as its baseline.
-                    for ((key, raw) in mutationPlan.changedLive) {
-                        if (key == "home_dashboard" && homeDashboardAppliedEarly) continue
-                        if (key == "update_channel") continue
+                    dispatchDirectConfigLiveSettings(mutationPlan.changedLive) { key, raw ->
+                        if (key == "home_dashboard" && homeDashboardAppliedEarly) {
+                            return@dispatchDirectConfigLiveSettings
+                        }
+                        if (key == "update_channel") return@dispatchDirectConfigLiveSettings
                         val spec = SettingsRegistry.spec(key)
                         val value = if (spec != null) {
                             when (val validated = SettingValue.validate(spec, raw)) {
                                 is Validation.Ok -> validated.normalized
-                                is Validation.Bad -> continue
+                                is Validation.Bad -> return@dispatchDirectConfigLiveSettings
                             }
                         } else raw.trim()
                         recordLiveApplyOutcome(
@@ -6202,27 +6365,43 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             respondConfigMutation(call, "no-op", emptyList(), emptyList(), emptyList(), null)
             return
         }
-        // Ordinary preferences are durably committed even when a later hardware admission is rejected;
-        // include them explicitly so a mixed response never hides which unrelated changes took effect.
-        liveApplied.addAll(0, mutationPlan.changedKeys.filter { it !in HTTP_LIVE_KEYS })
+        // Ordinary preferences are named only after committed read-back matches the normalized request.
+        // Planned keys are intent, not evidence: echoing them here hid both the idle-return and camera
+        // writer defects by reporting values the handler had silently dropped.
+        val ordinaryOutcomes = directConfigOrdinaryOutcomes(
+            config,
+            postedValues,
+            mutationPlan.changedKeys,
+            expectedReadBack,
+        )
+        liveApplied.addAll(0, ordinaryOutcomes.applied)
+        ordinaryOutcomes.rejected.filterNot(liveRejected::contains).forEach(liveRejected::add)
         if (committedChannel) liveApplied.add(0, "update_channel")
+        if ("update_channel" in mutationPlan.changedKeys && !committedChannel && "update_channel" !in liveRejected) {
+            liveRejected += "update_channel"
+        }
         snapInvalidate()
-        val reconfigureKeys = mutationPlan.changedKeys.filterTo(linkedSetOf()) {
-            it !in HTTP_LIVE_KEYS || it == "home_dashboard"
-        }.apply { addAll(livePending) }
+        val reconfigureKeys = ordinaryOutcomes.applied.toCollection(linkedSetOf()).apply {
+            if ("home_dashboard" in liveApplied || "home_dashboard" in livePending) add("home_dashboard")
+            addAll(livePending)
+        }
         if (reconfigureKeys.isNotEmpty()) onReconfigure(reconfigureKeys)
         rendererFailure?.let {
             Log.e(TAG, "configuration committed but renderer preparation failed", it)
-            val failedOwner = if (entityLearningChanged != null) "dashboard_entity_learning" else "renderer"
+            val failedOwner = directConfigEffectFailureOwner(entityLearningChanged != null)
             liveApplied.remove(failedOwner)
             if (failedOwner !in liveRejected) liveRejected += failedOwner
         }
         if (liveRejected.isNotEmpty()) {
             val nothingSaved = liveApplied.isEmpty() && livePending.isEmpty()
-            val failureMessage = if (nothingSaved) {
-                "Settings could not be durably accepted: ${liveRejected.joinToString()}."
-            } else {
-                "Some settings were saved, but ${liveRejected.joinToString()} could not be durably accepted."
+            val effectFailures = liveRejected.filter { it == "renderer" || it.endsWith("_effect") }
+            val failureMessage = when {
+                effectFailures.size == liveRejected.size && !nothingSaved ->
+                    "Settings were saved, but these post-commit effects failed: ${effectFailures.joinToString()}."
+                nothingSaved ->
+                    "Settings could not be durably accepted: ${liveRejected.joinToString()}."
+                else ->
+                    "Some settings were saved, but ${liveRejected.joinToString()} could not be durably accepted."
             }
             respondConfigMutation(
                 call,
@@ -6321,10 +6500,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         changedKeys: Collection<String>,
         discovery: DiscoveryResult,
     ): String? {
-        if (!effectiveDashboardIsBuiltin()) return null
-        if (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) return null
         val onboardingKeys = setOf("mqtt_broker", "mqtt_user", "mqtt_password", "ha_url", "dashboard_package")
         if (!haUrlDiscovered && changedKeys.none { it in onboardingKeys }) return null
+        if (!effectiveDashboardIsBuiltin()) return null
+        if (config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()) return null
         if (config.haUrl.isBlank()) {
             val next = "MQTT settings saved. Next: enter the Home Assistant URL in the Home Assistant " +
                 "connection card below."
@@ -9011,6 +9190,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     /** Last successfully queried catalog for the current owner; never blocks a config response. */
     private fun haAreaCatalogJson(): String? {
+        val credentialed = config.haToken.isNotBlank() || config.haRefreshToken.isNotBlank()
+        if (!HaAreaProtocol.canQueryUnprompted(config.haUrl, credentialed)) return null
         val snapshot = captureHaAreaSnapshot()
         val entry = haAreaCatalogCache
         val now = System.nanoTime() / 1_000_000L

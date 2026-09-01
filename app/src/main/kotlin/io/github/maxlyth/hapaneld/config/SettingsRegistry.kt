@@ -1018,8 +1018,26 @@ object SettingsRegistry {
 
     fun spec(key: String): SettingSpec? = byKey[key]
 
-    /** Settings accepted via the HTTP config API (everything settable; excludes publish-only sensors). */
+    /** Registry values accepted by validated configuration flows; excludes publish-only sensors. */
     fun settable(): List<SettingSpec> = SPECS.filterNot { it.readOnly }
+
+    /** Derived subsystem state which no user route accepts as a desired value. It remains settable only
+     * so a validated private backup can restore the owning entity-learning state atomically. */
+    val machineOwnedKeys: Set<String> = setOf("dashboard_entity_learning_applied")
+
+    /** User-controlled registry values whose public writer is the specialized Entities API rather than
+     * the generic `/config` form. The behavioural contract exercises those owners separately. */
+    val specializedUserOwnedKeys: Set<String> = setOf(
+        "dashboard_entity_overrides",
+        "dashboard_entity_auto_static",
+        "dashboard_entity_auto_runtime",
+    )
+
+    /** Exact reasoned set which the direct form must reject instead of reading and dropping. */
+    val directPostExcludedKeys: Set<String> = machineOwnedKeys + specializedUserOwnedKeys
+
+    /** User-submittable SettingsRegistry entries on the direct HTTP configuration route. */
+    fun directPostable(): List<SettingSpec> = settable().filterNot { it.key in directPostExcludedKeys }
 
     /** Every spec with a persisted expose-to-HA decision, including publish-only telemetry. */
     fun haCapable(): List<SettingSpec> = SPECS.filter { it.ha != null }

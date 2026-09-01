@@ -79,18 +79,20 @@ class HardenedControlContractTest {
         assertTrue(dispatch.contains("SensitiveOperation.APK_INSTALL"))
         assertTrue(dispatch.contains("SensitiveOperation.DEVICE_REBOOT"))
 
-        val auto = mqtt.substring(mqtt.indexOf("private fun handleCompanionAuto"), mqtt.indexOf("private fun handleSilenceBootChime"))
+        val auto = mqtt.substring(mqtt.indexOf("override fun handleCompanionAuto"), mqtt.indexOf("override fun handleSilenceBootChime"))
         assertTrue(auto.contains("if (on && approvalRequired) authorizeMqttSensitive("))
         assertTrue(auto.contains("approvalRequired && config.selfUpdate && requested != was"))
         assertTrue(auto.contains("approvalRequired && config.companionAutoUpdate && requested != was"))
 
-        val serviceApply = mqtt.substring(mqtt.indexOf("internal fun applySetting"), mqtt.indexOf("private fun dispatchSetting"))
+        val serviceApply = mqtt.substring(mqtt.indexOf("internal fun applySetting"), mqtt.indexOf("// ---- discovery ----"))
         assertTrue(serviceApply.contains("sensitiveApprovalRequired = false"))
+        assertTrue(serviceApply.contains("dispatchLiveSetting("))
+        assertTrue(serviceApply.contains("handlers = this"))
         assertFalse(serviceApply.contains("\"mqtt\""))
     }
 
     @Test fun networkAdbCannotBeEnabledUnderHardenedMode() {
-        val handler = mqtt.substring(mqtt.indexOf("private fun handleNetAdb"), mqtt.indexOf("private fun authorizeMqttSensitive"))
+        val handler = mqtt.substring(mqtt.indexOf("override fun handleNetAdb"), mqtt.indexOf("private fun authorizeMqttSensitive"))
         assertTrue(handler.contains("on && config.hardenedSecurityEnabled"))
         assertFalse(handler.contains("LocalApprovalBroker"))
 
@@ -177,15 +179,18 @@ class HardenedControlContractTest {
             configPost.indexOf("InstallProgress.startConfigMutation()"))
 
         val handler = mqtt.substring(
-            mqtt.indexOf("private fun handlePreventIdleDim"),
-            mqtt.indexOf("private fun handleTouchSound"),
+            mqtt.indexOf("override fun handlePreventIdleDim"),
+            mqtt.indexOf("override fun handleTouchSound"),
         )
         assertTrue(handler.contains("PowerSafetyMutationPolicy.parseGuardSwitch(payload)"))
         assertTrue(handler.contains("SensitiveOperation.POWER_CONFIGURATION"))
         assertTrue(handler.contains("\"prevent_idle_dim\\u0000${'$'}payload\""))
         assertTrue(handler.indexOf("authorizeMqttSensitive(") < handler.indexOf("config.setPreventIdleDim(on)"))
 
-        val dispatch = mqtt.substring(mqtt.indexOf("private fun dispatchSetting"), mqtt.indexOf("// ---- discovery ----"))
+        val dispatch = mqtt.substring(
+            mqtt.indexOf("internal fun dispatchLiveSetting"),
+            mqtt.indexOf("internal fun liveSettingApplyResult"),
+        )
         assertTrue(dispatch.contains("if (sensitiveApprovalRequired) value else onOff"))
     }
 

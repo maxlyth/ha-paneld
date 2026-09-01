@@ -1,7 +1,9 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.SharedPreferences
+import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
+import io.github.maxlyth.hapaneld.config.Validation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -101,6 +103,11 @@ class ConfigAccessorDefaultCoherenceTest {
             assertNotNull("no SettingSpec registered for '$key'", spec)
             return c.getRaw(spec!!)
         }
+        fun normalized(key: String, value: String): String {
+            val spec = SettingsRegistry.spec(key)
+            assertNotNull("no SettingSpec registered for '$key'", spec)
+            return (SettingValue.validate(spec!!, value) as Validation.Ok).normalized
+        }
 
         val rendered: Map<String, String> = mapOf(
             "mqtt_broker" to c.mqttBroker,
@@ -149,7 +156,9 @@ class ConfigAccessorDefaultCoherenceTest {
             "auto_brightness_minimum_percent" to c.autoBrightnessMinimumPercent.toString(),
             "log_ship_port" to c.logShipPort.toString(),
             "ha_token_expiry" to c.haTokenExpiry.toString(),
-            "room_temp_offset" to c.roomTempOffsetC.toString(),
+            // FLOAT read-back is canonical in its storage domain (for example 0f -> "0"), while
+            // Kotlin's typed accessor string is "0.0". Compare the normalized value, not formatting.
+            "room_temp_offset" to normalized("room_temp_offset", c.roomTempOffsetC.toString()),
             "camera_enabled" to c.cameraEnabled.toString(),
             "camera_resolution" to c.cameraResolution.wire,
             "camera_fps" to c.cameraFps.toString(),

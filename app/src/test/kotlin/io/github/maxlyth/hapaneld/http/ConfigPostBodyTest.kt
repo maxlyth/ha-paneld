@@ -75,10 +75,11 @@ class ConfigPostBodyTest {
             File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
         ).first { it.isFile }.readText()
-        assertTrue(source.contains("post(\"/config\") { handleConfigPost(call) }"))
-        assertTrue(source.contains("private suspend fun handleConfigPost(call: ApplicationCall)"))
+        assertTrue(source.contains("installDirectConfigPostRoute()"))
+        assertTrue(source.contains("post(\"/config\") { handleConfigPost(call, capabilityProvider) }"))
+        assertTrue(source.contains("private suspend fun handleConfigPost("))
         val handler = source.substring(
-            source.indexOf("private suspend fun handleConfigPost(call: ApplicationCall)"),
+            source.indexOf("private suspend fun handleConfigPost("),
             source.indexOf("private fun configSchemaJson()"),
         )
         val receive = handler.indexOf("receiveBoundedConfigParameters(call) ?: return")
@@ -96,7 +97,7 @@ class ConfigPostBodyTest {
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
         ).first { it.isFile }.readText()
         val handler = source.substring(
-            source.indexOf("private suspend fun handleConfigPost(call: ApplicationCall)"),
+            source.indexOf("private suspend fun handleConfigPost("),
             source.indexOf("private fun configSchemaJson()"),
         )
         val monitor = handler.substring(

@@ -28,9 +28,16 @@ object SettingValue {
                 rangeCheck(spec, n.toDouble()) ?: Validation.Ok(n.toString())
             }
             SettingType.FLOAT -> {
-                val f = v.toDoubleOrNull() ?: return Validation.Bad("${spec.key}: expected a number")
-                if (!f.isFinite()) return Validation.Bad("${spec.key}: expected a finite number")
-                rangeCheck(spec, f) ?: Validation.Ok(trimFloat(f))
+                val parsed = v.toDoubleOrNull() ?: return Validation.Bad("${spec.key}: expected a number")
+                if (!parsed.isFinite()) return Validation.Bad("${spec.key}: expected a finite number")
+                rangeCheck(spec, parsed) ?: run {
+                    // Config persists FLOAT settings with SharedPreferences.putFloat. Normalize in that
+                    // storage domain so an accepted decimal cannot round on write and then fail exact
+                    // committed read-back (for example 0.123456789 -> 0.12345679f).
+                    val stored = parsed.toFloat()
+                    if (!stored.isFinite()) return Validation.Bad("${spec.key}: expected a finite number")
+                    Validation.Ok(trimStoredFloat(stored))
+                }
             }
             SettingType.ENUM -> {
                 // Resolve a retired spelling first, so a bundle written against an older build still
@@ -70,4 +77,9 @@ object SettingValue {
     /** Render a double without a trailing ".0" when it is integral (so "5.0" persists as "5"). */
     private fun trimFloat(d: Double): String =
         if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
+
+    /** Shortest round-trippable spelling of the actual SharedPreferences Float, with integral and
+     * negative-zero spellings collapsed to the catalogue's ordinary integer form. */
+    private fun trimStoredFloat(value: Float): String =
+        if (value == value.toLong().toFloat()) value.toLong().toString() else value.toString()
 }

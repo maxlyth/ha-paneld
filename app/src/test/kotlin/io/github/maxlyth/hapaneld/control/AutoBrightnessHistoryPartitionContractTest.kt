@@ -64,8 +64,8 @@ class AutoBrightnessHistoryPartitionContractTest {
     }
 
     @Test fun `sensitivity reapplies policy without restarting the ambient source`() {
-        val handler = mqtt.substringAfter("private fun handleAutoBrightnessSensitivity")
-            .substringBefore("private fun handleAutoBrightnessMinimum")
+        val handler = mqtt.substringAfter("override fun handleAutoBrightnessSensitivity")
+            .substringBefore("override fun handleAutoBrightnessMinimum")
 
         assertTrue(handler.contains("autoBright.reapplyLatest()"))
         assertFalse(handler.contains("onAutoBrightnessConfigChanged()"))

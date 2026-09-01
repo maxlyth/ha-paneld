@@ -160,8 +160,8 @@ class NativeNavbarModeTest {
             "app/src/main/kotlin/io/github/maxlyth/hapaneld/MqttBridge.kt",
         )
         val handler = bridge.substring(
-            bridge.indexOf("private fun handleNavbar(payload: String)"),
-            bridge.indexOf("private fun handleHomeDashboard"),
+            bridge.indexOf("override fun handleNavbar(payload: String)"),
+            bridge.indexOf("override fun handleHomeDashboard"),
         )
         val guard = handler.indexOf("navbarModePermitted(")
         val actuate = handler.indexOf("applyAcknowledgedNavbarMode(")

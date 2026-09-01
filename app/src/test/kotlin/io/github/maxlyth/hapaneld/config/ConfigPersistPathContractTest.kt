@@ -11,10 +11,10 @@ import org.junit.Test
  * Every settable setting must actually be able to persist.
  *
  * The HTTP config route has exactly two ways to make a posted value durable: a key with
- * `liveApply = true` goes through the live-setting authority, and everything else needs an explicit
- * `p["key"]?.let { config.set…(it) }` line in the direct-mutation batch. A registry key with neither
- * is rendered on the Configure page, reported back in the response's `applied` list, and silently
- * discarded — the form reverts on the next load and nothing anywhere says why.
+ * `liveApply = true` goes through the live-setting authority, while ordinary keys pass through the
+ * registry writer and any coupled owner helper in the direct-mutation batch. This source-presence
+ * floor remains useful for its named historical regressions; the behavioural walker proves that the
+ * referenced writer actually commits and reads each catalogue value back.
  *
  * That has now happened twice. `dashboard_idle_return_min` shipped with no persist path (the batch
  * still carries the comment recording it), and all four camera trial settings shipped the same way,
@@ -39,8 +39,9 @@ class ConfigPersistPathContractTest {
      * Keys the HTTP handler never reads, each owned by another writer. Every entry needs a reason, and
      * the assertion below is an exact set: growing this list is a decision, not a formality.
      *
-     * All four are machine-managed entity-learning state, written by the learning subsystem through
-     * `Config` and never posted as a Configure form field, so there is nothing for the handler to read.
+     * The activation latch is derived machine state. The other three are user-controlled through the
+     * specialized Entities API. All four are rejected by direct `/config` admission and exercised by
+     * the behavioural settings contract through their actual owners.
      */
     private val ownedByAnotherWriter = setOf(
         "dashboard_entity_overrides",
@@ -56,7 +57,8 @@ class ConfigPersistPathContractTest {
     }
 
     /**
-     * A key counts as wired when the handler reads it at all. That is deliberately a floor rather than
+     * A key counts as wired when the handler or one of its production-used owner helpers reads it. That
+     * is deliberately a floor rather than
      * a proof: seven keys (`mqtt_broker`, `mqtt_user`, `mqtt_address_family`, `ha_url`,
      * `ha_token_expiry`, `dashboard_entity_learning`, `log_ship_enabled`) are read into a named local
      * inside the batch and written further down, so requiring a `config.set` call near the lookup
@@ -64,7 +66,8 @@ class ConfigPersistPathContractTest {
      * two real defects from every working key, because both `dashboard_idle_return_min` and the four
      * camera settings were not mentioned in this file *anywhere*: there was nothing to read the value.
      */
-    private fun isWired(key: String): Boolean = server.contains("p[\"$key\"]")
+    private fun isWired(key: String): Boolean =
+        server.contains("p[\"$key\"]") || server.contains("posted[\"$key\"]")
 
     @Test fun everySettableNonLiveSettingHasAPersistPath() {
         val live = SettingsRegistry.liveApplyKeys().toSet()

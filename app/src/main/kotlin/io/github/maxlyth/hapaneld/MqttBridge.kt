@@ -83,6 +83,169 @@ import java.util.Locale
 import java.util.WeakHashMap
 import org.json.JSONObject
 
+/** Independent, production-used map from registry live keys to their concrete MqttBridge effect owner.
+ * Keeping dispatch exhaustive over this enum means a newly declared live setting cannot acquire HTTP
+ * and MQTT classification merely because both classifications derive from the same registry flag. */
+internal enum class LiveSettingEffectOwner(val settingKey: String) {
+    WAKE_ON_WAVE("wake_on_wave"),
+    AUTO_SLEEP("auto_sleep"),
+    PREVENT_IDLE_DIM("prevent_idle_dim"),
+    WATCHDOG("watchdog_enabled"),
+    KIOSK("kiosk_lock"),
+    BOOT_CHIME("silence_boot_chime"),
+    AUTO_BRIGHTNESS("auto_brightness"),
+    TOUCH_SOUND("touch_sound"),
+    VOICE("voice_enabled"),
+    NETWORK_ADB("network_adb"),
+    ZIGBEE("zigbee_router"),
+    AUTO_BRIGHTNESS_MINIMUM("auto_brightness_minimum_percent"),
+    AUTO_BRIGHTNESS_RESPONSE("auto_brightness_response_percent"),
+    AUTO_BRIGHTNESS_HA_ENTITY("auto_brightness_ha_entity"),
+    CPU_GOVERNOR("cpu_governor"),
+    NAVBAR("navbar_mode"),
+    COMPANION_AUTO_UPDATE("companion_auto_update"),
+    COMPANION_UPDATE_CHANNEL("companion_update_channel"),
+    SELF_UPDATE("self_update"),
+    WEBVIEW_AUTO_UPDATE("webview_auto_update"),
+    UPDATE_CHANNEL("update_channel"),
+    HOME_DASHBOARD("home_dashboard"),
+    HA_AREA_PUBLISH_ONLY("ha_area"),
+    ;
+
+    companion object {
+        private val bySettingKey = entries.associateBy(LiveSettingEffectOwner::settingKey)
+        internal val settingKeys: Set<String> = bySettingKey.keys
+
+        fun requireFor(key: String): LiveSettingEffectOwner =
+            bySettingKey[key] ?: error("live setting declared without a dispatcher: $key")
+    }
+}
+
+/**
+ * The complete external MQTT surface for registry-backed live settings.
+ *
+ * This is deliberately narrower than [LiveSettingEffectOwner]: HTTP can apply adaptive-brightness
+ * tuning/source fields, while `ha_area` is followed by server-owned HA registry work and its bridge
+ * owner is intentionally publish-only. The wildcard subscription must not turn those HTTP-only/no-op
+ * owners into undocumented MQTT writers.
+ */
+internal val externalMqttLiveSettingOwners: Map<String, String> = linkedMapOf(
+    "cpu_governor" to "cpu_governor",
+    "network_adb" to "network_adb",
+    "home_dashboard" to "home_dashboard",
+    "navbar" to "navbar_mode",
+    "wake_on_wave" to "wake_on_wave",
+    "auto_sleep" to "auto_sleep",
+    "touch_sound" to "touch_sound",
+    "watchdog" to "watchdog_enabled",
+    "kiosk_lock" to "kiosk_lock",
+    "companion_auto_update" to "companion_auto_update",
+    "companion_update_channel" to "companion_update_channel",
+    "self_update" to "self_update",
+    "webview_auto_update" to "webview_auto_update",
+    "update_channel" to "update_channel",
+    "silence_boot_chime" to "silence_boot_chime",
+    "prevent_idle_dim" to "prevent_idle_dim",
+    "zigbee_router" to "zigbee_router",
+    "auto_brightness" to "auto_brightness",
+    "voice_enabled" to "voice_enabled",
+)
+
+/** Resolve an admitted MQTT setting topic to the same registry key used by HTTP live application. */
+internal fun externalLiveSettingKey(panel: String, topic: String): String? {
+    val prefix = "ha-paneld/$panel/"
+    if (!topic.startsWith(prefix) || !topic.endsWith("/set")) return null
+    val leaf = topic.removePrefix(prefix).removeSuffix("/set")
+    return externalMqttLiveSettingOwners[leaf]
+}
+
+/**
+ * The concrete live-setting owners. [MqttBridge] implements these methods itself, so production has no
+ * second key-to-method adapter that can be swapped independently of the behaviour tested by the router.
+ */
+internal interface LiveSettingHandlers {
+    fun handleWakeOnWave(payload: String)
+    fun handleAutoSleep(payload: String)
+    fun handlePreventIdleDim(payload: String, approvalRequired: Boolean = true)
+    fun handleWatchdog(payload: String)
+    fun handleKiosk(payload: String)
+    fun handleSilenceBootChime(payload: String)
+    fun handleAutoBright(payload: String)
+    fun handleTouchSound(payload: String)
+    fun handleVoiceEnabled(payload: String)
+    fun handleNetAdb(payload: String)
+    fun handleZigbee(payload: String)
+    fun handleAutoBrightnessMinimum(payload: String)
+    fun handleAutoBrightnessSensitivity(payload: String)
+    fun handleAutoBrightnessHaEntity(payload: String)
+    fun handleCpuGov(payload: String)
+    fun handleNavbar(payload: String)
+    fun handleCompanionAuto(payload: String, approvalRequired: Boolean = true)
+    fun handleCompanionChannel(
+        payload: String,
+        previousValue: String? = null,
+        approvalRequired: Boolean = true,
+    )
+    fun handleSelfUpdate(payload: String, approvalRequired: Boolean = true)
+    fun handleWebViewAuto(payload: String, approvalRequired: Boolean = true)
+    fun handleUpdateChannel(
+        payload: String,
+        previousValue: String? = null,
+        approvalRequired: Boolean = true,
+    )
+    fun handleHomeDashboard(payload: String, previousValue: String? = null)
+    fun handleHaAreaPublishOnly()
+}
+
+/** Route one normalized registry value to exactly one typed effect handler. */
+internal fun dispatchLiveSetting(
+    key: String,
+    value: String,
+    previousValue: String? = null,
+    sensitiveApprovalRequired: Boolean = true,
+    handlers: LiveSettingHandlers,
+) {
+    val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
+    when (LiveSettingEffectOwner.requireFor(key)) {
+        LiveSettingEffectOwner.WAKE_ON_WAVE -> handlers.handleWakeOnWave(onOff)
+        LiveSettingEffectOwner.AUTO_SLEEP -> handlers.handleAutoSleep(onOff)
+        LiveSettingEffectOwner.PREVENT_IDLE_DIM -> handlers.handlePreventIdleDim(
+            if (sensitiveApprovalRequired) value else onOff,
+            sensitiveApprovalRequired,
+        )
+        LiveSettingEffectOwner.WATCHDOG -> handlers.handleWatchdog(onOff)
+        LiveSettingEffectOwner.KIOSK -> handlers.handleKiosk(onOff)
+        LiveSettingEffectOwner.BOOT_CHIME -> handlers.handleSilenceBootChime(onOff)
+        LiveSettingEffectOwner.AUTO_BRIGHTNESS -> handlers.handleAutoBright(onOff)
+        LiveSettingEffectOwner.TOUCH_SOUND -> handlers.handleTouchSound(onOff)
+        LiveSettingEffectOwner.VOICE -> handlers.handleVoiceEnabled(onOff)
+        LiveSettingEffectOwner.NETWORK_ADB -> handlers.handleNetAdb(onOff)
+        LiveSettingEffectOwner.ZIGBEE -> handlers.handleZigbee(onOff)
+        LiveSettingEffectOwner.AUTO_BRIGHTNESS_MINIMUM -> {
+            requireNotNull(value.toIntOrNull()) { "$key requires a normalized integer" }
+            handlers.handleAutoBrightnessMinimum(value)
+        }
+        LiveSettingEffectOwner.AUTO_BRIGHTNESS_RESPONSE -> {
+            requireNotNull(value.toIntOrNull()) { "$key requires a normalized integer" }
+            handlers.handleAutoBrightnessSensitivity(value)
+        }
+        LiveSettingEffectOwner.AUTO_BRIGHTNESS_HA_ENTITY -> handlers.handleAutoBrightnessHaEntity(value)
+        LiveSettingEffectOwner.CPU_GOVERNOR -> handlers.handleCpuGov(value)
+        LiveSettingEffectOwner.NAVBAR -> handlers.handleNavbar(value)
+        LiveSettingEffectOwner.COMPANION_AUTO_UPDATE ->
+            handlers.handleCompanionAuto(onOff, sensitiveApprovalRequired)
+        LiveSettingEffectOwner.COMPANION_UPDATE_CHANNEL ->
+            handlers.handleCompanionChannel(value, previousValue, sensitiveApprovalRequired)
+        LiveSettingEffectOwner.SELF_UPDATE -> handlers.handleSelfUpdate(onOff, sensitiveApprovalRequired)
+        LiveSettingEffectOwner.WEBVIEW_AUTO_UPDATE ->
+            handlers.handleWebViewAuto(onOff, sensitiveApprovalRequired)
+        LiveSettingEffectOwner.UPDATE_CHANNEL ->
+            handlers.handleUpdateChannel(value, previousValue, sensitiveApprovalRequired)
+        LiveSettingEffectOwner.HOME_DASHBOARD -> handlers.handleHomeDashboard(value, previousValue)
+        LiveSettingEffectOwner.HA_AREA_PUBLISH_ONLY -> handlers.handleHaAreaPublishOnly()
+    }
+}
+
 internal fun liveSettingApplyResult(
     result: MqttCommandDispatcher.RunResult,
 ): LiveSettingApplyResult = when {
@@ -1056,7 +1219,7 @@ internal class MqttBridge(
     // holds one — otherwise a queued callback from a superseded broker session mutates whichever
     // coordinator happens to be installed when it finally runs.
     private val haLifecycleLease: HaLifecycleRuntime.MqttLease? = null,
-) {
+) : LiveSettingHandlers {
     private enum class CommandKind { LATEST, ACTION }
 
     private val haLinkResolutionThread = AtomicReference<Thread?>()
@@ -2398,7 +2561,7 @@ internal class MqttBridge(
             .work(units = 1, bytes = payloadBytes.size.toLong())
         try {
             dispatchCommand(topic, payloadBytes)
-            externalLiveSettingKey(topic)?.let { key ->
+            externalLiveSettingKey(panel, topic)?.let { key ->
                 check(onExternalSettingApplied(key)) { "failed to supersede pending HTTP setting $key" }
             }
         } catch (e: Exception) {
@@ -2407,29 +2570,6 @@ internal class MqttBridge(
         } finally {
             cost.close()
         }
-    }
-
-    private fun externalLiveSettingKey(topic: String): String? = when (topic) {
-        cmdCpuGov -> "cpu_governor"
-        cmdNetAdb -> "network_adb"
-        cmdHomeDashboard -> "home_dashboard"
-        cmdNavbar -> "navbar_mode"
-        cmdWakeOnWave -> "wake_on_wave"
-        cmdAutoSleep -> "auto_sleep"
-        cmdTouchSound -> "touch_sound"
-        cmdWatchdog -> "watchdog_enabled"
-        cmdKiosk -> "kiosk_lock"
-        cmdCompanionAuto -> "companion_auto_update"
-        cmdCompanionChannel -> "companion_update_channel"
-        cmdSelfUpdate -> "self_update"
-        cmdWebViewAuto -> "webview_auto_update"
-        cmdUpdateChannel -> "update_channel"
-        cmdSilenceBootChime -> "silence_boot_chime"
-        cmdPreventIdleDim -> "prevent_idle_dim"
-        cmdZigbee -> "zigbee_router"
-        cmdAutoBright -> "auto_brightness"
-        cmdVoiceEnabled -> "voice_enabled"
-        else -> null
     }
 
     private fun dispatchCommand(topic: String, payloadBytes: ByteArray) {
@@ -2445,15 +2585,18 @@ internal class MqttBridge(
         if (topic.startsWith("ha-paneld/$panel/button_led") && topic.endsWith("/set")) {
             handleButtonLed(topic, payload); return
         }
+        // Every registry-declared live setting, whether it arrived from MQTT or HTTP, reaches the same
+        // exhaustive owner mapping. Action commands and non-live camera control remain below.
+        externalLiveSettingKey(panel, topic)?.let { key ->
+            dispatchLiveSetting(key = key, value = payload, handlers = this)
+            return
+        }
         when (topic) {
-            cmdCpuGov -> handleCpuGov(payload)
-            cmdNetAdb -> handleNetAdb(payload)
             cmdScreen -> handleScreen(payload)
             cmdLed -> handleLed(payload)
             cmdNavigate -> handleNavigate(payload)
             cmdVolume -> handleVolume(payload)
             cmdReload -> handleReload()
-            cmdHomeDashboard -> handleHomeDashboard(payload)
             cmdReboot -> {
                 authorizeMqttSensitive(
                     SensitiveOperation.DEVICE_REBOOT,
@@ -2463,12 +2606,6 @@ internal class MqttBridge(
                 system.reboot()
             }
             cmdButtons -> if (hasButtonBacklight) handleButtons(payload)
-            cmdNavbar -> handleNavbar(payload)
-            cmdWakeOnWave -> handleWakeOnWave(payload)
-            cmdAutoSleep -> handleAutoSleep(payload)
-            cmdTouchSound -> handleTouchSound(payload)
-            cmdWatchdog -> handleWatchdog(payload)
-            cmdKiosk -> handleKiosk(payload)
             cmdUpdateCompanion -> {
                 authorizeMqttSensitive(
                     SensitiveOperation.APK_INSTALL,
@@ -2477,7 +2614,6 @@ internal class MqttBridge(
                 )
                 onUpdateCompanion()
             }
-            cmdCompanionAuto -> handleCompanionAuto(payload)
             cmdUpdatePaneld -> {
                 authorizeMqttSensitive(
                     SensitiveOperation.APK_INSTALL,
@@ -2486,15 +2622,6 @@ internal class MqttBridge(
                 )
                 onSelfUpdate(true)
             }
-            cmdCompanionChannel -> handleCompanionChannel(payload)
-            cmdSelfUpdate -> handleSelfUpdate(payload)
-            cmdWebViewAuto -> handleWebViewAuto(payload)
-            cmdUpdateChannel -> handleUpdateChannel(payload)
-            cmdSilenceBootChime -> handleSilenceBootChime(payload)
-            cmdPreventIdleDim -> handlePreventIdleDim(payload)
-            cmdZigbee -> handleZigbee(payload)
-            cmdAutoBright -> handleAutoBright(payload)
-            cmdVoiceEnabled -> handleVoiceEnabled(payload)
             cmdCameraEnabled -> handleCameraEnabled(payload)
             else -> Log.d(TAG, "unhandled command topic $topic")
         }
@@ -2590,7 +2717,7 @@ internal class MqttBridge(
         stateConverger.reconcile("led", force = true)
     }
 
-    private fun handleWakeOnWave(payload: String) {
+    override fun handleWakeOnWave(payload: String) {
         if (!hasProximity) {
             Log.w(TAG, "ignoring wake_on_wave command without a proximity source")
             return
@@ -2600,13 +2727,13 @@ internal class MqttBridge(
         stateConverger.reconcile("wake_on_wave", force = true)
     }
 
-    private fun handleAutoSleep(payload: String) {
+    override fun handleAutoSleep(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         applyAutoSleepSetting(on, config::setAutoSleep, onAutoSleepConfigChanged)
         stateConverger.reconcile("auto_sleep", force = true)
     }
 
-    private fun handlePreventIdleDim(payload: String, approvalRequired: Boolean = true) {
+    override fun handlePreventIdleDim(payload: String, approvalRequired: Boolean) {
         val on = requireNotNull(PowerSafetyMutationPolicy.parseGuardSwitch(payload)) {
             "prevent_idle_dim accepts only ON or OFF"
         }
@@ -2628,13 +2755,13 @@ internal class MqttBridge(
         stateConverger.reconcile("prevent_idle_dim", force = true)
     }
 
-    private fun handleTouchSound(payload: String) {
+    override fun handleTouchSound(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         check(touchSound.set(on)) { "touch sound transition failed" }
         stateConverger.reconcile("touch_sound", force = true)
     }
 
-    private fun handleWatchdog(payload: String) {
+    override fun handleWatchdog(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setWatchdogEnabled(on)
         watchdog.apply(on)
@@ -2661,7 +2788,7 @@ internal class MqttBridge(
     // both cases report execution SUCCEEDED, so a refused or unpersisted ON came back to the caller as
     // APPLIED. The decision itself is the pure, directly-testable applyAcknowledgedVoiceEnabled (mirrors
     // applyAcknowledgedKioskSetting), which always reconciles before reporting failure.
-    private fun handleVoiceEnabled(payload: String) {
+    override fun handleVoiceEnabled(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on && !hasMicrophone) Log.w(TAG, "ignoring voice_enabled ON command without a microphone")
         val accepted = applyAcknowledgedVoiceEnabled(
@@ -2676,7 +2803,7 @@ internal class MqttBridge(
         }
     }
 
-    private fun handleKiosk(payload: String) {
+    override fun handleKiosk(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         check(onDirectKioskSetting(on)) { "kiosk setting was not durably acknowledged" }
         stateConverger.reconcile("kiosk_lock", force = true)
@@ -2700,7 +2827,7 @@ internal class MqttBridge(
         dispatchStateWork { stateConverger.reconcile("update_channel", force = true) }
     }
 
-    private fun handleCompanionAuto(payload: String, approvalRequired: Boolean = true) {
+    override fun handleCompanionAuto(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on && approvalRequired) authorizeMqttSensitive(
             SensitiveOperation.APK_INSTALL,
@@ -2711,7 +2838,7 @@ internal class MqttBridge(
         stateConverger.reconcile("companion_auto_update", force = true)
     }
 
-    private fun handleSelfUpdate(payload: String, approvalRequired: Boolean = true) {
+    override fun handleSelfUpdate(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on && approvalRequired) authorizeMqttSensitive(
             SensitiveOperation.APK_INSTALL,
@@ -2722,7 +2849,7 @@ internal class MqttBridge(
         stateConverger.reconcile("self_update", force = true)
     }
 
-    private fun handleWebViewAuto(payload: String, approvalRequired: Boolean = true) {
+    override fun handleWebViewAuto(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on && approvalRequired) authorizeMqttSensitive(
             SensitiveOperation.APK_INSTALL,
@@ -2779,10 +2906,10 @@ internal class MqttBridge(
         }
     }
 
-    private fun handleUpdateChannel(
+    override fun handleUpdateChannel(
         payload: String,
-        previousValue: String? = null,
-        approvalRequired: Boolean = true,
+        previousValue: String?,
+        approvalRequired: Boolean,
     ) {
         val was = previousValue ?: config.updateChannel
         val requested = normalizeSelfUpdateChannel(payload)
@@ -2801,10 +2928,10 @@ internal class MqttBridge(
         )
     }
 
-    private fun handleCompanionChannel(
+    override fun handleCompanionChannel(
         payload: String,
-        previousValue: String? = null,
-        approvalRequired: Boolean = true,
+        previousValue: String?,
+        approvalRequired: Boolean,
     ) {
         val was = previousValue ?: config.companionUpdateChannel
         val requested = payload.trim().trim('"')
@@ -2824,13 +2951,13 @@ internal class MqttBridge(
     private fun updateChannelLabel(): String = if (config.updateChannel == "prerelease") "Pre-release" else "Stable"
     private fun companionChannelLabel(): String = if (config.companionUpdateChannel == "prerelease") "Pre-release" else "Stable"
 
-    private fun handleSilenceBootChime(payload: String) {
+    override fun handleSilenceBootChime(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         check(bootChime.set(on)) { "boot chime transition failed" }
         stateConverger.reconcile("silence_boot_chime", force = true)
     }
 
-    private fun handleAutoBright(payload: String) {
+    override fun handleAutoBright(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         config.setAutoBrightness(on)
         autoBright.reapplyLatest()
@@ -2838,19 +2965,19 @@ internal class MqttBridge(
         stateConverger.reconcile("auto_brightness", force = true)
     }
 
-    private fun handleAutoBrightnessSensitivity(payload: String) {
+    override fun handleAutoBrightnessSensitivity(payload: String) {
         val value = payload.trim().trim('"').toIntOrNull() ?: return
         config.setAutoBrightnessResponsePercent(value)
         autoBright.reapplyLatest()
     }
 
-    private fun handleAutoBrightnessMinimum(payload: String) {
+    override fun handleAutoBrightnessMinimum(payload: String) {
         val value = payload.trim().trim('"').toIntOrNull() ?: return
         config.setAutoBrightnessMinimumPercent(value)
         autoBright.reapplyLatest()
     }
 
-    private fun handleAutoBrightnessHaEntity(payload: String) {
+    override fun handleAutoBrightnessHaEntity(payload: String) {
         config.setAutoBrightnessHaEntity(payload.trim().trim('"'))
         onAutoBrightnessConfigChanged()
         autoBright.reapplyLatest()
@@ -2875,7 +3002,7 @@ internal class MqttBridge(
     // guard's ~30s timer (tens of seconds before it answers) — so it must NOT run on the MQTT callback
     // thread. We publish the commanded state optimistically, then reconcile to the real running state
     // on a background thread (polling for the slow ON) so HA ends up correct without stalling MQTT.
-    private fun handleZigbee(payload: String) {
+    override fun handleZigbee(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         if (on) onZigbeeExplicitRetry()
         config.setZigbeeRouterEnabled(on) // persist desired state so it survives a reboot (boot-restore)
@@ -2994,14 +3121,14 @@ internal class MqttBridge(
     }
 
     // CPU scaling governor (select). Quick su write; publishes the read-back governor.
-    private fun handleCpuGov(payload: String) {
+    override fun handleCpuGov(payload: String) {
         val tier = payload.trim().trim('"')   // "Performance" | "Efficiency" | "Auto"
         check(cpu.setTier(tier)) { "CPU governor transition failed" }
         stateConverger.reconcile("cpu_governor", force = true)
     }
 
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
-    private fun handleNetAdb(payload: String) {
+    override fun handleNetAdb(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         check(!(on && config.hardenedSecurityEnabled)) {
             "network ADB cannot be enabled while Hardened mode is active"
@@ -3027,7 +3154,7 @@ internal class MqttBridge(
 
     // Soft navbar mode (select). Persist and publish only after the asynchronous platform actuation
     // acknowledges both privileged display state and the main-thread overlay mutation.
-    private fun handleNavbar(payload: String) {
+    override fun handleNavbar(payload: String) {
         val previous = config.navbarMode
         // Unlike HTTP, this path coerces rather than rejects — NavbarController.normalise maps anything
         // unrecognised onto Off and the result is then persisted. "Native" IS recognised, so without this
@@ -3051,7 +3178,7 @@ internal class MqttBridge(
         )
     }
 
-    private fun handleHomeDashboard(payload: String, previousValue: String? = null) {
+    override fun handleHomeDashboard(payload: String, previousValue: String?) {
         // One authority decides what a home dashboard may be: the setting's own validator, which the
         // config API and both pickers already use. This function serves two callers with different
         // histories — an MQTT command arrives unvalidated, live apply arrives already canonical — and the
@@ -3074,6 +3201,9 @@ internal class MqttBridge(
         if (changed) onDashboardTargetChanged()
         stateConverger.reconcile("home_dashboard", force = true)
     }
+
+    /** Discovery embeds suggested_area on its next publish; the server owns HA registry write-back. */
+    override fun handleHaAreaPublishOnly() = Unit
 
     // Reload: keep the hard restart (the right recovery for a wedged WebView), but if a per-panel home
     // dashboard is set, deep-link back to it once the frontend has cold-started — so reload lands on THIS
@@ -3298,7 +3428,13 @@ internal class MqttBridge(
             try {
                 // This path is used only by the HTTP/service live-setting authority. Its owning HTTP
                 // request was already approved against the real peer before it became durable or queued.
-                dispatchSetting(key, value, previousValue, sensitiveApprovalRequired = false)
+                dispatchLiveSetting(
+                    key = key,
+                    value = value,
+                    previousValue = previousValue,
+                    sensitiveApprovalRequired = false,
+                    handlers = this,
+                )
             } catch (e: Exception) {
                 cost.outcome(FeatureCostOutcome.FAILURE)
                 throw e
@@ -3340,47 +3476,6 @@ internal class MqttBridge(
             commandDispatcher.pendingCount(),
         )
         return liveSettingApplyResult(result)
-    }
-
-    private fun dispatchSetting(
-        key: String,
-        value: String,
-        previousValue: String? = null,
-        sensitiveApprovalRequired: Boolean = true,
-    ) {
-        val onOff = if (SettingValue.parseBool(value) == true) "ON" else "OFF"
-        when (key) {
-            "wake_on_wave" -> handleWakeOnWave(onOff)
-            "auto_sleep" -> handleAutoSleep(onOff)
-            "prevent_idle_dim" -> handlePreventIdleDim(
-                if (sensitiveApprovalRequired) value else onOff,
-                approvalRequired = sensitiveApprovalRequired,
-            )
-            "watchdog_enabled" -> handleWatchdog(onOff)
-            "kiosk_lock" -> handleKiosk(onOff)
-            "silence_boot_chime" -> handleSilenceBootChime(onOff)
-            "auto_brightness" -> handleAutoBright(onOff)
-            "touch_sound" -> handleTouchSound(onOff)
-            "voice_enabled" -> handleVoiceEnabled(onOff)
-            "network_adb" -> handleNetAdb(onOff)
-            "zigbee_router" -> handleZigbee(onOff)
-            "auto_brightness_minimum_percent" -> handleAutoBrightnessMinimum(value)
-            "auto_brightness_response_percent" -> handleAutoBrightnessSensitivity(value)
-            "auto_brightness_ha_entity" -> handleAutoBrightnessHaEntity(value)
-            "cpu_governor" -> handleCpuGov(value)
-            "navbar_mode" -> handleNavbar(value)
-            "companion_auto_update" -> handleCompanionAuto(onOff, approvalRequired = sensitiveApprovalRequired)
-            "companion_update_channel" -> handleCompanionChannel(value, previousValue, sensitiveApprovalRequired)
-            "self_update" -> handleSelfUpdate(onOff, approvalRequired = sensitiveApprovalRequired)
-            "webview_auto_update" -> handleWebViewAuto(onOff, approvalRequired = sensitiveApprovalRequired)
-            "update_channel" -> handleUpdateChannel(value, previousValue, sensitiveApprovalRequired)
-            "home_dashboard" -> handleHomeDashboard(value, previousValue)
-            // Deliberately nothing to do live: discovery embeds suggested_area at its next publish, and
-            // the Home Assistant write-back runs as the server's own post-commit side effect. Declared
-            // live so the key cannot drag a full network reconfigure behind a wizard save.
-            "ha_area" -> Unit
-            else -> error("live setting declared without a dispatcher: $key")
-        }
     }
 
     // ---- discovery ----
