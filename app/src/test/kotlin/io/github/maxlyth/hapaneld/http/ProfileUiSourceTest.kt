@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.http
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -146,6 +147,13 @@ class ProfileUiSourceTest {
         assertTrue(notice.readText().contains("@codemirror/view 6.43.9"))
         assertTrue(bundle.readText().startsWith("/*! @license CodeMirror 6"))
         assertFalse(packageJson.readText().contains("\"latest\""))
-        assertFalse(File("build.gradle.kts").readText().contains("profile-editor"))
+        // Gradle never builds the bundle: the three editor files this test reads are declared inputs of
+        // the unit-test task and nothing else — never the subject of a task, an exec or a dependency.
+        val editorReferences = Regex("profile-editor[^\"\\s]*").findAll(File("build.gradle.kts").readText())
+            .map { it.value }.toSet()
+        assertEquals(
+            setOf("profile-editor/package.json", "profile-editor/package-lock.json", "profile-editor/build.mjs"),
+            editorReferences,
+        )
     }
 }

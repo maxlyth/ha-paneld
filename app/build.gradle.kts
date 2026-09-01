@@ -3,6 +3,7 @@ import java.security.MessageDigest
 import org.cyclonedx.gradle.CyclonedxDirectTask
 import org.cyclonedx.model.Component
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -383,11 +384,68 @@ val buildHelperSocketTestServer = tasks.register<Exec>("buildHelperSocketTestSer
     outputs.file(helperSocketTestServer)
 }
 
+// Files the JVM unit tests read from the working tree at run time, outside the test classpath: whole-tree
+// source scans, source-slicing wiring contracts, shipped web assets, the manifest, resource XML, build
+// scripts and a few repository documents and fixtures. Gradle fingerprints only declared inputs, so an
+// undeclared read lets an edit leave the Test task UP-TO-DATE, or lets the build cache replay a green
+// recorded under different bytes as FROM-CACHE. RuntimeReadInputsContractTest checks every runtime path
+// literal in app/src/test against these lists, so a new undeclared read fails that test instead of
+// silently caching. Entries are app-module relative; `../` reaches the repository root.
+val unitTestRuntimeReadDirectories = listOf(
+    "src/main/kotlin", // StringTemplateEscapeContractTest and HaTimestampTest walk every source file
+    "src/main/assets", // web assets, OpenAPI, i18n catalogues, device profiles, wake-word models
+    "src/main/res/xml", // backup rules and locale configuration
+    "../docs/profiles/examples", // BundledProfileParityTest
+    "../docs/profiles/unofficial", // BundledProfileFixtures
+    "../helper/src", // HelperSocketCompositionTest reads screen.c and runs a server built from this tree
+    "src/test/js", // Node scripts the entity UI contract tests execute; not on the test classpath
+)
+val unitTestRuntimeReadFiles = listOf(
+    "build.gradle.kts",
+    "src/main/AndroidManifest.xml",
+    "src/main/res/drawable/ic_nav_dashboard.xml",
+    "../settings.gradle.kts",
+    "../gradle/libs.versions.toml",
+    "../docs/api.md",
+    "../docs/built-in-renderer.md",
+    "../helper/Makefile", // the socket test server recipe, with the three test sources below
+    "../helper/source-id.sh",
+    "../helper/test/socket_server.c",
+    "../helper/test/sysexec_stub.c",
+    "../helper/test/sysexec_stub.h",
+    "../scripts/provision.sh",
+    "../scripts/tests/fixtures/database-compatibility-vectors.tsv",
+    "../test/fixtures/dashboard-path-parity.json",
+    "../test/fixtures/info-fixture.html",
+    "../tools/profile-editor/package.json", // ProfileUiSourceTest reads these three, never builds the bundle
+    "../tools/profile-editor/package-lock.json",
+    "../tools/profile-editor/build.mjs",
+)
+// Build outputs written into the assets directory by the native compile tasks above. Tests compare
+// their names only, never their bytes, so a recompiled binary must not invalidate the test task.
+val unitTestGeneratedAssetExcludes = listOf("cdprelay-arm*", "hapaneld-helper-arm*")
+
 tasks.withType<Test>().configureEach {
     if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
         dependsOn(buildHelperSocketTestServer)
         systemProperty("hapaneld.helper.socketTestServer", helperSocketTestServer.absolutePath)
     }
+    // RELATIVE path sensitivity keys the fingerprint on content plus tree-relative path, so a clean
+    // checkout at another location reuses the cache while any byte change invalidates it.
+    unitTestRuntimeReadDirectories.forEach { relative ->
+        val declaration = if (relative == "src/main/assets") {
+            inputs.files(fileTree(relative) { exclude(unitTestGeneratedAssetExcludes) })
+        } else {
+            inputs.dir(relative)
+        }
+        declaration.withPropertyName("runtimeRead:$relative").withPathSensitivity(PathSensitivity.RELATIVE)
+    }
+    unitTestRuntimeReadFiles.forEach { relative ->
+        inputs.file(relative).withPropertyName("runtimeRead:$relative").withPathSensitivity(PathSensitivity.RELATIVE)
+    }
+    systemProperty("hapaneld.test.runtimeReadDirectories", unitTestRuntimeReadDirectories.joinToString(File.pathSeparator))
+    systemProperty("hapaneld.test.runtimeReadFiles", unitTestRuntimeReadFiles.joinToString(File.pathSeparator))
+    systemProperty("hapaneld.test.runtimeReadAssetExcludes", unitTestGeneratedAssetExcludes.joinToString(File.pathSeparator))
     providers.gradleProperty("autoSleepReplayInput").orNull?.let {
         systemProperty("hapaneld.autoSleepReplay.input", it)
         inputs.file(it)
