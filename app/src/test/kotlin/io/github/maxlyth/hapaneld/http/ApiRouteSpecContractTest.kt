@@ -20,6 +20,13 @@ class ApiRouteSpecContractTest {
             "$method /api/v1$path"
         }
 
+        val directConfigStart = panel.indexOf("internal fun Route.installDirectConfigPostRoute")
+        val directConfigBlock = panel.substring(
+            directConfigStart,
+            panel.indexOf("private suspend fun handleConfigPost", directConfigStart),
+        )
+        literalRoutes(directConfigBlock).mapTo(active) { (method, path) -> "$method /api/v1$path" }
+
         val profiles = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/ProfileRoutes.kt").readText()
         val activeProfiles = profiles.substring(
             profiles.indexOf("fun Route.profileRoutes"),
