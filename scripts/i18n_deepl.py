@@ -249,6 +249,7 @@ def build_plan(
         "contextArtifactId": context["id"],
         "contextArtifactHash": context_hash,
         "contextArtifactBytes": context_bytes,
+        "reconsideredKeys": sorted(reconsider),
         "requestedCharacters": requested,
         "maximumBilledCharacters": sum(
             record["maximumBilledCharacters"]
@@ -459,7 +460,7 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         {
             "schema", "baseRevision", "sourceRevision", "sourceCatalogueHash", "requestedCharacters",
             "contextArtifactId", "contextArtifactHash", "contextArtifactBytes",
-            "maximumBilledCharacters", "batches",
+            "reconsideredKeys", "maximumBilledCharacters", "batches",
         },
         "plan root",
     )
@@ -478,6 +479,12 @@ def _validate_plan(plan: dict[str, Any]) -> None:
         or isinstance(plan["contextArtifactBytes"], bool)
         or not isinstance(plan["contextArtifactBytes"], int)
         or plan["contextArtifactBytes"] <= 0
+        or not isinstance(plan["reconsideredKeys"], list)
+        or any(
+            not isinstance(key, str) or not catalogue.KEY_RE.fullmatch(key)
+            for key in plan["reconsideredKeys"]
+        )
+        or plan["reconsideredKeys"] != sorted(set(plan["reconsideredKeys"]))
         or isinstance(plan["requestedCharacters"], bool)
         or not isinstance(plan["requestedCharacters"], int)
         or plan["requestedCharacters"] < 0
@@ -602,6 +609,16 @@ def _validate_plan_inputs(
         _target_catalogue(target_path, locale, source)
         if _source_digest(target_path) != batch["baseTargetHash"]:
             raise DeepLError(f"{locale}: base target drifted after the plan was created")
+    rebuilt = build_plan(
+        source_path,
+        target_dir,
+        context_path,
+        [batch["locale"] for batch in plan["batches"]],
+        plan["baseRevision"],
+        set(plan["reconsideredKeys"]),
+    )
+    if rebuilt != plan:
+        raise DeepLError("plan does not match the exact source and base target inputs")
     return source, context
 
 

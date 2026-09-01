@@ -213,6 +213,127 @@ class DeepLAdapterTest(unittest.TestCase):
         self.assertEqual(fake.requests, [])
         self.assertFalse(output.exists())
 
+    def test_generate_rejects_self_consistent_plan_record_substitution_before_provider_access(self):
+        plan = DEEPL.build_plan(
+            self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set(),
+        )
+        record = plan["batches"][0]["records"][0]
+        record["english"] = "Altered Alpha"
+        record["sourceHash"] = DEEPL.catalogue.source_hash(record["english"])
+        record["maximumBilledCharacters"] = len(DEEPL._protected_xml(record)[0])
+        plan["requestedCharacters"] = sum(
+            len(item["english"])
+            for batch in plan["batches"]
+            for item in batch["records"]
+        )
+        plan["maximumBilledCharacters"] = sum(
+            item["maximumBilledCharacters"]
+            for batch in plan["batches"]
+            for item in batch["records"]
+        )
+        plan_path = self.root / "substituted-plan.json"
+        write_json(plan_path, plan)
+        fake = FakeHttp([])
+        output = self.root / "substituted-output"
+
+        with self.assertRaisesRegex(DEEPL.DeepLError, "plan does not match"):
+            DEEPL.generate(
+                plan_path, self.source_path, self.target_dir, self.context_path,
+                output, "key:fx", fake,
+            )
+
+        self.assertEqual(fake.requests, [])
+        self.assertFalse(output.exists())
+
+    def test_generate_rejects_prior_target_substitution_before_provider_access(self):
+        source_record = self.source["strings"]["settings.alpha.label"]
+        self.target("de", {
+            "settings.alpha.label": {
+                "text": "Veraltetes Alpha",
+                "sourceHash": "0" * 64,
+                "state": "machine-draft",
+            },
+        })
+        plan = DEEPL.build_plan(
+            self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set(),
+        )
+        record = next(
+            item for item in plan["batches"][0]["records"]
+            if item["key"] == "settings.alpha.label"
+        )
+        self.assertEqual(record["sourceHash"], source_record["sourceHash"])
+        record["priorTarget"]["text"] = "Invented review context"
+        plan_path = self.root / "prior-substituted-plan.json"
+        write_json(plan_path, plan)
+        fake = FakeHttp([])
+
+        with self.assertRaisesRegex(DEEPL.DeepLError, "plan does not match"):
+            DEEPL.generate(
+                plan_path, self.source_path, self.target_dir, self.context_path,
+                self.root / "prior-substituted-output", "key:fx", fake,
+            )
+
+        self.assertEqual(fake.requests, [])
+
+    def test_generate_rejects_injected_current_community_correction_before_provider_access(self):
+        source_record = self.source["strings"]["settings.alpha.label"]
+        self.target("de", {
+            "settings.alpha.label": {
+                "text": "Kuratiertes Alpha",
+                "sourceHash": source_record["sourceHash"],
+                "state": "community-corrected",
+            },
+        })
+        plan = DEEPL.build_plan(
+            self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set(),
+        )
+        injected = DEEPL._selected_record("settings.alpha.label", source_record, self.source)
+        injected["priorTarget"] = {
+            "text": "Kuratiertes Alpha",
+            "sourceHash": source_record["sourceHash"],
+            "state": "community-corrected",
+        }
+        plan["batches"][0]["records"].append(injected)
+        plan["batches"][0]["records"].sort(key=lambda item: item["key"])
+        plan["requestedCharacters"] += len(injected["english"])
+        plan["maximumBilledCharacters"] += injected["maximumBilledCharacters"]
+        plan_path = self.root / "injected-plan.json"
+        write_json(plan_path, plan)
+        fake = FakeHttp([])
+
+        with self.assertRaisesRegex(DEEPL.DeepLError, "plan does not match"):
+            DEEPL.generate(
+                plan_path, self.source_path, self.target_dir, self.context_path,
+                self.root / "injected-output", "key:fx", fake,
+            )
+
+        self.assertEqual(fake.requests, [])
+
+    def test_explicit_reconsideration_is_bound_and_rederived(self):
+        source_record = self.source["strings"]["settings.alpha.label"]
+        self.target("de", {
+            "settings.alpha.label": {
+                "text": "Alpha DE",
+                "sourceHash": source_record["sourceHash"],
+                "state": "machine-draft",
+            },
+        })
+        plan = DEEPL.build_plan(
+            self.source_path,
+            self.target_dir,
+            self.context_path,
+            ["de"],
+            REVISION,
+            {"settings.alpha.label"},
+        )
+
+        self.assertEqual(plan["reconsideredKeys"], ["settings.alpha.label"])
+        source, context = DEEPL._validate_plan_inputs(
+            plan, self.source_path, self.target_dir, self.context_path,
+        )
+        self.assertEqual(source["sourceRevision"], SOURCE_REVISION)
+        self.assertEqual(context["id"], "home-assistant-terminology")
+
     def test_context_and_provider_responses_reject_duplicate_json_keys(self):
         self.context_path.write_text('{"schema":1,"schema":1}', encoding="utf-8")
         with self.assertRaisesRegex(DEEPL.DeepLError, "duplicate JSON key"):
