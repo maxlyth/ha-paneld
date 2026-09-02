@@ -6378,7 +6378,9 @@
         "dashboard.capability.note.shizuku_untrusted"
       ],
       "placeholders": [],
-      "frozen": [],
+      "frozen": [
+        "--shizuku"
+      ],
       "softMaxChars": 72,
       "hardMaxChars": 102
     },
@@ -6424,7 +6426,9 @@
         "dashboard.capability.note.shizuku_untrusted"
       ],
       "placeholders": [],
-      "frozen": [],
+      "frozen": [
+        "shell UID"
+      ],
       "softMaxChars": 66,
       "hardMaxChars": 94
     },

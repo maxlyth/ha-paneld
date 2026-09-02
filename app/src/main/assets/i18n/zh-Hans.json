@@ -1,7 +1,7 @@
 {
   "locale": "zh-Hans",
   "schema": 1,
-  "sourceRevision": "e725a821921d6b7b7c6b8889c55709572405cf16",
+  "sourceRevision": "ad0735c077ce673845df64d2e7f44865f09ca364",
   "strings": {
     "configure.action.failed": {
       "sourceHash": "4acca2deec62ac51cb2dd452216e9edf6e7b8b46625982f24c6c9395c1e57443",
@@ -1053,6 +1053,11 @@
       "state": "machine-cross-checked",
       "text": "自动"
     },
+    "configure.option.auto_detail": {
+      "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
+      "state": "machine-cross-checked",
+      "text": "自动（{value}）"
+    },
     "configure.package.auto_detect": {
       "sourceHash": "89ebfb7a88ca8e6cafba752d40719e9ebdbf1d4250b0b3a275566a9b7c00b5c4",
       "state": "machine-cross-checked",
@@ -1387,6 +1392,911 @@
       "sourceHash": "3aaa115bb156e96c5f3b2f9a1daa5d19806a92e5f1a47f6cd80066b36cc9e209",
       "state": "machine-cross-checked",
       "text": "强化模式下，网络客户端无法进行远程点击操作。"
+    },
+    "dashboard.banner.auth_rejected.action": {
+      "sourceHash": "521df20fbc23f0d26403dd8d82708d66019af14cc2081330ea88e5f3854d719a",
+      "state": "machine-cross-checked",
+      "text": "Configure → Home Assistant 连接"
+    },
+    "dashboard.banner.auth_rejected.explanation": {
+      "sourceHash": "e414f00aea1c8c8d9ac8a59a1fa6902c8fca809a1ad9990d1bed61898c4d8e96",
+      "state": "machine-cross-checked",
+      "text": "已保存的登录设置被拒绝，因此仪表板已停止重试（面板上会显示修复说明）。如需使用浏览器登录，请打开"
+    },
+    "dashboard.banner.auth_rejected.reload_suffix": {
+      "sourceHash": "ac2f4f87a33bda1c9d97387ce8d5ba0f27926025bd37ca5ce0a7d396fc5008c0",
+      "state": "machine-cross-checked",
+      "text": "凭据更改后，仪表板会自动重载。"
+    },
+    "dashboard.banner.auth_rejected.title": {
+      "sourceHash": "9fb8291c15b7f5ed04e8c99d9c63419c732ec377adf5f7bdad4ea59f85170b78",
+      "state": "machine-cross-checked",
+      "text": "内置渲染器：Home Assistant 登录被拒绝"
+    },
+    "dashboard.banner.companion_probe_failed.explanation": {
+      "sourceHash": "0fb05a33392aa3fc02b14f0a78ba2bd459b43bc4b54e5ba7cd9162443175b1ee",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 将保留最近一次已知结果并自动重试。"
+    },
+    "dashboard.banner.companion_probe_failed.title": {
+      "sourceHash": "899526133e9731be0d344d64ff4e7deff296d562694991aa95aa965fec43c354",
+      "state": "machine-cross-checked",
+      "text": "无法检查 Home Assistant 配套应用设置"
+    },
+    "dashboard.banner.companion_url.explanation": {
+      "sourceHash": "1fc0536e933993621bd1b791bad1196de804ee4c31783a6fade2011d34bd0c73",
+      "state": "machine-cross-checked",
+      "text": "修复操作会将内部网址设置为外部网址。"
+    },
+    "dashboard.banner.companion_url.install_action": {
+      "sourceHash": "d36d81e74fe3a959a745f091134741be7a6fdf8eaaa9a09835c19cd8c219b6d3",
+      "state": "machine-cross-checked",
+      "text": "在 Install 标签页修复 →"
+    },
+    "dashboard.banner.companion_url.repair": {
+      "sourceHash": "8192fbd2559223b9ded4b9199b6c9f54622863f4151afb5c292fe902fe350c25",
+      "state": "machine-cross-checked",
+      "text": "修复内部网址"
+    },
+    "dashboard.banner.companion_url.summary_many": {
+      "sourceHash": "aa53e84cf786b06f13cee6812a280e46bae647fd0290b0849b9a20237e899afe",
+      "state": "machine-cross-checked",
+      "text": "（{count} 台服务器）— 仪表板可能会加载失败并显示"
+    },
+    "dashboard.banner.companion_url.summary_one": {
+      "sourceHash": "56203c170dac72c1625b265579265ec88a750300873d2accad41690efe1e0a0f",
+      "state": "machine-cross-checked",
+      "text": "（{count} 台服务器）— 仪表板可能会加载失败并显示"
+    },
+    "dashboard.banner.companion_url.title": {
+      "sourceHash": "c919755118a3442bc3fed461d142cd7e575a4289d3a5c9f8a044e7a679044c86",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant 配套应用未设置内部网址"
+    },
+    "dashboard.banner.ha_sign_in.action": {
+      "sourceHash": "b9ce2f85fea6f8548721dc2e95170eb6501d1cb71444f211656d9aa22f968553",
+      "state": "machine-cross-checked",
+      "text": "通过浏览器连接此面板"
+    },
+    "dashboard.banner.ha_sign_in.explanation": {
+      "sourceHash": "845b28bc13330df790a1259e165e79ee6d56841495cad3c325bee32c17d49459",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 已选用内置渲染器。请完成面板上显示的登录，或者选择"
+    },
+    "dashboard.banner.ha_sign_in.title": {
+      "sourceHash": "180528809c42cbabe179f0f91a557e3d77b0cd39027113ed90ab02554fb44a8c",
+      "state": "machine-cross-checked",
+      "text": "MQTT 已配置。下一步：登录 Home Assistant。"
+    },
+    "dashboard.banner.manage_install": {
+      "sourceHash": "3a44b8764e7cc637360c1249abf2574724b61a152b99714fd55f09cdccd6999a",
+      "state": "machine-cross-checked",
+      "text": "在 Install 标签页中管理 →"
+    },
+    "dashboard.banner.no_renderer.configure_prefix": {
+      "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
+      "state": "machine-cross-checked",
+      "text": "如需选择 ha-paneld 内置渲染器，请前往"
+    },
+    "dashboard.banner.no_renderer.explanation": {
+      "sourceHash": "5aee351360d4e2deffde50f405e582262d7ac56d4909d5a35be51c8a96123bc3",
+      "state": "machine-cross-checked",
+      "text": "；也可以配置其他仪表盘软件包。在此之前，此面板不会显示仪表盘。"
+    },
+    "dashboard.banner.no_renderer.note": {
+      "sourceHash": "41a82e1a4b2967a3593b4a29619b743402b8885d9d67e2b4474a86ea71880142",
+      "state": "machine-cross-checked",
+      "text": "（即使没有渲染器，ha-paneld 本身仍可正常运行。）"
+    },
+    "dashboard.banner.no_renderer.title": {
+      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
+      "state": "machine-cross-checked",
+      "text": "MQTT 已配置。下一步：选择仪表盘渲染器。"
+    },
+    "dashboard.banner.proximity_learning.action": {
+      "sourceHash": "57564a7788a6a1a13cab9ef247bb024ce97fb9745f0e767eb0ff40e47674a4af",
+      "state": "machine-cross-checked",
+      "text": "查看学习进度或示范一次挥手动作"
+    },
+    "dashboard.banner.proximity_learning.title": {
+      "sourceHash": "c344400e0be09185e362531c8c91287fc095b1303c78d556a83b4a323c738010",
+      "state": "machine-cross-checked",
+      "text": "正在学习挥手唤醒"
+    },
+    "dashboard.banner.proximity_learning.touch_available": {
+      "sourceHash": "903915dd8ee56238ac39ddd50edf407ff66796e29173afbeb3da700f6838c234",
+      "state": "machine-cross-checked",
+      "text": "仍可通过触摸唤醒。"
+    },
+    "dashboard.banner.schema_rollback.configure_action": {
+      "sourceHash": "d8ec542d4afb557de9d173fa65c10ad47c3b9357a741084ceb548c815c8df1af",
+      "state": "machine-cross-checked",
+      "text": "查看 Configure →"
+    },
+    "dashboard.banner.schema_rollback.explanation": {
+      "sourceHash": "046030ae07aa906959b9ee562f63453ce1906dfa2607da9e06d030d1dfa5fb94",
+      "state": "machine-cross-checked",
+      "text": "此版本的数据库架构较旧，因此打开了全新的状态存储；部分设置可能已重置。此前的数据库仍保留在面板上，可用于恢复。"
+    },
+    "dashboard.banner.schema_rollback.or_restore": {
+      "sourceHash": "c4ae614553a2b22db8a4953db19a3b0d4cc99abc6914d1162d7cef90af4befc7",
+      "state": "machine-cross-checked",
+      "text": "或在以下页面恢复备份："
+    },
+    "dashboard.banner.schema_rollback.title": {
+      "sourceHash": "c6b434eb6d5f96ee9185ae968a89e7a1039ba9b2aad65bde00e6555a02b7fc78",
+      "state": "machine-cross-checked",
+      "text": "版本降级后已保留较新的数据库"
+    },
+    "dashboard.banner.setup_needs.joiner": {
+      "sourceHash": "6201111b83a0cb5b0922cb37cc442b9a40e24e3b1ce100a4bb204f4c63fd2ac0",
+      "state": "machine-cross-checked",
+      "text": "和"
+    },
+    "dashboard.banner.setup_needs.mqtt_configuration": {
+      "sourceHash": "dc67038dbc78f5ac4acaf201ff99b74d567c4a570b11c78fbef59a586da566f4",
+      "state": "machine-cross-checked",
+      "text": "MQTT 配置"
+    },
+    "dashboard.banner.setup_needs.prefix": {
+      "sourceHash": "2d9faa88e40af4265de7e9424e308724b1e7b96e30c1ea1f586704a10235225a",
+      "state": "machine-cross-checked",
+      "text": "此面板需要"
+    },
+    "dashboard.banner.setup_needs.reachable_broker": {
+      "sourceHash": "045ac1f4b721cd39b484c8273ebd33c7756cdb487214f63888ac86f9490f698f",
+      "state": "machine-cross-checked",
+      "text": "网络可达的 MQTT 消息代理"
+    },
+    "dashboard.banner.setup_needs.rejected_credentials": {
+      "sourceHash": "e3bec86a375b717aa06b9ef49db160cda580cfdebfe9a77fc35a6e1bc79d120d",
+      "state": "machine-cross-checked",
+      "text": "有效的 MQTT 凭据（消息代理拒绝了现有凭据）"
+    },
+    "dashboard.banner.setup_needs.suffix": {
+      "sourceHash": "a623aa42d2f1f53aa662a6afe155e3e0c1e47b2b888d5b843985025ef198d430",
+      "state": "machine-cross-checked",
+      "text": "— 请在 Configure 标签页中设置。"
+    },
+    "dashboard.banner.setup_needs.valid_broker_url": {
+      "sourceHash": "ee8fc48bc75378fd7cad15208047034017bceaff1864019a22416e40b281a734",
+      "state": "machine-cross-checked",
+      "text": "有效的 MQTT 消息代理网址"
+    },
+    "dashboard.banner.setup_needs.valid_credentials": {
+      "sourceHash": "c3a2944f7904354478c69932bda9ef2ee929ef06cb1728669fc31f31e0524fb3",
+      "state": "machine-cross-checked",
+      "text": "有效的 MQTT 凭据"
+    },
+    "dashboard.banner.update.available": {
+      "sourceHash": "e726d7045129a6d908ceb5f9d5ad758e78268c09aca52d104d2e9158709a4b45",
+      "state": "machine-cross-checked",
+      "text": "{latest} 现已可用（已安装版本：{current}）"
+    },
+    "dashboard.banner.update.ignore": {
+      "sourceHash": "72d0f08eee13ed1268875490b1f5cdc24e103edcb2a16d55862ace2c9223aa63",
+      "state": "machine-cross-checked",
+      "text": "忽略此版本"
+    },
+    "dashboard.banner.webview_old.engine_note": {
+      "sourceHash": "03639d66ebce5ea8cce72dd876874ae458b40ddd0eccf06217a459eab4a5134a",
+      "state": "machine-cross-checked",
+      "text": "此项依据实际引擎版本（取自 WebView UA）进行检查，而非只看软件包标注的版本，因此 Cromite 或 LineageOS SystemWebView 不会误触发此警告。"
+    },
+    "dashboard.banner.webview_old.explanation": {
+      "sourceHash": "ff191e5d689ffb361fc76cbffb902c16185f7355b227ddccb705d42aed4b54f1",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant 仪表盘可能会显示空白或出现异常。"
+    },
+    "dashboard.banner.webview_old.target": {
+      "sourceHash": "d145b2299c214056f667aaa46ed712ccad5275e9e75eb57223bde1ff2ca7b21d",
+      "state": "machine-cross-checked",
+      "text": "（目标：Chromium {version}+）"
+    },
+    "dashboard.banner.webview_old.title": {
+      "sourceHash": "32f9602603cf386e8accd721782721ab0c29ff77a86e739370a819d2c2ae5d59",
+      "state": "machine-cross-checked",
+      "text": "System WebView 版本过旧"
+    },
+    "dashboard.banner.webview_old.update_action": {
+      "sourceHash": "e47c274a443c3dfb22bfdfa0a49f6908e720d8b1518a6ba71e5d5014f52daea8",
+      "state": "machine-cross-checked",
+      "text": "查看更新方法和原因"
+    },
+    "dashboard.banner.zoom.action_suffix": {
+      "sourceHash": "7220acdb7b7548881a3939db495a9a5117cc8975f49c21d5c5f447c802508074",
+      "state": "machine-cross-checked",
+      "text": "可清晰缩放整个面板；请先调整该项，然后在此处重置缩放比例。"
+    },
+    "dashboard.banner.zoom.display_density": {
+      "sourceHash": "8ed65550c9c872be049e78dc7c88aeca0b7a035c05b7fa79496c17ab127ebb6f",
+      "state": "machine-cross-checked",
+      "text": "显示密度"
+    },
+    "dashboard.banner.zoom.explanation": {
+      "sourceHash": "9b8b90e77b2c5fe92483b1773920fc2568273ca3117badb474db74ac7642b72a",
+      "state": "machine-cross-checked",
+      "text": "（而非 100%）——这通常是从配套应用的“页面缩放”沿用而来。若要更清晰地调整仪表盘尺寸，请改用面板的"
+    },
+    "dashboard.banner.zoom.reset": {
+      "sourceHash": "39cdc8918f48e707c7dcbee5f5d331d7ef1c1265c875ac17181073e46ca7d135",
+      "state": "machine-cross-checked",
+      "text": "将缩放比例重置为 100%"
+    },
+    "dashboard.banner.zoom.title": {
+      "sourceHash": "7c420345226ec705034cdbc69b791fd059d1bfea7736e944fa5bbe605667795a",
+      "state": "machine-cross-checked",
+      "text": "仪表盘缩放比例为 {zoom}%"
+    },
+    "dashboard.camera.action.check_hardware": {
+      "sourceHash": "ead895a9433b1b339ce71fb87b51a913cea97707df38d20d00a76d06e112b66c",
+      "state": "machine-cross-checked",
+      "text": "检查摄像头硬件；等待期结束后接入新客户端，或切换设置，都会触发重试"
+    },
+    "dashboard.camera.action.check_indicator": {
+      "sourceHash": "f215faa3267178604f1d4d8c8fa70f5d6e4ab132f7942ffa677d64eb1726e37c",
+      "state": "machine-cross-checked",
+      "text": "无法显示摄像头使用中指示灯；请检查悬浮窗权限和发光二极管"
+    },
+    "dashboard.camera.action.enable": {
+      "sourceHash": "b5ba02397f9882f0957226dffeb565fed6081c3851f010523f56a31b0c5608f0",
+      "state": "machine-cross-checked",
+      "text": "开启摄像头设置，以提供快照和视频流"
+    },
+    "dashboard.camera.action.encoder_unavailable": {
+      "sourceHash": "62374b18e506772270e18c91afafca04ccb240b69e763ad83de6b8350a21f082",
+      "state": "machine-cross-checked",
+      "text": "没有符合摄像头码率上限的硬件 H.264 编码器；快照仍可用，但视频流不可用"
+    },
+    "dashboard.camera.action.grant_permission": {
+      "sourceHash": "b8021f57862db8b3de847ed071a7d422746cc592947888bb9f369fff7668c4e0",
+      "state": "machine-cross-checked",
+      "text": "面板提示时，请授予摄像头权限"
+    },
+    "dashboard.camera.action.report_encode_failure": {
+      "sourceHash": "e357e35fdd3e41b26dfcd530e77a10a34b239a0b525a735f9ed401554bf40eb6",
+      "state": "machine-cross-checked",
+      "text": "摄像头能提供帧，但无法对其编码；请连同面板诊断信息一起报告此问题"
+    },
+    "dashboard.camera.action.wake_panel": {
+      "sourceHash": "e88ad0895ee4cc2d7f5cd28e848d4c0aedc45e90ae7958a5517605497a6fd85f",
+      "state": "machine-cross-checked",
+      "text": "唤醒面板：仅当仪表盘可见时，摄像头会话才能启动"
+    },
+    "dashboard.camera.bitrate.cap": {
+      "sourceHash": "747e84d559f969df60a9060b54e4ac8d3beca53410849ce9034c246f8e2ea08a",
+      "state": "machine-cross-checked",
+      "text": "· 上限 {cap} kbps"
+    },
+    "dashboard.camera.bitrate.cap_unavailable": {
+      "sourceHash": "4de5c8d30a27b3b44efbb37a9e74d46d2646b7b22152456ae7706822dda335c2",
+      "state": "machine-cross-checked",
+      "text": "· 上限不可用"
+    },
+    "dashboard.camera.bitrate.nothing": {
+      "sourceHash": "5ac4c69564b214ec8379e8d493edaa39a2e23a8aabfe667331af08929fd19949",
+      "state": "machine-cross-checked",
+      "text": "没有传输数据"
+    },
+    "dashboard.camera.bitrate.of_cap": {
+      "sourceHash": "c3870e582520e293665259969b9c4cd6009f6e5b9041322ff840fee938485a08",
+      "state": "machine-cross-checked",
+      "text": "已传输 {delivered}/{cap} kbps（实际/上限）"
+    },
+    "dashboard.camera.bitrate.over_cap": {
+      "sourceHash": "1cda408560fa8159c2a265f8e9d2375c93265599a96eebc7f34fe13b0443c663",
+      "state": "machine-cross-checked",
+      "text": "· 超出了为编码器设定的上限；编码器消耗的网络带宽超过了允许值"
+    },
+    "dashboard.camera.bitrate.under_cap": {
+      "sourceHash": "7200bec5fae918383ebe5035b8a5dd45ef109a5b654ec4e28768e3e181720113",
+      "state": "machine-cross-checked",
+      "text": "· 对于静止画面，低于上限是正常现象"
+    },
+    "dashboard.camera.configure_link": {
+      "sourceHash": "6870136fd6944e6b56c7e4665108db488f5a2bf7ad7190c4183ed41eccd8a3cc",
+      "state": "machine-cross-checked",
+      "text": "Configure → 摄像头"
+    },
+    "dashboard.camera.delivery.measuring": {
+      "sourceHash": "821d52cb24753a97c13c311ade54818df413a5db241e340710b26e26ef2c1b55",
+      "state": "machine-cross-checked",
+      "text": "测量中…"
+    },
+    "dashboard.camera.delivery.measuring_help": {
+      "sourceHash": "2cdb516c661e524b4b5c4abc431c88f84a25b33578b8e436033767193f63f459",
+      "state": "machine-cross-checked",
+      "text": "· 正在等待足够的连续读数以作判断"
+    },
+    "dashboard.camera.delivery.no_frames": {
+      "sourceHash": "fece418d7eaadd1f9bffb400a95787c49e47e5b7862339594c9690ce101704d2",
+      "state": "machine-cross-checked",
+      "text": "· 编码器已绑定到会话，但没有帧到达"
+    },
+    "dashboard.camera.delivery.not_delivering": {
+      "sourceHash": "dfe296a65185027735aa6a4c92d84125f7063470124c0fb3509180b52cb1b686",
+      "state": "machine-cross-checked",
+      "text": "未在传输"
+    },
+    "dashboard.camera.delivery.ok": {
+      "sourceHash": "636605e8e8d86c3c6c20da380d75decac101f59b598e67dfecb39e52b967efe0",
+      "state": "machine-cross-checked",
+      "text": "正在按要求传输"
+    },
+    "dashboard.camera.delivery.short": {
+      "sourceHash": "ea0e6d628d45112790380f49ec0d4eacbc1a1fa66b3b912cf507a8b13bc1a2ab",
+      "state": "machine-cross-checked",
+      "text": "未能跟上"
+    },
+    "dashboard.camera.delivery.short_help": {
+      "sourceHash": "df7455427a2aa173ab64715f3d544617593051440b36c4dc33aa5d30533b97fc",
+      "state": "machine-cross-checked",
+      "text": "· 可在“Configure → 摄像头”中降低帧率或分辨率，也可接受此面板当前提供的帧率；此处尚未确定未能跟上的原因"
+    },
+    "dashboard.camera.encoder.output_unavailable": {
+      "sourceHash": "22f1442df9b228b9b287aa441c2ccc7db7db297a2344a2d77ac4bc45d9d48988",
+      "state": "machine-cross-checked",
+      "text": "· 输出尺寸不可用"
+    },
+    "dashboard.camera.encoding.idle_cost": {
+      "sourceHash": "6cb549a11ad9b56c4aef4f0a9ae4e5ff3124beb2583e09d0b46f10c7b5e95a01",
+      "state": "machine-cross-checked",
+      "text": "· 摄像头空闲时不占用面板资源"
+    },
+    "dashboard.camera.encoding.no_stream": {
+      "sourceHash": "f09765ea6b8220905d098896b79b4233007c5198b34b4eb4ec2da25468a00a48",
+      "state": "machine-cross-checked",
+      "text": "没有正在编码的流"
+    },
+    "dashboard.camera.encoding.nothing": {
+      "sourceHash": "9eeb0506641023080a6906ef60f4963fa7f7d88cc5ccc28ee06fc03760af9cad",
+      "state": "machine-cross-checked",
+      "text": "当前未进行编码"
+    },
+    "dashboard.camera.encoding.snapshot": {
+      "sourceHash": "17d887e88648cde718c676c471ba816a85ae2afa5d547081b9bdd0fb65e41def",
+      "state": "machine-cross-checked",
+      "text": "· 摄像头已打开以提供快照"
+    },
+    "dashboard.camera.encoding.waiting": {
+      "sourceHash": "466e8eb1b3a8786ee3270a2b42477a3d2a32761a2a00b7272b554d4c487769da",
+      "state": "machine-cross-checked",
+      "text": "正在等待编码器"
+    },
+    "dashboard.camera.encoding.waiting_with_rate": {
+      "sourceHash": "58f7975017f3a195af3fc588d54d9d6445870ad4b4b730fb4ba62ca8044257d9",
+      "state": "machine-cross-checked",
+      "text": "· 流请求的帧率为 {rate} fps，但编码器尚未启动"
+    },
+    "dashboard.camera.encoding.waiting_without_rate": {
+      "sourceHash": "2fade1864038e22d960bccb639d2ce33c8db39f40b8479d6aba35347b3697a34",
+      "state": "machine-cross-checked",
+      "text": "· 尚未为该流分配编码器"
+    },
+    "dashboard.camera.error.no_answer": {
+      "sourceHash": "e311f42e351214caade4db0e83fa99c77150c0e7a088d8524ed74f7f7a584d12",
+      "state": "machine-cross-checked",
+      "text": "· 面板未响应"
+    },
+    "dashboard.camera.error.status_unavailable": {
+      "sourceHash": "180119be630b8959719594b6094fda28ea2fd054860d95730af0c0c3b47aa64f",
+      "state": "machine-cross-checked",
+      "text": "状态不可用"
+    },
+    "dashboard.camera.fault.configure": {
+      "sourceHash": "3ef2a58a429f53dcfbdbc571ef6a2ee3c1ecc925678f2a6411d66f54b7b692dc",
+      "state": "machine-cross-checked",
+      "text": "摄像头配置失败"
+    },
+    "dashboard.camera.fault.device_error": {
+      "sourceHash": "e5ecf72d7e2a39287d656367e5a357a4861b865c59870afaa5097d5fa7a503a7",
+      "state": "machine-cross-checked",
+      "text": "摄像头设备错误"
+    },
+    "dashboard.camera.fault.disconnected": {
+      "sourceHash": "b58446cb14cebaab1e8ef3a6c9a0db7a4ef47b21bd6c1fa0c35cb275f377aeea",
+      "state": "machine-cross-checked",
+      "text": "摄像头已断开连接"
+    },
+    "dashboard.camera.fault.encode": {
+      "sourceHash": "54274a8a62fbbb757df1686604a6f2220be75671ff26a7753dfc8c9e710ea8d8",
+      "state": "machine-cross-checked",
+      "text": "帧编码失败"
+    },
+    "dashboard.camera.fault.foreground": {
+      "sourceHash": "b08e73f27623e299432281a9a7e16f1d174b10048cfe2efecb9040d0d0ab53f3",
+      "state": "machine-cross-checked",
+      "text": "前台服务遭拒"
+    },
+    "dashboard.camera.fault.indication": {
+      "sourceHash": "ce7ed97611a2429091a87b70434de24f04c56fdd61a2985ac5f3e6223ac03ba9",
+      "state": "machine-cross-checked",
+      "text": "摄像头使用状态指示失败"
+    },
+    "dashboard.camera.fault.open": {
+      "sourceHash": "7526b42b99c08d918585e3d3d6dc08abfc093105c2bfe4164548daad36317e3e",
+      "state": "machine-cross-checked",
+      "text": "无法打开摄像头"
+    },
+    "dashboard.camera.fault.permission": {
+      "sourceHash": "7487273eba77da5fbe1abf855e6d80b10df248bb211fdcb0e39dafe3c047a170",
+      "state": "machine-cross-checked",
+      "text": "缺少摄像头权限"
+    },
+    "dashboard.camera.fault.starved": {
+      "sourceHash": "73f2507a615ac16a76659beef2277218df8f549ab95468ffac627c6775051776",
+      "state": "machine-cross-checked",
+      "text": "摄像头已停止输出帧"
+    },
+    "dashboard.camera.fault.stream_encoder": {
+      "sourceHash": "5215cc3544b062d51644fdec7db0c1db9dce1f6f4f9e529d728136d4b7031c49",
+      "state": "machine-cross-checked",
+      "text": "视频流编码器发生故障"
+    },
+    "dashboard.camera.frame_rate.asked": {
+      "sourceHash": "26f2f0b0dd0dfab787d6bc4a910ffd17dd35a4c1f4d6c5af4aad726aaa6a0cd2",
+      "state": "machine-cross-checked",
+      "text": "· 请求帧率为 {rate} fps"
+    },
+    "dashboard.camera.frame_rate.comparison": {
+      "sourceHash": "e89313db19102da00d7745687f8b78bc49b4dfb11ff058df3d9f51e00bc33be0",
+      "state": "machine-cross-checked",
+      "text": "· 实际输出与请求帧率的对比"
+    },
+    "dashboard.camera.frame_rate.delivered": {
+      "sourceHash": "fec4f974ab19e874a46eeec270462c45edcf4e54f8658fe9bf1143e9ad60f33b",
+      "state": "machine-cross-checked",
+      "text": "已输出 {rate} fps"
+    },
+    "dashboard.camera.frame_rate.no_frames": {
+      "sourceHash": "e76570d9bcd60a396b991fa27f03b918fbf8dc1aa8497b9e286961677e8279e1",
+      "state": "machine-cross-checked",
+      "text": "已有 {seconds} 秒未收到帧"
+    },
+    "dashboard.camera.frame_rate.of_requested": {
+      "sourceHash": "540948ca12bba416dc5adff38135d0f266a705afb1ee9df1a17323144bd7d261",
+      "state": "machine-cross-checked",
+      "text": "实际 {delivered}/请求 {requested} fps"
+    },
+    "dashboard.camera.frame_rate.request_unavailable": {
+      "sourceHash": "74373138fe65a4054112af2989f9687d93730e11c13b328ffb10b5befb02dc5b",
+      "state": "machine-cross-checked",
+      "text": "· 无法获取请求帧率"
+    },
+    "dashboard.camera.frame_rate.stopped": {
+      "sourceHash": "186d8169818e7e412df9e134a7d41d0d3b30d51cee108af368aa6de697ef2b2a",
+      "state": "machine-cross-checked",
+      "text": "已停止 — {fault}"
+    },
+    "dashboard.camera.label.bitrate": {
+      "sourceHash": "0b2b7f69b8eff5316e661ca4d809aaf6fd0ef04e9b986a5489eec9944fdbf2cd",
+      "state": "machine-cross-checked",
+      "text": "比特率"
+    },
+    "dashboard.camera.label.camera": {
+      "sourceHash": "03494b0d1f803522a3497d751eaaf6f987883cd4fe0b0e66baf67a662ae231b2",
+      "state": "machine-cross-checked",
+      "text": "摄像头"
+    },
+    "dashboard.camera.label.delivery": {
+      "sourceHash": "52bfe584a5fc450539e2aa651b990fa2415060492a243816ab2994292089c6fd",
+      "state": "machine-cross-checked",
+      "text": "输出状态"
+    },
+    "dashboard.camera.label.encoder": {
+      "sourceHash": "3693e7913a44ffcfc9744f6dcb1cb774936458afd1b57ecea2b2ab7fbf56ea15",
+      "state": "machine-cross-checked",
+      "text": "编码器"
+    },
+    "dashboard.camera.label.encoding": {
+      "sourceHash": "4d25a47625ceaa596a02112e807209e5248a4a3bc61cd07d9191a9547a182550",
+      "state": "machine-cross-checked",
+      "text": "编码"
+    },
+    "dashboard.camera.label.frame_rate": {
+      "sourceHash": "68e19e4ca3a5670a9f2af8b18a5b437332601a9660565681abf4555d5e67c32d",
+      "state": "machine-cross-checked",
+      "text": "帧率"
+    },
+    "dashboard.camera.label.requested": {
+      "sourceHash": "2d9e28289facab94b41f9592b7f55bc4fc10fed54e789669468e8da31c9a5caf",
+      "state": "machine-cross-checked",
+      "text": "请求值"
+    },
+    "dashboard.camera.label.session": {
+      "sourceHash": "6959b4159575d8dd76d9f3bbe2c6437904f861e7860c35abd18deffb1c3425a0",
+      "state": "machine-cross-checked",
+      "text": "会话"
+    },
+    "dashboard.camera.note": {
+      "sourceHash": "bb5a06ff9300a2fa1d7bba9f81f2cedb4f380f6f1ac622abfb2c080c640e67c8",
+      "state": "machine-cross-checked",
+      "text": "这里显示视频流的请求值和实际输出值。这并非 CPU 指标：编码过程不只在本应用中运行，还涉及编解码器硬件和合成器，因此无法用单个进程的负载代表摄像头的资源开销——请查看“性能”和“资源占用最高的进程”卡片，了解面板的整体负载。"
+    },
+    "dashboard.camera.requested.bound": {
+      "sourceHash": "d09de2d910244d57d1e609b094babec9ec06ebcb15615a6a6b25fe9c46a285bb",
+      "state": "machine-cross-checked",
+      "text": "· 本次会话的帧率固定为 {rate} fps，在摄像头打开时确定"
+    },
+    "dashboard.camera.requested.value": {
+      "sourceHash": "175a064a8f5e57bb3a642998e7d809ecd05b82f583aa780abbf147b04b469764",
+      "state": "machine-cross-checked",
+      "text": "请求的帧率为 {rate} fps"
+    },
+    "dashboard.camera.session.absent": {
+      "sourceHash": "9f6012869d87a871b8713e6d1d5a9395856555952f513084973b44588198d26b",
+      "state": "machine-cross-checked",
+      "text": "此面板没有摄像头"
+    },
+    "dashboard.camera.session.closed": {
+      "sourceHash": "c3eefb58d7c42440a9d4abec51d629544d635a6d936ff3c4d3fca96d611b3cf3",
+      "state": "machine-cross-checked",
+      "text": "已关闭"
+    },
+    "dashboard.camera.session.degraded": {
+      "sourceHash": "2289f27e6898a01c26fd5e720f7dbeefc6e4f042e57cabfa3280a70f47227a92",
+      "state": "machine-cross-checked",
+      "text": "失败 {count} 次后已停止重试"
+    },
+    "dashboard.camera.session.off": {
+      "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+      "state": "machine-cross-checked",
+      "text": "未启用"
+    },
+    "dashboard.camera.session.open": {
+      "sourceHash": "2348f998744212575d85959674f9607ab26f67708a917157472832386337c904",
+      "state": "machine-cross-checked",
+      "text": "已打开"
+    },
+    "dashboard.camera.session.opening": {
+      "sourceHash": "2b3fdf05c4dda454998927370bf2cf20b0c17bcf1e3d3f294a550e341033ed61",
+      "state": "machine-cross-checked",
+      "text": "正在打开"
+    },
+    "dashboard.camera.session.permission_needed": {
+      "sourceHash": "7ea470b0d8640309098903185d11079abba3a23e7ce0d8b740769207a7514736",
+      "state": "machine-cross-checked",
+      "text": "正在等待授予 Android 摄像头权限"
+    },
+    "dashboard.camera.session.stopping": {
+      "sourceHash": "9ea90488b5c8219acc0b2eb36f115242abdbc865d061c24f2c8dfc0c9b57efab",
+      "state": "machine-cross-checked",
+      "text": "正在停止"
+    },
+    "dashboard.camera.session.unavailable": {
+      "sourceHash": "ba691ba042bcedd9a61a36f5969026bc95859dccdc7e47f24e6bce35673baf2f",
+      "state": "machine-cross-checked",
+      "text": "不可用"
+    },
+    "dashboard.camera.settings_on": {
+      "sourceHash": "f54672066b62686eee5b39929797b9ee07554d3e99cc56533d05f27e4f009527",
+      "state": "machine-cross-checked",
+      "text": "设置位于"
+    },
+    "dashboard.camera.status.starting": {
+      "sourceHash": "407944301e010c98c59b6de3b65332dc6541e40a88977303c32f342d28b52a50",
+      "state": "machine-cross-checked",
+      "text": "正在启动…"
+    },
+    "dashboard.camera.status.starting_plain": {
+      "sourceHash": "59dbf36d9930a99bfc1e13a10518cd5cf42d29ef9b21993c424b4146a81aa30e",
+      "state": "machine-cross-checked",
+      "text": "正在启动"
+    },
+    "dashboard.camera.title": {
+      "sourceHash": "7d2a3e8e8db5f55f008dcd361b641663d406588f505f18d559eec33473ccee9b",
+      "state": "machine-cross-checked",
+      "text": "摄像头视频流"
+    },
+    "dashboard.camera.watchers.many": {
+      "sourceHash": "e24f8a5e7a214a3d03428892622c755fed0bf51840c925fa0bc5c244ba147a25",
+      "state": "machine-cross-checked",
+      "text": "{count} 个客户端"
+    },
+    "dashboard.camera.watchers.none": {
+      "sourceHash": "0423798ddfc186bd693d4beac49de719162a89bb78b51ce9abfd776da79944b6",
+      "state": "machine-cross-checked",
+      "text": "无人观看"
+    },
+    "dashboard.camera.watchers.one": {
+      "sourceHash": "f6ae85d9ce781a95153ffe8cbfbbfcc4c3bd347e96729f4a7eb1ac0b05c92c38",
+      "state": "machine-cross-checked",
+      "text": "{count} 个客户端"
+    },
+    "dashboard.camera.watchers.streaming": {
+      "sourceHash": "52c5073dc7077b9b8690d6b29f8e1601d78e75726863511203273f255040d078",
+      "state": "machine-cross-checked",
+      "text": "{watching}，其中 {count} 个正在接收视频流"
+    },
+    "dashboard.capability.hardware_buttons": {
+      "sourceHash": "4acca9a71cd750ae7a450792591c91856a5483473ab2a9ca5d6c52366b3fc99b",
+      "state": "machine-cross-checked",
+      "text": "硬件按键"
+    },
+    "dashboard.capability.helper_daemon": {
+      "sourceHash": "69751952a2f35b1eb2a5741d3dc93ed9e6e8e2f278fea5da3a3a7fc5c862dd19",
+      "state": "machine-cross-checked",
+      "text": "辅助守护进程"
+    },
+    "dashboard.capability.note.android_sleep": {
+      "sourceHash": "e1923775e4c2c360f03fd9f4a5fa04cc2eb3fd63f044804acd8b4ec60250669a",
+      "state": "machine-cross-checked",
+      "text": "通过 KEYCODE_SLEEP 使 Android 进入休眠；Home Assistant 始终可以唤醒面板，只有当此面板的触摸屏是平台唤醒源时，本地触摸才能唤醒面板"
+    },
+    "dashboard.capability.note.available": {
+      "sourceHash": "ddd9818abacfde7afed60c93129175401439367a77e69ea93e0ddb3bb38e0bd9",
+      "state": "machine-cross-checked",
+      "text": "可用"
+    },
+    "dashboard.capability.note.backlight_off_helper": {
+      "sourceHash": "e1afa6ed1a6cd4ed2b169fb71e9e9fa8db7a29112697e0d39643f9126a485207",
+      "state": "machine-cross-checked",
+      "text": "通过辅助守护进程真正关闭背光"
+    },
+    "dashboard.capability.note.backlight_off_su": {
+      "sourceHash": "925907adfd86942e8d7f40c071a4acbde4c7f22face097af64dfc149cfca2af9",
+      "state": "machine-cross-checked",
+      "text": "通过 su bl_power 真正关闭背光"
+    },
+    "dashboard.capability.note.brightness_helper": {
+      "sourceHash": "adb57c0744977c72e567539d3337098a0e19eea90d77390beb3ceaf66dcb78a5",
+      "state": "machine-cross-checked",
+      "text": "通过辅助守护进程控制背光；Android 亮度设置保持不变"
+    },
+    "dashboard.capability.note.brightness_su": {
+      "sourceHash": "69f141ed1c25807a253437529b3a99366435a8088d4a9e943ae78e8e647e580c",
+      "state": "machine-cross-checked",
+      "text": "通过 su 控制背光；Android 设置保持不变"
+    },
+    "dashboard.capability.note.buttons_accessibility": {
+      "sourceHash": "49c7b16fabb7731aa57f75b09c751e5c6604364aa5ca40f4021b1988ac7a6a01",
+      "state": "machine-cross-checked",
+      "text": "已启用无障碍按键捕获"
+    },
+    "dashboard.capability.note.buttons_accessibility_not_verified": {
+      "sourceHash": "2366eae11f0e73209eaa8b91085c954f0589c330a03adb4f65f21c0e28834267",
+      "state": "machine-cross-checked",
+      "text": "无障碍按键捕获功能正常；设备配置方案中的 {count} 个实体按键尚未通过验证（{detail}）"
+    },
+    "dashboard.capability.note.buttons_accessibility_unverified_stream": {
+      "sourceHash": "8f449ea1b2498436029c2ffd0a3f0b3ef1a1cf854ea8abce1dc3dd71ca6311dd",
+      "state": "machine-cross-checked",
+      "text": "无障碍按键捕获可用，另有设备配置方案中的 {count} 个实体按键使用未经验证的数据流（{detail}）"
+    },
+    "dashboard.capability.note.buttons_accessibility_verified": {
+      "sourceHash": "8118541dec6bfaa414789c7f81da23fcdf1f47996565b62c7aaf5e349e0456b9",
+      "state": "machine-cross-checked",
+      "text": "无障碍按键捕获可用，另有设备配置方案中的 {count} 个实体按键使用已验证的辅助守护进程数据流"
+    },
+    "dashboard.capability.note.buttons_enable_no_root": {
+      "sourceHash": "291011f6218668e232f4c777286046293eab5e67959dd8fc4d0c4474caabd79d",
+      "state": "machine-cross-checked",
+      "text": "启用（无需超级用户权限）：{command}"
+    },
+    "dashboard.capability.note.buttons_not_verified": {
+      "sourceHash": "43215aff70fa1552c1f2d2c6d918f774b03e249d6a705129691ff14c5e398f23",
+      "state": "machine-cross-checked",
+      "text": "设备配置方案中的 {count} 个实体按键尚未通过验证（{detail}）"
+    },
+    "dashboard.capability.note.buttons_unverified_stream": {
+      "sourceHash": "add3e029da3ad0f8711b007609a85cd7e021c34138e92ae08beae79caf523c4b",
+      "state": "machine-cross-checked",
+      "text": "设备配置方案中的 {count} 个实体按键正在传输事件，但数据流未经验证（{detail}）"
+    },
+    "dashboard.capability.note.buttons_verified": {
+      "sourceHash": "8addd3febfb811d8b7faf754ff7066df1e7636619c137d891440e97ef17c4d1e",
+      "state": "machine-cross-checked",
+      "text": "设备配置方案中的 {count} 个实体按键使用已验证的辅助守护进程数据流"
+    },
+    "dashboard.capability.note.daemon_button_backlight": {
+      "sourceHash": "e03349a8e83008eccd77a5f30569dd960728b633b96dc891a77a8b4b08058c8a",
+      "state": "machine-cross-checked",
+      "text": "此设备配置文件指定的按键背光需要该守护进程"
+    },
+    "dashboard.capability.note.daemon_buttons": {
+      "sourceHash": "44768533635d18567cff1ab8a36a728ad147f2eeebb91209b2bad9057f3a4220",
+      "state": "machine-cross-checked",
+      "text": "设备配置文件指定的 {count} 个实体按键需要该守护进程，但一般特权操作可使用 su"
+    },
+    "dashboard.capability.note.daemon_hardware": {
+      "sourceHash": "25f8d6ef27123d7bd72c4270f2d45cca37e22ae37e5ce1a7eade527d15cc9725",
+      "state": "machine-cross-checked",
+      "text": "访问此设备配置文件中由守护进程支持的硬件时需要该进程"
+    },
+    "dashboard.capability.note.daemon_needed": {
+      "sourceHash": "3e7b2f9f5409d62f70a2137e4674155e7d8f5542365fcc257ea3e1e4b05d80b7",
+      "state": "machine-cross-checked",
+      "text": "需要但未运行"
+    },
+    "dashboard.capability.note.daemon_running": {
+      "sourceHash": "c071cf5f5ed6f884cc70155b6f05f755fd46a302d05e4261b7e92ce878bbfed8",
+      "state": "machine-cross-checked",
+      "text": "运行中"
+    },
+    "dashboard.capability.note.daemon_sandbox_path": {
+      "sourceHash": "a505a08012bb148112959a5048080f1650b90a651482e8e70616aca5b44e7554",
+      "state": "machine-cross-checked",
+      "text": "此面板受沙箱隔离时的特权控制路径；没有它，必须具有根权限的控制功能仍不可用"
+    },
+    "dashboard.capability.note.daemon_state": {
+      "sourceHash": "1eca5000089aa22f20d14024f9091229385ed498ea04161952a8622e1015641b",
+      "state": "machine-cross-checked",
+      "text": "{state} — {detail}"
+    },
+    "dashboard.capability.note.dim_backlight_powered": {
+      "sourceHash": "9ad1df56612df39975a440c255b5ab080f918e9212240b5ec22a290c21973621",
+      "state": "machine-cross-checked",
+      "text": "背光仍处于通电状态；需要 su 或辅助守护进程才能真正关闭"
+    },
+    "dashboard.capability.note.dim_brightness_zero": {
+      "sourceHash": "49361392d902ac3b22f9d5597a3796a44c77b5f1eaa17912d825a93b99213569",
+      "state": "machine-cross-checked",
+      "text": "此面板的设备配置文件选择亮度归零路径，此路径永远不会切断背光电源"
+    },
+    "dashboard.capability.note.dim_keycode_sleep": {
+      "sourceHash": "fdfbf3af9f2f97c4f37fbd64d08b71e7fd876dee7d4e57a7ea780dc9e6030878",
+      "state": "machine-cross-checked",
+      "text": "需要 su 或辅助守护进程来注入 KEYCODE_SLEEP"
+    },
+    "dashboard.capability.note.dim_only": {
+      "sourceHash": "566087c8cb755bd8c6f4af9d07008a957ecf50a377eb32e5b851bbf81cf3de3c",
+      "state": "machine-cross-checked",
+      "text": "DIM ONLY — {reason}"
+    },
+    "dashboard.capability.note.helper_routed": {
+      "sourceHash": "e9c4863384d41335b9ae2dea3d0ba01fbacddc489e4271439109765b442b2d1e",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 无法直接使用；特权操作会转由辅助守护进程执行"
+    },
+    "dashboard.capability.note.led_unreachable": {
+      "sourceHash": "6c32a3e8242a947d1c8e684587cfa1b63bfdb3c63e108a985bc724f272df055d",
+      "state": "machine-cross-checked",
+      "text": "没有可访问的 LED 节点；需要具有根权限的辅助守护进程（安装时需要使用一次 su）"
+    },
+    "dashboard.capability.note.needs_privileged_access": {
+      "sourceHash": "ccc3d966a928d6cd96e9a779950fe9be66865f03c09b3ed912ad691540906243",
+      "state": "machine-cross-checked",
+      "text": "需要面板提供受支持的特权访问权限"
+    },
+    "dashboard.capability.note.needs_su_or_helper": {
+      "sourceHash": "4e9c9b45a00e9db3c69382330e119f40fa835bd7898b1abb0b3077df5ac65e0f",
+      "state": "machine-cross-checked",
+      "text": "需要 su 或辅助守护进程"
+    },
+    "dashboard.capability.note.needs_write_settings": {
+      "sourceHash": "5356e1ca4a3a487fb59a9181ed108a1077e53887e3a521aec59c47c3f89da8ef",
+      "state": "machine-cross-checked",
+      "text": "需要 WRITE_SETTINGS：{command}"
+    },
+    "dashboard.capability.note.preferred_route_prefix": {
+      "sourceHash": "f1ab2487d4655ed06023393219c15889849d1dfc235f4db57b572cc909a58828",
+      "state": "machine-cross-checked",
+      "text": "在超级用户权限或辅助守护进程已提供首选路径的情况下，此项不会增加任何功能；"
+    },
+    "dashboard.capability.note.rockchip_led_direct": {
+      "sourceHash": "f5876fe3b48b4aeb1411b01ffc22454d72a3ab77bac26c52751b595f6c5a2dc8",
+      "state": "machine-cross-checked",
+      "text": "瑞芯微 /dev/ledjni（应用直接访问，无需超级用户权限）"
+    },
+    "dashboard.capability.note.rockchip_led_helper": {
+      "sourceHash": "26abef3a1d288f74a47761063b7232101264d83a0e850dbcab576de17dd1e7e8",
+      "state": "machine-cross-checked",
+      "text": "通过具有超级用户权限的辅助守护进程调用瑞芯微 /dev/ledjni 输入输出控制"
+    },
+    "dashboard.capability.note.root_or_helper": {
+      "sourceHash": "165f7476c83ccff55a53fe81df2bb7213eb58cc7dc042802bf754fc9a75d8acc",
+      "state": "machine-cross-checked",
+      "text": "可通过超级用户权限或辅助守护进程使用"
+    },
+    "dashboard.capability.note.shizuku_connecting": {
+      "sourceHash": "20ee03c32f465fae6c1c11e967e0e84adcc9bbb3020f72c9aeacaa08c27fe72a",
+      "state": "machine-cross-checked",
+      "text": "正在连接本地已批准的 Shizuku 服务"
+    },
+    "dashboard.capability.note.shizuku_disabled": {
+      "sourceHash": "3bee0070aeb6277cf63a471498b0fd5694cf27f969e666b702644b440086e92a",
+      "state": "machine-cross-checked",
+      "text": "已在 ha-paneld 中禁用；请在面板上打开 Configure → 工具栏更多菜单 → 增强访问权限 → 启用"
+    },
+    "dashboard.capability.note.shizuku_failed": {
+      "sourceHash": "c55ae7ee37cbc132cc37edd487b0d96b87317868a2912f108147ee9867c445d5",
+      "state": "machine-cross-checked",
+      "text": "无法连接 Shizuku；请在面板上的“增强访问权限”对话框中重试"
+    },
+    "dashboard.capability.note.shizuku_grant": {
+      "sourceHash": "7788db822a8fbe15837d8cc318945e47ee7ce3725c6b3282cba6c5c5273042c4",
+      "state": "machine-cross-checked",
+      "text": "访问被拒绝；请在 Shizuku → 已授权应用中授予 ha-paneld 访问权限"
+    },
+    "dashboard.capability.note.shizuku_incompatible": {
+      "sourceHash": "86b1e0cf086b8ad212410b559f017fea9d4662bb263a68413efa934c1cfe7d80",
+      "state": "machine-cross-checked",
+      "text": "已阻止：Shizuku 服务身份或协议与预期不符"
+    },
+    "dashboard.capability.note.shizuku_missing": {
+      "sourceHash": "fb760f6c866b73fcb6e8c782783813d5011fea64d563d767ad9b1643f635a78c",
+      "state": "machine-cross-checked",
+      "text": "缺少管理器；请添加 --shizuku 选项并重新运行预配"
+    },
+    "dashboard.capability.note.shizuku_permission": {
+      "sourceHash": "d83310993a1a94b12cdec092d96a629a92285d910255d1c61f308a201c624a2a",
+      "state": "machine-cross-checked",
+      "text": "服务正在运行；请在面板上请求并批准 ha-paneld 访问权限"
+    },
+    "dashboard.capability.note.shizuku_ready": {
+      "sourceHash": "ecdf8f84be742bd0ba8d4633061b3d355cefae6b946bc0eb030889ebe0344b14",
+      "state": "machine-cross-checked",
+      "text": "已以 shell UID 就绪；仅限本地预定义操作"
+    },
+    "dashboard.capability.note.shizuku_stopped": {
+      "sourceHash": "081425f46f4ebb0257a08721060226f25d4e9ce1221ba37ca6e85847ef5c5079",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 中已启用，但 Shizuku 服务已停止；请打开 Shizuku 并启动其服务"
+    },
+    "dashboard.capability.note.shizuku_untrusted": {
+      "sourceHash": "ca917912583f3b7942d9ba51510733d455007c04e339fe3101687c9dc83d73d4",
+      "state": "machine-cross-checked",
+      "text": "已阻止：已安装管理器的签名者不受信任"
+    },
+    "dashboard.capability.note.shizuku_verified": {
+      "sourceHash": "3b125c2e143d0b144888f9d28ef510a0d7a05f77298ea490b8736c7087961ecf",
+      "state": "machine-cross-checked",
+      "text": "可通过本地获批的 Shizuku 访问权限使用；应用更新仍会校验签名者身份"
+    },
+    "dashboard.capability.note.su_direct": {
+      "sourceHash": "a0ba5183f28168934f6d83d722669ab6cc27b21777617658035d9f9934c3992e",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 可直接使用"
+    },
+    "dashboard.capability.note.su_unavailable": {
+      "sourceHash": "6c0c02f245f4aabdb395f95353d4565c38affbb4ef9bf4327e70470c5b580c98",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld 无法直接使用——请查看下方各项功能"
+    },
+    "dashboard.capability.note.sysfs_led_helper": {
+      "sourceHash": "6e48992050b0bb9ef7ad7b482b89a339b779873721ede294ffb3929ccb77e7d8",
+      "state": "machine-cross-checked",
+      "text": "通过辅助守护进程控制 sysfs LED"
+    },
+    "dashboard.capability.note.write_settings_granted": {
+      "sourceHash": "2cc506ffccedc8432c430164530ff4fd2501d7e3a5a0a0fc91a494facb15adac",
+      "state": "machine-cross-checked",
+      "text": "已授予 WRITE_SETTINGS 权限"
+    },
+    "dashboard.capability.rgb_led": {
+      "sourceHash": "c2ab80360c8bb8cec47877c643abdeabd2ece37ec7b59ec506a4f2de1fcc1c0e",
+      "state": "machine-cross-checked",
+      "text": "RGB LED"
+    },
+    "dashboard.capability.root_su": {
+      "sourceHash": "dca17bff62e8f077eb8628174e0fa236b29c9448343eae86ee89cd0a37e94b63",
+      "state": "machine-cross-checked",
+      "text": "超级用户（su）"
+    },
+    "dashboard.capability.screen_brightness": {
+      "sourceHash": "694cb749771a50b425951ffbdc7b070db7350d4280f98d321ef946b6a7292a68",
+      "state": "machine-cross-checked",
+      "text": "屏幕亮度"
+    },
+    "dashboard.capability.screen_power": {
+      "sourceHash": "0d4d080bcd55f5ee63c4d2574a7c7e2a743c63673b4d440bbee7984f28e40c4a",
+      "state": "machine-cross-checked",
+      "text": "屏幕开/关"
+    },
+    "dashboard.capability.shizuku": {
+      "sourceHash": "195c2335bc7909021beca0b17dd90d7d6690c4d9b1bc28d3b41825d6712a83f5",
+      "state": "machine-cross-checked",
+      "text": "Shizuku 增强访问权限"
+    },
+    "dashboard.capability.system_actions": {
+      "sourceHash": "4a70712df481ed02525edcbf9e3507d7a28fca003abcbdd8b63516be53628ef0",
+      "state": "machine-cross-checked",
+      "text": "重启 / 重新加载 / 启动器"
+    },
+    "dashboard.capability.verified_operations": {
+      "sourceHash": "915a6bc11072c301c0f6504d5e7139c4736c62e0798fb0e221d55321a3049414",
+      "state": "machine-cross-checked",
+      "text": "已验证：应用更新 / 截图 / 显示"
     },
     "dashboard.card.behaviour": {
       "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
@@ -1943,6 +2853,26 @@
       "state": "machine-cross-checked",
       "text": "无法启动中继。"
     },
+    "dashboard.link.edit": {
+      "sourceHash": "464c4ffd019e1e9691dcf0537c797353ef2b1c1d4833d3d463e5b74ae4547344",
+      "state": "machine-cross-checked",
+      "text": "编辑"
+    },
+    "dashboard.link.edit_configure": {
+      "sourceHash": "d75a23f2180bbf4b16cdb8deab9099a4a9aec9709e122e21c211e080d535ca91",
+      "state": "machine-cross-checked",
+      "text": "在 Configure 标签页中编辑"
+    },
+    "dashboard.link.open": {
+      "sourceHash": "ed077f3d8125d60dca1979c7133601bd187d47c73ed9975028f677e49e709942",
+      "state": "machine-cross-checked",
+      "text": "打开"
+    },
+    "dashboard.link.open_install": {
+      "sourceHash": "f5ed36e35c39c2b351302d18126528be7471de98ed623c0018f0881a2b9426a5",
+      "state": "machine-cross-checked",
+      "text": "在 Install 标签页中打开"
+    },
     "dashboard.live.navigate": {
       "sourceHash": "5ea5fbe811dbe99a3f3d0d79704d2f54194692b349f2d682bd6fb86a9cbf8f12",
       "state": "machine-cross-checked",
@@ -2042,6 +2972,61 @@
       "sourceHash": "6c19166398f5f8511969fe7145afb7da147b9c1a60194b35013e4dcf789606c1",
       "state": "machine-cross-checked",
       "text": "此面板的"
+    },
+    "dashboard.proximity.adapting": {
+      "sourceHash": "5ca43fc74da45ad9124fbe82cb4e5c83990e956de60ab7d6e7aa63d370f7ee9a",
+      "state": "machine-cross-checked",
+      "text": "正在安全适应变化后的接近信号"
+    },
+    "dashboard.proximity.checking_previous_range": {
+      "sourceHash": "8d149efcb95a9578c5e158fd8a4d47127baa8205ce8152bc0e3e4c44d0aad38f",
+      "state": "machine-cross-checked",
+      "text": "正在将先前学习的范围与实时读数核对"
+    },
+    "dashboard.proximity.learning_baseline": {
+      "sourceHash": "594eb724417419650ee78b54e4ec36f2f63982f7d3ed747dd4779caa2821584b",
+      "state": "machine-cross-checked",
+      "text": "正在学习空房状态的基准值"
+    },
+    "dashboard.proximity.learning_gestures": {
+      "sourceHash": "bcfb4fefb4dc05108ad8035b32a4497a4dcfe27d324c457a8095d64a40494080",
+      "state": "machine-cross-checked",
+      "text": "人员存在检测已就绪；正在学习有意唤醒手势"
+    },
+    "dashboard.proximity.mode.binary": {
+      "sourceHash": "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd",
+      "state": "machine-cross-checked",
+      "text": "二值"
+    },
+    "dashboard.proximity.mode.graded": {
+      "sourceHash": "a20f6f9419f532136fc52d02e13fb6e194821d6289cbaf84d6e0884b4240d0da",
+      "state": "machine-cross-checked",
+      "text": "分级"
+    },
+    "dashboard.proximity.no_source": {
+      "sourceHash": "c1e1450f923c38e6346abb88bb8ea3d019c03887b79b3e25f066f7ac88abdd9d",
+      "state": "machine-cross-checked",
+      "text": "无接近感应源"
+    },
+    "dashboard.proximity.ready": {
+      "sourceHash": "d1ae4383e215c98ae7a375b970ec44769975efe65f08e79ad8df42b8276c9a02",
+      "state": "machine-cross-checked",
+      "text": "已就绪 · {mode} · 已归一化至 0–100"
+    },
+    "dashboard.proximity.waiting_first_reading": {
+      "sourceHash": "4349215e0cbf815aa0d54ea8d5e716471830b4e205a8a611e69a39fb64db31f9",
+      "state": "machine-cross-checked",
+      "text": "正在等待接近感应源提供首个可信读数"
+    },
+    "dashboard.proximity.waiting_movements": {
+      "sourceHash": "37561a40be70db6f873dad23a1c28094bc4e75e75343da6e517631ffe9d495de",
+      "state": "machine-cross-checked",
+      "text": "基准值已学习；正在等待完整的靠近并离开动作"
+    },
+    "dashboard.proximity.waiting_readings": {
+      "sourceHash": "b2803f401b72d6508d6f33e032bfaeee7cb22ae465701f8ff614d8dcadf427c9",
+      "state": "machine-cross-checked",
+      "text": "正在等待可信的接近感应读数"
     },
     "dashboard.remote_webview.hardened_unavailable": {
       "sourceHash": "c033a99023a02ded9ca4812bb3edd59772517da8470986440a9fd03cebf32722",
@@ -2232,6 +3217,96 @@
       "sourceHash": "b6976c2d96968d679b621136f2b8b300db6db5d6fadfaa0961e2bad94841fb4b",
       "state": "machine-cross-checked",
       "text": "显示/隐藏已模糊处理的值以便编辑——这些值默认保持模糊，以免截图泄露其内容"
+    },
+    "dashboard.runtime.audio_active": {
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked",
+      "text": "播放中"
+    },
+    "dashboard.runtime.audio_closed": {
+      "sourceHash": "c3eefb58d7c42440a9d4abec51d629544d635a6d936ff3c4d3fca96d611b3cf3",
+      "state": "machine-cross-checked",
+      "text": "已关闭"
+    },
+    "dashboard.runtime.audio_failed": {
+      "sourceHash": "5d28a90f4498a81461efbaf6f628a19d9778390bb5c81a393dd936181cc3d826",
+      "state": "machine-cross-checked",
+      "text": "失败"
+    },
+    "dashboard.runtime.audio_failed_detail": {
+      "sourceHash": "8ee1e374afa8721ba99fc4a562e3cca69e0f97cae7c7a9729c45a48a7f008356",
+      "state": "machine-cross-checked",
+      "text": "失败 · {detail}"
+    },
+    "dashboard.runtime.audio_idle": {
+      "sourceHash": "4fb62348858c2f6fbd6db27fa4c11edd8559119869d1034e2bd3390fd92b1a04",
+      "state": "machine-cross-checked",
+      "text": "空闲"
+    },
+    "dashboard.runtime.audio_queued": {
+      "sourceHash": "d36be6494248ee06ac18f38ea1119dfe4699fdcfcbbcc30a2e4f1ccbce68dfac",
+      "state": "machine-cross-checked",
+      "text": "排队中"
+    },
+    "dashboard.runtime.convergence": {
+      "sourceHash": "bc3a794f1545af2f3efcf5a5edb88b1889648fefb0a843e152e1a603f92d21b7",
+      "state": "machine-cross-checked",
+      "text": "{channels} 个通道 · {dirty} 个待同步 · {inFlight} 个同步中 · {unknown} 个未知 · 确认成功 {successes}/失败 {failures} · 待处理 {pending}"
+    },
+    "dashboard.runtime.disabled": {
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked",
+      "text": "已禁用"
+    },
+    "dashboard.runtime.external_renderer_unobserved": {
+      "sourceHash": "395098244943c3672f1f291a6bf053b4bcb5dd7f85d71e98886f2ef94a206a26",
+      "state": "machine-cross-checked",
+      "text": "外部渲染器 · ha-paneld 未观测到 Home Assistant 连接"
+    },
+    "dashboard.runtime.ha_connection_lost": {
+      "sourceHash": "fbe3bc3f09bc50985c450238be89be3c60b2291e769203da0f8865d147a0cc36",
+      "state": "machine-cross-checked",
+      "text": "连接已断开"
+    },
+    "dashboard.runtime.ha_events_refused": {
+      "sourceHash": "cbd643272d6e1a58b031a7fabd38d256b9f99cb469f80990e5f286fde3c55b32",
+      "state": "machine-cross-checked",
+      "text": "正在监听；Home Assistant 不允许此用户订阅 WebSocket 生命周期事件"
+    },
+    "dashboard.runtime.ha_network_healthy": {
+      "sourceHash": "bc9986678384fbf5e9ce507e7d1a91d76e34b08bf58a8a20eb366b0982245703",
+      "state": "machine-cross-checked",
+      "text": "正常；{evidence}"
+    },
+    "dashboard.runtime.ha_network_not_measured": {
+      "sourceHash": "0cecb6edb9d044c440671a9fab915ce705b495fd6d898e9d7db9bb02981fbb67",
+      "state": "machine-cross-checked",
+      "text": "未测量；此面板没有经过身份验证的 Home Assistant 套接字"
+    },
+    "dashboard.runtime.ha_network_severe": {
+      "sourceHash": "64f356940f9a3373feecedc98764165f8b1c405307b52a5d1cd7d0e2616e7142",
+      "state": "machine-cross-checked",
+      "text": "严重降级；{evidence}"
+    },
+    "dashboard.runtime.ha_network_slow": {
+      "sourceHash": "975ecd4b92faa7b52cbd625d366ce7014dd07f9808b9b12d863175d1338675c3",
+      "state": "machine-cross-checked",
+      "text": "缓慢；{evidence}"
+    },
+    "dashboard.runtime.ha_watching": {
+      "sourceHash": "19bda4aa00eaf9a162fb92bafdc63160190c0c8387687bb8b23027e7bb886ff6",
+      "state": "machine-cross-checked",
+      "text": "正在监听"
+    },
+    "dashboard.runtime.security_hardened": {
+      "sourceHash": "b227adf21bf39d75dc6caf09d98bb407d924a63fb17dfc7c83d9e1bcba6aaaa6",
+      "state": "machine-cross-checked",
+      "text": "强化 · 高影响远程操作需在面板上亲自批准"
+    },
+    "dashboard.runtime.security_relaxed": {
+      "sourceHash": "43ddd4ca77f3867dc868038ee29f599d6827cea28b5d00e7ad1827fa9373b76d",
+      "state": "machine-cross-checked",
+      "text": "宽松"
     },
     "dashboard.screenshot.alt": {
       "sourceHash": "3fd1aece0d335af6c5ec4a5aa8f59b5d74fe77ce9035967bd8de4c2572c851fa",
@@ -2543,10 +3618,25 @@
       "state": "machine-cross-checked",
       "text": "RAM 数据不可用"
     },
+    "dashboard.value.auto_detail": {
+      "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
+      "state": "machine-cross-checked",
+      "text": "自动（{value}）"
+    },
     "dashboard.value.builtin_renderer": {
       "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",
       "state": "machine-cross-checked",
       "text": "内置渲染器"
+    },
+    "dashboard.value.ha_default_view": {
+      "sourceHash": "3461d62cc4141599cc6913e0014e1add27ae7b0f91f84490429137f68e9ac04f",
+      "state": "machine-cross-checked",
+      "text": "HA 默认视图"
+    },
+    "dashboard.value.local_override": {
+      "sourceHash": "efedba76fc9cf52975e7cbb18b95db20e8ff40deb2e3d61b12eace3d3edb8e79",
+      "state": "machine-cross-checked",
+      "text": "{value}（本地覆盖）"
     },
     "dashboard.value.none": {
       "sourceHash": "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe",
@@ -3443,6 +4533,21 @@
       "state": "machine-cross-checked",
       "text": "GitHub 上的 ha-paneld"
     },
+    "shell.hardened.key": {
+      "sourceHash": "1cad2d18d4f0144e285115b035fa35f596fd66292288a07b1e25dd45b569f51a",
+      "state": "machine-cross-checked",
+      "text": "受保护的操作在 Hardened 模式下需在此面板上亲自批准；无法远程批准。"
+    },
+    "shell.hardened.section": {
+      "sourceHash": "7d68d1ace31daad34bfbf4b938bf1533316b87dd4c607a7e2a62db4fa5569085",
+      "state": "machine-cross-checked",
+      "text": "启用 Hardened 模式时，本节中的操作均需在面板上亲自批准。"
+    },
+    "shell.hardened.section_conditional": {
+      "sourceHash": "d1dfc54a70bcb22ca82d3019290ef1a41372f7e12c9ac81e97948543baa0e1f7",
+      "state": "machine-cross-checked",
+      "text": "启用 Hardened 模式时，本节中的部分操作需在面板上亲自批准。"
+    },
     "shell.menu.label": {
       "sourceHash": "99af6606ff9d6cd5154d4d4e9c21e325086d3e904677cdb41d363c8a3480f862",
       "state": "machine-cross-checked",
@@ -3462,6 +4567,11 @@
       "sourceHash": "7fdb3ccec0e0d23662eb4c22eb63a64c5873e7c383efde354432152eed55c9ce",
       "state": "machine-cross-checked",
       "text": "实体"
+    },
+    "shell.nav.fleet": {
+      "sourceHash": "2bb4f92ced331c66b26c0388e4cf20e4ee5965cf24f3283f1c3633befbf0c4a1",
+      "state": "machine-cross-checked",
+      "text": "面板群"
     },
     "shell.nav.install": {
       "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
@@ -3497,6 +4607,21 @@
       "sourceHash": "5dd303715b690c9ae7eee858506460c7b6aad6f57cb148b71d916186b435f51e",
       "state": "machine-cross-checked",
       "text": "在 HA 中打开"
+    },
+    "shell.setup_progress.next": {
+      "sourceHash": "272d0261ca0dc2b0e2a88f17d7c7589b4c1f21ae1e9ae9596e10128a156d609b",
+      "state": "machine-cross-checked",
+      "text": "下一步将显示仪表盘设置步骤。"
+    },
+    "shell.setup_progress.publishing": {
+      "sourceHash": "91badffcf3f64548ae77c2860e1ea840212f96d595e4f00ad17d768e1232c201",
+      "state": "machine-cross-checked",
+      "text": "MQTT 已连接——正在发布 Home Assistant 发现信息。"
+    },
+    "shell.setup_progress.verifying": {
+      "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
+      "state": "machine-cross-checked",
+      "text": "MQTT 设置已保存——正在验证消息代理连接。保存后可能需要等待片刻。"
     }
   }
 }
