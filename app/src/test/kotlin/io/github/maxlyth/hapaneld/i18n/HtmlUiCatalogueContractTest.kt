@@ -17,7 +17,8 @@ class HtmlUiCatalogueContractTest {
             "shell" to literalKeys(server.readText(), "strings\\.get"),
             "dashboard" to (
                 literalKeys(server.readText(), "strings\\.get") +
-                    literalKeys(File(assets, "info.js").readText(), "i18nText")
+                    literalKeys(File(assets, "info.js").readText(), "i18nText") +
+                    dynamicFactKeys(server.readText())
                 ).filterTo(sortedSetOf()) { it.startsWith("dashboard.") },
             "configure" to (
                 literalKeys(server.readText(), "strings\\.get") +
@@ -41,7 +42,8 @@ class HtmlUiCatalogueContractTest {
         val prefixes = listOf("shell.", "dashboard.", "configure.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
-        assertFalse("the HTML UI slice must not be empty", expected.isEmpty())
+        assertEquals("the complete source catalogue is a reviewed release contract", 699, source.strings.size)
+        assertEquals("the declared HTML UI preview scope must not shrink silently", 526, expected.size)
         expected.forEach { (key, sourceString) ->
             val translated = checkNotNull(target.strings[key]) { "zh-Hans is missing $key" }
             assertEquals("zh-Hans has stale source text for $key", sourceString.sourceHash, translated.sourceHash)
@@ -92,9 +94,14 @@ class HtmlUiCatalogueContractTest {
     }
 
     private fun literalKeys(source: String, function: String): Set<String> =
-        Regex("$function\\(\\s*\\\"((?:shell|dashboard|configure)\\.[a-z0-9._-]+)\\\"")
+        Regex("$function\\(\\s*[\\\"']((?:shell|dashboard|configure)\\.[a-z0-9._-]+)[\\\"']")
             .findAll(source)
             .mapTo(sortedSetOf()) { it.groupValues[1] }
+
+    private fun dynamicFactKeys(source: String): Set<String> =
+        Regex("->\\s*\\\"([a-z0-9_]+)\\\"")
+            .findAll(functionBody(source, "factLabel"))
+            .mapTo(sortedSetOf()) { "dashboard.fact.${it.groupValues[1]}" }
 
     private fun functionBody(source: String, name: String): String {
         val start = source.indexOf("fun $name(").takeIf { it >= 0 }
