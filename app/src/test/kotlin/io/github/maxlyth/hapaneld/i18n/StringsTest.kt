@@ -55,6 +55,55 @@ class StringsTest {
         assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
     }
 
+    @Test fun `web surfaces share the validated catalogue and can be resolved by prefix`() {
+        val settingText = "Settings label"
+        val menuText = "Dashboard"
+        val source = SourceCatalogue.parse("""{
+          "schema":1,
+          "locale":"en",
+          "sourceRevision":"${"e".repeat(40)}",
+          "strings":{
+            "settings.example.label":{
+              "text":"$settingText","sourceHash":"${sourceHash(settingText)}","surface":"settings",
+              "context":"Setting label","risk":"ordinary","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            },
+            "shell.nav.dashboard":{
+              "text":"$menuText","sourceHash":"${sourceHash(menuText)}","surface":"shell",
+              "context":"Dashboard navigation tab","risk":"ordinary","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            }
+          }
+        }""".trimIndent())
+        val target = TargetCatalogue.parse("""{
+          "schema":1,
+          "locale":"de",
+          "sourceRevision":"${"e".repeat(40)}",
+          "strings":{
+            "settings.example.label":{
+              "text":"Einstellung","sourceHash":"${sourceHash(settingText)}","state":"machine-cross-checked"
+            }
+          }
+        }""".trimIndent(), source)
+        val strings = Strings(source, target)
+
+        assertEquals("de", strings.requestedLocale)
+        assertEquals("de", strings.locale)
+        assertEquals(listOf("de"), strings.languages(setOf("settings.")))
+        assertEquals(listOf("en"), strings.languages(setOf("shell.")))
+        assertEquals(
+            mapOf("shell.nav.dashboard" to LocalizedText("Dashboard", "en")),
+            strings.resolved(setOf("shell.")),
+        )
+        assertThrows(IllegalArgumentException::class.java) { strings.resolved(setOf("")) }
+    }
+
+    @Test fun `unknown catalogue surface is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            SourceCatalogue.parse(english.replace("\"surface\":\"settings\"", "\"surface\":\"typo\""))
+        }
+    }
+
     @Test fun `page locale changes only when the complete Settings surface is promoted`() {
         val source = SourceCatalogue.parse(File("src/main/assets/i18n/en.json").readText())
         val promotedJson = File("src/main/assets/i18n/de.json").readText()

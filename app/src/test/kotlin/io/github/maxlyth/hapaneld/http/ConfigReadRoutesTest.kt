@@ -85,6 +85,7 @@ class ConfigReadRoutesTest {
             val body = JSONObject(response.bodyAsText())
             assertEquals(expectedText, body.getString("checked"))
             assertEquals(expectedText.substringBefore(':'), body.getString("checkedLanguage"))
+            assertEquals(expectedText.substringBefore(':'), body.getString("requestedLocale"))
             assertEquals("English fallback", body.getString("draft"))
             assertEquals("en", body.getString("draftLanguage"))
         }
@@ -111,6 +112,7 @@ class ConfigReadRoutesTest {
         return JSONObject()
             .put("checked", checked.text)
             .put("checkedLanguage", checked.language)
+            .put("requestedLocale", strings.requestedLocale)
             .put("draft", draft.text)
             .put("draftLanguage", draft.language)
             .toString()
