@@ -447,7 +447,7 @@ class RuntimeProfileRegistry internal constructor(
             message = "Selection staged; restart required.",
         )
         if (!preferences.put(
-                KEY_SELECTION to encode(selection),
+                *selectionState(selection),
                 KEY_PHASE to next.phase.name,
                 KEY_GENERATION to generation,
                 KEY_PREVIOUS to encode(current),
@@ -497,28 +497,43 @@ class RuntimeProfileRegistry internal constructor(
             val state = readActivation()
             when (state.phase) {
             ProfileActivationPhase.PENDING -> {
-                val desired = state.desired ?: readSelection()
-                val resolution = resolveSelection(desired)
-                if (resolution.entry == null) {
+                val staged = state.desired ?: readSelection()
+                val resolution = resolveSelection(staged)
+                val successor = (staged as? ProfileSelection.Pinned)?.let(::retiredBundledSuccessor)
+                val desired = successor?.let { ProfileSelection.Pinned(it.ref) } ?: staged
+                val repinIssues = if (successor != null) listOf(repinIssue(staged as ProfileSelection.Pinned, successor)) else emptyList()
+                // A re-pinned successor must not be able to roll back onto itself, so the staged
+                // rollback target is re-chosen to exclude it; an ordinary activation keeps its own.
+                val previous = if (successor != null) compatibleRollbackTarget(state.previous, excluding = successor.ref) else state.previous
+                if (resolution.entry == null && successor == null) {
                     rollbackInvalidPending(state, resolution.issues)
                 } else if (!preferences.put(
+                        *selectionState(desired),
+                        KEY_DESIRED to encode(desired),
+                        KEY_PREVIOUS to previous?.let(::encode),
                         KEY_PHASE to ProfileActivationPhase.APPLYING.name,
                         KEY_MESSAGE to "Applying selected profile.",
                         KEY_CATALOG_REVISION to catalogRevision() + 1,
                     )) {
                     rollbackInvalidPending(
                         state,
-                        listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Could not persist the applying state.")),
+                        repinIssues + ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Could not persist the applying state."),
+                        preferred = previous,
+                        excluding = (desired as? ProfileSelection.Pinned)?.ref,
                     )
                 } else {
-                    resolved(desired, state.generation)
+                    resolved(desired, state.generation, repinIssues)
                 }
             }
             ProfileActivationPhase.APPLYING -> {
-                val rollback = compatibleRollbackTarget(state.previous)
+                // The revision that failed to prove healthy must not be the rollback destination, even
+                // through automatic matching on hardware that would pick it again. A failed bundled
+                // successor is also remembered so a re-pin does not retry it on the next start.
+                val failed = (state.desired as? ProfileSelection.Pinned)?.ref
+                val rollback = compatibleRollbackTarget(state.previous, excluding = failed)
                 val persisted = persistRollback(
                     rollback,
-                    "Previous activation did not report healthy; rolled back.",
+                    "Previous activation did not report healthy; rolled back to ${describe(rollback)}.",
                 )
                 val issue = if (persisted) {
                     ProfileIssue(ProfileIssueSeverity.WARNING, "activation", "Previous profile activation was rolled back after an unhealthy restart.")
@@ -530,8 +545,13 @@ class RuntimeProfileRegistry internal constructor(
             ProfileActivationPhase.ACTIVE, ProfileActivationPhase.ROLLED_BACK -> {
                 val selection = readSelection()
                 val resolution = resolveSelection(selection)
-                if (selection is ProfileSelection.Pinned && resolution.entry == null) {
+                val successor = (selection as? ProfileSelection.Pinned)?.let(::retiredBundledSuccessor)
+                if (selection is ProfileSelection.Pinned && successor != null) {
+                    repinRetiredBundled(selection, successor, state)
+                } else if (selection is ProfileSelection.Pinned && resolution.entry == null) {
                     recoverInvalidActive(selection, resolution.issues)
+                } else if (selection is ProfileSelection.Pinned) {
+                    resolved(selection, null, listOfNotNull(rejectedSuccessorIssue(selection)))
                 } else if (selection == ProfileSelection.Auto) {
                     val current = resolution.entry
                     val previous = readActiveRef()
@@ -558,6 +578,10 @@ class RuntimeProfileRegistry internal constructor(
             }
             }.also { resolved ->
                 resolvedStartupRef = resolved.summary.ref.takeIf { it in entries }
+                // After the activation decision, so it cannot displace a write that decision makes or
+                // consume its failure; every path that does write a selection has already recorded the
+                // origin through selectionState, which leaves this to the steady-state legacy case.
+                backfillLegacySelectionOrigin()
             }
         } catch (error: Throwable) {
             cost.outcome(FeatureCostOutcome.FAILURE)
@@ -574,6 +598,7 @@ class RuntimeProfileRegistry internal constructor(
         val activeRef = resolveSelection(readSelection()).entry?.ref ?: return false
         if (!writeRollbackSnapshot(activeRef)) return false
         val persisted = preferences.put(
+            *selectionState(readSelection()),
             KEY_PHASE to ProfileActivationPhase.ACTIVE.name,
             KEY_ACTIVE_REF to encode(ProfileSelection.Pinned(activeRef)),
             KEY_LAST_KNOWN_GOOD to (state.previous ?: readLastKnownGood())?.let(::encode),
@@ -821,8 +846,19 @@ class RuntimeProfileRegistry internal constructor(
         )
     }
 
-    private fun rollbackInvalidPending(state: ProfileActivationState, problems: List<ProfileIssue>): ResolvedProfile {
-        val rollback = compatibleRollbackTarget(state.previous)
+    /**
+     * [excluding] is the revision this start was about to apply. When the applying state could not be
+     * persisted there is no activation generation and therefore no health gate, so the recovery must not
+     * land on that revision by another route: on hardware whose automatic match *is* that revision,
+     * an unexcluded rollback resolves straight back to it and runs it unproven.
+     */
+    private fun rollbackInvalidPending(
+        state: ProfileActivationState,
+        problems: List<ProfileIssue>,
+        preferred: ProfileSelection? = state.previous,
+        excluding: ProfileRef? = null,
+    ): ResolvedProfile {
+        val rollback = compatibleRollbackTarget(preferred, excluding = excluding)
         val persisted = persistRollback(
             rollback,
             "Selected profile could not be resolved; rolled back.",
@@ -866,14 +902,177 @@ class RuntimeProfileRegistry internal constructor(
         )
     }
 
+    /**
+     * The origin of a pinned selection. The preference store records it whenever a selection is staged,
+     * proven healthy or rolled back, and that record wins in both directions. State written by an older
+     * build has no record: a stored entry then answers for itself (a retained rollback snapshot is
+     * bundled, an imported file is imported), and a revision stored nowhere counts as imported when an
+     * imported store for its id exists, so a lost imported override of a bundled id is never mistaken
+     * for a bundled pin.
+     */
+    /**
+     * Writes the inferred origin of a pin carried over from a build that did not record one, once, at
+     * the first startup that can still see the evidence. The imported store or the retained snapshot the
+     * inference reads can disappear later, and an inference that changes answer between two starts would
+     * let a lost imported override become the stock profile. This is a deliberate one-time migration
+     * write on the startup path, not a read-path side effect: [pinnedOrigin] itself stays pure. A failed
+     * write is harmless and simply retried next start, because the inference still answers meanwhile.
+     *
+     * The already-recorded check saves a preference write on every subsequent boot; it is not a
+     * correctness barrier, because [pinnedOrigin] returns the record when there is one and rewriting it
+     * would store the same value. A mutation battery removing the check leaves every test green, which
+     * is the evidence for that claim rather than an untested assumption.
+     */
+    private fun backfillLegacySelectionOrigin() {
+        if (readSelectionOrigin() != null) return
+        val pinned = readSelection() as? ProfileSelection.Pinned ?: return
+        preferences.put(KEY_SELECTION_ORIGIN to encodeOrigin(pinnedOrigin(pinned)))
+    }
+
+    private fun pinnedOrigin(pinned: ProfileSelection.Pinned): ProfileOrigin =
+        readSelectionOrigin()
+            ?: entries[pinned.ref]?.origin
+            ?: if (File(importedDir, pinned.ref.id).exists()) ProfileOrigin.IMPORTED else ProfileOrigin.BUNDLED
+
+    /** The current bundled asset for a pinned profile's id when it is not the pinned revision itself. */
+    private fun currentBundledAsset(pinned: ProfileSelection.Pinned): StoredProfile? =
+        entries.values
+            .singleOrNull { it.origin == ProfileOrigin.BUNDLED && !it.rollbackOnly && it.ref.id == pinned.ref.id }
+            ?.takeIf { it.ref != pinned.ref }
+
+    /**
+     * The current bundled revision of a pinned profile whose pinned revision this release retired.
+     *
+     * A bundled revision is the SHA-256 of its YAML, so a release that edits a bundled profile mints a
+     * new revision and ships without the old one. The administrator pinned the *profile*; the retired
+     * revision is not something they could have kept. Only a pin of bundled origin qualifies, and the
+     * current asset for its id must differ from the pin: a pin whose revision is still the shipped
+     * asset is left alone, while a pin that now resolves only through a retained rollback snapshot, or
+     * not at all, follows the asset. Retained snapshots of older revisions are never candidates. The
+     * current asset is withheld while it is the recorded rejected successor: the last APPLYING rollback
+     * found it unhealthy, or the administrator explicitly selected a retained revision instead of it.
+     * A newer asset is offered as soon as it ships; [select] rewrites the record with every explicit
+     * choice, and a re-pin to a newer asset clears it.
+     */
+    private fun retiredBundledSuccessor(pinned: ProfileSelection.Pinned): StoredProfile? {
+        if (pinnedOrigin(pinned) != ProfileOrigin.BUNDLED) return null
+        return currentBundledAsset(pinned)?.takeIf { it.ref != readRejectedSuccessor() }
+    }
+
+    /**
+     * The warning that explains why a pinned profile is not following its current asset: either that
+     * asset was rolled back as unhealthy, or the administrator explicitly selected the retained revision.
+     */
+    private fun rejectedSuccessorIssue(pinned: ProfileSelection.Pinned): ProfileIssue? {
+        val current = currentBundledAsset(pinned)?.takeIf { it.ref == readRejectedSuccessor() } ?: return null
+        return ProfileIssue(
+            ProfileIssueSeverity.WARNING,
+            "selection",
+            "Pinned profile '${pinned.ref.id}' is held at revision ${pinned.ref.revision.take(12)}; " +
+                "the current bundled revision ${current.ref.revision.take(12)} is not applied automatically. Select it to adopt it.",
+        )
+    }
+
+    /**
+     * The current bundled asset a selection is deliberately held away from.
+     *
+     * A retained rollback snapshot is only ever the selection because somebody put the panel there: the
+     * administrator chose that revision, or an activation of the current asset failed and the panel was
+     * rolled back onto it. Either way the re-pin path must not move it forward again until a newer
+     * revision ships. Deriving the hold from the selection, rather than recording it at each site that
+     * causes one, is what keeps it correct through rollback, abort and staged-activation recovery.
+     */
+    private fun holdFor(selection: ProfileSelection): StoredProfile? {
+        val pinned = selection as? ProfileSelection.Pinned ?: return null
+        val entry = entries[pinned.ref] ?: return null
+        if (entry.origin != ProfileOrigin.BUNDLED || !entry.rollbackOnly) return null
+        return currentBundledAsset(pinned)
+    }
+
+    /**
+     * One selection's complete persisted identity: the selection, the origin that decides whether it may
+     * follow a bundled successor, and the asset it is held away from. Every write of the selection writes
+     * all three together, so no path can leave one of them describing a selection that is no longer there.
+     */
+    private fun selectionState(selection: ProfileSelection): Array<Pair<String, Any?>> = arrayOf(
+        KEY_SELECTION to encode(selection),
+        KEY_SELECTION_ORIGIN to encodeOrigin(originOf(selection)),
+        KEY_REJECTED_SUCCESSOR to holdFor(selection)?.let { encode(ProfileSelection.Pinned(it.ref)) },
+    )
+
+    private fun repinIssue(retired: ProfileSelection.Pinned, successor: StoredProfile) = ProfileIssue(
+        ProfileIssueSeverity.WARNING,
+        "selection",
+        "Pinned profile '${retired.ref.id}' revision ${retired.ref.revision.take(12)} was retired by this release; " +
+            "following its current bundled revision ${successor.ref.revision.take(12)}.",
+    )
+
+    /**
+     * Re-pins an active or rolled-back selection to the bundled successor through the same health gate
+     * as an automatic bundled revision change. The rollback target is the retired revision itself when
+     * its rollback snapshot survived, otherwise the first of last known good, automatic matching and
+     * the bundled generic profile that does not resolve to the successor; last known good is left for
+     * [markActivationHealthy] to prove.
+     */
+    private fun repinRetiredBundled(
+        retired: ProfileSelection.Pinned,
+        successor: StoredProfile,
+        state: ProfileActivationState,
+    ): ResolvedProfile {
+        val target = ProfileSelection.Pinned(successor.ref)
+        val issue = repinIssue(retired, successor)
+        val rollback = compatibleRollbackTarget(retired, excluding = successor.ref)
+        val generation = maxOf(state.generation, preferences.getLong(KEY_GENERATION, 0L)) + 1
+        val persisted = preferences.put(
+            *selectionState(target),
+            KEY_PHASE to ProfileActivationPhase.APPLYING.name,
+            KEY_GENERATION to generation,
+            KEY_PREVIOUS to encode(rollback),
+            KEY_DESIRED to encode(target),
+            KEY_MESSAGE to "Applying the current bundled revision of the pinned profile.",
+            KEY_CATALOG_REVISION to catalogRevision() + 1,
+        )
+        return if (persisted) {
+            resolved(target, generation, listOf(issue))
+        } else {
+            // Nothing recorded that this successor is being tried, so nothing would roll it back if it
+            // failed. Keep running what the panel already had and retry the re-pin after a restart.
+            resolved(
+                rollback,
+                null,
+                listOf(
+                    issue,
+                    ProfileIssue(
+                        ProfileIssueSeverity.ERROR,
+                        "activation",
+                        "Could not persist the re-pinned bundled revision; kept ${describe(rollback)} for this run and will retry after restart.",
+                    ),
+                ),
+            )
+        }
+    }
+
+    /**
+     * The first rollback candidate that resolves to a revision other than [excluding]: the preferred
+     * selection, then last known good, then automatic matching, then an explicit pin of the bundled
+     * generic profile. Automatic matching is judged by what it resolves to, so hardware that would match
+     * the excluded revision again cannot use it as a way back to that revision.
+     */
     private fun compatibleRollbackTarget(
         preferred: ProfileSelection?,
         excluding: ProfileRef? = null,
     ): ProfileSelection {
-        val candidates = listOfNotNull(preferred, readLastKnownGood(), ProfileSelection.Auto).distinct()
+        val generic = entries.values.firstOrNull { it.isBundledFallback() }?.let { ProfileSelection.Pinned(it.ref) }
+        val candidates = listOfNotNull(preferred, readLastKnownGood(), ProfileSelection.Auto, generic).distinct()
         return candidates.firstOrNull { candidate ->
-            (candidate as? ProfileSelection.Pinned)?.ref != excluding && resolveSelection(candidate).entry != null
+            val resolvedRef = resolveSelection(candidate).entry?.ref
+            resolvedRef != null && resolvedRef != excluding
         } ?: ProfileSelection.Auto
+    }
+
+    private fun describe(selection: ProfileSelection): String = when (selection) {
+        ProfileSelection.Auto -> "automatic matching"
+        is ProfileSelection.Pinned -> "${selection.ref.id}@${selection.ref.revision.take(12)}"
     }
 
     /** The rollback transition is one atomic preference commit; callers retain recovery policy and diagnostics. */
@@ -883,7 +1082,7 @@ class RuntimeProfileRegistry internal constructor(
         lastKnownGood: LastKnownGoodRollbackMutation = LastKnownGoodRollbackMutation.Preserve,
     ): Boolean {
         val values = mutableListOf<Pair<String, Any?>>(
-            KEY_SELECTION to encode(rollback),
+            *selectionState(rollback),
             KEY_PHASE to ProfileActivationPhase.ROLLED_BACK.name,
             KEY_PREVIOUS to null,
             KEY_DESIRED to null,
@@ -1344,6 +1543,24 @@ class RuntimeProfileRegistry internal constructor(
     private fun readActiveRef(): ProfileRef? =
         (decode(preferences.getString(KEY_ACTIVE_REF, "")) as? ProfileSelection.Pinned)?.ref
 
+    private fun readRejectedSuccessor(): ProfileRef? =
+        (decode(preferences.getString(KEY_REJECTED_SUCCESSOR, "")) as? ProfileSelection.Pinned)?.ref
+
+    private fun readSelectionOrigin(): ProfileOrigin? = when (preferences.getString(KEY_SELECTION_ORIGIN, "")) {
+        ORIGIN_BUNDLED -> ProfileOrigin.BUNDLED
+        ORIGIN_IMPORTED -> ProfileOrigin.IMPORTED
+        else -> null
+    }
+
+    private fun originOf(selection: ProfileSelection): ProfileOrigin? =
+        (selection as? ProfileSelection.Pinned)?.let { entries[it.ref]?.origin }
+
+    private fun encodeOrigin(origin: ProfileOrigin?): String? = when (origin) {
+        ProfileOrigin.BUNDLED -> ORIGIN_BUNDLED
+        ProfileOrigin.IMPORTED -> ORIGIN_IMPORTED
+        null -> null
+    }
+
     private fun readActivation(): ProfileActivationState {
         val phase = runCatching { ProfileActivationPhase.valueOf(preferences.getString(KEY_PHASE, ProfileActivationPhase.ACTIVE.name)) }
             .getOrDefault(ProfileActivationPhase.ACTIVE)
@@ -1395,6 +1612,10 @@ class RuntimeProfileRegistry internal constructor(
         private const val KEY_CATALOG_REVISION = "catalog_revision"
         private const val KEY_LAST_KNOWN_GOOD = "last_known_good"
         private const val KEY_ACTIVE_REF = "active_ref"
+        private const val KEY_SELECTION_ORIGIN = "selection_origin"
+        private const val KEY_REJECTED_SUCCESSOR = "rejected_successor"
+        private const val ORIGIN_BUNDLED = "bundled"
+        private const val ORIGIN_IMPORTED = "imported"
         private const val MAX_DIFFS = 256
     }
 }

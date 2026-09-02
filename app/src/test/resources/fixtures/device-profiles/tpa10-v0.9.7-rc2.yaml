@@ -1,0 +1,136 @@
+schema: 2
+id: tpa10
+version: 2.0.2
+display_name: Tuya TPA10
+soc_class: rk3566
+soc:
+  model: Rockchip RK3566
+  introduced_year: 2020
+  cpu_cores:
+    - architecture: Arm Cortex-A55
+      count: 4
+metadata:
+  author: ha-paneld maintainers
+  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/tpa10.md
+  links:
+    - label: SoC details
+      url: https://www.rock-chips.com/a/en/products/RK35_Series/2021/0113/1274.html
+    - label: SoC announcement
+      url: https://www.rock-chips.com/a/cn/news/rockchip/2020/1130/1368.html
+  license: Apache-2.0
+  maturity: verified
+  tested_firmware:
+    - TPA10 stock firmware (2026-06)
+  limitations:
+    - The CHT8305 baseline temperature offset is not yet characterised.
+requires:
+  min_core_version: 0.9.5-rc1
+  drivers:
+    - input.button-backlight
+    - input.evdev
+    - led.sysfs-daemon
+    - screen.daemon-blpower
+    - sensor.android
+    - sensor.cht8305-daemon
+    - update.webview
+match:
+  # Match values come from observed TPA10/RK3566 build properties.
+  priority: 500
+  fallback: false
+  any:
+    - priority: 1000
+      all:
+        - field: model
+          op: equals
+          values:
+            - tpa10
+    - priority: 1000
+      all:
+        - field: device
+          op: equals
+          values:
+            - tpa10
+platform:
+  # TPA10 is sandbox-walled; privileged routes use the helper daemon.
+  su_form: android
+  app_can_su: false
+  has_recents: false
+hardware:
+  led:
+    mechanism: sysfs-daemon
+    transfer: identity
+  screen_off: daemon-blpower
+  has_button_backlight: true
+  touch_click_gain: 0.12
+sensors:
+  proximity_technology: Time-of-Flight
+  light_technology: Ambient light
+  cht8305: true
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Tuya
+  model: TPA10
+  model_label_strategy: display-name
+input:
+  evdev_buttons:
+    - node: /dev/input/event8
+      code: 14
+      grab: false
+      event_type: KEYCODE_MUTE
+      sw: true
+cpu:
+  governors:
+    Performance: performance
+    Efficiency: powersave
+    Auto: schedutil
+display:
+  physical_ppi: 226
+provisioning:
+  software:
+    webview:
+      artifact: lineageos-150-arm
+  display:
+    density: 212
+    font_scale: 1.0
+  packages:
+  - package: com.smartos.xinch.smarthome
+    desired_state: disabled
+    importance: optional
+    tags:
+      - vendor
+      - smarthome
+    note: Xinch (SmartOS/Tuya) smart-home control app. Redundant on a Home Assistant panel; safe to disable.
+  - package: com.smartos.xinch.smartiot
+    desired_state: disabled
+    importance: optional
+    tags:
+      - vendor
+      - smarthome
+    note: Xinch (SmartOS/Tuya) IoT control app. Redundant alongside Home Assistant; safe to disable.
+  - package: com.smartos.xinch.communicate
+    desired_state: disabled
+    importance: optional
+    tags:
+      - vendor
+      - test
+    note: >-
+      Xinch "central-control interconnect" app (label "TEST-中控互联"). Vendor demo/test; not used in normal
+      operation.
+  - package: com.smartos.xinch.monitor
+    desired_state: disabled
+    importance: optional
+    tags:
+      - vendor
+      - test
+      - clutter
+    note: 'Xinch "PerformanceMonitor" diagnostic app. Not needed in normal operation.'
+  - package: com.tuya.devicetest
+    desired_state: disabled
+    importance: optional
+    tags:
+      - chipset
+      - test
+      - clutter
+    note: Tuya factory device-test app (in /odm, persists across factory reset). Diagnostic only.
+  recipes:
+    - id: tpa10.vendor-stack-minimize
