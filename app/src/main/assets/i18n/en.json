@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "locale": "en",
-  "sourceRevision": "35526a940dc0e178250ebefbfdf6e37764307622",
+  "sourceRevision": "202ddad7446b21486121b27d82b2df1e2ec45115",
   "strings": {
     "configure.action.failed": {
       "text": "Action failed ({error}).",
@@ -9256,6 +9256,172 @@
       "frozen": [],
       "softMaxChars": 10,
       "hardMaxChars": 14
+    },
+    "dashboard.runtime.camera.degraded": {
+      "text": "camera gave up after {count} failures ({fault}); {stream}",
+      "sourceHash": "cb1a216be1393d32e3a40b86a480b4537b945f13af5efede61523484aeb2e902",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{count}",
+        "{fault}",
+        "{stream}"
+      ],
+      "frozen": [
+        "{count}",
+        "{fault}",
+        "{stream}"
+      ],
+      "softMaxChars": 69,
+      "hardMaxChars": 114
+    },
+    "dashboard.runtime.camera.idle": {
+      "text": "camera closed; nobody is watching; {stream}",
+      "sourceHash": "15b36d156c5ed4bfe4fcf932476fa8aac67d83652e853cbca0e390c2a20a6427",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{stream}"
+      ],
+      "frozen": [
+        "{stream}"
+      ],
+      "softMaxChars": 55,
+      "hardMaxChars": 86
+    },
+    "dashboard.runtime.camera.live_many": {
+      "text": "camera open for {count} clients; {stream}",
+      "sourceHash": "6757a9380381400647c2f5c11eb875fd7d33ce295ac47a4aa76c33c8efb2cfeb",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{count}",
+        "{stream}"
+      ],
+      "frozen": [
+        "{count}",
+        "{stream}"
+      ],
+      "softMaxChars": 53,
+      "hardMaxChars": 82
+    },
+    "dashboard.runtime.camera.live_many_streaming": {
+      "text": "camera open for {count} clients ({streaming} streaming); {stream}",
+      "sourceHash": "14dab5a8d2cb9593b30a4f8333b3244357e2fb96b8c38d182c10857186cd022f",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{count}",
+        "{streaming}",
+        "{stream}"
+      ],
+      "frozen": [
+        "{count}",
+        "{streaming}",
+        "{stream}"
+      ],
+      "softMaxChars": 77,
+      "hardMaxChars": 130
+    },
+    "dashboard.runtime.camera.live_one": {
+      "text": "camera open for {count} client; {stream}",
+      "sourceHash": "4a79067050eb9945d3eb75a372dd6866f78196d9218d51b4b57fa0ff1813ff76",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{count}",
+        "{stream}"
+      ],
+      "frozen": [
+        "{count}",
+        "{stream}"
+      ],
+      "softMaxChars": 52,
+      "hardMaxChars": 80
+    },
+    "dashboard.runtime.camera.live_one_streaming": {
+      "text": "camera open for {count} client ({streaming} streaming); {stream}",
+      "sourceHash": "35ea89d501f3ff4087ef7db859fa6fce0e6cc3a97b3e6f4f2877660b8402db7a",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{count}",
+        "{streaming}",
+        "{stream}"
+      ],
+      "frozen": [
+        "{count}",
+        "{streaming}",
+        "{stream}"
+      ],
+      "softMaxChars": 76,
+      "hardMaxChars": 128
+    },
+    "dashboard.runtime.camera.off": {
+      "text": "camera off",
+      "sourceHash": "4675ebe469762dc534555484b1592e59367d8e11e2a5c20e53651a36838b4786",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 48
+    },
+    "dashboard.runtime.camera.opening": {
+      "text": "camera opening; {stream}",
+      "sourceHash": "9d2e38cfe58a6393e51ee6baceed4200b3cc3179b8dd949b6fc42a1e36a4ad28",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{stream}"
+      ],
+      "frozen": [
+        "{stream}"
+      ],
+      "softMaxChars": 36,
+      "hardMaxChars": 48
+    },
+    "dashboard.runtime.camera.permission_needed": {
+      "text": "camera on, but Android has not granted the permission",
+      "sourceHash": "37df57d9ed8efdbd533eb9c3462692cfd2694a5e1af230434a548ff55bea397a",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "Android"
+      ],
+      "softMaxChars": 65,
+      "hardMaxChars": 106
+    },
+    "dashboard.runtime.camera.stopping": {
+      "text": "camera stopping",
+      "sourceHash": "d1070e22ba353e86ba99eb889e6bbb7cbdf3af999209557c7757fa840cd71d64",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics camera status",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 27,
+      "hardMaxChars": 48
     },
     "dashboard.runtime.camera.stream_not_listening": {
       "text": "stream not listening",

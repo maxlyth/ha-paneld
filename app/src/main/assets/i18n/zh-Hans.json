@@ -1,7 +1,7 @@
 {
   "locale": "zh-Hans",
   "schema": 1,
-  "sourceRevision": "35526a940dc0e178250ebefbfdf6e37764307622",
+  "sourceRevision": "202ddad7446b21486121b27d82b2df1e2ec45115",
   "strings": {
     "configure.action.failed": {
       "sourceHash": "4acca2deec62ac51cb2dd452216e9edf6e7b8b46625982f24c6c9395c1e57443",
@@ -3247,6 +3247,56 @@
       "sourceHash": "d36be6494248ee06ac18f38ea1119dfe4699fdcfcbbcc30a2e4f1ccbce68dfac",
       "state": "machine-cross-checked",
       "text": "排队中"
+    },
+    "dashboard.runtime.camera.degraded": {
+      "text": "摄像头在 {count} 次失败后停止重试（{fault}）；{stream}",
+      "sourceHash": "cb1a216be1393d32e3a40b86a480b4537b945f13af5efede61523484aeb2e902",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.idle": {
+      "text": "摄像头已关闭；无人观看；{stream}",
+      "sourceHash": "15b36d156c5ed4bfe4fcf932476fa8aac67d83652e853cbca0e390c2a20a6427",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.live_many": {
+      "text": "摄像头已打开，供 {count} 个客户端使用；{stream}",
+      "sourceHash": "6757a9380381400647c2f5c11eb875fd7d33ce295ac47a4aa76c33c8efb2cfeb",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.live_many_streaming": {
+      "text": "摄像头已打开，供 {count} 个客户端使用（其中 {streaming} 个正在接收视频流）；{stream}",
+      "sourceHash": "14dab5a8d2cb9593b30a4f8333b3244357e2fb96b8c38d182c10857186cd022f",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.live_one": {
+      "text": "摄像头已打开，供 {count} 个客户端使用；{stream}",
+      "sourceHash": "4a79067050eb9945d3eb75a372dd6866f78196d9218d51b4b57fa0ff1813ff76",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.live_one_streaming": {
+      "text": "摄像头已打开，供 {count} 个客户端使用（其中 {streaming} 个正在接收视频流）；{stream}",
+      "sourceHash": "35ea89d501f3ff4087ef7db859fa6fce0e6cc3a97b3e6f4f2877660b8402db7a",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.off": {
+      "text": "摄像头已关闭",
+      "sourceHash": "4675ebe469762dc534555484b1592e59367d8e11e2a5c20e53651a36838b4786",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.opening": {
+      "text": "摄像头正在打开；{stream}",
+      "sourceHash": "9d2e38cfe58a6393e51ee6baceed4200b3cc3179b8dd949b6fc42a1e36a4ad28",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.permission_needed": {
+      "text": "摄像头已开启，但 Android 尚未授予摄像头权限",
+      "sourceHash": "37df57d9ed8efdbd533eb9c3462692cfd2694a5e1af230434a548ff55bea397a",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.camera.stopping": {
+      "text": "摄像头正在关闭",
+      "sourceHash": "d1070e22ba353e86ba99eb889e6bbb7cbdf3af999209557c7757fa840cd71d64",
+      "state": "machine-cross-checked"
     },
     "dashboard.runtime.camera.stream_not_listening": {
       "text": "视频流服务未监听",
