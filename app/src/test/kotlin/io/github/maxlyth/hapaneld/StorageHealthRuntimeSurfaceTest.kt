@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.storage.StorageAutoVacuumMode
 import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
 import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
@@ -262,6 +263,55 @@ class StorageHealthRuntimeSurfaceTest {
         val mqttAt = service.indexOf("publishStorageHealth()", callbackStart)
         assertTrue(invalidateAt in (callbackStart + 1) until notificationAt)
         assertTrue(notificationAt < mqttAt)
+    }
+
+    @Test fun theMqttPayloadNamesTheFailingOperationAndTheReclamationMode() {
+        val json = JSONObject(
+            storageHealthMqttAttributes(
+                snapshot(
+                    severity = StorageHealthSeverity.DATABASE_FAILURE,
+                    failureKind = StorageDatabaseFailureKind.UNKNOWN,
+                ).copy(
+                    databaseFailureOperation = "catalog-maintenance",
+                    autoVacuumMode = StorageAutoVacuumMode.INCREMENTAL,
+                ),
+            ),
+        )
+
+        // `failure_category=unknown` on its own is what a report used to carry: an outcome with no
+        // subject. The operation is the half that makes it reproducible.
+        assertEquals("unknown", json.getString("failure_category"))
+        assertEquals("catalog-maintenance", json.getString("failure_operation"))
+        assertEquals("incremental", json.getString("auto_vacuum"))
+    }
+
+    @Test fun theMqttPayloadUsesAnExplicitNullWhenNoOperationWasRecorded() {
+        val json = JSONObject(storageHealthMqttAttributes(StorageHealthSnapshot.UNCHECKED))
+
+        assertTrue(json.isNull("failure_operation"))
+        assertEquals("unknown", json.getString("auto_vacuum"))
+    }
+
+    @Test fun theNotificationNamesTheFailingOperation() {
+        val decision = storageHealthNotificationDecision(
+            snapshot(
+                severity = StorageHealthSeverity.DATABASE_FAILURE,
+                failureKind = StorageDatabaseFailureKind.UNKNOWN,
+            ).copy(databaseFailureOperation = "catalog-maintenance"),
+        ) as StorageHealthNotificationDecision.Show
+
+        assertTrue(decision.body.contains("during catalog-maintenance"))
+    }
+
+    @Test fun theNotificationOmitsTheClauseWhenNoOperationWasRecorded() {
+        val decision = storageHealthNotificationDecision(
+            snapshot(
+                severity = StorageHealthSeverity.DATABASE_FAILURE,
+                failureKind = StorageDatabaseFailureKind.UNKNOWN,
+            ),
+        ) as StorageHealthNotificationDecision.Show
+
+        assertFalse("an absent operation must not leave a dangling clause", decision.body.contains("during"))
     }
 
     private fun snapshot(
