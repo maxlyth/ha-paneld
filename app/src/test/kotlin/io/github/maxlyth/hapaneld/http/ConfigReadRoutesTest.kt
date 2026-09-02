@@ -92,6 +92,7 @@ class ConfigReadRoutesTest {
 
         // Explicit browser choice wins every inherited signal.
         assertSchema("/api/v1/config/schema?lang=fr&ha_lang=it", "es", "fr:Checked", "en, fr")
+        assertSchema("/api/v1/config/schema?lang=zh-Hans&ha_lang=it", "es", "zh-Hans:Checked", "en, zh-Hans")
         // A persisted non-auto panel choice wins HA, browser, and device signals.
         assertSchema("/api/v1/config/schema?ha_lang=it", "es", "de:Checked", "de, en")
         // Automatic persistence admits the connected HA user's language.
