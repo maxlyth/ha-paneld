@@ -5,10 +5,12 @@ import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
 import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 /**
@@ -133,6 +135,40 @@ class StorageFailureAttributionTest {
             assertEquals(expected, JSONObject(presentation.statusJson()).getString("auto_vacuum"))
             assertTrue(presentation.diagnosticLine().contains("auto_vacuum=$expected"))
         }
+    }
+
+    @Test fun theStatusJsonAndTheOpenApiSchemaDescribeTheSameStorageFields() {
+        // `/api/v1/status` is a documented public contract, and its documentation drifts silently:
+        // the `failure` description claimed no operation detail was ever exposed long after the
+        // operation was being captured. A green suite proves nothing here unless something compares
+        // the two, so this does.
+        val assets = listOf("src/main/assets", "app/src/main/assets", "../app/src/main/assets")
+            .map { File(it) }.firstOrNull { it.isDirectory }
+        assumeTrue("assets dir not found (skipping)", assets != null)
+        val schema = JSONObject(File(assets, "openapi.json").readText())
+            .getJSONObject("components").getJSONObject("schemas").getJSONObject("StorageHealth")
+        val documented = schema.getJSONObject("properties").keys().asSequence().toSet()
+
+        // A failed snapshot emits every optional field, so its key set is the widest the API produces.
+        val emitted = JSONObject(HealthAudit.storage(snapshot()).statusJson()).keys().asSequence().toSet()
+        assertTrue("undocumented status fields: ${emitted - documented}", (emitted - documented).isEmpty())
+        assertTrue("documented but never emitted: ${documented - emitted}", (documented - emitted).isEmpty())
+
+        val required = schema.getJSONArray("required").let { array ->
+            (0 until array.length()).map(array::getString).toSet()
+        }
+        val healthy = JSONObject(
+            HealthAudit.storage(
+                snapshot(severity = StorageHealthSeverity.HEALTHY, kind = null, operation = null),
+            ).statusJson(),
+        ).keys().asSequence().toSet()
+        assertTrue("required fields missing from a healthy status: ${required - healthy}",
+            (required - healthy).isEmpty())
+        assertTrue("auto_vacuum must be documented as always present", required.contains("auto_vacuum"))
+        assertFalse(
+            "failure_operation is present only alongside a failure, so it must not be required",
+            required.contains("failure_operation"),
+        )
     }
 
     @Test fun aHealthySnapshotCarriesNoFailureOperationField() {

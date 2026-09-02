@@ -68,7 +68,7 @@
       "StorageHealth": {
         "type": "object",
         "description": "Sanitized latest observation of the filesystem containing ha-paneld's SQLite database. No filesystem paths, configuration values or raw exception text are exposed. Metrics remain JSON null when their underlying probe is unavailable.",
-        "required": ["state", "pressure_state", "usable_bytes", "total_bytes", "used_percent", "database_bytes", "wal_bytes", "sidecar_bytes", "page_size_bytes", "page_count", "freelist_count", "schema_version", "quick_check", "checked_at", "summary", "action"],
+        "required": ["state", "pressure_state", "usable_bytes", "total_bytes", "used_percent", "database_bytes", "wal_bytes", "sidecar_bytes", "page_size_bytes", "page_count", "freelist_count", "schema_version", "quick_check", "auto_vacuum", "checked_at", "summary", "action"],
         "properties": {
           "state": { "type": "string", "enum": ["unchecked", "healthy", "warning", "critical", "database_failure"], "description": "Overall state. database_failure takes precedence over the underlying pressure band." },
           "pressure_state": { "type": "string", "enum": ["unchecked", "healthy", "warning", "critical"], "description": "Underlying filesystem/WAL pressure band, retained when state is database_failure." },
@@ -80,11 +80,13 @@
           "sidecar_bytes": { "type": "integer", "format": "int64", "nullable": true, "description": "Combined size of allowlisted SQLite sidecars other than the WAL." },
           "page_size_bytes": { "type": "integer", "format": "int64", "nullable": true },
           "page_count": { "type": "integer", "format": "int64", "nullable": true },
-          "freelist_count": { "type": "integer", "format": "int64", "nullable": true },
+          "freelist_count": { "type": "integer", "format": "int64", "nullable": true, "description": "Pages the database holds but is not using. A large value is not itself a fault — read it together with auto_vacuum, which says whether those pages can be returned to the filesystem at all." },
           "schema_version": { "type": "integer", "nullable": true },
           "quick_check": { "type": "string", "enum": ["not_run", "ok", "failed"] },
+          "auto_vacuum": { "type": "string", "enum": ["unknown", "none", "full", "incremental"], "description": "SQLite's auto-vacuum mode for this database, which decides whether bounded freelist reclamation can run. Only incremental reclaims in slices. none is not a fault and is never converted implicitly, because enabling auto-vacuum needs a full VACUUM whose temporary-space demand can worsen a low-space incident — but it does mean freelist pages will never return to the filesystem." },
           "checked_at": { "type": "integer", "format": "int64", "nullable": true, "description": "Unix epoch milliseconds for the underlying storage/SQLite check." },
-          "failure": { "type": "string", "enum": ["storage_full", "io", "corruption", "busy", "unknown"], "description": "Optional controlled failure kind; never raw exception text or operation details." },
+          "failure": { "type": "string", "enum": ["storage_full", "io", "corruption", "busy", "unknown"], "description": "Optional controlled failure kind; never raw exception text." },
+          "failure_operation": { "type": "string", "description": "Optional controlled name of the operation that failed, drawn from a fixed internal vocabulary — for example catalog-maintenance, app-state-write or database-checkpoint. Anything outside that vocabulary is reported as the generic database, so no SQL, filesystem path, entity id or other user data can appear here. Present only alongside failure, and the field most likely to make an unknown failure reproducible." },
           "summary": { "type": "string" },
           "action": { "type": "string" }
         }
