@@ -331,21 +331,26 @@ internal fun storageHealthNotificationDecision(
                 "Open ha-paneld and review free space and WAL growth before changing configuration.",
         )
     }
-    StorageHealthSeverity.DATABASE_FAILURE -> StorageHealthNotificationDecision.Show(
-        title = "Panel database needs attention",
-        body = when (snapshot.databaseFailureKind) {
-            StorageDatabaseFailureKind.STORAGE_FULL ->
-                "A panel database write failed when storage was full. Open ha-paneld; recovery is not yet verified."
-            StorageDatabaseFailureKind.IO ->
-                "The panel database reported a disk I/O failure. Open ha-paneld; retry only after resolving the cause."
-            StorageDatabaseFailureKind.CORRUPTION ->
-                "The panel database failed its integrity check. Preserve it and open ha-paneld diagnostics before further writes."
-            StorageDatabaseFailureKind.BUSY ->
-                "The panel database remained busy or locked. Open ha-paneld diagnostics and wait for a clean check before retrying."
-            StorageDatabaseFailureKind.UNKNOWN,
-            null -> "The panel database reported a failure. Preserve it and open ha-paneld diagnostics before retrying."
-        },
-    )
+    StorageHealthSeverity.DATABASE_FAILURE -> {
+        // The operation class is the one detail that turns "something failed" into a reproducible
+        // report; it is a closed internal vocabulary, so it carries no query text or user data.
+        val during = snapshot.databaseFailureOperationLabel?.let { " during $it" }.orEmpty()
+        StorageHealthNotificationDecision.Show(
+            title = "Panel database needs attention",
+            body = when (snapshot.databaseFailureKind) {
+                StorageDatabaseFailureKind.STORAGE_FULL ->
+                    "A panel database write$during failed when storage was full. Open ha-paneld; recovery is not yet verified."
+                StorageDatabaseFailureKind.IO ->
+                    "The panel database reported a disk I/O failure$during. Open ha-paneld; retry only after resolving the cause."
+                StorageDatabaseFailureKind.CORRUPTION ->
+                    "The panel database failed its integrity check$during. Preserve it and open ha-paneld diagnostics before further writes."
+                StorageDatabaseFailureKind.BUSY ->
+                    "The panel database remained busy or locked$during. Open ha-paneld diagnostics and wait for a clean check before retrying."
+                StorageDatabaseFailureKind.UNKNOWN,
+                null -> "The panel database reported a failure$during. Preserve it and open ha-paneld diagnostics before retrying."
+            },
+        )
+    }
 }
 
 internal enum class StorageHealthObservationQuality { COMPLETE, FAILED, INCOMPLETE }

@@ -206,9 +206,35 @@ class EntityCatalogStorageHealthContractTest {
             "execSQL(\"VACUUM" in source)
         val vacuum = functionBody("incrementalVacuumStep")
         assertTrue("reclamation must be sliced and capped per pass",
-            "MAX_VACUUM_PAGES_PER_PASS" in vacuum && "PRAGMA incremental_vacuum(\$VACUUM_CHUNK_PAGES)" in vacuum)
+            "MAX_VACUUM_PAGES_PER_PASS" in vacuum && "PRAGMA incremental_vacuum(\$slice)" in vacuum)
         assertTrue("a small freelist must be retained for ordinary reuse",
             "FREELIST_RETAINED_PAGES" in vacuum)
+        // incremental_vacuum yields one row per freed page. Through execSQL, Android's
+        // executeNonQuery threw on the first SQLITE_ROW, which classified UNKNOWN, took zero retries
+        // and latched database_failure on every pass that had anything to reclaim (Issue #91).
+        assertFalse("incremental_vacuum must never run through execSQL — it returns one row per page",
+            "execSQL(\"PRAGMA incremental_vacuum" in source)
+        assertTrue("the pragma must be stepped to exhaustion through rawQuery",
+            "rawQuery(\"PRAGMA incremental_vacuum(\$slice)\", null)" in vacuum &&
+                "while (cursor.moveToNext()) counted++" in vacuum)
+        assertTrue("a short slice means SQLite ran out of reclaimable pages and the loop must stop",
+            "if (sliceFreedPages < slice) break" in vacuum)
+        assertTrue("the pass must be refused when the filesystem cannot afford its transient cost",
+            "reclamationHasHeadroom(" in vacuum)
+        val headroom = functionBody("reclamationHasHeadroom")
+        assertTrue("the admission decision must be the shared reviewable policy, not a local rule",
+            "reclamationAdmitted(" in headroom)
+        assertTrue("the policy must be given this pass's own slice budget and margin",
+            "MAX_VACUUM_PAGES_PER_PASS" in headroom && "RECLAMATION_HEADROOM_MARGIN_BYTES" in headroom)
+        assertTrue("the policy must see live severity, not a cached one",
+            "StorageHealthRuntime.snapshot().severity" in headroom)
+        // The pragma alone moves page_count but leaves the file at its old length in WAL mode.
+        val reclaimed = functionBody("checkpointReclaimedBytes")
+        assertTrue("reclaimed pages must be checkpointed out of the WAL or no bytes come back",
+            "PRAGMA wal_checkpoint(PASSIVE)" in reclaimed)
+        assertTrue("returned bytes must be measured from the file, never inferred from the result row",
+            "storageKnownFileBytes(databaseFile)" in reclaimed &&
+                "(bytesBefore - bytesAfter).coerceAtLeast(0L)" in reclaimed)
     }
 
     @Test fun schemaAndPreopenFailuresCannotDisappear() {

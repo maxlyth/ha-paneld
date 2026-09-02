@@ -323,4 +323,24 @@ class StorageHealthTest {
     private class SQLiteDiskIOException : RuntimeException("private io detail")
     private class SQLiteCorruptException : RuntimeException("private corruption detail")
     private class SQLiteBusyException : RuntimeException("private busy detail")
+
+    @Test fun sanitizingAnAlreadySanitizedOperationLeavesItAlone() {
+        // Capture sanitizes and every render boundary sanitizes again, so a label that survives one
+        // pass but not two would reach users as the generic fallback while looking correct in the
+        // captured state. Every value the function can return must be a fixed point of itself.
+        val everyOutput = KNOWN_DATABASE_OPERATIONS + setOf("app-state-write", "database")
+        for (operation in everyOutput) {
+            assertEquals(
+                "sanitize must be idempotent for the value it can itself produce",
+                operation,
+                sanitizeDatabaseOperation(operation),
+            )
+        }
+    }
+
+    @Test fun everyAppStateNamespaceCollapsesToOneStableLabel() {
+        assertEquals("app-state-write", sanitizeDatabaseOperation("app_state:renderer"))
+        assertEquals("app-state-write", sanitizeDatabaseOperation("app_state"))
+        assertEquals("app-state-write", sanitizeDatabaseOperation(sanitizeDatabaseOperation("app_state:mqtt")))
+    }
 }

@@ -20,8 +20,10 @@ import io.github.maxlyth.hapaneld.persistence.ConfigVault
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.storage.DatabaseBusyRetry
+import io.github.maxlyth.hapaneld.storage.StorageAutoVacuumMode
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
 import io.github.maxlyth.hapaneld.storage.StorageHealthRuntime
+import io.github.maxlyth.hapaneld.storage.reclamationAdmitted
 import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1314,18 +1316,112 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
      * Reclaims freelist pages in bounded slices, one short write transaction per pragma call, capped
      * per maintenance pass so no single pass monopolizes the writer. Retains a small freelist for
      * ordinary page reuse. Returns whether any slice ran.
+     *
+     * Two measured SQLite facts shape this, and getting either wrong makes reclamation silently
+     * useless (Issue #91 residual):
+     *
+     *  * **`incremental_vacuum` is a row-returning statement** — it yields one empty result row per
+     *    freed page. Android's [SQLiteDatabase.execSQL] routes to `executeNonQuery`, which throws
+     *    `"Queries can be performed using SQLiteDatabase query or rawQuery methods only."` the moment
+     *    `sqlite3_step` first returns `SQLITE_ROW`. That message matches no full/corrupt/busy/io
+     *    keyword, so it classified `UNKNOWN`, took zero retries and latched `database_failure` on
+     *    every pass that had anything to reclaim. It must be run through [SQLiteDatabase.rawQuery]
+     *    and stepped to exhaustion; the row count is also the only direct count of pages freed.
+     *  * **The pragma alone returns no filesystem bytes in WAL mode.** A full drain moves
+     *    `page_count` but leaves the main file at its old length; the space comes back only when a
+     *    checkpoint backfills to the end of the WAL and truncates. See [checkpointReclaimedBytes].
      */
     private fun incrementalVacuumStep(db: SQLiteDatabase): Boolean {
         fun freelist(): Long = db.rawQuery("PRAGMA freelist_count", null).use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
         }
-        var vacuumedPages = 0L
-        while (vacuumedPages < MAX_VACUUM_PAGES_PER_PASS && freelist() > FREELIST_RETAINED_PAGES) {
-            // incremental_vacuum returns no rows, so execSQL both executes and fully steps it.
-            db.execSQL("PRAGMA incremental_vacuum($VACUUM_CHUNK_PAGES)")
-            vacuumedPages += VACUUM_CHUNK_PAGES
+        val pageSize = db.rawQuery("PRAGMA page_size", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0).coerceAtLeast(0L) else 0L
         }
-        return vacuumedPages > 0L
+        val databaseFile = File(db.path)
+        val startingFreelist = freelist()
+        if (startingFreelist <= FREELIST_RETAINED_PAGES) return false
+        if (!reclamationHasHeadroom(databaseFile, pageSize)) {
+            // Reclamation writes one WAL frame per relocated page before anything shrinks, so it
+            // costs space before it returns any. Refusing here is the difference between deferring
+            // reclamation and deepening the very low-space incident it exists to relieve.
+            Log.i("EntityCatalogStore", "storage reclamation deferred: insufficient headroom, freelist=$startingFreelist")
+            return false
+        }
+
+        val bytesBefore = storageKnownFileBytes(databaseFile)
+        var freedPages = 0L
+        while (freedPages < MAX_VACUUM_PAGES_PER_PASS && freelist() > FREELIST_RETAINED_PAGES) {
+            val slice = minOf(VACUUM_CHUNK_PAGES, MAX_VACUUM_PAGES_PER_PASS - freedPages)
+            // One row per freed page, stepped to exhaustion. A short slice means SQLite ran out of
+            // reclaimable pages, so stop rather than spin on a pragma that can no longer progress.
+            val sliceFreedPages = db.rawQuery("PRAGMA incremental_vacuum($slice)", null).use { cursor ->
+                var counted = 0L
+                while (cursor.moveToNext()) counted++
+                counted
+            }
+            freedPages += sliceFreedPages
+            if (sliceFreedPages < slice) break
+        }
+        if (freedPages == 0L) {
+            // A freelist above the retention floor that yields nothing is the exact shape of the
+            // defect this replaced: reclamation that runs, reports nothing and is never noticed.
+            // It is not a database fault and must not latch, but it must never again be silent.
+            Log.w(
+                "EntityCatalogStore",
+                "storage reclamation made no progress with freelist=$startingFreelist",
+            )
+            return false
+        }
+
+        val bytesReturned = checkpointReclaimedBytes(db, databaseFile, bytesBefore)
+        Log.i(
+            "EntityCatalogStore",
+            "storage reclamation freed $freedPages page(s), returned $bytesReturned byte(s) to the filesystem",
+        )
+        return true
+    }
+
+    /**
+     * Refuses a reclamation pass that the filesystem cannot afford. The transient cost is bounded by
+     * one pass's slice budget; the margin on top covers the checkpoint that follows. A capacity read
+     * that fails admits the pass, because losing the probe is not evidence of a full disk and the
+     * pass is already bounded — but latched or critical storage pressure refuses it outright.
+     */
+    private fun reclamationHasHeadroom(databaseFile: File, pageSize: Long): Boolean {
+        val statFs = runCatching { StatFs(databaseFile.path) }.getOrNull()
+        val usableBytes = storageSaturatedMultiply(
+            statFs?.availableBlocksLong?.coerceAtLeast(0L) ?: 0L,
+            statFs?.blockSizeLong?.coerceAtLeast(0L) ?: 0L,
+        )
+        return reclamationAdmitted(
+            severity = StorageHealthRuntime.snapshot().severity,
+            usableBytes = usableBytes,
+            pageSizeBytes = pageSize,
+            maxPagesPerPass = MAX_VACUUM_PAGES_PER_PASS,
+            marginBytes = RECLAMATION_HEADROOM_MARGIN_BYTES,
+        )
+    }
+
+    /**
+     * Flushes the reclaimed pages out of the WAL so the main file actually shrinks, and reports the
+     * bytes the filesystem really gave back.
+     *
+     * The returned count is measured from the file, never inferred from the checkpoint's result row.
+     * A reader whose snapshot predates the reclamation pins the backfill, and SQLite reports that as
+     * `(busy=0, log=N, checkpointed=0)` — the busy flag stays clear, so the result triple cannot
+     * distinguish "returned nothing" from "returned everything". The next pass, once that reader has
+     * moved on, returns the space. Reporting a measured zero is correct and is not a fault.
+     */
+    private fun checkpointReclaimedBytes(db: SQLiteDatabase, databaseFile: File, bytesBefore: Long): Long {
+        // PASSIVE never blocks a concurrent writer. TRUNCATE additionally shrinks the WAL file but
+        // waits on the busy handler, and the main database file — the space actually at stake here —
+        // comes back under PASSIVE just the same.
+        runCatching {
+            db.rawQuery("PRAGMA wal_checkpoint(PASSIVE)", null).use { cursor -> cursor.moveToFirst() }
+        }
+        val bytesAfter = storageKnownFileBytes(databaseFile)
+        return (bytesBefore - bytesAfter).coerceAtLeast(0L)
     }
 
     /** Rewrite only derived telemetry rows. Each tier is transactionally replace-or-delete so a
@@ -1717,6 +1813,14 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
             freelistCount = pragmaLong("freelist_count"),
             schemaVersion = db.version.coerceAtLeast(0),
             quickCheck = quickCheck,
+            // Without this, a large freelist_count is ambiguous: reclamation lagging, or a database
+            // on which bounded reclamation can never run at all.
+            autoVacuumMode = when (pragmaLong("auto_vacuum")) {
+                AUTO_VACUUM_NONE -> StorageAutoVacuumMode.NONE
+                AUTO_VACUUM_FULL -> StorageAutoVacuumMode.FULL
+                AUTO_VACUUM_INCREMENTAL -> StorageAutoVacuumMode.INCREMENTAL
+                else -> StorageAutoVacuumMode.UNKNOWN
+            },
         )
     }
 
@@ -1803,6 +1907,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
         private const val MAX_VACUUM_PAGES_PER_PASS = 5_120L
         /** Small freelist retained for ordinary page reuse; below this, reclamation is not worth a lock. */
         private const val FREELIST_RETAINED_PAGES = 512L
+        /**
+         * Free space a reclamation pass needs on top of its own transient cost. Reclamation adds WAL
+         * frames for the pages it relocates before the checkpoint gives anything back, so a pass run
+         * with no margin can deepen the low-space incident it was meant to relieve.
+         */
+        private const val RECLAMATION_HEADROOM_MARGIN_BYTES = 64L * 1024L * 1024L
         private const val MAX_SQL_ID_FILTER = 800
         internal const val PERFORMANCE_RETENTION_DAYS = 7
         private const val PERFORMANCE_RETENTION_MINUTES = PERFORMANCE_RETENTION_DAYS * 24L * 60L

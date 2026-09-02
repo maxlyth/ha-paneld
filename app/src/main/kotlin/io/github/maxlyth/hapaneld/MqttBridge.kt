@@ -361,6 +361,8 @@ internal fun storageHealthMqttAttributes(snapshot: StorageHealthSnapshot): Strin
     return JSONObject()
         .put("storage_pressure", snapshot.pressureSeverity.name.lowercase(Locale.ROOT))
         .put("failure_category", snapshot.databaseFailureKind?.name?.lowercase(Locale.ROOT) ?: JSONObject.NULL)
+        .put("failure_operation", snapshot.databaseFailureOperationLabel ?: JSONObject.NULL)
+        .put("auto_vacuum", snapshot.autoVacuumMode.name.lowercase(Locale.ROOT))
         .put("usable_bytes", valueOrNull(snapshot.usableBytes, capacityKnown))
         .put("total_bytes", valueOrNull(snapshot.totalBytes, capacityKnown))
         .put("used_percent", if (capacityKnown) snapshot.usedPercent ?: JSONObject.NULL else JSONObject.NULL)

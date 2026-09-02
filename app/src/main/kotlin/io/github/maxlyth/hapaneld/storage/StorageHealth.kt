@@ -20,6 +20,21 @@ enum class StorageQuickCheck {
     FAILED,
 }
 
+/**
+ * Whether bounded freelist reclamation is even possible for this database.
+ *
+ * `NONE` is not a fault and is never converted implicitly — enabling auto-vacuum on such a database
+ * needs a full `VACUUM`, whose temporary-space demand can worsen a low-space incident. It does mean
+ * freelist pages will never return to the filesystem, which an operator reading a large
+ * `freelist_count` otherwise has no way to tell from reclamation that is merely lagging.
+ */
+enum class StorageAutoVacuumMode {
+    UNKNOWN,
+    NONE,
+    FULL,
+    INCREMENTAL,
+}
+
 /** A deliberately small failure vocabulary; exception messages never enter the health snapshot. */
 enum class StorageDatabaseFailureKind {
     STORAGE_FULL,
@@ -45,6 +60,7 @@ data class StorageHealthObservation(
     val freelistCount: Long,
     val schemaVersion: Int,
     val quickCheck: StorageQuickCheck,
+    val autoVacuumMode: StorageAutoVacuumMode = StorageAutoVacuumMode.UNKNOWN,
 )
 
 /** One immutable, path-free projection shared by every health surface. */
@@ -63,9 +79,22 @@ data class StorageHealthSnapshot(
     val freelistCount: Long,
     val schemaVersion: Int,
     val quickCheck: StorageQuickCheck,
+    val autoVacuumMode: StorageAutoVacuumMode = StorageAutoVacuumMode.UNKNOWN,
     val databaseFailureKind: StorageDatabaseFailureKind? = null,
     val databaseFailureOperation: String? = null,
 ) {
+    /**
+     * The failing operation as it may be shown, reduced to the closed internal vocabulary.
+     *
+     * Capture already sanitizes, but capture is not the only way a snapshot comes into existence —
+     * `copy` reaches this field directly. Reducing again at the read boundary is what makes it safe
+     * for every surface to render: anything outside the known set becomes the generic `database`, so
+     * a path, a query fragment or an entity id can never reach a user-visible string by construction
+     * rather than by the discipline of each call site.
+     */
+    val databaseFailureOperationLabel: String?
+        get() = databaseFailureOperation?.takeIf { it.isNotBlank() }?.let(::sanitizeDatabaseOperation)
+
     companion object {
         val UNCHECKED = StorageHealthSnapshot(
             severity = StorageHealthSeverity.UNCHECKED,
@@ -82,6 +111,7 @@ data class StorageHealthSnapshot(
             freelistCount = 0L,
             schemaVersion = 0,
             quickCheck = StorageQuickCheck.NOT_RUN,
+            autoVacuumMode = StorageAutoVacuumMode.UNKNOWN,
         )
     }
 }
@@ -369,7 +399,16 @@ object StorageHealthRuntime {
     ): StorageHealthSnapshot = authority.refresh(observation, observationToken)
 
     fun recordDatabaseFailure(operation: String, throwable: Throwable): StorageHealthSnapshot {
-        return failureHub.recordDatabaseFailure(operation, throwable)
+        val snapshot = failureHub.recordDatabaseFailure(operation, throwable)
+        // Every latch funnels through here, so this is the one place that guarantees the failing
+        // operation reaches the log. Only the classified kind and the sanitized operation are
+        // printed: the exception message can carry SQL, and never enters any surface.
+        android.util.Log.w(
+            "StorageHealth",
+            "database failure latched: operation=${snapshot.databaseFailureOperationLabel ?: "unknown"} " +
+                "kind=${snapshot.databaseFailureKind?.name?.lowercase(java.util.Locale.ROOT) ?: "unknown"}",
+        )
+        return snapshot
     }
 
     fun recordDatabaseWriteSuccess(): StorageHealthSnapshot = authority.recordDatabaseWriteSuccess()
@@ -379,6 +418,42 @@ object StorageHealthRuntime {
 
     internal fun subscribeDatabaseFailures(listener: () -> Unit): AutoCloseable =
         failureHub.subscribe(listener)
+}
+
+/**
+ * Whether a bounded freelist-reclamation pass may run, given what is currently known about storage.
+ *
+ * Reclamation is not free before it pays: relocating pages writes WAL frames, and the space only
+ * comes back at the checkpoint afterwards. A pass started with no margin can therefore deepen the
+ * very low-space incident it exists to relieve, so this refuses one outright under critical pressure
+ * or a latched failure, and otherwise requires room for a whole pass plus [marginBytes].
+ *
+ * A capacity reading that is simply unavailable ([usableBytes] of zero) admits the pass: losing the
+ * probe is not evidence of a full disk, and the pass is bounded regardless. That is a deliberate
+ * fail-open, and it is the only one here.
+ */
+internal fun reclamationAdmitted(
+    severity: StorageHealthSeverity,
+    usableBytes: Long,
+    pageSizeBytes: Long,
+    maxPagesPerPass: Long,
+    marginBytes: Long,
+): Boolean {
+    if (severity == StorageHealthSeverity.CRITICAL || severity == StorageHealthSeverity.DATABASE_FAILURE) {
+        return false
+    }
+    if (pageSizeBytes <= 0L || usableBytes <= 0L) return true
+    val transientBytes = storageSaturatingMultiply(maxPagesPerPass, pageSizeBytes)
+    return usableBytes >= storageSaturatingAdd(transientBytes, marginBytes)
+}
+
+private fun storageSaturatingAdd(left: Long, right: Long): Long =
+    if (left > Long.MAX_VALUE - right) Long.MAX_VALUE else left + right
+
+private fun storageSaturatingMultiply(left: Long, right: Long): Long = when {
+    left <= 0L || right <= 0L -> 0L
+    left > Long.MAX_VALUE / right -> Long.MAX_VALUE
+    else -> left * right
 }
 
 internal fun classifyDatabaseFailure(throwable: Throwable): StorageDatabaseFailureKind {
@@ -462,6 +537,7 @@ private fun StorageHealthObservation.toSnapshot(
     freelistCount = freelistCount,
     schemaVersion = schemaVersion,
     quickCheck = quickCheck,
+    autoVacuumMode = autoVacuumMode,
     databaseFailureKind = databaseFailureKind,
     databaseFailureOperation = databaseFailureOperation,
 )
@@ -469,7 +545,11 @@ private fun StorageHealthObservation.toSnapshot(
 private const val MAX_FAILURE_CAUSE_DEPTH = 8
 private const val MAX_FAILURE_MESSAGE_CHARS = 256
 private const val MAX_OPERATION_CHARS = 48
-private val KNOWN_DATABASE_OPERATIONS = setOf(
+internal val KNOWN_DATABASE_OPERATIONS = setOf(
+    // The canonical form every `app_state:<namespace>` write collapses to. It must be a member in
+    // its own right, or reducing an already-reduced label would degrade it to the generic fallback
+    // — which is exactly what happens when a snapshot is rendered rather than captured.
+    "app-state-write",
     "ambient-history",
     "ambient-history-reset",
     "ambient-history-seed",

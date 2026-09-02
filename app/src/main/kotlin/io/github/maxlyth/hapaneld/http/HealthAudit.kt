@@ -72,7 +72,9 @@ object HealthAudit {
         val schemaVersion: Int?,
         val checkedAtMillis: Long?,
         val quickCheck: String,
+        val autoVacuum: String,
         val failure: String?,
+        val failureOperation: String?,
         val summary: String,
         val action: String,
     ) {
@@ -101,8 +103,10 @@ object HealthAudit {
             field("freelist_count", freelistCount)
             field("schema_version", schemaVersion)
             field("quick_check", quickCheck)
+            field("auto_vacuum", autoVacuum)
             field("checked_at", checkedAtMillis)
             failure?.let { field("failure", it) }
+            failureOperation?.let { field("failure_operation", it) }
             field("summary", summary)
             field("action", action)
             append('}')
@@ -139,8 +143,13 @@ object HealthAudit {
             metric("freelist_count", freelistCount)
             metric("schema_version", schemaVersion)
             metric("quick_check", quickCheck)
+            metric("auto_vacuum", autoVacuum)
             metric("checked_at", checkedAtMillis)
             metric("failure", failure ?: "none")
+            // The failing operation was already captured and sanitized to a closed vocabulary; until
+            // it was rendered here, a reported `failure=unknown` named nothing an operator could act
+            // on and nothing a maintainer could reproduce (Issue #91 residual).
+            metric("failure_operation", failureOperation ?: "none")
         }
     }
 
@@ -153,6 +162,10 @@ object HealthAudit {
         val pageCount = snapshot.pageCount.takeIf { probeRan && it > 0L }
         val used = snapshot.usedPercent?.takeIf { filesystemKnown && it.isFinite() && it in 0.0..100.0 }
         val failure = snapshot.databaseFailureKind?.let(::storageFailureWireValue)
+        val failureOperation = snapshot.databaseFailureOperationLabel
+        // Named in prose as well as in the machine fields: the operator-facing summary is the only
+        // one of these surfaces a reporter reads by default.
+        val during = failureOperation?.let { " during $it" }.orEmpty()
         val free = usableBytes?.let(::formatBytes) ?: "free space unknown"
         val percent = used?.let { "%.1f%% used".format(java.util.Locale.ROOT, it) }
         val headroom = listOfNotNull(free, percent).joinToString(", ")
@@ -168,16 +181,16 @@ object HealthAudit {
             StorageHealthSeverity.CRITICAL -> "Storage or database-file pressure is critical ($headroom)."
             StorageHealthSeverity.DATABASE_FAILURE -> when (snapshot.databaseFailureKind) {
                 StorageDatabaseFailureKind.STORAGE_FULL ->
-                    "A database write failed when storage was full; recovery is not yet verified. Last measured storage metrics: $headroom."
+                    "A database write$during failed when storage was full; recovery is not yet verified. Last measured storage metrics: $headroom."
                 StorageDatabaseFailureKind.IO ->
-                    "A database operation reported disk I/O failure; recovery is not yet verified. Last measured storage metrics: $headroom."
+                    "A database operation$during reported disk I/O failure; recovery is not yet verified. Last measured storage metrics: $headroom."
                 StorageDatabaseFailureKind.CORRUPTION ->
-                    "SQLite reported corruption or failed its quick check. Retained storage metrics are diagnostic only: $headroom."
+                    "SQLite reported corruption or failed its quick check$during. Retained storage metrics are diagnostic only: $headroom."
                 StorageDatabaseFailureKind.BUSY ->
-                    "A database operation remained busy or locked; recovery is not yet verified. Last measured storage metrics: $headroom."
+                    "A database operation$during remained busy or locked; recovery is not yet verified. Last measured storage metrics: $headroom."
                 StorageDatabaseFailureKind.UNKNOWN,
                 null ->
-                    "A database operation failed${failure?.let { " ($it)" }.orEmpty()}; recovery is not yet verified. Last measured storage metrics: $headroom."
+                    "A database operation$during failed${failure?.let { " ($it)" }.orEmpty()}; recovery is not yet verified. Last measured storage metrics: $headroom."
             }
         }
         val action = when (snapshot.severity) {
@@ -220,7 +233,9 @@ object HealthAudit {
             schemaVersion = snapshot.schemaVersion.takeIf { probeRan && it > 0 },
             checkedAtMillis = snapshot.checkedAtMillis.takeIf { probeRan },
             quickCheck = if (probeRan) snapshot.quickCheck.name.lowercase(java.util.Locale.ROOT) else "not_run",
+            autoVacuum = snapshot.autoVacuumMode.name.lowercase(java.util.Locale.ROOT),
             failure = failure,
+            failureOperation = failureOperation,
             summary = summary,
             action = action,
         )
