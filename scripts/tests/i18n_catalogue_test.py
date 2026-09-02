@@ -1,11 +1,13 @@
 import importlib.util
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "i18n_catalogue.py"
@@ -291,7 +293,7 @@ class CatalogueTest(unittest.TestCase):
                 },
             }
             worktree, source_path, base_path = self.committed_catalogues(root, source, "de", base)
-            replacement_path.write_text("{name} in MQTT beibehalten.", encoding="utf-8")
+            replacement_path.write_text("{name} in MQTT beibehalten.\n", encoding="utf-8")
 
             i18n.apply_community_correction(
                 worktree,
@@ -321,6 +323,24 @@ class CatalogueTest(unittest.TestCase):
             report = i18n.catalogue_report(source_path, [output])
             self.assertEqual(1, report["locales"]["de"]["stateCounts"]["community-corrected"])
 
+            replacement_path.write_bytes(b"{name} in MQTT beibehalten.\r\n")
+            crlf_output = root / "out" / "de-crlf.json"
+            i18n.apply_community_correction(
+                worktree,
+                source_path,
+                base_path,
+                "de",
+                "settings.example.help",
+                source["strings"]["settings.example.help"]["sourceHash"],
+                i18n.source_hash(current_text),
+                replacement_path,
+                crlf_output,
+            )
+            self.assertEqual(
+                "{name} in MQTT beibehalten.",
+                json.loads(crlf_output.read_text(encoding="utf-8"))["strings"]["settings.example.help"]["text"],
+            )
+
     def test_apply_community_correction_fails_closed_for_stale_or_invalid_input(self):
         invalid_replacements = {
             "placeholder": "Ohne Namen auf MQTT behalten.",
@@ -329,6 +349,9 @@ class CatalogueTest(unittest.TestCase):
             "script": "{name} auf MQTT behalten. Ελληνικά",
             "NUL control": "{name} auf MQTT behalten.\x00",
             "bidi override": "{name} auf MQTT behalten.\u202e",
+            "embedded newline": "{name} auf\nMQTT behalten.",
+            "double terminal newline": "{name} auf MQTT behalten.\n\n",
+            "bare terminal carriage return": "{name} auf MQTT behalten.\r",
             "empty": "",
         }
         for name, replacement in invalid_replacements.items():
@@ -510,6 +533,68 @@ class CatalogueTest(unittest.TestCase):
             failed_command[failed_command.index("--output") + 1] = str(root / "failed.json")
             failed = subprocess.run(failed_command, capture_output=True, text=True)
             self.assertEqual(1, failed.returncode)
+
+            existing_output = root / "existing.json"
+            existing_output.write_text("do not replace", encoding="utf-8")
+            existing_command = list(command)
+            existing_command[existing_command.index("--output") + 1] = str(existing_output)
+            failed = subprocess.run(existing_command, capture_output=True, text=True)
+            self.assertEqual(1, failed.returncode)
+            self.assertIn("correction output already exists", failed.stderr)
+            self.assertEqual("do not replace", existing_output.read_text(encoding="utf-8"))
+
+    def test_community_replacement_read_is_bounded_before_decode(self):
+        class RecordingBytes(io.BytesIO):
+            requested = None
+
+            def read(self, size=-1):
+                self.requested = size
+                return super().read(size)
+
+        content = RecordingBytes(b"{name} auf MQTT behalten.\n")
+        with mock.patch.object(Path, "open", return_value=content):
+            self.assertEqual(
+                "{name} auf MQTT behalten.",
+                i18n.read_community_replacement(Path("unused"), "settings.example.help"),
+            )
+        self.assertEqual(i18n.MAX_REPLACEMENT_FILE_BYTES + 1, content.requested)
+
+        maximum = RecordingBytes(("\U0001f600" * i18n.MAX_TARGET_TEXT_CHARS + "\r\n").encode("utf-8"))
+        with mock.patch.object(Path, "open", return_value=maximum):
+            self.assertEqual(
+                "\U0001f600" * i18n.MAX_TARGET_TEXT_CHARS,
+                i18n.read_community_replacement(Path("unused"), "settings.example.help"),
+            )
+
+    def test_community_correction_loses_output_race_without_clobbering_winner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.source()
+            current_text = "{name} auf MQTT behalten."
+            target = {
+                "schema": 1, "locale": "de", "sourceRevision": "e" * 40,
+                "strings": {"settings.example.help": {
+                    "text": current_text,
+                    "sourceHash": source["strings"]["settings.example.help"]["sourceHash"],
+                    "state": "machine-cross-checked",
+                }},
+            }
+            worktree, source_path, base_path = self.committed_catalogues(root, source, "de", target)
+            replacement_path, output = root / "replacement.txt", root / "corrected.json"
+            replacement_path.write_text("{name} in MQTT beibehalten.\n", encoding="utf-8")
+
+            def racing_link(_source, destination):
+                Path(destination).write_text("concurrent winner", encoding="utf-8")
+                raise FileExistsError(destination)
+
+            with mock.patch.object(i18n.os, "link", side_effect=racing_link):
+                with self.assertRaisesRegex(i18n.CatalogueError, "output already exists"):
+                    i18n.apply_community_correction(
+                        worktree, source_path, base_path, "de", "settings.example.help",
+                        source["strings"]["settings.example.help"]["sourceHash"],
+                        i18n.source_hash(current_text), replacement_path, output,
+                    )
+            self.assertEqual("concurrent winner", output.read_text(encoding="utf-8"))
 
     def test_empty_frozen_literal_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

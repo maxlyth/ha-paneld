@@ -38,6 +38,9 @@ HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
+MAX_TARGET_TEXT_CHARS = 16_384
+MAX_TARGET_TEXT_BYTES = MAX_TARGET_TEXT_CHARS * 4
+MAX_REPLACEMENT_FILE_BYTES = MAX_TARGET_TEXT_BYTES + 2
 CONTEXT_ROOT_KEYS = {
     "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",
 }
@@ -208,7 +211,7 @@ def validate_target(
         if not isinstance(text, str) or not text:
             raise CatalogueError(f"{key}: target text must be non-empty")
         validate_target_text_hygiene(key, text)
-        if len(text) > 16_384:
+        if len(text) > MAX_TARGET_TEXT_CHARS:
             raise CatalogueError(f"{key}: target text is unreasonably large")
         if not isinstance(record["sourceHash"], str) or not SHA_RE.fullmatch(record["sourceHash"]):
             raise CatalogueError(f"{key}: invalid source hash")
@@ -469,6 +472,29 @@ def paths_alias(first: Path, second: Path) -> bool:
         return False
 
 
+def read_community_replacement(path: Path, key: str) -> str:
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_REPLACEMENT_FILE_BYTES + 1)
+    except OSError as error:
+        raise CatalogueError(f"{path}: {error}") from error
+    if len(data) > MAX_REPLACEMENT_FILE_BYTES:
+        raise CatalogueError(f"{key}: community correction is unreasonably large")
+    try:
+        replacement = data.decode("utf-8")
+    except UnicodeError as error:
+        raise CatalogueError(f"{path}: {error}") from error
+    if replacement.endswith("\r\n"):
+        replacement = replacement[:-2]
+    elif replacement.endswith("\n"):
+        replacement = replacement[:-1]
+    if not replacement:
+        raise CatalogueError(f"{key}: empty community correction")
+    if len(replacement) > MAX_TARGET_TEXT_CHARS:
+        raise CatalogueError(f"{key}: community correction is unreasonably large")
+    return replacement
+
+
 def apply_community_correction(
     worktree: Path,
     source_path: Path,
@@ -506,6 +532,8 @@ def apply_community_correction(
     ):
         if paths_alias(output, input_path):
             raise CatalogueError(f"correction output must not overwrite the {owner}")
+    if output.exists() or output.is_symlink():
+        raise CatalogueError("correction output already exists")
 
     source = validate_source(source_path)
     base = validate_target(base_target_path, source, expected_locale=locale)
@@ -523,14 +551,7 @@ def apply_community_correction(
         raise CatalogueError(f"{key}: expected current target hash is stale")
     if current["state"] == "community-corrected":
         raise CatalogueError(f"{key}: current community correction is protected")
-    try:
-        replacement = replacement_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise CatalogueError(f"{replacement_path}: {error}") from error
-    if not replacement:
-        raise CatalogueError(f"{key}: empty community correction")
-    if len(replacement) > 16_384:
-        raise CatalogueError(f"{key}: community correction is unreasonably large")
+    replacement = read_community_replacement(replacement_path, key)
 
     corrected = {
         "schema": SCHEMA,
@@ -557,7 +578,12 @@ def apply_community_correction(
         os.fsync(handle.fileno())
     try:
         validate_target(validation_path, source, expected_locale=locale)
-        os.replace(validation_path, output)
+        try:
+            os.link(validation_path, output)
+        except FileExistsError as error:
+            raise CatalogueError("correction output already exists") from error
+        except OSError as error:
+            raise CatalogueError(f"could not create correction output: {error}") from error
     finally:
         validation_path.unlink(missing_ok=True)
 
