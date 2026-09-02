@@ -57,7 +57,8 @@ class StringsTest {
 
     @Test fun `page locale changes only when the complete Settings surface is promoted`() {
         val source = SourceCatalogue.parse(File("src/main/assets/i18n/en.json").readText())
-        val draftJson = File("src/main/assets/i18n/de.json").readText()
+        val promotedJson = File("src/main/assets/i18n/de.json").readText()
+        val draftJson = promotedJson.replace("\"state\": \"machine-cross-checked\"", "\"state\": \"machine-draft\"")
         val partial = TargetCatalogue.parse(
             draftJson.replaceFirst("\"state\": \"machine-draft\"", "\"state\": \"machine-cross-checked\""),
             source,

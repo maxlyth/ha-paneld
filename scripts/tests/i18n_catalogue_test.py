@@ -685,6 +685,33 @@ class CatalogueTest(unittest.TestCase):
             with self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target(target_path, i18n.validate_source(source_path))
 
+    def test_target_language_exceptions_are_exact_and_key_scoped(self):
+        zoom = {
+            "text": "Zoom (%)", "placeholders": [], "frozen": ["%"],
+        }
+        i18n.validate_target_language("settings.dashboard_zoom.label", "Zoom (%)", "fr", zoom)
+        for key, locale, text in (
+            ("settings.other.label", "fr", "Zoom (%)"),
+            ("settings.dashboard_zoom.label", "es", "Zoom (%)"),
+            ("settings.dashboard_zoom.label", "fr", "zoom (%)"),
+        ):
+            with self.subTest(key=key, locale=locale, text=text), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_language(key, text, locale, zoom)
+
+        voice = {
+            "text": "Send recognised speech to Home Assistant Assist.",
+            "placeholders": [],
+            "frozen": ["Home Assistant"],
+        }
+        valid = "将识别出的语音发送至 Home Assistant Assist。"
+        i18n.validate_target_language("settings.voice_enabled.help", valid, "zh-Hans", voice)
+        for key, text in (
+            ("settings.other.help", valid),
+            ("settings.voice_enabled.help", "将识别出的语音发送至 Home Assistant Assistant。"),
+        ):
+            with self.subTest(key=key, text=text), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_language(key, text, "zh-Hans", voice)
+
     def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -41,6 +41,20 @@ RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
 MAX_TARGET_TEXT_CHARS = 16_384
 MAX_TARGET_TEXT_BYTES = MAX_TARGET_TEXT_CHARS * 4
 MAX_REPLACEMENT_FILE_BYTES = MAX_TARGET_TEXT_BYTES + 2
+UNCHANGED_TARGET_EXCEPTIONS = {
+    ("fr", "settings.dashboard_zoom.label"): "Zoom (%)",
+    ("it", "settings.camera_kbps.label"): "Bitrate (kbps)",
+    ("it", "settings.dashboard_zoom.label"): "Zoom (%)",
+    ("it", "settings.mqtt_password.label"): "Password",
+    ("it", "settings.zigbee_router.label"): "Router Zigbee",
+}
+TARGET_LITERAL_EXCEPTIONS = {
+    ("zh-Hans", "settings.camera_exposure.help"): ("EV",),
+    ("zh-Hans", "settings.kiosk_lock.help"): ("root",),
+    ("zh-Hans", "settings.voice_enabled.help"): ("Assist",),
+    ("zh-Hans", "settings.voice_pipelines.help"): ("Assist", "ID"),
+    ("zh-Hans", "settings.webview_auto_update.help"): ("Google Play",),
+}
 CONTEXT_ROOT_KEYS = {
     "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",
 }
@@ -95,11 +109,21 @@ def unprotected_text(text: str, source_record: dict[str, Any]) -> str:
     return result
 
 
+def remove_literal(text: str, literal: str) -> str:
+    return re.sub(
+        rf"(?<![A-Za-z0-9_]){re.escape(literal)}(?![A-Za-z0-9_])",
+        " ",
+        text,
+    )
+
+
 def validate_target_language(key: str, text: str, locale: str, source_record: dict[str, Any]) -> None:
     source_visible = unprotected_text(source_record["text"], source_record)
     if not LATIN_RE.search(source_visible):
         return
     target_visible = unprotected_text(text, source_record)
+    for literal in TARGET_LITERAL_EXCEPTIONS.get((locale, key), ()):
+        target_visible = remove_literal(target_visible, literal)
     if locale == "zh-Hans":
         if not HAN_RE.search(target_visible):
             raise CatalogueError(f"{key}: zh-Hans target has no Han text")
@@ -114,7 +138,10 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
             for character in target_visible
         ):
             raise CatalogueError(f"{key}: {locale} target has unexpected script")
-        if target_visible.strip().casefold() == source_visible.strip().casefold():
+        if (
+            target_visible.strip().casefold() == source_visible.strip().casefold()
+            and UNCHANGED_TARGET_EXCEPTIONS.get((locale, key)) != text
+        ):
             raise CatalogueError(f"{key}: target is unchanged English")
 
 

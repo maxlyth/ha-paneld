@@ -13,34 +13,25 @@ import org.junit.runner.RunWith
 @CoreInstrumentation
 @RunWith(AndroidJUnit4::class)
 class CatalogueAndroidTest {
-    @Test fun productionLoaderReadsPackagedTargetsAndSeparatesEligibleFromDraftFallbackOnAndroid() {
+    @Test fun productionLoaderReadsPackagedTargetsAndCachesEligibleTranslationsOnAndroid() {
         val assets = InstrumentationRegistry.getInstrumentation().targetContext.assets
         val key = "settings.auto_brightness.label"
-        val eligibleLocale = "de"
-        val eligibleText = JSONObject(assets.readText("i18n/$eligibleLocale.json"))
-            .getJSONObject("strings")
-            .getJSONObject(key)
-            .getString("text")
         val reads = mutableListOf<String>()
-        val loader = CatalogueLoader { path ->
-            reads += path
-            val packaged = assets.readText(path)
-            if (path != "i18n/$eligibleLocale.json") packaged else JSONObject(packaged).apply {
-                getJSONObject("strings").getJSONObject(key).put("state", "machine-cross-checked")
-            }.toString()
-        }
-        val english = loader.strings(AppLocale.ENGLISH).get(key)
+        val loader = CatalogueLoader { path -> assets.readText(path).also { reads += path } }
 
         (AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH).forEach { locale ->
+            val record = JSONObject(assets.readText("i18n/$locale.json"))
+                .getJSONObject("strings")
+                .getJSONObject(key)
+            assertEquals("machine-cross-checked", record.getString("state"))
+            val expectedText = record.getString("text")
             val localized = loader.strings(locale)
-            val expectedText = if (locale == eligibleLocale) eligibleText else english
-            val expectedLanguage = if (locale == eligibleLocale) eligibleLocale else AppLocale.ENGLISH
             assertEquals(expectedText, localized.get(key))
-            assertEquals(expectedLanguage, localized.resolve(key).language)
+            assertEquals(locale, localized.resolve(key).language)
 
             val cached = loader.strings(locale)
             assertEquals(expectedText, cached.get(key))
-            assertEquals(expectedLanguage, cached.resolve(key).language)
+            assertEquals(locale, cached.resolve(key).language)
         }
         assertEquals(AppLocale.RELEASE_LOCALES.map { "i18n/$it.json" }, reads)
     }
