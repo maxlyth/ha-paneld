@@ -37,8 +37,29 @@ class ReclamationAdmissionTest {
     }
 
     @Test fun aPassIsRefusedWhenItsOwnTransientCostAloneWouldNotFit() {
-        assertFalse("the slice budget itself must fit before the margin is even considered",
-            admitted(usableBytes = maxPages * pageSize - 1L))
+        // Isolates the transient term: with no margin, the bar IS the slice budget, so this can only
+        // pass while that budget is genuinely part of the bar. With the margin left in, the margin
+        // alone would refuse and the assertion would say nothing about the budget.
+        assertFalse(
+            "the slice budget itself must be part of the bar",
+            reclamationAdmitted(
+                StorageHealthSeverity.HEALTHY,
+                usableBytes = maxPages * pageSize - 1L,
+                pageSizeBytes = pageSize,
+                maxPagesPerPass = maxPages,
+                marginBytes = 0L,
+            ),
+        )
+        assertTrue(
+            "and exactly that budget must be enough once it is met",
+            reclamationAdmitted(
+                StorageHealthSeverity.HEALTHY,
+                usableBytes = maxPages * pageSize,
+                pageSizeBytes = pageSize,
+                maxPagesPerPass = maxPages,
+                marginBytes = 0L,
+            ),
+        )
     }
 
     @Test fun criticalPressureRefusesEvenWithVastHeadroom() {

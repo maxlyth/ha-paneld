@@ -1352,6 +1352,9 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
         val bytesBefore = storageKnownFileBytes(databaseFile)
         var freedPages = 0L
         while (freedPages < MAX_VACUUM_PAGES_PER_PASS && freelist() > FREELIST_RETAINED_PAGES) {
+            // Between slices, never inside one: an owner closing mid-pass must stop the loop rather
+            // than keep taking the writer, and each completed slice is already durable on its own.
+            if (isBusyRetryAbandoned()) break
             val slice = minOf(VACUUM_CHUNK_PAGES, MAX_VACUUM_PAGES_PER_PASS - freedPages)
             // One row per freed page, stepped to exhaustion. A short slice means SQLite ran out of
             // reclaimable pages, so stop rather than spin on a pragma that can no longer progress.
@@ -1417,9 +1420,11 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
         // PASSIVE never blocks a concurrent writer. TRUNCATE additionally shrinks the WAL file but
         // waits on the busy handler, and the main database file — the space actually at stake here —
         // comes back under PASSIVE just the same.
-        runCatching {
-            db.rawQuery("PRAGMA wal_checkpoint(PASSIVE)", null).use { cursor -> cursor.moveToFirst() }
-        }
+        //
+        // Deliberately not wrapped: PASSIVE reports contention through its busy flag rather than by
+        // throwing, so anything it does throw is IO or corruption. That must reach the enclosing
+        // `catalog-maintenance` boundary, classify and latch — and now says which operation it was.
+        db.rawQuery("PRAGMA wal_checkpoint(PASSIVE)", null).use { cursor -> cursor.moveToFirst() }
         val bytesAfter = storageKnownFileBytes(databaseFile)
         return (bytesBefore - bytesAfter).coerceAtLeast(0L)
     }

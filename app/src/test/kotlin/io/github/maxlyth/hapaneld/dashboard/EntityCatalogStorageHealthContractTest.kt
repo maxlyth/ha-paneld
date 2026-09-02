@@ -235,6 +235,12 @@ class EntityCatalogStorageHealthContractTest {
         assertTrue("returned bytes must be measured from the file, never inferred from the result row",
             "storageKnownFileBytes(databaseFile)" in reclaimed &&
                 "(bytesBefore - bytesAfter).coerceAtLeast(0L)" in reclaimed)
+        // PASSIVE reports contention through its busy flag rather than by throwing, so anything it
+        // throws is IO or corruption and must reach the maintenance boundary rather than be swallowed.
+        assertFalse("a throwing checkpoint must not be silently swallowed",
+            "runCatching" in reclaimed)
+        assertTrue("an owner closing mid-pass must stop the loop between slices",
+            "if (isBusyRetryAbandoned()) break" in vacuum)
     }
 
     @Test fun schemaAndPreopenFailuresCannotDisappear() {

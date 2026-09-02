@@ -281,8 +281,9 @@ class StorageHealthRuntimeSurfaceTest {
         // `failure_category=unknown` on its own is what a report used to carry: an outcome with no
         // subject. The operation is the half that makes it reproducible.
         assertEquals("unknown", json.getString("failure_category"))
-        assertEquals("catalog-maintenance", json.getString("failure_operation"))
-        assertEquals("incremental", json.getString("auto_vacuum"))
+        assertFalse("the payload must carry the operation, not an explicit null", json.isNull("failure_operation"))
+        assertEquals("catalog-maintenance", json.optString("failure_operation"))
+        assertEquals("incremental", json.optString("auto_vacuum"))
     }
 
     @Test fun theMqttPayloadUsesAnExplicitNullWhenNoOperationWasRecorded() {

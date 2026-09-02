@@ -52,10 +52,13 @@ class StorageFailureAttributionTest {
         val json = JSONObject(presentation.statusJson())
 
         assertEquals("unknown", json.getString("failure"))
+        // `has` first, then `optString`: an absent key must fail this assertion rather than throw,
+        // so a regression reads as this contract breaking and not as an incidental JSON error.
+        assertTrue("the status JSON must carry the operation", json.has("failure_operation"))
         assertEquals(
             "an unknown outcome is exactly when the operation is the only usable detail",
             "catalog-maintenance",
-            json.getString("failure_operation"),
+            json.optString("failure_operation"),
         )
         assertTrue(presentation.diagnosticLine().contains("failure_operation=catalog-maintenance"))
     }
@@ -81,7 +84,7 @@ class StorageFailureAttributionTest {
             assertEquals(
                 "$kind must name its operation in the status JSON",
                 "app-state-write",
-                JSONObject(presentation.statusJson()).getString("failure_operation"),
+                JSONObject(presentation.statusJson()).optString("failure_operation"),
             )
         }
     }
@@ -95,7 +98,7 @@ class StorageFailureAttributionTest {
         )
         val rendered = presentation.statusJson() + presentation.summary + presentation.diagnosticLine()
 
-        assertEquals("database", JSONObject(presentation.statusJson()).getString("failure_operation"))
+        assertEquals("database", JSONObject(presentation.statusJson()).optString("failure_operation"))
         assertFalse(rendered.contains("secret"))
         assertFalse(rendered.contains("/data/"))
         assertFalse(rendered.contains("SELECT"))
