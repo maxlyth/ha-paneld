@@ -101,7 +101,10 @@ class CameraOutcomeResetContractTest {
             "the open, not the frame, is what clears a refusal for an admitted viewer",
             "if (became) { outcome = \"ok\"; fault = CameraFault.NONE; faultDetail = null; recovery = \"none\" }" in body("private fun configure("),
         )
-        assertTrue("and the last lease leaving an open session leaves it at ok", "if (release == Release.Close) outcome = \"ok\"" in body("inner class Lease"))
+        assertTrue(
+            "the last lease leaves the active retained refusal, or ok when nothing remains",
+            "outcome = retained?.token ?: CameraOutcome.OK" in body("inner class Lease"),
+        )
     }
 
     /** A missing permission wins over the stored outcome, so the reset can never present as granted. */
