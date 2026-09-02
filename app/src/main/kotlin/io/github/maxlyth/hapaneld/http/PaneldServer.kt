@@ -5330,47 +5330,50 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     private fun localizedCameraRuntime(value: String, strings: AppStrings): String {
         when (value) {
-            "camera off" -> return strings.get("dashboard.camera.session.off")
+            "camera off" -> return strings.get("dashboard.runtime.camera.off")
             "camera on, but Android has not granted the permission" ->
-                return strings.get("dashboard.camera.session.permission_needed")
-            "camera stopping" -> return strings.get("dashboard.camera.session.stopping")
+                return strings.get("dashboard.runtime.camera.permission_needed")
+            "camera stopping" -> return strings.get("dashboard.runtime.camera.stopping")
         }
         if (!value.contains("; ")) return value
         val stateRaw = value.substringBeforeLast("; ")
         val stream = localizedCameraStream(value.substringAfterLast("; "), strings) ?: return value
-        val state = when {
-            stateRaw == "camera opening" -> strings.get("dashboard.camera.session.opening")
+        when {
+            stateRaw == "camera opening" ->
+                return formattedString(strings, "dashboard.runtime.camera.opening", "stream" to stream)
             stateRaw == "camera closed; nobody is watching" ->
-                strings.get("dashboard.camera.session.closed") + " · " + strings.get("dashboard.camera.watchers.none")
+                return formattedString(strings, "dashboard.runtime.camera.idle", "stream" to stream)
             stateRaw.startsWith("camera gave up after ") -> {
                 val match = Regex("^camera gave up after (\\d+) failures \\(([^)]+)\\)$").matchEntire(stateRaw) ?: return value
-                formattedString(strings, "dashboard.camera.session.degraded", "count" to match.groupValues[1]) +
-                    " (${match.groupValues[2]})"
+                return formattedString(
+                    strings,
+                    "dashboard.runtime.camera.degraded",
+                    "count" to match.groupValues[1],
+                    "fault" to match.groupValues[2],
+                    "stream" to stream,
+                )
             }
             stateRaw.startsWith("camera open for ") -> {
                 val match = Regex("^camera open for (\\d+) clients?(?: \\((\\d+) streaming\\))?$").matchEntire(stateRaw)
                     ?: return value
                 val clients = match.groupValues[1]
-                val watchers = formattedString(
-                    strings,
-                    if (clients == "1") "dashboard.camera.watchers.one" else "dashboard.camera.watchers.many",
-                    "count" to clients,
-                )
                 val streaming = match.groupValues[2]
-                strings.get("dashboard.camera.session.open") + " · " + if (streaming.isEmpty()) {
-                    watchers
-                } else {
-                    formattedString(
-                        strings,
-                        "dashboard.camera.watchers.streaming",
-                        "watching" to watchers,
-                        "count" to streaming,
-                    )
+                val key = when {
+                    clients == "1" && streaming.isEmpty() -> "dashboard.runtime.camera.live_one"
+                    clients != "1" && streaming.isEmpty() -> "dashboard.runtime.camera.live_many"
+                    clients == "1" -> "dashboard.runtime.camera.live_one_streaming"
+                    else -> "dashboard.runtime.camera.live_many_streaming"
                 }
+                return formattedString(
+                    strings,
+                    key,
+                    "count" to clients,
+                    "streaming" to streaming,
+                    "stream" to stream,
+                )
             }
             else -> return value
         }
-        return "$state; $stream"
     }
 
     private fun localizedCameraStream(value: String, strings: AppStrings): String? = when (value) {
