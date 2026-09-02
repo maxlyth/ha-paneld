@@ -299,25 +299,53 @@ function cameraCard(tbl,hdr){
  }
  function watchers(d){
   var c=n(d.clients)||0,s=n(d.stream_clients)||0;
-  if(!c)return 'nobody is watching';
-  return c+(c===1?' client':' clients')+(s?', '+s+' streaming':'');
+  if(!c)return i18nText('dashboard.camera.watchers.none','nobody is watching');
+  var watching=c===1?i18nText('dashboard.camera.watchers.one','{count} client',{count:c}):i18nText('dashboard.camera.watchers.many','{count} clients',{count:c});
+  return s?i18nText('dashboard.camera.watchers.streaming','{watching}, {count} streaming',{watching:watching,count:s}):watching;
  }
  function session(d){
   switch(d.state){
-   case 'live':return 'open';
-   case 'opening':return 'opening';
-   case 'idle':return 'closed';
-   case 'disabled':return 'off';
-   case 'permission_needed':return 'waiting for the Android camera permission';
-   case 'degraded':return 'stopped retrying after '+(n(d.consecutive_failures)||0)+' failures';
-   case 'stopping':return 'stopping';
-   case 'absent':return 'no camera on this panel';
-   default:return 'unavailable';
+   case 'live':return i18nText('dashboard.camera.session.open','open');
+   case 'opening':return i18nText('dashboard.camera.session.opening','opening');
+   case 'idle':return i18nText('dashboard.camera.session.closed','closed');
+   case 'disabled':return i18nText('dashboard.camera.session.off','off');
+   case 'permission_needed':return i18nText('dashboard.camera.session.permission_needed','waiting for the Android camera permission');
+   case 'degraded':return i18nText('dashboard.camera.session.degraded','stopped retrying after {count} failures',{count:n(d.consecutive_failures)||0});
+   case 'stopping':return i18nText('dashboard.camera.session.stopping','stopping');
+   case 'absent':return i18nText('dashboard.camera.session.absent','no camera on this panel');
+   default:return i18nText('dashboard.camera.session.unavailable','unavailable');
+  }
+ }
+ function actionText(action){
+  switch(action){
+   case 'turn on the camera setting to serve snapshots and a stream':return i18nText('dashboard.camera.action.enable','turn on the camera setting to serve snapshots and a stream');
+   case 'grant the camera permission on the panel when prompted':return i18nText('dashboard.camera.action.grant_permission','grant the camera permission on the panel when prompted');
+   case 'check the camera hardware; a new client after the hold or a setting toggle retries':return i18nText('dashboard.camera.action.check_hardware','check the camera hardware; a new client after the hold or a setting toggle retries');
+   case 'wake the panel: a camera session can only start while the dashboard is visible':return i18nText('dashboard.camera.action.wake_panel','wake the panel: a camera session can only start while the dashboard is visible');
+   case 'the camera-in-use light could not be shown; check overlay permission and the LED':return i18nText('dashboard.camera.action.check_indicator','the camera-in-use light could not be shown; check overlay permission and the LED');
+   case "the camera delivers frames but they could not be encoded; report this with the panel's diagnostics":return i18nText('dashboard.camera.action.report_encode_failure',"the camera delivers frames but they could not be encoded; report this with the panel's diagnostics");
+   case 'no hardware H.264 encoder fits the camera bitrate cap; snapshots still work, streaming does not':return i18nText('dashboard.camera.action.encoder_unavailable','no hardware H.264 encoder fits the camera bitrate cap; snapshots still work, streaming does not');
+   default:return action;
+  }
+ }
+ function faultText(fault){
+  switch(fault){
+   case 'indication':return i18nText('dashboard.camera.fault.indication','camera-use indication failed');
+   case 'foreground':return i18nText('dashboard.camera.fault.foreground','foreground service refused');
+   case 'permission':return i18nText('dashboard.camera.fault.permission','camera permission missing');
+   case 'open':return i18nText('dashboard.camera.fault.open','camera could not open');
+   case 'configure':return i18nText('dashboard.camera.fault.configure','camera configuration failed');
+   case 'device_error':return i18nText('dashboard.camera.fault.device_error','camera device error');
+   case 'disconnected':return i18nText('dashboard.camera.fault.disconnected','camera disconnected');
+   case 'starved':return i18nText('dashboard.camera.fault.starved','camera stopped delivering frames');
+   case 'encode':return i18nText('dashboard.camera.fault.encode','frame encoding failed');
+   case 'stream_encoder':return i18nText('dashboard.camera.fault.stream_encoder','stream encoder failed');
+   default:return fault.replace(/_/g,' ');
   }
  }
  function render(d,now){
-  var rows=[{label:'Session',val:session(d),suf:'· '+watchers(d)}];
-  var act=(typeof d.action==='string'&&d.action&&d.action!=='none')?d.action:null;
+  var rows=[{label:i18nText('dashboard.camera.label.session','Session'),val:session(d),suf:'· '+watchers(d)}];
+  var act=(typeof d.action==='string'&&d.action&&d.action!=='none')?actionText(d.action):null;
   var enc=(typeof d.encoder==='string'&&d.encoder)?d.encoder:null;
   var streams=n(d.stream_clients)||0;
   var w=n(d.encode_width),h=n(d.encode_height),bound=n(d.encode_fps),cap=n(d.encode_kbps);
@@ -331,72 +359,72 @@ function cameraCard(tbl,hdr){
    // Nothing is encoding, and WHY differs. "Idle costs nothing" is true only of a camera that is
    // actually closed — a snapshot client holds it open and pays for every frame it converts, and a
    // stream client waiting for its encoder to start is a stream, not a snapshot.
-   if(d.state==='idle')rows.push({label:'Encoding',val:'nothing is being encoded',col:'#888',suf:'· an idle camera costs the panel nothing'});
-   else if(streams>0)rows.push({label:'Encoding',val:'waiting for the encoder',col:'#888',suf:asked?'· a stream asked for '+asked+' fps and the encoder has not started yet':'· the stream has not been given an encoder yet'});
-   else if(d.state==='live'||d.state==='opening')rows.push({label:'Encoding',val:'no stream is encoding',col:'#888',suf:'· the camera is open for a snapshot'});
-   else rows.push({label:'Encoding',val:'no stream is encoding',col:'#888',suf:act?'· '+act:''});
+   if(d.state==='idle')rows.push({label:i18nText('dashboard.camera.label.encoding','Encoding'),val:i18nText('dashboard.camera.encoding.nothing','nothing is being encoded'),col:'#888',suf:i18nText('dashboard.camera.encoding.idle_cost','· an idle camera costs the panel nothing')});
+   else if(streams>0)rows.push({label:i18nText('dashboard.camera.label.encoding','Encoding'),val:i18nText('dashboard.camera.encoding.waiting','waiting for the encoder'),col:'#888',suf:asked?i18nText('dashboard.camera.encoding.waiting_with_rate','· a stream asked for {rate} fps and the encoder has not started yet',{rate:asked}):i18nText('dashboard.camera.encoding.waiting_without_rate','· the stream has not been given an encoder yet')});
+   else if(d.state==='live'||d.state==='opening')rows.push({label:i18nText('dashboard.camera.label.encoding','Encoding'),val:i18nText('dashboard.camera.encoding.no_stream','no stream is encoding'),col:'#888',suf:i18nText('dashboard.camera.encoding.snapshot','· the camera is open for a snapshot')});
+   else rows.push({label:i18nText('dashboard.camera.label.encoding','Encoding'),val:i18nText('dashboard.camera.encoding.no_stream','no stream is encoding'),col:'#888',suf:act?'· '+act:''});
    forget();
    head('· '+session(d));
    return rows;
   }
-  rows.push({label:'Encoder',val:enc,suf:(w&&h)?'· '+w+'×'+h:'· output size unavailable'});
+  rows.push({label:i18nText('dashboard.camera.label.encoder','Encoder'),val:enc,suf:(w&&h)?'· '+w+'×'+h:i18nText('dashboard.camera.encoder.output_unavailable','· output size unavailable')});
   // The rate the verdict is measured against is the rate the stream ASKED for, when the panel knows
   // it, and the bound rate only when it does not. A session that could not give the stream the rate
   // it wanted is a shortfall the person needs to see, not one the card hides by moving the target.
   var want=asked!=null?asked:bound;
   if(asked!=null&&bound!=null&&asked!==bound){
-   rows.push({label:'Requested',val:asked+' fps asked for',col:'#d9a528',bold:true,
-    suf:'· the session is bound to '+bound+' fps, set when the camera was opened'});
+   rows.push({label:i18nText('dashboard.camera.label.requested','Requested'),val:i18nText('dashboard.camera.requested.value','{rate} fps asked for',{rate:asked}),col:'#d9a528',bold:true,
+    suf:i18nText('dashboard.camera.requested.bound','· the session is bound to {rate} fps, set when the camera was opened',{rate:bound})});
   }
   var age=n(d.last_frame_age_ms);
-  var fault=(typeof d.fault==='string'&&d.fault&&d.fault!=='none')?d.fault.replace(/_/g,' '):null;
+  var fault=(typeof d.fault==='string'&&d.fault&&d.fault!=='none')?faultText(d.fault):null;
   // An encoder bound to a session that has stopped receiving frames reports no delivered rate at all,
   // exactly as one that has not started yet does. Reading both as "starting…" would leave a stalled
   // stream looking like a warming-up one for as long as it stayed broken.
-  var stalled=got!=null?null:(fault?'stopped — '+fault:((age!=null&&age>CAMERA_WINDOW_MS)?'no frames for '+Math.round(age/1000)+'s':null));
+  var stalled=got!=null?null:(fault?i18nText('dashboard.camera.frame_rate.stopped','stopped — {fault}',{fault:fault}):((age!=null&&age>CAMERA_WINDOW_MS)?i18nText('dashboard.camera.frame_rate.no_frames','no frames for {seconds}s',{seconds:Math.round(age/1000)}):null));
   if(stalled){
-   rows.push({label:'Frame rate',val:stalled,col:'#d9a528',bold:true,suf:want?'· asked for '+want+' fps':''});
+   rows.push({label:i18nText('dashboard.camera.label.frame_rate','Frame rate'),val:stalled,col:'#d9a528',bold:true,suf:want?i18nText('dashboard.camera.frame_rate.asked','· asked for {rate} fps',{rate:want}):''});
    forget();
    head('· '+stalled);
   }else if(got==null){
-   rows.push({label:'Frame rate',val:'starting…',col:'#888',suf:want?'· asked for '+want+' fps':'· requested rate unavailable'});
+   rows.push({label:i18nText('dashboard.camera.label.frame_rate','Frame rate'),val:i18nText('dashboard.camera.status.starting','starting…'),col:'#888',suf:want?i18nText('dashboard.camera.frame_rate.asked','· asked for {rate} fps',{rate:want}):i18nText('dashboard.camera.frame_rate.request_unavailable','· requested rate unavailable')});
    forget();
-   head('· starting');
+   head('· '+i18nText('dashboard.camera.status.starting_plain','starting'));
   }else if(!want){
-   rows.push({label:'Frame rate',val:one(got)+' fps delivered',suf:'· requested rate unavailable',col:'#888'});
+   rows.push({label:i18nText('dashboard.camera.label.frame_rate','Frame rate'),val:i18nText('dashboard.camera.frame_rate.delivered','{rate} fps delivered',{rate:one(got)}),suf:i18nText('dashboard.camera.frame_rate.request_unavailable','· requested rate unavailable'),col:'#888'});
    forget();
    head('· '+one(got)+' fps');
   }else{
    observe(got<want*CAMERA_SHORTFALL_RATIO,now);
-   rows.push({label:'Frame rate',val:one(got)+' of '+want+' fps',bold:verdict==='short',col:verdict==='short'?'#d9a528':'',
-    suf:'· delivered against what was asked for'});
-   head('· '+one(got)+' of '+want+' fps');
+   rows.push({label:i18nText('dashboard.camera.label.frame_rate','Frame rate'),val:i18nText('dashboard.camera.frame_rate.of_requested','{delivered} of {requested} fps',{delivered:one(got),requested:want}),bold:verdict==='short',col:verdict==='short'?'#d9a528':'',
+    suf:i18nText('dashboard.camera.frame_rate.comparison','· delivered against what was asked for')});
+   head('· '+i18nText('dashboard.camera.frame_rate.of_requested','{delivered} of {requested} fps',{delivered:one(got),requested:want}));
   }
   // Bitrate is a cap, never a target: a still scene needs fewer bits and using fewer is the encoder
   // working, not failing. It is shown for the trade — resolution and rate are what spend it — and it
   // is deliberately kept out of the shortfall verdict, which is about frame rate alone.
-  if(stalled)rows.push({label:'Bitrate',val:'nothing delivered',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
-  else if(gotKbps==null)rows.push({label:'Bitrate',val:'starting…',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
-  else if(!cap)rows.push({label:'Bitrate',val:gotKbps+' kbps',col:'#888',suf:'· cap unavailable'});
+  if(stalled)rows.push({label:i18nText('dashboard.camera.label.bitrate','Bitrate'),val:i18nText('dashboard.camera.bitrate.nothing','nothing delivered'),col:'#888',suf:cap?i18nText('dashboard.camera.bitrate.cap','· cap {cap} kbps',{cap:cap}):i18nText('dashboard.camera.bitrate.cap_unavailable','· cap unavailable')});
+  else if(gotKbps==null)rows.push({label:i18nText('dashboard.camera.label.bitrate','Bitrate'),val:i18nText('dashboard.camera.status.starting','starting…'),col:'#888',suf:cap?i18nText('dashboard.camera.bitrate.cap','· cap {cap} kbps',{cap:cap}):i18nText('dashboard.camera.bitrate.cap_unavailable','· cap unavailable')});
+  else if(!cap)rows.push({label:i18nText('dashboard.camera.label.bitrate','Bitrate'),val:gotKbps+' kbps',col:'#888',suf:i18nText('dashboard.camera.bitrate.cap_unavailable','· cap unavailable')});
   // Measured on a WF1589T at 1080p: 4846 kbps against a 2000 kbps cap. The encoder can overshoot the
   // bitrate it was given, so the row cannot assume the delivered figure sits under the cap and call
   // every reading normal — that would print reassurance over the one number that had gone wrong.
-  else if(gotKbps>cap)rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',col:'#d9a528',bold:true,
-   suf:'· over the cap it was given; the encoder is spending more of the network than it was allowed'});
-  else rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',suf:'· under the cap is normal for a still scene'});
+  else if(gotKbps>cap)rows.push({label:i18nText('dashboard.camera.label.bitrate','Bitrate'),val:i18nText('dashboard.camera.bitrate.of_cap','{delivered} of {cap} kbps cap',{delivered:gotKbps,cap:cap}),col:'#d9a528',bold:true,
+   suf:i18nText('dashboard.camera.bitrate.over_cap','· over the cap it was given; the encoder is spending more of the network than it was allowed')});
+  else rows.push({label:i18nText('dashboard.camera.label.bitrate','Bitrate'),val:i18nText('dashboard.camera.bitrate.of_cap','{delivered} of {cap} kbps cap',{delivered:gotKbps,cap:cap}),suf:i18nText('dashboard.camera.bitrate.under_cap','· under the cap is normal for a still scene')});
   // The verdict states what was observed and what can be done about it. It does not name a cause:
   // capture pacing, the encode path and contention with whatever else holds the video hardware are
   // all candidates, none of them is established here, and guessing in this row would send the person
   // reading it to fix the wrong thing.
   rows.push(stalled
-   ?{label:'Delivery',val:'not delivering',col:'#d9a528',bold:true,
-     suf:act?'· '+act:'· the encoder is bound to the session but no frames are arriving'}
+   ?{label:i18nText('dashboard.camera.label.delivery','Delivery'),val:i18nText('dashboard.camera.delivery.not_delivering','not delivering'),col:'#d9a528',bold:true,
+     suf:act?'· '+act:i18nText('dashboard.camera.delivery.no_frames','· the encoder is bound to the session but no frames are arriving')}
    :verdict==='short'
-   ?{label:'Delivery',val:'not keeping up',col:'#d9a528',bold:true,
-     suf:'· lower the frame rate or the resolution on Configure → Camera, or accept the rate this panel is giving; why it is short is not established here'}
+   ?{label:i18nText('dashboard.camera.label.delivery','Delivery'),val:i18nText('dashboard.camera.delivery.short','not keeping up'),col:'#d9a528',bold:true,
+     suf:i18nText('dashboard.camera.delivery.short_help','· lower the frame rate or the resolution on Configure → Camera, or accept the rate this panel is giving; why it is short is not established here')}
    :verdict==='ok'
-    ?{label:'Delivery',val:'delivering what it was asked for',col:'#48c774'}
-    :{label:'Delivery',val:'measuring…',col:'#888',suf:'· waiting for enough consecutive readings to judge'});
+    ?{label:i18nText('dashboard.camera.label.delivery','Delivery'),val:i18nText('dashboard.camera.delivery.ok','delivering what it was asked for'),col:'#48c774'}
+    :{label:i18nText('dashboard.camera.label.delivery','Delivery'),val:i18nText('dashboard.camera.delivery.measuring','measuring…'),col:'#888',suf:i18nText('dashboard.camera.delivery.measuring_help','· waiting for enough consecutive readings to judge')});
   return rows;
  }
  async function poll(){
@@ -415,8 +443,8 @@ function cameraCard(tbl,hdr){
    // The panel did not answer, so every figure on this card is now of unknown age. Showing the last
    // ones under a live heading would be the reassuring-but-wrong answer; drop them and say so.
    forget();lastReadingAt=0;
-   paint(tbl,[{label:'Camera',val:'status unavailable',col:'#888',suf:'· the panel did not answer'}]);hwm(tbl);
-   head('· unavailable');
+   paint(tbl,[{label:i18nText('dashboard.camera.label.camera','Camera'),val:i18nText('dashboard.camera.error.status_unavailable','status unavailable'),col:'#888',suf:i18nText('dashboard.camera.error.no_answer','· the panel did not answer')}]);hwm(tbl);
+   head('· '+i18nText('dashboard.camera.session.unavailable','unavailable'));
   }finally{
    inFlight=false;
    cardSizeSourceReady('camera');

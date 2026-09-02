@@ -2073,6 +2073,13 @@ class PaneldServer internal constructor(
                     )
                 }
                 get("/setup") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
                     // No data-cfg, unlike every other page: buildwatch.js reloads /configure when settings
                     // change underneath it, and that same reload mid-step would throw away what the user is
                     // typing. The wizard tracks server state by polling instead. The build token stays, so a
@@ -2080,27 +2087,85 @@ class PaneldServer internal constructor(
                     call.respondText(
                         pageShell(
                             active = "setup",
-                            sectionTitle = "Set up",
+                            sectionTitle = strings.get("shell.nav.setup"),
                             bodyAttrs = """data-build="${buildToken()}"""",
-                            rightControls = ghLink(),
+                            rightControls = ghLink(strings),
                             body = setupBody(),
+                            strings = strings,
                         ),
                         ContentType.Text.Html,
                     )
                 }
-                get("/profiles") { call.respondText(page("profiles", "Profile", profilesBody()), ContentType.Text.Html) }
+                get("/profiles") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
+                    call.respondText(
+                        page("profiles", strings.get("shell.nav.profile"), profilesBody(), strings),
+                        ContentType.Text.Html,
+                    )
+                }
                 // The experimental remote-control page is withheld from 0.9.2. Keep old bookmarks
                 // useful while its tap-injection UX is reviewed for a later release.
                 get("/test") { call.respondRedirect("/") }
                 get("/install") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
                     call.respondText(
-                        withContext(Dispatchers.IO) { page("install", "Install", installBody()) },
+                        withContext(Dispatchers.IO) {
+                            page("install", strings.get("shell.nav.install"), installBody(), strings)
+                        },
                         ContentType.Text.Html,
                     )
                 }
-                get("/fleet") { call.respondText(page("fleet", "Fleet", fleetBody()), ContentType.Text.Html) }
-                get("/logs") { call.respondText(page("logs", "Logs", logsBody()), ContentType.Text.Html) }
-                get("/entities") { call.respondText(page("entities", "Entities", entitiesBody()), ContentType.Text.Html) }
+                get("/fleet") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
+                    call.respondText(
+                        page("fleet", strings.get("shell.nav.fleet"), fleetBody(), strings),
+                        ContentType.Text.Html,
+                    )
+                }
+                get("/logs") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
+                    call.respondText(
+                        page("logs", strings.get("shell.nav.logs"), logsBody(), strings),
+                        ContentType.Text.Html,
+                    )
+                }
+                get("/entities") {
+                    val strings = requestStrings(call)
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
+                    )
+                    call.respondText(
+                        page("entities", strings.get("shell.nav.entities"), entitiesBody(), strings),
+                        ContentType.Text.Html,
+                    )
+                }
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
                 get("/api") {
@@ -3782,9 +3847,14 @@ class PaneldServer internal constructor(
         """<p class="hardened-approval-key${if (top) " top" else ""}">Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely.</p>"""
 
     /** The shared tab bar; [active] highlights the current page. */
-    private fun localizedHref(path: String, strings: AppStrings): String =
-        if (strings.requestedLocale == AppLocale.ENGLISH) path
-        else "$path${if ('?' in path) '&' else '?'}lang=${esc(strings.requestedLocale)}"
+    private fun localizedHref(path: String, strings: AppStrings): String {
+        if (strings.requestedLocale == AppLocale.ENGLISH) return path
+        val fragmentAt = path.indexOf('#')
+        val address = if (fragmentAt < 0) path else path.substring(0, fragmentAt)
+        val fragment = if (fragmentAt < 0) "" else path.substring(fragmentAt)
+        val separator = if ('?' in address) '&' else '?'
+        return "$address${separator}lang=${esc(strings.requestedLocale)}$fragment"
+    }
 
     /** JSON inside a script data block: escape HTML-significant bytes as JSON unicode escapes so a
      * translated value can never terminate the element or become markup. */
@@ -5070,7 +5140,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                     HA_NETWORK_FACT -> " id=\"hanetcell\""
                     else -> ""
                 }
-                "<tr><th>${esc(label)}</th><td$cellId>${esc(value)}</td></tr>"
+                "<tr><th>${esc(label)}</th><td$cellId>${esc(runtimeValue(value, strings))}</td></tr>"
             }
         }.toMutableList()
         h.webView.reportingQuirk?.let {
@@ -5078,6 +5148,29 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         }
         return rows.joinToString("\n")
     }
+
+    /** Translate only closed, exact runtime states. Evidence-bearing and backend-origin detail remains verbatim. */
+    private fun runtimeValue(value: String, strings: AppStrings): String = when (value) {
+        "on" -> strings.get("dashboard.value.on")
+        "off" -> strings.get("dashboard.value.off")
+        "none" -> strings.get("dashboard.value.none")
+        "unavailable" -> strings.get("dashboard.common.unavailable")
+        "Relaxed" -> strings.get("dashboard.runtime.security_relaxed")
+        "Hardened · high-impact remote actions need physical on-panel approval" ->
+            strings.get("dashboard.runtime.security_hardened")
+        "idle" -> strings.get("dashboard.runtime.audio_idle")
+        "queued" -> strings.get("dashboard.runtime.audio_queued")
+        "active" -> strings.get("dashboard.runtime.audio_active")
+        "closed" -> strings.get("dashboard.runtime.audio_closed")
+        "watching" -> strings.get("dashboard.runtime.ha_watching")
+        "connection lost" -> strings.get("dashboard.runtime.ha_connection_lost")
+        "watching; Home Assistant does not permit WebSocket lifecycle events for this user" ->
+            strings.get("dashboard.runtime.ha_events_refused")
+        else -> value
+    }
+
+    private fun formattedString(strings: AppStrings, key: String, vararg values: Pair<String, String>): String =
+        values.fold(strings.get(key)) { text, (name, value) -> text.replace("{$name}", value) }
 
     /**
      * Whether setup genuinely still owes the user a dashboard/renderer step.
@@ -5113,14 +5206,14 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      */
     private fun haNetworkHealthToken(): String = HaNetworkPathRuntime.healthToken()
 
-    private fun bannersHtml(s: Snap, h: HealthInputs): String {
+    private fun bannersHtml(s: Snap, h: HealthInputs, strings: AppStrings): String {
         val storage = HealthAudit.storage(storageHealth())
         val mqtt = s.facts["MQTT"] ?: "disabled"
         // Pure decision (unit-tested in SetupBannerTest) — note a CONFIGURED broker that's merely
         // mid-(re)connect must not be reported as missing.
         val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.mqttUser.isNotBlank())
         val setup = if (needs.isNotEmpty())
-            """<div class="setup">⚠ This panel needs <a href="/configure">${needs.joinToString(" and ")}</a> — set on the Configure tab.</div>"""
+            """<div class="setup">⚠ ${esc(strings.get("dashboard.banner.setup_needs.prefix"))} <a href="${localizedHref("/configure", strings)}">${needs.joinToString(" and ")}</a> ${esc(strings.get("dashboard.banner.setup_needs.suffix"))}</div>"""
         else ""
         // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
         // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
@@ -5132,10 +5225,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                 """<div class="setup">⟳ ${esc(it)}</div>"""
             }.orEmpty()
         }
-        val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner() else ""
+        val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner(strings) else ""
         val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
-            """<div class="setup">👋 <b>Wake on wave is learning</b> — ${esc(sensors.proximitySummary())}. """ +
-                """Touch-to-wake remains available. <a href="/configure#cfg-proximity-learning">See progress or teach a wave</a>.</div>"""
+            """<div class="setup">👋 <b>${esc(strings.get("dashboard.banner.proximity_learning.title"))}</b> — ${esc(sensors.proximitySummary())}. """ +
+                """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("/configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
         } else ""
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
         // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
@@ -5152,8 +5245,8 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             powerSafetyAdvisory(s.privilege),
             inlineRepair = true,
         ) +
-            adHocWarnings(s, companionServersForRender(), inlineRepair = false) +
-            findings.joinToString("") { bannerFor(it) } + proximityLearning + haSetup + mqttProgress + setup
+            adHocWarnings(s, companionServersForRender(), inlineRepair = false, strings = strings) +
+            findings.joinToString("") { bannerFor(it, strings) } + proximityLearning + haSetup + mqttProgress + setup
     }
 
     private fun effectiveDashboardIsBuiltin(): Boolean =
@@ -5165,10 +5258,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         effectiveDashboardIsBuiltin() &&
             haSignInPending(config.haUrl, config.haToken, config.haRefreshToken)
 
-    private fun haSignInBanner(): String =
-        """<div class="setup">🏠 <b>MQTT is configured. Next: Home Assistant sign-in.</b> """ +
-            """ha-paneld's built-in renderer is selected. Complete the sign-in shown on the panel, or """ +
-            """<a href="/configure#cfg-ha-oauth">connect this panel from a browser</a>.</div>"""
+    private fun haSignInBanner(strings: AppStrings): String =
+        """<div class="setup">🏠 <b>${esc(strings.get("dashboard.banner.ha_sign_in.title"))}</b> """ +
+            """${esc(strings.get("dashboard.banner.ha_sign_in.explanation"))} """ +
+            """<a href="${localizedHref("/configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.ha_sign_in.action"))}</a>.</div>"""
 
     /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and Companion
      *  server inspection/blank-internal-URL findings — the latter only when Companion is the active renderer
@@ -5179,6 +5272,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         management: Snap,
         companion: CompanionDb.ServerObservation?,
         inlineRepair: Boolean,
+        strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
     ): String = buildString {
         radioStatus()?.let { z ->
             zigbeeWarning(z)?.let { warning ->
@@ -5186,11 +5280,10 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             }
         }
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
-            """<div class="setup crit">⛔ <b>Built-in renderer: Home Assistant sign-in rejected</b> — the """ +
-                """saved login settings were rejected, so the dashboard stopped retrying (it shows fix """ +
-                """instructions on the panel). Use Browser sign-in on """ +
-                """<a href="/configure#cfg-ha-oauth">Configure → Home Assistant connection</a>; the dashboard reloads automatically when """ +
-                """the credentials change.</div>""",
+            """<div class="setup crit">⛔ <b>${esc(strings.get("dashboard.banner.auth_rejected.title"))}</b> — """ +
+                """${esc(strings.get("dashboard.banner.auth_rejected.explanation"))} """ +
+                """<a href="${localizedHref("/configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.auth_rejected.action"))}</a>; """ +
+                """${esc(strings.get("dashboard.banner.auth_rejected.reload_suffix"))}</div>""",
         )
         dashboardRecoveryWarning()?.let { append("""<div class="setup crit">$it</div>""") }
         // Shared companion internal-URL decision (CompanionDb.warning); this surface renders it as a banner
@@ -5198,17 +5291,22 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         when (val w = CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)) {
             is CompanionDb.Warning.NeedsRepair -> {
                 val action = if (inlineRepair)
-                    """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ Repair internal URL</button> <span id="cu-fix" class="muted"></span></div>"""
-                else """ <a href="/install">Repair on the Install tab →</a>"""
+                    """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ ${esc(strings.get("dashboard.banner.companion_url.repair"))}</button> <span id="cu-fix" class="muted"></span></div>"""
+                else """ <a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.companion_url.install_action"))}</a>"""
+                val summaryKey = if (w.affected == 1) {
+                    "dashboard.banner.companion_url.summary_one"
+                } else {
+                    "dashboard.banner.companion_url.summary_many"
+                }
                 append(
-                    """<div class="setup crit">⚠ <b>Home Assistant Companion has no internal URL</b> """ +
-                        """(${w.affected} server${if (w.affected == 1) "" else "s"}) — the dashboard can fail to load """ +
-                        """with <i>"Missing 'Host' header"</i>. Repair sets the internal URL to the external URL.$action</div>""",
+                    """<div class="setup crit">⚠ <b>${esc(strings.get("dashboard.banner.companion_url.title"))}</b> """ +
+                        """${esc(formattedString(strings, summaryKey, "count" to w.affected.toString()))} """ +
+                        """<i>"Missing 'Host' header"</i>. ${esc(strings.get("dashboard.banner.companion_url.explanation"))}$action</div>""",
                 )
             }
             CompanionDb.Warning.ProbeFailed -> append(
-                """<div class="setup">⚠ <b>Home Assistant Companion settings could not be inspected</b> — """ +
-                    """ha-paneld will retain any last-known result and retry automatically.</div>""",
+                """<div class="setup">⚠ <b>${esc(strings.get("dashboard.banner.companion_probe_failed.title"))}</b> — """ +
+                    """${esc(strings.get("dashboard.banner.companion_probe_failed.explanation"))}</div>""",
             )
             null -> {}
         }
@@ -5221,13 +5319,13 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             // Reset is a plain form POST (no JS), so it works on the dashboard banner too — not just the
             // Install tab. The message already links to the Display-sizing card.
             append(
-                """<div class="setup">⚠ <b>Dashboard zoom is $zoom%</b> (not 100%) — usually carried over from the """ +
-                    """Companion app's Page zoom. The cleaner way to size a dashboard is the panel's """ +
-                    """<a href="/install#cfg-display">display density</a>, which scales the whole panel crisply; """ +
-                    """set that, then reset the zoom here.""" +
+                """<div class="setup">⚠ <b>${esc(formattedString(strings, "dashboard.banner.zoom.title", "zoom" to zoom.toString()))}</b> """ +
+                    """${esc(strings.get("dashboard.banner.zoom.explanation"))} """ +
+                    """<a href="${localizedHref("/install#cfg-display", strings)}">${esc(strings.get("dashboard.banner.zoom.display_density"))}</a>, """ +
+                    """${esc(strings.get("dashboard.banner.zoom.action_suffix"))}""" +
                     """ <form method="post" action="/api/v1/config" style="display:inline">""" +
                     """<input type="hidden" name="dashboard_zoom" value="100">""" +
-                    """<button class="pbtn" type="submit">Reset zoom to 100%</button></form></div>""",
+                    """<button class="pbtn" type="submit">${esc(strings.get("dashboard.banner.zoom.reset"))}</button></form></div>""",
             )
         }
     }
@@ -5240,30 +5338,30 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
      *  manages versions) and carry an "Ignore this version" button — a per-version dismissal that stays
      *  hidden until a newer release ships (see Config.ignoreUpdate / UpdateChecker.visible). */
-    private fun bannerFor(f: HealthAudit.Finding): String = when (f.kind) {
+    private fun bannerFor(f: HealthAudit.Finding, strings: AppStrings): String = when (f.kind) {
         HealthAudit.Kind.WEBVIEW_OLD ->
-            """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
-                """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
-                """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+). """ +
-                """<small>Checked against the real engine version (from the WebView UA), not just the """ +
-                """stamped package version — so a Cromite/LineageOS SystemWebView won't trip this.</small> """ +
-                """<a href="/install">Manage on the Install tab →</a></div>"""
+            """<div class="setup crit">⚠ <b>${esc(strings.get("dashboard.banner.webview_old.title"))}</b> (${esc(f.detail)}) — """ +
+                """${esc(strings.get("dashboard.banner.webview_old.explanation"))} <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
+                """${esc(strings.get("dashboard.banner.webview_old.update_action"))}</a> """ +
+                """${esc(formattedString(strings, "dashboard.banner.webview_old.target", "version" to PanelHealth.MIN_CHROMIUM.toString()))}. """ +
+                """<small>${esc(strings.get("dashboard.banner.webview_old.engine_note"))}</small> """ +
+                """<a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a></div>"""
         HealthAudit.Kind.NO_RENDERER ->
-            """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's """ +
-                """built-in renderer on <a href="/configure">Configure</a> or configure another dashboard package. """ +
-                """Until then, this panel won't display a dashboard. <small>(ha-paneld itself runs fine without one.)</small></div>"""
+            """<div class="setup">ℹ <b>${esc(strings.get("dashboard.banner.no_renderer.title"))}</b> """ +
+                """${esc(strings.get("dashboard.banner.no_renderer.configure_prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a> """ +
+                """${esc(strings.get("dashboard.banner.no_renderer.explanation"))} <small>${esc(strings.get("dashboard.banner.no_renderer.note"))}</small></div>"""
         HealthAudit.Kind.UPDATE -> {
             val u = f.update!!
             """<div class="setup info" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
-                """⬆ <b>${esc(u.label)}</b> ${esc(u.latestVersion)} is available (installed: ${esc(u.currentVersion)}) — """ +
-                """<a href="/install">manage on the Install tab</a> """ +
-                """<button class="pbtn" onclick="ignoreUpdate(this)">Ignore this version</button></div>"""
+                """⬆ <b>${esc(u.label)}</b> ${esc(formattedString(strings, "dashboard.banner.update.available", "latest" to u.latestVersion, "current" to u.currentVersion))} — """ +
+                """<a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a> """ +
+                """<button class="pbtn" onclick="ignoreUpdate(this)">${esc(strings.get("dashboard.banner.update.ignore"))}</button></div>"""
         }
         HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
-            """<div class="setup crit">⚠ <b>Newer database preserved after a version downgrade</b> (${esc(f.detail)}) — """ +
-                """this build opened a fresh state store because its schema is older; some settings may have reset. """ +
-                """The previous database is preserved on the panel for recovery. """ +
-                """<a href="/configure">Check Configure →</a> or restore a backup on the <a href="/install">Install tab</a>.</div>"""
+            """<div class="setup crit">⚠ <b>${esc(strings.get("dashboard.banner.schema_rollback.title"))}</b> (${esc(f.detail)}) — """ +
+                """${esc(strings.get("dashboard.banner.schema_rollback.explanation"))} """ +
+                """<a href="${localizedHref("/configure", strings)}">${esc(strings.get("dashboard.banner.schema_rollback.configure_action"))}</a> """ +
+                """${esc(strings.get("dashboard.banner.schema_rollback.or_restore"))} <a href="${localizedHref("/install", strings)}">${esc(strings.get("shell.nav.install"))}</a>.</div>"""
     }
 
     /** Table rows for one facts card (Panel information / Networking / ha-paneld profile). */
@@ -5362,12 +5460,47 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
     private fun updatesRowsHtml(s: Snap, strings: AppStrings): String = listOf("self_update", "update_channel", "companion_auto_update")
         .mapNotNull { settingRowHtml(it, s.live, liveCapabilities(s.caps), strings) }.joinToString("\n")
 
-    private fun capRowsHtml(capabilities: List<DiagReader.Cap>): String {
+    private fun capRowsHtml(capabilities: List<DiagReader.Cap>, strings: AppStrings): String {
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         return capabilities.joinToString("\n") { c ->
             val col = capColor[c.status] ?: "#888"
-            """<tr><th>${esc(c.name)}</th><td><span style="color:$col">●</span> ${esc(c.note)}</td></tr>"""
+            """<tr><th>${esc(capabilityName(c.name, strings))}</th><td><span style="color:$col">●</span> ${esc(capabilityNote(c.note, strings))}</td></tr>"""
         }
+    }
+
+    private fun capabilityName(name: String, strings: AppStrings): String = when (name) {
+        "Root (su)" -> strings.get("dashboard.capability.root_su")
+        "Helper daemon" -> strings.get("dashboard.capability.helper_daemon")
+        "Shizuku enhanced access" -> strings.get("dashboard.capability.shizuku")
+        "Verified app update / screenshot / display" -> strings.get("dashboard.capability.verified_operations")
+        "Screen brightness" -> strings.get("dashboard.capability.screen_brightness")
+        "Screen on/off" -> strings.get("dashboard.capability.screen_power")
+        "RGB LED" -> strings.get("dashboard.capability.rgb_led")
+        "Hardware buttons" -> strings.get("dashboard.capability.hardware_buttons")
+        "Reboot / reload / launcher" -> strings.get("dashboard.capability.system_actions")
+        else -> name
+    }
+
+    private fun capabilityNote(note: String, strings: AppStrings): String = when (note) {
+        "available through root or the helper daemon" -> strings.get("dashboard.capability.note.root_or_helper")
+        "available through locally approved Shizuku access; app updates remain signer-verified" ->
+            strings.get("dashboard.capability.note.shizuku_verified")
+        "needs supported privileged panel access" -> strings.get("dashboard.capability.note.needs_privileged_access")
+        "available directly to ha-paneld" -> strings.get("dashboard.capability.note.su_direct")
+        "not available directly to ha-paneld — privileged actions are routed through the helper daemon" ->
+            strings.get("dashboard.capability.note.helper_routed")
+        "not available directly to ha-paneld — see the individual capability rows below" ->
+            strings.get("dashboard.capability.note.su_unavailable")
+        "WRITE_SETTINGS granted" -> strings.get("dashboard.capability.note.write_settings_granted")
+        "backlight control via helper daemon; Android setting is unchanged" ->
+            strings.get("dashboard.capability.note.brightness_helper")
+        "backlight control via su; Android setting is unchanged" ->
+            strings.get("dashboard.capability.note.brightness_su")
+        "available" -> strings.get("dashboard.capability.note.available")
+        "needs su or the helper daemon" -> strings.get("dashboard.capability.note.needs_su_or_helper")
+        "true backlight-off via su bl_power" -> strings.get("dashboard.capability.note.backlight_off_su")
+        "true backlight-off via the helper daemon" -> strings.get("dashboard.capability.note.backlight_off_helper")
+        else -> note
     }
 
     /** Visible "this needs root" banner for a root-gated card/control group — shown (never hidden) so a
@@ -5449,9 +5582,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             "nettbl" to factRowsHtml(s, NET_KEYS, h, strings),
             "proftbl" to factRowsHtml(s, profileFactKeys(profile, s.facts), h, strings),
             "contexttbl" to contextRowsHtml(s, h, strings),
-            "captbl" to capRowsHtml(s.capabilityRows),
+            "captbl" to capRowsHtml(s.capabilityRows, strings),
         ).joinToString(",") { (k, v) -> "\"$k\":${jsonStr(v)}" }
-        return """{"banners":${jsonStr(bannersHtml(s, h))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s, strings))},"cards":{$cards}}"""
+        return """{"banners":${jsonStr(bannersHtml(s, h, strings))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s, strings))},"cards":{$cards}}"""
     }
 
     private fun infoHtml(strings: AppStrings): String {
@@ -5502,9 +5635,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // A board whose profile declares no camera gets no card rather than an empty one — the same
         // rule the Camera row in Runtime diagnostics already follows.
         val cameraCard = if (camera.presentation().state == CameraState.ABSENT) "" else
-            """<div class="card" data-layout-key="camera-stream"><h2>Camera stream <small id="camhdr"></small></h2>
-<table id="camtbl"><tr><td style="color:#888">reading…</td></tr></table>
-<p class="note">What the stream was asked for and what it is delivering. This is not a CPU figure: encoding runs on the codec hardware and through the compositor as well as in this app, so no single process is the camera's cost — read the panel's whole load from the Performance and Top processes cards. Settings are on <a href="/configure">Configure → Camera</a>.</p></div>"""
+            """<div class="card" data-layout-key="camera-stream"><h2>${esc(strings.get("dashboard.camera.title"))} <small id="camhdr"></small></h2>
+<table id="camtbl"><tr><td style="color:#888">${esc(strings.get("dashboard.status.reading"))}</td></tr></table>
+<p class="note">${esc(strings.get("dashboard.camera.note"))} ${esc(strings.get("dashboard.camera.settings_on"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("dashboard.camera.configure_link"))}</a>.</p></div>"""
         val infoHaLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.open_in_ha.title"))}">${esc(strings.get("shell.open_in_ha"))}</a>""" else ""
         val revealBtn = """<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="${esc(strings.get("dashboard.reveal.title"))}">${esc(strings.get("dashboard.action.reveal"))}</button>"""
@@ -5517,7 +5650,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 <script src="/assets/card-column-alignment.js"></script>
 <script src="/info.js"></script>
 """,
-            body = """<div id="bannerzone">${s?.let { bannersHtml(it, h) } ?: ""}</div>
+            body = """<div id="bannerzone">${s?.let { bannersHtml(it, h, strings) } ?: ""}</div>
 <div class="cards" id="dashboard-cards" data-card-size-page="dashboard" data-card-size-epoch="1" data-card-size-restore="1">
 <div class="card" data-layout-key="controls"><h2>${esc(strings.get("dashboard.card.controls"))} <small>· ${esc(strings.get("dashboard.card.software_nav_bar"))}</small></h2>
 <div id="ctlzone">${controlsHtml(s, strings)}</div></div>
@@ -5526,7 +5659,7 @@ $shotCard
 ${tcard("nettbl", strings.get("dashboard.card.networking"), s?.let { factRowsHtml(it, NET_KEYS, h, strings) })}
 ${tcard("proftbl", strings.get("dashboard.card.profile"), s?.let { factRowsHtml(it, profileFactKeys(profile, it.facts), h, strings) }, post = profNote)}
 ${tcard("contexttbl", strings.get("dashboard.card.runtime_diagnostics"), s?.let { contextRowsHtml(it, h, strings) })}
-${tcard("captbl", strings.get("dashboard.card.capabilities"), s?.let { capRowsHtml(it.capabilityRows) }, post = capNote)}
+${tcard("captbl", strings.get("dashboard.card.capabilities"), s?.let { capRowsHtml(it.capabilityRows, strings) }, post = capNote)}
 <div class="card" data-layout-key="responsiveness"><h2>${esc(strings.get("dashboard.card.responsiveness"))} <small id="smhdr"></small></h2>
 <canvas id="respchart" width="600" height="150" style="height:150px"></canvas>
 <div class="leg"><span style="color:#d04a3b">▬</span> ${esc(strings.get("dashboard.chart.interaction_latency"))}&nbsp;&nbsp;<span style="color:#4a9eff">▬</span> ${esc(strings.get("dashboard.chart.state_updates"))}&nbsp;&nbsp;<span style="color:#f5a623">▬</span> ${esc(strings.get("dashboard.chart.main_thread_blocking"))} · ~4 min</div>

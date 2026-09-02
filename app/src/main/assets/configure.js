@@ -238,7 +238,7 @@
   };
 
   function approvalMessage(body) {
-    return body && body.message || i18nText("configure.approval.retry", "Approve this request on the panel, then retry it.");
+    return i18nText("configure.approval.retry", "Approve this request on the panel, then retry it.");
   }
 
   function approvalAwareJson(response) {
@@ -379,7 +379,13 @@
       body: new URLSearchParams({ ha_url: target }).toString()
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
-        if (!response.ok || !body.authorization_url) throw new Error(body.message || ("HTTP " + response.status));
+        if (!response.ok || !body.authorization_url) {
+          var failure = new Error(body && body.error === "invalid-ha-url"
+            ? i18nText("configure.oauth.valid_url_first", "Enter a valid Home Assistant URL first.")
+            : i18nText("configure.oauth.start_failed", "Could not start sign-in."));
+          failure.localizedMessage = failure.message;
+          throw failure;
+        }
         return body.authorization_url;
       });
     }).then(function (authorizationUrl) {
@@ -390,7 +396,9 @@
       haOauthLinks.hidden = false;
       setHaOauthStatus(i18nText("configure.oauth.link_ready", "Sign-in link ready. Open it normally or copy it into a private window."), false);
     }).catch(function (error) {
-      setHaOauthStatus(error && error.message ? error.message : i18nText("configure.oauth.start_failed", "Could not start sign-in."), false);
+      setHaOauthStatus(error && error.localizedMessage
+        ? error.localizedMessage
+        : i18nText("configure.oauth.start_failed", "Could not start sign-in."), false);
     }).then(function () { syncHaOAuthAvailability(); });
   }
 
@@ -1055,7 +1063,7 @@
             haSourceItems = (body && (body.items || body.candidates)) || [];
             populate();
             if (!body || body.available === false) {
-              note.textContent = (body && body.detail) || i18nText("configure.brightness.sources_unavailable", "Home Assistant sources are unavailable; an exact sensor entity id can still be entered.");
+              note.textContent = i18nText("configure.brightness.sources_unavailable", "Home Assistant sources are unavailable; an exact sensor entity id can still be entered.");
             } else if (!haSourceItems.length) {
               if (body.refreshing === true && sourcePolls < 20) {
                 sourcePolls++;
@@ -3041,7 +3049,9 @@
     }).then(function (r) {
       return approvalAwareJson(r).then(function (body) {
         if (!r.ok) {
-          var error = new Error(body.message || body.error || ("HTTP " + r.status));
+          var error = new Error(body && body.status === "saved-partial"
+            ? i18nText("configure.save.failed", "Save failed.")
+            : i18nText("configure.error.http", "Failed (HTTP {status})", { status: r.status }));
           error.configOutcome = body;
           throw error;
         }
@@ -3049,7 +3059,9 @@
       });
     })
       .then(function (outcome) {
-        var outcomeMessage = outcome && outcome.message || i18nText("configure.save.saved", "Saved.");
+        var outcomeMessage = outcome && outcome.status === "saved-apply-pending"
+          ? i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.")
+          : i18nText("configure.save.saved", "Saved.");
         var autoBrightnessSourceChanged = Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_ha_entity");
         if (autoBrightnessSourceChanged) beginAutoBrightnessSourceTransition(submittedValues.auto_brightness_ha_entity);
         Object.keys(submittedValues).forEach(function (key) { savedValues[key] = submittedValues[key]; });
@@ -3147,7 +3159,9 @@
             updateSaveUi();
           }, false);
         } else {
-          msg.textContent = e && e.message ? e.message : i18nText("configure.save.failed", "Save failed.");
+          msg.textContent = e && e.approvalRequired
+            ? e.message
+            : i18nText("configure.save.failed", "Save failed.");
           updateSaveUi();
         }
       });
