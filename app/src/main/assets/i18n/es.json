@@ -1,7 +1,7 @@
 {
   "locale": "es",
   "schema": 1,
-  "sourceRevision": "f128fbb6c62fca597e553fd6da9278b59bd32e97",
+  "sourceRevision": "e725a821921d6b7b7c6b8889c55709572405cf16",
   "strings": {
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",

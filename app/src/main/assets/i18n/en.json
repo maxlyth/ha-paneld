@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "locale": "en",
-  "sourceRevision": "f128fbb6c62fca597e553fd6da9278b59bd32e97",
+  "sourceRevision": "e725a821921d6b7b7c6b8889c55709572405cf16",
   "strings": {
     "settings.auto_brightness.help": {
       "text": "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",

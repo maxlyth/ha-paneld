@@ -18,6 +18,7 @@ class CatalogueAndroidTest {
         val key = "settings.auto_brightness.label"
         val reads = mutableListOf<String>()
         val loader = CatalogueLoader { path -> assets.readText(path).also { reads += path } }
+        loader.strings(AppLocale.ENGLISH)
 
         (AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH).forEach { locale ->
             val record = JSONObject(assets.readText("i18n/$locale.json"))
