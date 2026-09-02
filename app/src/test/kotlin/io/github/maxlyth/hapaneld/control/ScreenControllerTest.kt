@@ -1180,6 +1180,14 @@ class ScreenControllerTest {
         assertEquals(1, power.pulses)
     }
 
+    @Test fun ensureOnWakesANoninteractiveDeviceWhateverTheBacklightReads() {
+        val sc = brightnessZero()
+        backlight.level = 200
+        power.interactive = false   // Android slept on its own; the node still reads powered
+        assertEquals(WakeOutcome.WOKEN, sc.ensureOn())
+        assertEquals("the wakelock pulse is what brings Android back", 1, power.pulses)
+    }
+
     @Test fun ensureOnTreatsAnUnknownReadingAsDark() {
         val sc = brightnessZero()
         backlight.level = -1   // read-back unavailable: never-blank fails toward light

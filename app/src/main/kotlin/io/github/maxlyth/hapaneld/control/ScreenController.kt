@@ -296,12 +296,14 @@ class ScreenController(
      * panel that clamps a minimum reads lit after a deliberate off, and lit alone would make ON after
      * OFF a permanent no-op there. The hardware read-back comes second because an unexpectedly dark
      * panel must still relight on an explicit ON; an unknown reading counts as dark, so never-blank
-     * fails toward light. Check and act share the transition monitor, so a concurrent sleep is ordered
-     * wholly before this call or wholly after it, never between the read and the wake.
+     * fails toward light. A device Android itself has put noninteractive is not on either, whatever
+     * its backlight node reads, so it keeps the wakelock pulse a bare ON always delivered. Check and
+     * act share the transition monitor, so a concurrent sleep is ordered wholly before this call or
+     * wholly after it, never between the read and the wake.
      */
     @Synchronized
     fun ensureOn(): WakeOutcome {
-        if (!intendedOff && observedLit() == true) return WakeOutcome.ALREADY_ON
+        if (!intendedOff && power.isInteractive() && observedLit() == true) return WakeOutcome.ALREADY_ON
         return runCatching {
             wake()
             WakeOutcome.WOKEN
