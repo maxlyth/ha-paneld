@@ -737,6 +737,58 @@ class EntityLearningManager(
         outcome
     }
 
+    /**
+     * The bounded upgrade recovery, decided on the exact post-commit candidate.
+     *
+     * The default-resolver migration disables a filter the panel was already running and forces a
+     * re-bootstrap. A dashboard rule the analyzer flags must not then hold that panel behind a decision
+     * nobody is present to make, because the panel was working a minute ago and the dashboard did not
+     * change. But restoring is only safe when the set now available carries the COMPLETE list the panel
+     * had. A subset is silent canonical loss: the subscription would be overwritten with fewer ids and
+     * the one-shot latch cleared, so no later pass would ever notice the missing ones — cards simply
+     * stop updating. Anything short of complete leaves the decision hold in place, which is recoverable.
+     *
+     * Returns true only when the block was genuinely cleared and the caller may proceed to apply.
+     */
+    private fun recoverUpgradeFilter(
+        snapshot: EntityLearningSyncSnapshot,
+        rawIssues: List<JSONObject>,
+        now: Long,
+    ): Boolean {
+        if (!upgradeRecoveryAdmissible(snapshot.upgradeRebootstrapPending, snapshot.filterIds)) return false
+        val recovered = desiredIds(
+            now, snapshot.instanceKey, snapshot.dashboardPath,
+            includeStatic = snapshot.autoStatic,
+            includeRuntime = snapshot.autoRuntime,
+        )
+        if (!upgradeRecoveryPreservesFilter(snapshot.filterIds, recovered)) {
+            Log.w(
+                TAG,
+                "upgrade re-bootstrap: holding the dashboard — the restorable set (${recovered.size}) does not " +
+                    "preserve the complete retained filter (${snapshot.filterIds.size}); the decision stands",
+            )
+            return false
+        }
+        val ignorable = ignorableIssueFingerprints(rawIssues)
+        if (ignorable.isEmpty()) return false
+        if (!ignorable.all { store.setIssueIgnored(snapshot.instanceKey, snapshot.dashboardPath, it, true, now) }) {
+            Log.w(TAG, "upgrade re-bootstrap: a dashboard rule could not be recorded as ignored; the decision stands")
+            return false
+        }
+        bootstrapBlockingIssues = store.snapshot(snapshot.instanceKey, snapshot.dashboardPath).blockingIssueCount
+        if (bootstrapBlockingIssues > 0) {
+            Log.w(TAG, "upgrade re-bootstrap: a non-ignorable fence still blocks this dashboard; the decision stands")
+            return false
+        }
+        Log.i(
+            TAG,
+            "upgrade re-bootstrap: ${ignorable.size} ignorable dashboard rule(s) recorded as ignored so the " +
+                "${snapshot.filterIds.size}-entity filter this panel already ran is restored complete; " +
+                "review them under Entities",
+        )
+        return true
+    }
+
     private suspend fun synchronize() = withContext(Dispatchers.IO) {
         val syncCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_SYNC)
         var syncWork = 0L
@@ -809,53 +861,14 @@ class EntityLearningManager(
         // successful bootstrap; they remain visible in Entities and can be re-enabled there. Hard
         // diagnostic/resource fences are never ignorable and therefore still hold the renderer.
         //
-        // The same courtesy is owed to an upgrade. The default-resolver migration disables a filter the
-        // panel was already running and forces this re-bootstrap; a dashboard rule the new analyzer
-        // flags must not then hold that panel behind a decision until somebody walks up to it, because
-        // the panel was working a minute ago and nothing on the dashboard changed. The condition is
-        // narrow: the migration latch is pending, the retained allow-list is non-empty, and the set this
-        // scan would restore is non-empty too. An empty recovery is a blank dashboard, which is the
-        // destructive outcome the hold exists to prevent, so there the decision stays load-bearing.
-        //
-        // The preview must be exactly what the apply below would commit, and it is computed before the
-        // commit, so it deliberately does NOT count this catalogue's static rows: `commitSync` clears
-        // `referenced_by_config` and re-sets it only for THIS scan's derived ids, so the previous scan's
-        // static rows are counted here and dropped there. That is the one direction the error cannot be
-        // allowed to run in — an analyzer-policy upgrade on a dashboard with no pins and no in-retention
-        // runtime evidence would otherwise pass this check and commit the empty sentinel. Pins and
-        // runtime rows do survive the commit, and this scan's own literal and server-expanded ids are
-        // added directly, projected through the ignore set this recovery would create.
+        // The upgrade re-bootstrap deliberately takes NO default here. Its recovery is decided after the
+        // commit instead, on the exact set the apply would install; see [recoverUpgradeFilter].
         val storedIgnoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath)
-        val candidateIgnoredFingerprints = storedIgnoredFingerprints + ignorableIssueFingerprints(rawIssues)
-        val upgradeRecovery = snapshot.upgradeRebootstrapPending && upgradeRecoveryRestoresFilter(
-            upgradeRebootstrapPending = snapshot.upgradeRebootstrapPending,
-            retainedFilterIds = snapshot.filterIds,
-            recoveredIds = desiredIds(
-                System.currentTimeMillis(), snapshot.instanceKey, snapshot.dashboardPath,
-                includeStatic = false,
-                includeRuntime = snapshot.autoRuntime,
-            ) + (
-                if (snapshot.autoStatic) {
-                    deriveStaticEntityIds(
-                        scan.entityIds, catalogIds, expanded,
-                        effectiveLintEntityIds(lint, candidateIgnoredFingerprints),
-                    )
-                } else emptySet()
-            ),
-        )
         val defaultIgnoredFingerprints = defaultIgnoredIssueFingerprints(
             initialActivationPending = snapshot.initialActivationPending,
             bootstrap = bootstrap,
             issues = rawIssues,
-            upgradeRecovery = upgradeRecovery,
         )
-        if (upgradeRecovery && defaultIgnoredFingerprints.isNotEmpty()) {
-            Log.i(
-                TAG,
-                "upgrade re-bootstrap: ${defaultIgnoredFingerprints.size} ignorable dashboard rule(s) recorded as " +
-                    "ignored so the filter this panel already ran can be restored; review them under Entities",
-            )
-        }
         val ignoredFingerprints = storedIgnoredFingerprints + defaultIgnoredFingerprints
         val lintIds = effectiveLintEntityIds(lint, ignoredFingerprints)
         // Context-free literals still require a live-catalog match to discard entity-shaped prose.
@@ -921,7 +934,13 @@ class EntityLearningManager(
         // filter byte-for-byte, or keep a fresh renderer on its native diagnostic screen. Never apply
         // the bounded fragments of a partially unsafe dashboard and never fall back to an unfiltered
         // WebSocket while automatic learning is enabled.
-        if (effectiveBlocking) return@withContext
+        //
+        // The one exception is the re-bootstrap an upgrade forced on a panel that was already filtering
+        // this dashboard, and it is decided here rather than before the commit for a reason that cost a
+        // review round: `commitSync` above advances `missing_streak` for every entity absent from this
+        // scan, and `desiredIds` excludes rows that reach three. A candidate measured before the commit
+        // can therefore be larger than the one the apply installs, or empty where it looked sufficient.
+        if (effectiveBlocking && !recoverUpgradeFilter(snapshot, rawIssues, now)) return@withContext
         val active = desiredIds(
             now, snapshot.instanceKey, snapshot.dashboardPath,
             includeStatic = snapshot.autoStatic,
@@ -2999,20 +3018,13 @@ internal fun shouldBootstrapEntityLearning(
     configuredIds: Collection<String>,
 ): Boolean = learningEnabled && !applied && configuredIds.isEmpty()
 
-/**
- * First-run compatibility defaults are durable choices, not a blanket weakening of later scans.
- *
- * [upgradeRecovery] extends the same default to a re-bootstrap the default-resolver migration forced on
- * a panel that was already running a filter; see [upgradeRecoveryRestoresFilter] for the conditions.
- * Neither path reaches a non-ignorable fence.
- */
+/** First-run compatibility defaults are durable choices, not a blanket weakening of later scans. */
 internal fun defaultIgnoredIssueFingerprints(
     initialActivationPending: Boolean,
     bootstrap: Boolean,
     issues: Collection<JSONObject>,
-    upgradeRecovery: Boolean = false,
 ): Set<String> {
-    if (!bootstrap || !(initialActivationPending || upgradeRecovery)) return emptySet()
+    if (!bootstrap || !initialActivationPending) return emptySet()
     return ignorableIssueFingerprints(issues)
 }
 
@@ -3023,22 +3035,36 @@ internal fun ignorableIssueFingerprints(issues: Collection<JSONObject>): Set<Str
     .toSet()
 
 /**
- * Whether an upgrade-forced re-bootstrap may record ignorable blocking rules as ignored and restore
- * the filter the panel already ran, rather than hold the renderer behind a decision.
+ * Whether an upgrade-forced re-bootstrap is eligible for recovery at all.
  *
- * All three conditions carry weight. The migration latch is the only trigger: a person's own "Reset
- * learned data" also forces a bootstrap, but that person is looking at the Entities page where the
- * rules are shown, and deciding for them there would be a surprise. A retained allow-list is the
- * evidence that filtering on this dashboard was accepted before. And the set this scan would restore
- * must be non-empty: the ids committed at apply time come from the catalogue rows, not the retained
- * preference, so an install whose rows did not survive would otherwise pass the first two checks and
- * commit the fail-closed empty sentinel, a blank dashboard where a working one existed.
+ * The migration latch is the only trigger: a person's own "Reset learned data" also forces a bootstrap,
+ * but that person is looking at the Entities page where the rules are shown, and deciding for them
+ * there would be a surprise. A retained allow-list is the evidence that filtering on this dashboard was
+ * accepted before; without one there is nothing to restore and the decision is genuinely load-bearing.
  */
-internal fun upgradeRecoveryRestoresFilter(
+internal fun upgradeRecoveryAdmissible(
     upgradeRebootstrapPending: Boolean,
     retainedFilterIds: Collection<String>,
+): Boolean = upgradeRebootstrapPending && retainedFilterIds.isNotEmpty()
+
+/**
+ * Whether the set now restorable carries the COMPLETE filter the panel was running.
+ *
+ * A subset is not a partial success, it is silent canonical loss. The apply overwrites the stored
+ * subscription with what it installs and clears the one-shot migration latch, so ids missing here are
+ * missing for good: no later pass has any record that they were ever in the filter, and the only
+ * symptom is cards that quietly stop updating. The caller must therefore evaluate this against the
+ * exact post-commit candidate — `commitSync` advances `missing_streak` for entities absent from the
+ * scan and `desiredIds` drops rows that reach three, so a pre-commit measurement can overstate what
+ * survives. Anything short of complete leaves the decision hold standing, which a person can resolve.
+ */
+internal fun upgradeRecoveryPreservesFilter(
+    retainedFilterIds: Collection<String>,
     recoveredIds: Collection<String>,
-): Boolean = upgradeRebootstrapPending && retainedFilterIds.isNotEmpty() && recoveredIds.isNotEmpty()
+): Boolean {
+    if (retainedFilterIds.isEmpty() || recoveredIds.isEmpty()) return false
+    return recoveredIds.toSet().containsAll(retainedFilterIds.toSet())
+}
 
 internal enum class DashboardProbeOutcome { UNCHANGED, CHANGED }
 

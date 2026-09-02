@@ -74,7 +74,7 @@ class EntityBootstrapWatchdogTest {
         assertEquals(0, run.watchdog.probes)
     }
 
-    @Test fun `late approval starts no watchdog resync on top of the approval's own scan`() {
+    @Test fun `late approval starts no watchdog resync on top of the approval own scan`() {
         val run = Run(watchdog())
         run.poll(2 * 24 * HOUR, blockingIssues = 1)
         val probesBeforeApproval = run.watchdog.probes
@@ -188,7 +188,7 @@ class EntityBootstrapWatchdogTest {
         assertEquals(1, run.count(EntityBootstrapWatchdogAction.PRESENT_PROBLEM))
     }
 
-    @Test fun `a person's retry restarts the ladder from the base rung`() {
+    @Test fun `a person retry restarts the ladder from the base rung`() {
         val run = Run(watchdog())
         run.poll(HOUR, blockingIssues = 0)
         assertTrue(run.watchdog.gaveUp)

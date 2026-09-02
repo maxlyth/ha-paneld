@@ -22,39 +22,61 @@ class EntityLearningHoldRecoveryTest {
     private val fence = issue("diagnostic_limit", "fedcba9876543210", ignorable = false)
     private val advisory = issue("runtime_coverage", "1111222233334444", ignorable = false, blocking = false)
 
-    @Test fun `upgrade recovery needs the migration latch, a retained filter and a non-empty recovered set`() {
+    @Test fun `only the migration latch with a retained filter is even eligible`() {
         val retained = listOf("light.kitchen", "sensor.hall")
-        val recovered = listOf("light.kitchen")
-        assertTrue(upgradeRecoveryRestoresFilter(true, retained, recovered))
+        assertTrue(upgradeRecoveryAdmissible(true, retained))
         // A person's own reset also forces a bootstrap; it is not the migration and does not qualify.
-        assertFalse(upgradeRecoveryRestoresFilter(false, retained, recovered))
+        assertFalse(upgradeRecoveryAdmissible(false, retained))
         // No retained list means filtering was never accepted on this dashboard.
-        assertFalse(upgradeRecoveryRestoresFilter(true, emptyList(), recovered))
-        // An empty recovered set would commit the fail-closed sentinel: a blank dashboard.
-        assertFalse(upgradeRecoveryRestoresFilter(true, retained, emptyList()))
+        assertFalse(upgradeRecoveryAdmissible(true, emptyList()))
     }
 
-    @Test fun `the recovery preview counts only what survives the commit`() {
-        // `commitSync` clears referenced_by_config and re-sets it for THIS scan's derived ids, so a
-        // preview that counted the catalogue's static rows would count rows the apply then drops: an
-        // analyzer-policy upgrade with no pins and no runtime evidence would pass this check and commit
-        // the empty fail-closed sentinel. Pins and runtime rows survive; this scan's own ids are added
-        // directly. The wiring needs a live scan, so it is pinned against the source.
+    @Test fun `a recovered subset is refused because it is silent canonical loss`() {
+        val retained = listOf("light.kitchen", "sensor.hall", "sensor.landing")
+
+        // The whole list, in any order, is the only admissible outcome.
+        assertTrue(upgradeRecoveryPreservesFilter(retained, retained.reversed()))
+        // Extra ids are fine: the dashboard may legitimately reference more than it used to.
+        assertTrue(upgradeRecoveryPreservesFilter(retained, retained + "sensor.new"))
+
+        // A subset is NOT a partial success. The apply overwrites the stored subscription and clears
+        // the one-shot latch, so a dropped id is dropped for good and its card silently stops updating.
+        // This is the defect the first review round found: non-empty is not sufficient.
+        assertFalse(upgradeRecoveryPreservesFilter(retained, listOf("light.kitchen", "sensor.hall")))
+        assertFalse(upgradeRecoveryPreservesFilter(retained, listOf("light.kitchen")))
+        // A near-miss that swaps one id for another is still loss.
+        assertFalse(upgradeRecoveryPreservesFilter(retained, listOf("light.kitchen", "sensor.hall", "sensor.other")))
+        // The empty candidate is the fail-closed sentinel: a blank dashboard.
+        assertFalse(upgradeRecoveryPreservesFilter(retained, emptyList()))
+        // Nothing retained means nothing to preserve, and the decision is genuinely load-bearing.
+        assertFalse(upgradeRecoveryPreservesFilter(emptyList(), listOf("light.kitchen")))
+    }
+
+    @Test fun `the recovery decision is taken after the commit, on the exact applied candidate`() {
+        // The ordering is the contract: commitSync advances missing_streak before desiredIds runs, so a
+        // pre-commit preview can overstate what survives. Pinned against the source because the wiring
+        // needs a live scan; the arithmetic itself is covered by the instrumented store regression.
         val manager = listOf(
             java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
             java.io.File("app/src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityLearningManager.kt"),
         ).first { it.isFile }.readText()
-        val preview = manager.substringAfter("val upgradeRecovery = snapshot.upgradeRebootstrapPending")
-            .substringBefore("val defaultIgnoredFingerprints")
-        assertTrue("the preview must exclude the catalogue's static rows", preview.contains("includeStatic = false"))
-        assertTrue(preview.contains("includeRuntime = snapshot.autoRuntime"))
+
+        val commit = manager.indexOf("commitEntityLearningSyncEvidence(")
+        val gate = manager.indexOf("if (effectiveBlocking && !recoverUpgradeFilter(")
+        assertTrue("the recovery gate must exist", gate > 0)
+        assertTrue("the recovery must be decided after the commit", commit < gate)
+
+        // The default-ignore helper must no longer carry the upgrade path: taking it before the commit
+        // is exactly what let a doomed candidate persist its ignores.
+        assertFalse(manager.contains("upgradeRecovery = upgradeRecovery"))
+        val body = manager.substringAfter("private fun recoverUpgradeFilter(").substringBefore("\n    private suspend fun synchronize")
+        assertTrue("eligibility is checked first", body.indexOf("upgradeRecoveryAdmissible(") < body.indexOf("upgradeRecoveryPreservesFilter("))
+        assertTrue("the candidate comes from desiredIds", body.contains("desiredIds("))
         assertTrue(
-            "this scan's own ids must be projected through the ignore set the recovery would create",
-            preview.contains("effectiveLintEntityIds(lint, candidateIgnoredFingerprints)"),
+            "ignores are only written once the complete filter is proven restorable",
+            body.indexOf("upgradeRecoveryPreservesFilter(") < body.indexOf("store.setIssueIgnored("),
         )
-        // The candidate set is the stored ignores plus what this recovery would add, never more.
-        assertTrue(manager.contains("storedIgnoredFingerprints + ignorableIssueFingerprints(rawIssues)"))
-        assertTrue(manager.contains("val ignoredFingerprints = storedIgnoredFingerprints + defaultIgnoredFingerprints"))
+        assertTrue("a remaining fence still holds the renderer", body.contains("bootstrapBlockingIssues > 0"))
     }
 
     @Test fun `only ignorable blocking findings are ever eligible for a default`() {
@@ -65,29 +87,23 @@ class EntityLearningHoldRecoveryTest {
         assertEquals(emptySet<String>(), ignorableIssueFingerprints(listOf(fence, advisory)))
     }
 
-    @Test fun `upgrade recovery records ignorable blocking rules as ignored and nothing else`() {
+    @Test fun `the first-run default is unchanged and never carries the upgrade path`() {
         val issues = listOf(strategy, fence, advisory)
-        assertEquals(
-            setOf("0123456789abcdef"),
-            defaultIgnoredIssueFingerprints(
-                initialActivationPending = false, bootstrap = true, issues = issues, upgradeRecovery = true,
-            ),
-        )
-        // Only a bootstrap may take the default; an applied filter keeps its own decisions.
-        assertEquals(
-            emptySet<String>(),
-            defaultIgnoredIssueFingerprints(
-                initialActivationPending = false, bootstrap = false, issues = issues, upgradeRecovery = true,
-            ),
-        )
-        // Without either trigger the rule holds the renderer exactly as before.
+        // The upgrade path takes no default here any more; it is decided after the commit instead.
         assertEquals(
             emptySet<String>(),
             defaultIgnoredIssueFingerprints(
                 initialActivationPending = false, bootstrap = true, issues = issues,
             ),
         )
-        // The first-run path is unchanged by the new parameter.
+        // Only a bootstrap may take the default; an applied filter keeps its own decisions.
+        assertEquals(
+            emptySet<String>(),
+            defaultIgnoredIssueFingerprints(
+                initialActivationPending = true, bootstrap = false, issues = issues,
+            ),
+        )
+        // The first-run path itself is untouched by this lane: still exactly the ignorable blocking set.
         assertEquals(
             setOf("0123456789abcdef"),
             defaultIgnoredIssueFingerprints(
@@ -175,15 +191,12 @@ class EntityLearningHoldRecoveryTest {
         assertTrue(flagged.getBoolean("blocking"))
         assertTrue(flagged.getBoolean("ignorable"))
 
-        // The reported panel: upgrade latch pending, a 347-entity filter retained, catalogue rows present.
-        val recovery = upgradeRecoveryRestoresFilter(
-            upgradeRebootstrapPending = true,
-            retainedFilterIds = List(347) { "sensor.retained_$it" },
-            recoveredIds = List(347) { "sensor.retained_$it" },
-        )
-        val ignored = defaultIgnoredIssueFingerprints(
-            initialActivationPending = false, bootstrap = true, issues = raw, upgradeRecovery = recovery,
-        )
+        // The reported panel: upgrade latch pending, a 347-entity filter retained, and a post-commit
+        // candidate that carries every one of them.
+        val retained = List(347) { "sensor.retained_$it" }
+        assertTrue(upgradeRecoveryAdmissible(true, retained))
+        assertTrue(upgradeRecoveryPreservesFilter(retained, retained))
+        val ignored = ignorableIssueFingerprints(raw)
         val effective = JSONArray(EntityCatalogIssuePersistence.applyIgnores(JSONArray(raw), ignored))
         val issue = effective.getJSONObject(0)
         assertFalse(issue.getBoolean("blocking"))
@@ -198,12 +211,10 @@ class EntityLearningHoldRecoveryTest {
             ),
         )
 
-        // The same dashboard on a panel that never ran a filter on it keeps asking.
-        val fresh = defaultIgnoredIssueFingerprints(
-            initialActivationPending = false, bootstrap = true, issues = raw,
-            upgradeRecovery = upgradeRecoveryRestoresFilter(true, emptyList(), emptyList()),
-        )
-        val stillBlocking = JSONArray(EntityCatalogIssuePersistence.applyIgnores(JSONArray(raw), fresh))
+        // The same dashboard on a panel that never ran a filter on it keeps asking: nothing retained
+        // means nothing to preserve, so no ignore is ever recorded.
+        assertFalse(upgradeRecoveryAdmissible(true, emptyList()))
+        val stillBlocking = JSONArray(EntityCatalogIssuePersistence.applyIgnores(JSONArray(raw), emptySet()))
         assertTrue(stillBlocking.getJSONObject(0).getBoolean("blocking"))
         assertEquals(
             AutomaticSyncDecision.BLOCKED,
