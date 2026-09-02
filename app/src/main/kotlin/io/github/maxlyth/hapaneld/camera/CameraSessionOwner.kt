@@ -234,7 +234,12 @@ class CameraSessionOwner(
                 open = false
                 release = state.release(id)
                 ended = if (release == Release.Close) takeCurrentLocked() else null
-                if (release == Release.Close) outcome = "ok"
+                if (release == Release.Close) {
+                    val now = nowMs()
+                    val retained = state.retainedRefusal(now, LeaseKind.SNAPSHOT)
+                        ?: state.retainedRefusal(now, LeaseKind.STREAM)
+                    outcome = retained?.token ?: CameraOutcome.OK
+                }
                 generation = state.generation
             }
             when (release) {

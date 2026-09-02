@@ -69,6 +69,19 @@ class CameraOutcomeResetContractTest {
         assertFalse("the gate is never computed in a section of its own", "val gate = synchronized(lock)" in acquire)
     }
 
+    /** Ending the session must not erase a hold which still refuses the next consumer. */
+    @Test fun closingTheLastLeaseRestatesAnyRetainedRefusal() {
+        val close = body("override fun close")
+        val release = close.indexOf("release = state.release(id)")
+        val snapshot = close.indexOf("state.retainedRefusal(now, LeaseKind.SNAPSHOT)")
+        val stream = close.indexOf("?: state.retainedRefusal(now, LeaseKind.STREAM)")
+        val store = close.indexOf("outcome = retained?.token ?: CameraOutcome.OK")
+        assertTrue("release happens first", release >= 0)
+        assertTrue("snapshot-wide refusal is checked after release", snapshot > release)
+        assertTrue("stream-only refusal is the fallback", stream > snapshot)
+        assertTrue("the retained refusal is stored instead of unconditional ok", store > stream)
+    }
+
     /** The balanced `{...}` block starting at [from], so a later section cannot be read as this one. */
     private fun balanced(source: String, from: Int): String {
         val open = source.indexOf('{', from)

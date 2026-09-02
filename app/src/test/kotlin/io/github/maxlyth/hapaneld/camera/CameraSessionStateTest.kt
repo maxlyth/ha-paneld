@@ -444,6 +444,23 @@ class CameraSessionStateTest {
         assertTrue("$state", state.acquire(gate = null, nowMs = now) is Admission.Open)
     }
 
+    @Test fun closingTheLastLeaseDoesNotEraseARetainedEncoderHold() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        state.encoderFailed(nowMs = 10_000L)
+
+        assertEquals(Release.Close, state.release(stream.lease))
+        assertEquals(Phase.IDLE, state.phase)
+        assertEquals(
+            CameraRefusal.STREAM_ENCODER,
+            state.retainedRefusal(nowMs = 20_000L, kind = LeaseKind.STREAM),
+        )
+        assertEquals(
+            Admission.Refused(CameraRefusal.STREAM_ENCODER),
+            state.acquire(gate = null, nowMs = 20_000L, kind = LeaseKind.STREAM, binding = binding),
+        )
+    }
+
     @Test fun aRetainedRetryBackoffSurvivesADisableAndStillRefusesEverythingAfterTheEnable() {
         val first = open()
         // The open fails while its caller is still waiting, so the ladder reopens and records the
