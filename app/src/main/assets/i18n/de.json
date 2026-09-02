@@ -1,8 +1,168 @@
 {
   "locale": "de",
   "schema": 1,
-  "sourceRevision": "e725a821921d6b7b7c6b8889c55709572405cf16",
+  "sourceRevision": "35526a940dc0e178250ebefbfdf6e37764307622",
   "strings": {
+    "dashboard.runtime.camera.stream_not_listening": {
+      "text": "stream not listening",
+      "sourceHash": "e3a40cd0634618399becf4bea497de031a554cc4e1db0324c6af3e5e3092e0d8",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.camera.stream_port": {
+      "text": "stream listening on port {port}",
+      "sourceHash": "83c1bf9b7ba534ecc1a6dbea0551e81ffd3a09abdb1ec9e48b9eac9f4a7511ab",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.camera.stream_url": {
+      "text": "stream at {url} (not for this panel's own dashboard)",
+      "sourceHash": "d3f3db923f7d17d1a473967e4cf23654596c890df0926f8f8fff90363e68dffd",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.database.on_disk": {
+      "text": "{bytes} on disk",
+      "sourceHash": "76ece6574f88f5736843495cc337b68ae23178a21b35fbe4fb8810470bd85081",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.database.schema": {
+      "text": "schema {version}",
+      "sourceHash": "34e4f2a16fb4af8c88576f4640e68479bab5729512058c2441cf8796a064e4b3",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.database.used": {
+      "text": "{bytes} used",
+      "sourceHash": "b9ec98fe463481d27be6c8fa0a11e0d830b8a9dfac2f593dce1045dff7ab9a72",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.age_never": {
+      "text": "never",
+      "sourceHash": "6497e4b3d7bed16979a343a7db4efa6d57725529f5ac3cec45c1f08fabcbdafc",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.age_seconds_ago": {
+      "text": "{seconds}s ago",
+      "sourceHash": "b5907e4c12962ee59cf2dcdc0690ca8f736d7cdc77f5c546cb75fc84d2781931",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.auth_retry": {
+      "text": "{state} · rejects {rejects} · attempt {attempt} · next {next}",
+      "sourceHash": "ab27a09ae2f9439f008c5f90250464af8c2752e203041bb4ac35e75eb6b589fd",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.config_error": {
+      "text": "config-error · invalid or unsupported broker URL",
+      "sourceHash": "2b4df44055ce98c13abe97370dae68b9b8c5064008dd177455388e79e61ffc9d",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.family_automatic": {
+      "text": "Automatic (next {family})",
+      "sourceHash": "edada581531450033adad40e605a3dfd6211bdbef79fb5159ca89c7b857ec1ab",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.family_force_ipv4": {
+      "text": "Force IPv4",
+      "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.family_prefer_ipv4": {
+      "text": "Prefer IPv4",
+      "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.seconds": {
+      "text": "{seconds}s",
+      "sourceHash": "5307d20dc7c46cc7771e80a1d10417915bcf84ff57f50a15e3f7aea5d1661ed6",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.announcing": {
+      "text": "announcing",
+      "sourceHash": "67209cabee758ad203e5ea33eae67637767e65aca1a440c111ac283aed2fc3d1",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.auth_failed": {
+      "text": "auth-failed",
+      "sourceHash": "1d75377d4dbd78456c27d8a187ae15d24bc4123a82b83de0596323e0b9525139",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.auth_retrying": {
+      "text": "auth-retrying",
+      "sourceHash": "a2653bd8b474cef91ad8f81e15e8d1b10bf8056049c83ac62b835e9b85710403",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.connected": {
+      "text": "connected",
+      "sourceHash": "12a7bd86e0a430327620a0e2274d0f6f091c783b21c169636ef8997f9f1da76a",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.connecting": {
+      "text": "connecting",
+      "sourceHash": "3d6df245178e60766e3478a821dd81b9702e3e4d4e1319d5484b0351f29c0149",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.disconnected": {
+      "text": "disconnected",
+      "sourceHash": "d0cb8d28fd8ddcf3c8bc194941b24815924ef438f9650ad2c41bbc01806d67d8",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.discovering": {
+      "text": "discovering",
+      "sourceHash": "346e887d310fe3193dc94b94facaab54dea5933f8d593dcc4c67d9000dd5619d",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.state.unreachable": {
+      "text": "unreachable",
+      "sourceHash": "5e6017027437e595ec72adee0718d78f092cddaa8d31048c9d5ba2ed647ded5e",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.mqtt.status": {
+      "text": "{state} · {transport} · last-ok {lastOk} · last-auth {lastAuth} · {auth} · family {family}",
+      "sourceHash": "21b4a9b385928557b8618f562b0b77a974a159b081213524f7a4b24cee066ebe",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.admitted_age": {
+      "text": "{status} · admitted {age} ago",
+      "sourceHash": "92fd22f641da39cb2efa0269be095d0282a1735efec48034da755a27035e0697",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.admitted_cached": {
+      "text": "admitted on a previously verified Home Assistant version; the dashboard has not connected",
+      "sourceHash": "7e85c23b29d5ad7c28dabb3f8c4261b86e848c31a64e911bce5b10fa680240bf",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.admitted_waiting": {
+      "text": "admitted; the dashboard has not connected yet",
+      "sourceHash": "89c8b01a2e40da3b01620c913744f4c12b8c5669544bf736dc0d73d7b1ca76d7",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.builtin": {
+      "text": "built-in · {summary}",
+      "sourceHash": "700d74f3da30748668edfc3425baf5195000846b62bc7b57ee43d32b254af6fd",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.checking": {
+      "text": "checking Home Assistant compatibility",
+      "sourceHash": "aae85d745feb6aae58da37322c34e07a283d37ae30f9a8d487e0f2ceca009c97",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.rendered": {
+      "text": "dashboard rendered",
+      "sourceHash": "364760458d97955decc536899d96d5ec91067e214a8b461675bc0def3e5e3221",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.rendered_cached": {
+      "text": "dashboard rendered; admitted on a previously verified Home Assistant version",
+      "sourceHash": "2077a2931c2fa32a27d8d8a136b7a0e5367c4007d0b7df59b559e10e337235d4",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.theme_override_suffix": {
+      "text": "; an explicit Home Assistant theme is overriding this panel's Dashboard theme",
+      "sourceHash": "48b00c7c6d33ce7186244ebdc2343d2c5d58a9156ebf9276d8c7e3bbbc5cb28a",
+      "state": "english-fallback"
+    },
+    "dashboard.runtime.renderer.unobserved": {
+      "text": "no admission observed for the current renderer",
+      "sourceHash": "b65f8770c0d567f700d2f20e7e522d6afeb982ebe8210b632c41f937c7f5d599",
+      "state": "english-fallback"
+    },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
       "state": "machine-cross-checked",
