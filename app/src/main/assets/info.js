@@ -3,6 +3,8 @@
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
 var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='',topMode='cpu',topCpu=null,topRam=null;  // ~4 min at 2s
 var TOP_PROCESS_MEMORY_FALLBACK_POLLS=12,topProcessMemoryPolls=0,topProcessMemoryPopulated=false;
+function tr(key,fallback,vars){if(window.HaI18n&&window.HaI18n.t)return window.HaI18n.t(key,fallback,vars);
+ return fallback.replace(/\{([A-Za-z0-9_]+)\}/g,function(all,name){return vars&&vars[name]!=null?String(vars[name]):all;});}
 // The camera source is already satisfied on a panel that has no camera card: the server omits the card
 // on a board whose profile declares no camera, and a source that can never report would stall the
 // remembered card sizes for every other card on the page.
@@ -42,11 +44,11 @@ function paint(id,rows){
 // Top-processes: persistent header + reconciled data rows (or a single muted message row).
 function paintTop(top,msg){
  var t=document.getElementById('topproc');
- if(!t._h){var hr=document.createElement('tr'),a=document.createElement('th');a.textContent='Process';
+ if(!t._h){var hr=document.createElement('tr'),a=document.createElement('th');a.textContent=tr('dashboard.top_processes.process','Process');
   var b=document.createElement('th');b.className='num';hr.appendChild(a);hr.appendChild(b);
   t.textContent='';t.appendChild(hr);t._h=true;}
  t.children[0].children[1].textContent=topMode==='ram'?'RAM':'% CPU';
- var empty=!top||!top.length,data=empty?[{name:msg||'needs root (su)'}]:top;
+ var empty=!top||!top.length,data=empty?[{name:msg||tr('dashboard.top_processes.needs_root','needs root (su)')}]:top;
  t.children[0].style.display=empty?'none':'';
  for(var i=0;i<data.length;i++){var p=data[i],tr=t.children[i+1];
   if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('td'));
@@ -64,7 +66,7 @@ function paintTop(top,msg){
 function setTopMode(mode){
  if(mode!=='cpu'&&mode!=='ram')return;topMode=mode;
  document.querySelectorAll('.top-process-mode').forEach(function(button){var on=button.dataset.mode===mode;button.classList.toggle('on',on);button.setAttribute('aria-pressed',on?'true':'false');});
- paintTop(mode==='ram'?topRam:topCpu,mode==='ram'?'RAM data unavailable':'needs root (su)');hwm('topproc');
+ paintTop(mode==='ram'?topRam:topCpu,mode==='ram'?tr('dashboard.top_processes.ram_unavailable','RAM data unavailable'):tr('dashboard.top_processes.needs_root','needs root (su)'));hwm('topproc');
 }
 // Noisy state-stream contributors: one sortable-looking data shape instead of repeating the same
 // "Noisy entity" key/value label for every contributor.
@@ -72,11 +74,11 @@ function paintNoisy(entities,identified){
  var t=document.getElementById('noisyentities');if(!t)return;
  var rows=entities||[],empty=!rows.length;
   if(!t._h){var hr=document.createElement('tr');
-  ['Top entities','Rate','Payload'].forEach(function(label,index){var h=document.createElement('th');
+  [tr('dashboard.noisy.top_entities','Top entities'),tr('dashboard.noisy.rate','Rate'),tr('dashboard.noisy.payload','Payload')].forEach(function(label,index){var h=document.createElement('th');
    h.textContent=label;if(index)h.className=index===1?'num rate':'num payload';hr.appendChild(h);});
   t.textContent='';t.appendChild(hr);t._h=true;}
  t.children[0].style.display=empty?'none':'';
- var data=empty?[{entityId:identified?'No noisy contributors in this sample':'Aggregate only — enable automatic entity learning to identify contributors'}]:rows;
+ var data=empty?[{entityId:identified?tr('dashboard.noisy.none','No noisy contributors in this sample'):tr('dashboard.noisy.aggregate_only','Aggregate only — enable automatic entity learning to identify contributors')}]:rows;
  for(var i=0;i<data.length;i++){var e=data[i],tr=t.children[i+1];
   if(!tr){tr=document.createElement('tr');tr.appendChild(document.createElement('td'));
    var updates=document.createElement('td');updates.className='num rate';tr.appendChild(updates);
@@ -113,9 +115,9 @@ function drawResp(hist){
  x.clearRect(0,0,W,H);
  x.font='10px system-ui,sans-serif';x.textBaseline='top';x.lineWidth=1;
  var lanes=[
-  {name:'interaction',values:hist&&hist.interactionMs||[],max:1000,col:'#d04a3b',unit:'ms'},
-  {name:'state updates',values:hist&&hist.updatesPerSec||[],max:Math.max(50,Math.max.apply(null,hist&&hist.updatesPerSec||[0])),col:'#4a9eff',unit:'/s'},
-  {name:'main blocked',values:hist&&hist.blockedMsPerSec||[],max:1000,col:'#f5a623',unit:'ms/s'}];
+  {name:tr('dashboard.responsiveness.interaction','interaction'),values:hist&&hist.interactionMs||[],max:1000,col:'#d04a3b',unit:'ms'},
+  {name:tr('dashboard.responsiveness.state_updates','state updates'),values:hist&&hist.updatesPerSec||[],max:Math.max(50,Math.max.apply(null,hist&&hist.updatesPerSec||[0])),col:'#4a9eff',unit:'/s'},
+  {name:tr('dashboard.responsiveness.main_blocked','main blocked'),values:hist&&hist.blockedMsPerSec||[],max:1000,col:'#f5a623',unit:'ms/s'}];
  var lh=H/lanes.length;
  lanes.forEach(function(lane,index){
   var top=index*lh,bottom=top+lh-1;x.strokeStyle='#383838';x.beginPath();x.moveTo(0,bottom);x.lineTo(W,bottom);x.stroke();
@@ -129,23 +131,24 @@ function drawResp(hist){
 function fmtRate(n,unit){return n<10?n.toFixed(1)+' '+unit:Math.round(n)+' '+unit;}
 function fmtBytes(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB/s';if(n>=1024)return (n/1024).toFixed(1)+' KB/s';return Math.round(n)+' B/s';}
 function fmtByteTotal(n){if(n>=1048576)return (n/1048576).toFixed(1)+' MB';if(n>=1024)return (n/1024).toFixed(1)+' KB';return Math.round(n)+' B';}
-function causeLabel(c){return ({ha_network_path:'Network path to Home Assistant',state_stream:'State stream pressure',dashboard_script:'Dashboard/card JavaScript',
- rendering_or_media:'Rendering, layout, or media',system_contention:'System process contention',
- memory_or_renderer_instability:'Renderer or memory instability',dashboard_or_state_proxy:'Dashboard or state load (proxy)',
- no_clear_dominant_cause:'No clear dominant cause'})[c]||'Collecting evidence';}
+function causeLabel(c){return ({ha_network_path:tr('dashboard.cause.ha_network_path','Network path to Home Assistant'),state_stream:tr('dashboard.cause.state_stream','State stream pressure'),dashboard_script:tr('dashboard.cause.dashboard_script','Dashboard/card JavaScript'),
+ rendering_or_media:tr('dashboard.cause.rendering_or_media','Rendering, layout, or media'),system_contention:tr('dashboard.cause.system_contention','System process contention'),
+ memory_or_renderer_instability:tr('dashboard.cause.memory_or_renderer_instability','Renderer or memory instability'),dashboard_or_state_proxy:tr('dashboard.cause.dashboard_or_state_proxy','Dashboard or state load (proxy)'),
+ no_clear_dominant_cause:tr('dashboard.cause.no_clear_dominant_cause','No clear dominant cause')})[c]||tr('dashboard.cause.collecting','Collecting evidence');}
 function rendererMeasurement(mode,r){
- if(mode==='builtin_unavailable')return {header:'· built-in observer unavailable',
-  title:'The built-in renderer is active without its live browser observer',
-  rows:[{label:'Measurement mode',val:'built-in live observer unavailable',col:'#888'},
-   {label:'How to restore it',val:'reload the built-in dashboard to retry',
-    suf:'· if this persists, update the panel WebView'}]};
+ var text=typeof tr==='function'?tr:function(key,fallback,vars){return fallback.replace(/\{([A-Za-z0-9_]+)\}/g,function(all,name){return vars&&vars[name]!=null?String(vars[name]):all;});};
+ if(mode==='builtin_unavailable')return {header:text('dashboard.renderer.observer_unavailable_header','· built-in observer unavailable'),
+  title:text('dashboard.renderer.observer_unavailable_title','The built-in renderer is active without its live browser observer'),
+  rows:[{label:text('dashboard.renderer.measurement_mode','Measurement mode'),val:text('dashboard.renderer.observer_unavailable','built-in live observer unavailable'),col:'#888'},
+   {label:text('dashboard.renderer.restore','How to restore it'),val:text('dashboard.renderer.reload_to_retry','reload the built-in dashboard to retry'),
+    suf:text('dashboard.renderer.update_webview','· if this persists, update the panel WebView')}]};
  if(r&&r.status!=='no-renderer'){
-  var rows=[{label:'Measurement mode',val:'renderer CPU proxy',suf:'· not actual tap latency',col:'#888'},
-   {label:'Dashboard main-thread',val:r.mainPct+'% of one core',suf:'· 100% means the renderer thread is saturated',bold:true}];
-  if(r.jankPct!=null)rows.push({label:'Rendering proxy',val:r.jankPct+'% janky',suf:'· worst frame '+r.p99+' ms'});
-  return {header:'· external renderer proxy',title:'measuring '+r.pkg,rows:rows};
+  var rows=[{label:text('dashboard.renderer.measurement_mode','Measurement mode'),val:text('dashboard.renderer.cpu_proxy','renderer CPU proxy'),suf:text('dashboard.renderer.not_tap_latency','· not actual tap latency'),col:'#888'},
+   {label:text('dashboard.renderer.main_thread','Dashboard main-thread'),val:text('dashboard.renderer.core_percent','{percent}% of one core',{percent:r.mainPct}),suf:text('dashboard.renderer.saturated','· 100% means the renderer thread is saturated'),bold:true}];
+  if(r.jankPct!=null)rows.push({label:text('dashboard.renderer.rendering_proxy','Rendering proxy'),val:text('dashboard.renderer.janky_percent','{percent}% janky',{percent:r.jankPct}),suf:text('dashboard.renderer.worst_frame','· worst frame {milliseconds} ms',{milliseconds:r.p99})});
+  return {header:text('dashboard.renderer.external_proxy_header','· external renderer proxy'),title:text('dashboard.renderer.measuring','measuring {package}',{package:r.pkg}),rows:rows};
  }
- return {header:'',title:'',rows:[{label:'Measurement mode',val:'External renderer proxy needs root/helper access',col:'#888'}]};
+ return {header:'',title:'',rows:[{label:text('dashboard.renderer.measurement_mode','Measurement mode'),val:text('dashboard.renderer.needs_root','External renderer proxy needs root/helper access'),col:'#888'}]};
 }
 async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
@@ -157,14 +160,14 @@ async function perf(){
   var ramPct=ramOk?Math.round(d.memUsedMb*100/d.memTotalMb):null;
   var peak=(d.cores&&d.cores.length)?Math.max.apply(null,d.cores):d.cpu;
   var fok=!!(d.freqMhz&&d.freqMhz.length),cur=fok?Math.max.apply(null,d.freqMhz):0,mx=d.freqMaxMhz||0;
-  var rows=[{label:'CPU',val:d.cpu==null?'–':d.cpu+'%',suf:peak==null?'waiting for sample':'peak core '+peak+'%'},
-   opt('clk','CPU clock',fok,(cur/1000).toFixed(2)+' GHz',mx?'/ '+(mx/1000).toFixed(2)+' GHz max':''),
+  var rows=[{label:'CPU',val:d.cpu==null?'–':d.cpu+'%',suf:peak==null?tr('dashboard.performance.waiting_sample','waiting for sample'):tr('dashboard.performance.peak_core','peak core {percent}%',{percent:peak})},
+   opt('clk',tr('dashboard.performance.cpu_clock','CPU clock'),fok,(cur/1000).toFixed(2)+' GHz',mx?tr('dashboard.performance.clock_max','/ {gigahertz} GHz max',{gigahertz:(mx/1000).toFixed(2)}):''),
    opt('gpu','GPU',d.gpu!=null,d.gpu+'%',d.gpuMhz?d.gpuMhz+' MHz':''),
    {label:'RAM',val:ramOk?d.memUsedMb+' / '+d.memTotalMb+' MB ('+ramPct+'%)':'–'},
-   opt('load','Load avg',!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
-   opt('temp','Temperature',d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
+   opt('load',tr('dashboard.performance.load_average','Load avg'),!!(d.load&&d.load.length),d.load?d.load.join('  '):''),
+   opt('temp',tr('dashboard.performance.temperature','Temperature'),d.tempC!=null,d.tempC!=null?d.tempC.toFixed(1)+' °C':'')];
   paint('perf',rows.filter(Boolean));
-  topCpu=d.top;topRam=d.topRam;paintTop(topMode==='ram'?topRam:topCpu,topMode==='ram'?'RAM data unavailable':null);
+  topCpu=d.top;topRam=d.topRam;paintTop(topMode==='ram'?topRam:topCpu,topMode==='ram'?tr('dashboard.top_processes.ram_unavailable','RAM data unavailable'):null);
   topProcessMemoryReady(topCpu);
   var r=d.render,smh=document.getElementById('smhdr'),dash=d.dashboard;
   perfMode=dash&&dash.mode||'';var direct=perfMode==='builtin_direct';
@@ -172,18 +175,18 @@ async function perf(){
   // in-process, so — unlike the root/daemon main-thread metric below — it shows even with no root.
   var bRows=[],b=d.builtin;
   if(b){
-   if(b.ttiColdMs>=0)bRows.push({label:'Time to interactive',val:(b.ttiColdMs/1000).toFixed(1)+'s cold',suf:b.ttiWarmMedianMs>=0?'· reload '+(b.ttiWarmMedianMs/1000).toFixed(1)+'s':'· launch → dashboard ready'});
-   bRows.push({label:'Renderer reloads (24h)',val:''+b.reloads24h,col:b.reloads24h>0?'#d9a528':'#888',suf:b.reloads24h>0?'· heap/OOM churn':'· stable'});
+   if(b.ttiColdMs>=0)bRows.push({label:tr('dashboard.responsiveness.time_to_interactive','Time to interactive'),val:tr('dashboard.responsiveness.cold_seconds','{seconds}s cold',{seconds:(b.ttiColdMs/1000).toFixed(1)}),suf:b.ttiWarmMedianMs>=0?tr('dashboard.responsiveness.reload_seconds','· reload {seconds}s',{seconds:(b.ttiWarmMedianMs/1000).toFixed(1)}):tr('dashboard.responsiveness.launch_ready','· launch → dashboard ready')});
+   bRows.push({label:tr('dashboard.responsiveness.renderer_reloads','Renderer reloads (24h)'),val:''+b.reloads24h,col:b.reloads24h>0?'#d9a528':'#888',suf:b.reloads24h>0?tr('dashboard.responsiveness.heap_churn','· heap/OOM churn'):tr('dashboard.common.stable','· stable')});
   }
   if(direct&&dash){
-   smh.textContent='· built-in live instrumentation';var it=dash.interaction||{},bl=dash.blocking||{};
+   smh.textContent=tr('dashboard.responsiveness.live_instrumentation','· built-in live instrumentation');var it=dash.interaction||{},bl=dash.blocking||{};
    var causeCol=dash.confidence==='high'?'#d04a3b':(dash.confidence==='medium'?'#d9a528':'#888');
-   var sm=[{label:'Likely cause',val:causeLabel(dash.likelyCause),suf:'· '+dash.confidence+' confidence',col:causeCol,bold:true}];
-   if(it.count)sm.push({label:'Tap response',val:'~p50 '+it.p50Ms+' ms · ~p95 '+it.p95Ms+' ms',
-    suf:'· worst '+it.worstMs+' ms = input '+it.inputDelayMs+' + handler '+it.processingMs+' + presentation '+it.presentationMs});
-   else sm.push({label:'Tap response',val:'interact with the dashboard to measure',col:'#888'});
-   sm.push({label:'Main-thread blocking',val:fmtRate(bl.blockedMsPerSec||0,'ms/s'),
-    suf:'· p95 '+Math.round(bl.blockedP95MsPerSec||0)+' ms/s · longest frame '+Math.round(bl.longestFrameMs||0)+' ms'});
+   var sm=[{label:tr('dashboard.responsiveness.likely_cause','Likely cause'),val:causeLabel(dash.likelyCause),suf:tr('dashboard.responsiveness.confidence','· {level} confidence',{level:dash.confidence}),col:causeCol,bold:true}];
+   if(it.count)sm.push({label:tr('dashboard.responsiveness.tap_response','Tap response'),val:tr('dashboard.responsiveness.tap_percentiles','~p50 {p50} ms · ~p95 {p95} ms',{p50:it.p50Ms,p95:it.p95Ms}),
+    suf:tr('dashboard.responsiveness.tap_breakdown','· worst {worst} ms = input {input} + handler {handler} + presentation {presentation}',{worst:it.worstMs,input:it.inputDelayMs,handler:it.processingMs,presentation:it.presentationMs})});
+   else sm.push({label:tr('dashboard.responsiveness.tap_response','Tap response'),val:tr('dashboard.responsiveness.interact_to_measure','interact with the dashboard to measure'),col:'#888'});
+   sm.push({label:tr('dashboard.responsiveness.main_thread_blocking','Main-thread blocking'),val:fmtRate(bl.blockedMsPerSec||0,'ms/s'),
+    suf:tr('dashboard.responsiveness.blocking_detail','· p95 {p95} ms/s · longest frame {longest} ms',{p95:Math.round(bl.blockedP95MsPerSec||0),longest:Math.round(bl.longestFrameMs||0)})});
    paint('smtbl',sm.concat(bRows));drawResp(dash.history||{});
   }else{
    drawResp({});
@@ -193,24 +196,24 @@ async function perf(){
   }
   var stream=dash&&dash.stateStream||{},filter=dash&&dash.filter||{},sr=[];
   if(direct&&dash.sampleCount){
-   sr.push({label:'State updates',val:fmtRate(stream.updatesPerSec||0,'/s'),suf:'· p95 '+fmtRate(stream.updatesP95PerSec||0,'/s')});
-   sr.push({label:'State payload',val:fmtBytes(stream.payloadBytesPerSec||0),suf:'· p95 '+fmtBytes(stream.payloadP95BytesPerSec||0)+' · uncompressed JSON'});
-   sr.push({label:'State-event main thread',val:fmtRate(stream.mainThreadMsPerSec||0,'ms/s'),
-    suf:'· p95 '+Math.round(stream.mainThreadP95MsPerSec||0)+' ms/s · longest '+Math.round(stream.longestStateTaskMs||0)+' ms'});
-   sr.push({label:'Initial hydration',val:(stream.hydrationUpdates||0)+' entities'});
-   sr.push({label:'Subscription',val:filter.active?'filtered to '+filter.entityCount+' entities':'unfiltered',
+   sr.push({label:tr('dashboard.state_stream.state_updates','State updates'),val:fmtRate(stream.updatesPerSec||0,'/s'),suf:tr('dashboard.state_stream.p95_rate','· p95 {rate}',{rate:fmtRate(stream.updatesP95PerSec||0,'/s')})});
+   sr.push({label:tr('dashboard.state_stream.state_payload','State payload'),val:fmtBytes(stream.payloadBytesPerSec||0),suf:tr('dashboard.state_stream.payload_detail','· p95 {rate} · uncompressed JSON',{rate:fmtBytes(stream.payloadP95BytesPerSec||0)})});
+   sr.push({label:tr('dashboard.state_stream.main_thread','State-event main thread'),val:fmtRate(stream.mainThreadMsPerSec||0,'ms/s'),
+    suf:tr('dashboard.state_stream.main_thread_detail','· p95 {p95} ms/s · longest {longest} ms',{p95:Math.round(stream.mainThreadP95MsPerSec||0),longest:Math.round(stream.longestStateTaskMs||0)})});
+   sr.push({label:tr('dashboard.state_stream.initial_hydration','Initial hydration'),val:tr('dashboard.common.entity_count','{count} entities',{count:stream.hydrationUpdates||0})});
+   sr.push({label:tr('dashboard.state_stream.subscription','Subscription'),val:filter.active?tr('dashboard.state_stream.filtered','filtered to {count} entities',{count:filter.entityCount}):tr('dashboard.state_stream.unfiltered','unfiltered'),
     col:filter.active?'#48c774':'#d9a528'});
    paintNoisy(dash.topEntities||[],!!filter.active);
-   if(stream.droppedFrames)sr.push({label:'Measurement drops',val:''+stream.droppedFrames,col:'#d9a528'});
+   if(stream.droppedFrames)sr.push({label:tr('dashboard.state_stream.measurement_drops','Measurement drops'),val:''+stream.droppedFrames,col:'#d9a528'});
   }else{
-   sr.push({label:'State stream',val:direct?'waiting for Home Assistant state traffic':'available with the built-in renderer',col:'#888'});
+   sr.push({label:tr('dashboard.state_stream.state_stream','State stream'),val:direct?tr('dashboard.state_stream.waiting_ha','waiting for Home Assistant state traffic'):tr('dashboard.state_stream.available_builtin','available with the built-in renderer'),col:'#888'});
    paintNoisy([],false);
   }
   paint('streamtbl',sr);
   hwm('smtbl');hwm('streamtbl');hwm('topproc');
-  document.getElementById('perfage').textContent='· live';
+  document.getElementById('perfage').textContent=tr('dashboard.common.live','· live');
   cardSizeSourceReady('perf');
- }catch(e){document.getElementById('perfage').textContent='· unavailable';}
+ }catch(e){document.getElementById('perfage').textContent=tr('dashboard.common.unavailable','· unavailable');}
 }
 perf();setInterval(perf,2000);
 // Live Sensors card — REUSABLE: sensorsCard(tableId, ageId) mounts the same card on any tab that
@@ -220,25 +223,29 @@ function formatBrightness(raw){
  var value=Math.max(0,Math.min(255,Math.round(raw)));
  return Math.round(value*100/255)+'% ('+value+')';
 }
+function proximityPhase(value){var normalized=String(value||'waiting').replace(/_/g,' ');return ({
+ waiting:tr('dashboard.sensors.phase_waiting','waiting'),learning:tr('dashboard.sensors.phase_learning','learning'),
+ learned:tr('dashboard.sensors.phase_learned','learned'),calibrating:tr('dashboard.sensors.phase_calibrating','calibrating')
+ })[normalized]||normalized;}
 function sensorsCard(tbl,age){
- function fA(a){return a==null?'':(a<90?'· '+a+'s ago':(a<5400?'· '+Math.round(a/60)+'m ago':'· '+Math.round(a/3600)+'h ago'));}
+ function fA(a){return a==null?'':(a<90?tr('dashboard.sensors.seconds_ago','· {count}s ago',{count:a}):(a<5400?tr('dashboard.sensors.minutes_ago','· {count}m ago',{count:Math.round(a/60)}):tr('dashboard.sensors.hours_ago','· {count}h ago',{count:Math.round(a/3600)})));}
  async function s(){
   if(document.hidden)return;
   try{
    var d=await (await fetch('/api/v1/sensors')).json(),rows=[];
-   if(d.light&&d.light.present)rows.push({label:'Ambient light',val:d.light.lux!=null?d.light.lux+' lx':'no reading yet',suf:fA(d.light.age_s)});
-   if(d.proximity&&d.proximity.present){var p=d.proximity,phase=(p.learning||p.phase||'waiting').replace(/_/g,' ');
-    rows.push({label:'Proximity',val:p.near==null?phase:(p.near?'near':'far'),suf:p.normalizedLevel==null?'· '+phase:'· '+p.normalizedLevel+'% normalized · '+phase});}
-   if(d.temperature&&d.temperature.present)rows.push({label:'Temperature',val:d.temperature.c!=null?d.temperature.c+' °C':'no reading yet',suf:fA(d.temperature.age_s)});
-   if(d.humidity&&d.humidity.present)rows.push({label:'Humidity',val:d.humidity.pct!=null?d.humidity.pct+' %':'no reading yet',suf:fA(d.humidity.age_s)});
-   if(d.volume_pct!=null&&d.volume_pct>=0)rows.push({label:'Volume',val:d.volume_pct+' %'});
+   if(d.light&&d.light.present)rows.push({label:tr('dashboard.sensors.ambient_light','Ambient light'),val:d.light.lux!=null?d.light.lux+' lx':tr('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.light.age_s)});
+   if(d.proximity&&d.proximity.present){var p=d.proximity,phase=proximityPhase(p.learning||p.phase||'waiting');
+    rows.push({label:tr('dashboard.sensors.proximity','Proximity'),val:p.near==null?phase:(p.near?tr('dashboard.sensors.near','near'):tr('dashboard.sensors.far','far')),suf:p.normalizedLevel==null?'· '+phase:tr('dashboard.sensors.normalized','· {percent}% normalized · {phase}',{percent:p.normalizedLevel,phase:phase})});}
+   if(d.temperature&&d.temperature.present)rows.push({label:tr('dashboard.performance.temperature','Temperature'),val:d.temperature.c!=null?d.temperature.c+' °C':tr('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.temperature.age_s)});
+   if(d.humidity&&d.humidity.present)rows.push({label:tr('dashboard.sensors.humidity','Humidity'),val:d.humidity.pct!=null?d.humidity.pct+' %':tr('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.humidity.age_s)});
+   if(d.volume_pct!=null&&d.volume_pct>=0)rows.push({label:tr('dashboard.sensors.volume','Volume'),val:d.volume_pct+' %'});
    var brightness=formatBrightness(d.brightness);
-   if(brightness!=null)rows.push({label:'Brightness',val:brightness});
-   if(!rows.length)rows.push({label:'',val:'no sensors on this panel',col:'#888'});
+   if(brightness!=null)rows.push({label:tr('dashboard.sensors.brightness','Brightness'),val:brightness});
+   if(!rows.length)rows.push({label:'',val:tr('dashboard.sensors.none','no sensors on this panel'),col:'#888'});
    paint(tbl,rows);
-   var a=document.getElementById(age);if(a)a.textContent='· live';
+   var a=document.getElementById(age);if(a)a.textContent=tr('dashboard.common.live','· live');
    cardSizeSourceReady('sensors');
-  }catch(e){var a=document.getElementById(age);if(a)a.textContent='· unavailable';}
+  }catch(e){var a=document.getElementById(age);if(a)a.textContent=tr('dashboard.common.unavailable','· unavailable');}
  }
  s();setInterval(s,2000);
 }
@@ -444,7 +451,7 @@ function fitControls(){
 }
 window.addEventListener('resize',fitControls);
 if(document.readyState!=='loading')fitControls();else document.addEventListener('DOMContentLoaded',fitControls);
-function approvalMessage(body){return body&&body.message||'Approve this request on the panel, then retry it.';}
+function approvalMessage(body){return body&&body.message||tr('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.');}
 function responseBody(response){return response.text().then(function(text){
  var body={};try{body=text?JSON.parse(text):{};}catch(_){body={message:text};}
  if(response.status===202&&body&&body.error==='approval-required'){
@@ -454,21 +461,20 @@ function responseBody(response){return response.text().then(function(text){
 });}
 function inspApply(d){
  var hdr=document.getElementById('insthdr'),hint=document.getElementById('insthint'),start=document.getElementById('inspstart');
- var hp='<b>'+location.hostname+':'+d.port+'</b>';
  if(start)start.disabled=d.start_allowed===false;
- hdr.textContent=d.running?'· on':'· off';
- if(d.status==='hardened-disabled')hint.textContent='Unavailable while Hardened mode is enabled. Switch to Relaxed mode before exposing WebView developer tools to the LAN.';
- else if(d.status==='no-socket')hint.innerHTML='Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.';
- else if(d.status==='needs-root')hint.textContent='Needs root (su) on this panel.';
- else if(d.status==='failed'||d.status==='no-binary')hint.textContent='Could not start the relay.';
- else if(d.running)hint.innerHTML='Relay on. In <b>chrome://inspect</b> the dashboard now appears under Remote Target — click <b>inspect</b>. If it does not show, the host must be added <i>before</i> enabling — add '+hp+' in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.';
- else hint.innerHTML=(perfMode==='builtin_direct'?'The performance cards above use direct built-in instrumentation without DevTools. ':'')+'For deeper inspection, open <b>chrome://inspect</b> → <b>Configure…</b>, add '+hp+', then press <b>Enable</b>. Companion also requires Settings → Troubleshooting → <b>WebView remote debugging</b> and a dashboard relaunch. The relay needs root.';
+ hdr.textContent=d.running?tr('dashboard.inspect.on','· on'):tr('dashboard.inspect.off','· off');
+ if(d.status==='hardened-disabled')hint.textContent=tr('dashboard.inspect.hardened_disabled','Unavailable while Hardened mode is enabled. Switch to Relaxed mode before exposing WebView developer tools to the LAN.');
+ else if(d.status==='no-socket')hint.textContent=tr('dashboard.inspect.enable_in_companion','Enable it on the dashboard first: Companion → Settings → Troubleshooting → "WebView remote debugging", then relaunch the dashboard and press Enable again.');
+ else if(d.status==='needs-root')hint.textContent=tr('dashboard.inspect.needs_root','Needs root (su) on this panel.');
+ else if(d.status==='failed'||d.status==='no-binary')hint.textContent=tr('dashboard.inspect.start_failed','Could not start the relay.');
+ else if(d.running)hint.textContent=tr('dashboard.inspect.running','Relay on. In chrome://inspect the dashboard now appears under Remote Target — click inspect. If it does not show, the host must be added before enabling — add {host} in Configure…, then refresh chrome://inspect. Exposes DevTools to the LAN while on; press Stop when done.',{host:location.hostname+':'+d.port});
+ else hint.textContent=(perfMode==='builtin_direct'?tr('dashboard.inspect.direct_instrumentation','The performance cards above use direct built-in instrumentation without DevTools.')+' ':'')+tr('dashboard.inspect.instructions','For deeper inspection, open chrome://inspect → Configure…, add {host}, then press Enable. Companion also requires Settings → Troubleshooting → WebView remote debugging and a dashboard relaunch. The relay needs root.',{host:location.hostname+':'+d.port});
  cardSizeSourceReady('inspect');
 }
 async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){var hint=document.getElementById('insthint');
  fetch('/api/v1/inspect/start',{method:'POST'}).then(responseBody).then(function(result){inspApply(result.body);})
- .catch(function(error){if(hint)hint.textContent=error&&error.message?error.message:'Could not start the relay.';});}
+ .catch(function(error){if(hint)hint.textContent=error&&error.message?error.message:tr('dashboard.inspect.start_failed','Could not start the relay.');});}
 function inspStop(){fetch('/api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
 
@@ -484,23 +490,23 @@ scheduleDashboardColumnAlignment();
 function controlMessage(text){var zone=document.getElementById('ctlzone');if(!zone)return;
  var note=document.getElementById('ctlmsg');if(!note){note=document.createElement('p');note.id='ctlmsg';note.className='note';note.setAttribute('role','status');note.setAttribute('aria-live','polite');zone.appendChild(note);}note.textContent=text||'';}
 function act(a){if(a==='reboot'){
- var warning='Reboot this panel now?';
- if(document.body.dataset.hardened==='1')warning+='\n\nHardened mode requires physical approval on this panel; it cannot be approved remotely.';
+ var warning=tr('dashboard.actions.confirm_reboot','Reboot this panel now?');
+ if(document.body.dataset.hardened==='1')warning+='\n\n'+tr('dashboard.actions.hardened_approval','Hardened mode requires physical approval on this panel; it cannot be approved remotely.');
  if(!confirm(warning))return;
  }
  fetch('/api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a})
  .then(responseBody).then(function(result){
   if(!result.response.ok){
-   if(result.body&&result.body.error==='remote-input-disabled')controlMessage('Remote tap input is disabled for network clients in Hardened mode.');
-   else controlMessage(result.body.message||result.body.error||('Action failed (HTTP '+result.response.status+').'));
+   if(result.body&&result.body.error==='remote-input-disabled')controlMessage(tr('dashboard.actions.remote_input_disabled','Remote tap input is disabled for network clients in Hardened mode.'));
+   else controlMessage(result.body.message||result.body.error||tr('dashboard.actions.failed_http','Action failed (HTTP {status}).',{status:result.response.status}));
   }else controlMessage('');
- }).catch(function(error){controlMessage(error&&error.approvalRequired?error.message:'Action failed (network).');});}
+ }).catch(function(error){controlMessage(error&&error.approvalRequired?error.message:tr('dashboard.actions.failed_network','Action failed (network).'));});}
 
 // Reveal toggle for .secret fields (blurred by default). Auto-re-blurs after 20s so it can't be left
 // revealed for a screenshot. Focusing a blurred input also un-blurs it (see info.css) so config stays editable.
 function toggleReveal(){var on=document.body.classList.toggle('revealed');var b=document.getElementById('revbtn');
- if(b)b.textContent=on?'Hide':'Reveal';clearTimeout(window.__rev);
- if(on)window.__rev=setTimeout(function(){document.body.classList.remove('revealed');if(b)b.textContent='Reveal';},20000);}
+ if(b)b.textContent=on?tr('dashboard.secrets.hide','Hide'):tr('dashboard.secrets.reveal','Reveal');clearTimeout(window.__rev);
+ if(on)window.__rev=setTimeout(function(){document.body.classList.remove('revealed');if(b)b.textContent=tr('dashboard.secrets.reveal','Reveal');},20000);}
 // Click a single blurred value to reveal just it (toggle). Inputs reveal on focus already (info.css), so
 // only handle non-input .secret spans here.
 document.addEventListener('click',function(e){var s=e.target.closest&&e.target.closest('.secret');
@@ -567,14 +573,14 @@ function screenshotTrace(dialog,headers){
 }
 function clearScreenshotTrace(dialog){['inputId','inputRoute','screenshotRoute','screenshotId'].forEach(function(key){delete dialog.dataset[key];});}
 function fallbackScreenshot(card,dialog,generation,tapConfirmed){var state=screenshotState(card);if(state.fallbackUsed)return Promise.resolve(false);
- state.fallbackUsed=true;screenshotStatus(tapConfirmed?'Tap completed; capturing a fresh screenshot…':'Tap outcome unknown; capturing the current panel…',false);
+ state.fallbackUsed=true;screenshotStatus(tapConfirmed?tr('dashboard.screenshot.tap_completed_capturing','Tap completed; capturing a fresh screenshot…'):tr('dashboard.screenshot.outcome_unknown_capturing','Tap outcome unknown; capturing the current panel…'),false);
  return new Promise(function(resolve){setTimeout(resolve,250);}).then(function(){
   return fetch('/api/v1/screenshot.png?t='+Date.now(),{cache:'no-store'});
  }).then(function(r){if(!r.ok)throw new Error('capture failed');screenshotTrace(dialog,r.headers);return r.blob().then(function(blob){
    return installScreenshotBlob(card,blob,generation,r.headers);});
- }).then(function(updated){screenshotStatus(updated?(tapConfirmed?'Screenshot updated.':'Tap outcome unknown; current screenshot refreshed.'):
-  (tapConfirmed?'The tap completed, but the screenshot could not be updated.':'Tap outcome unknown; the screenshot could not be updated.'),!updated);return updated;})
- .catch(function(){screenshotStatus(tapConfirmed?'The tap completed, but the screenshot could not be updated.':'Tap outcome unknown; the screenshot could not be updated.',true);return false;});
+ }).then(function(updated){screenshotStatus(updated?(tapConfirmed?tr('dashboard.screenshot.updated','Screenshot updated.'):tr('dashboard.screenshot.outcome_unknown_refreshed','Tap outcome unknown; current screenshot refreshed.')):
+  (tapConfirmed?tr('dashboard.screenshot.tap_completed_update_failed','The tap completed, but the screenshot could not be updated.'):tr('dashboard.screenshot.outcome_unknown_update_failed','Tap outcome unknown; the screenshot could not be updated.')),!updated);return updated;})
+ .catch(function(){screenshotStatus(tapConfirmed?tr('dashboard.screenshot.tap_completed_update_failed','The tap completed, but the screenshot could not be updated.'):tr('dashboard.screenshot.outcome_unknown_update_failed','Tap outcome unknown; the screenshot could not be updated.'),true);return false;});
 }
 function sendScreenshotTap(ev,card,dialog,image){
  if(!ev||ev.detail<=0||ev.button!==0||ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey)return;
@@ -584,7 +590,7 @@ function sendScreenshotTap(ev,card,dialog,image){
  state.tapping=true;state.fallbackUsed=false;var generation=++state.generation;
  clearScreenshotTrace(dialog);
  var cardImage=card.querySelector('.shot img');if(cardImage)cardImage.dataset.refreshing='0';
- image.classList.add('pending');screenshotStatus('Sending tap…',false);
+ image.classList.add('pending');screenshotStatus(tr('dashboard.screenshot.sending_tap','Sending tap…'),false);
  var controller=typeof AbortController==='function'?new AbortController():null;
  // The server owns the tap/capture completion deadline and response grace. Do not abandon a slow helper or
  // accessibility route early and race its eventual tap with the safe fallback screenshot.
@@ -598,27 +604,27 @@ function sendScreenshotTap(ev,card,dialog,image){
   var type=(r.headers.get('Content-Type')||'').toLowerCase();if(type.indexOf('image/png')<0){
    var bad=new Error('capture response was not a PNG');bad.tapConfirmed=true;throw bad;}
   return r.blob().then(function(blob){return installScreenshotBlob(card,blob,generation,r.headers);});
- }).then(function(updated){screenshotStatus(updated?'Screenshot updated.':'The tap completed, but the screenshot could not be updated.',!updated);
+ }).then(function(updated){screenshotStatus(updated?tr('dashboard.screenshot.updated','Screenshot updated.'):tr('dashboard.screenshot.tap_completed_update_failed','The tap completed, but the screenshot could not be updated.'),!updated);
   if(!updated)return fallbackScreenshot(card,dialog,generation,true);return true;
  }).catch(function(error){if(timeout)clearTimeout(timeout);
   // A route header proves execution reached a tap route; completion-unknown and network/abort failures
   // are ambiguous. Queue expiry is explicitly not a tap and must not masquerade as success.
   if(error.tapConfirmed||error.code==='completion-unknown')return fallbackScreenshot(card,dialog,generation,!!error.tapConfirmed);
   if(error.status==null)return fallbackScreenshot(card,dialog,generation,false);
-  screenshotStatus(error.status===403?'Remote input is disabled in Hardened mode.':'Tap was not accepted.',true);return false;
+  screenshotStatus(error.status===403?tr('dashboard.screenshot.remote_input_disabled','Remote input is disabled in Hardened mode.'):tr('dashboard.screenshot.tap_rejected','Tap was not accepted.'),true);return false;
  }).then(function(){if(generation===state.generation){state.tapping=false;image.classList.remove('pending');}});
 }
 function createScreenshotDialog(card,shot){
  var dialog=document.createElement('dialog');dialog.id='screenshot-dialog';dialog.className='screenshot-dialog';
  var bar=document.createElement('div');bar.className='screenshot-dialog-bar';
- var title=document.createElement('h2');title.id='screenshot-dialog-title';title.textContent='Screenshot · live panel';bar.appendChild(title);
- var refresh=document.createElement('button');refresh.type='button';refresh.className='pbtn screenshot-dialog-refresh';refresh.textContent='Refresh';
- refresh.addEventListener('click',function(){if(dialog.classList.contains('view-only')){refreshScreenshot(card);return;}refreshScreenshot(card);screenshotStatus('Refreshing screenshot…',false);});
+ var title=document.createElement('h2');title.id='screenshot-dialog-title';title.textContent=tr('dashboard.screenshot.dialog_title','Screenshot · live panel');bar.appendChild(title);
+ var refresh=document.createElement('button');refresh.type='button';refresh.className='pbtn screenshot-dialog-refresh';refresh.textContent=tr('dashboard.screenshot.refresh','Refresh');
+ refresh.addEventListener('click',function(){if(dialog.classList.contains('view-only')){refreshScreenshot(card);return;}refreshScreenshot(card);screenshotStatus(tr('dashboard.screenshot.refreshing','Refreshing screenshot…'),false);});
  bar.appendChild(refresh);
- var close=document.createElement('button');close.type='button';close.className='pbtn screenshot-dialog-close';close.textContent='Close';
+ var close=document.createElement('button');close.type='button';close.className='pbtn screenshot-dialog-close';close.textContent=tr('dashboard.screenshot.close','Close');
  close.addEventListener('click',function(){dialog.close();});bar.appendChild(close);dialog.appendChild(bar);
  var frame=document.createElement('div');frame.className='screenshot-dialog-frame';
- var image=document.createElement('img');image.id='screenshot-dialog-image';image.alt='Live panel screenshot';image.draggable=false;
+ var image=document.createElement('img');image.id='screenshot-dialog-image';image.alt=tr('dashboard.screenshot.image_alt','Live panel screenshot');image.draggable=false;
  image.addEventListener('click',function(ev){sendScreenshotTap(ev,card,dialog,image);});frame.appendChild(image);dialog.appendChild(frame);
  dialog.setAttribute('aria-labelledby',title.id);
  var status=document.createElement('p');status.id='screenshot-dialog-status';status.className='screenshot-dialog-status';
@@ -636,7 +642,7 @@ function setupScreenshotOverlay(){var card=document.getElementById('shotcard'),s
   if(ev.button!==0||ev.ctrlKey||ev.metaKey||ev.shiftKey||ev.altKey||!screenshotLoaded(shot,im))return;
   ev.preventDefault();document.getElementById('screenshot-dialog-image').src=im.currentSrc||im.src;
   var hardened=document.body.getAttribute('data-hardened')==='1';dialog.classList.toggle('view-only',hardened);
-  screenshotStatus(hardened?'View only — remote input is disabled in Hardened mode.':'Click the screenshot to tap the panel.',false);
+  screenshotStatus(hardened?tr('dashboard.screenshot.view_only','View only — remote input is disabled in Hardened mode.'):tr('dashboard.screenshot.click_to_tap','Click the screenshot to tap the panel.'),false);
   if(!dialog.open){dialog.showModal();dialog.querySelector('.screenshot-dialog-close').focus();}
  });
 }
