@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -102,19 +103,35 @@ class HaNetworkPathQualificationTest {
         assertTrue(pokes.contains(Triple(true, false, HaNetworkPathSeverity.HEALTHY)))
     }
 
-    @Test fun sustainedLatencyOnTheRealSocketIsAWarningAndMultiSecondRepliesAreSevere() {
+    /**
+     * The split, proved end to end on a real socket rather than on a replayed trace: a server that is
+     * genuinely slow to answer — a real pong delay, over real Ktor/OkHttp, through the real frame
+     * decode — raises RESPONSIVENESS and never touches the path verdict.
+     *
+     * This is the strongest evidence available for the rule, because every term the deterministic
+     * traces cannot model (socket scheduling, decode cost, the reader thread's turn on the CPU) is
+     * present here and still nothing about the path changes. Nothing is lost, so nothing may be said.
+     */
+    @Test fun sustainedLatencyOnTheRealSocketIsAResponsivenessVerdictAndNeverAPathOne() {
         server.pongDelayMs.set(180L)
         owner.replaceLifecycleWatch(true)
-        val warned = await("warning", 6_000L) { it.severity == HaNetworkPathSeverity.WARNING }
+        val warned = await("responsiveness warning", 6_000L) { it.responsiveness == HaNetworkPathSeverity.WARNING }
         assertTrue("p95 ${warned.p95Ms}", warned.p95Ms >= 180L)
         assertEquals(0, warned.networkFailures)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, warned.severity)
         server.pongDelayMs.set(1_200L)
-        val severe = await("severe by latency", 12_000L) { it.severity == HaNetworkPathSeverity.SEVERE }
+        val severe = await("responsiveness severe", 12_000L) { it.responsiveness == HaNetworkPathSeverity.SEVERE }
         assertTrue("p95 ${severe.p95Ms}", severe.p95Ms > HaNetworkPath.SEVERE_P95_MS)
         assertEquals("multi-second replies are round trips, not loss", 0, severe.networkFailures)
-        // Bind announces the unreportable state first; the three verdicts follow in order, each once.
+        assertEquals("a lossless path stays healthy however slow the server is", HaNetworkPathSeverity.HEALTHY, severe.severity)
+        assertFalse("the prominent surfaces must stay silent", severe.degraded)
+        // The poke key is (measuring, settling, PATH verdict), so a purely slow server moves it
+        // exactly once — when measurement begins — and the native chip is never woken after that.
         assertEquals(
-            listOf(false to HaNetworkPathSeverity.HEALTHY, true to HaNetworkPathSeverity.HEALTHY, true to HaNetworkPathSeverity.WARNING, true to HaNetworkPathSeverity.SEVERE),
+            listOf(
+                Triple(false, false, HaNetworkPathSeverity.HEALTHY),
+                Triple(true, false, HaNetworkPathSeverity.HEALTHY),
+            ),
             pokes.toList(),
         )
     }
