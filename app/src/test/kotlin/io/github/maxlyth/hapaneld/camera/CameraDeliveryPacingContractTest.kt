@@ -41,6 +41,6 @@ class CameraDeliveryPacingContractTest {
         assertTrue("a second pacer at the session's own rate would drop frames the first had already spaced",
             "encoderPacer = if (fps < boundFps) FramePacer(fps) else null" in owner)
         assertTrue("an encoder without its own pacer is fed every delivered frame",
-            "encoder?.takeIf { encoderPacer?.admit(now) ?: true }" in onFrame())
+            "attempt.encoder?.takeIf { attempt.encoderPacer?.admit(now) ?: true }" in onFrame())
     }
 }

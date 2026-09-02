@@ -144,13 +144,47 @@ class CameraSessionOwner(
         var fpsRange: Range<Int>? = null
 
         /**
+         * The encoder this attempt opened, if a stream wanted one. It is the attempt's hardware, not
+         * the session's: it is configured for this attempt's capture size, fed only this attempt's
+         * frames, and comes down with this attempt's capture on every path (a reopen, a degrade, a
+         * finish). Keeping it here is what lets an ended attempt's teardown close its own codec after
+         * the next attempt has opened — and only its own.
+         */
+        var encoder: VideoEncoder? = null
+        var encoderPacer: FramePacer? = null
+        /** The parameter sets [encoder] published; a joiner is granted them while the encoder runs. */
+        var streamParams: StreamParams? = null
+
+        /**
          * Releases the foreground standing this attempt promoted. Teardown runs out of order — an
          * ended session's finish can reach here after the next session has opened and promoted — so
          * the release names this attempt and does nothing once a newer one holds standing.
          */
         fun releaseStanding() = foreground.demote(id)
 
+        /**
+         * Close this attempt's codec, and retract what it advertised through the transport — but only
+         * if the advertisement is still its own: a newer attempt's encoder may have published since,
+         * and its sets must stay up. Always safe to call, whoever is live now.
+         */
+        fun closeEncoder() {
+            val enc: VideoEncoder?
+            val retract: Boolean
+            synchronized(lock) {
+                enc = encoder; encoder = null
+                encoderPacer = null
+                streamParams = null
+                retract = advertisedBy == id
+                if (retract) advertisedBy = null
+            }
+            if (enc == null) return
+            runCatching { enc.close() }
+            if (retract) transport.onEncoderStopped()
+        }
+
         fun release() {
+            // The encoder stops first so nothing is produced while the capture beneath it is torn down.
+            closeEncoder()
             val s: CameraCaptureSession?
             val d: CameraDevice?
             val r: ImageReader?
@@ -165,10 +199,16 @@ class CameraSessionOwner(
         }
     }
 
-    private var encoder: VideoEncoder? = null
-    private var encoderPacer: FramePacer? = null
-    private var streamParams: StreamParams? = null
-    /** Settled by the running encoder attempt: its parameter sets, or why there is none. */
+    /**
+     * The attempt whose parameter sets the transport currently advertises, so that closing a codec
+     * retracts its own advertisement and never a newer encoder's. Stamped when sets are published.
+     */
+    private var advertisedBy: Long? = null
+    /**
+     * Settled by the running encoder attempt: its parameter sets, or why there is none. The session's,
+     * not an attempt's: a joiner rides a bounded reopen out on it. It is replaced when a new session
+     * starts, so no joiner can be granted an ended session's sets.
+     */
     private var streamReady = CompletableFuture<StreamOutcome>()
     private val stats = StreamStats()
 
@@ -255,8 +295,9 @@ class CameraSessionOwner(
         val lease = acquireLease(bound.resolution, LeaseKind.STREAM, bound.binding)
             ?: return StreamAdmission.Refused(lastRefusal())
         val ready = synchronized(lock) {
-            val params = streamParams
-            if (encoder != null && params != null) CompletableFuture.completedFuture<StreamOutcome>(StreamOutcome.Ready(params)) else streamReady
+            val live = current
+            val params = live?.streamParams
+            if (live?.encoder != null && params != null) CompletableFuture.completedFuture<StreamOutcome>(StreamOutcome.Ready(params)) else streamReady
         }
         return when (val outcome = runCatching { ready.get(ENCODER_WAIT_MS, TimeUnit.MILLISECONDS) }.getOrNull()) {
             is StreamOutcome.Ready -> StreamAdmission.Granted(lease, outcome.params)
@@ -272,7 +313,7 @@ class CameraSessionOwner(
     }
 
     override fun requestKeyFrame() {
-        val enc = synchronized(lock) { encoder } ?: return
+        val enc = synchronized(lock) { current?.encoder } ?: return
         post { enc.requestKeyFrame() }
     }
 
@@ -425,6 +466,10 @@ class CameraSessionOwner(
         appliedForStream = null
         policy = CameraSessionPolicy(frameIntervalMs = 1_000L / boundFps)
         deliveryPacer = FramePacer(boundFps)
+        // The finish of the session that ended may still be pending, and it will not touch a readiness
+        // that is no longer its own; so the new session replaces a settled one itself, and its first
+        // joiner waits for its encoder's sets rather than being granted the ended encoder's.
+        if (streamReady.isDone) streamReady = CompletableFuture()
         h.post { open(attemptId) }
     }
 
@@ -614,15 +659,23 @@ class CameraSessionOwner(
 
     // ---- encoder ------------------------------------------------------------------------------------
 
-    private val encoderListener = object : VideoEncoder.Listener {
+    /**
+     * The listener for [attempt]'s encoder. Every callback checks that the attempt is still current: a
+     * superseded attempt's codec keeps running until its teardown closes it, and its late parameter
+     * sets, access units or failure belong to nobody — they must not complete the newer session's
+     * readiness, reach its clients, or end its stream.
+     */
+    private fun encoderListener(attempt: Attempt) = object : VideoEncoder.Listener {
         override fun onParameterSets(sets: ParameterSets) {
             val params: StreamParams
             val ready: CompletableFuture<StreamOutcome>
             synchronized(lock) {
-                val enc = encoder ?: return
+                if (!state.isCurrent(attempt.id)) return
+                val enc = attempt.encoder ?: return
                 val facts = enc.facts
                 params = StreamParams(facts.width, facts.height, facts.fps, facts.kbps, facts.name, sets)
-                streamParams = params
+                attempt.streamParams = params
+                advertisedBy = attempt.id
                 ready = streamReady
             }
             // The transport learns the new sets BEFORE any waiter is woken, so a DESCRIBE that wakes on
@@ -632,6 +685,7 @@ class CameraSessionOwner(
         }
 
         override fun onAccessUnit(nals: List<ByteArray>, keyFrame: Boolean, ptsUs: Long, bytes: Int) {
+            if (synchronized(lock) { !state.isCurrent(attempt.id) }) return
             stats.onFrame(nowMs(), bytes)
             transport.onAccessUnit(nals, keyFrame, ptsUs)
         }
@@ -640,9 +694,17 @@ class CameraSessionOwner(
             // The encoder failed, not the camera: stop the encoder alone, hold stream leases off for
             // the policy's backoff so a reconnecting client cannot set the retry rate, and drop the
             // stream clients so they reconnect after it. Snapshot subscribers never notice.
-            if (synchronized(lock) { encoder == null }) return
+            val live = synchronized(lock) {
+                if (attempt.encoder == null) return
+                state.isCurrent(attempt.id)
+            }
+            if (!live) {
+                // A superseded attempt's codec failing late: only its own codec is touched.
+                attempt.closeEncoder()
+                return
+            }
             Log.w(TAG, "encoder failed while streaming ($detail); stopping the stream, snapshots unaffected")
-            stopEncoder()
+            stopEncoder(attempt, ownsSession = true)
             synchronized(lock) {
                 fault = CameraFault.STREAM_ENCODER
                 faultDetail = HaTransportFault.sanitize(detail)
@@ -654,15 +716,22 @@ class CameraSessionOwner(
         }
     }
 
-    /** On the camera thread: open the encoder for the live attempt if a stream lease still wants one. */
+    /**
+     * On the camera thread: open the encoder for the live attempt if a stream lease still wants one.
+     * The guard is the attempt's own encoder, never a session-wide one: an ended attempt's codec that
+     * is still awaiting its teardown must not stop a newer attempt from starting its own.
+     */
     private fun startEncoder(attemptId: Long) {
         val h: Handler
+        val attempt: Attempt
         val size: Size?
         val binding: StreamBinding?
         synchronized(lock) {
-            if (!state.isCurrent(attemptId) || state.phase != Phase.LIVE || !state.encoderWanted || encoder != null) return
+            if (!state.isCurrent(attemptId) || state.phase != Phase.LIVE || !state.encoderWanted) return
+            attempt = current?.takeIf { it.id == attemptId } ?: return
+            if (attempt.encoder != null) return
             h = handler ?: return
-            size = current?.takeIf { it.id == attemptId }?.size
+            size = attempt.size
             binding = state.streamBinding
         }
         if (size == null || binding == null) return refuseEncoder("no_capture_size")
@@ -670,13 +739,13 @@ class CameraSessionOwner(
         // by a stream that joined an already-open session must not be configured above what it will be
         // fed. This is a physical bound, not a policy one — the configured values are defaults now.
         val fps = minOf(binding.fps, boundFps)
-        when (val opened = encoderFactory.open(size.width, size.height, fps, binding.kbps, h, encoderListener)) {
+        when (val opened = encoderFactory.open(size.width, size.height, fps, binding.kbps, h, encoderListener(attempt))) {
             is EncoderOpen.Refused -> refuseEncoder(opened.detail)
             is EncoderOpen.Ready -> {
                 synchronized(lock) {
-                    encoder = opened.encoder
-                    encoderPacer = if (fps < boundFps) FramePacer(fps) else null
-                    streamParams = null
+                    attempt.encoder = opened.encoder
+                    attempt.encoderPacer = if (fps < boundFps) FramePacer(fps) else null
+                    attempt.streamParams = null
                     stats.reset()
                 }
                 // A stream is now being served: drop to the cheap pipeline for every frame.
@@ -709,37 +778,37 @@ class CameraSessionOwner(
      */
     private fun stopEncoderIfUnwanted() {
         val settled: CompletableFuture<StreamOutcome>
+        val live: Attempt?
         synchronized(lock) {
             if (state.encoderWanted) return
             settled = streamReady
             streamReady = CompletableFuture()
+            live = current
         }
-        stopEncoder()
+        stopEncoder(live, ownsSession = true)
         // Nobody is streaming any more, so a snapshot may have the expensive pipeline again.
         synchronized(lock) { state.currentAttempt }?.let { refreshProcessing(it) }
         settled.complete(StreamOutcome.Refused(CameraRefusal.FAILED))
     }
 
     /**
-     * Stop the codec without refusing anyone waiting for parameter sets: across a bounded reopen the
-     * pending future is completed by the restarted encoder, so a joiner rides the reopen out instead of
-     * being refused a session that is about to come back. A future that was already settled by the
-     * stopped encoder is replaced, so a joiner during the reopen waits for the new parameter sets rather
-     * than being granted the old encoder's. Terminal paths settle explicitly.
+     * [attempt]'s encoder comes down. Two owners, two halves: the codec, its pacer, its parameter sets
+     * and the advertisement it published are the attempt's, closed unconditionally by
+     * [Attempt.closeEncoder]; the session's stream readiness and its measurement are reset only while
+     * the session this encoder served is still the live one — [ownsSession] is [CameraTeardown]'s
+     * decision, and a finish that lost it leaves the newer session's readiness alone.
+     *
+     * The readiness is reset, not refused: across a bounded reopen the pending future is completed by
+     * the restarted encoder, so a joiner rides the reopen out instead of being refused a session that
+     * is about to come back. A future that was already settled by the stopped encoder is replaced, so
+     * a joiner during the reopen waits for the new parameter sets rather than being granted the old
+     * encoder's. Terminal paths settle explicitly.
      */
-    private fun stopEncoder() {
-        val enc: VideoEncoder?
-        synchronized(lock) {
-            enc = encoder
-            encoder = null
-            encoderPacer = null
-            streamParams = null
-            if (streamReady.isDone) streamReady = CompletableFuture()
-        }
-        if (enc == null) return
-        runCatching { enc.close() }
+    private fun stopEncoder(attempt: Attempt?, ownsSession: Boolean) {
+        attempt?.closeEncoder()
+        if (!ownsSession) return
+        synchronized(lock) { if (streamReady.isDone) streamReady = CompletableFuture() }
         stats.reset()
-        transport.onEncoderStopped()
     }
 
     /** Everyone waiting for parameter sets learns [refusal]; the next encoder attempt gets a fresh future. */
@@ -758,7 +827,13 @@ class CameraSessionOwner(
      * waiters — before it runs. Those belong to the new session and must not be dropped by the old one.
      */
     private fun endStreamIfStillEnded(refusal: CameraRefusal, endedGeneration: Long) {
-        if (synchronized(lock) { state.generation != endedGeneration }) return
+        // The same rule the rest of the teardown follows: the stream belongs to the live session.
+        val owns = CameraTeardown.ownsSessionGlobals(
+            stopping = false,
+            endedGeneration = endedGeneration,
+            currentGeneration = synchronized(lock) { state.generation },
+        )
+        if (!owns) return
         settleStreamWaiters(refusal)
         transport.onStreamEnded()
     }
@@ -780,7 +855,7 @@ class CameraSessionOwner(
                     ready.forEach { state.requeue(it) }
                     return
                 }
-                enc = encoder?.takeIf { encoderPacer?.admit(now) ?: true }
+                enc = attempt.encoder?.takeIf { attempt.encoderPacer?.admit(now) ?: true }
             }
             enc?.feed(img, now * 1_000L)
             if (ready.isEmpty()) return
@@ -967,14 +1042,14 @@ class CameraSessionOwner(
             is TickAction.Reopen -> {
                 // The encoder comes down with the capture beneath it and restarts with the reopened
                 // session; stream clients keep their place and joiners ride the reopen out.
-                stopEncoder()
+                stopEncoder(attempt, ownsSession = true)
                 attempt.release()
                 attempt.releaseStanding()
                 indicator.hide()
                 scheduleReopen(action.afterMs)
             }
             is TickAction.Degrade -> {
-                stopEncoder()
+                stopEncoder(attempt, ownsSession = true)
                 attempt.release()
                 attempt.releaseStanding()
                 indicator.hide()
@@ -1026,17 +1101,30 @@ class CameraSessionOwner(
 
     /**
      * Bring the session down: the state machine has already ended it, as generation [endedGeneration].
-     * The encoder stops first so nothing is produced while the capture beneath it is torn down; then
-     * the attempt's hardware, if any; then — only if no newer session has started in the meantime —
-     * every stream client is dropped so it reconnects and pays the open cost.
+     * The attempt's encoder stops first so nothing is produced while the capture beneath it is torn
+     * down; then the attempt's hardware, if any; then — only if no newer session has started in the
+     * meantime — every stream client is dropped so it reconnects and pays the open cost.
      */
     private fun finishAttempt(attempt: Attempt?, stopping: Boolean, endedGeneration: Long) {
-        stopEncoder()
+        // This finish was posted, so the next session may already have been admitted and opened
+        // before it ran. Whether the session-global effects are still this finish's to perform is
+        // [CameraTeardown]'s rule; the attempt's own codec, hardware and standing are always its own.
+        val ownsGlobals = CameraTeardown.ownsSessionGlobals(
+            stopping = stopping,
+            endedGeneration = endedGeneration,
+            currentGeneration = synchronized(lock) { state.generation },
+        )
+        stopEncoder(attempt, ownsSession = ownsGlobals)
         attempt?.release()
         // Stopping outright takes standing whoever holds it, because nothing newer can be coming; a
         // session merely ending releases only its own, because a newer session may already hold it.
         if (stopping) foreground.demoteAll() else attempt?.releaseStanding()
-        if (stopping) indicator.forceHide() else indicator.hide()
+        // The light goes out only for the session that still owns it. Putting it out while a newer
+        // session has the camera open would leave the room uninformed with the camera running, which
+        // is the one thing the indicator exists to prevent.
+        if (ownsGlobals) {
+            if (stopping) indicator.forceHide() else indicator.hide()
+        }
         quitThread()
         endStreamIfStillEnded(if (stopping) CameraRefusal.STOPPING else lastRefusal(), endedGeneration)
     }
@@ -1073,7 +1161,7 @@ class CameraSessionOwner(
         val clients = state.clients
         val streaming = state.streamClients
         val failures = state.consecutiveFailures
-        val encoderFacts = encoder?.facts
+        val encoderFacts = current?.encoder?.facts
         val presented = when (phase) {
             Phase.IDLE -> CameraState.IDLE
             Phase.OPENING -> CameraState.OPENING

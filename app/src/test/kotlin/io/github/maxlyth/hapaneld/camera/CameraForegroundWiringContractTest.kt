@@ -75,6 +75,80 @@ class CameraForegroundWiringContractTest {
     }
 
     /**
+     * The enqueue inversion found after the foreground fix landed: a finish posted for an ended session
+     * can run after the next session has opened. The decision is `CameraTeardown`'s, and it must guard
+     * exactly the session's effects — the attempt's own codec, hardware and standing are always its own
+     * to release, and the readiness and the light are the live session's.
+     */
+    @Test fun aFinishGuardsOnlyTheSessionGlobalEffectsWithTheTeardownRule() {
+        val finish = body(owner, "private fun finishAttempt")
+        assertTrue("the rule decides, and reads the live generation", "CameraTeardown.ownsSessionGlobals(" in finish)
+        assertTrue("currentGeneration = synchronized(lock) { state.generation }" in finish)
+        val encoder = finish.indexOf("stopEncoder(attempt, ownsSession = ownsGlobals)")
+        assertTrue("the attempt's codec always comes down; the session's readiness only for the session that owns it", encoder >= 0)
+        assertTrue(
+            "and the light goes out only for that session",
+            "if (ownsGlobals) {\n            if (stopping) indicator.forceHide() else indicator.hide()" in finish,
+        )
+        val hardware = finish.indexOf("attempt?.release()")
+        assertTrue("the attempt's own hardware is released whatever else has started, after its codec", hardware > encoder)
+        assertFalse("and is never behind the global guard", "if (ownsGlobals) attempt" in finish)
+
+        val stop = body(owner, "private fun stopEncoder(attempt: Attempt?, ownsSession: Boolean)")
+        val close = stop.indexOf("attempt?.closeEncoder()")
+        val owned = stop.indexOf("if (!ownsSession) return")
+        assertTrue("the codec closes before ownership is even asked", close >= 0 && owned > close)
+        assertTrue("what ownership guards is the readiness", stop.indexOf("streamReady = CompletableFuture()") > owned)
+    }
+
+    /**
+     * The revision-5 hold: the encoder was session-wide, so a stale finish that skipped it left the
+     * ended codec installed and the newer attempt, finding one there, never started its own — and a
+     * stale finish that stopped it would have stopped the newer attempt's. It is the attempt's hardware.
+     */
+    @Test fun theEncoderIsTheAttemptsOwnHardware() {
+        val attempt = body(owner, "private inner class Attempt")
+        assertTrue("the codec lives in the attempt", "var encoder: VideoEncoder? = null" in attempt)
+        assertTrue("with its pacer", "var encoderPacer: FramePacer? = null" in attempt)
+        assertTrue("and the sets it published", "var streamParams: StreamParams? = null" in attempt)
+        assertFalse("there is no session-wide encoder to find", "private var encoder" in owner)
+        assertFalse("private var streamParams" in owner)
+
+        val close = body(attempt, "fun closeEncoder()")
+        assertTrue("closing retracts only this attempt's own advertisement", "retract = advertisedBy == id" in close)
+        assertTrue("if (retract) transport.onEncoderStopped()" in close)
+        val release = body(attempt, "fun release()")
+        assertTrue("the attempt's release closes its codec before the capture beneath it", release.indexOf("closeEncoder()") in 0 until release.indexOf("session = null"))
+
+        val start = body(owner, "private fun startEncoder(attemptId: Long)")
+        assertTrue("a start is refused only by the attempt's own encoder", "if (attempt.encoder != null) return" in start)
+        assertFalse("never by anyone else's", "current?.encoder" in start)
+        assertTrue("and installs into the attempt", "attempt.encoder = opened.encoder" in start)
+        assertTrue("with a listener that knows whose it is", "encoderListener(attempt)" in start)
+
+        val listener = body(owner, "private fun encoderListener(attempt: Attempt)")
+        assertEquals(
+            "every callback from a codec checks its attempt is still current before touching the session",
+            3,
+            Regex("state\\.isCurrent\\(attempt\\.id\\)").findAll(listener).count(),
+        )
+        assertTrue("a superseded codec failing late closes only itself", "attempt.closeEncoder()\n                return" in listener)
+    }
+
+    /**
+     * The other half of a fresh start: the readiness a joiner waits on is the session's, and the finish
+     * of the session that ended will not touch one that is no longer its own. So the new session
+     * replaces a settled one itself, where every other session-bound value is already reset.
+     */
+    @Test fun aNewSessionStartsWithItsOwnStreamReadiness() {
+        val begin = body(owner, "private fun beginOpenLocked")
+        assertTrue("if (streamReady.isDone) streamReady = CompletableFuture()" in begin)
+        assertTrue("alongside the other session-bound values", begin.indexOf("deliveryPacer = FramePacer(boundFps)") in 0 until begin.indexOf("streamReady.isDone"))
+        val ready = body(owner, "override fun acquireStream")
+        assertTrue("a joiner is granted only the live attempt's sets", "live?.encoder != null && params != null" in ready)
+    }
+
+    /**
      * The revision-3 hold: `finishAttempt` demoted without saying whose standing it was releasing, so
      * an ended session tearing down after the next one had promoted took the live session's service
      * down with it. Standing is now released through the attempt that promoted it, which no call site

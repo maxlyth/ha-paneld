@@ -51,7 +51,7 @@ class CameraStreamContractTest {
         assertTrue(owner.contains("camera.createCaptureSession(listOf(r.surface)"))
         assertFalse("no encoder input surface joins the capture session", owner.contains("createInputSurface"))
         assertFalse(encoder.contains("createInputSurface()"))
-        assertTrue("frames enter the encoder through the owner's paced delivery", owner.contains("encoder?.takeIf { encoderPacer?.admit(now) ?: true }"))
+        assertTrue("frames enter the encoder through the owner's paced delivery", owner.contains("attempt.encoder?.takeIf { attempt.encoderPacer?.admit(now) ?: true }"))
         assertTrue(encoder.contains("COLOR_FormatYUV420Flexible"))
     }
 
