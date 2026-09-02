@@ -44,8 +44,8 @@ class HtmlUiCatalogueContractTest {
         val prefixes = listOf("shell.", "dashboard.", "configure.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 699, source.strings.size)
-        assertEquals("the declared HTML UI preview scope must not shrink silently", 526, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 966, source.strings.size)
+        assertEquals("the declared HTML UI preview scope must not shrink silently", 793, expected.size)
         expected.forEach { (key, sourceString) ->
             val translated = checkNotNull(target.strings[key]) { "zh-Hans is missing $key" }
             assertEquals("zh-Hans has stale source text for $key", sourceString.sourceHash, translated.sourceHash)
