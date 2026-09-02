@@ -3786,6 +3786,20 @@ class PaneldServer internal constructor(
         if (strings.requestedLocale == AppLocale.ENGLISH) path
         else "$path${if ('?' in path) '&' else '?'}lang=${esc(strings.requestedLocale)}"
 
+    /** JSON inside a script data block: escape HTML-significant bytes as JSON unicode escapes so a
+     * translated value can never terminate the element or become markup. */
+    private fun browserI18nPayload(strings: AppStrings, prefixes: Set<String>): String {
+        val entries = strings.resolved(prefixes).entries.joinToString(",") { (key, localized) ->
+            "${Json.str(key)}:${Json.str(localized.text)}"
+        }
+        return "{\"locale\":${Json.str(strings.requestedLocale)},\"strings\":{$entries}}"
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+    }
+
     private fun navBar(active: String, strings: AppStrings): String {
         fun tab(id: String, href: String, label: String): String =
             """<a href="${localizedHref(href, strings)}"${if (id == active) " class=\"active\"" else ""}>${esc(label)}</a>"""
@@ -3889,6 +3903,7 @@ class PaneldServer internal constructor(
         body: String,
         extraScripts: String = "",
         strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+        translationPrefixes: Set<String> = setOf("shell."),
     ): String {
         // Capture panel identity once so title, switcher metadata and visible name cannot disagree if a
         // concurrent config save replaces the live identity while this response is being rendered.
@@ -3903,7 +3918,9 @@ class PaneldServer internal constructor(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>$title</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css"></head><body $bodyAttrs><div class="wrap">
+<link rel="stylesheet" href="/info.css">
+<script id="ha-i18n" type="application/json">${browserI18nPayload(strings, translationPrefixes)}</script>
+<script src="/assets/i18n.js"></script></head><body $bodyAttrs><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="${esc(strings.get("shell.menu.label"))}">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
 ${navBar(active, strings)}</div>
@@ -3949,6 +3966,7 @@ $approvalKeyBefore
 $body
 $approvalKeyAfter""",
             strings = strings,
+            translationPrefixes = setOf("shell.", "$active."),
         )
     }
 
@@ -5541,6 +5559,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
 <p class="note" style="text-align:center;margin-top:18px"><a href="${localizedHref("/api", strings)}" style="color:#9cf">${esc(strings.get("dashboard.footer.api_explorer"))}</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">${esc(strings.get("dashboard.footer.diagnostics"))}</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>""",
             strings = strings,
+            translationPrefixes = setOf("shell.", "dashboard."),
         )
     }
 
