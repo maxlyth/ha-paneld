@@ -4302,3 +4302,172 @@ browserTest('The search status line reserves its height, so feedback shifts noth
   await page.evaluate(() => window.scrollTo(0, 0));
   assert.equal(Math.abs((await issuesTop()) - before) < 1, true, 'the counts line must not move the card below it');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Dashboard camera-stream card. The card answers one question — is the panel delivering the stream
+// it was asked for — so these cover what it says when it does not know yet, when it does, and when
+// the facts go away. A verdict that survives a gap in the facts is the defect they exist to catch.
+
+function cameraFixture() {
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/info.css"></head>
+    <body data-hydrate="0" data-hardened="0">
+    <canvas id="perfchart" width="600" height="96"></canvas><canvas id="respchart" width="600" height="150"></canvas>
+    <table id="perf"></table><table id="smtbl"></table><table id="streamtbl"></table><table id="topproc"></table>
+    <table id="noisyentities"></table><small id="smhdr"></small><small id="perfage"></small><small id="sensage"></small>
+    <small id="insthdr"></small><table id="senstbl"></table><p id="insthint"></p><div id="ctlzone"></div>
+    <div id="dashboard-cards"><div class="card" data-layout-key="camera-stream">
+      <h2>Camera stream <small id="camhdr"></small></h2>
+      <table id="camtbl"><tr><td style="color:#888">reading…</td></tr></table></div></div>
+    <script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/info.js"></script></body></html>`;
+}
+
+// A board whose profile declares no camera: the server omits the card entirely, so nothing here mounts.
+function cameralessFixture() {
+  return cameraFixture().replace(/<div class="card" data-layout-key="camera-stream">[\s\S]*?<\/div><\/div>/, '</div>');
+}
+
+// The live projection, exactly as CameraPresentation.statusJson() emits it.
+function cameraStatus(overrides = {}) {
+  return {
+    state: 'live', outcome: 'ok', fault: 'none', fault_detail: null, recovery: 'none',
+    clients: 1, last_frame_age_ms: 40, consecutive_failures: 0, indication: 'overlay', live: true,
+    stream_clients: 1, stream_port: 8554, encoder: 'c2.rk.avc.encoder',
+    encode_width: 1280, encode_height: 720, encode_fps: 15, encode_kbps: 2000,
+    delivered_fps: 14.8, delivered_kbps: 1660,
+    summary: 'camera open for 1 client (1 streaming); stream listening on port 8554', action: 'none',
+    ...overrides,
+  };
+}
+
+const cameraIdle = cameraStatus({
+  state: 'idle', live: false, clients: 0, stream_clients: 0, encoder: null,
+  encode_width: null, encode_height: null, encode_fps: null, encode_kbps: null,
+  delivered_fps: null, delivered_kbps: null, indication: 'none',
+  summary: 'camera closed; nobody is watching; stream listening on port 8554',
+});
+const cameraShort = cameraStatus({ clients: 1, stream_clients: 1, delivered_fps: 10.05, delivered_kbps: 1660 });
+
+// `state.payload` is what the panel answers with right now; a test moves the panel by assigning to it.
+// 'unreachable' makes the route fail, which is how a poll loses its facts on a real panel.
+async function startCameraHarness(t, payload, pageFixture = cameraFixture) {
+  const state = { payload };
+  const served = [];
+  const harness = await startHarness(async (path) => {
+    if (path !== '/api/v1/camera/status') return null;
+    served.push(state.payload);
+    if (state.payload === 'unreachable') {
+      return { status: 503, headers: { 'content-type': 'text/plain' }, body: 'camera-status-unavailable\n' };
+    }
+    return json(state.payload);
+  }, pageFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(4_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  return { page, state, served };
+}
+
+const cameraText = (page) => page.evaluate(() => document.getElementById('camtbl').textContent);
+const cameraHeader = (page) => page.evaluate(() => document.getElementById('camhdr').textContent);
+// The verdict needs three consecutive readings, two seconds apart, so anything it decides is ~6s away.
+const untilCamera = (page, needle) => page.waitForFunction(
+  (text) => document.getElementById('camtbl').textContent.includes(text), needle, { timeout: 20_000 },
+);
+
+browserTest('An idle camera reports that nothing is encoding, and offers no rate to judge', async (t) => {
+  const { page } = await startCameraHarness(t, cameraIdle);
+
+  await untilCamera(page, 'nothing is being encoded');
+  const text = await cameraText(page);
+  assert.match(text, /closed/, 'the session row names the closed session');
+  assert.match(text, /nobody is watching/);
+  assert.match(text, /an idle camera costs the panel nothing/, 'idle is zero cost and the card says so');
+  assert.equal(text.includes('Frame rate'), false, 'there is no delivered rate while nothing encodes');
+  assert.equal(text.includes('Delivery'), false, 'a closed camera is not delivering badly — it is not delivering');
+  assert.equal(await cameraHeader(page), '· closed');
+});
+
+browserTest('A starting stream measures before it judges, then confirms healthy delivery for every client', async (t) => {
+  const { page, state } = await startCameraHarness(t, cameraStatus({
+    clients: 2, stream_clients: 2, delivered_fps: null, delivered_kbps: null,
+  }));
+
+  await untilCamera(page, 'starting…');
+  const starting = await cameraText(page);
+  assert.match(starting, /c2\.rk\.avc\.encoder/, 'the encoder in use is named');
+  assert.match(starting, /1280×720/);
+  assert.match(starting, /2 clients, 2 streaming/, 'every subscriber is counted, streams among them');
+  assert.match(starting, /asked for 15 fps/, 'the request is shown before anything has been delivered');
+  assert.match(starting, /measuring…/, 'no verdict is offered from no readings');
+  assert.equal(await cameraHeader(page), '· starting');
+
+  state.payload = cameraStatus({ clients: 2, stream_clients: 2 });
+  await untilCamera(page, 'delivering what it was asked for');
+  const healthy = await cameraText(page);
+  assert.match(healthy, /14\.8 of 15 fps/, 'delivered is shown against requested, not alone');
+  assert.match(healthy, /1660 of 2000 kbps cap/);
+  assert.match(healthy, /under the cap is normal for a still scene/, 'a bitrate under its cap is never a fault');
+  assert.equal(await cameraHeader(page), '· 14.8 of 15 fps');
+});
+
+browserTest('A sustained shortfall is named and made actionable, and clears only once it is re-earned', async (t) => {
+  const { page, state, served } = await startCameraHarness(t, cameraShort);
+
+  // The measured WF1589T case: 10 fps against a configured 15. One reading is not yet a verdict.
+  await untilCamera(page, '10.1 of 15 fps');
+  assert.match(await cameraText(page), /measuring…/, 'a single short reading must not raise a verdict');
+
+  await untilCamera(page, 'not keeping up');
+  const short = await cameraText(page);
+  assert.match(short, /lower the frame rate or the resolution on Configure → Camera/, 'the shortfall is actionable');
+  assert.match(short, /accept the rate this panel can give/, 'the request is never clamped for the operator');
+  assert.match(short, /a dim room can also hold the sensor below its target/, 'no single cause is claimed');
+  assert.match(short, /10\.1 of 15 fps/, 'the request stands at 15 — nothing rewrites it downward');
+
+  const decided = served.length;
+  state.payload = cameraStatus();
+  await untilCamera(page, 'delivering what it was asked for');
+  assert.equal(served.length - decided >= 3, true, 'a recovery is trusted no faster than the fault was');
+});
+
+browserTest('Facts the panel will not give are reported as unavailable, never as a rate', async (t) => {
+  const { page, state } = await startCameraHarness(t, 'unreachable');
+
+  await untilCamera(page, 'status unavailable');
+  assert.match(await cameraText(page), /the panel did not answer/);
+  assert.equal(await cameraHeader(page), '· unavailable');
+
+  state.payload = cameraStatus({ encode_fps: null, encode_kbps: null, delivered_fps: null, delivered_kbps: null });
+  await untilCamera(page, 'requested rate unavailable');
+  const partial = await cameraText(page);
+  assert.match(partial, /cap unavailable/, 'a missing cap is missing, not zero');
+  assert.match(partial, /measuring…/, 'nothing is judged from facts that are not there');
+
+  state.payload = cameraStatus({ encode_fps: null, encode_kbps: null });
+  await untilCamera(page, '14.8 fps delivered');
+  assert.match(await cameraText(page), /measuring…/, 'a delivered rate alone cannot be short of anything');
+});
+
+browserTest('A verdict does not survive a gap in the facts', async (t) => {
+  const { page, state, served } = await startCameraHarness(t, cameraShort);
+
+  await untilCamera(page, 'not keeping up');
+  state.payload = 'unreachable';
+  await untilCamera(page, 'status unavailable');
+  assert.equal((await cameraText(page)).includes('not keeping up'), false, 'the stale verdict goes with the stale facts');
+
+  state.payload = cameraShort;
+  await untilCamera(page, '10.1 of 15 fps');
+  const resumed = served.length;
+  await untilCamera(page, 'not keeping up');
+  assert.equal(served.length - resumed >= 2, true, 'the run restarts from zero rather than resuming where it left off');
+});
+
+browserTest('A panel with no camera card never polls for one, and never stalls the remembered card sizes', async (t) => {
+  const { page, served } = await startCameraHarness(t, cameraIdle, cameralessFixture);
+
+  await page.waitForFunction(() => window.cardSizeSources && window.cardSizeSources.camera === true);
+  assert.equal(await page.evaluate(() => !!document.getElementById('camtbl')), false, 'the fixture has no camera card');
+  assert.equal(served.length, 0, 'a board with no camera asks the camera route nothing');
+});

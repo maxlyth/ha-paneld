@@ -3,8 +3,11 @@
 // string, so syntax errors (e.g. an apostrophe in a single-quoted string) are caught at build.
 var cpuH=[],ramH=[],gpuH=[],MAX=120,perfMode='',topMode='cpu',topCpu=null,topRam=null;  // ~4 min at 2s
 var TOP_PROCESS_MEMORY_FALLBACK_POLLS=12,topProcessMemoryPolls=0,topProcessMemoryPopulated=false;
-var cardSizeSources={info:document.body.getAttribute('data-hydrate')!=='1',perf:false,topProcesses:false,sensors:false,inspect:false};
-function cardSizeSourcesReady(){return cardSizeSources.info&&cardSizeSources.perf&&cardSizeSources.topProcesses&&cardSizeSources.sensors&&cardSizeSources.inspect;}
+// The camera source is already satisfied on a panel that has no camera card: the server omits the card
+// on a board whose profile declares no camera, and a source that can never report would stall the
+// remembered card sizes for every other card on the page.
+var cardSizeSources={info:document.body.getAttribute('data-hydrate')!=='1',perf:false,topProcesses:false,sensors:false,inspect:false,camera:!document.getElementById('camtbl')};
+function cardSizeSourcesReady(){return cardSizeSources.info&&cardSizeSources.perf&&cardSizeSources.topProcesses&&cardSizeSources.sensors&&cardSizeSources.inspect&&cardSizeSources.camera;}
 function settleCardSizeMemory(){if(cardSizeSourcesReady()&&window.CardSizeMemory)window.CardSizeMemory.settle('dashboard-cards',1200);}
 function cardSizeSourceReady(source){if(cardSizeSources[source])return;cardSizeSources[source]=true;settleCardSizeMemory();}
 // A successful /perf response does not mean Top processes is ready. After a service restart its CPU
@@ -240,6 +243,109 @@ function sensorsCard(tbl,age){
  s();setInterval(s,2000);
 }
 sensorsCard('senstbl','sensage');
+// Live Camera stream card — what the encode session was ASKED for, beside what it is DELIVERING.
+// Mounted only where the server rendered the card (a board whose profile declares a camera), and fed
+// by /api/v1/camera/status, which is byte-for-byte the object /api/v1/status carries under `camera`.
+//
+// Two things this card deliberately does NOT do. It never quotes a CPU figure: a hardware encode runs
+// in the codec HAL and through the compositor as much as in this app, so no single process is "what the
+// camera costs" and naming one would be a comfortable lie — the panel's whole load is on the
+// Performance and Top processes cards instead. And it never turns a shortfall into a ceiling: nothing
+// here clamps, rewrites or hides what was requested. The request stands, the panel reports what it
+// managed, and the person reading it makes the trade — which is the entire reason for showing it.
+// A delivered rate below this share of the requested one is reported as a shortfall. It is a display
+// tolerance, not a cap: a couple of frames' slack is ordinary pacing jitter and not worth an alarm.
+var CAMERA_SHORTFALL_RATIO=0.85;
+// Consecutive polls, two seconds apart, before the verdict flips — in either direction, so a recovery
+// is trusted no faster than a fault. Three of them outrun the panel's own five-second delivery window,
+// so one slow sample cannot raise the verdict and one good one cannot clear it.
+var CAMERA_VERDICT_POLLS=3;
+function cameraCard(tbl,hdr){
+ if(!document.getElementById(tbl))return;
+ // Three verdicts, not two: until a run reaches the threshold the honest answer is that the card does
+ // not yet know, and saying "delivering what it was asked for" beside a rate that is plainly short
+ // would be the card contradicting itself in the two polls before it makes up its mind.
+ var shortRun=0,okRun=0,verdict='measuring';
+ function n(v){return typeof v==='number'&&isFinite(v)?v:null;}
+ function one(v){return Math.round(v*10)/10;}
+ function head(text){var h=document.getElementById(hdr);if(h)h.textContent=text;}
+ // A gap in the facts is not evidence of anything. Absence must never leave a verdict standing, and it
+ // must never age into one either, so the runs reset with it.
+ function forget(){shortRun=0;okRun=0;verdict='measuring';}
+ function watchers(d){
+  var c=n(d.clients)||0,s=n(d.stream_clients)||0;
+  if(!c)return 'nobody is watching';
+  return c+(c===1?' client':' clients')+(s?', '+s+' streaming':'');
+ }
+ function session(d){
+  switch(d.state){
+   case 'live':return 'open';
+   case 'opening':return 'opening';
+   case 'idle':return 'closed';
+   case 'disabled':return 'off';
+   case 'permission_needed':return 'waiting for the Android camera permission';
+   case 'degraded':return 'stopped retrying after '+(n(d.consecutive_failures)||0)+' failures';
+   case 'stopping':return 'stopping';
+   case 'absent':return 'no camera on this panel';
+   default:return 'unavailable';
+  }
+ }
+ async function poll(){
+  if(document.hidden)return;
+  try{
+   var d=await (await fetch('/api/v1/camera/status',{cache:'no-store'})).json();
+   var rows=[{label:'Session',val:session(d),suf:'· '+watchers(d)}];
+   var enc=(typeof d.encoder==='string'&&d.encoder)?d.encoder:null;
+   var w=n(d.encode_width),h=n(d.encode_height),want=n(d.encode_fps),cap=n(d.encode_kbps);
+   var got=n(d.delivered_fps),gotKbps=n(d.delivered_kbps);
+   if(!enc){
+    // Nothing is encoding, so there is nothing to compare and no verdict to keep. Saying so is the
+    // honest reading of a closed camera: it is not delivering badly, it is not delivering at all.
+    rows.push({label:'Encoding',val:'nothing is being encoded',col:'#888',suf:'· an idle camera costs the panel nothing'});
+    forget();
+    head('· '+session(d));
+   }else{
+    rows.push({label:'Encoder',val:enc,suf:(w&&h)?'· '+w+'×'+h:'· output size unavailable'});
+    if(got==null){
+     rows.push({label:'Frame rate',val:'starting…',col:'#888',suf:want?'· asked for '+want+' fps':'· requested rate unavailable'});
+     forget();
+     head('· starting');
+    }else if(!want){
+     rows.push({label:'Frame rate',val:one(got)+' fps delivered',suf:'· requested rate unavailable',col:'#888'});
+     forget();
+     head('· '+one(got)+' fps');
+    }else{
+     if(got<want*CAMERA_SHORTFALL_RATIO){okRun=0;if(++shortRun>=CAMERA_VERDICT_POLLS)verdict='short';}
+     else{shortRun=0;if(++okRun>=CAMERA_VERDICT_POLLS)verdict='ok';}
+     rows.push({label:'Frame rate',val:one(got)+' of '+want+' fps',bold:verdict==='short',col:verdict==='short'?'#d9a528':'',
+      suf:'· delivered against what was asked for'});
+     head('· '+one(got)+' of '+want+' fps');
+    }
+    // Bitrate is a cap, never a target: a still scene needs fewer bits and using fewer is the encoder
+    // working, not failing. It is shown for the trade — resolution and rate are what spend it — and it
+    // is deliberately kept out of the shortfall verdict, which is about frame rate alone.
+    if(gotKbps==null)rows.push({label:'Bitrate',val:'starting…',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
+    else if(!cap)rows.push({label:'Bitrate',val:gotKbps+' kbps',col:'#888',suf:'· cap unavailable'});
+    else rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',suf:'· under the cap is normal for a still scene'});
+    rows.push(verdict==='short'
+     ?{label:'Delivery',val:'not keeping up',col:'#d9a528',bold:true,
+       suf:'· lower the frame rate or the resolution on Configure → Camera, or accept the rate this panel can give; a dim room can also hold the sensor below its target'}
+     :verdict==='ok'
+      ?{label:'Delivery',val:'delivering what it was asked for',col:'#48c774'}
+      :{label:'Delivery',val:'measuring…',col:'#888',suf:'· waiting for enough consecutive readings to judge'});
+   }
+   paint(tbl,rows);hwm(tbl);
+  }catch(e){
+   // The panel did not answer, so every figure on this card is now of unknown age. Showing the last
+   // ones under a live heading would be the reassuring-but-wrong answer; drop them and say so.
+   forget();paint(tbl,[{label:'Camera',val:'status unavailable',col:'#888',suf:'· the panel did not answer'}]);hwm(tbl);
+   head('· unavailable');
+  }
+  cardSizeSourceReady('camera');
+ }
+ poll();setInterval(poll,2000);
+}
+cameraCard('camtbl','camhdr');
 // High-water-mark: the two live cards whose heights swing most — Responsiveness (the Rendering-load row
 // flips between a long "X% janky…" line and a short "idle") and Top processes (process names wrap to 1–2
 // lines) — never shrink below the tallest they've been (latched min-height on the card). They stop jumping
@@ -249,7 +355,7 @@ function hwm(id){var t=document.getElementById(id);if(!t)return;var c=t.parentNo
  if(hint&&c.style.minHeight===hint+'px')c.style.minHeight='';
  var h=c.offsetHeight;if(h>(c._hwm||0))c._hwm=h;
  c.style.minHeight=hint?hint+'px':(c._hwm?c._hwm+'px':'');}
-window.addEventListener('resize',function(){['smtbl','streamtbl','topproc'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
+window.addEventListener('resize',function(){['smtbl','streamtbl','topproc','camtbl'].forEach(function(id){var t=document.getElementById(id),c=t&&t.parentNode;if(c){c._hwm=0;c.style.minHeight='';}});});
 
 // Controls panel: at compact desktop widths collapse the labelled action row to icons-only when it would
 // wrap. A narrow panel (600px or below) uses the CSS two-column, 48px labelled grid instead so Dashboard remains

@@ -3194,6 +3194,19 @@ class PaneldServer internal constructor(
                             )
                         }
                     }
+                    // Exactly the object `/api/v1/status` carries under `camera`, served alone so the
+                    // Dashboard's camera card can poll it every couple of seconds without rebuilding
+                    // the whole status document. One projection, one renderer: the bytes are produced
+                    // by the same `statusJson()`, so the card and the status object cannot drift.
+                    //
+                    // Unadmitted for the same reason `/sensors` is: there is no work here to gate. The
+                    // call reads the session's own state under its lock and never opens the camera, so
+                    // an idle panel stays at zero cost, and the identical bytes are already readable
+                    // from `/api/v1/status` — this adds no exposure, only a cheaper way to ask.
+                    get("/camera/status") {
+                        call.response.headers.append("Cache-Control", "no-store")
+                        call.respondText(camera.presentation().statusJson(), ContentType.Application.Json)
+                    }
                     get("/openapi.json") {
                         call.respondText(asset("openapi.json"), ContentType.Application.Json)
                     }
@@ -5382,6 +5395,15 @@ report of this panel's hardware, firmware, SELinux, su and node probes for bug r
                 """<div class="card" id="shotcard" data-layout-key="screenshot" data-capture-ok="1">$shotTitle${shotInner(cachedShot)}</div>"""
             else -> ""
         }
+        // The camera card is a live measurement surface, so the server renders the shell and nothing
+        // else: rows written here would be a reading from page-render time that the card could not
+        // retract, which is the defect the lifecycle banner was deleted for. The poll owns every row.
+        // A board whose profile declares no camera gets no card rather than an empty one — the same
+        // rule the Camera row in Runtime diagnostics already follows.
+        val cameraCard = if (camera.presentation().state == CameraState.ABSENT) "" else
+            """<div class="card" data-layout-key="camera-stream"><h2>Camera stream <small id="camhdr"></small></h2>
+<table id="camtbl"><tr><td style="color:#888">reading…</td></tr></table>
+<p class="note">What the stream was asked for and what it is delivering. This is not a CPU figure: encoding runs on the codec hardware and through the compositor as well as in this app, so no single process is the camera's cost — read the panel's whole load from the Performance and Top processes cards. Settings are on <a href="/configure">Configure → Camera</a>.</p></div>"""
         val infoHaLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="Open Home Assistant (this panel's device page when known)">Open in HA</a>""" else ""
         val revealBtn = """<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="Show/hide blurred values for editing — they're blurred by default so screenshots don't leak them">Reveal</button>"""
@@ -5415,6 +5437,7 @@ ${tcard("captbl", "Capabilities", s?.let { capRowsHtml(it.capabilityRows) }, pos
 <div class="card" data-layout-key="sensors"><h2>Sensors <small id="sensage"></small></h2>
 <table id="senstbl"><tr><td style="color:#888">reading…</td></tr></table>
 <p class="note">Live readings from this panel’s sensors — shown even when a value is hidden from Home Assistant.</p></div>
+$cameraCard
 <div class="card" data-layout-key="performance"><h2>Performance <small id="perfage"></small></h2>
 <div style="color:#666;font-size:.78rem;margin-bottom:8px">Samples only while this page is open.</div>
 <canvas id="perfchart" width="600" height="96" style="height:96px"></canvas>

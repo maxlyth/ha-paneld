@@ -12,6 +12,7 @@ Open the panel's web page at `http://<panel-ip>:8888/` or use the Home Assistant
 - **Dashboard responsiveness** — real interaction latency, the slowest interaction's input/handler/presentation breakdown, main-thread blocking, time to interactive and unexpected renderer reloads.
 - **Home Assistant state stream** — state updates per second, uncompressed JSON payload rate, initial hydration size, time until the main thread yields and the top three contributing entities over the rolling hour, ranked with both update rate and payload volume.
 - **Performance** — CPU, GPU, RAM, clock speed, temperature and the busiest processes.
+- **Camera stream** (only on a panel with a camera, and only while the trial is on) — the subscribers holding the session open, the encoder in use, and the frame rate and bitrate the stream was asked for beside the ones it is delivering. A rate well under the one requested is the panel telling you it has no headroom for that stream; the request is never quietly reduced. It deliberately quotes no CPU figure, because a hardware encode runs in the codec hardware and the compositor as well as in the app, and no single process is the camera's cost — read the panel's whole load from Performance and Top processes.
 - **Entities page** — what the built-in renderer currently subscribes to, what automatic learning found and which dashboard rules still need a decision.
 - **Diagnostics dump** (`/diag`) — a copy-paste report for a bug report when the cause is still unclear.
 
