@@ -123,6 +123,9 @@ import io.github.maxlyth.hapaneld.sensors.HaLifecycleCoordinator
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPath
+import io.github.maxlyth.hapaneld.sensors.PathProbeMonitor
+import io.github.maxlyth.hapaneld.sensors.PathProbeRuntime
+import io.github.maxlyth.hapaneld.sensors.IcmpEchoSource
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathMonitor
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
@@ -908,6 +911,7 @@ class PaneldService : Service() {
     private lateinit var haExactEntityStream: HaExactEntityStreamOwner
     private lateinit var haLifecycle: HaLifecycleCoordinator
     private lateinit var haNetworkPath: HaNetworkPathMonitor
+    private lateinit var haPathProbe: PathProbeMonitor
     private val rendererSettledForLifecycle: () -> Unit = { runCatching { refreshHaLifecycleWatch() } }
     private lateinit var haSiteMetadata: HaSiteMetadataClient
     private var brightnessObserver: ContentObserver? = null
@@ -1109,6 +1113,10 @@ class PaneldService : Service() {
         // ONE monotonic clock for the socket owner and its transport: the round trip is the owner's
         // send stamp against the transport's decode stamp, and two clocks would make it meaningless.
         val haSocketClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+        // The layer-3 probe is constructed before the transport so the transport can report the
+        // address each route connects on straight to it. It measures the path the dashboard is
+        // actually using; a fresh resolution could name a family the connect race already rejected.
+        haPathProbe = PathProbeMonitor(source = IcmpEchoSource())
         haExactEntityStream = HaExactEntityStreamOwner(
             scope = scope,
             auth = haSessionAuthority,
@@ -1116,6 +1124,7 @@ class PaneldService : Service() {
                 haApi,
                 socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
                 monotonicMillis = haSocketClock,
+                onRouteConnected = { address -> haPathProbe.onRouteConnected(address) },
             ),
             monotonicMillis = haSocketClock,
         )
@@ -1153,6 +1162,10 @@ class PaneldService : Service() {
         )
         HaNetworkPathRuntime.install(haNetworkPath)
         haExactEntityStream.bindNetworkPath(haNetworkPath)
+        // Installed before binding for the same reason as the pair above: the first state the owner
+        // announces on bind must already be readable.
+        PathProbeRuntime.install(haPathProbe, haSocketClock)
+        haExactEntityStream.bindPathProbe(haPathProbe)
         // One atomic install: the coordinator and its MQTT read arrive together, so no reader can pair
         // this service's coordinator with a predecessor's bridge. The supplier reads the bridge's
         // canonical serialized connection state through the runtime owner, so it follows reconfigure()'s
@@ -4074,6 +4087,9 @@ class PaneldService : Service() {
                 if (::haNetworkPath.isInitialized && HaNetworkPathRuntime.uninstall(haNetworkPath)) {
                     BuiltinDashboard.onHaLifecycleChanged()
                 }
+                // The echo probe is cleared under the same identity gate, and silently: it drives no
+                // prominent surface, so nothing needs re-poking when it goes.
+                if (::haPathProbe.isInitialized) PathProbeRuntime.uninstall(haPathProbe)
                 BuiltinDashboard.clearRendererSettledListener(rendererSettledForLifecycle)
             }
             closeOwner("sensors") { sensorPersistenceClosed.set(sensors.stop()) }

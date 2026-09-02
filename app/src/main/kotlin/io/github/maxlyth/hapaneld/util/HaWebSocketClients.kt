@@ -55,6 +55,19 @@ internal object HaWebSocketClients {
         routeConnectTimeoutMs: Long = ROUTE_CONNECT_TIMEOUT_MS,
         tls: TlsTrust? = null,
         resolver: ((String) -> List<InetAddress>)? = null,
+        /**
+         * The address a route actually connected on, reported once per successful connect.
+         *
+         * Only the exact-entity stream passes this, and only so a layer-3 probe can measure THE PATH
+         * THE DASHBOARD IS USING rather than a fresh resolution of the same hostname. The two differ
+         * exactly when it matters: on 2026-08-10 a black-holed AAAA left one panel unusable while the
+         * family race put the socket on IPv4, and a probe that re-resolved would have measured the
+         * dead family and blamed a path nothing was riding.
+         *
+         * Called on an OkHttp connection thread, so an implementation must do nothing but hand the
+         * address to an owner that can take it from there.
+         */
+        onRouteConnected: ((InetAddress) -> Unit)? = null,
     ): HttpClient = HttpClient(OkHttp) {
         // No engine-level maxFrameSize: the OkHttp engine REJECTS any custom value at session
         // start ("Max frame size switch is not supported"), pinned by HaWebSocketClientsFailoverTest.
@@ -75,6 +88,19 @@ internal object HaWebSocketClients {
                     },
                 )
                 if (tls != null) sslSocketFactory(tls.socketFactory, tls.trustManager)
+                if (onRouteConnected != null) {
+                    eventListener(
+                        object : okhttp3.EventListener() {
+                            override fun connectionAcquired(call: okhttp3.Call, connection: okhttp3.Connection) {
+                                // Best effort by construction: this is a diagnostic, and nothing about
+                                // the session may depend on it succeeding.
+                                runCatching { connection.socket().inetAddress }
+                                    .getOrNull()
+                                    ?.let { address -> runCatching { onRouteConnected(address) } }
+                            }
+                        },
+                    )
+                }
             }
         }
     }

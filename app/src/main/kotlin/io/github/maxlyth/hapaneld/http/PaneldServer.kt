@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.sensors.HaLifecycle
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime
+import io.github.maxlyth.hapaneld.sensors.PathProbeRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceUpdate
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisite
 import io.github.maxlyth.hapaneld.sensors.HaPanelAreaPrerequisitePhase
@@ -4675,6 +4676,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             // `ha_network` follows the same unconditional rule: idle with measuring=false when no
             // socket is held, never absent.
             "\"ha_network\":${HaNetworkPathRuntime.statusJson()}," +
+                "\"ha_path_probe\":${PathProbeRuntime.statusJson()}," +
             "\"renderer\":${rendererAdmission().statusJson()}," +
             "\"camera\":${camera.presentation().statusJson()}," +
             "\"power_safety\":${PowerSafetyPresentation.json(powerAdvisory)}}"
@@ -4924,6 +4926,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             camera = camera.presentation(),
             wifiStabilityChronic = management.wifiChronic,
             haNetwork = HaNetworkPathRuntime.diagnosticLine(),
+            haPathProbe = PathProbeRuntime.diagnosticLine(),
         )
     }
 

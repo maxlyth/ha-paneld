@@ -60,6 +60,11 @@ internal class IcmpEchoSource : PathEchoSource {
             return null
         } catch (_: SecurityException) {
             return null
+        } catch (_: Throwable) {
+            // Anything else the platform can throw here — a missing syscall, a stripped framework —
+            // means the same thing to us: this panel cannot probe layer 3. It is never a fault in
+            // the network and it must never escape into the socket's probe path.
+            return null
         }
 
         var received = 0
@@ -90,7 +95,7 @@ internal class IcmpEchoSource : PathEchoSource {
 
     /** True when the request went out; a send error is an unanswered echo, not a thrown burst. */
     private fun sendOne(fd: FileDescriptor, v6: Boolean, seq: Int, token: Int): Boolean {
-        val packet = echoRequest(v6, seq, token)
+        val packet = IcmpEchoPacket.request(v6, seq, token)
         return try {
             Os.write(fd, ByteBuffer.wrap(packet)) > 0
         } catch (_: ErrnoException) {
@@ -144,22 +149,34 @@ internal class IcmpEchoSource : PathEchoSource {
             val at = nowMs()
             if (read <= 0) continue
             // The datagram starts at the ICMP header: no IP header is present on a ping socket.
-            if (matches(buffer.array(), read, v6, seq, token)) return (at - sentAtMs).coerceAtLeast(0L)
+            if (IcmpEchoPacket.matches(buffer.array(), read, v6, seq, token)) return (at - sentAtMs).coerceAtLeast(0L)
         }
     }
 
-    private fun matches(bytes: ByteArray, length: Int, v6: Boolean, seq: Int, token: Int): Boolean {
-        if (length < HEADER_BYTES + 4) return false
-        val expectedType = if (v6) ICMPV6_ECHO_REPLY else ICMP_ECHO_REPLY
-        if ((bytes[0].toInt() and 0xFF) != expectedType) return false
-        // Identifier at bytes 4-5 is rewritten by the kernel and deliberately not compared.
-        val replySeq = ((bytes[6].toInt() and 0xFF) shl 8) or (bytes[7].toInt() and 0xFF)
-        if (replySeq != (seq and 0xFFFF)) return false
-        val echoedToken = ByteBuffer.wrap(bytes, HEADER_BYTES, 4).int
-        return echoedToken == token
+    private companion object {
+        const val MAX_DATAGRAM = 1500
     }
+}
 
-    private fun echoRequest(v6: Boolean, seq: Int, token: Int): ByteArray {
+/**
+ * The wire format, kept apart from the syscalls so it can be proved without a device.
+ *
+ * This is where every subtlety of the unprivileged ping socket lives, and each one is silent when
+ * wrong: a reply is matched on sequence and an echoed token because the kernel REWRITES the
+ * identifier; a received datagram is parsed from the ICMP header because there is no IP header in
+ * front of it on a datagram socket; and the checksum is computed over the whole packet with its own
+ * field zeroed. A unit test can hold all of that to account; only the sending needs hardware.
+ */
+internal object IcmpEchoPacket {
+    const val HEADER_BYTES = 8
+    const val PAYLOAD_BYTES = 16
+    const val ICMP_ECHO_REQUEST = 8
+    const val ICMP_ECHO_REPLY = 0
+    const val ICMPV6_ECHO_REQUEST = 128
+    const val ICMPV6_ECHO_REPLY = 129
+
+    /** Build an echo request carrying [seq] and [token]. */
+    fun request(v6: Boolean, seq: Int, token: Int): ByteArray {
         val packet = ByteArray(HEADER_BYTES + PAYLOAD_BYTES)
         packet[0] = (if (v6) ICMPV6_ECHO_REQUEST else ICMP_ECHO_REQUEST).toByte()
         packet[1] = 0
@@ -169,7 +186,7 @@ internal class IcmpEchoSource : PathEchoSource {
         packet[5] = 0
         packet[6] = ((seq shr 8) and 0xFF).toByte()
         packet[7] = (seq and 0xFF).toByte()
-        ByteBuffer.wrap(packet, HEADER_BYTES, 4).putInt(token)
+        java.nio.ByteBuffer.wrap(packet, HEADER_BYTES, 4).putInt(token)
         if (!v6) {
             val sum = checksum(packet)
             packet[2] = ((sum shr 8) and 0xFF).toByte()
@@ -178,8 +195,18 @@ internal class IcmpEchoSource : PathEchoSource {
         return packet
     }
 
+    /** Whether [bytes] is the reply to [seq] carrying [token]. The identifier is never compared. */
+    fun matches(bytes: ByteArray, length: Int, v6: Boolean, seq: Int, token: Int): Boolean {
+        if (length < HEADER_BYTES + 4) return false
+        val expectedType = if (v6) ICMPV6_ECHO_REPLY else ICMP_ECHO_REPLY
+        if ((bytes[0].toInt() and 0xFF) != expectedType) return false
+        val replySeq = ((bytes[6].toInt() and 0xFF) shl 8) or (bytes[7].toInt() and 0xFF)
+        if (replySeq != (seq and 0xFFFF)) return false
+        return java.nio.ByteBuffer.wrap(bytes, HEADER_BYTES, 4).int == token
+    }
+
     /** Standard internet checksum. The kernel recomputes it, but a correct one costs nothing. */
-    private fun checksum(bytes: ByteArray): Int {
+    fun checksum(bytes: ByteArray): Int {
         var sum = 0L
         var i = 0
         while (i + 1 < bytes.size) {
@@ -189,15 +216,5 @@ internal class IcmpEchoSource : PathEchoSource {
         if (i < bytes.size) sum += (bytes[i].toInt() and 0xFF) shl 8
         while (sum shr 16 != 0L) sum = (sum and 0xFFFF) + (sum shr 16)
         return (sum.inv() and 0xFFFF).toInt()
-    }
-
-    private companion object {
-        const val HEADER_BYTES = 8
-        const val PAYLOAD_BYTES = 16
-        const val MAX_DATAGRAM = 1500
-        const val ICMP_ECHO_REQUEST = 8
-        const val ICMP_ECHO_REPLY = 0
-        const val ICMPV6_ECHO_REQUEST = 128
-        const val ICMPV6_ECHO_REPLY = 129
     }
 }

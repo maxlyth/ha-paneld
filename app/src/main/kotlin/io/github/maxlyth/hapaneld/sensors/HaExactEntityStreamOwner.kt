@@ -429,6 +429,9 @@ internal class HaExactEntityStreamOwner(
     @Volatile private var registryChangeObserver: (() -> Unit)? = null
     @Volatile private var lifecycleObserver: HaLifecycleObserver? = null
     @Volatile private var networkPathObserver: HaNetworkPathObserver? = null
+
+    /** The layer-3 echo probe, when one is bound. Nothing in the stream depends on it existing. */
+    @Volatile private var pathProbe: PathProbeMonitor? = null
     private var drainingCallbacks = false
     private var presenceRevision = 0L
     private var presencePhase = HaExactEntityStreamPhase.DISABLED
@@ -517,6 +520,24 @@ internal class HaExactEntityStreamOwner(
 
     fun unbindNetworkPath() {
         synchronized(lock) { networkPathObserver = null }
+    }
+
+    /**
+     * Bind the layer-3 echo probe. Optional by construction: a panel whose platform refuses an ICMP
+     * socket, or a build with no probe bound at all, keeps exactly the behaviour it had before.
+     */
+    fun bindPathProbe(next: PathProbeMonitor) {
+        val active = synchronized(lock) {
+            check(!stopped) { "exact entity stream owner is closed" }
+            check(pathProbe == null || pathProbe === next) { "path probe is already bound" }
+            pathProbe = next
+            request.active
+        }
+        safeCallback { next.onSocketState(if (active) HaSocketState.CONNECTING else HaSocketState.STOPPED) }
+    }
+
+    fun unbindPathProbe() {
+        synchronized(lock) { pathProbe = null }
     }
 
     /**
@@ -652,6 +673,9 @@ internal class HaExactEntityStreamOwner(
     /** Publish the socket's own state to the network-path monitor; it owns nothing else. */
     private fun reportSocketState(state: HaSocketState) {
         networkPathObserver?.let { observer -> safeCallback { observer.onSocketState(state) } }
+        // The echo probe follows the same authenticated socket, for the same reason: there is no path
+        // worth describing until one is actually held.
+        pathProbe?.let { probe -> safeCallback { probe.onSocketState(state) } }
     }
 
     private suspend fun runSource(run: Long, expected: Request) {
@@ -961,7 +985,18 @@ internal class HaExactEntityStreamOwner(
                     // Silence for the whole pong timeout is the original liveness verdict: dead.
                     PongWait.SilentTimeout -> {
                         networkPathObserver?.let { observer -> safeCallback { observer.onProbeTimeout() } }
+                        // Ask layer 3 immediately: a pong that never came is exactly the observation
+                        // the echo probe exists to attribute, and it is about to be torn down anyway.
+                        pathProbe?.let { probe -> safeCallback { probe.onSocketSilence(monotonicMillis()) } }
                         throw HaStreamLivenessException()
+                    }
+                }
+                // Piggyback the layer-3 burst on this cadence rather than running a second loop. The
+                // burst itself blocks for as long as its echoes take, so it is dispatched away from
+                // this coroutine: the socket's own probe must never wait on it.
+                pathProbe?.let { probe ->
+                    probe.claimBurst(monotonicMillis())?.let { target ->
+                        scope.launch(Dispatchers.IO) { probe.runBurst(target, monotonicMillis) }
                     }
                 }
                 nextProbeAtMs = monotonicMillis() + probeIntervalMs
@@ -1387,6 +1422,15 @@ internal class KtorHaExactEntityStreamTransport(
      * owner sends on, which is why the service passes its `elapsedRealtime` lambda to both.
      */
     private val monotonicMillis: () -> Long = { android.os.SystemClock.elapsedRealtime() },
+    /**
+     * Reports the address each route actually connected on, for the layer-3 echo probe.
+     *
+     * Supplied by the service alongside the probe itself. It exists so the probe measures THE PATH
+     * THE DASHBOARD IS USING rather than a fresh resolution of the same hostname: the two differ
+     * exactly when it matters, which is a black-holed family the connect race has already stepped
+     * around. Null in every build and test that has no probe.
+     */
+    private val onRouteConnected: ((java.net.InetAddress) -> Unit)? = null,
 ) : HaExactEntityStreamTransport {
     override suspend fun subscribe(
         baseUrl: String,
@@ -1411,7 +1455,11 @@ internal class KtorHaExactEntityStreamTransport(
     ): HaExactEntityConnection = withContext(Dispatchers.IO) {
         require(entityIds.isNotEmpty() || watchRegistry || watchLifecycle)
         val policy = socketFamilyPolicy()
-        val client = HaWebSocketClients.client(preferIpv4 = policy.initialPreferIpv4, ipv4Only = policy.ipv4Only)
+        val client = HaWebSocketClients.client(
+            preferIpv4 = policy.initialPreferIpv4,
+            ipv4Only = policy.ipv4Only,
+            onRouteConnected = onRouteConnected,
+        )
         var socket: DefaultClientWebSocketSession? = null
         try {
             val active = withTimeout(CONNECT_TIMEOUT_MS) {
