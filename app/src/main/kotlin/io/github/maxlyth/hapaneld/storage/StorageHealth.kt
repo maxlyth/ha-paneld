@@ -400,9 +400,11 @@ object StorageHealthRuntime {
 
     fun recordDatabaseFailure(operation: String, throwable: Throwable): StorageHealthSnapshot {
         val snapshot = failureHub.recordDatabaseFailure(operation, throwable)
-        // Every latch funnels through here, so this is the one place that guarantees the failing
-        // operation reaches the log. Only the classified kind and the sanitized operation are
-        // printed: the exception message can carry SQL, and never enters any surface.
+        // Every latch raised by a failing *operation* funnels through here. A failed `quick_check`
+        // is the one exception: `StorageHealthState.refresh` sets CORRUPTION and `quick-check`
+        // directly, and reports it through the snapshot rather than this line. Only the classified
+        // kind and the sanitized operation are printed: the exception message can carry SQL, and
+        // never enters any surface.
         android.util.Log.w(
             "StorageHealth",
             "database failure latched: operation=${snapshot.databaseFailureOperationLabel ?: "unknown"} " +
@@ -428,13 +430,17 @@ object StorageHealthRuntime {
  * very low-space incident it exists to relieve, so this refuses one outright under critical pressure
  * or a latched failure, and otherwise requires room for a whole pass plus [marginBytes].
  *
- * A capacity reading that is simply unavailable ([usableBytes] of zero) admits the pass: losing the
- * probe is not evidence of a full disk, and the pass is bounded regardless. That is a deliberate
- * fail-open, and it is the only one here.
+ * A capacity reading that is genuinely **unavailable** — [usableBytes] of `null`, meaning the probe
+ * itself could not be taken — admits the pass: losing the probe is not evidence of a full disk, and
+ * the pass is bounded regardless. That is a deliberate fail-open, and it is the only one here.
+ *
+ * A measured **zero** is the opposite and must refuse. A full filesystem reports zero available
+ * blocks, so collapsing the two into one number admitted a relocation pass on a disk with no room
+ * for it — the exact outcome this gate exists to prevent.
  */
 internal fun reclamationAdmitted(
     severity: StorageHealthSeverity,
-    usableBytes: Long,
+    usableBytes: Long?,
     pageSizeBytes: Long,
     maxPagesPerPass: Long,
     marginBytes: Long,
@@ -442,7 +448,8 @@ internal fun reclamationAdmitted(
     if (severity == StorageHealthSeverity.CRITICAL || severity == StorageHealthSeverity.DATABASE_FAILURE) {
         return false
     }
-    if (pageSizeBytes <= 0L || usableBytes <= 0L) return true
+    if (pageSizeBytes <= 0L) return true
+    if (usableBytes == null) return true
     val transientBytes = storageSaturatingMultiply(maxPagesPerPass, pageSizeBytes)
     return usableBytes >= storageSaturatingAdd(transientBytes, marginBytes)
 }
@@ -455,6 +462,35 @@ private fun storageSaturatingMultiply(left: Long, right: Long): Long = when {
     left > Long.MAX_VALUE / right -> Long.MAX_VALUE
     else -> left * right
 }
+
+/**
+ * Whether a reclamation pass should run at all, given the freelist and whether an earlier pass's
+ * bytes are still stranded in the WAL.
+ *
+ * The second term is what makes deferred bytes recoverable. A reader whose snapshot predates a drain
+ * pins the backfill, so that pass frees pages and returns nothing; by then the freelist is back at
+ * its floor, and a rule that looked only at the freelist would never bring a pass back here to try
+ * the checkpoint again. The bytes would sit in the WAL until the freelist happened to rebuild.
+ */
+internal fun reclamationPassWanted(
+    freelistCount: Long,
+    retainedPages: Long,
+    walReclamationPending: Boolean,
+): Boolean = freelistCount > retainedPages || walReclamationPending
+
+/**
+ * Whether reclaimed bytes are still stranded in the WAL after a checkpoint.
+ *
+ * Pending means exactly one thing: a checkpoint could not hand back bytes that a drain had already
+ * made reclaimable. Any checkpoint that returns bytes clears it, and a pass that freed nothing and
+ * had nothing pending cannot set it — otherwise an idle panel would checkpoint on every pass for
+ * ever.
+ */
+internal fun walReclamationStillPending(
+    freedPages: Long,
+    bytesReturned: Long,
+    wasPending: Boolean,
+): Boolean = bytesReturned == 0L && (freedPages > 0L || wasPending)
 
 internal fun classifyDatabaseFailure(throwable: Throwable): StorageDatabaseFailureKind {
     var candidate: Throwable? = throwable
@@ -559,11 +595,13 @@ internal val KNOWN_DATABASE_OPERATIONS = setOf(
     "catalog-metric-history",
     "catalog-overrides",
     "catalog-reset",
+    "catalog-scope-migration",
     "catalog-status",
     "catalog-sync",
     "dashboard-performance-history",
     "database-checkpoint",
     "database-create",
+    "database-downgrade-tripwire",
     "database-preopen-reconcile",
     "database-upgrade",
     "database-vault-read",

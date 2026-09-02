@@ -20,7 +20,7 @@ class ReclamationAdmissionTest {
 
     private fun admitted(
         severity: StorageHealthSeverity = StorageHealthSeverity.HEALTHY,
-        usableBytes: Long = required,
+        usableBytes: Long? = required,
         pageSizeBytes: Long = pageSize,
     ) = reclamationAdmitted(severity, usableBytes, pageSizeBytes, maxPages, margin)
 
@@ -85,13 +85,26 @@ class ReclamationAdmissionTest {
     }
 
     @Test fun anUnavailableCapacityReadingAdmitsThePass() {
-        // Deliberate fail-open, and the only one: a probe that could not read the filesystem is not
+        // Deliberate fail-open, and the only one: a probe that could not be taken at all is not
         // evidence the filesystem is full, and the pass is bounded either way.
-        assertTrue(admitted(usableBytes = 0L))
+        assertTrue(admitted(usableBytes = null))
+    }
+
+    @Test fun aMeasuredZeroIsAFullFilesystemAndMustRefuse() {
+        // A full filesystem reports zero available blocks. Collapsing that into the same value as a
+        // missing probe admitted a relocation pass onto a disk with no room for it — the exact
+        // outcome this gate exists to prevent, produced by the gate itself.
+        assertFalse("zero free bytes is a measurement, not an absent reading", admitted(usableBytes = 0L))
     }
 
     @Test fun anUnavailableCapacityReadingDoesNotOverrideCriticalPressure() {
-        assertFalse(admitted(severity = StorageHealthSeverity.CRITICAL, usableBytes = 0L))
+        assertFalse(admitted(severity = StorageHealthSeverity.CRITICAL, usableBytes = null))
+    }
+
+    @Test fun anUnknownPageSizeStillAdmitsOnAFullFilesystem() {
+        // Documenting the one ordering that remains fail-open: with no page size there is no bar to
+        // compute, so the pass is admitted and bounded by its slice cap alone.
+        assertTrue(admitted(usableBytes = 0L, pageSizeBytes = 0L))
     }
 
     @Test fun anUnknownPageSizeAdmitsThePassRatherThanComputingANonsenseBar() {

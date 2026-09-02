@@ -4,6 +4,7 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import io.github.maxlyth.hapaneld.storage.KNOWN_DATABASE_OPERATIONS
 import org.junit.Test
 
 class EntityCatalogStorageHealthContractTest {
@@ -216,7 +217,7 @@ class EntityCatalogStorageHealthContractTest {
             "execSQL(\"PRAGMA incremental_vacuum" in source)
         assertTrue("the pragma must be stepped to exhaustion through rawQuery",
             "rawQuery(\"PRAGMA incremental_vacuum(\$slice)\", null)" in vacuum &&
-                "while (cursor.moveToNext()) counted++" in vacuum)
+                "cursor.count.toLong()" in vacuum)
         assertTrue("a short slice means SQLite ran out of reclaimable pages and the loop must stop",
             "if (sliceFreedPages < slice) break" in vacuum)
         assertTrue("the pass must be refused when the filesystem cannot afford its transient cost",
@@ -239,8 +240,48 @@ class EntityCatalogStorageHealthContractTest {
         // throws is IO or corruption and must reach the maintenance boundary rather than be swallowed.
         assertFalse("a throwing checkpoint must not be silently swallowed",
             "runCatching" in reclaimed)
-        assertTrue("an owner closing mid-pass must stop the loop between slices",
-            "if (isBusyRetryAbandoned()) break" in vacuum)
+        // A pool closed mid-pass makes the next query throw IllegalStateException, which no boundary
+        // classifies and `observedMaintenance`'s runCatching swallows — a shutdown would read as a
+        // clean pass that did nothing. So closure is checked before EVERY later database access.
+        assertTrue("closure must be checked before the freelist read that gates the loop",
+            "if (abandoned() || freelist() <= FREELIST_RETAINED_PAGES) break" in vacuum)
+        assertTrue("closure must be checked before the pass reads anything at all",
+            vacuum.indexOf("if (abandoned()) return false") < vacuum.indexOf("PRAGMA page_size"))
+        assertTrue("closure must stop the pass before the checkpoint, which writes too",
+            "if (abandoned()) return freedPages > 0L" in vacuum)
+        assertTrue("a shutdown must not fire the no-progress warning",
+            "if (freedPages == 0L && !abandoned())" in vacuum)
+        // Stepping via `count` fills the window once; a moveToNext walk could re-execute the pragma
+        // on a window refill and free another slice beyond the cap.
+        assertTrue("the slice must be stepped through the cursor count, not a moveToNext walk",
+            "cursor.count.toLong()" in vacuum && "while (cursor.moveToNext())" !in vacuum)
+        // A reader-blocked checkpoint leaves the freelist at its floor, so only the pending flag can
+        // bring a later pass back to the checkpoint that returns those bytes.
+        assertTrue("a deferred checkpoint must be retried on a later pass",
+            "reclamationPassWanted(" in vacuum && "walReclamationStillPending(" in vacuum)
+        assertTrue("a full filesystem must be measured, not collapsed into an absent probe",
+            "statFs?.let {" in headroom && "?: 0L" !in headroom)
+    }
+
+    @Test fun everyProductionOperationLabelIsInTheClosedVocabulary() {
+        // `catalog-scope-migration` and `database-downgrade-tripwire` were live labels that were
+        // never set members, so they sanitized to the generic `database` — a failure during a scope
+        // migration reported "during database", which is precisely the "names nothing anyone can act
+        // on" outcome this work exists to remove. Enumerating them by hand is what let that happen,
+        // so the enumeration is derived from the source instead.
+        val labels = Regex("""observed(?:Write|SchemaWrite)\("([a-z0-9:<>_-]+)"""")
+            .findAll(source).map { it.groupValues[1] }
+            .plus(Regex("""retainDatabaseFailure\("([a-z0-9:<>_-]+)"""")
+                .findAll(source).map { it.groupValues[1] })
+            .toSet()
+        assertTrue("the scan must actually find the operation labels", labels.size >= 15)
+        val missing = labels
+            .filterNot { it.startsWith("app_state") }
+            .filterNot { it in KNOWN_DATABASE_OPERATIONS }
+        assertTrue(
+            "operation labels outside the closed vocabulary render as the generic name: $missing",
+            missing.isEmpty(),
+        )
     }
 
     @Test fun schemaAndPreopenFailuresCannotDisappear() {
