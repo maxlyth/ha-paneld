@@ -5180,7 +5180,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
                     HA_NETWORK_FACT -> " id=\"hanetcell\""
                     else -> ""
                 }
-                "<tr><th>${esc(label)}</th><td$cellId>${esc(runtimeValue(value, strings))}</td></tr>"
+                "<tr><th>${esc(label)}</th><td$cellId>${esc(localizedRuntimeValue(key, value, strings))}</td></tr>"
             }
         }.toMutableList()
         h.webView.reportingQuirk?.let {
@@ -5213,6 +5213,173 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         "external renderer · Home Assistant connection not observed by ha-paneld" ->
             strings.get("dashboard.runtime.external_renderer_unobserved")
         else -> runtimeValueFamily(value, strings)
+    }
+
+    private fun localizedRuntimeValue(key: String, value: String, strings: AppStrings): String = when (key) {
+        HA_RENDERER_FACT -> localizedRendererRuntime(value, strings)
+        "MQTT state" -> localizedMqttRuntime(value, strings)
+        "App database" -> localizedDatabaseRuntime(value, strings)
+        CAMERA_FACT -> localizedCameraRuntime(value, strings)
+        else -> runtimeValue(value, strings)
+    }
+
+    private fun localizedRendererRuntime(value: String, strings: AppStrings): String {
+        if (!value.startsWith("built-in · ")) return runtimeValue(value, strings)
+        val admitted = Regex("^(.*) · admitted ([^·]+) ago$").matchEntire(value)
+        var summary = (admitted?.groupValues?.get(1) ?: value).removePrefix("built-in · ")
+        val themeSuffix = RendererAdmissionPresentation.OVERRIDDEN_SUMMARY_SUFFIX
+        val themeOverridden = summary.endsWith(themeSuffix)
+        if (themeOverridden) summary = summary.removeSuffix(themeSuffix)
+        val translated = when (summary) {
+            "dashboard rendered" -> strings.get("dashboard.runtime.renderer.rendered")
+            "dashboard rendered; admitted on a previously verified Home Assistant version" ->
+                strings.get("dashboard.runtime.renderer.rendered_cached")
+            "admitted on a previously verified Home Assistant version; the dashboard has not connected" ->
+                strings.get("dashboard.runtime.renderer.admitted_cached")
+            "admitted; the dashboard has not connected yet" ->
+                strings.get("dashboard.runtime.renderer.admitted_waiting")
+            "checking Home Assistant compatibility" -> strings.get("dashboard.runtime.renderer.checking")
+            "no admission observed for the current renderer" -> strings.get("dashboard.runtime.renderer.unobserved")
+            else -> return value // Classified blocked detail is uncommon diagnostic evidence.
+        }.let {
+            if (themeOverridden) it + strings.get("dashboard.runtime.renderer.theme_override_suffix") else it
+        }
+        val status = formattedString(strings, "dashboard.runtime.renderer.builtin", "summary" to translated)
+        return admitted?.let {
+            formattedString(strings, "dashboard.runtime.renderer.admitted_age", "status" to status, "age" to it.groupValues[2])
+        } ?: status
+    }
+
+    private fun localizedMqttRuntime(value: String, strings: AppStrings): String {
+        if (value == "disabled") return strings.get("dashboard.runtime.disabled")
+        if (value == "config-error · invalid or unsupported broker URL") {
+            return strings.get("dashboard.runtime.mqtt.config_error")
+        }
+        val match = Regex(
+            "^([^·]+) · ((?:TLS|TCP)(?:/IPv[46])?) · last-ok ([^·]+) · last-auth ([^·]+) · (.+) · family (.+)$",
+        ).matchEntire(value) ?: return value
+        val state = localizedMqttState(match.groupValues[1].trim(), strings) ?: return value
+        val lastOk = localizedMqttAge(match.groupValues[3].trim(), strings) ?: return value
+        val lastAuth = localizedMqttAge(match.groupValues[4].trim(), strings) ?: return value
+        val authRaw = match.groupValues[5].trim()
+        val auth = if (authRaw == "auth-ok") {
+            authRaw
+        } else {
+            val authMatch = Regex("^(connected|auth-retrying|auth-failed) · rejects (\\d+) · attempt (\\d+) · next (.+)$")
+                .matchEntire(authRaw) ?: return value
+            val authState = localizedMqttState(authMatch.groupValues[1], strings) ?: return value
+            val next = when (val raw = authMatch.groupValues[4]) {
+                "none" -> strings.get("dashboard.value.none")
+                else -> Regex("^(\\d+)s$").matchEntire(raw)?.let {
+                    formattedString(strings, "dashboard.runtime.mqtt.seconds", "seconds" to it.groupValues[1])
+                } ?: return value
+            }
+            formattedString(
+                strings,
+                "dashboard.runtime.mqtt.auth_retry",
+                "state" to authState,
+                "rejects" to authMatch.groupValues[2],
+                "attempt" to authMatch.groupValues[3],
+                "next" to next,
+            )
+        }
+        val family = when (val raw = match.groupValues[6].trim()) {
+            "Prefer IPv4" -> strings.get("dashboard.runtime.mqtt.family_prefer_ipv4")
+            "Force IPv4" -> strings.get("dashboard.runtime.mqtt.family_force_ipv4")
+            else -> Regex("^Automatic \\(next (IPv[46])\\)$").matchEntire(raw)?.let {
+                formattedString(strings, "dashboard.runtime.mqtt.family_automatic", "family" to it.groupValues[1])
+            } ?: return value
+        }
+        return formattedString(
+            strings,
+            "dashboard.runtime.mqtt.status",
+            "state" to state,
+            "transport" to match.groupValues[2],
+            "lastOk" to lastOk,
+            "lastAuth" to lastAuth,
+            "auth" to auth,
+            "family" to family,
+        )
+    }
+
+    private fun localizedMqttState(value: String, strings: AppStrings): String? = when (value) {
+        "connected", "announcing", "auth-retrying", "auth-failed", "unreachable", "connecting", "discovering", "disconnected" ->
+            strings.get("dashboard.runtime.mqtt.state.${value.replace('-', '_')}")
+        else -> null
+    }
+
+    private fun localizedMqttAge(value: String, strings: AppStrings): String? = when (value) {
+        "never" -> strings.get("dashboard.runtime.mqtt.age_never")
+        else -> Regex("^(\\d+)s ago$").matchEntire(value)?.let {
+            formattedString(strings, "dashboard.runtime.mqtt.age_seconds_ago", "seconds" to it.groupValues[1])
+        }
+    }
+
+    private fun localizedDatabaseRuntime(value: String, strings: AppStrings): String {
+        val translated = value.split(" · ").map { segment ->
+            Regex("^(.+) used$").matchEntire(segment)?.let {
+                formattedString(strings, "dashboard.runtime.database.used", "bytes" to it.groupValues[1])
+            } ?: Regex("^(.+) on disk$").matchEntire(segment)?.let {
+                formattedString(strings, "dashboard.runtime.database.on_disk", "bytes" to it.groupValues[1])
+            } ?: Regex("^schema (\\d+)$").matchEntire(segment)?.let {
+                formattedString(strings, "dashboard.runtime.database.schema", "version" to it.groupValues[1])
+            } ?: return value
+        }
+        return translated.joinToString(" · ")
+    }
+
+    private fun localizedCameraRuntime(value: String, strings: AppStrings): String {
+        when (value) {
+            "camera off" -> return strings.get("dashboard.camera.session.off")
+            "camera on, but Android has not granted the permission" ->
+                return strings.get("dashboard.camera.session.permission_needed")
+            "camera stopping" -> return strings.get("dashboard.camera.session.stopping")
+        }
+        if (!value.contains("; ")) return value
+        val stateRaw = value.substringBeforeLast("; ")
+        val stream = localizedCameraStream(value.substringAfterLast("; "), strings) ?: return value
+        val state = when {
+            stateRaw == "camera opening" -> strings.get("dashboard.camera.session.opening")
+            stateRaw == "camera closed; nobody is watching" ->
+                strings.get("dashboard.camera.session.closed") + " · " + strings.get("dashboard.camera.watchers.none")
+            stateRaw.startsWith("camera gave up after ") -> {
+                val match = Regex("^camera gave up after (\\d+) failures \\(([^)]+)\\)$").matchEntire(stateRaw) ?: return value
+                formattedString(strings, "dashboard.camera.session.degraded", "count" to match.groupValues[1]) +
+                    " (${match.groupValues[2]})"
+            }
+            stateRaw.startsWith("camera open for ") -> {
+                val match = Regex("^camera open for (\\d+) clients?(?: \\((\\d+) streaming\\))?$").matchEntire(stateRaw)
+                    ?: return value
+                val clients = match.groupValues[1]
+                val watchers = formattedString(
+                    strings,
+                    if (clients == "1") "dashboard.camera.watchers.one" else "dashboard.camera.watchers.many",
+                    "count" to clients,
+                )
+                val streaming = match.groupValues[2]
+                strings.get("dashboard.camera.session.open") + " · " + if (streaming.isEmpty()) {
+                    watchers
+                } else {
+                    formattedString(
+                        strings,
+                        "dashboard.camera.watchers.streaming",
+                        "watching" to watchers,
+                        "count" to streaming,
+                    )
+                }
+            }
+            else -> return value
+        }
+        return "$state; $stream"
+    }
+
+    private fun localizedCameraStream(value: String, strings: AppStrings): String? = when (value) {
+        "stream not listening" -> strings.get("dashboard.runtime.camera.stream_not_listening")
+        else -> Regex("^stream listening on port (\\d+)$").matchEntire(value)?.let {
+            formattedString(strings, "dashboard.runtime.camera.stream_port", "port" to it.groupValues[1])
+        } ?: Regex("^stream at (rtsp://.+) \\(not for this panel's own dashboard\\)$").matchEntire(value)?.let {
+            formattedString(strings, "dashboard.runtime.camera.stream_url", "url" to it.groupValues[1])
+        }
     }
 
     private fun runtimeValueFamily(value: String, strings: AppStrings): String {
