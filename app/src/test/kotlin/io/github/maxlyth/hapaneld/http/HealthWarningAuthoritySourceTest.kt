@@ -71,11 +71,11 @@ class HealthWarningAuthoritySourceTest {
 
     @Test fun theOnePageRenderThreadsTheSameSnapshotIntoEverySurface() {
         // The banner, facts card and diagnostics rows all take the shared HealthInputs rather than re-probing.
-        assertTrue(server.contains("private fun bannersHtml(s: Snap, h: HealthInputs): String"))
+        assertTrue(server.contains("private fun bannersHtml(s: Snap, h: HealthInputs, strings: AppStrings): String"))
         assertTrue(server.contains("private fun factRowsHtml(s: Snap, keys: List<String>, h: HealthInputs, strings: AppStrings): String"))
         assertTrue(server.contains("private fun contextRowsHtml(s: Snap, h: HealthInputs, strings: AppStrings): String"))
         // Warm hydration (/api/v1/info) captures once, then threads it into each fragment.
-        assertTrue(server.contains("bannersHtml(s, h)"))
+        assertTrue(server.contains("bannersHtml(s, h, strings)"))
         assertTrue(server.contains("factRowsHtml(s, infoKeys(s), h, strings)"))
         assertTrue(server.contains("contextRowsHtml(s, h, strings)"))
     }

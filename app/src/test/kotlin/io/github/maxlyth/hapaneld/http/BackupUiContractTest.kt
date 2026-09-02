@@ -70,7 +70,7 @@ class BackupUiContractTest {
     @Test fun theCardIsRenderedWithTheInstalledStateNotJustHelperCapability() {
         assertTrue(
             "backupCardHtml must receive the installed check",
-            "backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null)" in serverSource,
+            "backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null, strings)" in serverSource,
         )
     }
 

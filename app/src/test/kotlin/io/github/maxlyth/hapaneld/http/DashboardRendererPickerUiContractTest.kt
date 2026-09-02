@@ -10,9 +10,9 @@ class DashboardRendererPickerUiContractTest {
     private val configure = File("src/main/assets/configure.js").readText()
 
     @Test fun autoDashboardPlaceholderUsesTheBuiltInRenderer() {
-        assertTrue(server.contains("put(\"dashboard_package\", dashboardRendererAutoLabel(it))"))
-        assertTrue(server.contains("resolved == SystemController.BUILTIN_DASHBOARD) \"Built-in renderer\""))
-        assertTrue(server.contains("val placeholder = hints[spec.key]?.let { \"auto (\$it)\" }"))
+        assertTrue(server.contains("put(\"dashboard_package\", dashboardRendererAutoLabel(it, strings))"))
+        assertTrue(server.contains("strings.get(\"dashboard.value.builtin_renderer\")"))
+        assertTrue(server.contains("formattedString(strings, \"configure.option.auto_detail\", \"value\" to it)"))
     }
 
     @Test fun rendererPickerAutoEntryUsesTheSchemaAutoLabel() {

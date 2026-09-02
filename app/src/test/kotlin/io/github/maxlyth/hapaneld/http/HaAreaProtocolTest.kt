@@ -86,10 +86,17 @@ class HaAreaProtocolTest {
             "the Behaviour row must disclose the override only while the bit is set",
             server.contains("if (key == \"ha_area\" && config.haAreaUserOverride) {"),
         )
+        val areaOverrideFormatter = server.substring(
+            server.indexOf("if (key == \"ha_area\" && config.haAreaUserOverride) {"),
+            server.indexOf("} else null", server.indexOf("if (key == \"ha_area\" && config.haAreaUserOverride) {")),
+        )
         assertTrue(
-            "the suffix must be built through the guarded formatter constructor, which refuses a spec " +
-                "whose row could never render it",
-            server.contains("SettingRowFormatter.of(key) { raw -> \"\$raw (local override)\" }"),
+            "the localized suffix must be built through the guarded formatter constructor, which refuses " +
+                "a spec whose row could never render it",
+            areaOverrideFormatter.contains("SettingRowFormatter.of(key) { raw ->") &&
+                areaOverrideFormatter.contains(
+                    """formattedString(strings, "dashboard.value.local_override", "value" to raw)""",
+                ),
         )
         assertTrue(
             "override retirement must serialize ownership revalidation with configuration mutation",

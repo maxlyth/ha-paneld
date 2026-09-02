@@ -11,7 +11,7 @@ class ProfileIdentityConfigUiContractTest {
     @Test fun profileIdentitySurfacesOnlyAsPlaceholdersWithoutBecomingDurableConfig() {
         assertTrue(server.contains("\"manufacturer\" -> profile.manufacturer"))
         assertTrue(server.contains("\"model\" -> profile.model"))
-        assertTrue(server.contains("val placeholder = hints[spec.key]?.let { \"auto (\$it)\" } ?: when (spec.key)"))
+        assertTrue(server.contains("formattedString(strings, \"configure.option.auto_detail\", \"value\" to it)"))
         assertTrue(!server.contains("\"prefill\":"))
         assertTrue(!configure.contains("f.prefill"))
     }

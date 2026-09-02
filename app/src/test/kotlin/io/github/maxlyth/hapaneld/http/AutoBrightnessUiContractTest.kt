@@ -105,7 +105,12 @@ class AutoBrightnessUiContractTest {
         assertTrue("manual pause hand-back must be explicit", "/api/v1/auto-brightness/resume" in source)
         assertTrue("history reset must require confirmation", "Delete the seven-day ambient-light history" in source)
         assertTrue("saving a changed adaptive setting must refresh runtime truth", "hasOwnProperty.call(submittedValues, \"auto_brightness_ha_entity\")" in source)
-        assertTrue("save rejection must show the server's actionable reason", "e && e.message ? e.message : i18nText(\"configure.save.failed\", \"Save failed.\")" in source)
+        assertTrue(
+            "save rejection must use catalogue-backed copy instead of raw API prose",
+            "msg.textContent = e && e.approvalRequired" in source &&
+                "approvalMessage(e.body)" in source &&
+                "i18nText(\"configure.save.failed\", \"Save failed.\")" in source,
+        )
         assertTrue("invalid numeric controls must be stopped before the custom fetch", "firstInvalidDirtySetting()" in source && "invalid.control.reportValidity" in source)
         assertTrue("enabled history must refresh on its five-minute bucket cadence", "AUTO_BRIGHTNESS_REFRESH_MS = 5 * 60 * 1000" in source)
         assertTrue("disabled or hidden auto-brightness must not schedule chart polling", "values.auto_brightness !== \"true\" || document.hidden" in source)

@@ -362,7 +362,8 @@ class SetupWizardAssetTest {
             File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt"),
         ).first { it.isFile }.readText()
-        val route = server.substring(server.indexOf("get(\"/setup\") {"), server.indexOf("get(\"/setup\") {") + 900)
+        val routeStart = server.indexOf("get(\"/setup\") {")
+        val route = server.substring(routeStart, server.indexOf("get(\"/profiles\") {", routeStart))
         assertTrue(route.contains("""data-build="$"""))
         // The comment in that route may NAME the attribute; what must be absent is its emission.
         assertFalse("emitting data-cfg on /setup lets buildwatch destroy in-progress typing", route.contains("""data-cfg="$"""))
