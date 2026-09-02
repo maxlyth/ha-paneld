@@ -58,25 +58,24 @@ class HealthWarningAuthoritySourceTest {
 
     @Test fun configureTabSurfacesMissingRendererNextStepInPlace() {
         val configure = server.substring(
-            server.indexOf("private fun configureBody(strings: AppStrings)"),
+            server.indexOf("private fun configureBody()"),
             server.indexOf("private fun profilesBody()"),
         )
-        assertTrue(configure.contains("configureSetupBanners(strings)"))
-        assertTrue(configure.contains("private fun configureSetupBanners(strings: AppStrings)"))
+        assertTrue(configure.contains("configureSetupBanners()"))
+        assertTrue(configure.contains("private fun configureSetupBanners()"))
         assertTrue(configure.contains("haSignInNeededForEffectiveDashboard()"))
         assertTrue(configure.contains("HealthAudit.Kind.NO_RENDERER"))
-        assertTrue(configure.contains("configure.setup.renderer.title"))
-        assertTrue(configure.contains("configure.setup.renderer.body"))
+        assertTrue(configure.contains("built-in renderer in the Dashboard card below"))
     }
 
     @Test fun theOnePageRenderThreadsTheSameSnapshotIntoEverySurface() {
         // The banner, facts card and diagnostics rows all take the shared HealthInputs rather than re-probing.
         assertTrue(server.contains("private fun bannersHtml(s: Snap, h: HealthInputs): String"))
-        assertTrue(server.contains("private fun factRowsHtml(s: Snap, keys: List<String>, h: HealthInputs, strings: AppStrings): String"))
-        assertTrue(server.contains("private fun contextRowsHtml(s: Snap, h: HealthInputs, strings: AppStrings): String"))
+        assertTrue(server.contains("private fun factRowsHtml(s: Snap, keys: List<String>, h: HealthInputs): String"))
+        assertTrue(server.contains("private fun contextRowsHtml(s: Snap, h: HealthInputs): String"))
         // Warm hydration (/api/v1/info) captures once, then threads it into each fragment.
         assertTrue(server.contains("bannersHtml(s, h)"))
-        assertTrue(server.contains("factRowsHtml(s, infoKeys(s), h, strings)"))
-        assertTrue(server.contains("contextRowsHtml(s, h, strings)"))
+        assertTrue(server.contains("factRowsHtml(s, infoKeys(s), h)"))
+        assertTrue(server.contains("contextRowsHtml(s, h)"))
     }
 }

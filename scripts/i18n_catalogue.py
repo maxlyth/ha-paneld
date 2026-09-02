@@ -28,10 +28,6 @@ CANDIDATE_ROOT_KEYS = {
 }
 CANDIDATE_RECORD_KEYS = {"key", "translation"}
 LOCALES = {"de", "fr", "it", "es", "zh-Hans"}
-SOURCE_SURFACES = {
-    "settings", "shell", "dashboard", "configure", "setup", "profiles", "entities", "install", "logs",
-    "fleet", "api",
-}
 STATES = {"english-fallback", "machine-draft", "machine-cross-checked", "community-corrected"}
 KEY_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -190,7 +186,7 @@ def validate_source(path: Path) -> dict[str, Any]:
             raise CatalogueError(f"{key}: text must be non-empty")
         if record["sourceHash"] != source_hash(text):
             raise CatalogueError(f"{key}: sourceHash mismatch")
-        if record["surface"] not in SOURCE_SURFACES or not isinstance(record["context"], str) or not record["context"].strip():
+        if record["surface"] != "settings" or not isinstance(record["context"], str) or not record["context"].strip():
             raise CatalogueError(f"{key}: invalid surface or context")
         if record["risk"] not in {"ordinary", "setup", "consequential"}:
             raise CatalogueError(f"{key}: invalid risk")

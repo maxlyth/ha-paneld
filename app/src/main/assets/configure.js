@@ -71,20 +71,6 @@
     "it": "Italiano", "es": "Español", "zh-Hans": "简体中文"
   };
 
-  function i18nText(key, fallback, vars) {
-    return window.HaI18n && typeof window.HaI18n.t === "function"
-      ? window.HaI18n.t(key, fallback, vars)
-      : String(fallback == null ? "" : fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (placeholder, name) {
-        return vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : placeholder;
-      });
-  }
-
-  function localizedPlaceholder(value) {
-    if (value === "auto") return i18nText("configure.option.auto", "auto");
-    if (value === "Auto-detect") return i18nText("configure.package.auto_detect", "Auto-detect");
-    return value;
-  }
-
   function validLanguageTag(value) {
     return typeof value === "string" && value.length <= 63 &&
       /^[A-Za-z0-9]{1,8}(?:[-_][A-Za-z0-9]{1,8})*$/.test(value);
@@ -238,7 +224,7 @@
   };
 
   function approvalMessage(body) {
-    return body && body.message || i18nText("configure.approval.retry", "Approve this request on the panel, then retry it.");
+    return body && body.message || "Approve this request on the panel, then retry it.";
   }
 
   function approvalAwareJson(response) {
@@ -269,7 +255,7 @@
     var button = document.getElementById("savebtn");
     var bar = document.getElementById("savebar");
     button.disabled = !dirty || saving;
-    button.textContent = saving ? i18nText("configure.save.saving", "Saving…") : i18nText("configure.save.action", "Save changes");
+    button.textContent = saving ? "Saving…" : "Save changes";
     bar.hidden = !dirty && !saving;
     document.body.classList.toggle("cfg-dirty", dirty || saving);
     syncUnsavedNavigationGuard();
@@ -340,7 +326,7 @@
   function syncHaOAuthAvailability() {
     if (!haOauthButton) return;
     haOauthButton.disabled = !validHaUrlForOAuth();
-    haOauthButton.title = haOauthButton.disabled ? i18nText("configure.oauth.valid_url_first", "Enter a valid Home Assistant URL first.") : "";
+    haOauthButton.title = haOauthButton.disabled ? "Enter a valid Home Assistant URL first." : "";
   }
 
   function keepSaveMessageVisible(text) {
@@ -369,7 +355,7 @@
     if (tokenInput) tokenInput.value = "";
     recomputeDirty(); updateSaveUi();
     haOauthButton.disabled = true;
-    setHaOauthStatus(i18nText("configure.oauth.starting", "Starting sign-in…"), false);
+    setHaOauthStatus("Starting sign-in…", false);
     haOauthAuthorizationUrl = "";
     haOauthTargetUrl = "";
     haOauthLinks.hidden = true;
@@ -388,27 +374,21 @@
       var openLink = haOauthLinks.querySelector("a");
       openLink.href = authorizationUrl;
       haOauthLinks.hidden = false;
-      setHaOauthStatus(i18nText("configure.oauth.link_ready", "Sign-in link ready. Open it normally or copy it into a private window."), false);
+      setHaOauthStatus("Sign-in link ready. Open it normally or copy it into a private window.", false);
     }).catch(function (error) {
-      setHaOauthStatus(error && error.message ? error.message : i18nText("configure.oauth.start_failed", "Could not start sign-in."), false);
+      setHaOauthStatus(error && error.message ? error.message : "Could not start sign-in.", false);
     }).then(function () { syncHaOAuthAvailability(); });
   }
 
   function haConnectionStatusText() {
     if (haUserStatus.phase === "connected") {
-      return haUserStatus.display_name
-        ? i18nText("configure.oauth.connected_as", "Connected as {name}", { name: haUserStatus.display_name })
-        : i18nText("configure.oauth.connected", "Connected");
+      return haUserStatus.display_name ? "Connected as " + haUserStatus.display_name : "Connected";
     }
-    if (haUserStatus.phase === "rejected") return i18nText("configure.oauth.rejected", "Sign-in rejected — reconnect to Home Assistant");
+    if (haUserStatus.phase === "rejected") return "Sign-in rejected — reconnect to Home Assistant";
     if (haUserStatus.phase === "unavailable") {
-      return i18nText("configure.oauth.status_unavailable", "{method} · status unavailable", {
-        method: haAuth.oauth ? i18nText("configure.oauth.method_oauth", "OAuth configured") : i18nText("configure.oauth.method_token", "Long-lived token configured")
-      });
+      return (haAuth.oauth ? "OAuth configured" : "Long-lived token configured") + " · status unavailable";
     }
-    return haAuth.oauth ? i18nText("configure.oauth.method_oauth", "OAuth configured")
-      : haAuth.configured ? i18nText("configure.oauth.method_token", "Long-lived token configured")
-      : i18nText("configure.oauth.not_configured", "Not configured");
+    return haAuth.oauth ? "OAuth configured" : haAuth.configured ? "Long-lived token configured" : "Not configured";
   }
 
   function setHaOauthStatus(text, connected) {
@@ -449,7 +429,7 @@
 
   function haOAuthRow() {
     haOauthButton = el("button", {
-      class: "pbtn", type: "button", text: haAuth.configured ? i18nText("configure.oauth.reconnect", "Reconnect") : i18nText("configure.oauth.connect", "Connect")
+      class: "pbtn", type: "button", text: haAuth.configured ? "Reconnect" : "Connect"
     });
     haOauthButton.addEventListener("click", startHaOAuth);
     haOauthStatus = el("div", {
@@ -458,25 +438,25 @@
     });
     renderHaConnectionStatus();
     var openLink = el("a", {
-      class: "pbtn", target: "_blank", rel: "noopener noreferrer", referrerpolicy: "no-referrer", text: i18nText("configure.oauth.open_sign_in", "Open sign-in")
+      class: "pbtn", target: "_blank", rel: "noopener noreferrer", referrerpolicy: "no-referrer", text: "Open sign-in"
     });
-    var copyButton = el("button", { class: "pbtn", type: "button", text: i18nText("configure.oauth.copy_link", "Copy link") });
+    var copyButton = el("button", { class: "pbtn", type: "button", text: "Copy link" });
     copyButton.addEventListener("click", function () {
       copyText(haOauthAuthorizationUrl).then(function () {
-        setHaOauthStatus(i18nText("configure.oauth.link_copied", "Sign-in link copied."), false);
-      }).catch(function () { setHaOauthStatus(i18nText("configure.oauth.copy_failed", "Could not copy the link."), false); });
+        setHaOauthStatus("Sign-in link copied.", false);
+      }).catch(function () { setHaOauthStatus("Could not copy the link.", false); });
     });
     haOauthLinks = el("div", { class: "ha-oauth-links" }, [openLink, copyButton]);
     haOauthLinks.hidden = !haOauthAuthorizationUrl;
     if (haOauthAuthorizationUrl) openLink.href = haOauthAuthorizationUrl;
     var guidance = !haAuth.configured
-      ? i18nText("configure.oauth.enter_url", "Enter the Home Assistant URL above, then connect this panel.")
-      : !haAuth.oauth ? i18nText("configure.oauth.browser_recommended", "Browser sign-in is recommended; the long-lived token remains available as an advanced fallback.") : "";
+      ? "Enter the Home Assistant URL above, then connect this panel."
+      : !haAuth.oauth ? "Browser sign-in is recommended; the long-lived token remains available as an advanced fallback." : "";
     var row = el("div", { class: "frow ha-oauth-row", id: "cfg-ha-oauth" }, [
       el("div", { class: "flabel" }, [
-        el("span", { text: i18nText("configure.oauth.browser_sign_in", "Browser sign-in") }),
+        el("span", { text: "Browser sign-in" }),
         haOauthStatus,
-        el("small", { text: i18nText("configure.oauth.sign_in_help", "Sign in from this computer. To sign in as another user, copy the link into a private window.") }),
+        el("small", { text: "Sign in from this computer. To sign in as another user, copy the link into a private window." }),
         guidance ? el("small", { class: "ha-oauth-guidance", text: guidance }) : null
       ]),
       el("div", { class: "fctl ha-oauth-actions" }, [haOauthButton, haOauthLinks])
@@ -508,9 +488,9 @@
   }
 
   function ambientSourcePlaceholder() {
-    if (!autoBrightStatus) return i18nText("configure.brightness.source_checking", "Checking ambient light source…");
+    if (!autoBrightStatus) return "Checking ambient light source…";
     var localPresent = autoBrightStatus.localSourcePresent === true || autoBrightStatus.local_source_present === true;
-    return localPresent ? i18nText("configure.brightness.panel_sensor", "Panel ambient light sensor") : i18nText("configure.brightness.select_ha_sensor", "Select a Home Assistant illuminance sensor");
+    return localPresent ? "Panel ambient light sensor" : "Select a Home Assistant illuminance sensor";
   }
 
   // One input control bound to values[f.key]; Save appears only while the form differs from its baseline.
@@ -526,7 +506,7 @@
         "aria-checked": v === "true" && !sourceBlocked ? "true" : "false", "aria-disabled": blocked ? "true" : "false"
       });
       if (f.key === "auto_sleep") t.setAttribute("aria-describedby", "auto-sleep-prerequisite-status");
-      if (sourceBlocked) t.title = i18nText("configure.brightness.waiting_valid_reading", "Waiting for a valid ambient light reading.");
+      if (sourceBlocked) t.title = "Waiting for a valid ambient light reading.";
       function toggleValue() {
         if (f.key === "auto_brightness" && !ambientLightSourceReady()) return;
         if (f.key === "auto_sleep" && values[f.key] !== "true" && autoSleepPrerequisite.eligible !== true) return;
@@ -549,7 +529,7 @@
       var s = el("select");
       f.options.forEach(function (o) {
         var label = f.key === "ui_language" && Object.prototype.hasOwnProperty.call(UI_LANGUAGE_LABELS, o)
-          ? (o === "auto" ? i18nText("configure.language.automatic", "Automatic") : UI_LANGUAGE_LABELS[o]) : o;
+          ? UI_LANGUAGE_LABELS[o] : o;
         var op = el("option", { value: o, text: label }); if (o === v) op.selected = true; s.appendChild(op);
       });
       s.addEventListener("change", function () {
@@ -562,10 +542,10 @@
     if (f.picker === "renderer") {
       var cur = v == null ? "" : v;
       var sel = el("select", { class: "pkgsel" });
-      sel.appendChild(el("option", { value: "", text: localizedPlaceholder(f.placeholder || "auto") }));
+      sel.appendChild(el("option", { value: "", text: f.placeholder || "auto" }));
       var seen = { "": true };
       var KNOWN = [
-        { pkg: "builtin", label: i18nText("configure.renderer.builtin", "Built-in renderer (ha-paneld)") }
+        { pkg: "builtin", label: "Built-in renderer (ha-paneld)" }
       ].concat(rendererChoices);
       KNOWN.forEach(function (r) {
         if (!r || !r.pkg || seen[r.pkg]) return;
@@ -576,7 +556,7 @@
       });
       // A currently-set external renderer is preserved so it isn't silently lost.
       if (cur && !seen[cur]) {
-        var o2 = el("option", { value: cur, text: i18nText("configure.renderer.configured_external", "{package} · configured external renderer", { package: cur }) });
+        var o2 = el("option", { value: cur, text: cur + " · configured external renderer" });
         o2.selected = true; sel.appendChild(o2);
       }
       sel.addEventListener("change", function () {
@@ -593,7 +573,7 @@
     if (f.picker === "package") {
       var cur = v == null ? "" : v;
       var sel = el("select", { class: "pkgsel" });
-      var autoLabel = localizedPlaceholder(f.placeholder || "Auto-detect");
+      var autoLabel = f.placeholder || "Auto-detect";
       sel.appendChild(el("option", { value: "", text: autoLabel }));
       var seen = { "": true };
       apps.forEach(function (a) {
@@ -603,7 +583,7 @@
         sel.appendChild(op);
       });
       if (cur && !seen[cur]) {
-        var o2 = el("option", { value: cur, text: i18nText("configure.package.not_installed", "{package} · (not installed)", { package: cur }) });
+        var o2 = el("option", { value: cur, text: cur + " · (not installed)" });
         o2.selected = true; sel.appendChild(o2);
       }
       sel.addEventListener("change", function () { values[f.key] = sel.value; setDirty(f.key); });
@@ -640,7 +620,7 @@
         });
         pipelinesWrap.appendChild(pipelinesRaw);
         if (voicePipelinesCatalog === false) {
-          pipelinesWrap.appendChild(el("small", { text: i18nText("configure.voice.pipeline_unavailable", "Pipeline list unavailable — edit as JSON.") }));
+          pipelinesWrap.appendChild(el("small", { text: "Pipeline list unavailable — edit as JSON." }));
         }
         return pipelinesWrap;
       }
@@ -652,7 +632,7 @@
         }
       } catch (e) { configuredWakeWords = []; }
       if (!configuredWakeWords.length) {
-        pipelinesWrap.appendChild(el("small", { text: i18nText("configure.voice.configure_wake_word_first", "Configure a wake word above first.") }));
+        pipelinesWrap.appendChild(el("small", { text: "Configure a wake word above first." }));
         return pipelinesWrap;
       }
       var pipelineMapping = {};
@@ -666,7 +646,7 @@
         var pipelineRow = el("div", { class: "voice-pipeline-row" });
         pipelineRow.appendChild(el("span", { class: "voice-pipeline-label", text: word }));
         var pipelineSelect = el("select");
-        pipelineSelect.appendChild(el("option", { value: "", text: i18nText("configure.voice.preferred_pipeline", "Preferred pipeline") }));
+        pipelineSelect.appendChild(el("option", { value: "", text: "Preferred pipeline" }));
         var retainedPipelineId = pipelineMapping[word];
         var matchedRetained = false;
         voicePipelinesCatalog.forEach(function (p) {
@@ -684,7 +664,7 @@
         // clearable through the existing empty "Preferred pipeline" option.
         if (retainedPipelineId && !matchedRetained) {
           var unknownOption = el("option", {
-            value: String(retainedPipelineId), text: i18nText("configure.voice.pipeline_not_listed", "{pipeline} · not in Home Assistant's list", { pipeline: retainedPipelineId }),
+            value: String(retainedPipelineId), text: retainedPipelineId + " · not in Home Assistant's list",
           });
           unknownOption.selected = true;
           pipelineSelect.appendChild(unknownOption);
@@ -716,10 +696,9 @@
     if (f.picker === "ha_dashboard") {
       var currentDashboard = v == null ? "" : v;
       var dashboardSelect = el("select", { class: "pkgsel" });
-      var autoText = !homeDashboardQueried ? i18nText("configure.dashboard.auto_list_unavailable", "Auto — dashboard list unavailable")
+      var autoText = !homeDashboardQueried ? "Auto — dashboard list unavailable"
         : (homeDashboardDefault.explicit
-          ? i18nText("configure.dashboard.auto_account_default", "Auto — follow this account’s default")
-          : i18nText("configure.dashboard.auto_no_default", "Auto — no default set for this account"));
+          ? "Auto — follow this account’s default" : "Auto — no default set for this account");
       var autoOption = el("option", { value: "", text: autoText });
       dashboardSelect.appendChild(autoOption);
       var dashboardPaths = { "": true };
@@ -727,9 +706,7 @@
       ["panel", "dashboard"].forEach(function (group) {
         var members = homeDashboardItems.filter(function (d) { return (d.group || "dashboard") === group; });
         if (!members.length) return;
-        var host = el("optgroup", { label: group === "panel"
-          ? i18nText("configure.dashboard.group_ha", "Home Assistant dashboards")
-          : i18nText("configure.dashboard.group_yours", "Your dashboards") });
+        var host = el("optgroup", { label: group === "panel" ? "Home Assistant dashboards" : "Your dashboards" });
         groupHosts[group] = host;
         dashboardSelect.appendChild(host);
         members.forEach(function (dashboard) {
@@ -743,12 +720,12 @@
         });
       });
       var customActive = !!currentDashboard && !dashboardPaths[currentDashboard];
-      dashboardSelect.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: i18nText("configure.dashboard.custom", "Custom — enter a dashboard path…") }));
+      dashboardSelect.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: "Custom — enter a dashboard path…" }));
       if (customActive) dashboardSelect.value = CUSTOM_DASHBOARD;
       var customInput = el("input", {
         type: "text", class: "hd-custom-input", value: currentDashboard,
         placeholder: "/dashboard-name/tab-name", id: "cfg-home_dashboard-path",
-        maxlength: f.maxLength || 2048, "aria-label": i18nText("configure.dashboard.path_label", "Dashboard path"),
+        maxlength: f.maxLength || 2048, "aria-label": "Dashboard path",
         "aria-describedby": "cfg-home_dashboard-path-note",
       });
       // The note explains what the value will DO (including the fallback warning), so it is wired to the
@@ -765,8 +742,9 @@
         var root = dashboardRootOf(typedPath);
         var unknown = root && homeDashboardQueried && homeDashboardItems.length && !dashboardPaths[root];
         customNote.textContent = unknown
-          ? i18nText("configure.dashboard.path_not_visible", "{path} is not a dashboard this panel’s Home Assistant account can see — the panel will fall back to its default until that dashboard exists.", { path: root })
-          : i18nText("configure.dashboard.path_help", "A path on this Home Assistant, starting with a dashboard from the list above.");
+          ? root + " is not a dashboard this panel’s Home Assistant account can see — the panel will fall"
+            + " back to its default until that dashboard exists."
+          : "A path on this Home Assistant, starting with a dashboard from the list above.";
         customNote.classList.toggle("warn", !!unknown);
       }
       // Validity is decided here rather than by the browser's pattern engine, and is cleared entirely
@@ -777,7 +755,7 @@
         var typedPath = customInput.value.trim();
         customInput.setCustomValidity(
           !typedPath || wellFormedDashboardPath(typedPath) ? ""
-            : i18nText("configure.dashboard.path_invalid", "Enter a dashboard path such as /dashboard-name/tab-name."),
+            : "Enter a dashboard path such as /dashboard-name/tab-name.",
         );
       }
       function syncCustom() {
@@ -805,15 +783,15 @@
       var notes = [];
       if (!homeDashboardQueried) {
         notes.push(el("small", { class: "hd-area-note", text:
-          i18nText("configure.dashboard.fetch_failed", "Couldn’t fetch this account’s dashboard list from Home Assistant yet. Try again after the connection recovers.") }));
+          "Couldn’t fetch this account’s dashboard list from Home Assistant yet. Try again after the connection recovers." }));
       } else if (!homeDashboardItems.length) {
         notes.push(el("small", { class: "hd-area-note", text:
-          i18nText("configure.dashboard.none_accessible", "This account cannot access any dashboards. Create one or grant access in Home Assistant.") }));
+          "This account cannot access any dashboards. Create one or grant access in Home Assistant." }));
       } else if (!homeDashboardDefault.explicit && !currentDashboard) {
         // The demotion rule, in native terms: Auto still exists but the field says why picking a real
         // dashboard is the recommendation when the account carries no server-side default.
         notes.push(el("small", { class: "hd-area-note", text:
-          i18nText("configure.dashboard.no_default", "This account has no default dashboard set — pick the dashboard this panel should show.") }));
+          "This account has no default dashboard set — pick the dashboard this panel should show." }));
       }
       // The select is never disabled now, even with no listed dashboards: Custom is still a legal
       // answer then, and it is exactly the case where someone needs to type a path by hand.
@@ -830,7 +808,7 @@
       var areaCurrent = v == null ? "" : v;
       var areaWrap = el("div", { class: "ha-area-picker" });
       var areaSelect = el("select", { class: "pkgsel", "aria-label": f.label });
-      areaSelect.appendChild(el("option", { value: "", text: i18nText("configure.area.none", "No area") }));
+      areaSelect.appendChild(el("option", { value: "", text: "No area" }));
       if (areaCurrent) {
         var cur = el("option", { value: areaCurrent, text: areaCurrent });
         cur.selected = true;
@@ -852,8 +830,8 @@
           // Name what Home Assistant actually holds, so the divergence is legible at a glance —
           // "Office while HA has Hall" is the whole story (maintainer, rc2 request 2026-07-27).
           areaNote.textContent = areaHa
-            ? i18nText("configure.area.local_override_ha", "Local override only — Home Assistant has “{area}”", { area: areaHa })
-            : i18nText("configure.area.local_override", "Local override only");
+            ? "Local override only — Home Assistant has \u201C" + areaHa + "\u201D"
+            : "Local override only";
           areaNote.removeAttribute("hidden");
         } else {
           areaNote.setAttribute("hidden", "hidden");
@@ -926,7 +904,7 @@
       });
       var list = el("div", { id: listId, class: "ha-entity-listbox", role: "listbox" });
       list.hidden = true;
-      var note = el("small", { class: "picker-note", text: i18nText("configure.brightness.focus_to_load", "Focus to load Home Assistant illuminance sensors.") });
+      var note = el("small", { class: "picker-note", text: "Focus to load Home Assistant illuminance sensors." });
       var picker = el("div", { class: "ha-entity-picker" }, [input, note]);
       var sourcePolls = 0;
       var activeIndex = -1;
@@ -1041,13 +1019,13 @@
           });
           list.appendChild(option);
         });
-        if (haSourceItems.length) note.textContent = i18nText("configure.brightness.sources_available", "{count} illuminance source(s) available. Blank uses the panel sensor.", { count: haSourceItems.length });
+        if (haSourceItems.length) note.textContent = haSourceItems.length + " illuminance source" + (haSourceItems.length === 1 ? "" : "s") + " available. Blank uses the panel sensor.";
         if (document.activeElement === input) openList();
         else closeList();
       }
       function loadSources(query) {
         var request = ++haSourceRequest;
-        note.textContent = i18nText("configure.brightness.sources_loading", "Loading Home Assistant illuminance sensors…");
+        note.textContent = "Loading Home Assistant illuminance sensors…";
         fetch("/api/v1/auto-brightness/sources?q=" + encodeURIComponent(query || "") + "&limit=200")
           .then(function (r) { if (!r.ok) throw r.status; return r.json(); })
           .then(function (body) {
@@ -1055,20 +1033,20 @@
             haSourceItems = (body && (body.items || body.candidates)) || [];
             populate();
             if (!body || body.available === false) {
-              note.textContent = (body && body.detail) || i18nText("configure.brightness.sources_unavailable", "Home Assistant sources are unavailable; an exact sensor entity id can still be entered.");
+              note.textContent = (body && body.detail) || "Home Assistant sources are unavailable; an exact sensor entity id can still be entered.";
             } else if (!haSourceItems.length) {
               if (body.refreshing === true && sourcePolls < 20) {
                 sourcePolls++;
-                note.textContent = i18nText("configure.brightness.sources_loading", "Loading Home Assistant illuminance sensors…");
+                note.textContent = "Loading Home Assistant illuminance sensors…";
                 setTimeout(function () { if (request === haSourceRequest) loadSources(query); }, 500);
               } else {
-                note.textContent = i18nText("configure.brightness.sources_none", "No Home Assistant illuminance sensors found; an exact sensor entity id can still be entered.");
+                note.textContent = "No Home Assistant illuminance sensors found; an exact sensor entity id can still be entered.";
               }
             }
           })
           .catch(function () {
             if (request !== haSourceRequest) return;
-            note.textContent = i18nText("configure.brightness.sources_load_failed", "Could not load Home Assistant sources; an exact sensor entity id can still be entered.");
+            note.textContent = "Could not load Home Assistant sources; an exact sensor entity id can still be entered.";
           });
       }
       input.addEventListener("focus", function () {
@@ -1132,7 +1110,7 @@
     }
     var type = f.type === "PASSWORD" ? "password" : (f.type === "INT" || f.type === "FLOAT") ? "number" : "text";
     var inp = el("input", { type: type, value: f.secret ? "" : (v == null ? "" : v) });
-    if (f.secret) inp.placeholder = i18nText("configure.secret.blank_keeps_current", "blank keeps current");
+    if (f.secret) inp.placeholder = "blank keeps current";
     else if (f.placeholder) inp.placeholder = f.placeholder;   // e.g. "auto (io.homeassistant…)" on package fields
     if (f.min != null) inp.min = f.min;
     if (f.max != null) inp.max = f.max;
@@ -1141,7 +1119,7 @@
     if (f.type === "FLOAT" && f.step == null) inp.step = "any";
     if ((f.key === "auto_brightness_minimum_percent" || f.key === "auto_brightness_response_percent") && !ambientLightSourceReady()) {
       inp.disabled = true;
-      inp.title = i18nText("configure.brightness.select_source_first", "Select an ambient light source first.");
+      inp.title = "Select an ambient light source first.";
     }
     inp.addEventListener("input", function () {
       values[f.key] = inp.value; setDirty(f.key);
@@ -1315,7 +1293,7 @@
     ctx.clearRect(0, 0, width, height);
     if (!points.length) {
       ctx.fillStyle = "#888"; ctx.font = "13px sans-serif"; ctx.textAlign = "center";
-      ctx.fillText(i18nText("configure.brightness.history_none", "No ambient-light history yet"), width / 2, height / 2);
+      ctx.fillText("No ambient-light history yet", width / 2, height / 2);
       return;
     }
     var days = autoBrightnessChartDays(points);
@@ -1449,33 +1427,25 @@
   }
 
   function autoBrightnessSummary() {
-    if (autoBrightSourceTransition) return i18nText("configure.brightness.source_updating", "Updating ambient-light source… · Source: {source}", { source: autoBrightnessSelectedSource() });
-    if (!autoBrightStatus) return autoBrightLoading ? i18nText("configure.brightness.loading", "Loading adaptive brightness…") : i18nText("configure.brightness.status_unavailable", "Adaptive brightness status is unavailable.");
-    if (autoBrightStatus.available === false) return autoBrightStatus.detail || i18nText("configure.brightness.runtime_unavailable", "Adaptive brightness runtime is unavailable.");
+    if (autoBrightSourceTransition) return "Updating ambient-light source… · Source: " + autoBrightnessSelectedSource();
+    if (!autoBrightStatus) return autoBrightLoading ? "Loading adaptive brightness…" : "Adaptive brightness status is unavailable.";
+    if (autoBrightStatus.available === false) return autoBrightStatus.detail || "Adaptive brightness runtime is unavailable.";
     if (autoBrightStatus.sourceAvailable === false || autoBrightStatus.source_available === false) {
-      return i18nText("configure.brightness.waiting", "Waiting for ambient light… · Source: {source}", { source: autoBrightnessSelectedSource() });
+      return "Waiting for ambient light… · Source: " + autoBrightnessSelectedSource();
     }
     var state = autoBrightStatus.state || "learning";
     if (autoBrightStatus.preferenceActive === true || autoBrightStatus.paused === true) state = "temporary preference";
     else if (state === "enabled" && autoBrightStatus.mode) state = autoBrightStatus.mode;
-    var stateLabels = {
-      learning: i18nText("configure.brightness.state_learning", "learning"),
-      "temporary preference": i18nText("configure.brightness.state_temporary_preference", "temporary preference"),
-      enabled: i18nText("configure.brightness.state_enabled", "enabled"),
-      disabled: i18nText("configure.brightness.state_disabled", "disabled")
-    };
-    state = stateLabels[state] || state;
-    return i18nText("configure.brightness.state_source", "{state} · Source: {source}", { state: state, source: autoBrightnessSelectedSource() });
+    return state + " · Source: " + autoBrightnessSelectedSource();
   }
 
   function autoBrightnessSelectedSource() {
-    if (autoBrightSourceTransition && autoBrightTransitionSource) return autoBrightTransitionSource === "panel sensor"
-      ? i18nText("configure.brightness.panel_sensor_short", "panel sensor") : autoBrightTransitionSource;
+    if (autoBrightSourceTransition && autoBrightTransitionSource) return autoBrightTransitionSource;
     var selected = String(values.auto_brightness_ha_entity || "").trim();
     if (selected) return selected;
     return autoBrightStatus && (
       autoBrightStatus.source_label || autoBrightStatus.sourceLabel || autoBrightStatus.entity_id || autoBrightStatus.entityId
-    ) || i18nText("configure.brightness.panel_sensor_short", "panel sensor");
+    ) || "panel sensor";
   }
 
   function autoBrightnessSourceRevision(body) {
@@ -1502,14 +1472,12 @@
 
   function autoBrightnessFreshness() {
     var latest = autoBrightnessLatestEpochMinute();
-    if (latest == null) return autoBrightSourceTransition ? i18nText("configure.brightness.new_history_loading", "Loading new source history…") : i18nText("configure.brightness.samples_none", "No samples yet");
+    if (latest == null) return autoBrightSourceTransition ? "Loading new source history…" : "No samples yet";
     var date = new Date(latest * 60000);
     var ageMinutes = Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
-    var relative = ageMinutes < 1 ? i18nText("configure.time.just_now", "just now")
-      : ageMinutes < 60 ? i18nText("configure.time.minutes_ago", "{count} min ago", { count: ageMinutes })
-      : ageMinutes < 1440 ? i18nText("configure.time.hours_ago", "{count} hr ago", { count: Math.floor(ageMinutes / 60) })
-      : i18nText("configure.time.days_ago", "{count} days ago", { count: Math.floor(ageMinutes / 1440) });
-    return i18nText("configure.time.updated", "Updated {date} ({relative})", { date: date.toLocaleString(), relative: relative });
+    var relative = ageMinutes < 1 ? "just now" : ageMinutes < 60 ? ageMinutes + " min ago" :
+      ageMinutes < 1440 ? Math.floor(ageMinutes / 60) + " hr ago" : Math.floor(ageMinutes / 1440) + " days ago";
+    return "Updated " + date.toLocaleString() + " (" + relative + ")";
   }
 
   // Preview bounds come from /api/v1/config/schema, never from literals here. A copy in this file
@@ -1541,7 +1509,7 @@
     autoBrightTransitionAttempts = 0;
     autoBrightTransitionSource = String(source || "").trim() || "panel sensor";
     autoBrightHistory = { points: [] };
-    autoBrightMessage = i18nText("configure.brightness.selected_history_loading", "Loading history for the selected source…");
+    autoBrightMessage = "Loading history for the selected source…";
     if (autoBrightTransitionTimer) clearTimeout(autoBrightTransitionTimer);
     autoBrightTransitionTimer = null;
     if (autoBrightRefreshTimer) clearTimeout(autoBrightRefreshTimer);
@@ -1592,34 +1560,34 @@
         autoBrightHistory = { points: [] };
         if (autoBrightTransitionAttempts >= AUTO_BRIGHTNESS_TRANSITION_MAX_ATTEMPTS) {
           finishAutoBrightnessSourceTransition();
-          autoBrightMessage = i18nText("configure.brightness.history_preparing", "History is still preparing for the selected source; it will retry on the normal refresh.");
+          autoBrightMessage = "History is still preparing for the selected source; it will retry on the normal refresh.";
         } else {
-          autoBrightMessage = i18nText("configure.brightness.selected_history_loading", "Loading history for the selected source…");
+          autoBrightMessage = "Loading history for the selected source…";
           scheduleAutoBrightnessTransitionPoll();
         }
       } else if (autoBrightSourceTransition && latest == null && autoBrightTransitionAttempts < AUTO_BRIGHTNESS_TRANSITION_MAX_ATTEMPTS) {
         autoBrightHistory = { points: [], sourceRevision: result[1].sourceRevision };
-        autoBrightMessage = i18nText("configure.brightness.first_sample_waiting", "Waiting for the first sample from the selected source…");
+        autoBrightMessage = "Waiting for the first sample from the selected source…";
         scheduleAutoBrightnessTransitionPoll();
       } else {
         autoBrightHistory = result[1];
         if (autoBrightSourceTransition) {
           var timedOutEmpty = latest == null;
           finishAutoBrightnessSourceTransition();
-          autoBrightMessage = timedOutEmpty ? i18nText("configure.brightness.selected_samples_none", "The selected source has no ambient-light samples yet.") : "";
+          autoBrightMessage = timedOutEmpty ? "The selected source has no ambient-light samples yet." : "";
         } else autoBrightMessage = "";
       }
     }).catch(function () {
       if (request !== autoBrightRequest) return;
       if (typeof window !== "undefined" && window.configCardSizeGeometryInvalid) window.configCardSizeGeometryInvalid();
-      if (!autoBrightSourceTransition) autoBrightStatus = { available: false, detail: i18nText("configure.brightness.load_failed", "Could not load adaptive brightness.") };
+      if (!autoBrightSourceTransition) autoBrightStatus = { available: false, detail: "Could not load adaptive brightness." };
       autoBrightHistory = { points: [] };
       if (autoBrightSourceTransition && autoBrightTransitionAttempts < AUTO_BRIGHTNESS_TRANSITION_MAX_ATTEMPTS) {
-        autoBrightMessage = i18nText("configure.brightness.selected_source_loading", "The selected source is still loading…");
+        autoBrightMessage = "The selected source is still loading…";
         scheduleAutoBrightnessTransitionPoll();
       } else if (autoBrightSourceTransition) {
         finishAutoBrightnessSourceTransition();
-        autoBrightMessage = i18nText("configure.brightness.selected_source_failed", "The selected source could not be loaded; it will retry on the normal refresh.");
+        autoBrightMessage = "The selected source could not be loaded; it will retry on the normal refresh.";
       }
     }).then(function () {
       if (request !== autoBrightRequest) return;
@@ -1671,11 +1639,11 @@
   }
 
   function runAutoBrightnessAction(path, button) {
-    button.disabled = true; autoBrightMessage = i18nText("configure.action.working", "Working…"); render();
+    button.disabled = true; autoBrightMessage = "Working…"; render();
     fetch(path, { method: "POST", headers: { "Accept": "application/json" } })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (body) { if (!r.ok) throw (body.error || ("HTTP " + r.status)); return body; }); })
-      .then(function () { autoBrightMessage = i18nText("configure.action.updated", "Updated."); loadAutoBrightnessData(true); })
-      .catch(function (error) { autoBrightMessage = i18nText("configure.action.failed", "Action failed ({error}).", { error: error }); button.disabled = false; render(); });
+      .then(function () { autoBrightMessage = "Updated."; loadAutoBrightnessData(true); })
+      .catch(function (error) { autoBrightMessage = "Action failed (" + error + ")."; button.disabled = false; render(); });
   }
 
   function autoBrightnessPanel() {
@@ -1683,33 +1651,33 @@
     var paused = autoBrightStatus && (
       autoBrightStatus.preferenceActive === true || autoBrightStatus.paused === true || autoBrightStatus.state === "paused"
     );
-    var reset = el("button", { class: "pbtn", type: "button", text: i18nText("configure.brightness.reset_history", "Reset learned history") });
-    var resume = el("button", { class: "pbtn", type: "button", text: i18nText("configure.brightness.resume_auto", "Resume full auto") });
+    var reset = el("button", { class: "pbtn", type: "button", text: "Reset learned history" });
+    var resume = el("button", { class: "pbtn", type: "button", text: "Resume full auto" });
     reset.disabled = !available || autoBrightLoading;
     resume.disabled = !available || !paused || autoBrightLoading;
     reset.onclick = function () {
-      if (confirm(i18nText("configure.brightness.reset_confirm", "Delete the seven-day ambient-light history and restart learning?"))) runAutoBrightnessAction("/api/v1/auto-brightness/reset", reset);
+      if (confirm("Delete the seven-day ambient-light history and restart learning?")) runAutoBrightnessAction("/api/v1/auto-brightness/reset", reset);
     };
     resume.onclick = function () { runAutoBrightnessAction("/api/v1/auto-brightness/resume", resume); };
     var bucket = autoBrightHistory && (autoBrightHistory.bucket_minutes || autoBrightHistory.bucketMinutes);
     var dayCount = autoBrightnessChartDays(normalizedChartPoints()).length;
     var lineDayCount = Math.min(dayCount, autoBrightnessLineDays());
-    var detail = i18nText("configure.brightness.days_drawn", "{count} day(s) drawn individually", { count: lineDayCount });
-    if (dayCount > autoBrightnessLineDays()) detail += i18nText("configure.brightness.earlier_weekly_range", " · earlier history shown as weekly range");
-    if (bucket) detail += i18nText("configure.brightness.minute_buckets", " · {count} minute buckets", { count: bucket });
+    var detail = lineDayCount + (lineDayCount === 1 ? " day" : " days") + " drawn individually";
+    if (dayCount > autoBrightnessLineDays()) detail += " · earlier history shown as weekly range";
+    if (bucket) detail += " · " + bucket + " minute buckets";
     var projectionSensitivity = autoBrightnessProjectionSensitivity();
-    if (projectionSensitivity != null) detail += i18nText("configure.brightness.sensitivity", " · Sensitivity {percent}%", { percent: projectionSensitivity });
+    if (projectionSensitivity != null) detail += " · Sensitivity " + projectionSensitivity + "%";
     detail += " · " + autoBrightnessFreshness();
     var panel = el("div", { class: "autobright-panel", id: "auto-brightness-learning" }, [
       el("div", { class: "autobright-head" }, [
-        el("div", {}, [el("strong", { text: i18nText("configure.brightness.daily_learning", "Daily ambient learning") }), el("small", { text: autoBrightnessSummary() })]),
+        el("div", {}, [el("strong", { text: "Daily ambient learning" }), el("small", { text: autoBrightnessSummary() })]),
         el("div", { class: "autobright-actions" }, [reset, resume])
       ]),
-      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": i18nText("configure.brightness.chart_label", "24-hour ambient-light pattern: the three most recent days drawn individually, with the rest of the week shown as a shaded minimum-to-maximum range") }),
+      el("canvas", { id: "auto-brightness-chart", class: "autobright-chart", role: "img", "aria-label": "24-hour ambient-light pattern: the three most recent days drawn individually, with the rest of the week shown as a shaded minimum-to-maximum range" }),
       el("div", { class: "autobright-legend" }, [
-        el("span", { class: "observed", text: i18nText("configure.brightness.observed", "Observed") }),
-        el("span", { class: "expected", text: i18nText("configure.brightness.learned_baseline", "Learned baseline") }),
-        el("span", { class: "proposed", text: i18nText("configure.brightness.proposed_level", "Proposed level") }),
+        el("span", { class: "observed", text: "Observed" }),
+        el("span", { class: "expected", text: "Learned baseline" }),
+        el("span", { class: "proposed", text: "Proposed level" }),
         el("small", { text: detail })
       ]),
       el("div", { class: "autobright-message" + (autoBrightMessage.indexOf("failed") >= 0 ? " error" : ""), text: autoBrightMessage })
@@ -1719,65 +1687,36 @@
   }
 
   function autoSleepHuman(value) {
-    var token = String(value == null ? "unknown" : value).toLowerCase();
-    var labels = {
-      unknown: i18nText("configure.auto_sleep.value.unknown", "Unknown"),
-      disabled: i18nText("configure.auto_sleep.value.disabled", "Disabled"),
-      authenticating: i18nText("configure.auto_sleep.value.authenticating", "Authenticating"),
-      discovering: i18nText("configure.auto_sleep.value.discovering", "Discovering"),
-      learning: i18nText("configure.auto_sleep.value.learning", "Learning"),
-      connecting: i18nText("configure.auto_sleep.value.connecting", "Connecting"),
-      synchronizing: i18nText("configure.auto_sleep.value.synchronizing", "Synchronizing"),
-      live: i18nText("configure.auto_sleep.value.live", "Live"),
-      no_area: i18nText("configure.auto_sleep.value.no_area", "No area"),
-      no_credible_sources: i18nText("configure.auto_sleep.value.no_credible_sources", "No credible sources"),
-      no_included_sources: i18nText("configure.auto_sleep.value.no_included_sources", "No included sources"),
-      auth_failed: i18nText("configure.auto_sleep.value.auth_failed", "Authentication failed"),
-      discovery_failed: i18nText("configure.auto_sleep.value.discovery_failed", "Discovery failed"),
-      reconnecting: i18nText("configure.auto_sleep.value.reconnecting", "Reconnecting"),
-      stopped: i18nText("configure.auto_sleep.value.stopped", "Stopped"),
-      no_sources_configured: i18nText("configure.auto_sleep.value.no_sources_configured", "No sources configured"),
-      all_sources_unavailable: i18nText("configure.auto_sleep.value.all_sources_unavailable", "All sources unavailable"),
-      source_active: i18nText("configure.auto_sleep.value.source_active", "Source active"),
-      partial_source_loss: i18nText("configure.auto_sleep.value.partial_source_loss", "Partial source loss"),
-      source_activity_lease: i18nText("configure.auto_sleep.value.source_activity_lease", "Source activity lease"),
-      touch_activity: i18nText("configure.auto_sleep.value.touch_activity", "Touch activity"),
-      proximity_activity: i18nText("configure.auto_sleep.value.proximity_activity", "Proximity activity"),
-      lease_expired: i18nText("configure.auto_sleep.value.lease_expired", "Lease expired")
-    };
-    return labels[token] || token.replace(/_/g, " ").replace(/^./, function (c) { return c.toUpperCase(); });
+    return String(value == null ? "unknown" : value).replace(/_/g, " ").replace(/^./, function (c) { return c.toUpperCase(); });
   }
 
   function autoSleepSummaryModel(status) {
     status = status || {};
     var areaName = status.area_name != null ? status.area_name : status.areaName;
-    var area = String(areaName || "").trim() || i18nText("configure.auto_sleep.not_learned", "not learned");
+    var area = String(areaName || "").trim() || "not learned";
     var leaseMs = status.learned_lease_ms != null ? status.learned_lease_ms : status.learnedLeaseMs;
-    var lease = typeof leaseMs === "number" && isFinite(leaseMs)
-      ? i18nText("configure.duration.minutes", "{count} min", { count: Math.round(leaseMs / 60000) })
-      : i18nText("configure.auto_sleep.not_learned", "not learned");
+    var lease = typeof leaseMs === "number" && isFinite(leaseMs) ? Math.round(leaseMs / 60000) + " min" : "not learned";
     var count = status.source_count != null ? status.source_count : status.sourceCount;
     var suppressed = status.manual_suppression === true || status.manualSuppression === true;
     var phase = autoSleepHuman(status.phase);
     var reason = autoSleepHuman(status.reason);
     var sources = count == null ? 0 : count;
-    var override = suppressed ? i18nText("configure.state.active", "active") : i18nText("configure.state.inactive", "inactive");
+    var override = suppressed ? "active" : "inactive";
     return {
       lines: [
-        i18nText("configure.auto_sleep.area", "Home Assistant Area: {area}", { area: area }),
-        i18nText("configure.auto_sleep.phase", "Phase: {phase}", { phase: phase }),
-        i18nText("configure.auto_sleep.reason", "Reason: {reason}", { reason: reason }),
-        i18nText("configure.auto_sleep.delay_sources", "Delay: {delay} · Sources: {count}", { delay: lease, count: sources }),
-        i18nText("configure.auto_sleep.manual_override", "Manual override: {state}", { state: override })
+        "Home Assistant Area: " + area,
+        "Phase: " + phase,
+        "Reason: " + reason,
+        "Delay: " + lease + " · Sources: " + sources,
+        "Manual override: " + override
       ],
-      accessible: i18nText("configure.auto_sleep.summary_accessible", "Home Assistant Area: {area} · Phase: {phase} · Reason: {reason} · Learned delay: {delay} · Sources: {count} · Manual screen override: {state}",
-        { area: area, phase: phase, reason: reason, delay: lease, count: sources, state: override })
+      accessible: "Home Assistant Area: " + area + " · Phase: " + phase + " · Reason: " + reason +
+        " · Learned delay: " + lease + " · Sources: " + sources + " · Manual screen override: " + override
     };
   }
 
   function autoSleepLoadingSummaryModel() {
-    var loading = i18nText("configure.loading", "Loading…");
-    return { lines: [loading, "", "", "", ""], accessible: loading };
+    return { lines: ["Loading…", "", "", "", ""], accessible: "Loading…" };
   }
 
   function setAutoSleepSummary(summary, announcement, model) {
@@ -1809,13 +1748,11 @@
   function autoSleepPrerequisiteText() {
     var phase = String(autoSleepPrerequisite.phase || "unavailable").toLowerCase();
     var areaName = autoSleepPrerequisite.area_name != null ? autoSleepPrerequisite.area_name : autoSleepPrerequisite.areaName;
-    if (phase === "checking") return i18nText("configure.auto_sleep.area_checking", "Checking this panel’s Home Assistant Area…");
-    if (autoSleepPrerequisite.eligible === true && phase === "assigned") return i18nText("configure.auto_sleep.area", "Home Assistant Area: {area}", {
-      area: String(areaName || "").trim() || i18nText("configure.auto_sleep.assigned", "Assigned")
-    });
-    if (phase === "unassigned") return i18nText("configure.auto_sleep.assign_area_first", "Assign this panel to a Home Assistant Area before enabling Auto sleep.");
-    if (phase === "auth_failed") return i18nText("configure.auto_sleep.reconnect_first", "Reconnect Home Assistant before enabling Auto sleep.");
-    return i18nText("configure.auto_sleep.area_check_failed", "Could not check this panel’s Home Assistant Area. Check the Home Assistant connection.");
+    if (phase === "checking") return "Checking this panel’s Home Assistant Area…";
+    if (autoSleepPrerequisite.eligible === true && phase === "assigned") return "Home Assistant Area: " + (String(areaName || "").trim() || "Assigned");
+    if (phase === "unassigned") return "Assign this panel to a Home Assistant Area before enabling Auto sleep.";
+    if (phase === "auth_failed") return "Reconnect Home Assistant before enabling Auto sleep.";
+    return "Could not check this panel’s Home Assistant Area. Check the Home Assistant connection.";
   }
 
   function autoSleepPrerequisiteNode() {
@@ -1893,7 +1830,7 @@
           // expand through an empty state before every Area refresh.
           invalidateAutoSleepData();
           autoSleepHistoryWaiting = values.auto_sleep === "true";
-          autoSleepHistoryWaitingMessage = autoSleepHistoryWaiting ? i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…") : "";
+          autoSleepHistoryWaitingMessage = autoSleepHistoryWaiting ? "Preparing activity history…" : "";
           updateAutoSleepHistory();
           if (values.auto_sleep === "true") loadAutoSleepData();
         } else if (nextAreaName) {
@@ -1928,9 +1865,9 @@
   function autoSleepPanel() {
     if (!autoSleepStatus && !autoSleepLoading) {
       autoSleepHistoryWaiting = true;
-      autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
+      autoSleepHistoryWaitingMessage = "Preparing activity history…";
     }
-    var windows = el("div", { class: "auto-sleep-windows", role: "group", "aria-label": i18nText("configure.auto_sleep.history_period", "Activity history period") });
+    var windows = el("div", { class: "auto-sleep-windows", role: "group", "aria-label": "Activity history period" });
     [6, 24, 48].forEach(function (hours) {
       var button = el("button", { class: "pbtn", type: "button", text: hours + "h", "data-hours": hours, "aria-pressed": hours === autoSleepHistoryHours ? "true" : "false" });
       button.onclick = function () {
@@ -1943,7 +1880,7 @@
     });
     var chart = el("div", { id: "auto-sleep-chart", class: "auto-sleep-history", "aria-describedby": "auto-sleep-chart-description" }, [
       el("div", { class: "auto-sleep-chart-content" }),
-      el("div", { class: "auto-sleep-loading-overlay", role: "status", "aria-live": "polite", text: i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…") })
+      el("div", { class: "auto-sleep-loading-overlay", role: "status", "aria-live": "polite", text: "Preparing activity history…" })
     ]);
     var summary = autoSleepSummaryNode();
     var announcement = autoSleepSummaryAnnouncementNode();
@@ -1951,7 +1888,7 @@
     var panel = el("div", { class: "autobright-panel", id: "auto-sleep-status" }, [
       el("div", { class: "autobright-head auto-sleep-head" }, [
       el("div", {}, [
-          el("strong", { text: i18nText("configure.auto_sleep.activity", "Auto-sleep activity") })
+          el("strong", { text: "Auto-sleep activity" })
         ]),
         el("div", { class: "autobright-actions" }, [windows])
       ]),
@@ -1959,11 +1896,11 @@
       announcement,
       chart,
       el("div", { class: "autobright-legend auto-sleep-legend" }, [
-        el("span", { class: "detected", text: i18nText("configure.auto_sleep.detected_awake", "Detected / Awake") }),
-        el("span", { class: "clear", text: i18nText("configure.auto_sleep.clear_sleep", "Clear / Sleep") }),
-        el("span", { class: "inhibited", text: i18nText("configure.state.unavailable", "Unavailable") })
+        el("span", { class: "detected", text: "Detected / Awake" }),
+        el("span", { class: "clear", text: "Clear / Sleep" }),
+        el("span", { class: "inhibited", text: "Unavailable" })
       ]),
-      el("div", { id: "auto-sleep-chart-description", class: "sr-only", text: i18nText("configure.auto_sleep.history_replaying", "Replaying activity history.") }),
+      el("div", { id: "auto-sleep-chart-description", class: "sr-only", text: "Replaying activity history." }),
       el("div", {
         id: "auto-sleep-history-message", class: "autobright-message", role: "status", "aria-live": "polite",
         text: autoSleepHistoryMessage()
@@ -1985,7 +1922,7 @@
   function autoSleepHistoryMessage() {
     if (autoSleepHistoryError) return autoSleepHistoryError;
     return autoSleepHistoryBusy() && autoSleepHistory && autoSleepHistory.available !== false
-      ? i18nText("configure.auto_sleep.history_refreshing", "Refreshing activity history…") : "";
+      ? "Refreshing activity history…" : "";
   }
 
   function autoSleepHistoryBusy() {
@@ -2034,14 +1971,14 @@
   function autoSleepHistoryTerminalMessage(status) {
     var phase = String(status && status.phase || "").toLowerCase();
     var detail = String(status && status.detail || "").toLowerCase();
-    if (phase === "no_area") return i18nText("configure.auto_sleep.history_requires_area", "Assign this panel to a Home Assistant Area to calculate activity history.");
-    if (phase === "no_credible_sources") return i18nText("configure.auto_sleep.no_credible_sources", "No credible device-backed activity source is available in this Area.");
-    if (phase === "auth_failed") return i18nText("configure.auto_sleep.auth_failed", "Home Assistant authentication failed. Reconnect Home Assistant to calculate activity history.");
-    if (phase === "discovery_failed" && detail === "history_parse") return i18nText("configure.auto_sleep.timestamps_unreadable", "Home Assistant returned activity timestamps this panel could not read.");
-    if (phase === "discovery_failed" && detail === "history_limit") return i18nText("configure.auto_sleep.history_too_large", "Home Assistant activity history is too large to process safely.");
-    if (phase === "discovery_failed") return i18nText("configure.auto_sleep.discovery_failed", "Auto-sleep source discovery failed. Check the Home Assistant connection.");
-    if (phase === "status_failed") return i18nText("configure.auto_sleep.status_failed", "Auto-sleep status request failed (HTTP {status}).", { status: Number(status && status.status_code) });
-    return i18nText("configure.auto_sleep.history_unavailable", "Auto-sleep activity history is unavailable.");
+    if (phase === "no_area") return "Assign this panel to a Home Assistant Area to calculate activity history.";
+    if (phase === "no_credible_sources") return "No credible device-backed activity source is available in this Area.";
+    if (phase === "auth_failed") return "Home Assistant authentication failed. Reconnect Home Assistant to calculate activity history.";
+    if (phase === "discovery_failed" && detail === "history_parse") return "Home Assistant returned activity timestamps this panel could not read.";
+    if (phase === "discovery_failed" && detail === "history_limit") return "Home Assistant activity history is too large to process safely.";
+    if (phase === "discovery_failed") return "Auto-sleep source discovery failed. Check the Home Assistant connection.";
+    if (phase === "status_failed") return "Auto-sleep status request failed (HTTP " + Number(status && status.status_code) + ").";
+    return "Auto-sleep activity history is unavailable.";
   }
 
   function scheduleAutoSleepReadiness(afterFailure) {
@@ -2081,7 +2018,7 @@
     var updateToken = {};
     autoSleepSourceUpdating[sourceKey] = updateToken;
     autoSleepHistoryWaiting = true;
-    autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
+    autoSleepHistoryWaitingMessage = "Preparing activity history…";
     autoSleepHistoryError = "";
     updateAutoSleepHistory(false);
     fetch("/api/v1/auto-sleep/source", {
@@ -2101,9 +2038,7 @@
       delete autoSleepSourceUpdating[sourceKey];
       autoSleepHistoryWaiting = false;
       autoSleepHistoryWaitingMessage = "";
-      autoSleepHistoryError = error && error.status
-        ? i18nText("configure.auto_sleep.source_update_failed_http", "Could not update this activity source (HTTP {status}).", { status: error.status })
-        : i18nText("configure.auto_sleep.source_update_failed", "Could not update this activity source.");
+      autoSleepHistoryError = "Could not update this activity source" + (error && error.status ? " (HTTP " + error.status + ")" : "") + ".";
       updateAutoSleepHistory();
     });
   }
@@ -2134,13 +2069,10 @@
     });
     function duration(ms) {
       var minutes = Math.round(ms / 60000);
-      return minutes >= 60
-        ? i18nText("configure.duration.hours_minutes", "{hours} h {minutes} min", { hours: Math.floor(minutes / 60), minutes: minutes % 60 })
-        : i18nText("configure.duration.minutes", "{count} min", { count: minutes });
+      return minutes >= 60 ? Math.floor(minutes / 60) + " h " + (minutes % 60) + " min" : minutes + " min";
     }
-    return i18nText("configure.auto_sleep.calculated_summary", "Calculated auto-sleep: hold awake {awake}, allow sleep {sleep}, inhibited {inhibited}.", {
-      awake: duration(totals.hold_awake), sleep: duration(totals.allow_sleep), inhibited: duration(totals.inhibited)
-    });
+    return "Calculated auto-sleep: hold awake " + duration(totals.hold_awake) +
+      ", allow sleep " + duration(totals.allow_sleep) + ", inhibited " + duration(totals.inhibited) + ".";
   }
 
   function setAutoSleepOverlayHidden(overlay, hidden) {
@@ -2169,21 +2101,14 @@
     var displayedHours = autoSleepDisplayedHours(history);
     var policySegments = autoSleepSegments(history), sourceLanes = autoSleepSourceLanes(history), bounds = autoSleepHistoryBounds(history);
     var replacement = el("div", { class: "auto-sleep-chart-snapshot" });
-    if (!policySegments.length) replacement.appendChild(el("div", { class: "auto-sleep-empty", text: autoSleepHistoryError || i18nText("configure.auto_sleep.no_replay_data", "No replay data") }));
+    if (!policySegments.length) replacement.appendChild(el("div", { class: "auto-sleep-empty", text: autoSleepHistoryError || "No replay data" }));
     function span(segment, kind) {
       var start = segment.start_epoch_ms != null ? segment.start_epoch_ms : segment.startEpochMs;
       var end = segment.end_epoch_ms != null ? segment.end_epoch_ms : segment.endEpochMs;
       var state = kind === "policy" ? String(segment.output || "inhibited").toLowerCase() : String(segment.state || "unavailable").toLowerCase();
       var left = Math.max(0, Math.min(100, (start - bounds.start) / Math.max(1, bounds.end - bounds.start) * 100));
       var right = Math.max(left, Math.min(100, (end - bounds.start) / Math.max(1, bounds.end - bounds.start) * 100));
-      var names = {
-        hold_awake: i18nText("configure.auto_sleep.hold_awake", "Hold awake"),
-        allow_sleep: i18nText("configure.auto_sleep.allow_sleep", "Allow sleep"),
-        inhibited: i18nText("configure.auto_sleep.inhibited", "Inhibited"),
-        on: i18nText("configure.auto_sleep.detected", "Detected"),
-        off: i18nText("configure.auto_sleep.clear", "Clear"),
-        unavailable: i18nText("configure.state.unavailable", "Unavailable")
-      };
+      var names = { hold_awake: "Hold awake", allow_sleep: "Allow sleep", inhibited: "Inhibited", on: "Detected", off: "Clear", unavailable: "Unavailable" };
       var node = el("span", { class: "auto-sleep-interval " + state });
       node.style.left = left + "%"; node.style.width = Math.max(.15, right - left) + "%";
       if (right - left >= 9) node.textContent = names[state] || autoSleepHuman(state);
@@ -2196,17 +2121,8 @@
         var state = kind === "policy" ? String(segment.output || "inhibited").toLowerCase() : String(segment.state || "unavailable").toLowerCase();
         counts[state] = (counts[state] || 0) + 1;
       });
-      var names = {
-        hold_awake: i18nText("configure.auto_sleep.hold_awake_lower", "hold awake"),
-        allow_sleep: i18nText("configure.auto_sleep.allow_sleep_lower", "allow sleep"),
-        inhibited: i18nText("configure.auto_sleep.inhibited_lower", "inhibited"),
-        on: i18nText("configure.auto_sleep.detected_lower", "detected"),
-        off: i18nText("configure.auto_sleep.clear_lower", "clear"),
-        unavailable: i18nText("configure.state.unavailable_lower", "unavailable")
-      };
-      var detail = Object.keys(counts).map(function (state) {
-        return i18nText("configure.auto_sleep.interval_count", "{state} {count} interval(s)", { state: names[state] || autoSleepHuman(state), count: counts[state] });
-      }).join(", ");
+      var names = { hold_awake: "hold awake", allow_sleep: "allow sleep", inhibited: "inhibited", on: "detected", off: "clear", unavailable: "unavailable" };
+      var detail = Object.keys(counts).map(function (state) { return (names[state] || autoSleepHuman(state)) + " " + counts[state] + " interval" + (counts[state] === 1 ? "" : "s"); }).join(", ");
       var sourceKey = source && (source.source_key != null ? source.source_key : source.sourceKey);
       sourceKey = String(sourceKey || "").trim();
       var included = !source || source.included !== false;
@@ -2215,22 +2131,18 @@
       function sourceInteractionBlocked() {
         return !!autoSleepSourceUpdating[sourceKey] || autoSleepHistoryBusy();
       }
-      var stateText = source ? (included ? i18nText("configure.auto_sleep.included", "included") : i18nText("configure.auto_sleep.suppressed_lower", "suppressed")) : i18nText("configure.auto_sleep.calculated", "calculated");
-      var labelText = label + (source && !included ? i18nText("configure.auto_sleep.suppressed_suffix", " · Suppressed") : "") + (updating ? i18nText("configure.auto_sleep.updating_suffix", " · Updating…") : "");
+      var stateText = source ? (included ? "included" : "suppressed") : "calculated";
+      var labelText = label + (source && !included ? " · Suppressed" : "") + (updating ? " · Updating…" : "");
       var rowAttrs = {
         class: "auto-sleep-lane " + (kind === "policy" ? "policy" : "source") + (included ? "" : " suppressed") + (updating ? " updating" : ""),
         role: sourceKey ? "button" : "img",
-        "aria-label": i18nText("configure.auto_sleep.lane_label", "{label}{kind}{state}, over {hours} hours: {detail}", {
-          label: label,
-          kind: source ? i18nText("configure.auto_sleep.activity_source_separator", " activity source, ") : i18nText("configure.auto_sleep.result_separator", " result, "),
-          state: stateText, hours: displayedHours, detail: detail || i18nText("configure.auto_sleep.no_intervals", "no intervals")
-        })
+        "aria-label": label + (source ? " activity source, " : " result, ") + stateText + ", over " + displayedHours + " hours: " + (detail || "no intervals")
       };
       if (sourceKey) {
         rowAttrs.tabindex = "0";
         rowAttrs["aria-pressed"] = included ? "true" : "false";
         rowAttrs["aria-disabled"] = interactionBlocked ? "true" : "false";
-        trackAttrs.title = included ? i18nText("configure.auto_sleep.click_suppress", "Click to suppress this source") : i18nText("configure.auto_sleep.click_include", "Click to include this source");
+        trackAttrs.title = included ? "Click to suppress this source" : "Click to include this source";
       }
       var track = el("div", trackAttrs);
       segments.forEach(function (segment) { track.appendChild(span(segment, kind)); });
@@ -2248,9 +2160,9 @@
       return row;
     }
     if (policySegments.length) {
-      replacement.appendChild(lane(i18nText("configure.auto_sleep.calculated_label", "Calculated auto-sleep"), policySegments, "policy"));
+      replacement.appendChild(lane("Calculated auto-sleep", policySegments, "policy"));
       var sources = el("div", { class: "auto-sleep-source-scroll" });
-      sourceLanes.forEach(function (source) { sources.appendChild(lane(source.label || i18nText("configure.auto_sleep.activity_source", "Activity source"), Array.isArray(source.segments) ? source.segments : [], "source", source)); });
+      sourceLanes.forEach(function (source) { sources.appendChild(lane(source.label || "Activity source", Array.isArray(source.segments) ? source.segments : [], "source", source)); });
       replacement.appendChild(sources);
       var axis = el("div", { class: "auto-sleep-axis", "aria-hidden": "true" }, [el("span", { text: "" }), el("div", { class: "auto-sleep-axis-track" })]);
       var axisTrack = axis.lastChild;
@@ -2272,7 +2184,7 @@
     chart.classList.toggle("busy", busy);
     chart.setAttribute("aria-busy", busy ? "true" : "false");
     setAutoSleepOverlayHidden(overlay, !busy || content.getAttribute("data-settled") === "true");
-    var description = autoSleepHistorySummary(policySegments, bounds) + " " + i18nText("configure.auto_sleep.source_lanes_shown", "{count} source lanes are shown.", { count: sourceLanes.length });
+    var description = autoSleepHistorySummary(policySegments, bounds) + " " + sourceLanes.length + " source lanes are shown.";
     var accessible = document.getElementById("auto-sleep-chart-description");
     if (accessible) accessible.textContent = description;
   }
@@ -2327,34 +2239,33 @@
       }).catch(function (error) {
         if (request !== autoSleepHistoryRequest) return;
         if (error && error.status >= 400 && error.status < 500) {
-          autoSleepHistoryError = i18nText("configure.auto_sleep.history_request_failed", "History request failed (HTTP {status}).", { status: error.status });
+          autoSleepHistoryError = "History request failed (HTTP " + error.status + ").";
         }
         else if (error && error.status) {
           retryAutomatically = true;
           autoSleepHistoryWaiting = true;
-          autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_retrying", "Activity history is temporarily unavailable. Retrying automatically…");
+          autoSleepHistoryWaitingMessage = "Activity history is temporarily unavailable. Retrying automatically…";
         }
         else if (error && (error.detail === "runtime_unavailable" || error.detail === "sources_changed")) {
           retryAutomatically = true;
           autoSleepHistoryWaiting = true;
-          autoSleepHistoryWaitingMessage = error.detail === "sources_changed"
-            ? i18nText("configure.auto_sleep.sources_changed", "Activity sources changed. Refreshing history…")
-            : i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
+          autoSleepHistoryWaitingMessage = error.detail === "sources_changed" ?
+            "Activity sources changed. Refreshing history…" : "Preparing activity history…";
         }
-        else if (error && error.detail === "history_auth") autoSleepHistoryError = i18nText("configure.auto_sleep.history_rejected", "Home Assistant rejected the history request. Reconnect Home Assistant.");
+        else if (error && error.detail === "history_auth") autoSleepHistoryError = "Home Assistant rejected the history request. Reconnect Home Assistant.";
         else if (error && (error.detail === "history_transport" || error.detail === "history_unavailable")) {
           retryAutomatically = true;
           autoSleepHistoryWaiting = true;
-          autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.ha_history_retrying", "Home Assistant history is temporarily unavailable. Retrying automatically…");
+          autoSleepHistoryWaitingMessage = "Home Assistant history is temporarily unavailable. Retrying automatically…";
         }
         else if (error && error.name === "TypeError") {
           retryAutomatically = true;
           autoSleepHistoryWaiting = true;
-          autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.panel_reconnecting", "The panel connection changed. Reconnecting activity history…");
+          autoSleepHistoryWaitingMessage = "The panel connection changed. Reconnecting activity history…";
         }
-        else if (error && error.detail === "history_parse") autoSleepHistoryError = i18nText("configure.auto_sleep.history_unreadable", "Home Assistant returned activity history this build could not read.");
-        else if (error && error.detail === "history_limit") autoSleepHistoryError = i18nText("configure.auto_sleep.history_rows_exceeded", "Home Assistant returned more activity history rows than the replay safety bound allows.");
-        else autoSleepHistoryError = i18nText("configure.auto_sleep.response_unreadable", "The activity history response could not be read.");
+        else if (error && error.detail === "history_parse") autoSleepHistoryError = "Home Assistant returned activity history this build could not read.";
+        else if (error && error.detail === "history_limit") autoSleepHistoryError = "Home Assistant returned more activity history rows than the replay safety bound allows.";
+        else autoSleepHistoryError = "The activity history response could not be read.";
         if (!retryAutomatically && autoSleepHistory) autoSleepHistoryHours = autoSleepDisplayedHours(autoSleepHistory);
       }).then(function () {
         if (request !== autoSleepHistoryRequest) return;
@@ -2392,7 +2303,7 @@
     if (values.auto_sleep !== "true" || autoSleepLoading) return;
     autoSleepLoading = true;
     autoSleepHistoryWaiting = true;
-    autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
+    autoSleepHistoryWaitingMessage = "Preparing activity history…";
     autoSleepHistoryError = "";
     updateAutoSleepSummary();
     updateAutoSleepHistory();
@@ -2423,7 +2334,7 @@
         var retryAfterFailure = autoSleepStatusRetryable(autoSleepStatus);
         autoSleepHistoryWaiting = true;
         autoSleepHistoryWaitingMessage = autoSleepAreaTransitioning(autoSleepStatus) || autoSleepHistoryPreparing(autoSleepStatus) ?
-          i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…") : i18nText("configure.auto_sleep.status_waiting", "Waiting for auto-sleep status…");
+          "Preparing activity history…" : "Waiting for auto-sleep status…";
         autoSleepHistoryError = "";
         updateAutoSleepHistory();
         scheduleAutoSleepReadiness(retryAfterFailure);
@@ -2462,9 +2373,9 @@
     function render() {
       btn.classList.toggle("on", on);
       btn.innerHTML = on ? ICON_LINK : ICON_UNLINK;
-      btn.title = on ? i18nText("configure.exposure.hide_title", "Exposed to Home Assistant — click to hide")
-                     : i18nText("configure.exposure.expose_title", "Hidden from Home Assistant — click to expose");
-      btn.setAttribute("aria-label", on ? i18nText("configure.exposure.exposed", "Exposed to Home Assistant") : i18nText("configure.exposure.hidden", "Hidden from Home Assistant"));
+      btn.title = on ? "Exposed to Home Assistant — click to hide"
+                     : "Hidden from Home Assistant — click to expose";
+      btn.setAttribute("aria-label", on ? "Exposed to Home Assistant" : "Hidden from Home Assistant");
       btn.setAttribute("aria-pressed", on ? "true" : "false");
     }
     btn.addEventListener("click", function () { on = !on; expose[f.key] = on; render(); setDirty(f.key, true); });
@@ -2506,9 +2417,9 @@
     if (f.key === "dashboard_zoom") {
       var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })];
       if (f.displaySizingAvailable === true) {
-        helpKids.push(document.createTextNode(i18nText("configure.display.recommend_prefix", " Recommend use ")));
-        helpKids.push(el("a", { href: "/install#cfg-display", text: i18nText("configure.display.sizing", "Display Sizing") }));
-        helpKids.push(document.createTextNode(i18nText("configure.display.recommend_suffix", " for better results")));
+        helpKids.push(document.createTextNode(" Recommend use "));
+        helpKids.push(el("a", { href: "/install#cfg-display", text: "Display Sizing" }));
+        helpKids.push(document.createTextNode(" for better results"));
       }
       help = el("small", {}, helpKids);
     } else if (f.key === "camera_enabled") {
@@ -2534,14 +2445,14 @@
       var shieldTail = el("span", { class: "hardened-label-tail", text: words[words.length - 1] || f.label });
       shieldTail.setAttribute("data-hardened-approval", "conditional");
       shieldTail.setAttribute("aria-describedby", "hardened-approval-conditional-description");
-      shieldTail.setAttribute("title", i18nText("configure.hardened.setting_approval", "Changing this setting may require physical on-panel approval when Hardened mode is enabled."));
+      shieldTail.setAttribute("title", "Changing this setting may require physical on-panel approval when Hardened mode is enabled.");
       labelText.appendChild(shieldTail);
     } else labelText.textContent = f.label;
     var label = el("div", { class: "flabel" }, [
       labelText,
       help,
       Object.prototype.hasOwnProperty.call(applyPending, f.key) ?
-        el("small", { class: "apply-pending-status", text: i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.") }) : null,
+        el("small", { class: "apply-pending-status", text: "Saved desired value; hardware application is pending." }) : null,
     ]);
     // Read-only rows (diagnostic sensors) have no editable value — just the expose-to-HA pip.
     var valueControl = f.readOnly ? null : control(f);
@@ -2550,7 +2461,7 @@
       valueControl.setAttribute("lang", f.labelLanguage);
       if (protectedSetting) {
         valueControl.setAttribute("aria-describedby", "hardened-approval-conditional-description");
-        valueControl.setAttribute("title", i18nText("configure.hardened.setting_approval", "Changing this setting may require physical on-panel approval when Hardened mode is enabled."));
+        valueControl.setAttribute("title", "Changing this setting may require physical on-panel approval when Hardened mode is enabled.");
       }
     }
     var ctl = el("div", { class: "fctl" }, f.readOnly ? [pip(f)] : [pip(f), valueControl]);
@@ -2573,7 +2484,12 @@
 
   function requestJoin(btn) {
     if (!radio || !radio.router_enabled || radioJoined()) return;
-    if (!confirm(i18nText("configure.zigbee.join_confirm", "Enable Permit join in Zigbee2MQTT or ZHA first.\n\nThis will request Repeater mode and begin a new 15-minute joining period. It will not reboot or restart the panel.\n\nPermit join is enabled — request join?"))) return;
+    if (!confirm(
+      "Enable Permit join in Zigbee2MQTT or ZHA first.\n\n" +
+      "This will request Repeater mode and begin a new 15-minute joining period. " +
+      "It will not reboot or restart the panel.\n\n" +
+      "Permit join is enabled — request join?"
+    )) return;
     btn.disabled = true;
     fetch("/api/v1/radio/join", { method: "POST" })
       .then(function (r) {
@@ -2592,7 +2508,7 @@
       })
       .catch(function (e) {
         btn.disabled = false;
-        alert(i18nText("configure.zigbee.join_failed", "Join request failed ({error}).", { error: e }));
+        alert("Join request failed (" + e + ").");
       });
   }
 
@@ -2601,17 +2517,17 @@
     var joined = radioJoined();
     var enabled = radio.router_enabled === true;
     var coolingDown = Date.now() < joinCooldownUntil;
-    var request = el("button", { class: "pbtn", type: "button", text: i18nText("configure.zigbee.request_join", "Request join") });
+    var request = el("button", { class: "pbtn", type: "button", text: "Request join" });
     request.disabled = !enabled || joined || coolingDown;
-    request.title = joined ? i18nText("configure.zigbee.already_joined", "This Zigbee router is already joined.")
-      : !enabled ? i18nText("configure.zigbee.enable_first", "Turn on the Zigbee router switch and save first.")
-      : coolingDown ? i18nText("configure.zigbee.recent_request", "A join request was sent recently.")
-      : i18nText("configure.zigbee.request_help", "Request Repeater mode while coordinator permit-join is open.");
+    request.title = joined ? "This Zigbee router is already joined."
+      : !enabled ? "Turn on the Zigbee router switch and save first."
+      : coolingDown ? "A join request was sent recently."
+      : "Request Repeater mode while coordinator permit-join is open.";
     request.onclick = function () { requestJoin(request); };
     return el("div", { class: "frow", id: "cfg-zigbee_join" }, [
       el("div", { class: "flabel" }, [
-        el("span", { text: i18nText("configure.zigbee.join_network", "Join Zigbee network") }),
-        el("small", { text: i18nText("configure.zigbee.join_help", "Open permit-join on your coordinator, then request Repeater mode.") }),
+        el("span", { text: "Join Zigbee network" }),
+        el("small", { text: "Open permit-join on your coordinator, then request Repeater mode." }),
       ]),
       el("div", { class: "fctl" }, [request]),
     ]);
@@ -2643,24 +2559,6 @@
     "Sensors": "Home Assistant reporting",
     "Diagnostics": "Home Assistant reporting"
   };
-  function groupTitle(group) {
-    var titles = {
-      "Identity": i18nText("configure.group.identity", "Identity"),
-      "MQTT": "MQTT",
-      "Behaviour": i18nText("configure.group.behaviour", "Behaviour"),
-      "Display": i18nText("configure.group.display", "Display"),
-      "Camera": i18nText("configure.group.camera", "Camera"),
-      "System": i18nText("configure.group.system", "System"),
-      "Sensors": i18nText("configure.group.sensors", "Sensors"),
-      "Diagnostics": i18nText("configure.group.diagnostics", "Diagnostics"),
-      "Logging": i18nText("configure.group.logging", "Logging"),
-      "Voice": i18nText("configure.group.voice", "Voice"),
-      "Home Assistant connection": i18nText("configure.group.ha_connection", "Home Assistant connection"),
-      "Dashboard": i18nText("configure.group.dashboard", "Dashboard"),
-      "Built-in renderer": i18nText("configure.group.builtin_renderer", "Built-in renderer")
-    };
-    return Object.prototype.hasOwnProperty.call(titles, group) ? titles[group] : group;
-  }
   var BUILTIN_RENDERER_KEYS = {
     dashboard_entity_learning: true, dashboard_fullscreen: true, dashboard_native_kiosk: true,
     dashboard_idle_return_min: true, dashboard_zoom: true, dashboard_theme: true
@@ -2861,11 +2759,10 @@
         return;
       }
       // Maturity badges on whole cards; Logging is intentionally no longer experimental.
-      var h2kids = [el("span", { text: groupTitle(g) })];
-      if (CARD_NOTES[g]) h2kids.push(el("small", { text: i18nText("configure.group.ha_reporting_note", " · Home Assistant reporting") }));
+      var h2kids = [el("span", { text: g })];
+      if (CARD_NOTES[g]) h2kids.push(el("small", { text: " · " + CARD_NOTES[g] }));
       var badge = CARD_BADGES[g];
-      if (badge) h2kids.push(el("span", { class: "cardbadge " + badge[1], text: badge[0] === "experimental"
-        ? i18nText("configure.badge.experimental", "experimental") : i18nText("configure.badge.skunk_works", "skunk-works") }));
+      if (badge) h2kids.push(el("span", { class: "cardbadge " + badge[1], text: badge[0] }));
       var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       card.setAttribute("data-config-group", g);
       card.setAttribute("data-layout-key", configLayoutKey(g));
@@ -2904,25 +2801,25 @@
           }, 4000);
         }
         var btn = el("button", {
-          class: "pbtn", text: i18nText("configure.renderer.clear_storage", "Clear renderer storage"),
+          class: "pbtn", text: "Clear renderer storage",
           "aria-describedby": "hardened-approval-description",
-          title: i18nText("configure.hardened.action_approval", "Requires physical on-panel approval for this action when Hardened mode is enabled.")
+          title: "Requires physical on-panel approval for this action when Hardened mode is enabled."
         });
         btn.onclick = function () {
-          setClearStatus(i18nText("configure.renderer.clearing", "Clearing…"), false);
+          setClearStatus("Clearing…", false);
           fetch("/api/v1/dashboard/clear-storage", { method: "POST" })
             .then(function (r) { return approvalAwareJson(r).then(function () { return r; }); })
-            .then(function (r) { setClearStatus(r.ok ? i18nText("configure.renderer.clear_requested", "Clear requested.") : i18nText("configure.error.http", "Failed (HTTP {status})", { status: r.status }), r.ok); })
-            .catch(function (error) { setClearStatus(error && error.approvalRequired ? error.message : i18nText("configure.error.network", "Failed (network)"), false); });
+            .then(function (r) { setClearStatus(r.ok ? "Clear requested." : "Failed (HTTP " + r.status + ")", r.ok); })
+            .catch(function (error) { setClearStatus(error && error.approvalRequired ? error.message : "Failed (network)", false); });
         };
         card.appendChild(el("div", { class: "frow" }, [
           el("div", { class: "flabel" }, [
             el("span", {
-              text: i18nText("configure.renderer.storage", "Renderer storage"), "data-hardened-approval": "",
+              text: "Renderer storage", "data-hardened-approval": "",
               "aria-describedby": "hardened-approval-description",
-              title: i18nText("configure.hardened.action_approval", "Requires physical on-panel approval for this action when Hardened mode is enabled.")
+              title: "Requires physical on-panel approval for this action when Hardened mode is enabled."
             }),
-            el("small", { text: i18nText("configure.renderer.clear_storage_help", "Clear cached dashboard data. Keeps sign-in.") }),
+            el("small", { text: "Clear cached dashboard data. Keeps sign-in." }),
           ]),
           el("div", { class: "fctl" }, [btn, st]),
         ]));
@@ -2944,7 +2841,7 @@
       updateAutoSleepHistory();
     }
     document.getElementById("cfg-status").style.display = shown ? "none" : "block";
-    if (!shown) document.getElementById("cfg-status").textContent = i18nText("configure.empty", "No settings in this view.");
+    if (!shown) document.getElementById("cfg-status").textContent = "No settings in this view.";
     if (retainedAutoSleepFocus && retainedAutoSleepFocus.isConnected && document.activeElement !== retainedAutoSleepFocus) {
       try { retainedAutoSleepFocus.focus({ preventScroll: true }); }
       catch (_) { retainedAutoSleepFocus.focus(); }
@@ -2998,9 +2895,8 @@
         break;
       }
       if (!control) continue;
-      var message = field.min != null && field.max != null
-        ? i18nText("configure.validation.range", "{label} must be between {min} and {max}.", { label: field.label, min: field.min, max: field.max })
-        : i18nText("configure.validation.invalid", "{label} has an invalid value.", { label: field.label });
+      var range = field.min != null && field.max != null ? " between " + field.min + " and " + field.max : "";
+      var message = range ? field.label + " must be" + range + "." : field.label + " has an invalid value.";
       return { field: field, control: control, message: message };
     }
     return null;
@@ -3034,7 +2930,7 @@
         body.set("ha_expose_" + f.key, submittedExpose[f.key] ? "true" : "false");
       }
     });
-    msg.textContent = i18nText("configure.save.saving", "Saving…");
+    msg.textContent = "Saving…";
     fetch("/api/v1/config", {
       method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
@@ -3049,7 +2945,7 @@
       });
     })
       .then(function (outcome) {
-        var outcomeMessage = outcome && outcome.message || i18nText("configure.save.saved", "Saved.");
+        var outcomeMessage = outcome && outcome.message || "Saved.";
         var autoBrightnessSourceChanged = Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_ha_entity");
         if (autoBrightnessSourceChanged) beginAutoBrightnessSourceTransition(submittedValues.auto_brightness_ha_entity);
         Object.keys(submittedValues).forEach(function (key) { savedValues[key] = submittedValues[key]; });
@@ -3080,15 +2976,14 @@
           }
           msg.textContent = dirty ?
             ((outcome && outcome.pending && outcome.pending.length) ?
-              i18nText("configure.save.outcome_newer_changes", "{outcome} Newer changes still need saving.", { outcome: outcomeMessage })
-              : i18nText("configure.save.saved_newer_changes", "Saved; newer changes still need saving.")) :
+              outcomeMessage + " Newer changes still need saving." : "Saved; newer changes still need saving.") :
             outcomeMessage;
           if (autoSleepInputsChanged && values.auto_sleep === "true") setTimeout(loadAutoSleepData, 0);
           if (autoBrightnessSourceChanged) setTimeout(function () { loadAutoBrightnessData(true); }, 0);
           return;
         }
         saving = false;
-        msg.textContent = i18nText("configure.save.saving", "Saving…"); clearDirty();
+        msg.textContent = "Saving…"; clearDirty();
         // The optional Presence & wake card is server-rendered only while Wake on wave is enabled.
         if (localeDocumentReloadPending || Object.prototype.hasOwnProperty.call(submittedValues, "wake_on_wave")) {
           reloadForSavedLocale();
@@ -3098,7 +2993,7 @@
         // "reconnecting…" string hanging (it reads as stuck even though the save is done).
         // Clear before load(): its render pass is the single owner that schedules enabled status.
         load(function (ok) {
-          msg.textContent = ok ? outcomeMessage : i18nText("configure.save.reload_failed", "Saved (reload failed — refresh the page).");
+          msg.textContent = ok ? outcomeMessage : "Saved (reload failed — refresh the page).";
           var autoBrightnessSettingChanged = Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness") ||
               Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_minimum_percent") ||
               Object.prototype.hasOwnProperty.call(submittedValues, "auto_brightness_response_percent") ||
@@ -3147,7 +3042,7 @@
             updateSaveUi();
           }, false);
         } else {
-          msg.textContent = e && e.message ? e.message : i18nText("configure.save.failed", "Save failed.");
+          msg.textContent = e && e.message ? e.message : "Save failed.";
           updateSaveUi();
         }
       });
@@ -3210,9 +3105,8 @@
       loadDiscoverySuggestions();
       loadHomeDashboards();
       if (!done && Object.keys(applyPending).length) {
-        document.getElementById("cfg-msg").textContent = i18nText("configure.save.waiting_to_apply", "Saved settings waiting to apply: {settings}.", {
-          settings: Object.keys(applyPending).join(", ")
-        });
+        document.getElementById("cfg-msg").textContent =
+          "Saved settings waiting to apply: " + Object.keys(applyPending).join(", ") + ".";
       }
       scheduleApplyPendingPoll();
       if (refreshAutoSleepPrerequisite !== false) scheduleAutoSleepPrerequisite();
@@ -3222,7 +3116,7 @@
       consumeLocaleReloadMessage();
       if (done) done(true);
     }).catch(function (e) {
-      document.getElementById("cfg-status").textContent = i18nText("configure.load_failed", "Could not load settings ({error}).", { error: e });
+      document.getElementById("cfg-status").textContent = "Could not load settings (" + e + ").";
       consumeLocaleReloadMessage();
       if (done) done(false);
     });
@@ -3328,7 +3222,7 @@
           if (!dirty) {
             load(function (ok) {
               if (ok && !nextKeys.length) {
-                document.getElementById("cfg-msg").textContent = i18nText("configure.save.now_applied", "Saved settings are now applied.");
+                document.getElementById("cfg-msg").textContent = "Saved settings are now applied.";
               }
             }, false, false);
             return;
@@ -3341,14 +3235,14 @@
             var status = label.querySelector(".apply-pending-status");
             if (Object.prototype.hasOwnProperty.call(next, key)) {
               if (!status) label.appendChild(el("small", {
-                class: "apply-pending-status", text: i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.")
+                class: "apply-pending-status", text: "Saved desired value; hardware application is pending."
               }));
             } else if (status) status.remove();
           });
           syncBehaviourCardSignature();
           if (!nextKeys.length) {
             var msg = document.getElementById("cfg-msg");
-            msg.textContent = i18nText("configure.save.applied_newer_changes", "Saved settings are now applied; newer changes still need saving.");
+            msg.textContent = "Saved settings are now applied; newer changes still need saving.";
           }
         })
         .catch(function () {})
@@ -3406,10 +3300,10 @@
         scheduleAutoSleepPrerequisite();
         if (values.auto_sleep === "true") setTimeout(loadAutoSleepData, 0);
         loadHaUserStatus();
-        document.getElementById("cfg-msg").textContent = i18nText("configure.oauth.configured", "Home Assistant configured.");
+        document.getElementById("cfg-msg").textContent = "Home Assistant configured.";
       } else {
         haOauthTargetUrl = "";
-        setHaOauthStatus(i18nText("configure.oauth.not_completed", "Sign-in was not completed. Start again."), false);
+        setHaOauthStatus("Sign-in was not completed. Start again.", false);
         syncHaOAuthAvailability();
       }
   }

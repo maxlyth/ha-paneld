@@ -13,7 +13,7 @@ class ProfileUiSourceTest {
 
     @Test
     fun profileTabIsPrimaryFullWidthLocalAndRestartExplicit() {
-        assertTrue("tab(\"profiles\", \"/profiles\", strings.get(\"shell.nav.profile\"))" in server)
+        assertTrue("tab(\"profiles\", \"/profiles\", \"Profile\")" in server)
         assertTrue("get(\"/profiles\")" in server)
         assertTrue("profile-workspace" in server)
         assertTrue("Confirm and restart" in script)
@@ -107,7 +107,7 @@ class ProfileUiSourceTest {
 
     @Test
     fun profileReferencesAreSeparateVisibleDestinationSafeLinks() {
-        assertTrue("dashboard.profile_note.prefix" in server)
+        assertTrue("Values declared by this panel's" in server)
         assertFalse("if one looks wrong, that's where to correct it" in server)
         assertTrue("id=\"profile-links\"" in server)
         assertTrue("aria-label=\"Profile references\"" in server)

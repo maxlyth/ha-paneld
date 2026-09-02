@@ -55,7 +55,7 @@ class AutoBrightnessUiContractTest {
         assertTrue("the region must break on missing data rather than bridge it", "if (span.length && slot - span[span.length - 1] !== bucketMinutes)" in source && "spans.forEach" in source)
         assertTrue("the region must be painted before the day lines", source.indexOf("rgba(74,158,255,.15)") < source.indexOf("day.age < autoBrightnessLineDays()"))
         assertFalse("the retired per-day envelope must not linger", "style.band" in source)
-        assertTrue("visible detail must describe individually drawn days and the weekly range", "configure.brightness.days_drawn" in source && "earlier history shown as weekly range" in source)
+        assertTrue("visible detail must describe individually drawn days and the weekly range", "\" days\") + \" drawn individually\"" in source && "earlier history shown as weekly range" in source)
         assertFalse("visible detail must not describe the retired seven-line fade", "overlaid · older days fade" in source)
         assertTrue("canvas accessibility text must describe the current encoding", "the three most recent days drawn individually, with the rest of the week shown as a shaded minimum-to-maximum range" in source)
         // A faint mark loses hue toward the ground, so a more heavily blurred day needs more chroma to
@@ -87,7 +87,7 @@ class AutoBrightnessUiContractTest {
         assertTrue("chart bitmap must be redrawn after layout changes", "setTimeout(drawAutoBrightnessChart, 100)" in source)
         assertTrue("sensitivity edits must reproject history", "f.key === \"auto_brightness_response_percent\"" in source)
         assertTrue("history must echo the sensitivity used for its projection", "put(\"sensitivity\", previewSensitivity)" in service)
-        assertTrue("the chart must identify the sensitivity used for its proposed line", "configure.brightness.sensitivity" in source && "percent: projectionSensitivity" in source)
+        assertTrue("the chart must identify the sensitivity used for its proposed line", "Sensitivity \" + projectionSensitivity" in source)
         assertTrue("minimum edits must reproject history", "f.key === \"auto_brightness_minimum_percent\"" in source)
         assertTrue("minimum preview must use the server projection", "&minimum_percent=" in source)
         // A bound copied into this file drifts from the registry silently, and the failure mode is not
@@ -105,7 +105,7 @@ class AutoBrightnessUiContractTest {
         assertTrue("manual pause hand-back must be explicit", "/api/v1/auto-brightness/resume" in source)
         assertTrue("history reset must require confirmation", "Delete the seven-day ambient-light history" in source)
         assertTrue("saving a changed adaptive setting must refresh runtime truth", "hasOwnProperty.call(submittedValues, \"auto_brightness_ha_entity\")" in source)
-        assertTrue("save rejection must show the server's actionable reason", "e && e.message ? e.message : i18nText(\"configure.save.failed\", \"Save failed.\")" in source)
+        assertTrue("save rejection must show the server's actionable reason", "e && e.message ? e.message : \"Save failed.\"" in source)
         assertTrue("invalid numeric controls must be stopped before the custom fetch", "firstInvalidDirtySetting()" in source && "invalid.control.reportValidity" in source)
         assertTrue("enabled history must refresh on its five-minute bucket cadence", "AUTO_BRIGHTNESS_REFRESH_MS = 5 * 60 * 1000" in source)
         assertTrue("disabled or hidden auto-brightness must not schedule chart polling", "values.auto_brightness !== \"true\" || document.hidden" in source)
@@ -131,10 +131,10 @@ class AutoBrightnessUiContractTest {
     @Test fun `adaptive chart identifies its source and sample freshness`() {
         val source = asset("configure.js").readText()
 
-        assertTrue("chart summary must explicitly name its selected source", "configure.brightness.state_source" in source && "source: autoBrightnessSelectedSource()" in source)
+        assertTrue("chart summary must explicitly name its selected source", "Source: \" + autoBrightnessSelectedSource()" in source)
         assertTrue("freshness must come from the newest persisted epoch minute", "latestEpochMinute" in source && "latest * 60000" in source)
         assertTrue("freshness must include a local human-readable timestamp", "date.toLocaleString()" in source)
-        assertTrue("freshness must state relative age", "configure.time.minutes_ago" in source && "configure.time.days_ago" in source)
+        assertTrue("freshness must state relative age", "ageMinutes + \" min ago\"" in source && "Math.floor(ageMinutes / 1440) + \" days ago\"" in source)
         assertTrue("the chart detail must display freshness", "detail += \" · \" + autoBrightnessFreshness()" in source)
         assertTrue("transition state must be concise and live", "Updating ambient-light source…" in source && "Loading new source history…" in source)
     }

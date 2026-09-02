@@ -136,13 +136,6 @@ class DeepLAdapterTest(unittest.TestCase):
             DEEPL._source_digest(self.target_dir / "de.json"),
         )
 
-    def test_plan_admits_web_surface_records(self):
-        self.source["strings"]["settings.gamma.label"]["surface"] = "dashboard"
-        write_json(self.source_path, self.source)
-        plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["de"], REVISION, set())
-        records = {item["key"]: item for item in plan["batches"][0]["records"]}
-        self.assertEqual("dashboard", records["settings.gamma.label"]["surface"])
-
     def test_plan_rejects_a_missing_or_malformed_base_target(self):
         (self.target_dir / "de.json").unlink()
         with self.assertRaisesRegex(DEEPL.DeepLError, "base target catalogue is missing"):

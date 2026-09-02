@@ -132,10 +132,6 @@ class AssetSyntaxTest {
               'scheduleAutoSleepReadiness','loadAutoSleepHistory','invalidateAutoSleepHistory',
               'invalidateAutoSleepData','autoSleepDisplayedHours','loadAutoSleepData'
             ].map(take).join('\n'));
-            // The extracted functions normally inherit the page helper. This harness deliberately
-            // exercises their English behavior without loading the complete Configure document.
-            global.i18nText=(key,fallback,values)=>String(fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g,
-              (placeholder,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):placeholder);
             global.values={auto_sleep:'true'};
             global.autoSleepStatus=null;global.autoSleepLoading=false;global.autoSleepRequest=0;
             global.autoSleepHistory=null;global.autoSleepHistoryLoading=false;global.autoSleepHistoryError='';

@@ -10,15 +10,15 @@ class RemoteControlsLayoutContractTest {
     private val openApi = File("src/main/assets/openapi.json").readText()
 
     @Test fun `controls omit volume and lead the second row with Dashboard`() {
-        val controls = source.substringAfter("private fun controlsHtml(s: Snap?, strings: AppStrings): String")
-            .substringBefore("private fun infoJson(strings: AppStrings)")
+        val controls = source.substringAfter("private fun controlsHtml(s: Snap?): String")
+            .substringBefore("private fun infoJson()")
         val secondary = controls.substringAfter("<div class=\"ctlrow ctlrow-secondary\">")
             .substringBefore("</div>\"\"\"")
 
         assertFalse(controls.contains("pbtn(\"voldn\""))
         assertFalse(controls.contains("pbtn(\"volup\""))
-        assertTrue(secondary.contains("strings.get(\"dashboard.controls.dashboard\")"))
-        assertTrue(secondary.contains("strings.get(\"dashboard.controls.reload\")"))
+        assertTrue(secondary.contains("<span class=\\\"lbl\\\"> Dashboard</span>"))
+        assertTrue(secondary.contains("↻ Reload"))
         assertFalse(secondary.contains("Home Assistant"))
         assertTrue(secondary.indexOf("pbtn(\"dashboard\"") < secondary.indexOf("pbtn(\"reload\""))
     }

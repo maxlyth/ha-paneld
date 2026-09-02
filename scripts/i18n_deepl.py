@@ -524,7 +524,7 @@ def _validate_plan(plan: dict[str, Any]) -> None:
                 or not record["english"]
                 or not isinstance(record["sourceHash"], str)
                 or record["sourceHash"] != catalogue.source_hash(record["english"])
-                or record["surface"] not in catalogue.SOURCE_SURFACES
+                or record["surface"] != "settings"
                 or not isinstance(record["context"], str)
                 or not record["context"].strip()
                 or record["risk"] not in {"ordinary", "setup", "consequential"}

@@ -120,19 +120,6 @@ class CatalogueTest(unittest.TestCase):
             parsed = i18n.validate_source(source_path)
             i18n.validate_target(target_path, parsed)
 
-    def test_web_surface_is_admitted_but_unknown_surface_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            source_path = Path(directory) / "en.json"
-            source = self.source()
-            source["strings"]["settings.example.help"]["surface"] = "shell"
-            self.write(source_path, source)
-            self.assertEqual("shell", i18n.validate_source(source_path)["strings"]["settings.example.help"]["surface"])
-
-            source["strings"]["settings.example.help"]["surface"] = "typo"
-            self.write(source_path, source)
-            with self.assertRaises(i18n.CatalogueError):
-                i18n.validate_source(source_path)
-
     def test_duplicate_key_and_changed_placeholder_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

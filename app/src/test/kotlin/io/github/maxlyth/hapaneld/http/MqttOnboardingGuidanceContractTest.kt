@@ -75,7 +75,7 @@ class MqttOnboardingGuidanceContractTest {
     @Test fun theConfigureTabShowsMqttVerificationProgress() {
         // Verification runs asynchronously after the save returns, and Configure is where the user is.
         val banners = server.substring(
-            server.indexOf("private fun configureSetupBanners(strings: AppStrings)"),
+            server.indexOf("private fun configureSetupBanners()"),
             server.indexOf("private fun profilesBody()"),
         )
         assertTrue(banners.contains("SetupBanner.progress("))

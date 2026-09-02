@@ -35,11 +35,6 @@ data class LocalizedText(
     val language: String,
 )
 
-private val SOURCE_SURFACES = setOf(
-    "settings", "shell", "dashboard", "configure", "setup", "profiles", "entities", "install", "logs",
-    "fleet", "api",
-)
-
 /** Parsed, validated English source catalogue. */
 class SourceCatalogue private constructor(
     val locale: String,
@@ -73,7 +68,7 @@ class SourceCatalogue private constructor(
                 require(text.isNotEmpty()) { "$key has empty English text" }
                 val hash = record.getString("sourceHash")
                 require(hash == sourceHash(text)) { "$key sourceHash does not match its English text" }
-                require(record.getString("surface") in SOURCE_SURFACES) { "$key has unsupported surface" }
+                require(record.getString("surface") == "settings") { "$key has unsupported surface" }
                 require(record.getString("context").isNotBlank()) { "$key has no context" }
                 require(record.getString("risk") in setOf("ordinary", "setup", "consequential")) {
                     "$key has invalid risk"
@@ -153,20 +148,10 @@ class Strings(
     private val target: TargetCatalogue? = null,
     private val pseudo: Boolean = false,
 ) {
-    /** Locale of the selected valid target catalogue, even when individual keys fall back to English. */
-    val requestedLocale: String get() = when {
-        pseudo -> AppLocale.PSEUDO
-        target != null -> target.locale
-        else -> AppLocale.ENGLISH
-    }
-
-    /** Effective locale of the original Settings proof surface; retained for schema compatibility. */
     val locale: String get() = when {
         pseudo -> AppLocale.PSEUDO
         target?.strings?.let { translated ->
-            source.strings
-                .filterKeys { it.startsWith("settings.") }
-                .all { (key, value) ->
+            source.strings.all { (key, value) ->
                 translated[key]?.let { candidate ->
                     candidate.sourceHash == value.sourceHash &&
                         (candidate.state == TranslationState.MACHINE_CROSS_CHECKED ||
@@ -177,29 +162,11 @@ class Strings(
         else -> AppLocale.ENGLISH
     }
 
-    val languages: List<String> get() = languages(emptySet())
-
-    /** Languages actually emitted for the selected prefixes; an empty set means the whole catalogue. */
-    fun languages(prefixes: Set<String>): List<String> {
-        if (prefixes.isNotEmpty()) requireCataloguePrefixes(prefixes)
-        return source.strings.keys
-            .asSequence()
-            .filter { key -> prefixes.isEmpty() || prefixes.any(key::startsWith) }
-            .mapTo(linkedSetOf()) { resolve(it).language }
-            .sorted()
-    }
+    val languages: List<String> get() = source.strings.keys
+        .mapTo(linkedSetOf()) { resolve(it).language }
+        .sorted()
 
     fun get(key: String): String = resolve(key).text
-
-    /** Resolve only keys owned by one of the supplied catalogue prefixes, in canonical key order. */
-    fun resolved(prefixes: Set<String>): Map<String, LocalizedText> {
-        if (prefixes.isEmpty()) return emptyMap()
-        requireCataloguePrefixes(prefixes)
-        return source.strings.keys
-            .asSequence()
-            .filter { key -> prefixes.any(key::startsWith) }
-            .associateWithTo(linkedMapOf(), ::resolve)
-    }
 
     fun resolve(key: String): LocalizedText {
         val english = source.text(key)
@@ -217,12 +184,6 @@ class Strings(
             TranslationState.MACHINE_DRAFT,
             -> LocalizedText(english, AppLocale.ENGLISH)
         }
-    }
-}
-
-private fun requireCataloguePrefixes(prefixes: Set<String>) {
-    require(prefixes.all { it.matches(Regex("[a-z0-9][a-z0-9._-]*\\.")) }) {
-        "catalogue prefixes must be non-empty namespace prefixes ending in a dot"
     }
 }
 

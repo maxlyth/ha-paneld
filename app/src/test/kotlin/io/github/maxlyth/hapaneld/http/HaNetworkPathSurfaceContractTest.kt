@@ -123,7 +123,7 @@ class HaNetworkPathSurfaceContractTest {
         val telemetry = TestSources.kotlin("dashboard/DashboardTelemetry.kt").readText()
         val classify = telemetry.substringAfter("private fun classify(").substringBefore("private fun histogramPercentile")
         assertTrue(classify.indexOf("NETWORK_PATH_CAUSE") < classify.indexOf("\"state_stream\""))
-        assertTrue(info.contains("${HaNetworkPathPresentation.LIKELY_CAUSE}:i18nText('dashboard.cause.ha_network_path','Network path to Home Assistant')"))
+        assertTrue(info.contains("${HaNetworkPathPresentation.LIKELY_CAUSE}:'Network path to Home Assistant'"))
         assertTrue(perf.contains("takeIf { it.degraded }"))
     }
 

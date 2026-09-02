@@ -86,8 +86,9 @@ class AdminUiAssetContractTest {
         val route = server.substringAfter("post(\"/inspect/start\")").substringBefore("post(\"/inspect/stop\")")
         assertTrue(route.indexOf("rejectHardenedDevToolsRelay") < route.indexOf("authorizeSensitive"))
         assertTrue(server.contains("devtools-incompatible-with-hardened-mode"))
+        assertTrue(server.contains("Unavailable while Hardened mode is enabled"))
+
         val info = File(assetsDir, "info.js").readText()
-        assertTrue(info.contains("i18nText('dashboard.inspect.hardened_disabled','Unavailable while Hardened mode is enabled."))
         assertTrue(info.contains("d.status==='hardened-disabled'"))
         assertTrue(info.contains("start.disabled=d.start_allowed===false"))
     }
