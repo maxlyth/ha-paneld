@@ -64,6 +64,7 @@ apk_files=()
 support_files=()
 index_files=()
 entry_files=()
+legacy_index_jar=
 entry_jar=
 uploaded_apks=()
 for file in "${all_files[@]}"; do
@@ -71,6 +72,9 @@ for file in "${all_files[@]}"; do
   case "$key" in
     fdroid/repo/*.apk)
       apk_files+=("$file")
+      ;;
+    fdroid/repo/index-v1.jar)
+      legacy_index_jar="$file"
       ;;
     fdroid/repo/index*)
       index_files+=("$file")
@@ -93,6 +97,10 @@ if [ "${#apk_files[@]}" -eq 0 ]; then
 fi
 if [ -z "$entry_jar" ]; then
   echo "F-Droid publication contains no signed entry.jar." >&2
+  exit 1
+fi
+if [ -z "$legacy_index_jar" ]; then
+  echo "F-Droid publication contains no signed index-v1.jar." >&2
   exit 1
 fi
 
@@ -185,14 +193,20 @@ upload_file() {
 
 snapshot_file() {
   local file="$1"
-  local key destination object_status
+  local key destination head_file head object_status
 
   key="${file#"$site_dir"/}"
   destination="$rollback_dir/$key"
-  if object_head "$key" >/dev/null 2>&1; then
+  head_file="$rollback_dir/.heads/${#rollback_keys[@]}.json"
+  if head="$(object_head "$key" 2>/dev/null)"; then
     mkdir -p "${destination%/*}"
+    mkdir -p "${head_file%/*}"
     aws_r2 s3 cp "s3://$EXPECTED_BUCKET/$key" "$destination" --only-show-errors --no-progress
-    rollback_files+=("$destination")
+    printf '%s\n' "$head" > "$head_file"
+    rollback_states+=(present)
+    rollback_backups+=("$destination")
+    rollback_heads+=("$head_file")
+    rollback_keys+=("$key")
     return
   fi
   if object_exists "$key"; then
@@ -205,24 +219,132 @@ snapshot_file() {
       return 1
     fi
   fi
+  rollback_states+=(absent)
+  rollback_backups+=("")
+  rollback_heads+=("")
+  rollback_keys+=("$key")
+}
+
+delete_object() {
+  aws_r2 s3api delete-object --bucket "$EXPECTED_BUCKET" --key "$1" >/dev/null
+}
+
+verify_absent() {
+  local key="$1"
+  local object_status
+
+  object_exists "$key"
+  object_status=$?
+  case "$object_status" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+restore_snapshot() {
+  local index="$1"
+  local key state backup head_file cache type sha size restored_head restored_sha restored_size
+
+  key="${rollback_keys[$index]}"
+  state="${rollback_states[$index]}"
+  if [ "$state" = absent ]; then
+    echo "remove $key" >&2
+    if ! delete_object "$key"; then
+      return 1
+    fi
+    if ! verify_absent "$key"; then
+      return 1
+    fi
+    return 0
+  fi
+
+  backup="${rollback_backups[$index]}"
+  head_file="${rollback_heads[$index]}"
+  cache="$(jq -r '.CacheControl // empty' "$head_file")"
+  type="$(jq -r '.ContentType // empty' "$head_file")"
+  sha="$(jq -r '.Metadata.sha256 // empty' "$head_file")"
+  [ -n "$cache" ] || cache="$MUTABLE_CACHE"
+  [ -n "$type" ] || type="$(content_type "$key")"
+  [ -n "$sha" ] || sha="$(sha256sum "$backup" | awk '{print $1}')"
+  size="$(wc -c < "$backup" | tr -d ' ')"
+
+  echo "restore $key" >&2
+  if ! aws_r2 s3 cp "$backup" "s3://$EXPECTED_BUCKET/$key" \
+      --only-show-errors --no-progress \
+      --content-type "$type" \
+      --cache-control "$cache" \
+      --metadata "sha256=$sha"; then
+    return 1
+  fi
+  if ! restored_head="$(object_head "$key")"; then
+    return 1
+  fi
+  restored_sha="$(jq -r '.Metadata.sha256 // empty' <<<"$restored_head")"
+  restored_size="$(jq -r '.ContentLength // empty' <<<"$restored_head")"
+  [ "$restored_sha" = "$sha" ] && [ "$restored_size" = "$size" ]
 }
 
 rollback_publication() {
-  local backup key sha failed
+  local failed discovery_hidden index root_index
+  local -a discovery_indexes
 
   failed=false
-  for backup in "${rollback_files[@]}"; do
-    key="${backup#"$rollback_dir"/}"
-    sha="$(sha256sum "$backup" | awk '{print $1}')"
-    echo "restore $key" >&2
-    if ! aws_r2 s3 cp "$backup" "s3://$EXPECTED_BUCKET/$key" \
-      --only-show-errors --no-progress \
-      --content-type "$(content_type "$key")" \
-      --cache-control "$MUTABLE_CACHE" \
-      --metadata "sha256=$sha"; then
+  discovery_hidden=true
+  discovery_indexes=()
+  for index in "${!rollback_keys[@]}"; do
+    case "${rollback_keys[$index]}" in
+      fdroid/repo/index-v1.jar|fdroid/repo/entry.jar)
+        discovery_indexes+=("$index")
+        ;;
+    esac
+  done
+
+  # Both signed indexes are direct discovery roots. Prove that every root is absent before changing
+  # anything it can reference; a partial hide must not start an underlying rollback.
+  for root_index in "${discovery_indexes[@]}"; do
+    echo "hide ${rollback_keys[$root_index]}" >&2
+    if ! delete_object "${rollback_keys[$root_index]}" ||
+       ! verify_absent "${rollback_keys[$root_index]}"; then
+      echo "Rollback could not prove ${rollback_keys[$root_index]} is hidden." >&2
+      discovery_hidden=false
+    fi
+  done
+  if [ "$discovery_hidden" = false ]; then
+    echo "Underlying objects were left unchanged because every discovery root could not be hidden." >&2
+    return 1
+  fi
+
+  for index in "${!rollback_keys[@]}"; do
+    case "${rollback_keys[$index]}" in
+      fdroid/repo/index-v1.jar|fdroid/repo/entry.jar) continue ;;
+    esac
+    if ! restore_snapshot "$index"; then
+      echo "Rollback action failed for ${rollback_keys[$index]}." >&2
       failed=true
     fi
   done
+
+  # Restore the legacy root and then entry.jar only after every dependency is coherent. If either
+  # root restore fails, re-hide both: a successfully restored first root is not safe on its own.
+  if [ "$failed" = false ]; then
+    for root_index in "${discovery_indexes[@]}"; do
+      if ! restore_snapshot "$root_index"; then
+        echo "Rollback action failed for ${rollback_keys[$root_index]}." >&2
+        failed=true
+        break
+      fi
+    done
+  fi
+  if [ "$failed" = true ]; then
+    for root_index in "${discovery_indexes[@]}"; do
+      echo "leave ${rollback_keys[$root_index]} hidden because rollback is incomplete" >&2
+      if ! delete_object "${rollback_keys[$root_index]}" ||
+         ! verify_absent "${rollback_keys[$root_index]}"; then
+        echo "Rollback could not re-hide ${rollback_keys[$root_index]}." >&2
+      fi
+    done
+  fi
   [ "$failed" = false ]
 }
 
@@ -231,7 +353,7 @@ handle_failure() {
   trap - ERR INT TERM HUP
   set +e
   if [ "$rollback_active" = true ]; then
-    echo "F-Droid publication failed; restoring the previous signed index set." >&2
+    echo "F-Droid publication failed; restoring the previous mutable repository state." >&2
     rollback_publication || echo "F-Droid rollback failed; the repository requires immediate repair." >&2
   fi
   rm -rf "$rollback_dir"
@@ -312,7 +434,10 @@ elif ! grep -Eiq 'AccessDenied|Forbidden|403' <<<"$forbidden_output"; then
 fi
 
 rollback_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ha-paneld-fdroid-rollback.XXXXXX")"
-rollback_files=()
+rollback_keys=()
+rollback_states=()
+rollback_backups=()
+rollback_heads=()
 rollback_active=false
 trap 'handle_failure $?' ERR
 trap 'handle_failure 129' HUP
@@ -320,23 +445,28 @@ trap 'handle_failure 130' INT
 trap 'handle_failure 143' TERM
 
 # APK names are versioned and must never change bytes. Everything referenced by an index is present
-# before any signed index is replaced. Other generated files are mutable and bypass edge caching.
+# before any mutable object is replaced. APKs uploaded by a failed run are safe to retain because no
+# restored or absent signed discovery roots can discover them.
 for file in "${apk_files[@]}"; do
   upload_file "$file" "$IMMUTABLE_CACHE" true
   if [ "$last_upload_performed" = true ]; then
     uploaded_apks+=("$file")
   fi
 done
+
+# Snapshot every mutable object before the first mutable write. A missing key is a real rollback
+# state: if this publication fails, any object newly created at that key must be deleted again.
+for file in "${support_files[@]}" "${index_files[@]}" "${entry_files[@]}" "$legacy_index_jar" "$entry_jar"; do
+  snapshot_file "$file"
+done
+rollback_active=true
+
+# Generated support files are mutable too. They are part of the same transaction as the signed index
+# set so a failed changed publication cannot leave a new landing page, icon or status file behind.
 for file in "${support_files[@]}"; do
   upload_file "$file" "$MUTABLE_CACHE" false
 done
 
-# Preserve the currently signed index set so normal command failures and termination signals can put
-# it back. Newly introduced index files need no deletion: the previous entry.jar cannot reference them.
-for file in "${index_files[@]}" "${entry_files[@]}" "$entry_jar"; do
-  snapshot_file "$file"
-done
-rollback_active=true
 for file in "${index_files[@]}"; do
   upload_file "$file" "$MUTABLE_CACHE" false
 done
@@ -344,7 +474,9 @@ for file in "${entry_files[@]}"; do
   upload_file "$file" "$MUTABLE_CACHE" false
 done
 
-# entry.jar is the signed index-v2 discovery commit and is deliberately the final write.
+# Publish both signed discovery roots only after their dependencies. entry.jar is the index-v2
+# discovery commit and remains the final write.
+upload_file "$legacy_index_jar" "$MUTABLE_CACHE" false
 upload_file "$entry_jar" "$MUTABLE_CACHE" false
 
 for file in "${all_files[@]}"; do
@@ -352,7 +484,7 @@ for file in "${all_files[@]}"; do
 done
 
 verify_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ha-paneld-fdroid-verify.XXXXXX")"
-for file in "${index_files[@]}" "${entry_files[@]}" "$entry_jar"; do
+for file in "${index_files[@]}" "${entry_files[@]}" "$legacy_index_jar" "$entry_jar"; do
   verify_public_file "$file" 'no-store'
 done
 if [ "${#uploaded_apks[@]}" -eq 0 ]; then
