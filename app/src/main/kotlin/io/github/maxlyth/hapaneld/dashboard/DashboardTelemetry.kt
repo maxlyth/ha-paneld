@@ -168,7 +168,7 @@ object DashboardTelemetry {
         rendererMainPct: Double?,
         networkPath: String? = null,
     ): Pair<String, String> {
-        // A measured slow or lossy path to Home Assistant is named BEFORE any in-panel burden: every
+        // A measured lossy path to Home Assistant is named BEFORE any in-panel burden: every
         // server-backed action waits on that path, so entity filtering, card JavaScript and panel CPU
         // are not to be blamed while the round trip itself is the bottleneck.
         when (networkPath) {

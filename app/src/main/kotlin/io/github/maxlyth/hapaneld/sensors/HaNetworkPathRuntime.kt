@@ -37,7 +37,7 @@ internal class HaNetworkPathMonitor(
     private val path: HaNetworkPath = HaNetworkPath(),
 ) : HaNetworkPathObserver {
     private val lock = Any()
-    private var lastReported: Pair<Boolean, HaNetworkPathSeverity>? = null
+    private var lastReported: Triple<Boolean, Boolean, HaNetworkPathSeverity>? = null
 
     override fun onSocketState(state: HaSocketState) = mutate { path.onSocketState(state) }
 

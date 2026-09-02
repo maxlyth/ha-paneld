@@ -78,12 +78,15 @@ class HaNetworkPathTest {
         assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
     }
 
-    @Test fun twoSpikesInAWindowAreAWarningAndTheP95ReportsThem() {
+    @Test fun twoSpikesInAWindowAreAResponsivenessWarningAndNeverAPathVerdict() {
         path.onSocketState(HaSocketState.LIVE)
         val end = replay(0L, List(28) { 10L } + listOf(300L, 400L))
         val snap = path.snapshot(end)
         assertEquals(300L, snap.p95Ms)
-        assertEquals(HaNetworkPathSeverity.WARNING, snap.severity)
+        assertEquals(HaNetworkPathSeverity.WARNING, snap.responsiveness)
+        // Nothing was lost, so nothing may be said about the path.
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
+        assertFalse(snap.degraded)
     }
 
     @Test fun oneIsolatedTimeoutIsVisibleEvidenceButNeverAnAlarm() {
@@ -107,26 +110,47 @@ class HaNetworkPathTest {
         assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
     }
 
-    @Test fun sustainedLatencyOverAHundredMillisecondsIsAWarningNotSevere() {
+    @Test fun sustainedLatencyOverAHundredMillisecondsIsAResponsivenessWarningNotSevere() {
         path.onSocketState(HaSocketState.LIVE)
         val end = replay(0L, List(30) { 120L + (it % 5) * 40L })
         val snap = path.snapshot(end)
         assertTrue(snap.p95Ms > HaNetworkPath.WARN_P95_MS)
         assertTrue(snap.p95Ms <= HaNetworkPath.SEVERE_P95_MS)
-        assertEquals(HaNetworkPathSeverity.WARNING, snap.severity)
+        assertEquals(HaNetworkPathSeverity.WARNING, snap.responsiveness)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
         assertEquals(0, snap.networkFailures)
+    }
+
+    /**
+     * The defining assertion of this lane. A working Wi-Fi link can measure a p50 in the tens of
+     * milliseconds and a p95 in the low hundreds while losing nothing at all, because the round trip
+     * also contains the server's own answer time and this panel's scheduling. The old rule called
+     * that a degraded network. Nothing here may raise a path verdict.
+     */
+    @Test fun aSlowServerOnAnIntactPathIsNeverAPathVerdict() {
+        path.onSocketState(HaSocketState.LIVE)
+        val end = replay(0L, List(30) { 36L + (it % 6) * 60L })
+        val snap = path.snapshot(end)
+        assertEquals(0, snap.networkFailures)
+        assertEquals(0.0, snap.lossPercent, 0.001)
+        assertTrue("p95 ${snap.p95Ms} should exceed the responsiveness line", snap.p95Ms > HaNetworkPath.WARN_P95_MS)
+        assertEquals(HaNetworkPathSeverity.WARNING, snap.responsiveness)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
+        assertFalse("a lossless path must never raise the prominent warning", snap.degraded)
     }
 
     @Test fun theThresholdsAreStrictSoExactlyOnTheLineIsNotOverIt() {
         path.onSocketState(HaSocketState.LIVE)
         val atWarn = replay(0L, List(30) { HaNetworkPath.WARN_P95_MS })
         assertEquals(HaNetworkPath.WARN_P95_MS, path.snapshot(atWarn).p95Ms)
-        assertEquals(HaNetworkPathSeverity.HEALTHY, path.snapshot(atWarn).severity)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, path.snapshot(atWarn).responsiveness)
         val severePath = HaNetworkPath().apply { onSocketState(HaSocketState.LIVE) }
         var t = 0L
         repeat(30) { severePath.onRoundTrip(t, HaNetworkPath.SEVERE_P95_MS); t += interval }
         assertEquals(HaNetworkPath.SEVERE_P95_MS, severePath.snapshot(t).p95Ms)
-        assertEquals(HaNetworkPathSeverity.WARNING, severePath.snapshot(t).severity)
+        assertEquals(HaNetworkPathSeverity.WARNING, severePath.snapshot(t).responsiveness)
+        // Neither line is a path claim at any value.
+        assertEquals(HaNetworkPathSeverity.HEALTHY, severePath.snapshot(t).severity)
     }
 
     @Test fun repeatedMultiSecondRepliesWithTimeoutsMatchTheReportedDegradedCase() {
@@ -135,18 +159,23 @@ class HaNetworkPathTest {
         val trace = listOf<Long?>(2_200L, null, 5_900L, 3_100L, null, 4_400L, 2_600L, null, 5_200L, 3_800L)
         val end = replay(0L, trace)
         val snap = path.snapshot(end)
-        assertEquals(HaNetworkPathSeverity.SEVERE, snap.severity)
+        // Three of ten probes lost IS path evidence, so this case still raises the prominent warning.
+        assertEquals(HaNetworkPathSeverity.WARNING, snap.severity)
+        assertEquals(HaNetworkPathSeverity.SEVERE, snap.responsiveness)
         assertEquals(3, snap.networkFailures)
         assertTrue(snap.p95Ms > HaNetworkPath.SEVERE_P95_MS)
         assertEquals(5_900L, snap.maxMs)
     }
 
-    @Test fun repeatedMultiSecondRepliesAloneAreSevereWithoutAnyTimeout() {
+    @Test fun repeatedMultiSecondRepliesAloneAreAResponsivenessVerdictWithoutAnyTimeout() {
         path.onSocketState(HaSocketState.LIVE)
         val end = replay(0L, List(30) { 2_200L + (it % 4) * 900L })
         val snap = path.snapshot(end)
         assertEquals(0, snap.networkFailures)
-        assertEquals(HaNetworkPathSeverity.SEVERE, snap.severity)
+        assertEquals(HaNetworkPathSeverity.SEVERE, snap.responsiveness)
+        // Every probe came back. However slow, that is a server observation, not a lost packet.
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
+        assertFalse(snap.degraded)
     }
 
     @Test fun twoConsecutiveTimeoutsAreSevereAtAnyWindowSize() {
@@ -216,7 +245,10 @@ class HaNetworkPathTest {
         assertEquals(2, snap.networkFailures)
         assertEquals(0, snap.consecutiveFailures)
         assertTrue(snap.lossPercent > HaNetworkPath.SEVERE_LOSS_PERCENT)
-        assertEquals(HaNetworkPathSeverity.SEVERE, snap.severity)
+        // Loss is genuine path evidence, so it warns; SEVERE is reserved for a consecutive run, which
+        // is the stronger claim because it survived a teardown and reconnect.
+        assertEquals(HaNetworkPathSeverity.WARNING, snap.severity)
+        assertTrue(snap.degraded)
     }
 
     @Test fun aHomeAssistantRestartOnAHealthyPathIsNeverLoss() {
@@ -290,11 +322,13 @@ class HaNetworkPathTest {
         val recovering = path.snapshot(t)
         assertEquals(0, recovering.consecutiveFailures)
         assertEquals(2, recovering.networkFailures)
-        assertEquals(HaNetworkPathSeverity.SEVERE, recovering.severity)
+        // The run has ended, so the verdict steps down from severe to the loss-share warning rather
+        // than clearing outright: the two misses are still inside the window and still evidence.
+        assertEquals(HaNetworkPathSeverity.WARNING, recovering.severity)
         // Exactly at the window boundary the first miss is still inside and the pair still exceeds
-        // five percent; one millisecond later only one miss remains, which is diagnostic, not severe.
+        // five percent; one millisecond later only one miss remains, which is diagnostic, not a verdict.
         val boundary = firstMissAt + HaNetworkPath.WINDOW_MS
-        assertEquals(HaNetworkPathSeverity.SEVERE, path.snapshot(boundary).severity)
+        assertEquals(HaNetworkPathSeverity.WARNING, path.snapshot(boundary).severity)
         val cleared = path.snapshot(boundary + 1L)
         assertEquals(HaNetworkPathSeverity.HEALTHY, cleared.severity)
         assertEquals(1, cleared.networkFailures)
@@ -362,5 +396,64 @@ class HaNetworkPathTest {
         assertEquals(3, snap.roundTrips)
         assertEquals(10L, snap.p95Ms)
         assertEquals(25.0, snap.lossPercent, 0.01)
+    }
+
+    // ---- startup settling -------------------------------------------------------------------
+    //
+    // A wired panel can report a p95 in the hundreds of milliseconds while its real path is around
+    // one, if it is still loading: the WebView, the first paint and the entity hydration all compete
+    // for the cores the socket's reader thread needs. Nothing observed then describes the path.
+
+    private fun settlingPath(startAtMs: Long = 0L) = HaNetworkPath(processStartElapsedMs = startAtMs)
+        .apply { onSocketState(HaSocketState.LIVE) }
+
+    @Test fun observationsInsideTheStartupWindowAreDiscardedEntirely() {
+        val p = settlingPath()
+        var t = 0L
+        // Ten probes at the ten-second cadence is 100 s, comfortably inside the three-minute window.
+        repeat(10) { p.onRoundTrip(t, 592L); t += interval }
+        p.onFailure(t, HaPathFailureKind.NETWORK)
+        val snap = p.snapshot(t)
+        assertTrue(snap.settling)
+        assertEquals(0, snap.probes)
+        assertEquals(0, snap.roundTrips)
+        assertEquals(0, snap.networkFailures)
+        // Not merely unreported: the run counter and the reply stamp are kept outside the sample
+        // store, so a gate that only guarded the store would leave these two moving.
+        assertEquals(0, snap.consecutiveFailures)
+        assertEquals(-1L, snap.lastRoundTripAgeMs)
+    }
+
+    @Test fun theStartupWindowReportsSettlingRatherThanHealthyOrUnmeasured() {
+        val p = settlingPath()
+        val snap = p.snapshot(HaNetworkPath.STARTUP_SETTLE_MS - 1L)
+        assertTrue(snap.measuring)
+        assertTrue(snap.settling)
+        // Claiming health it has not measured, or claiming no socket while holding one, are both lies.
+        assertFalse(snap.degraded)
+        assertEquals(HaNetworkPathPresentation.SETTLING, HaNetworkPathPresentation.statusText(snap))
+        assertEquals(" ha_net=settling", HaNetworkPathPresentation.healthToken(snap))
+        assertEquals("[ha-network] state=settling measuring=true", HaNetworkPathPresentation.diagnosticLine(snap))
+    }
+
+    @Test fun onceSettledTheVerdictIsFormedFromPostStartupProbesOnly() {
+        val p = settlingPath()
+        var t = 0L
+        repeat(10) { p.onRoundTrip(t, 5_000L); t += interval }
+        t = HaNetworkPath.STARTUP_SETTLE_MS
+        repeat(30) { p.onRoundTrip(t, 9L); t += interval }
+        val snap = p.snapshot(t)
+        assertFalse(snap.settling)
+        assertEquals(30, snap.roundTrips)
+        assertEquals(9L, snap.maxMs)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.severity)
+        assertEquals(HaNetworkPathSeverity.HEALTHY, snap.responsiveness)
+    }
+
+    @Test fun theStartupGateIsOffByDefaultSoAnArbitraryOriginMeasuresWhatItSays() {
+        path.onSocketState(HaSocketState.LIVE)
+        val end = replay(0L, List(5) { 10L })
+        assertFalse(path.snapshot(end).settling)
+        assertEquals(5, path.snapshot(end).roundTrips)
     }
 }

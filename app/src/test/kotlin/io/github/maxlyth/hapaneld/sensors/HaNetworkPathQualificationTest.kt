@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicReference
 class HaNetworkPathQualificationTest {
     private lateinit var server: FakeHaServer
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val pokes = ConcurrentLinkedQueue<Pair<Boolean, HaNetworkPathSeverity>>()
+    private val pokes = ConcurrentLinkedQueue<Triple<Boolean, Boolean, HaNetworkPathSeverity>>()
     private lateinit var monitor: HaNetworkPathMonitor
     private lateinit var owner: HaExactEntityStreamOwner
 
@@ -99,7 +99,7 @@ class HaNetworkPathQualificationTest {
         assertTrue("p95 ${snap.p95Ms} on loopback", snap.p95Ms in 0L..HaNetworkPath.WARN_P95_MS)
         assertEquals(0, snap.networkFailures)
         assertEquals(0, snap.serverFailures)
-        assertTrue(pokes.contains(true to HaNetworkPathSeverity.HEALTHY))
+        assertTrue(pokes.contains(Triple(true, false, HaNetworkPathSeverity.HEALTHY)))
     }
 
     @Test fun sustainedLatencyOnTheRealSocketIsAWarningAndMultiSecondRepliesAreSevere() {

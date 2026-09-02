@@ -17,7 +17,7 @@ import org.junit.Test
 class HaNetworkPathRuntimeTest {
     private var now = 0L
     private var restarting = false
-    private val pokes = mutableListOf<Pair<Boolean, HaNetworkPathSeverity>>()
+    private val pokes = mutableListOf<Triple<Boolean, Boolean, HaNetworkPathSeverity>>()
     private val monitor = HaNetworkPathMonitor(
         nowMs = { now },
         haRestarting = { restarting },
@@ -46,18 +46,22 @@ class HaNetworkPathRuntimeTest {
     @Test fun theMonitorPokesOnlyWhenTheVerdictChanges() {
         val m = installed()
         m.onSocketState(HaSocketState.LIVE)
-        assertEquals(listOf(true to HaNetworkPathSeverity.HEALTHY), pokes)
+        assertEquals(listOf(Triple(true, false, HaNetworkPathSeverity.HEALTHY)), pokes)
         now += 10_000L; m.onRoundTrip(8L)
         now += 10_000L; m.onRoundTrip(9L)
         assertEquals(1, pokes.size)
         now += 10_000L; m.onProbeTimeout()
         assertEquals(1, pokes.size)
         now += 15_000L; m.onProbeTimeout()
-        assertEquals(listOf(true to HaNetworkPathSeverity.HEALTHY, true to HaNetworkPathSeverity.SEVERE), pokes)
+        assertEquals(listOf(
+                Triple(true, false, HaNetworkPathSeverity.HEALTHY),
+                Triple(true, false, HaNetworkPathSeverity.SEVERE),
+            ),
+            pokes)
         now += 1_000L; m.onConnectionFailure(HaPathFailureKind.NETWORK)
         assertEquals(2, pokes.size)
         m.onSocketState(HaSocketState.STOPPED)
-        assertEquals(false to HaNetworkPathSeverity.HEALTHY, pokes.last())
+        assertEquals(Triple(false, false, HaNetworkPathSeverity.HEALTHY), pokes.last())
         assertEquals(3, pokes.size)
     }
 
@@ -105,7 +109,7 @@ class HaNetworkPathRuntimeTest {
     @Test fun aTimeOnlyRecoveryIsPokedFromTheReadThatObservesItExactlyOnce() {
         // Recovery is samples ageing out, which is time passing rather than an event. The polled web
         // surfaces re-render from every read; the native chip is poke-driven, so without a poke here
-        // it would keep showing "HA network slow" after the web page had already recovered.
+        // it would keep showing the panel chip after the web page had already recovered.
         val m = installed()
         m.onSocketState(HaSocketState.LIVE)
         now += 1_000L; m.onProbeTimeout()
@@ -120,7 +124,7 @@ class HaNetworkPathRuntimeTest {
         now += 2_001L
         assertEquals(HaNetworkPathSeverity.HEALTHY, HaNetworkPathRuntime.snapshot()!!.severity)
         assertEquals(pokesBefore + 1, pokes.size)
-        assertEquals(true to HaNetworkPathSeverity.HEALTHY, pokes.last())
+        assertEquals(Triple(true, false, HaNetworkPathSeverity.HEALTHY), pokes.last())
         // Idempotent: further reads of the same state poke nothing, so the redraw cannot loop.
         repeat(3) { HaNetworkPathRuntime.snapshot() }
         assertEquals(pokesBefore + 1, pokes.size)
@@ -170,7 +174,8 @@ class HaNetworkPathRuntimeTest {
 
     private fun degraded(severity: HaNetworkPathSeverity, misses: Int, p95: Long): HaNetworkPath.Snapshot =
         HaNetworkPath.Snapshot(
-            measuring = true, socketLive = true, severity = severity, windowMs = HaNetworkPath.WINDOW_MS, probes = 30,
+            measuring = true, settling = false, socketLive = true, severity = severity,
+            responsiveness = severity, windowMs = HaNetworkPath.WINDOW_MS, probes = 30,
             roundTrips = 30 - misses, networkFailures = misses, serverFailures = 1, authFailures = 0,
             p50Ms = 35L, p95Ms = p95, maxMs = 5_900L, jitterMs = 310L,
             lossPercent = misses * 100.0 / 30, consecutiveFailures = 0, lastRoundTripAgeMs = 4_000L,
@@ -181,11 +186,17 @@ class HaNetworkPathRuntimeTest {
         val idle = HaNetworkPath().snapshot(0L)
         assertEquals("", HaNetworkPathPresentation.healthToken(idle))
         val snap = degraded(HaNetworkPathSeverity.SEVERE, misses = 3, p95 = 4_200L)
-        assertEquals(" ha_net=severe ha_net_p95=4200 ha_net_n=30 ha_net_miss=3 ha_net_age=4000", HaNetworkPathPresentation.healthToken(snap))
+        assertEquals(" ha_net=severe ha_resp=severe ha_net_p95=4200 ha_net_n=30 ha_net_miss=3 ha_net_age=4000", HaNetworkPathPresentation.healthToken(snap))
         val healthy = degraded(HaNetworkPathSeverity.HEALTHY, misses = 0, p95 = 23L)
-        assertEquals(" ha_net=healthy ha_net_p95=23 ha_net_n=30 ha_net_miss=0 ha_net_age=4000", HaNetworkPathPresentation.healthToken(healthy))
+        assertEquals(
+            " ha_net=healthy ha_resp=healthy ha_net_p95=23 ha_net_n=30 ha_net_miss=0 ha_net_age=4000",
+            HaNetworkPathPresentation.healthToken(healthy),
+        )
         val fresh = HaNetworkPath().apply { onSocketState(HaSocketState.LIVE) }.snapshot(0L)
-        assertEquals(" ha_net=healthy ha_net_p95=-1 ha_net_n=0 ha_net_miss=0 ha_net_age=-1", HaNetworkPathPresentation.healthToken(fresh))
+        assertEquals(
+            " ha_net=healthy ha_resp=healthy ha_net_p95=-1 ha_net_n=0 ha_net_miss=0 ha_net_age=-1",
+            HaNetworkPathPresentation.healthToken(fresh),
+        )
     }
 
     @Test fun theDiagnosticsRowWordsEachVerdictFromTheSameEvidence() {
@@ -196,11 +207,11 @@ class HaNetworkPathRuntimeTest {
             HaNetworkPathPresentation.statusText(degraded(HaNetworkPathSeverity.HEALTHY, 0, 23L)),
         )
         assertEquals(
-            "slow; p95 240 ms, no misses in the last 5 min",
+            "losing probes; Home Assistant answering slowly; p95 240 ms, no misses in the last 5 min",
             HaNetworkPathPresentation.statusText(degraded(HaNetworkPathSeverity.WARNING, 0, 240L)),
         )
         assertEquals(
-            "severely degraded; p95 4,200 ms, 3 of 30 probes missed in the last 5 min",
+            "failing; Home Assistant answering very slowly; p95 4,200 ms, 3 of 30 probes missed in the last 5 min",
             HaNetworkPathPresentation.statusText(degraded(HaNetworkPathSeverity.SEVERE, 3, 4_200L)),
         )
         val measuringButEmpty = HaNetworkPath().apply { onSocketState(HaSocketState.LIVE) }.snapshot(0L)
@@ -229,7 +240,8 @@ class HaNetworkPathRuntimeTest {
     @Test fun theDiagLineIsTerseHostFreeAndAlwaysPresent() {
         val snap = degraded(HaNetworkPathSeverity.SEVERE, misses = 3, p95 = 4_200L)
         assertEquals(
-            "[ha-network] state=severe measuring=true socket=live window=5m probes=30 round_trips=27 p50=35 p95=4200 " +
+            "[ha-network] state=severe responsiveness=severe measuring=true socket=live window=5m probes=30 " +
+                "round_trips=27 p50=35 p95=4200 " +
                 "max=5900 jitter=310 loss=10.0% consecutive=0 server_errors=1 auth_errors=0 last_reply_age=4000",
             HaNetworkPathPresentation.diagnosticLine(snap),
         )

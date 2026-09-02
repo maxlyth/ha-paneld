@@ -122,6 +122,7 @@ import io.github.maxlyth.hapaneld.sensors.HaExactEntityStreamOwner
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleCoordinator
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
+import io.github.maxlyth.hapaneld.sensors.HaNetworkPath
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathMonitor
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathRuntime
 import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
@@ -1145,6 +1146,10 @@ class PaneldService : Service() {
                 }
             },
             onChanged = { BuiltinDashboard.onHaLifecycleChanged() },
+            // Startup is a known high-latency period whose figures describe this panel's own load
+            // rather than the path, so observations inside it are discarded rather than judged. The
+            // process start is read on the same monotonic clock every probe is stamped with.
+            path = HaNetworkPath(processStartElapsedMs = android.os.Process.getStartElapsedRealtime()),
         )
         HaNetworkPathRuntime.install(haNetworkPath)
         haExactEntityStream.bindNetworkPath(haNetworkPath)

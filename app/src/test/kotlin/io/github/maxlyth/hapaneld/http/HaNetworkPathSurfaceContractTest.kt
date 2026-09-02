@@ -87,6 +87,10 @@ class HaNetworkPathSurfaceContractTest {
         // Absent token: banner hidden, row emptied; no default verdict is invented.
         assertTrue(banner.contains("if (!text) { b.style.display = \"none\"; }"))
         assertTrue(banner.contains("if (!state) { row.textContent = \"\"; return; }"))
+        // Responsiveness is a clause in the same row and can never raise the banner: the banner text
+        // table is keyed on the PATH state alone and has no responsiveness entry.
+        assertTrue(banner.contains("var clause = HA_RESP_CLAUSE[resp]"))
+        assertFalse("latency must not reach the banner", banner.contains("HA_NET_TEXT[resp]"))
     }
 
     @Test fun theScriptAndTheKotlinPresentationShareOneCopy() {
@@ -163,7 +167,7 @@ class HaNetworkPathSurfaceContractTest {
         val document = JSONObject(TestSources.asset("openapi.json").readText())
         val health = document.getJSONObject("paths").getJSONObject("/api/v1/health")
             .getJSONObject("get").getJSONObject("responses").getJSONObject("200").getString("description")
-        listOf("ha_net=", "ha_net_p95=", "ha_net_n=", "ha_net_miss=", "ha_net_age=").forEach {
+        listOf("ha_net=", "ha_resp=", "ha_net_p95=", "ha_net_n=", "ha_net_miss=", "ha_net_age=").forEach {
             assertTrue("OpenAPI must name the $it token", health.contains(it))
         }
         HaNetworkPathSeverity.entries.forEach { assertTrue(health.contains(it.wireValue)) }
@@ -174,10 +178,13 @@ class HaNetworkPathSurfaceContractTest {
         assertTrue(schema.getJSONObject("properties").has("ha_network"))
         assertTrue(schema.getJSONArray("required").toString().contains("\"ha_network\""))
         val component = document.getJSONObject("components").getJSONObject("schemas").getJSONObject("HaNetworkPath")
-        listOf("measuring", "state", "socket", "p95_ms", "loss_percent", "consecutive_failures", "server_failures", "last_round_trip_age_ms").forEach {
-            assertTrue(component.getJSONObject("properties").has(it))
+        listOf(
+            "measuring", "state", "responsiveness", "settling", "socket", "p95_ms", "loss_percent",
+            "consecutive_failures", "server_failures", "last_round_trip_age_ms",
+        ).forEach {
+            assertTrue("OpenAPI must document the $it property", component.getJSONObject("properties").has(it))
         }
         val states = component.getJSONObject("properties").getJSONObject("state").getJSONArray("enum").toString()
-        listOf("idle", "healthy", "warning", "severe").forEach { assertTrue(states.contains("\"$it\"")) }
+        listOf("idle", "settling", "healthy", "warning", "severe").forEach { assertTrue(states.contains("\"$it\"")) }
     }
 }

@@ -60,10 +60,10 @@ assert.equal(ids.hanetbar.className, 'setup');
 assert.equal(ids.hanetbar.innerHTML, '', 'textContent only');
 assert.equal(
   ids.hanetbar.textContent,
-  '⚠ The network path to Home Assistant is slow: p95 240 ms, no misses in the last 5 min. '
-  + 'Dashboard actions will lag. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.',
+  '⚠ Probes to Home Assistant are going missing: p95 240 ms, no misses in the last 5 min. '
+  + 'Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.',
 );
-assert.equal(ids.hanetcell.textContent, 'slow; p95 240 ms, no misses in the last 5 min');
+assert.equal(ids.hanetcell.textContent, 'losing probes; p95 240 ms, no misses in the last 5 min');
 // The lifecycle pair on the same line is untouched by the network tokens.
 assert.equal(ids.halifebar.style.display, 'none');
 
@@ -72,14 +72,14 @@ await poll(base + ' ha_net=severe ha_net_p95=4200 ha_net_n=30 ha_net_miss=3');
 assert.equal(ids.hanetbar.className, 'setup crit');
 assert.equal(
   ids.hanetbar.textContent,
-  '⚠ The network path to Home Assistant is severely degraded: p95 4,200 ms, 3 of 30 probes missed in the last 5 min. '
-  + 'Dashboard actions will lag. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.',
+  '⚠ The network path to Home Assistant is failing: p95 4,200 ms, 3 of 30 probes missed in the last 5 min. '
+  + 'Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.',
 );
-assert.equal(ids.hanetcell.textContent, 'severely degraded; p95 4,200 ms, 3 of 30 probes missed in the last 5 min');
+assert.equal(ids.hanetcell.textContent, 'failing; p95 4,200 ms, 3 of 30 probes missed in the last 5 min');
 
 // 5. Severe with nothing answering at all: p95 is -1 and the wording says so rather than "-1 ms".
 await poll(base + ' ha_net=severe ha_net_p95=-1 ha_net_n=4 ha_net_miss=4');
-assert.equal(ids.hanetcell.textContent, 'severely degraded; no reply, 4 of 4 probes missed in the last 5 min');
+assert.equal(ids.hanetcell.textContent, 'failing; no reply, 4 of 4 probes missed in the last 5 min');
 
 // 6. Measuring with no probe yet: honest, not "0 ms".
 await poll(base + ' ha_net=healthy ha_net_p95=-1 ha_net_n=0 ha_net_miss=0 ha_net_age=-1');
@@ -101,5 +101,28 @@ await poll(base + ' ha_net=severe ha_net_p95=4200 ha_net_n=30 ha_net_miss=3');
 await poll(base);
 assert.equal(ids.hanetbar.style.display, 'none');
 assert.equal(ids.hanetcell.textContent, '');
+
+
+// ---- the lane's defining browser cases -------------------------------------------------------
+// A slow server on an intact path fills the response row and leaves the banner hidden. This is the
+// exact shape that told a wired panel, whose real path was around a millisecond, that its
+// network was slow.
+await poll(base + ' ha_net=healthy ha_resp=warning ha_net_p95=592 ha_net_n=30 ha_net_miss=0');
+assert.equal(ids.hanetbar.style.display, 'none');
+assert.equal(ids.hanetcell.textContent, 'healthy; Home Assistant answering slowly; p95 592 ms, no misses in the last 5 min');
+
+await poll(base + ' ha_net=healthy ha_resp=severe ha_net_p95=4200 ha_net_n=30 ha_net_miss=0');
+assert.equal(ids.hanetbar.style.display, 'none');
+assert.equal(ids.hanetcell.textContent, 'healthy; Home Assistant answering very slowly; p95 4,200 ms, no misses in the last 5 min');
+
+// Settling: measured, but no verdict yet, and never a banner.
+await poll(base + ' ha_net=settling');
+assert.equal(ids.hanetbar.style.display, 'none');
+assert.equal(ids.hanetcell.textContent, 'settling after startup; no verdict yet');
+
+// Loss still raises the banner: that is the evidence the prominence is reserved for.
+await poll(base + ' ha_net=warning ha_resp=healthy ha_net_p95=30 ha_net_n=30 ha_net_miss=2');
+assert.notEqual(ids.hanetbar.style.display, 'none');
+assert.equal(ids.hanetcell.textContent, 'losing probes; p95 30 ms, 2 of 30 probes missed in the last 5 min');
 
 console.log('ha network banner cases passed');
