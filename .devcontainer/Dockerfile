@@ -14,8 +14,15 @@ ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk \
     DEBIAN_FRONTEND=noninteractive
 
+# make and a host C compiler are build dependencies, not conveniences. helper/Makefile compiles the
+# daemon and its test binaries with `cc` (GNU ld `--wrap`), and Gradle's buildHelperSocketTestServer
+# task runs `make socket-test-server` ahead of every unit-test task on Linux, so without them every
+# JVM test fails before a single test runs. gcc registers the `cc` alternative and brings binutils;
+# libc6-dev is named for the headers rather than left to a recommendation. ninja and the SDK's cmake
+# serve the CMake native library and are unrelated to this path.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl unzip git ninja-build file \
+        make gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # arm64 dev hosts only: enable x86_64 (amd64) multi-arch so the official x86_64 SDK build-tools + NDK
