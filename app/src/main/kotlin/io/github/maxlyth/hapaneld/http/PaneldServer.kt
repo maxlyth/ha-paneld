@@ -6745,7 +6745,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val displaySizingAvailable = caps.canSetDisplay
         // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
         // no editable value but still render an expose pip, so the user can opt them into HA.
-        val schemaSpecs = SettingsRegistry.SPECS.filter { (!it.readOnly || it.ha != null) && !it.hidden }
+        val schemaSpecs = SettingsRegistry.schemaVisibleSpecs()
         val items = schemaSpecs.joinToString(",") { spec ->
             val opts = spec.optionsFor(caps).joinToString(",") { s(it) }
             val isHa = spec.ha != null

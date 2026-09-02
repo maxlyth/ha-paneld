@@ -25,6 +25,18 @@ import java.util.Locale
  */
 object SettingsRegistry {
 
+    /**
+     * The specs the generated Configure form is built from.
+     *
+     * Settable settings plus the read-only HA sensors, which carry no editable value but still render an
+     * expose pip. `hidden` specs are excluded outright: that is what makes a setting API-only, and with
+     * every spec of a group hidden the group has no fields and therefore renders no card at all. The
+     * Voice group relies on exactly that to ship unsurfaced, so this predicate is a release-visibility
+     * decision and not merely a rendering detail.
+     */
+    fun schemaVisibleSpecs(): List<SettingSpec> =
+        SPECS.filter { (!it.readOnly || it.ha != null) && !it.hidden }
+
     /** Bump whenever the persisted shape changes; drives bundle migration. */
     const val SCHEMA = 10
     const val MAX_PANEL_ID_CHARS = 63
@@ -671,17 +683,35 @@ object SettingsRegistry {
             ),
         ),
         // ---- Voice -------------------------------------------------------------------------------
-        // Local wake-word listening + Home Assistant Assist pipeline selection. Every spec here
-        // requires hasMicrophone, so a panel with no microphone — or one that declines a misreported
-        // capability (the gen-1 NSPanel Pro advertises FEATURE_MICROPHONE with no actual mic) — never
-        // sees the group. The pipeline runtime itself is a separate lane; this is the settings/HTTP/HA
-        // surface it drives, seamed behind AssistPipelineDirectory and VoiceTestTrigger.
+        // Local wake-word listening + Home Assistant Assist pipeline selection.
+        //
+        // Every spec here is `hidden`, so the feature ships with no Configure card at all while its
+        // direction is still open. The schema route drops hidden specs, the form is built from the
+        // schema, and a group with no fields renders no card — so hiding the seven removes the card, its
+        // skunk-works badge and the wake-word pipeline picker's fetch together, with no second gate to
+        // keep in step and nothing to remember to undo elsewhere.
+        //
+        // Hidden is not disabled. The values stay readable on GET /api/v1/config, settable on POST, and
+        // carried in config bundles, which is what lets a single panel be brought up for acceptance over
+        // HTTP while nothing is advertised to anyone else. Both HA-capable specs below are
+        // haExposedByDefault = false and the card was the only route to opting them in, so no Home
+        // Assistant entity appears either. To surface the feature, delete the `hidden = true` lines;
+        // nothing else is holding it back.
+        //
+        // The specs also require hasMicrophone, which is a hardware gate rather than a release one and
+        // outlives this. Note the profile truth it reads was corrected on 2026-08-31: the NSPanel Pro
+        // does have a working microphone, on the PDM device's channels 2 and 3, and the earlier
+        // "advertises a microphone it does not have" reading was a mis-shaped capture, not a lying
+        // feature flag.
+        //
+        // The pipeline runtime itself is a separate lane; this is the settings/HTTP/HA surface it
+        // drives, seamed behind AssistPipelineDirectory and VoiceTestTrigger.
         SettingSpec(
             key = "voice_enabled", type = SettingType.BOOL, group = "Voice",
             label = "Voice assistant", default = "false", tier = Tier.ADVANCED, scope = Scope.DEVICE,
             liveApply = true,
             help = "Run the on-panel wake-word listener and send recognised speech to Home Assistant Assist.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
             haExposedByDefault = false,
             ha = HaEntity(
                 "switch", "voice_assistant", "Voice assistant",
@@ -694,7 +724,7 @@ object SettingsRegistry {
             maxChars = 512,
             help = "Up to two local wake-word models to listen for, as a JSON array: " +
                 "${VOICE_WAKE_WORDS.joinToString(", ")}.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
             validate = ::validateVoiceWakeWords,
         ),
         SettingSpec(
@@ -703,7 +733,7 @@ object SettingsRegistry {
             maxChars = 2_048,
             help = "Which Home Assistant Assist pipeline each configured wake word triggers, as a JSON " +
                 "object of wake word to pipeline id. An empty value uses Home Assistant's preferred pipeline.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
             validate = ::validateVoicePipelines,
         ),
         SettingSpec(
@@ -712,7 +742,7 @@ object SettingsRegistry {
             options = listOf("voice_recognition", "mic", "voice_communication"),
             tier = Tier.ADVANCED, scope = Scope.DEVICE,
             help = "Android audio source the wake-word listener records from.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
         ),
         SettingSpec(
             key = "voice_sensitivity", type = SettingType.ENUM, group = "Voice",
@@ -722,7 +752,7 @@ object SettingsRegistry {
             help = "Wake-word detector threshold, applied as an offset to the model's cutoff score. Low " +
                 "requires a clearer match (fewer false wakes, more likely to miss a quiet or distant call); " +
                 "High matches more readily (faster to wake, more false triggers). Normal applies no offset.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
         ),
         SettingSpec(
             key = "voice_mic_gain_db", type = SettingType.INT, group = "Voice",
@@ -735,14 +765,14 @@ object SettingsRegistry {
                 "quiet signal on its own and speech-to-text does not. Raise this if commands are missed " +
                 "or mistranscribed while the wake word works. Wake-word detection is deliberately left " +
                 "on the unamplified signal.",
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
         ),
         SettingSpec(
             key = "voice_state", type = SettingType.STRING, group = "Voice",
             label = "Voice assistant state", default = "",
             help = "Current voice-assistant phase: off, idle, listening, processing, responding or error.",
             haExposedByDefault = false,
-            availableWhen = { it.hasMicrophone },
+            availableWhen = { it.hasMicrophone }, hidden = true,
             ha = HaEntity(
                 "sensor", "voice_state", "Voice assistant state",
                 """"state_topic":"ha-paneld/{panel}/voice_state/state","icon":"mdi:microphone-message","entity_category":"diagnostic"""",

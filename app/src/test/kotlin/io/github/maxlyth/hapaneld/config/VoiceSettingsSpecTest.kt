@@ -14,8 +14,10 @@ class VoiceSettingsSpecTest {
     private val sensitivity = requireNotNull(SettingsRegistry.spec("voice_sensitivity"))
     private val voiceState = requireNotNull(SettingsRegistry.spec("voice_state"))
 
+    private val micGain = requireNotNull(SettingsRegistry.spec("voice_mic_gain_db"))
+
     private val everyMicrophoneGatedVoiceSpec =
-        listOf(voiceEnabled, wakeWords, pipelines, audioSource, sensitivity, voiceState)
+        listOf(voiceEnabled, wakeWords, pipelines, audioSource, sensitivity, voiceState, micGain)
 
     @Test fun `every voice setting requires the microphone capability and lives in the Voice group`() {
         everyMicrophoneGatedVoiceSpec.forEach { spec ->
@@ -25,6 +27,41 @@ class VoiceSettingsSpecTest {
                 "${spec.key} must be available with a microphone",
                 spec.availableWhen(Capabilities(hasMicrophone = true)),
             )
+        }
+    }
+
+    /**
+     * 0.9.7-rc3 ships the voice feature with no Configure card. The card is not suppressed anywhere in
+     * the page: every spec of the group is `hidden`, the schema route drops hidden specs, and a group
+     * with no fields renders no card — so this assertion is the whole mechanism, and un-hiding one spec
+     * would bring the card back carrying a single orphaned field.
+     */
+    @Test fun `every voice setting is hidden, so the group contributes no Configure card`() {
+        everyMicrophoneGatedVoiceSpec.forEach { spec ->
+            assertTrue("${spec.key} must be hidden while the feature is unsurfaced", spec.hidden)
+        }
+        assertTrue(
+            "no Voice spec may reach the Configure form",
+            SettingsRegistry.schemaVisibleSpecs().none { it.group == "Voice" },
+        )
+        // The group still exists in the registry: hiding is a release decision, not a deletion.
+        assertEquals(7, SettingsRegistry.SPECS.count { it.group == "Voice" })
+    }
+
+    /**
+     * Hidden is not disabled, and the difference is what allows a single panel to be brought up for
+     * acceptance over HTTP while nothing is advertised. A spec that became `transient` or lost its
+     * persist path would read as "hidden" to a casual glance and quietly discard every write.
+     */
+    @Test fun `hiding the group leaves the values readable, settable and persisted`() {
+        everyMicrophoneGatedVoiceSpec.forEach { spec ->
+            assertFalse("${spec.key} must still persist", spec.transient)
+            assertFalse("${spec.key} must not be secret-redacted", spec.secret)
+        }
+        // A microphone-bearing panel still resolves the settings; only their rendering is withheld.
+        val caps = Capabilities(hasMicrophone = true)
+        everyMicrophoneGatedVoiceSpec.forEach { spec ->
+            assertTrue("${spec.key} must remain capability-available", spec.availableWhen(caps))
         }
     }
 
