@@ -343,6 +343,11 @@ function cameraCard(tbl,hdr){
     if(stalled)rows.push({label:'Bitrate',val:'nothing delivered',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
     else if(gotKbps==null)rows.push({label:'Bitrate',val:'starting…',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
     else if(!cap)rows.push({label:'Bitrate',val:gotKbps+' kbps',col:'#888',suf:'· cap unavailable'});
+    // Measured on a WF1589T at 1080p: 4817 kbps against a 2000 kbps cap. The encoder can overshoot the
+    // bitrate it was given, so the row cannot assume the delivered figure sits under the cap and call
+    // every reading normal — that would print reassurance over the one number that had gone wrong.
+    else if(gotKbps>cap)rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',col:'#d9a528',bold:true,
+     suf:'· over the cap it was given; the encoder is spending more of the network than it was allowed'});
     else rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',suf:'· under the cap is normal for a still scene'});
     rows.push(stalled
      ?{label:'Delivery',val:'not delivering',col:'#d9a528',bold:true,

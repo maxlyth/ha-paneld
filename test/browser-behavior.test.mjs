@@ -4510,3 +4510,17 @@ browserTest('A stream that stops delivering says so, rather than starting for ev
   assert.match(faulted, /stopped retrying after 3 failures/, 'the session row carries the panel’s own account');
   assert.match(faulted, /no hardware H\.264 encoder fits the camera bitrate cap/, 'the panel’s action is passed through');
 });
+
+browserTest('A bitrate over its cap is not called normal', async (t) => {
+  // Measured on a real WF1589T at 1080p: the encoder delivered 4817 kbps against a 2000 kbps cap
+  // while the frame rate was met exactly, so the healthy-looking case is precisely where this shows.
+  const { page } = await startCameraHarness(t, cameraStatus({
+    encode_width: 1920, encode_height: 1080, delivered_fps: 15.04, delivered_kbps: 4817,
+  }));
+
+  await untilCamera(page, '4817 of 2000 kbps cap');
+  const text = await cameraText(page);
+  assert.match(text, /over the cap it was given/, 'an overshoot is named as an overshoot');
+  assert.equal(text.includes('under the cap is normal'), false, 'the reassuring line must not print over a fault');
+  assert.match(text, /15 of 15 fps/, 'the frame rate is judged on its own and is met here');
+});
