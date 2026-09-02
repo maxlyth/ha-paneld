@@ -227,6 +227,10 @@ Dependency selection and updates follow the project's [dependency and supply-cha
 
 </details>
 
+## Translations
+
+Translations are generated and cross-checked using multiple services and models, including EuroLLM, DeepL and OpenAI. They have not been systematically reviewed by speakers of each language, so the English text remains authoritative. If wording is unclear or incorrect, [open a translation correction issue](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+
 ## Acknowledgements
 
 Thanks to **Seaky** for [NSPanel Pro Tools](https://github.com/seaky/nspanel_pro_tools_apk), which was one of the projects that inspired me to start ha-paneld. ha-paneld is not an open-source reimplementation of NSPanel Pro Tools. It has grown into a much broader wall-panel platform, with its own dashboard renderer, entity filtering, runtime hardware profiles, diagnostics and provisioning across multiple makes of panel. The two projects now have very different feature sets and should not be treated as interchangeable, even on a Sonoff panel.
