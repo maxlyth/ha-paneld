@@ -4711,17 +4711,19 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
      *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
      *  launcher app resolves, the Launcher key falls back to ha-paneld's own admin launcher (see
      *  SystemController.launchLauncher) — say so instead of leaving a "—" that reads like a dead key. */
-    private fun autoHints(): Map<String, String> = buildMap {
-        system.resolveDashboard("").takeIf { it.isNotBlank() }?.let { put("dashboard_package", dashboardRendererAutoLabel(it)) }
+    private fun autoHints(strings: AppStrings): Map<String, String> = buildMap {
+        system.resolveDashboard("").takeIf { it.isNotBlank() }?.let {
+            put("dashboard_package", dashboardRendererAutoLabel(it, strings))
+        }
         put("launcher_package", system.resolvedLauncher("") ?: "ha-paneld admin launcher")
         // Unset home_dashboard = reload/boot land on whatever HA's frontend picks. On this path,
         // resolve the HA user's profile default (or the system fallback) in-band so the UI shows
         // a concrete target instead of an abstract description.
-        put("home_dashboard", "HA default view")
+        put("home_dashboard", strings.get("dashboard.value.ha_default_view"))
     }
 
-    private fun dashboardRendererAutoLabel(resolved: String): String =
-        if (resolved == SystemController.BUILTIN_DASHBOARD) "Built-in renderer" else resolved
+    private fun dashboardRendererAutoLabel(resolved: String, strings: AppStrings): String =
+        if (resolved == SystemController.BUILTIN_DASHBOARD) strings.get("dashboard.value.builtin_renderer") else resolved
 
     /** One read-only dashboard row for a registry setting: label → current value + the edit pencil.
      *  Null when the setting doesn't exist on this panel (capability-gated). */
@@ -4743,7 +4745,9 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         val shown = when {
             spec.secret -> if (raw.isNotEmpty()) strings.get("dashboard.value.set") else "—"
             spec.type == SettingType.BOOL -> strings.get(if (raw.toBoolean()) "dashboard.value.on" else "dashboard.value.off")
-            raw.isBlank() -> hints[key]?.let { "auto ($it)" } ?: "—"
+            raw.isBlank() -> hints[key]?.let {
+                formattedString(strings, "dashboard.value.auto_detail", "value" to it)
+            } ?: "—"
             // The built-in renderer sentinel has no package label — show its friendly name, not "builtin".
             raw == SystemController.BUILTIN_DASHBOARD -> strings.get("dashboard.value.builtin_renderer")
             else -> valueFormatter?.formatFor(key, raw) ?: raw
@@ -5208,7 +5212,45 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             strings.get("dashboard.runtime.ha_network_not_measured")
         "external renderer · Home Assistant connection not observed by ha-paneld" ->
             strings.get("dashboard.runtime.external_renderer_unobserved")
-        else -> value
+        else -> runtimeValueFamily(value, strings)
+    }
+
+    private fun runtimeValueFamily(value: String, strings: AppStrings): String {
+        if (value.startsWith("failed · ")) {
+            return formattedString(
+                strings,
+                "dashboard.runtime.audio_failed_detail",
+                "detail" to value.removePrefix("failed · "),
+            )
+        }
+        listOf(
+            "healthy; " to "dashboard.runtime.ha_network_healthy",
+            "slow; " to "dashboard.runtime.ha_network_slow",
+            "severely degraded; " to "dashboard.runtime.ha_network_severe",
+        ).forEach { (prefix, key) ->
+            if (value.startsWith(prefix)) {
+                return formattedString(strings, key, "evidence" to value.removePrefix(prefix))
+            }
+        }
+        Regex("^(\\d+) channels · (\\d+) dirty · (\\d+) in-flight · (\\d+) unknown · ack (\\d+)/(\\d+) · pending (.+)$")
+            .matchEntire(value)
+            ?.let { match ->
+                val pending = match.groupValues[7].let {
+                    if (it == "none") strings.get("dashboard.value.none") else it
+                }
+                return formattedString(
+                    strings,
+                    "dashboard.runtime.convergence",
+                    "channels" to match.groupValues[1],
+                    "dirty" to match.groupValues[2],
+                    "inFlight" to match.groupValues[3],
+                    "unknown" to match.groupValues[4],
+                    "successes" to match.groupValues[5],
+                    "failures" to match.groupValues[6],
+                    "pending" to pending,
+                )
+            }
+        return value
     }
 
     private fun formattedString(strings: AppStrings, key: String, vararg values: Pair<String, String>): String =
@@ -5511,14 +5553,16 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         "silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled",
         "home_dashboard", "ha_area", "dashboard_package", "launcher_package",
     ).let { keys ->
-        val hints = autoHints()
+        val hints = autoHints(strings)
         val caps = liveCapabilities(s.caps)
         keys.mapNotNull { key ->
             // A deliberately overridden area must say so wherever the value is shown — at rest it is
             // otherwise indistinguishable from an adopted value (maintainer, rc2 request 2026-07-27).
             val areaFormatter: SettingRowFormatter? =
                 if (key == "ha_area" && config.haAreaUserOverride) {
-                    SettingRowFormatter.of(key) { raw -> "$raw (local override)" }
+                    SettingRowFormatter.of(key) { raw ->
+                        formattedString(strings, "dashboard.value.local_override", "value" to raw)
+                    }
                 } else {
                     null
                 }
@@ -5597,7 +5641,123 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         "needs su or the helper daemon" -> strings.get("dashboard.capability.note.needs_su_or_helper")
         "true backlight-off via su bl_power" -> strings.get("dashboard.capability.note.backlight_off_su")
         "true backlight-off via the helper daemon" -> strings.get("dashboard.capability.note.backlight_off_helper")
-        else -> note
+        "Rockchip /dev/ledjni (app-direct, no root)" -> strings.get("dashboard.capability.note.rockchip_led_direct")
+        "Rockchip /dev/ledjni ioctl via the helper daemon (root)" ->
+            strings.get("dashboard.capability.note.rockchip_led_helper")
+        "sysfs LED via the helper daemon" -> strings.get("dashboard.capability.note.sysfs_led_helper")
+        "no reachable LED node; needs the root helper daemon (install needs su once)" ->
+            strings.get("dashboard.capability.note.led_unreachable")
+        "Android sleep via KEYCODE_SLEEP; Home Assistant always wakes it, a local touch only where this panel's touchscreen is a platform wake source" ->
+            strings.get("dashboard.capability.note.android_sleep")
+        "accessibility key capture enabled" -> strings.get("dashboard.capability.note.buttons_accessibility")
+        "blocked: installed manager signer is not trusted" -> strings.get("dashboard.capability.note.shizuku_untrusted")
+        "manager missing; re-run provisioning with --shizuku" -> strings.get("dashboard.capability.note.shizuku_missing")
+        "ready as shell UID; local typed operations only" -> strings.get("dashboard.capability.note.shizuku_ready")
+        "disabled in ha-paneld; on the panel open Configure → toolbar overflow → Enhanced access → Enable" ->
+            strings.get("dashboard.capability.note.shizuku_disabled")
+        "enabled in ha-paneld, but the Shizuku service is stopped; open Shizuku and start its service" ->
+            strings.get("dashboard.capability.note.shizuku_stopped")
+        "service running; request and approve ha-paneld access locally" ->
+            strings.get("dashboard.capability.note.shizuku_permission")
+        "access denied; grant ha-paneld under Shizuku → Authorized applications" ->
+            strings.get("dashboard.capability.note.shizuku_grant")
+        "connecting to the locally approved Shizuku service" -> strings.get("dashboard.capability.note.shizuku_connecting")
+        "blocked: unexpected Shizuku service identity or protocol" -> strings.get("dashboard.capability.note.shizuku_incompatible")
+        "Shizuku could not be connected; retry from the on-panel Enhanced access dialog" ->
+            strings.get("dashboard.capability.note.shizuku_failed")
+        else -> capabilityNoteFamily(note, strings)
+    }
+
+    private fun capabilityNoteFamily(note: String, strings: AppStrings): String {
+        val preferredPrefix = "adds no capability while root or the helper daemon provides the preferred route; "
+        if (note.startsWith(preferredPrefix)) {
+            return strings.get("dashboard.capability.note.preferred_route_prefix") + " " +
+                capabilityNote(note.removePrefix(preferredPrefix), strings)
+        }
+        val daemon = Regex("^(running|NEEDED but not running) — (.+)$").matchEntire(note)
+        if (daemon != null) {
+            val state = strings.get(
+                if (daemon.groupValues[1] == "running") {
+                    "dashboard.capability.note.daemon_running"
+                } else {
+                    "dashboard.capability.note.daemon_needed"
+                },
+            )
+            val detail = daemon.groupValues[2]
+            val translated = when {
+                detail == "the privileged control path on this sandbox-walled panel; without it, root-only controls remain unavailable" ->
+                    strings.get("dashboard.capability.note.daemon_sandbox_path")
+                detail == "required for the profiled button backlight" ->
+                    strings.get("dashboard.capability.note.daemon_button_backlight")
+                detail == "required for this profile's daemon-backed hardware" ->
+                    strings.get("dashboard.capability.note.daemon_hardware")
+                else -> Regex("^required for (\\d+) profiled physical button\\(s\\), even though ordinary privileged actions can use su$")
+                    .matchEntire(detail)
+                    ?.let { match ->
+                        formattedString(
+                            strings,
+                            "dashboard.capability.note.daemon_buttons",
+                            "count" to match.groupValues[1],
+                        )
+                    }
+                    ?: detail
+            }
+            return formattedString(
+                strings,
+                "dashboard.capability.note.daemon_state",
+                "state" to state,
+                "detail" to translated,
+            )
+        }
+        val dimReason = note.removePrefix("DIM ONLY — ").takeIf { it.length != note.length }
+        if (dimReason != null) {
+            val reason = when (dimReason) {
+                "needs su or the helper daemon to inject KEYCODE_SLEEP" ->
+                    strings.get("dashboard.capability.note.dim_keycode_sleep")
+                "this panel's profile selects the brightness-zero route, which never powers the backlight down" ->
+                    strings.get("dashboard.capability.note.dim_brightness_zero")
+                "the backlight stays powered; needs su or the helper daemon for a real off" ->
+                    strings.get("dashboard.capability.note.dim_backlight_powered")
+                else -> dimReason
+            }
+            return formattedString(strings, "dashboard.capability.note.dim_only", "reason" to reason)
+        }
+        if (note.startsWith("needs WRITE_SETTINGS: ")) {
+            return formattedString(
+                strings,
+                "dashboard.capability.note.needs_write_settings",
+                "command" to note.removePrefix("needs WRITE_SETTINGS: "),
+            )
+        }
+        if (note.startsWith("enable (no root): ")) {
+            return formattedString(
+                strings,
+                "dashboard.capability.note.buttons_enable_no_root",
+                "command" to note.removePrefix("enable (no root): "),
+            )
+        }
+        val buttonPatterns = listOf(
+            Regex("^accessibility key capture plus (\\d+) profiled physical button\\(s\\) on a verified helper stream$") to
+                "dashboard.capability.note.buttons_accessibility_verified",
+            Regex("^(\\d+) profiled physical button\\(s\\) on a verified helper stream$") to
+                "dashboard.capability.note.buttons_verified",
+            Regex("^accessibility key capture plus (\\d+) profiled physical button\\(s\\) on an unverified stream \\((.+)\\)$") to
+                "dashboard.capability.note.buttons_accessibility_unverified_stream",
+            Regex("^(\\d+) profiled physical button\\(s\\) are streaming but unverified \\((.+)\\)$") to
+                "dashboard.capability.note.buttons_unverified_stream",
+            Regex("^accessibility key capture works; (\\d+) profiled physical button\\(s\\) are not verified \\((.+)\\)$") to
+                "dashboard.capability.note.buttons_accessibility_not_verified",
+            Regex("^(\\d+) profiled physical button\\(s\\) are not verified \\((.+)\\)$") to
+                "dashboard.capability.note.buttons_not_verified",
+        )
+        buttonPatterns.forEach { (pattern, key) ->
+            pattern.matchEntire(note)?.let { match ->
+                val values = mutableListOf("count" to match.groupValues[1])
+                if (match.groupValues.size > 2) values += "detail" to match.groupValues[2]
+                return formattedString(strings, key, *values.toTypedArray())
+            }
+        }
+        return note
     }
 
     /** Visible "this needs root" banner for a root-gated card/control group — shown (never hidden) so a
@@ -7103,7 +7263,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     private fun configSchemaJson(strings: AppStrings): String {
         fun s(v: String) = Json.str(v)
         val caps = liveCapabilities(snapStaleOk().caps) // learned eligibility is fail-closed and live
-        val hints = autoHints()   // what blank ("auto") package fields resolve to → field placeholder
+        val hints = autoHints(strings)   // what blank ("auto") package fields resolve to → field placeholder
         val displaySizingAvailable = caps.canSetDisplay
         // Include the settable settings PLUS the read-only HA sensors (diagnostics): the latter carry
         // no editable value but still render an expose pip, so the user can opt them into HA.
@@ -7111,7 +7271,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         val items = schemaSpecs.joinToString(",") { spec ->
             val opts = spec.optionsFor(caps).joinToString(",") { s(it) }
             val isHa = spec.ha != null
-            val placeholder = hints[spec.key]?.let { "auto ($it)" } ?: when (spec.key) {
+            val placeholder = hints[spec.key]?.let {
+                formattedString(strings, "configure.option.auto_detail", "value" to it)
+            } ?: when (spec.key) {
                 "manufacturer" -> profile.manufacturer
                 "model" -> profile.model
                 else -> null
