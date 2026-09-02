@@ -17,5 +17,9 @@ class ConfigureControlSizingAssetTest {
         assertTrue("Configure control rule must exist", ruleStart >= 0)
         val rule = css.substring(ruleStart, css.indexOf('}', ruleStart))
         assertTrue("Configure controls must use one border-box height", "box-sizing:border-box;height:34px" in rule)
+        assertTrue(
+            "a direct native select must yield its preferred width beside the HA exposure control",
+            ".frow .fctl>select{min-width:0;max-width:100%}" in css,
+        )
     }
 }

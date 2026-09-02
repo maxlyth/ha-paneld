@@ -270,6 +270,10 @@ body.hdr-hide-brand .hdr .brand{display:none}
 /* Keep native dropdowns aligned with the text fields beside them.  WebView's native select
    metrics are otherwise shorter than equivalent inputs even when padding and font match. */
 .frow input[type=text],.frow input[type=password],.frow input[type=number],.frow select{box-sizing:border-box;height:34px;background:var(--input-bg2);border:1px solid var(--border2);color:var(--text);border-radius:6px;padding:6px 8px;min-width:170px;font:inherit}
+/* A linked setting adds its HA-exposure button beside the control. Let a direct native select yield
+   its 170px preferred width inside the 50% control column instead of spilling the exact button+gap
+   excess beyond a 400px masonry card. Wrapped pickers retain their narrower dedicated rules below. */
+.frow .fctl>select{min-width:0;max-width:100%}
 .ha-oauth-status{display:block;color:var(--dim);font-size:.9em;margin:5px 0 3px}
 .ha-oauth-status.connected{color:var(--ok-dim);font-weight:700}
 .ha-oauth-status.connected::before{content:"";display:inline-block;width:7px;height:7px;margin:0 7px 1px 1px;border-radius:50%;background:var(--ok-dim)}

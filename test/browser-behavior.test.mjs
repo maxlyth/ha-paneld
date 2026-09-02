@@ -1100,6 +1100,48 @@ browserTest('Configure help wraps a frozen URL without applying break-all global
   assert.equal(layout.ordinaryWordBreak, 'normal');
 });
 
+browserTest('Configure exposure-linked native selects stay inside a Hall-width card', async (t) => {
+  const schema = [
+    { key: 'navbar_mode', label: '导航栏模式', help: '选择导航栏的显示方式。', labelLanguage: 'zh-Hans', helpLanguage: 'zh-Hans', group: 'Behaviour', tier: 'BASIC', type: 'ENUM', options: ['auto', 'visible', 'hidden'], available: true, ha: true },
+    { key: 'cpu_governor', label: 'CPU 调速器', help: '选择系统性能策略。', labelLanguage: 'zh-Hans', helpLanguage: 'zh-Hans', group: 'System', tier: 'ADVANCED', type: 'ENUM', options: ['ondemand', 'performance', 'powersave'], available: true, ha: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({
+      settings: { navbar_mode: 'auto', cpu_governor: 'ondemand' },
+      ha_expose: { navbar_mode: true, cpu_governor: true }, ha_auth: {},
+    });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/health') return { body: 'ok cfg=test' };
+    return null;
+  }, configureVisualFixture);
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 1361, height: 851 } });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded' });
+  for (const key of ['navbar_mode', 'cpu_governor']) {
+    const row = page.locator(`#cfg-${key}`);
+    await row.waitFor();
+    const geometry = await row.evaluate((node) => {
+      const control = node.querySelector('.fctl');
+      const select = control.querySelector('select');
+      return {
+        rowClientWidth: node.clientWidth, rowScrollWidth: node.scrollWidth,
+        controlClientWidth: control.clientWidth, controlScrollWidth: control.scrollWidth,
+        selectWidth: select.getBoundingClientRect().width,
+        hasExposureControl: !!control.querySelector('.pip'),
+      };
+    });
+    assert.equal(geometry.hasExposureControl, true);
+    assert.ok(geometry.selectWidth > 0, `${key} retains a usable select: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.controlScrollWidth <= geometry.controlClientWidth + 1, `${key} control must not overflow: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.rowScrollWidth <= geometry.rowClientWidth + 1, `${key} row must not overflow: ${JSON.stringify(geometry)}`);
+  }
+});
+
 browserTest('Configure rejects an invalid brightness floor before a save request', async (t) => {
   let configPosts = 0;
   const schema = [
