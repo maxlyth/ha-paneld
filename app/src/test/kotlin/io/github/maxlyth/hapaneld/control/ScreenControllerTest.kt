@@ -1104,4 +1104,138 @@ class ScreenControllerTest {
         override fun sendLong(cmd: String, timeoutMs: Long): DaemonLongResult = DaemonLongResult.NotSubmitted
         override fun sendBytes(cmd: String): ByteArray? = null
     }
+
+    // --- ensureOn: a bare Home Assistant ON on a lit panel changes nothing ---
+
+    private fun brightnessZero(backlight: Backlight = this.backlight) =
+        ScreenController(backlight, power, FakeRootShell(runResult = false), FakeDaemon(), wakeTap, ScreenOff.BRIGHTNESS_ZERO)
+
+    /** The reporter's panel: the last off remembered a tiny level, and every later wake floors it. */
+    private fun cycleOffOnLeavingStaleSavedLevel(sc: ScreenController, staleLevel: Int) {
+        backlight.level = staleLevel
+        sc.sleep()
+        sc.wake()
+        assertEquals("restore floors the stale level to 4%", "set:10", backlight.calls.last())
+        backlight.calls.clear()
+        power.pulses = 0
+        backlight.level = 200   // the person then raised it by hand; savedLevel did not follow
+    }
+
+    @Test fun bareOnOnLitPanelTouchesNoActuatorAndKeepsTheLevel() {
+        val sc = brightnessZero()
+        cycleOffOnLeavingStaleSavedLevel(sc, staleLevel = 5)
+        var rendererWoken = 0
+        val listener: (Boolean) -> Unit = { if (it) rendererWoken++ }
+        BuiltinDashboard.setScreenListener(listener)
+        try {
+            assertEquals(WakeOutcome.ALREADY_ON, sc.ensureOn())
+        } finally {
+            BuiltinDashboard.clearScreenListener(listener)
+        }
+        assertEquals("no brightness write at all", emptyList<String>(), backlight.calls)
+        assertEquals(200, backlight.level)
+        assertEquals("no wakelock pulse", 0, power.pulses)
+        assertEquals("no renderer wake", 0, rendererWoken)
+        assertFalse(sc.isIntendedOff())
+    }
+
+    @Test fun plainWakeStillRestoresTheStaleLevelWhichIsWhyTheGuardExists() {
+        val sc = brightnessZero()
+        cycleOffOnLeavingStaleSavedLevel(sc, staleLevel = 5)
+        sc.wake()
+        assertEquals(listOf("set:10"), backlight.calls)
+    }
+
+    @Test fun ensureOnAfterATrueOffRestoresAndPulsesLikeWake() {
+        val sc = brightnessZero()
+        backlight.level = 150
+        sc.sleep()
+        assertTrue(sc.isIntendedOff())
+        assertEquals("raw:0", backlight.calls.last())
+        backlight.calls.clear()
+        assertEquals(WakeOutcome.WOKEN, sc.ensureOn())
+        assertEquals(listOf("set:150"), backlight.calls)
+        assertEquals(1, power.pulses)
+        assertFalse(sc.isIntendedOff())
+        assertFalse("wake must disarm touch-to-wake", wakeTap.armed)
+    }
+
+    @Test fun ensureOnAfterAnOffThatClampedVisibleStillWakes() {
+        // A brightness-zero panel that clamps a minimum reads lit after a deliberate off; the lit
+        // read alone must not turn ON-after-OFF into a permanent no-op.
+        val sc = brightnessZero()
+        backlight.level = 150
+        sc.sleep()
+        backlight.level = 12   // the driver clamped the raw zero to something visible
+        backlight.calls.clear()
+        assertEquals(WakeOutcome.WOKEN, sc.ensureOn())
+        assertEquals(listOf("set:150"), backlight.calls)
+    }
+
+    @Test fun ensureOnRelightsAnUnexpectedlyDarkPanel() {
+        val sc = brightnessZero()
+        backlight.level = 0    // dark without ha-paneld asking for it
+        assertEquals(WakeOutcome.WOKEN, sc.ensureOn())
+        assertTrue(backlight.calls.any { it.startsWith("set:") })
+        assertEquals(1, power.pulses)
+    }
+
+    @Test fun ensureOnTreatsAnUnknownReadingAsDark() {
+        val sc = brightnessZero()
+        backlight.level = -1   // read-back unavailable: never-blank fails toward light
+        assertEquals(WakeOutcome.WOKEN, sc.ensureOn())
+        assertEquals(1, power.pulses)
+    }
+
+    @Test fun ensureOnOnPrivilegedRouteReadsBacklightPowerNotJustBrightness() {
+        backlight.level = 120
+        val (lit, _) = controller(daemon = mapOf("BLPOWER" to "0", "SCREEN ON" to "OK"))
+        assertEquals(WakeOutcome.ALREADY_ON, lit.ensureOn())
+        assertEquals(0, power.pulses)
+
+        val (dark, _) = controller(daemon = mapOf("BLPOWER" to "4", "SCREEN ON" to "OK"))
+        assertEquals("bl_power off with a positive brightness is still dark", WakeOutcome.WOKEN, dark.ensureOn())
+        assertEquals(1, power.pulses)
+    }
+
+    @Test fun ensureOnReportsAFailedActuatorInsteadOfClaimingOn() {
+        val failing = object : Backlight {
+            override fun getBrightness() = 0
+            override fun setBrightness(level: Int) = throw IllegalStateException("backlight write refused")
+            override fun setBrightnessRaw(level: Int) = throw IllegalStateException("backlight write refused")
+        }
+        val sc = brightnessZero(failing)
+        assertEquals(WakeOutcome.ACTUATION_FAILED, sc.ensureOn())
+    }
+
+    @Test(timeout = 10_000)
+    fun aSleepArrivingDuringTheLitReadWaitsForEnsureOnToFinish() {
+        val insideRead = CountDownLatch(1)
+        val sleepFinished = CountDownLatch(1)
+        lateinit var sc: ScreenController
+        var sleepCompletedDuringRead = false
+        val observed = object : Backlight {
+            override fun getBrightness(): Int {
+                if (insideRead.count > 0) {
+                    insideRead.countDown()
+                    Thread { sc.sleep(); sleepFinished.countDown() }.start()
+                    // Give the competing sleep a real chance to run; the monitor must hold it back.
+                    sleepCompletedDuringRead = sleepFinished.await(300, TimeUnit.MILLISECONDS)
+                }
+                return 200
+            }
+            override fun setBrightness(level: Int) { backlight.setBrightness(level) }
+            override fun setBrightnessRaw(level: Int) { backlight.setBrightnessRaw(level) }
+        }
+        sc = brightnessZero(observed)
+
+        val outcome = sc.ensureOn()
+
+        assertTrue(insideRead.await(1, TimeUnit.SECONDS))
+        assertFalse("the sleep must not interleave with the read-and-act", sleepCompletedDuringRead)
+        assertTrue(sleepFinished.await(5, TimeUnit.SECONDS))
+        assertEquals("the panel was lit when ON was judged", WakeOutcome.ALREADY_ON, outcome)
+        assertTrue("the later sleep wins once ensureOn has released the monitor", sc.isIntendedOff())
+        assertEquals("the sleep, not the ON, made the only write", listOf("raw:0"), backlight.calls)
+    }
 }

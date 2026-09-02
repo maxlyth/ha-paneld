@@ -285,6 +285,32 @@ class ScreenController(
     private fun automaticEpochOrNull(): AutomaticOffEpoch? =
         automaticOffGeneration.takeIf { it != 0L }?.let(::AutomaticOffEpoch)
 
+    /**
+     * Light the screen only if it is not already lit. An ON command that carries no brightness is a
+     * request for a state, not for a relight: on a panel that is already on it must change nothing.
+     * [wake] cannot promise that, because its brightness fallback restores [savedLevel], and on the
+     * brightness-zero route that is whatever the last off remembered, floored to [MIN_ON] and then
+     * persisted by the write, so a redundant ON dimmed a lit panel to a few percent.
+     *
+     * Both halves of the guard are load-bearing. [intendedOff] comes first because a brightness-zero
+     * panel that clamps a minimum reads lit after a deliberate off, and lit alone would make ON after
+     * OFF a permanent no-op there. The hardware read-back comes second because an unexpectedly dark
+     * panel must still relight on an explicit ON; an unknown reading counts as dark, so never-blank
+     * fails toward light. Check and act share the transition monitor, so a concurrent sleep is ordered
+     * wholly before this call or wholly after it, never between the read and the wake.
+     */
+    @Synchronized
+    fun ensureOn(): WakeOutcome {
+        if (!intendedOff && observedLit() == true) return WakeOutcome.ALREADY_ON
+        return runCatching {
+            wake()
+            WakeOutcome.WOKEN
+        }.getOrElse {
+            Log.e(TAG, "explicit wake failed", it)
+            WakeOutcome.ACTUATION_FAILED
+        }
+    }
+
     @Synchronized
     fun wake() {
         stateGeneration.incrementAndGet()

@@ -2648,24 +2648,27 @@ internal class MqttBridge(
     }
 
     private fun handleScreen(payload: String) {
-        val json = JSONObject(payload)
-        val on = json.optString("state", "ON").equals("ON", ignoreCase = true)
-        if (!on) {
+        val command = io.github.maxlyth.hapaneld.control.ScreenCommandPolicy.parse(payload)
+        if (!command.on) {
             screen.sleep()
             publishScreenOff()
             return
         }
-        val level = if (json.has("brightness")) {
-            json.getInt("brightness").coerceIn(BrightnessController.MIN_VISIBLE, 255).also {
-                autoBright.noteExternalBrightness(it, io.github.maxlyth.hapaneld.control.BrightnessPreferenceOrigin.HOME_ASSISTANT)
-            }
-        } else {
-            brightness.getCommanded().coerceAtLeast(1)
+        // Capture explicit intent before wake completion can reapply automatic control.
+        command.brightness?.let {
+            autoBright.noteExternalBrightness(it, io.github.maxlyth.hapaneld.control.BrightnessPreferenceOrigin.HOME_ASSISTANT)
         }
-        screen.wake() // capture explicit intent before wake completion can reapply automatic control
-        if (json.has("brightness")) brightness.setBrightness(level)
-        screen.noteLevel(level)
-        publishScreenBrightness(level)
+        // A bare ON on a lit panel changes nothing: ensureOn skips the wake path, whose brightness
+        // fallback would otherwise restore a stale saved level on the brightness-zero route.
+        val delivered = io.github.maxlyth.hapaneld.control.ScreenCommandPolicy.executeOn(
+            command,
+            ensureOn = screen::ensureOn,
+            setBrightness = brightness::setBrightness,
+            commandedLevel = brightness::getCommanded,
+            noteLevel = screen::noteLevel,
+            publish = ::publishScreenBrightness,
+        )
+        check(delivered) { "screen wake failed; ON not published" }
     }
 
     /**
