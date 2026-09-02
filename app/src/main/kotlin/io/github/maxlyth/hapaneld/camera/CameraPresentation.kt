@@ -98,6 +98,41 @@ enum class CameraFault(val wire: String) {
     STREAM_ENCODER("stream_encoder"),
 }
 
+/**
+ * The `outcome` field's reset at the master switch.
+ *
+ * `outcome` remembers the last refusal so that a camera which stopped working is visible while it is
+ * idle. The owner stamps `camera-disabled` when the switch ends a session and whenever a consumer is
+ * refused while the switch is off, and until now nothing cleared it when the switch came back on: found
+ * on a camera panel during the trial (2026-09-01), status and the diag line stayed at
+ * `state=idle outcome=camera-disabled` after off→on until the next delivered frame, so an enabled,
+ * healthy, idle camera read as refused to anyone reading `outcome` alone. The earliest truthful reset
+ * is the enable itself, because the switch turning on is exactly what removes that refusal.
+ *
+ * It is the only refusal the switch may clear, and it may clear it only when nothing else is refusing.
+ * A permission, foreground, indication, starvation, encode or stopping refusal was earned by something
+ * the switch does not change, so it is returned untouched. And the switch's own refusal is not cleared
+ * blindly either: the session's failure memory outlives the session that earned it, so an encoder hold,
+ * a retry backoff or a degraded session can still be refusing consumers at the moment the switch comes
+ * back on. `CameraSessionState.retainedRefusal` answers that from the same code an acquire consults,
+ * and its answer is restated in place of the switch's. Nothing here ever claims a frame: `ok` says no
+ * refusal stands, and `last_frame_age_ms` still says when a frame last arrived.
+ */
+object CameraOutcome {
+    const val OK = "ok"
+
+    /**
+     * What `outcome` reads once the switch is on. [retained] is what the session would still refuse,
+     * from `CameraSessionState.retainedRefusal` — null when it would refuse nothing. Idempotent, which
+     * matters because the owner is called on any camera-key change and not only on an edge.
+     */
+    fun onEnable(outcome: String, retained: CameraRefusal?): String = when {
+        outcome != CameraRefusal.DISABLED.token -> outcome
+        retained != null -> retained.token
+        else -> OK
+    }
+}
+
 /** Which route is telling the room the camera is on. `none` is only legal when the camera is closed. */
 enum class CameraIndication(val wire: String) { NONE("none"), OVERLAY("overlay"), LED("led") }
 
@@ -120,7 +155,11 @@ enum class CameraIndication(val wire: String) { NONE("none"), OVERLAY("overlay")
  */
 data class CameraPresentation(
     val state: CameraState,
-    /** Wire form of the last outcome: `ok`, or the refusal token that last blocked a consumer. */
+    /**
+     * Wire form of the last outcome: `ok`, or the refusal token that last blocked a consumer. A refusal
+     * is cleared at two boundaries only — a session opening for a client, and the master switch turning
+     * on, which clears the switch's own refusal alone ([CameraOutcome.onEnable]).
+     */
     val outcome: String,
     val fault: CameraFault,
     val faultDetail: String?,

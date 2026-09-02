@@ -319,9 +319,24 @@ class CameraSessionOwner(
 
     // ---- lifecycle used by the service --------------------------------------------------------------
 
-    /** The master switch moved. Off ends a live or opening session at once; on republishes the prompt and listens. */
+    /**
+     * The master switch moved. Off ends a live or opening session at once; on clears the switch's own
+     * refusal from the outcome, republishes the prompt and listens.
+     */
     fun onEnabledChanged() {
         if (enabled()) {
+            // The switch is re-read inside the lock that stores the outcome, so a disable landing
+            // between the branch above and the store below cannot leave a stale `ok` behind. The
+            // session is asked what it would still refuse — worst first, because one field answers for
+            // every consumer and a snapshot blocker outranks a stream-only one.
+            synchronized(lock) {
+                if (enabled()) {
+                    val now = nowMs()
+                    val retained = state.retainedRefusal(now, LeaseKind.SNAPSHOT)
+                        ?: state.retainedRefusal(now, LeaseKind.STREAM)
+                    outcome = CameraOutcome.onEnable(outcome, retained)
+                }
+            }
             publishPermissionPrompt(freshEnable = true)
             transport.setListening(hasCamera)
             return
@@ -385,19 +400,22 @@ class CameraSessionOwner(
     fun acquire(requested: CameraResolution?): Lease? = acquireLease(requested, LeaseKind.SNAPSHOT, null)
 
     private fun acquireLease(requested: CameraResolution?, kind: LeaseKind, binding: StreamBinding?): Lease? {
-        val gate = synchronized(lock) {
-            when {
+        val leaseId: Long
+        val pending: CompletableFuture<CameraRefusal?>?
+        var startEncoderFor: Long? = null
+        synchronized(lock) {
+            // Observed and applied in ONE critical section. Split across two, an enable landing in the
+            // gap let a caller that had already read the switch as off store `camera-disabled` over the
+            // enable's own reset, putting back the very refusal this class exists to clear — and this
+            // time on a camera that was on. Both reads are the same cheap non-blocking reads the
+            // presentation already makes under this lock.
+            val gate = when {
                 !hasCamera -> CameraRefusal.ABSENT
                 admissionClosed -> CameraRefusal.STOPPING
                 !enabled() -> CameraRefusal.DISABLED
                 !permissionGranted() -> CameraRefusal.PERMISSION
                 else -> null
             }
-        }
-        val leaseId: Long
-        val pending: CompletableFuture<CameraRefusal?>?
-        var startEncoderFor: Long? = null
-        synchronized(lock) {
             when (val admission = state.acquire(gate, nowMs(), kind, binding)) {
                 is Admission.Refused -> {
                     outcome = admission.reason.token

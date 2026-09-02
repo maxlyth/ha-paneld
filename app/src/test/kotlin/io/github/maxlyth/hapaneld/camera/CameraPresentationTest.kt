@@ -116,6 +116,80 @@ class CameraPresentationTest {
         assertTrue(line.contains("last_frame=1m5s"))
     }
 
+    // --- CameraOutcome: the reset at the master switch ----------------------------------------------
+    //
+    // The decision alone; `CameraSessionStateTest` drives the real session that supplies its argument.
+
+    /**
+     * The trial residual (2026-09-01): off, then on, with nobody watching and nothing else refusing.
+     * Status must say so before any frame arrives, without claiming one.
+     */
+    @Test fun disableThenEnableBeforeAnyViewerReadsOkAndClaimsNoFrame() {
+        val outcome = CameraOutcome.onEnable(CameraRefusal.DISABLED.token, retained = null)
+        assertEquals(CameraOutcome.OK, outcome)
+        val p = CameraPresentation.absent().copy(state = CameraState.IDLE, outcome = outcome, lastFrameAgeMs = null)
+        val j = JSONObject(p.statusJson())
+        assertEquals("idle", j.getString("state"))
+        assertEquals("ok", j.getString("outcome"))
+        assertTrue("no frame is fabricated by the reset", j.isNull("last_frame_age_ms"))
+        assertFalse(j.getBoolean("live"))
+    }
+
+    /** An enable that is not an edge — any camera key change reaches the owner — must be a no-op. */
+    @Test fun enableIsIdempotentOnAnOutcomeThatIsAlreadyOk() {
+        assertEquals(CameraOutcome.OK, CameraOutcome.onEnable(CameraOutcome.OK, retained = null))
+        assertEquals(CameraOutcome.OK, CameraOutcome.onEnable(CameraOutcome.OK, retained = CameraRefusal.FAILED))
+    }
+
+    /**
+     * Off, then on, with the Android permission still missing. The reset does not stamp the permission
+     * refusal — that is the presentation's short-circuit and the lease gate's job — and what a consumer
+     * sees is the permission state with its own token, not `ok` and not `camera-disabled`.
+     */
+    @Test fun disableThenEnableWithMissingPermissionShowsThePermissionStateNotTheSwitch() {
+        assertEquals(
+            "the reset never invents a permission refusal; the gate stamps it when a consumer asks",
+            CameraOutcome.OK,
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, retained = null),
+        )
+        val p = CameraPresentation.permissionNeeded()
+        assertEquals(CameraState.PERMISSION_NEEDED, p.state)
+        assertEquals(CameraRefusal.PERMISSION.token, p.outcome)
+        assertTrue(p.diagnosticLine().contains("state=permission_needed outcome=camera-permission-needed"))
+    }
+
+    /** Every refusal the switch did not cause stands, whatever the session retains. */
+    @Test fun enablePreservesEveryRefusalTheSwitchDidNotCause() {
+        CameraRefusal.entries.filter { it != CameraRefusal.DISABLED }.forEach { refusal ->
+            assertEquals(refusal.name, refusal.token, CameraOutcome.onEnable(refusal.token, retained = null))
+            assertEquals("$refusal, still refusing", refusal.token, CameraOutcome.onEnable(refusal.token, CameraRefusal.FAILED))
+        }
+    }
+
+    /** A refusal that still stands is restated in place of the switch's, never cleared. */
+    @Test fun enableRestatesWhateverTheSessionStillRefuses() {
+        CameraRefusal.entries.forEach { retained ->
+            assertEquals(
+                "$retained still refuses, so the switch may not report a clear camera",
+                retained.token,
+                CameraOutcome.onEnable(CameraRefusal.DISABLED.token, retained),
+            )
+        }
+    }
+
+    /** Status and the diag line are one projection: the reset cannot show in one and not the other. */
+    @Test fun statusAndDiagnosticLineAgreeOnTheResetOutcome() {
+        listOf(
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, retained = null),
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, CameraRefusal.STREAM_ENCODER),
+            CameraOutcome.onEnable(CameraRefusal.STARVED.token, retained = null),
+        ).forEach { outcome ->
+            val p = CameraPresentation.absent().copy(state = CameraState.IDLE, outcome = outcome)
+            assertEquals(outcome, JSONObject(p.statusJson()).getString("outcome"))
+            assertTrue(p.diagnosticLine(), p.diagnosticLine().contains(" outcome=$outcome "))
+        }
+    }
+
     // --- CameraResolution -----------------------------------------------------------------------
 
     @Test fun parseRejectsAnyValueOutsideTheClosedVocabulary() {

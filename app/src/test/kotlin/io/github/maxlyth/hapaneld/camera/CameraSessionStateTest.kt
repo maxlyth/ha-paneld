@@ -411,6 +411,139 @@ class CameraSessionStateTest {
         assertNull("one admitted attempt clears the hold", state.encoderHoldUntilMs)
     }
 
+    // --- what the master switch may say when it turns back on ---------------------------------------
+    //
+    // Each case drives the real machine and then asserts BOTH halves together: what `retainedRefusal`
+    // reports, and what an actual `acquire` does at the same instant on the same object. The status
+    // field and the consumer must not be able to disagree.
+
+    @Test fun aRetainedEncoderHoldSurvivesADisableAndStillRefusesStreamsAfterTheEnable() {
+        val stream = openStream()
+        assertTrue(state.openSucceeded(stream.attempt))
+        state.encoderFailed(nowMs = 10_000L)
+        assertTrue("the switch ended a live session", state.disable())
+
+        // The switch is back on and the hold has not expired.
+        val now = 20_000L
+        assertEquals(
+            "a stream is still refused, so the switch may not report a clear camera",
+            CameraRefusal.STREAM_ENCODER,
+            state.retainedRefusal(now, LeaseKind.STREAM),
+        )
+        assertEquals(
+            "and that is exactly what a stream client is told",
+            Admission.Refused(CameraRefusal.STREAM_ENCODER),
+            state.acquire(gate = null, nowMs = now, kind = LeaseKind.STREAM, binding = binding),
+        )
+        assertEquals(
+            CameraRefusal.STREAM_ENCODER.token,
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, state.retainedRefusal(now, LeaseKind.SNAPSHOT) ?: state.retainedRefusal(now, LeaseKind.STREAM)),
+        )
+        // A snapshot was never held off, and the worst-first read agrees with that.
+        assertNull("the hold is the stream's alone", state.retainedRefusal(now, LeaseKind.SNAPSHOT))
+        assertTrue("$state", state.acquire(gate = null, nowMs = now) is Admission.Open)
+    }
+
+    @Test fun aRetainedRetryBackoffSurvivesADisableAndStillRefusesEverythingAfterTheEnable() {
+        val first = open()
+        // The open fails while its caller is still waiting, so the ladder reopens and records the
+        // backoff; the caller then gives up its lease and the session ends around it.
+        assertTrue(
+            "$state",
+            state.openFailed(first.attempt, CameraFault.OPEN, CameraRefusal.FAILED, nowMs = 1_000L) is Failure.Reopen,
+        )
+        assertEquals("the caller leaving ends the session", Release.Close, state.release(first.lease))
+        assertTrue("the backoff outlives the session that earned it", state.retryNotBeforeMs > 1_000L)
+        val now = state.retryNotBeforeMs - 1L
+        assertEquals(CameraRefusal.FAILED, state.retainedRefusal(now, LeaseKind.SNAPSHOT))
+        assertEquals(
+            Admission.Refused(CameraRefusal.FAILED),
+            state.acquire(gate = null, nowMs = now),
+        )
+        assertEquals(
+            CameraRefusal.FAILED.token,
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, state.retainedRefusal(now, LeaseKind.SNAPSHOT)),
+        )
+    }
+
+    @Test fun anIdleCameraWithNothingRetainedReportsOkAndAdmitsTheNextViewerImmediately() {
+        val first = open()
+        assertTrue(state.openSucceeded(first.attempt))
+        assertNotNull(state.frame(first.attempt, 1_200L))
+        assertTrue("the switch ended it", state.disable())
+
+        val now = 2_000L
+        assertNull("nothing of the session's own refuses", state.retainedRefusal(now, LeaseKind.SNAPSHOT))
+        assertNull(state.retainedRefusal(now, LeaseKind.STREAM))
+        assertEquals(
+            "so the switch clears its own refusal",
+            CameraOutcome.OK,
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, state.retainedRefusal(now, LeaseKind.SNAPSHOT)),
+        )
+        // And the very next viewer is admitted rather than refused, which is what `ok` promised.
+        assertTrue("$state", state.acquire(gate = null, nowMs = now) is Admission.Open)
+    }
+
+    @Test fun anOpenThatFailsAfterTheEnableIsReportedRatherThanHiddenByTheReset() {
+        // Enabled and clear, so the reset would have said ok.
+        assertNull(state.retainedRefusal(500L, LeaseKind.SNAPSHOT))
+        val attempt = open(nowMs = 1_000L)
+        assertTrue(
+            "$state",
+            state.openFailed(attempt.attempt, CameraFault.CONFIGURE, CameraRefusal.FAILED, nowMs = 1_100L) is Failure.Reopen,
+        )
+        assertEquals("the caller leaving ends the session", Release.Close, state.release(attempt.lease))
+        assertEquals(
+            "the failed reopen is what a later reader sees, not the enable's ok",
+            CameraRefusal.FAILED,
+            state.retainedRefusal(1_200L, LeaseKind.SNAPSHOT),
+        )
+        assertEquals(
+            Admission.Refused(CameraRefusal.FAILED),
+            state.acquire(gate = null, nowMs = 1_200L),
+        )
+    }
+
+    @Test fun aDegradedCameraIsReportedAsRefusingEvenOnceItsHoldHasExpired() {
+        var attempt = open(nowMs = 0L)
+        var now = 0L
+        // Climb the ladder to the ceiling; the session keeps a lease so it degrades rather than closing.
+        repeat(policy.maxConsecutiveFailures) {
+            state.openFailed(attempt.attempt, CameraFault.DEVICE_ERROR, CameraRefusal.FAILED, nowMs = now)
+            if (state.phase == Phase.OPENING) {
+                now += policy.maxBackoffMs
+                attempt = Admission.Open(attempt.lease, requireNotNull(state.reopenAttempt(now)))
+            }
+        }
+        assertEquals("the ladder ended at the ceiling", Phase.DEGRADED, state.phase)
+
+        val afterHold = state.retryNotBeforeMs + 1L
+        assertEquals(
+            "a camera that gave up stays visible after its hold; `state=degraded outcome=ok` is a contradiction",
+            CameraRefusal.FAILED,
+            state.retainedRefusal(afterHold, LeaseKind.SNAPSHOT),
+        )
+        assertEquals(
+            CameraRefusal.FAILED.token,
+            CameraOutcome.onEnable(CameraRefusal.DISABLED.token, state.retainedRefusal(afterHold, LeaseKind.SNAPSHOT)),
+        )
+        // The asymmetry is deliberate and is the contract: recovery is an acquire, not a status read,
+        // so the very same instant that still REPORTS a refusal ADMITS a client and tries again.
+        assertTrue(
+            "a new client after the hold still retries",
+            state.acquire(gate = null, nowMs = afterHold) is Admission.Open,
+        )
+    }
+
+    @Test fun aStoppingSubsystemIsReportedAsRefusingWhateverTheStoredOutcomeSays() {
+        state.stopping()
+        assertEquals(CameraRefusal.STOPPING, state.retainedRefusal(1_000L, LeaseKind.SNAPSHOT))
+        assertEquals(
+            Admission.Refused(CameraRefusal.STOPPING),
+            state.acquire(gate = null, nowMs = 1_000L),
+        )
+    }
+
     @Test fun aStreamLeaseMustCarryABinding() {
         val failed = runCatching { state.acquire(gate = null, nowMs = 0L, kind = LeaseKind.STREAM, binding = null) }
         assertTrue(failed.exceptionOrNull() is IllegalArgumentException)

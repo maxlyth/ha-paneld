@@ -183,18 +183,20 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
         if (phase == Phase.STOPPING) return Admission.Refused(CameraRefusal.STOPPING)
         if (gate != null) return Admission.Refused(gate)
         require(kind != LeaseKind.STREAM || binding != null) { "a stream lease must carry a binding" }
-        if (kind == LeaseKind.STREAM) {
-            val hold = encoderHoldUntilMs
-            if (hold != null && nowMs < hold) return Admission.Refused(CameraRefusal.STREAM_ENCODER)
-            encoderHoldUntilMs = null
-        }
+        // One encoding of what this session's own failure memory refuses, shared with [retainedRefusal]
+        // so a caller asking what would happen and a caller making it happen cannot drift apart.
+        blockedBy(nowMs, kind)?.let { return Admission.Refused(it) }
+        // Reached only when the hold is absent or spent, so clearing it here is the same store the
+        // guarded version made; a snapshot lease still leaves a live hold alone.
+        if (kind == LeaseKind.STREAM) encoderHoldUntilMs = null
         val firstStream = kind == LeaseKind.STREAM && streamClients == 0
         return when (phase) {
             Phase.LIVE -> Admission.Join(newLease(kind, firstStream, binding), startEncoder = firstStream)
             Phase.OPENING -> Admission.Join(newLease(kind, firstStream, binding), startEncoder = false)
             Phase.IDLE, Phase.DEGRADED -> {
-                // Backoff is honoured across sessions: a poller retrying a broken camera waits it out.
-                if (nowMs < retryNotBeforeMs) return Admission.Refused(CameraRefusal.FAILED)
+                // The backoff was already honoured by [blockedBy] above, which is the only place that
+                // decides it: a second check here could not change the answer, and a guard that reads
+                // as protection it is not is worse than none.
                 if (phase == Phase.DEGRADED) consecutiveFailures = 0
                 val lease = newLease(kind, firstStream, binding)
                 phase = Phase.OPENING
@@ -204,6 +206,40 @@ class CameraSessionState(private val policy: () -> CameraSessionPolicy) {
             }
             Phase.STOPPING -> error("unreachable")
         }
+    }
+
+    /**
+     * What this session's retained failure memory refuses a lease of [kind] right now, or null when
+     * nothing of its own stands in the way. The static gates are the owner's and are not consulted here.
+     *
+     * Both blockers outlive the session that earned them, which is the whole point: [encoderHoldUntilMs]
+     * keeps stream leases off after the encoder refused, and [retryNotBeforeMs] backs off a poller that
+     * would otherwise cycle a broken camera. Neither is cleared by [endSession], so both survive a
+     * disable — the reason the master switch may not report a clear camera on the strength of the switch
+     * alone.
+     */
+    private fun blockedBy(nowMs: Long, kind: LeaseKind): CameraRefusal? = when {
+        kind == LeaseKind.STREAM && encoderHoldUntilMs?.let { nowMs < it } == true -> CameraRefusal.STREAM_ENCODER
+        (phase == Phase.IDLE || phase == Phase.DEGRADED) && nowMs < retryNotBeforeMs -> CameraRefusal.FAILED
+        else -> null
+    }
+
+    /**
+     * The refusal that still stands for a lease of [kind], for a caller deciding what to *say* rather
+     * than what to do. [CameraOutcome.onEnable] is that caller: the master switch may clear its own
+     * refusal, and this is how it learns whether clearing it would report a camera that is in fact
+     * still refusing.
+     *
+     * It is [blockedBy] plus one deliberate difference: a degraded session is reported as refusing even
+     * once its backoff has expired, when a real acquire would admit and try again. That asymmetry is
+     * intended. `DEGRADED` is a failure the panel reached after the whole retry ladder and it stays
+     * visible until something actually succeeds, so the switch cannot present a camera that gave up as
+     * a clear one; `state=degraded outcome=ok` would be a contradiction on its face. The recovery is
+     * unaffected, because recovery is an acquire, not a status read.
+     */
+    fun retainedRefusal(nowMs: Long, kind: LeaseKind): CameraRefusal? = when {
+        phase == Phase.STOPPING -> CameraRefusal.STOPPING
+        else -> blockedBy(nowMs, kind) ?: if (phase == Phase.DEGRADED) CameraRefusal.FAILED else null
     }
 
     private fun newLease(kind: LeaseKind, firstStream: Boolean, binding: StreamBinding?): Long {
