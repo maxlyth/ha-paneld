@@ -35,6 +35,24 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
+    @Test fun `Simplified Chinese HTML UI slice is current and promoted`() {
+        val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
+        val target = TargetCatalogue.parse(File(assets, "i18n/zh-Hans.json").readText(), source)
+        val prefixes = listOf("shell.", "dashboard.", "configure.")
+        val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
+
+        assertFalse("the HTML UI slice must not be empty", expected.isEmpty())
+        expected.forEach { (key, sourceString) ->
+            val translated = checkNotNull(target.strings[key]) { "zh-Hans is missing $key" }
+            assertEquals("zh-Hans has stale source text for $key", sourceString.sourceHash, translated.sourceHash)
+            assertTrue(
+                "zh-Hans must promote $key beyond draft before the collaborator preview",
+                translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                    translated.state == TranslationState.COMMUNITY_CORRECTED,
+            )
+        }
+    }
+
     @Test fun `shared shell installs localized payload and helper before page scripts`() {
         val source = server.readText()
         val payload = source.indexOf("<script id=\"ha-i18n\"")
