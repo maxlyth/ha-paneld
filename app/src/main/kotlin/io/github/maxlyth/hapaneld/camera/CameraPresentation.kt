@@ -176,6 +176,17 @@ data class CameraPresentation(
     val streamClients: Int = 0,
     /** The RTSP port while the transport is listening; null when the feature is off or the port could not be bound. */
     val streamPort: Int? = null,
+    /**
+     * The frame rate the current stream ASKED for, which [encodeFps] does not always equal.
+     *
+     * The capture rate is fixed by whoever opens the session, so a snapshot opens it at the configured
+     * default and a stream arriving afterwards joins that session rather than reconfiguring it. A
+     * consumer that reads [encodeFps] as the request therefore reports a clamped session as a healthy
+     * one — "15 of 15" to somebody who asked for 30. Null while no stream lease is held; when two
+     * streams share the session this is the first one's request, because the second's binding is
+     * discarded where the session is joined rather than opened.
+     */
+    val requestedFps: Int? = null,
     val encoder: String? = null,
     val encodeWidth: Int? = null,
     val encodeHeight: Int? = null,
@@ -210,6 +221,7 @@ data class CameraPresentation(
         field("live", state == CameraState.LIVE)
         field("stream_clients", streamClients)
         field("stream_port", streamPort)
+        field("requested_fps", requestedFps)
         field("encoder", encoder)
         field("encode_width", encodeWidth)
         field("encode_height", encodeHeight)
@@ -248,6 +260,10 @@ data class CameraPresentation(
         } else {
             append("none")
         }
+        // Appended rather than placed beside `encode=`, where it reads more naturally, because
+        // consumers pin the encode-to-delivered run of this line as one substring. The dump is flat
+        // key=value text whose order carries no contract, so the field goes where it costs nothing.
+        append(" requested_fps=").append(requestedFps?.toString() ?: "none")
     }
 
     companion object {

@@ -4349,23 +4349,53 @@ const cameraShort = cameraStatus({ clients: 1, stream_clients: 1, delivered_fps:
 
 // `state.payload` is what the panel answers with right now; a test moves the panel by assigning to it.
 // 'unreachable' makes the route fail, which is how a poll loses its facts on a real panel.
-async function startCameraHarness(t, payload, pageFixture = cameraFixture) {
-  const state = { payload };
+// `delayNth`/`delayMs` hold one answer back, which is how a real poll loses its place: the response
+// still arrives, just long after the state it describes. `hideable` makes document.hidden settable so
+// a backgrounded tab can be modelled. `state.overlaps` counts requests that arrived while another was
+// still open — it must stay at zero, which is the single-flight guarantee stated as a number.
+async function startCameraHarness(t, payload, pageFixture = cameraFixture, options = {}) {
+  const state = { payload, overlaps: 0 };
   const served = [];
+  let open = 0;
   const harness = await startHarness(async (path) => {
     if (path !== '/api/v1/camera/status') return null;
-    served.push(state.payload);
-    if (state.payload === 'unreachable') {
-      return { status: 503, headers: { 'content-type': 'text/plain' }, body: 'camera-status-unavailable\n' };
+    if (open > 0) state.overlaps++;
+    open++;
+    try {
+      served.push(state.payload);
+      if (options.delayNth && served.length === options.delayNth) {
+        await new Promise((resolve) => setTimeout(resolve, options.delayMs));
+      }
+      if (state.payload === 'unreachable') {
+        return { status: 503, headers: { 'content-type': 'text/plain' }, body: 'camera-status-unavailable\n' };
+      }
+      return json(state.payload);
+    } finally {
+      open--;
     }
-    return json(state.payload);
   }, pageFixture);
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(4_000);
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  if (options.hideable) {
+    await page.addInitScript(() => {
+      window.__hidden = false;
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden });
+    });
+  }
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   return { page, state, served };
+}
+
+// Wait on what the panel was actually asked, rather than on wall-clock time, so a slow machine
+// changes how long a test takes and never what it proves.
+async function untilServed(served, count) {
+  const deadline = Date.now() + 40_000;
+  while (served.length < count) {
+    if (Date.now() > deadline) throw new Error(`only ${served.length} status polls served, wanted ${count}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 const cameraText = (page) => page.evaluate(() => document.getElementById('camtbl').textContent);
@@ -4421,8 +4451,8 @@ browserTest('A sustained shortfall is named and made actionable, and clears only
   await untilCamera(page, 'not keeping up');
   const short = await cameraText(page);
   assert.match(short, /lower the frame rate or the resolution on Configure → Camera/, 'the shortfall is actionable');
-  assert.match(short, /accept the rate this panel can give/, 'the request is never clamped for the operator');
-  assert.match(short, /a dim room can also hold the sensor below its target/, 'no single cause is claimed');
+  assert.match(short, /accept the rate this panel is giving/, 'the request is never clamped for the operator');
+  assert.match(short, /why it is short is not established here/, 'no cause is claimed for it');
   assert.match(short, /10\.1 of 15 fps/, 'the request stands at 15 — nothing rewrites it downward');
 
   const decided = served.length;
@@ -4523,4 +4553,113 @@ browserTest('A bitrate over its cap is not called normal', async (t) => {
   assert.match(text, /over the cap it was given/, 'an overshoot is named as an overshoot');
   assert.equal(text.includes('under the cap is normal'), false, 'the reassuring line must not print over a fault');
   assert.match(text, /15 of 15 fps/, 'the frame rate is judged on its own and is met here');
+});
+
+// Four cases about what the card says when its own evidence is imperfect: the rate it judges against
+// is not the one the encoder was given, the state it is in is ambiguous, or the readings it has are
+// not as consecutive as the counter thinks. Each is written against a defect that was really there.
+
+browserTest('A stream is judged against what it asked for, not against a rate a snapshot already bound', async (t) => {
+  // The camera session's capture rate is fixed by whoever opens it. A snapshot opens it at the
+  // configured 15, a stream then asks the URL for 30 and joins that session rather than reconfiguring
+  // it, so the encoder is bound to 15 while the person is still waiting for 30. Reporting "15 of 15"
+  // there would answer their question with the wrong number and call a shortfall a success.
+  const { page } = await startCameraHarness(t, cameraStatus({
+    clients: 2, stream_clients: 1, requested_fps: 30, encode_fps: 15,
+    delivered_fps: 14.9, delivered_kbps: 1660,
+  }));
+
+  await untilCamera(page, '30 fps asked for');
+  const text = await cameraText(page);
+  assert.match(text, /the session is bound to 15 fps, set when the camera was opened/,
+    'the bound rate is shown beside the request rather than in place of it');
+  assert.match(text, /14\.9 of 30 fps/, 'the delivered rate is measured against the request');
+  assert.equal(text.includes('of 15 fps'), false, 'the bound rate must never become the target');
+  assert.equal(await cameraHeader(page), '· 14.9 of 30 fps');
+
+  await untilCamera(page, 'not keeping up');
+});
+
+browserTest('A stream waiting for its encoder is called a stream, not a snapshot', async (t) => {
+  const { page } = await startCameraHarness(t, cameraStatus({
+    clients: 1, stream_clients: 1, requested_fps: 30, encoder: null,
+    encode_width: null, encode_height: null, encode_fps: null, encode_kbps: null,
+    delivered_fps: null, delivered_kbps: null,
+  }));
+
+  await untilCamera(page, 'waiting for the encoder');
+  const text = await cameraText(page);
+  assert.match(text, /a stream asked for 30 fps and the encoder has not started yet/);
+  assert.equal(text.includes('open for a snapshot'), false,
+    'a stream client is present, so this is not a snapshot holding the camera');
+});
+
+browserTest('A response that crawls back does not build a verdict across the gap it left', async (t) => {
+  const { page, state, served } = await startCameraHarness(t, cameraShort, cameraFixture, {
+    // Long enough to exceed the run's maximum gap, so the readings either side of it are not
+    // consecutive and the run that was building must start again rather than resume.
+    delayNth: 2, delayMs: 8_000,
+  });
+
+  await untilCamera(page, '10.1 of 15 fps');
+  await untilServed(served, 3);
+  assert.match(await cameraText(page), /measuring…/, 'a run broken by a slow answer is not a run');
+
+  await untilCamera(page, 'not keeping up');
+  // The arithmetic is the point. Readings one and two straddle the eight-second gap; a card that
+  // counted them as consecutive would have reached three on the reading right after it, and the run
+  // would already span far more than the window. Discarding them pushes the verdict past that.
+  assert.equal(served.length >= 4, true,
+    'a verdict built across the gap would have landed on the third reading');
+  assert.equal(state.overlaps, 0, 'the card never had two reads of itself in flight at once');
+});
+
+browserTest('A hidden tab stops polling, and the gap it leaves is not counted as evidence', async (t) => {
+  const { page, served } = await startCameraHarness(t, cameraShort, cameraFixture, { hideable: true });
+
+  await untilCamera(page, '10.1 of 15 fps');
+  await page.evaluate(() => { window.__hidden = true; });
+  const parked = served.length;
+  await page.waitForTimeout(7_000);
+  assert.equal(served.length, parked, 'a hidden tab must not keep asking the panel for status');
+
+  await page.evaluate(() => { window.__hidden = false; });
+  const resumed = served.length;
+  await untilCamera(page, 'not keeping up');
+  assert.equal(served.length - resumed >= 3, true,
+    'the readings either side of the hidden gap are not consecutive, so the run starts again');
+});
+
+browserTest('A sustained verdict is not promoted from readings that cannot span the measurement window', async (t) => {
+  // The panel measures delivery over a rolling five seconds. Three polls two seconds apart cover
+  // about four, so a count alone would promote "sustained" from three readings drawn from one
+  // window's data. The verdict must also have taken longer than that window to reach.
+  const { page } = await startCameraHarness(t, cameraShort);
+
+  await untilCamera(page, '10.1 of 15 fps');
+  const firstReadingAt = Date.now();
+  await untilCamera(page, 'not keeping up');
+  assert.equal(Date.now() - firstReadingAt >= 5_000, true,
+    'the run must span more than the panel’s own five-second delivery window');
+});
+
+browserTest('Two readings that already span the window are still not enough to judge on', async (t) => {
+  // The elapsed test and the count test are not the same test, and each has a case the other misses.
+  // Here a slow answer leaves two readings five and a half seconds apart: long enough to span the
+  // panel's measurement window, and still only two samples. A verdict from two readings is thinner
+  // evidence than the card claims to be reporting, so it waits for the third.
+  const { page, state, served } = await startCameraHarness(t, cameraShort, cameraFixture, {
+    delayNth: 2, delayMs: 3_500,
+  });
+
+  await untilCamera(page, '10.1 of 15 fps');
+  await untilServed(served, 2);
+  // The delayed answer is chosen while it is held, so its arrival is visible in the card's own text
+  // and the assertion below cannot land on the wrong reading.
+  state.payload = cameraStatus({ clients: 1, stream_clients: 1, delivered_fps: 10.24, delivered_kbps: 1660 });
+  await untilCamera(page, '10.2 of 15 fps');
+  assert.match(await cameraText(page), /measuring…/,
+    'two readings spanning the window are still two readings');
+
+  await untilCamera(page, 'not keeping up');
 });

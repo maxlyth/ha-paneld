@@ -1221,6 +1221,14 @@ class CameraSessionOwner(
             },
             streamClients = streaming,
             streamPort = facts.port,
+            // What the stream asked for, which is not always what the encoder was given. The capture
+            // rate is fixed by whoever OPENS the session — a snapshot opens it at the configured
+            // default — and a stream arriving afterwards joins that session rather than reconfiguring
+            // it, so `startEncoder` binds `minOf(binding.fps, boundFps)`. Reporting only the bound
+            // rate answers "am I getting what I asked for?" with the wrong number, in the one case
+            // where the answer is no. Null while no stream lease is held, and, by the same design that
+            // discards a later joiner's binding, this is the FIRST current stream lease's request.
+            requestedFps = state.streamBinding?.fps,
             encoder = encoderFacts?.name,
             encodeWidth = encoderFacts?.width,
             encodeHeight = encoderFacts?.height,
