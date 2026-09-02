@@ -716,15 +716,16 @@ class ServiceProcessBoundaryContractTest {
         assertFalse(stop.contains("Su.run("))
     }
 
-    @Test fun presenceFeedAndAutoSleepControllerShareTheElapsedRealtimeClock() {
+    @Test fun presenceFeedNetworkProbeAndAutoSleepControllerShareTheElapsedRealtimeClock() {
         val service = source("PaneldService.kt")
         val owner = service.substring(
-            service.indexOf("haExactEntityStream = HaExactEntityStreamOwner("),
+            service.indexOf("val haSocketClock: () -> Long"),
             service.indexOf("haAmbientLux = HaAmbientLuxSubscriber("),
         )
         val controller = source("control/AutoSleepController.kt")
 
-        assertTrue(owner.contains("monotonicMillis = { android.os.SystemClock.elapsedRealtime() }"))
+        assertTrue(owner.contains("val haSocketClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }"))
+        assertTrue(owner.split("monotonicMillis = haSocketClock").size == 3)
         assertTrue(controller.contains("elapsedRealtime: () -> Long = SystemClock::elapsedRealtime"))
     }
 
