@@ -8,14 +8,14 @@ class PanelNavigationSourceTest {
     @Test
     fun unfinishedTabsAreWithheldAndInstallRemainsInPrimaryNavigation() {
         val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        val nav = source.substringAfter("private fun navBar(active: String)")
+        val nav = source.substringAfter("private fun navBar(active: String, strings: AppStrings)")
             .substringBefore("private fun entitiesBody()")
-        val install = nav.indexOf("tab(\"install\", \"/install\", \"Install\")")
-        val profiles = nav.indexOf("tab(\"profiles\", \"/profiles\", \"Profile\")")
+        val install = nav.indexOf("tab(\"install\", \"/install\", strings.get(\"shell.nav.install\"))")
+        val profiles = nav.indexOf("tab(\"profiles\", \"/profiles\", strings.get(\"shell.nav.profile\"))")
         assertTrue(install >= 0, "Install navigation entry is missing")
         assertTrue(profiles >= 0, "Profile navigation entry is missing")
         assertTrue(
-            "tab(\"entities\", \"/entities\", \"Entities\")" in nav,
+            "tab(\"entities\", \"/entities\", strings.get(\"shell.nav.entities\"))" in nav,
             "Entities must remain reachable before first-time entity-filter activation completes",
         )
         assertTrue("disabled-tab" !in nav, "Entities must not become an inert navigation label")

@@ -222,7 +222,7 @@ class AutoSleepUiContractTest {
         assertTrue(
             "tooltip ownership must separate the full source label from the chart action",
             "class: \"auto-sleep-label\", text: labelText, title: label" in source &&
-                "trackAttrs.title = included ? \"Click to suppress this source\"" in source,
+                "trackAttrs.title = included ? i18nText(\"configure.auto_sleep.click_suppress\", \"Click to suppress this source\")" in source,
         )
         assertFalse(
             "rows and individual intervals must not own redundant hover titles",

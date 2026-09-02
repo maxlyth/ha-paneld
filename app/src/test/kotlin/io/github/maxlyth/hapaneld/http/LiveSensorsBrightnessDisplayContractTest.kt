@@ -31,7 +31,7 @@ class LiveSensorsBrightnessDisplayContractTest {
         assertTrue("percentage must be rounded from the bounded raw value", "Math.round(value*100/255)+'% ('" in formatter)
         assertTrue("native value must remain visible beside the percentage", "+value+')'" in formatter)
         assertTrue("the live row must use the shared formatter", "var brightness=formatBrightness(d.brightness);" in source)
-        assertTrue("unavailable brightness must not create a row", "if(brightness!=null)rows.push({label:'Brightness',val:brightness});" in source)
+        assertTrue("unavailable brightness must not create a row", "if(brightness!=null)rows.push({label:i18nText('dashboard.sensors.brightness','Brightness'),val:brightness});" in source)
         assertFalse("the raw-only presentation must not return", "val:d.brightness+' / 255'" in source)
     }
 

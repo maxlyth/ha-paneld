@@ -36,13 +36,13 @@ class DiagCapabilityPolicyTest {
 
     @Test fun performanceUiNamesTheDevtoolsRelayAsRemoteDebugging() {
         val source = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        assertTrue(source.contains("<h2>Remote WebView debugging "))
+        assertTrue(source.contains("strings.get(\"dashboard.card.remote_webview\")"))
         assertFalse(source.contains("<h2>WebView debugging "))
     }
 
     @Test fun topProcessesCardHasAnAccessibleCpuRamSelector() {
         val server = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        assertTrue(server.contains("""role="group" aria-label="Rank processes by"""))
+        assertTrue(server.contains("""role="group" aria-label="${'$'}{esc(strings.get("dashboard.processes.rank_by"))}"""))
         assertTrue(server.contains("""data-mode="cpu" aria-pressed="true"""))
         assertTrue(server.contains("""data-mode="ram" aria-pressed="false"""))
     }
@@ -60,7 +60,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(source.contains(""""Keep panel responsive", "Prevent idle dim", "Android dashboard lock", "Navbar","""))
         assertTrue(source.contains(""""silence_boot_chime", "keep_awake", "navbar_mode", "log_ship_enabled""""))
         assertTrue(source.contains(""""watchdog_enabled", "kiosk_lock", "touch_sound""""))
-        assertTrue(source.contains("""tcard("behavtbl", "Behaviour", s?.let { behaviourRowsHtml(it) })"""))
+        assertTrue(source.contains("""tcard("behavtbl", strings.get("dashboard.card.behaviour"), s?.let { behaviourRowsHtml(it, strings) })"""))
     }
 
     /** Runtime diagnostics owns live transport state; Behaviour reports the configured on/off setting. */
@@ -76,7 +76,7 @@ class DiagCapabilityPolicyTest {
 
         // No formatter may be attached to a BOOL setting — settingRowHtml would silently ignore it.
         assertFalse(source.contains("dashboardLogShipValue"))
-        assertTrue(source.contains("settingRowHtml(key, s.live, caps, hints, areaFormatter)"))
+        assertTrue(source.contains("settingRowHtml(key, s.live, caps, strings, hints, areaFormatter)"))
 
         // The off state is suppressed rather than shown twice; Behaviour's "Ship logs" already says it.
         assertTrue(source.contains("""key == "Log shipping" && it == LOG_SHIP_STATUS_OFF"""))
@@ -89,7 +89,7 @@ class DiagCapabilityPolicyTest {
         val configReadRoutes = java.io.File("src/main/kotlin/io/github/maxlyth/hapaneld/http/ConfigReadRoutes.kt").readText()
 
         assertTrue(script.contains("function paintNoisy(entities,identified)"))
-        assertTrue(script.contains("['Top entities','Rate','Payload']"))
+        assertTrue(script.contains("[i18nText('dashboard.noisy.top_entities','Top entities'),i18nText('dashboard.noisy.rate','Rate'),i18nText('dashboard.noisy.payload','Payload')]"))
         assertTrue(script.contains("String(e.updates1h)+'/hr'"))
         assertTrue(script.contains("fmtByteTotal(e.payloadBytes1h||0)+'/hr'"))
         assertTrue(script.contains("function fmtByteTotal(n)"))
@@ -106,7 +106,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains("""<div id="cfg-all-cards">"""))
         assertTrue(server.contains("""<div id="cfg-groups" class="cards" data-card-size-page="configure"""))
         assertFalse(server.contains("Save changes does not control them"))
-        assertTrue(server.contains("""id="savebar" class="savebar" role="region" aria-label="Unsaved settings" hidden"""))
+        assertTrue(server.contains("""id="savebar" class="savebar" role="region" aria-label="${'$'}{esc(strings.get("configure.unsaved.label"))}" hidden"""))
         assertTrue(configure.contains("""bar.hidden = !dirty && !saving"""))
         assertTrue(configure.contains("""document.body.classList.toggle("cfg-dirty", dirty || saving)"""))
         assertTrue(configure.contains("""if (!dirty || saving) return"""))
@@ -128,7 +128,7 @@ class DiagCapabilityPolicyTest {
         assertFalse(configure.contains("dashboard appearance; does not lock Android"))
         assertTrue(configure.contains(""""Sensors": "Home Assistant reporting""""))
         assertTrue(configure.contains(""""Diagnostics": "Home Assistant reporting""""))
-        assertTrue(configure.contains("""el("small", { text: " · " + CARD_NOTES[g] })"""))
+        assertTrue(configure.contains("""el("small", { text: i18nText("configure.group.ha_reporting_note", " · Home Assistant reporting") })"""))
         val css = java.io.File("src/main/assets/info.css").readText()
         assertTrue(css.contains("#noisyentities th:first-child,#noisyentities td:first-child{width:auto}"))
         assertTrue(css.contains("#noisyentities .num{white-space:nowrap}"))
@@ -148,22 +148,25 @@ class DiagCapabilityPolicyTest {
         assertTrue(configure.contains("""var labelText = el("span", { lang: f.labelLanguage })"""))
         assertFalse(configure.contains("document.documentElement.lang"))
         assertTrue(server.contains("""get("/configure") {
-                    call.response.headers.append(HttpHeaders.ContentLanguage, AppLocale.ENGLISH)"""))
-        assertTrue(server.contains("""page("configure", "Configure", configureBody(), languageTag = AppLocale.ENGLISH)"""))
+                    val strings = requestStrings(call)"""))
+        assertTrue(server.contains("""strings.languages(setOf("shell.", "configure.")).joinToString(", ")"""))
+        assertTrue(server.contains("""active = "configure",
+                            title = strings.get("shell.nav.configure"),
+                            body = configureBody(strings)"""))
         assertTrue(server.contains("configReadRoutes("))
         assertTrue(server.contains("render = ::configSchemaJson"))
-        assertTrue(configReadRoutes.contains("LocalizedConfigSchema(render(strings), strings.languages)"))
+        assertTrue(configReadRoutes.contains("LocalizedConfigSchema(render(strings), strings.languages(setOf(\"settings.\")))"))
         assertTrue(configReadRoutes.contains("HttpHeaders.ContentLanguage"))
         assertTrue(server.contains("\\\"labelLanguage\\\":${'$'}{s(label.language)}"))
         assertTrue(server.contains("\\\"helpLanguage\\\":${'$'}helpLanguageJson"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))
-        assertTrue(configure.contains("href: \"/install#cfg-display\", text: \"Display Sizing\""))
+        assertTrue(configure.contains("href: \"/install#cfg-display\", text: i18nText(\"configure.display.sizing\", \"Display Sizing\")"))
         assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))
         assertTrue(server.contains("spec.key == \"dashboard_zoom\" && displaySizingAvailable"))
         assertTrue(server.contains("""<div class="cards" id="install-cards" data-card-size-page="install"""))
         assertTrue(server.contains("""<div class="cards" id="dashboard-cards" data-card-size-page="dashboard"""))
         assertFalse(server.contains("For panels with no physical nav bar"))
-        assertTrue(server.indexOf("\${tcard(\"infotbl\", \"Panel information\"") < server.indexOf("\$shotCard"))
+        assertTrue(server.indexOf("\${tcard(\"infotbl\", strings.get(\"dashboard.card.panel_information\")") < server.indexOf("\$shotCard"))
         assertTrue(server.contains("""class="gh gh-inline cnotes"""))
         assertTrue(server.contains("class=\"gh gh-inline\" href=\"\$RELEASES_URL\""))
         assertTrue(css.contains(".gh-inline svg{width:16px;height:16px"))

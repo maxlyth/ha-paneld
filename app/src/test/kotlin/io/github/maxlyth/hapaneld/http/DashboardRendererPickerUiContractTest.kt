@@ -20,7 +20,7 @@ class DashboardRendererPickerUiContractTest {
             configure.indexOf("if (f.picker === \"renderer\")"),
             configure.indexOf("if (f.picker === \"package\")"),
         )
-        assertTrue(picker.contains("sel.appendChild(el(\"option\", { value: \"\", text: f.placeholder || \"auto\" }))"))
+        assertTrue(picker.contains("sel.appendChild(el(\"option\", { value: \"\", text: localizedPlaceholder(f.placeholder || \"auto\") }))"))
         assertFalse(picker.contains("f.placeholder || \"Auto-detect\""))
     }
 }
