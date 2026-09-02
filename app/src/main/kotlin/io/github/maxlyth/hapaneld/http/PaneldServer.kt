@@ -2122,7 +2122,7 @@ class PaneldServer internal constructor(
                     )
                     call.respondText(
                         withContext(Dispatchers.IO) {
-                            page("install", strings.get("shell.nav.install"), installBody(), strings)
+                            page("install", strings.get("shell.nav.install"), installBody(strings), strings)
                         },
                         ContentType.Text.Html,
                     )
@@ -3817,34 +3817,45 @@ class PaneldServer internal constructor(
 
     // ---- tabbed multi-page shell ----
 
-    private fun hardenedApprovalA11yAttrs(conditional: Boolean = false): String {
+    private fun hardenedApprovalA11yAttrs(
+        conditional: Boolean = false,
+        strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+    ): String {
         val description = if (conditional) "hardened-approval-conditional-description" else "hardened-approval-description"
-        val title = if (conditional) HARDENED_CONDITIONAL_APPROVAL_TEXT else HARDENED_APPROVAL_TEXT
-        return """ aria-describedby="$description" title="$title""""
+        val title = strings.get(
+            if (conditional) "configure.hardened.setting_approval" else "configure.hardened.action_approval",
+        )
+        return """ aria-describedby="$description" title="${esc(title)}""""
     }
 
-    private fun hardenedApprovalAttrs(conditional: Boolean = false): String =
-        """ data-hardened-approval${if (conditional) "=\"conditional\"" else ""}${hardenedApprovalA11yAttrs(conditional)}"""
+    private fun hardenedApprovalAttrs(
+        conditional: Boolean = false,
+        strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+    ): String =
+        """ data-hardened-approval${if (conditional) "=\"conditional\"" else ""}${hardenedApprovalA11yAttrs(conditional, strings)}"""
 
-    private fun hardenedApprovalCardTitle(title: String, badge: String = "", conditional: Boolean = false): String {
+    private fun hardenedApprovalCardTitle(
+        title: String,
+        badge: String = "",
+        conditional: Boolean = false,
+        strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+    ): String {
         val description = if (conditional) "hardened-approval-section-conditional-description" else "hardened-approval-section-description"
-        val explanation = if (conditional) {
-            "Some actions in this section require physical on-panel approval when Hardened mode is enabled."
-        } else {
-            "Actions in this section require physical on-panel approval when Hardened mode is enabled."
-        }
+        val explanation = strings.get(
+            if (conditional) "shell.hardened.section_conditional" else "shell.hardened.section",
+        )
         val marker = if (conditional) "=\"conditional\"" else ""
-        return """<h2 data-hardened-approval$marker aria-describedby="$description" title="$explanation">$title$badge</h2>"""
+        return """<h2 data-hardened-approval$marker aria-describedby="$description" title="${esc(explanation)}">$title$badge</h2>"""
     }
 
-    private fun hardenedApprovalDescription(): String =
-        """<span id="hardened-approval-description" class="sr-only">$HARDENED_APPROVAL_TEXT</span>""" +
-            """<span id="hardened-approval-conditional-description" class="sr-only">$HARDENED_CONDITIONAL_APPROVAL_TEXT</span>""" +
-            """<span id="hardened-approval-section-description" class="sr-only">Actions in this section require physical on-panel approval when Hardened mode is enabled.</span>""" +
-            """<span id="hardened-approval-section-conditional-description" class="sr-only">Some actions in this section require physical on-panel approval when Hardened mode is enabled.</span>"""
+    private fun hardenedApprovalDescription(strings: AppStrings): String =
+        """<span id="hardened-approval-description" class="sr-only">${esc(strings.get("configure.hardened.action_approval"))}</span>""" +
+            """<span id="hardened-approval-conditional-description" class="sr-only">${esc(strings.get("configure.hardened.setting_approval"))}</span>""" +
+            """<span id="hardened-approval-section-description" class="sr-only">${esc(strings.get("shell.hardened.section"))}</span>""" +
+            """<span id="hardened-approval-section-conditional-description" class="sr-only">${esc(strings.get("shell.hardened.section_conditional"))}</span>"""
 
-    private fun hardenedApprovalKey(top: Boolean = false): String =
-        """<p class="hardened-approval-key${if (top) " top" else ""}">Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely.</p>"""
+    private fun hardenedApprovalKey(top: Boolean = false, strings: AppStrings): String =
+        """<p class="hardened-approval-key${if (top) " top" else ""}">${esc(strings.get("shell.hardened.key"))}</p>"""
 
     /** The shared tab bar; [active] highlights the current page. */
     private fun localizedHref(path: String, strings: AppStrings): String {
@@ -4015,7 +4026,11 @@ $extraScripts<script src="/assets/power-safety.js"></script>
     ): String {
         val haLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener">${esc(strings.get("shell.open_in_ha"))}</a>""" else ""
-        val approvalKey = if (active in setOf("configure", "install")) hardenedApprovalKey(top = active == "install") else ""
+        val approvalKey = if (active in setOf("configure", "install")) {
+            hardenedApprovalKey(top = active == "install", strings = strings)
+        } else {
+            ""
+        }
         val approvalKeyBefore = approvalKey.takeIf { active == "install" }.orEmpty()
         val approvalKeyAfter = approvalKey.takeIf { active != "install" }.orEmpty()
         // While setup is unfinished, Configure carries a `commissioning` body class: a first-time user on
@@ -4031,7 +4046,7 @@ $extraScripts<script src="/assets/power-safety.js"></script>
             bodyAttrs = (if (commissioning) """class="commissioning" """ else "") +
                 """data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}"""",
             rightControls = "$haLink${ghLink(strings)}",
-            body = """${hardenedApprovalDescription()}
+            body = """${hardenedApprovalDescription(strings)}
 $approvalKeyBefore
 $body
 $approvalKeyAfter""",
@@ -4105,7 +4120,7 @@ $proximityScript"""
         // rendered on the dashboard; surfacing it here too costs nothing and keeps one authority.
         val mqtt = management.facts["MQTT"] ?: "disabled"
         SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let { progress ->
-            return power + resume + """<div class="setup">⟳ ${esc(progress)}</div>"""
+            return power + resume + """<div class="setup">⟳ ${esc(localizedSetupProgress(progress, strings))}</div>"""
         }
         if (haSignInNeededForEffectiveDashboard()) {
             return power + resume + """<div class="setup">🏠 <b>${esc(strings.get("configure.setup.ha_signin.title"))}</b> ${esc(strings.get("configure.setup.ha_signin.body"))}</div>"""
@@ -4245,7 +4260,7 @@ $proximityScript"""
 
     /** Install tab — software-management hub: setup warnings, managed component versions, radio firmware,
      *  on-demand health audit, and config backup. (The Capabilities card lives on the Dashboard.) */
-    private fun installBody(): String {
+    private fun installBody(strings: AppStrings): String {
         val management = snapStaleOk()
         val companion = companionServersStaleOk()
         // Engine-aware WebView age check (a Cromite swap reports the stale OEM package version).
@@ -4276,14 +4291,14 @@ $proximityScript"""
             powerAdvisory,
             inlineRepair = true,
         ) +
-            adHocWarnings(management, companion, inlineRepair = true)
-        val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion) }
+            adHocWarnings(management, companion, inlineRepair = true, strings = strings)
+        val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion, strings) }
         val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty() && !powerAdvisory.assessment.warning) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
         return """$warnings
 <div class="cards" id="install-cards" data-card-size-page="install" data-card-size-epoch="1" data-card-size-restore="1">
-${componentsCardHtml(wv, root, installer)}
-${apkCardHtml(root)}
-${uninstallCardHtml(su)}
+${componentsCardHtml(wv, root, installer, strings)}
+${apkCardHtml(root, strings)}
+${uninstallCardHtml(su, strings)}
 <div class="card" id="radiocard" data-layout-key="radio-firmware" style="display:none"><h2>Radio firmware</h2>
 <table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr>
 <tr><th>Gateway health</th><td id="radio-health">…</td></tr></table>
@@ -4293,9 +4308,9 @@ ${uninstallCardHtml(su)}
 <button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
 <div id="audit-out" style="margin-top:10px"></div>
 <p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
-${tameCardHtml(root)}
-${displayCardHtml(management.privilege.typedShellControlReady, displaySizing)}
-${backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null)}
+${tameCardHtml(root, strings)}
+${displayCardHtml(management.privilege.typedShellControlReady, displaySizing, strings)}
+${backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null, strings)}
 $allGood</div>
 <script src="/assets/card-size-memory.js"></script>
 <script src="/assets/card-column-alignment.js"></script>
@@ -4305,18 +4320,23 @@ $allGood</div>
     /** One top-of-tab warning for a render-blocking finding (WebView old / no dashboard app). WebView gets
      *  the inline "Update WebView now" heal button when [canHeal]; a missing renderer gets a one-tap
      *  "Install HA Companion" button when [canInstallCompanion]. */
-    private fun installWarning(f: HealthAudit.Finding, canHeal: Boolean, canInstallCompanion: Boolean): String = when (f.kind) {
+    private fun installWarning(
+        f: HealthAudit.Finding,
+        canHeal: Boolean,
+        canInstallCompanion: Boolean,
+        strings: AppStrings,
+    ): String = when (f.kind) {
         HealthAudit.Kind.WEBVIEW_OLD ->
             """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
                 """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
                 """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
-                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
+                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.NO_RENDERER ->
             """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's built-in renderer """ +
                 """on <a href="/configure">Configure</a>, install the Home Assistant Companion app, or set another """ +
                 """dashboard package there.""" +
-                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
+                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
         HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
@@ -4330,28 +4350,33 @@ $allGood</div>
      *  from Configure; up to 10 recent versions hydrated by install.js) with a release-notes link and an
      *  Install-selected-version button. The System WebView is a single known-good build (heal/up-to-date).
      *  All actions POST /api/v1/install/component and poll /api/v1/install/status. */
-    private fun componentsCardHtml(wv: PanelInfo.WebViewStatus, root: Boolean, installer: Boolean): String {
+    private fun componentsCardHtml(
+        wv: PanelInfo.WebViewStatus,
+        root: Boolean,
+        installer: Boolean,
+        strings: AppStrings,
+    ): String {
         val paneldCur = Config.VERSION
         val compPkg = CompanionInstaller.installedPkg(appContext)
         val compFull = compPkg == CompanionInstaller.FULL_PKG
         val compCur = compPkg?.let { AppInstaller.installedVersion(appContext, it) }?.takeIf { it.isNotBlank() }
         val rec = profile.recommendedWebView
 
-        val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, installer)
+        val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, installer, strings)
         // A Play-managed FULL Companion must never be touched by ha-paneld — show it read-only.
         val compRow = if (compFull)
             simpleRow("HA Companion", compCur, """<span class="muted">Play-managed — updates via the Play Store</span>""")
-        else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, installer)
+        else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, installer, strings)
         val wvAction = when {
             wv.playManaged -> """<span class="muted">Managed by Google Play — updates via the Play Store</span>"""
-            wv.tooOld && rec != null && root -> """<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
+            wv.tooOld && rec != null && root -> """<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
             wv.tooOld && rec != null -> """<span class="muted">needs root/daemon to update</span>"""
             wv.tooOld -> """<span class="muted">no known-good build for this panel</span>"""
             else -> """<span class="muted">up to date</span>"""
         }
         val installNote = if (installer) "" else """<p class="note">⚠ Installing or updating needs supported privileged panel access, which is unavailable on this panel.</p>"""
         val title = if (installer || (wv.tooOld && rec != null && root)) {
-            hardenedApprovalCardTitle("Managed components", conditional = true)
+            hardenedApprovalCardTitle("Managed components", conditional = true, strings = strings)
         } else {
             "<h2>Managed components</h2>"
         }
@@ -4367,17 +4392,21 @@ $installNote
     /** Backup & restore card: an ENCRYPTED device-state bundle (ha-paneld config + optionally the HA
      *  Companion login) with a passphrase; restore shows a decrypt preview before the destructive apply.
      *  Also links the plain config-only bundle (for cloning settings between panels). */
-    private fun backupCardHtml(companionHelper: Boolean, companionInstalled: Boolean): String {
+    private fun backupCardHtml(
+        companionHelper: Boolean,
+        companionInstalled: Boolean,
+        strings: AppStrings,
+    ): String {
         val companion = backupCompanionCopy(installed = companionInstalled, helper = companionHelper)
         val compRow = companion.row
         val restoreWarn = companion.restoreWarning
-        return """<div class="card" data-layout-key="backup-restore">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true)}
+        return """<div class="card" data-layout-key="backup-restore">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true, strings = strings)}
 <p class="note">A bundle of this panel's ha-paneld config${companion.bundleSuffix}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
 <input type="password" id="bk-pw" placeholder="Passphrase (required for encrypted backup)">
 <label style="display:flex;flex-direction:row;gap:8px;align-items:flex-start;font-size:.85rem;color:#c88"><input type="checkbox" id="bk-plain"> Create an unencrypted plaintext ZIP instead (contains credentials)</label>
-<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="doBackup(this)">⭳ Download backup</button>
+<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doBackup(this)">⭳ Download backup</button>
 </div>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
 <p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
@@ -4391,8 +4420,8 @@ $compRow
 <p class="note"><b>Configuration bundle</b> copies settings between panels without app data. Preview an import before applying it; valid entries are applied and unsupported entries are skipped.</p>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
  <a class="pbtn" href="/api/v1/config/export">⭳ Export settings</a>
- <button class="pbtn" type="button"${hardenedApprovalA11yAttrs()} onclick="configExport(true,this)">⭳ Export incl. secrets</button>
- <label class="pbtn"${hardenedApprovalA11yAttrs()} style="cursor:pointer">⭱ Import settings…<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
+ <button class="pbtn" type="button"${hardenedApprovalA11yAttrs(strings = strings)} onclick="configExport(true,this)">⭳ Export incl. secrets</button>
+ <label class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} style="cursor:pointer">⭱ Import settings…<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
 </div>
 <p id="cfg-export-result" class="note" role="status" aria-live="polite"></p>
 <pre id="cfg-import-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div>"""
@@ -4406,7 +4435,7 @@ $compRow
      *  because a phone browser may refuse to offer a downloaded APK to the file picker at all, which
      *  leaves upload-only administrators with no route. Both end at the same inspected staged file and
      *  the same confirm-before-install button. */
-    private fun apkCardHtml(root: Boolean): String {
+    private fun apkCardHtml(root: Boolean, strings: AppStrings): String {
         val body = if (!root) {
             """<p class="note">⚠ Installing an arbitrary APK needs root or the helper daemon — unavailable on this panel.</p>"""
         } else {
@@ -4425,7 +4454,7 @@ $compRow
         // Both actions in this card are approval-gated in Hardened mode — fetching, because it aims the
         // panel at a destination someone chose remotely, and installing — so the card title carries the
         // shield rather than each control repeating it.
-        val title = if (root) hardenedApprovalCardTitle("Install an APK") else "<h2>Install an APK</h2>"
+        val title = if (root) hardenedApprovalCardTitle("Install an APK", strings = strings) else "<h2>Install an APK</h2>"
         return """<div class="card" data-layout-key="apk-install">$title
 <p class="note">Sideload an app (e.g. a dashboard renderer) from a file on your device or an <code>https://</code> link the panel downloads itself — either way you'll see its package, version and signer before it installs.</p>
 $body
@@ -4434,15 +4463,15 @@ $body
 
     /** "Uninstall an app" card. Lists only removable apps (see packagesJson) so the picker can't strand the
      *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
-    private fun uninstallCardHtml(root: Boolean): String {
+    private fun uninstallCardHtml(root: Boolean, strings: AppStrings): String {
         val body = if (!root) """<p class="note">⚠ Uninstalling an app needs root — unavailable on this panel.</p>"""
         else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/install#cfg-tame">tame</a> it instead.</p>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
 <select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>loading…</option></select>
-<button class="pbtn"${hardenedApprovalA11yAttrs()} onclick="doUninstall(this)">Uninstall</button>
+<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doUninstall(this)">Uninstall</button>
 </div>
 <p class="note" id="uninst-msg"></p>"""
-        val title = if (root) hardenedApprovalCardTitle("Uninstall an app") else "<h2>Uninstall an app</h2>"
+        val title = if (root) hardenedApprovalCardTitle("Uninstall an app", strings = strings) else "<h2>Uninstall an app</h2>"
         return """<div class="card" data-layout-key="uninstall-app">$title
 $body</div>"""
     }
@@ -4513,7 +4542,14 @@ $body</div>"""
     /** A component row with a channel + version picker (versions hydrated by install.js), a release-notes
      *  link, and an Install button — for the GitHub-hosted components (ha-paneld, HA Companion). The
      *  channel select defaults to [defaultChannel] (the Configure-tab setting). */
-    private fun pickerRow(name: String, label: String, installed: String?, defaultChannel: String, installer: Boolean): String {
+    private fun pickerRow(
+        name: String,
+        label: String,
+        installed: String?,
+        defaultChannel: String,
+        installer: Boolean,
+        strings: AppStrings,
+    ): String {
         fun sel(v: String) = if (defaultChannel == v) " selected" else ""
         return """<div class="comprow" data-name="${esc(name)}">
 <div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
@@ -4521,7 +4557,7 @@ $body</div>"""
 <label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
 <label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
 <a class="gh gh-inline cnotes" target="_blank" rel="noopener" title="Release notes on GitHub" aria-label="Release notes on GitHub" style="visibility:hidden"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="$GH_ICON"/></svg></a>
-${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs()} onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
+${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
         else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no privileged installer, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
 </div></div>"""
     }
@@ -4665,11 +4701,11 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
 
     /** The pencil that marks a value as CONFIGURABLE (vs a static fact) and deep-links to the exact
      *  setting/card on the Configure tab (`/configure#<anchor>` scrolls + flashes it). */
-    private fun cfgIcon(anchor: String): String =
-        """&nbsp;<a class="cfglink" href="/configure#$anchor" title="Edit on the Configure tab" aria-label="Edit">✎</a>"""
+    private fun cfgIcon(anchor: String, strings: AppStrings): String =
+        """&nbsp;<a class="cfglink" href="${localizedHref("/configure#$anchor", strings)}" title="${esc(strings.get("dashboard.link.edit_configure"))}" aria-label="${esc(strings.get("dashboard.link.edit"))}">✎</a>"""
 
-    private fun installIcon(anchor: String): String =
-        """&nbsp;<a class="cfglink" href="/install#$anchor" title="Open on the Install tab" aria-label="Open">✎</a>"""
+    private fun installIcon(anchor: String, strings: AppStrings): String =
+        """&nbsp;<a class="cfglink" href="${localizedHref("/install#$anchor", strings)}" title="${esc(strings.get("dashboard.link.open_install"))}" aria-label="${esc(strings.get("dashboard.link.open"))}">✎</a>"""
 
     /** What the "auto" (blank) package settings actually resolved to — shown as `auto (label)` in the
      *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
@@ -4712,7 +4748,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             raw == SystemController.BUILTIN_DASHBOARD -> strings.get("dashboard.value.builtin_renderer")
             else -> valueFormatter?.formatFor(key, raw) ?: raw
         }
-        return """<tr><th>${esc(strings.get(spec.labelKey))}</th><td>${esc(shown)}${cfgIcon("cfg-$key")}</td></tr>"""
+        return """<tr><th>${esc(strings.get(spec.labelKey))}</th><td>${esc(shown)}${cfgIcon("cfg-$key", strings)}</td></tr>"""
     }
 
     // ---- dashboard snapshot (probe results) + hydration ---------------------------------------------
@@ -5166,11 +5202,72 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         "connection lost" -> strings.get("dashboard.runtime.ha_connection_lost")
         "watching; Home Assistant does not permit WebSocket lifecycle events for this user" ->
             strings.get("dashboard.runtime.ha_events_refused")
+        "failed" -> strings.get("dashboard.runtime.audio_failed")
+        "disabled" -> strings.get("dashboard.runtime.disabled")
+        "not measured; this panel holds no authenticated Home Assistant socket" ->
+            strings.get("dashboard.runtime.ha_network_not_measured")
+        "external renderer · Home Assistant connection not observed by ha-paneld" ->
+            strings.get("dashboard.runtime.external_renderer_unobserved")
         else -> value
     }
 
     private fun formattedString(strings: AppStrings, key: String, vararg values: Pair<String, String>): String =
         values.fold(strings.get(key)) { text, (name, value) -> text.replace("{$name}", value) }
+
+    private fun localizedSetupNeeds(needs: List<String>, strings: AppStrings): String = needs.joinToString(
+        separator = strings.get("dashboard.banner.setup_needs.joiner"),
+    ) { need ->
+        when (need) {
+            "MQTT configuration" -> strings.get("dashboard.banner.setup_needs.mqtt_configuration")
+            "valid MQTT credentials" -> strings.get("dashboard.banner.setup_needs.valid_credentials")
+            "valid MQTT credentials (the broker rejected them)" ->
+                strings.get("dashboard.banner.setup_needs.rejected_credentials")
+            "a reachable MQTT broker" -> strings.get("dashboard.banner.setup_needs.reachable_broker")
+            "a valid MQTT broker URL" -> strings.get("dashboard.banner.setup_needs.valid_broker_url")
+            else -> need
+        }
+    }
+
+    private fun localizedSetupProgress(progress: String, strings: AppStrings): String {
+        val next = " The dashboard setup step appears next."
+        val suffix = if (progress.endsWith(next)) " ${strings.get("shell.setup_progress.next")}" else ""
+        val base = progress.removeSuffix(next)
+        val translated = when (base) {
+            "MQTT settings saved — verifying the broker connection. This can take a short while after saving." ->
+                strings.get("shell.setup_progress.verifying")
+            "MQTT connected — publishing Home Assistant discovery." ->
+                strings.get("shell.setup_progress.publishing")
+            else -> base
+        }
+        return translated + suffix
+    }
+
+    private fun localizedProximitySummary(summary: String, strings: AppStrings): String = when (summary) {
+        "No proximity source" -> strings.get("dashboard.proximity.no_source")
+        "Waiting for the proximity source's first trustworthy reading" ->
+            strings.get("dashboard.proximity.waiting_first_reading")
+        "Checking the previous learned range against live readings" ->
+            strings.get("dashboard.proximity.checking_previous_range")
+        "Learning the clear-room baseline" -> strings.get("dashboard.proximity.learning_baseline")
+        "Baseline learned; waiting for complete near-and-clear movements" ->
+            strings.get("dashboard.proximity.waiting_movements")
+        "Adapting safely to a changed proximity signal" -> strings.get("dashboard.proximity.adapting")
+        "Presence ready; learning deliberate wake gestures" -> strings.get("dashboard.proximity.learning_gestures")
+        "Waiting for trustworthy proximity readings" -> strings.get("dashboard.proximity.waiting_readings")
+        else -> {
+            val ready = Regex("^Ready · ([a-z_]+) · normalized 0–100$").matchEntire(summary)
+            if (ready != null) {
+                val mode = when (ready.groupValues[1]) {
+                    "binary" -> strings.get("dashboard.proximity.mode.binary")
+                    "graded" -> strings.get("dashboard.proximity.mode.graded")
+                    else -> ready.groupValues[1]
+                }
+                formattedString(strings, "dashboard.proximity.ready", "mode" to mode)
+            } else {
+                summary
+            }
+        }
+    }
 
     /**
      * Whether setup genuinely still owes the user a dashboard/renderer step.
@@ -5213,7 +5310,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // mid-(re)connect must not be reported as missing.
         val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.mqttUser.isNotBlank())
         val setup = if (needs.isNotEmpty())
-            """<div class="setup">⚠ ${esc(strings.get("dashboard.banner.setup_needs.prefix"))} <a href="${localizedHref("/configure", strings)}">${needs.joinToString(" and ")}</a> ${esc(strings.get("dashboard.banner.setup_needs.suffix"))}</div>"""
+            """<div class="setup">⚠ ${esc(strings.get("dashboard.banner.setup_needs.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(localizedSetupNeeds(needs, strings))}</a> ${esc(strings.get("dashboard.banner.setup_needs.suffix"))}</div>"""
         else ""
         // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
         // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
@@ -5222,12 +5319,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         // made, which is the reason it was added.
         val mqttProgress = if (!setupNeedsUser()) "" else {
             SetupBanner.progress(mqtt, config.mqttBroker.isNotBlank(), dashboardSetupStepPending(), mqttState())?.let {
-                """<div class="setup">⟳ ${esc(it)}</div>"""
+                """<div class="setup">⟳ ${esc(localizedSetupProgress(it, strings))}</div>"""
             }.orEmpty()
         }
         val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner(strings) else ""
         val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
-            """<div class="setup">👋 <b>${esc(strings.get("dashboard.banner.proximity_learning.title"))}</b> — ${esc(sensors.proximitySummary())}. """ +
+            """<div class="setup">👋 <b>${esc(strings.get("dashboard.banner.proximity_learning.title"))}</b> — ${esc(localizedProximitySummary(sensors.proximitySummary(), strings))}. """ +
                 """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("/configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
         } else ""
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
@@ -5386,7 +5483,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             }
             // Facts backed by a setting get the ✎ marker (configurable vs static at a glance),
             // deep-linking to the exact row on the Configure tab.
-            val edit = FACT_CFG[k]?.let { cfgIcon(it) } ?: ""
+            val edit = FACT_CFG[k]?.let { cfgIcon(it, strings) } ?: ""
             "<tr><th>${esc(factLabel(k, strings))}</th><td>$cell$edit</td></tr>"
         }
     }
@@ -5448,12 +5545,12 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
             settingRowHtml(key, s.live, liveCapabilities(s.caps), strings, valueFormatter = formatter)
         }
             .joinToString("\n") + "\n" + listOfNotNull(
-            s.densityCur?.let { """<tr><th>${esc(strings.get("dashboard.display.logical_density"))}</th><td>$it dpi (${esc(strings.get("dashboard.display.factory_base"))} ${s.densityBase ?: "?"})${installIcon("cfg-display")}</td></tr>""" },
-            s.densityCur?.let { """<tr><th>${esc(strings.get("dashboard.display.text_size"))}</th><td>${s.fontScale}${installIcon("cfg-display")}</td></tr>""" },
+            s.densityCur?.let { """<tr><th>${esc(strings.get("dashboard.display.logical_density"))}</th><td>$it dpi (${esc(strings.get("dashboard.display.factory_base"))} ${s.densityBase ?: "?"})${installIcon("cfg-display", strings)}</td></tr>""" },
+            s.densityCur?.let { """<tr><th>${esc(strings.get("dashboard.display.text_size"))}</th><td>${s.fontScale}${installIcon("cfg-display", strings)}</td></tr>""" },
             sensors.proximitySummary().takeIf { sensors.hasProximity() }?.let {
-                """<tr><th>${esc(strings.get("settings.wake_on_wave.label"))}</th><td>${esc(it)}${cfgIcon("cfg-wake_on_wave")}</td></tr>"""
+                """<tr><th>${esc(strings.get("settings.wake_on_wave.label"))}</th><td>${esc(localizedProximitySummary(it, strings))}${cfgIcon("cfg-wake_on_wave", strings)}</td></tr>"""
             },
-            """<tr><th>${esc(strings.get("dashboard.display.tamed_packages"))}</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { strings.get("dashboard.value.none") })}${installIcon("cfg-tame")}</td></tr>""",
+            """<tr><th>${esc(strings.get("dashboard.display.tamed_packages"))}</th><td>${esc(config.tameVendorPackagesRaw.ifBlank { strings.get("dashboard.value.none") })}${installIcon("cfg-tame", strings)}</td></tr>""",
         ).joinToString("\n")
     }
 
@@ -5713,7 +5810,12 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
     /** One Vendor-packages row: label + package id, an optional state badge, and the single action button.
      *  Shared by the card and the picker. [showState] is false on the card — every row there is already
      *  tamed (disabled), so the column is redundant and just crowds the layout. */
-    private fun tameRowHtml(c: TameController.Candidate, showState: Boolean = true, disabled: Boolean = false): String {
+    private fun tameRowHtml(
+        c: TameController.Candidate,
+        showState: Boolean = true,
+        disabled: Boolean = false,
+        strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+    ): String {
         val tamed = c.blocked || c.disabled
         val state = if (!showState) "" else when {
             !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:var(--dim)">not installed</span>"""
@@ -5738,7 +5840,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         val control = if (!c.removable)
             """<span style="font-size:.8em;color:#777;white-space:nowrap">protected</span>"""
         else
-            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs()} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
+            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
@@ -5746,7 +5848,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
   </div>"""
     }
 
-    private fun tameCardHtml(rootReady: Boolean): String {
+    private fun tameCardHtml(rootReady: Boolean, strings: AppStrings): String {
         // Root-gated, but shown (never hidden) so a no-root user sees the feature: the profile's candidate
         // vendor apps are listed greyed with a lock banner, actions disabled. Discovery (PackageManager)
         // needs no root; the tame/re-enable ACTIONS do.
@@ -5757,7 +5859,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         val cands = runCatching {
             tame.cardCandidates(config.tameVendorPackages, tameProfileCandidates)
         }.getOrDefault(emptyList())
-        val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false, disabled = locked) }
+        val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false, disabled = locked, strings = strings) }
         val body = when {
             locked -> """<div class="locked">${rows.ifBlank { """<p class="note">The vendor apps this panel could hide would be listed here.</p>""" }}</div>"""
             else -> rows.ifBlank {
@@ -5766,7 +5868,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         }
         val dis = if (locked) " disabled" else ""
         val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
-        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", conditional = true)
+        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", conditional = true, strings = strings)
             else "<h2>Vendor packages</h2>"
         return """<div class="card" id="cfg-tame" data-layout-key="vendor-packages">$title
 $lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
@@ -5777,12 +5879,12 @@ $body
   <label for="tame-pkg" style="grid-column:1/-1">Android package name</label>
   <input id="tame-pkg" name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" required pattern="[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*" maxlength="255" aria-describedby="tame-pkg-hint" placeholder="io.example.app" style="min-width:0"$dis oninput="updateTamePackageSubmit()">
   <input type="hidden" name="action" value="tame">
-  <button id="tame-package-submit" type="submit"${hardenedApprovalA11yAttrs()}$dis>Tame</button>
+  <button id="tame-package-submit" type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>Tame</button>
   <small id="tame-pkg-hint" class="note" style="grid-column:1/-1">Use the Android package id, for example io.example.app.</small>
  </form>
 </div>
 <dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
- <h3 data-hardened-approval="conditional" aria-describedby="hardened-approval-section-conditional-description" title="Some actions in this section require physical on-panel approval when Hardened mode is enabled." style="margin:0 0 4px">Find a package to control</h3>
+ <h3 data-hardened-approval="conditional" aria-describedby="hardened-approval-section-conditional-description" title="${esc(strings.get("shell.hardened.section_conditional"))}" style="margin:0 0 4px">Find a package to control</h3>
  <p class="note" style="margin:0 0 8px">Apps on this panel you might want to tame — pick one to act on it. Not every entry is unwanted; only tame things you recognise.</p>
  <div id="pkgdlgbody" style="max-height:55vh;overflow:auto">Loading…</div>
  <form method="dialog" style="margin-top:12px;text-align:right"><button>Close</button></form>
@@ -5797,6 +5899,7 @@ function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg')
     private fun displayCardHtml(
         typedShellReady: Boolean,
         sizing: DisplaySizingObservation,
+        strings: AppStrings,
     ): String {
         // The POST primes densityCache, so peek preserves immediate post-write values without turning
         // Install rendering into another privileged probe. Cold startup already populated the snapshot.
@@ -5812,10 +5915,10 @@ function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg')
         val resetTitle = base?.let { "Reset to firmware default ($it dpi)" } ?: "Reset to firmware default"
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
-            """ <button type="submit" name="action" value="rec"${hardenedApprovalA11yAttrs()} formnovalidate>HA-optimised</button>""" else ""
+            """ <button type="submit" name="action" value="rec"${hardenedApprovalA11yAttrs(strings = strings)} formnovalidate>HA-optimised</button>""" else ""
         val lock = if (locked) privilegedLockBanner("With supported privileged panel access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
         val badge = """<span class="cardbadge exp">experimental</span>"""
-        val title = if (!locked) hardenedApprovalCardTitle("Display sizing", badge) else "<h2>Display sizing$badge</h2>"
+        val title = if (!locked) hardenedApprovalCardTitle("Display sizing", badge, strings = strings) else "<h2>Display sizing$badge</h2>"
         return """<div class="card" id="cfg-display" data-layout-key="display-sizing">$title
 $lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
 pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
@@ -5831,8 +5934,8 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
   <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px"$dis>
  </label>
  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
-  <button type="submit"${hardenedApprovalA11yAttrs()}$dis>Apply</button>$rec
-  <button type="submit" name="action" value="reset" aria-describedby="hardened-approval-description" formnovalidate title="$resetTitle · $HARDENED_APPROVAL_TEXT"$dis>Reset</button>
+  <button type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>Apply</button>$rec
+  <button type="submit" name="action" value="reset" aria-describedby="hardened-approval-description" formnovalidate title="$resetTitle · ${esc(strings.get("configure.hardened.action_approval"))}"$dis>Reset</button>
  </div>
 </form></div>"""
     }

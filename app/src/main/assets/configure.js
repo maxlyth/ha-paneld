@@ -122,6 +122,15 @@
     window.history.replaceState(null, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
   }
 
+  function localizedPageHref(path) {
+    var locale = window.HaI18n && typeof window.HaI18n.locale === "string" ? window.HaI18n.locale : "";
+    if (!validLanguageTag(locale) || locale.toLowerCase() === "en") return path;
+    var fragmentAt = path.indexOf("#");
+    var address = fragmentAt < 0 ? path : path.slice(0, fragmentAt);
+    var fragment = fragmentAt < 0 ? "" : path.slice(fragmentAt);
+    return address + (address.indexOf("?") < 0 ? "?" : "&") + "lang=" + encodeURIComponent(locale) + fragment;
+  }
+
   // HA uses this JSON-encoded localStorage key for its own browser language choice. The same shape
   // gives Configure a durable browser override without inventing another client-side authority.
   function browserLanguageChoice() {
@@ -1459,7 +1468,7 @@
   function autoBrightnessSummary() {
     if (autoBrightSourceTransition) return i18nText("configure.brightness.source_updating", "Updating ambient-light source… · Source: {source}", { source: autoBrightnessSelectedSource() });
     if (!autoBrightStatus) return autoBrightLoading ? i18nText("configure.brightness.loading", "Loading adaptive brightness…") : i18nText("configure.brightness.status_unavailable", "Adaptive brightness status is unavailable.");
-    if (autoBrightStatus.available === false) return autoBrightStatus.detail || i18nText("configure.brightness.runtime_unavailable", "Adaptive brightness runtime is unavailable.");
+    if (autoBrightStatus.available === false) return i18nText("configure.brightness.runtime_unavailable", "Adaptive brightness runtime is unavailable.");
     if (autoBrightStatus.sourceAvailable === false || autoBrightStatus.source_available === false) {
       return i18nText("configure.brightness.waiting", "Waiting for ambient light… · Source: {source}", { source: autoBrightnessSelectedSource() });
     }
@@ -2515,7 +2524,7 @@
       var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })];
       if (f.displaySizingAvailable === true) {
         helpKids.push(document.createTextNode(i18nText("configure.display.recommend_prefix", " Recommend use ")));
-        helpKids.push(el("a", { href: "/install#cfg-display", text: i18nText("configure.display.sizing", "Display Sizing") }));
+        helpKids.push(el("a", { href: localizedPageHref("/install#cfg-display"), text: i18nText("configure.display.sizing", "Display Sizing") }));
         helpKids.push(document.createTextNode(i18nText("configure.display.recommend_suffix", " for better results")));
       }
       help = el("small", {}, helpKids);
@@ -2921,7 +2930,7 @@
           fetch("/api/v1/dashboard/clear-storage", { method: "POST" })
             .then(function (r) { return approvalAwareJson(r).then(function () { return r; }); })
             .then(function (r) { setClearStatus(r.ok ? i18nText("configure.renderer.clear_requested", "Clear requested.") : i18nText("configure.error.http", "Failed (HTTP {status})", { status: r.status }), r.ok); })
-            .catch(function (error) { setClearStatus(error && error.approvalRequired ? error.message : i18nText("configure.error.network", "Failed (network)"), false); });
+            .catch(function (error) { setClearStatus(error && error.approvalRequired ? approvalMessage(error.body) : i18nText("configure.error.network", "Failed (network)"), false); });
         };
         card.appendChild(el("div", { class: "frow" }, [
           el("div", { class: "flabel" }, [
@@ -3160,7 +3169,7 @@
           }, false);
         } else {
           msg.textContent = e && e.approvalRequired
-            ? e.message
+            ? approvalMessage(e.body)
             : i18nText("configure.save.failed", "Save failed.");
           updateSaveUi();
         }

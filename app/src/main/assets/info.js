@@ -479,11 +479,11 @@ function fitControls(){
 }
 window.addEventListener('resize',fitControls);
 if(document.readyState!=='loading')fitControls();else document.addEventListener('DOMContentLoaded',fitControls);
-function approvalMessage(body){return body&&body.message||i18nText('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.');}
+function approvalMessage(){return i18nText('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.');}
 function responseBody(response){return response.text().then(function(text){
- var body={};try{body=text?JSON.parse(text):{};}catch(_){body={message:text};}
+ var body={};try{body=text?JSON.parse(text):{};}catch(_){body={};}
  if(response.status===202&&body&&body.error==='approval-required'){
-  var error=new Error(approvalMessage(body));error.approvalRequired=true;error.body=body;throw error;
+  var error=new Error(approvalMessage());error.approvalRequired=true;error.body=body;throw error;
  }
  return {response:response,body:body};
 });}
@@ -502,7 +502,7 @@ function inspApply(d){
 async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){var hint=document.getElementById('insthint');
  fetch('/api/v1/inspect/start',{method:'POST'}).then(responseBody).then(function(result){inspApply(result.body);})
- .catch(function(error){if(hint)hint.textContent=error&&error.message?error.message:i18nText('dashboard.inspect.start_failed','Could not start the relay.');});}
+ .catch(function(error){if(hint)hint.textContent=error&&error.approvalRequired?i18nText('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.'):i18nText('dashboard.inspect.start_failed','Could not start the relay.');});}
 function inspStop(){fetch('/api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
 
@@ -526,9 +526,9 @@ function act(a){if(a==='reboot'){
  .then(responseBody).then(function(result){
   if(!result.response.ok){
    if(result.body&&result.body.error==='remote-input-disabled')controlMessage(i18nText('dashboard.actions.remote_input_disabled','Remote tap input is disabled for network clients in Hardened mode.'));
-   else controlMessage(result.body.message||result.body.error||i18nText('dashboard.actions.failed_http','Action failed (HTTP {status}).',{status:result.response.status}));
+   else controlMessage(i18nText('dashboard.actions.failed_http','Action failed (HTTP {status}).',{status:result.response.status}));
   }else controlMessage('');
- }).catch(function(error){controlMessage(error&&error.approvalRequired?error.message:i18nText('dashboard.actions.failed_network','Action failed (network).'));});}
+ }).catch(function(error){controlMessage(error&&error.approvalRequired?i18nText('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.'):i18nText('dashboard.actions.failed_network','Action failed (network).'));});}
 
 // Reveal toggle for .secret fields (blurred by default). Auto-re-blurs after 20s so it can't be left
 // revealed for a screenshot. Focusing a blurred input also un-blurs it (see info.css) so config stays editable.
