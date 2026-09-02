@@ -5257,7 +5257,7 @@ publishes MQTT availability, so the discovery hooks are in place.</p>
         values.fold(strings.get(key)) { text, (name, value) -> text.replace("{$name}", value) }
 
     private fun localizedSetupNeeds(needs: List<String>, strings: AppStrings): String = needs.joinToString(
-        separator = strings.get("dashboard.banner.setup_needs.joiner"),
+        separator = " ${strings.get("dashboard.banner.setup_needs.joiner")} ",
     ) { need ->
         when (need) {
             "MQTT configuration" -> strings.get("dashboard.banner.setup_needs.mqtt_configuration")
