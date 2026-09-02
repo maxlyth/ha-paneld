@@ -55,6 +55,87 @@ class StringsTest {
         assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
     }
 
+    @Test fun `web surfaces share the validated catalogue and can be resolved by prefix`() {
+        val settingText = "Settings label"
+        val menuText = "Dashboard"
+        val source = SourceCatalogue.parse("""{
+          "schema":1,
+          "locale":"en",
+          "sourceRevision":"${"e".repeat(40)}",
+          "strings":{
+            "settings.example.label":{
+              "text":"$settingText","sourceHash":"${sourceHash(settingText)}","surface":"settings",
+              "context":"Setting label","risk":"ordinary","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            },
+            "shell.nav.dashboard":{
+              "text":"$menuText","sourceHash":"${sourceHash(menuText)}","surface":"shell",
+              "context":"Dashboard navigation tab","risk":"ordinary","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            }
+          }
+        }""".trimIndent())
+        val target = TargetCatalogue.parse("""{
+          "schema":1,
+          "locale":"de",
+          "sourceRevision":"${"e".repeat(40)}",
+          "strings":{
+            "settings.example.label":{
+              "text":"Einstellung","sourceHash":"${sourceHash(settingText)}","state":"machine-cross-checked"
+            }
+          }
+        }""".trimIndent(), source)
+        val strings = Strings(source, target)
+
+        assertEquals("de", strings.requestedLocale)
+        assertEquals("de", strings.locale)
+        assertEquals(listOf("de"), strings.languages(setOf("settings.")))
+        assertEquals(listOf("en"), strings.languages(setOf("shell.")))
+        assertEquals(
+            mapOf("shell.nav.dashboard" to LocalizedText("Dashboard", "en")),
+            strings.resolved(setOf("shell.")),
+        )
+        assertThrows(IllegalArgumentException::class.java) { strings.resolved(setOf("")) }
+    }
+
+    @Test fun `Simplified Chinese request retains its locale while each HTML key falls back independently`() {
+        val revision = "c".repeat(40)
+        val dashboardEnglish = "Dashboard"
+        val configureEnglish = "Save changes"
+        val source = SourceCatalogue.parse("""{
+          "schema":1,"locale":"en","sourceRevision":"$revision","strings":{
+            "shell.nav.dashboard":{
+              "text":"$dashboardEnglish","sourceHash":"${sourceHash(dashboardEnglish)}","surface":"shell",
+              "context":"Dashboard tab","risk":"ordinary","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            },
+            "configure.save.action":{
+              "text":"$configureEnglish","sourceHash":"${sourceHash(configureEnglish)}","surface":"configure",
+              "context":"Save action","risk":"consequential","siblings":[],"placeholders":[],"frozen":[],
+              "softMaxChars":20,"hardMaxChars":40
+            }
+          }
+        }""".trimIndent())
+        val target = TargetCatalogue.parse("""{
+          "schema":1,"locale":"zh-Hans","sourceRevision":"$revision","strings":{
+            "shell.nav.dashboard":{"text":"仪表板","sourceHash":"${sourceHash(dashboardEnglish)}","state":"machine-cross-checked"},
+            "configure.save.action":{"text":"保存更改","sourceHash":"${sourceHash(configureEnglish)}","state":"machine-draft"}
+          }
+        }""".trimIndent(), source)
+        val strings = Strings(source, target)
+
+        assertEquals("zh-Hans", strings.requestedLocale)
+        assertEquals(LocalizedText("仪表板", "zh-Hans"), strings.resolve("shell.nav.dashboard"))
+        assertEquals(LocalizedText("Save changes", "en"), strings.resolve("configure.save.action"))
+        assertEquals(listOf("en", "zh-Hans"), strings.languages)
+    }
+
+    @Test fun `unknown catalogue surface is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            SourceCatalogue.parse(english.replace("\"surface\":\"settings\"", "\"surface\":\"typo\""))
+        }
+    }
+
     @Test fun `page locale changes only when the complete Settings surface is promoted`() {
         val source = SourceCatalogue.parse(File("src/main/assets/i18n/en.json").readText())
         val promotedJson = File("src/main/assets/i18n/de.json").readText()
@@ -70,9 +151,11 @@ class StringsTest {
         assertEquals("en", Strings(source, partial).locale)
         assertEquals("de", Strings(source, complete).locale)
         assertEquals(listOf("de", "en"), Strings(source, partial).languages)
-        assertEquals(listOf("de"), Strings(source, complete).languages)
-        val promotedKey = source.strings.keys.first()
-        val fallbackKey = source.strings.keys.drop(1).first()
+        assertEquals(listOf("de", "en"), Strings(source, complete).languages)
+        assertEquals(listOf("de"), Strings(source, complete).languages(setOf("settings.")))
+        assertEquals(listOf("en"), Strings(source, complete).languages(setOf("shell.")))
+        val promotedKey = partial.strings.values.single { it.state == TranslationState.MACHINE_CROSS_CHECKED }.key
+        val fallbackKey = source.strings.keys.first { it.startsWith("settings.") && it != promotedKey }
         assertEquals("de", Strings(source, partial).resolve(promotedKey).language)
         assertEquals("en", Strings(source, partial).resolve(fallbackKey).language)
     }

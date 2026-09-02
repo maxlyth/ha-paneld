@@ -20,9 +20,10 @@ class SettingsCatalogueContractTest {
 
         assertEquals(87, SettingsRegistry.SPECS.size)
         assertEquals(173, expected.size)
-        assertEquals(expected.keys, catalogue.strings.keys.toSet())
+        val settings = catalogue.strings.filterKeys { it.startsWith("settings.") }
+        assertEquals("Settings must remain an exact independently-owned subset", expected.keys, settings.keys)
         expected.forEach { (key, text) ->
-            val record = checkNotNull(catalogue.strings[key])
+            val record = checkNotNull(settings[key])
             assertEquals("English drift for $key", text, record.text)
             assertEquals("source hash drift for $key", sourceHash(text), record.sourceHash)
         }

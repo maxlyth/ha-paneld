@@ -10,11 +10,11 @@ class HaOAuthUiContractTest {
         val source = asset("configure.js").readText()
 
         assertTrue("browser sign-in must post the in-memory HA URL", "new URLSearchParams({ ha_url: target })" in source)
-        assertTrue("configured is state, not a connectivity claim", "haAuth.configured ? \"Reconnect\" : \"Connect\"" in source)
+        assertTrue("configured is state, not a connectivity claim", "haAuth.configured ? i18nText(\"configure.oauth.reconnect\", \"Reconnect\") : i18nText(\"configure.oauth.connect\", \"Connect\")" in source)
         assertTrue("OAuth provenance must be visible", "OAuth configured" in source)
         assertFalse("credential UI must not claim that the live transport is connected", "OAuth connected" in source)
         assertTrue("another HA user needs a private-window path", "To sign in as another user, copy the link into a private window." in source)
-        assertTrue("a normal link must remain available when popups are blocked", "text: \"Open sign-in\"" in source)
+        assertTrue("a normal link must remain available when popups are blocked", "text: i18nText(\"configure.oauth.open_sign_in\", \"Open sign-in\")" in source)
         assertTrue("manual links must not leak callback context", "rel: \"noopener noreferrer\"" in source && "referrerpolicy: \"no-referrer\"" in source)
         assertFalse("starting a login must not navigate an already authenticated browser session", "window.open(" in source)
         val dirtyHandler = source.substringAfter("function setDirty()").substringBefore("function clearDirty()")

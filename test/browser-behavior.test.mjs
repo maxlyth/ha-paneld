@@ -659,6 +659,13 @@ function screenshotFixture({ hardened = false, supported = true } = {}) {
     <script>window.CardColumnAlignment={attach:()=>()=>{}};</script>${dialogShim}<script src="/info.js"></script></body></html>`;
 }
 
+function localizedDashboardHydrationFixture(locale, validHelper = true) {
+  return screenshotFixture().replace(
+    '<body data-hardened="0">',
+    `<body data-hardened="0" data-hydrate="1"><div id="bannerzone"></div><script>window.HaI18n={locale:${JSON.stringify(locale)},t:${validHelper ? '(key,fallback)=>fallback' : JSON.stringify('not-a-function')}};</script>`,
+  );
+}
+
 function controlsFixture() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="stylesheet" href="/info.css"></head><body data-hardened="0">
@@ -994,6 +1001,38 @@ browserTest('Top processes switches between CPU and resident RAM rankings', asyn
   assert.equal(await page.locator('#topproc th.num').textContent(), '% CPU');
   assert.equal(await page.locator('.top-process-mode[data-mode="cpu"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.top-process-mode[data-mode="ram"]').getAttribute('aria-pressed'), 'false');
+});
+
+browserTest('Dashboard hydration forwards only an admitted explicit locale', async (t) => {
+  for (const [locale, expected, validHelper = true] of [
+    ['zh-Hans', '/api/v1/info?lang=zh-Hans'],
+    ['en', '/api/v1/info?lang=en'],
+    ['zh-Hans?theme=dark', '/api/v1/info'],
+    ['zh-Hans', '/api/v1/info?lang=zh-Hans', false],
+  ]) {
+    const requests = [];
+    const harness = await startHarness((path, request) => {
+      if (path === '/api/v1/info') {
+        requests.push(request.url);
+        return json({ banners: '', cards: {}, controls: '', shot: false, shotCached: '' });
+      }
+      if (path === '/api/v1/perf') return json({ hist: { cpu: [], ram: [], gpu: [] } });
+      if (path === '/api/v1/sensors') return json({});
+      if (path === '/api/v1/inspect') return json({ status: 'needs-root', running: false, port: 9222 });
+    }, () => localizedDashboardHydrationFixture(locale, validHelper));
+    const browser = await chromium.launch({ executablePath: chrome, headless: true });
+    const page = await browser.newPage();
+    try {
+      await page.goto(harness.url + '/?theme=dark&unrelated=1', { waitUntil: 'domcontentloaded', timeout: 5_000 });
+      await page.waitForFunction(() => document.body.getAttribute('data-hydrate') === '1' && document.querySelector('#topproc'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.deepEqual(requests, [expected]);
+      if (!validHelper) await page.locator('#topproc').getByText('needs root (su)').waitFor();
+    } finally {
+      await browser.close();
+      await new Promise((resolve) => harness.server.close(resolve));
+    }
+  }
 });
 
 browserTest('Top processes explains when resident RAM is unavailable from an older helper', async (t) => {

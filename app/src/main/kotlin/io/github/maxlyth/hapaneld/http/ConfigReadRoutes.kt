@@ -16,6 +16,25 @@ internal data class LocalizedConfigSchema(
     val languages: Collection<String>,
 )
 
+/** Select the validated catalogue for any human or machine HTTP surface using one locale precedence. */
+internal fun resolvedRequestStrings(
+    call: ApplicationCall,
+    persistedLanguage: String?,
+    deviceLanguageTag: String?,
+    allowPseudo: Boolean,
+    catalogueLoader: CatalogueLoader,
+): Strings {
+    val locale = AppLocale.resolve(
+        explicit = call.request.queryParameters["lang"],
+        persisted = persistedLanguage,
+        haUser = call.request.queryParameters["ha_lang"],
+        acceptLanguage = call.request.headers[HttpHeaders.AcceptLanguage],
+        deviceLanguageTag = deviceLanguageTag,
+        allowPseudo = allowPseudo,
+    )
+    return catalogueLoader.strings(locale)
+}
+
 /** Production locale negotiation and catalogue selection for the dynamic Configure schema. */
 internal fun localizedConfigSchema(
     call: ApplicationCall,
@@ -25,16 +44,14 @@ internal fun localizedConfigSchema(
     catalogueLoader: CatalogueLoader,
     render: (Strings) -> String,
 ): LocalizedConfigSchema {
-    val locale = AppLocale.resolve(
-        explicit = call.request.queryParameters["lang"],
-        persisted = persistedLanguage,
-        haUser = call.request.queryParameters["ha_lang"],
-        acceptLanguage = call.request.headers[HttpHeaders.AcceptLanguage],
+    val strings = resolvedRequestStrings(
+        call = call,
+        persistedLanguage = persistedLanguage,
         deviceLanguageTag = deviceLanguageTag,
         allowPseudo = allowPseudo,
+        catalogueLoader = catalogueLoader,
     )
-    val strings = catalogueLoader.strings(locale)
-    return LocalizedConfigSchema(render(strings), strings.languages)
+    return LocalizedConfigSchema(render(strings), strings.languages(setOf("settings.")))
 }
 
 /** Dynamic Configure reads. Neither response may be reused after settings or locale signals change. */
