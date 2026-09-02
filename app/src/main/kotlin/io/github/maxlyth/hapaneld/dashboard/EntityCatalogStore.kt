@@ -859,6 +859,12 @@ class EntityCatalogStore(context: Context) : SQLiteOpenHelper(context, DATABASE_
         }
     }
 
+    /** The revision the last committed scan recorded for this dashboard, or blank before any scan. */
+    fun dashboardConfigHash(instance: String, path: String): String = readableDatabase.rawQuery(
+        "SELECT config_hash FROM dashboard WHERE instance=? AND path=?",
+        arrayOf(instance, path),
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else "" }
+
     /** Internal-only source for rebuilding bounded derived diagnostics after process restart. */
     fun dashboardConfigJson(instance: String, path: String): String = readableDatabase.rawQuery(
         "SELECT config_json FROM dashboard WHERE instance=? AND path=?",

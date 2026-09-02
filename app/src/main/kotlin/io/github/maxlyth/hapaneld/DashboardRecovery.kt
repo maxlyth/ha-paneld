@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.Intent
+import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.http.HA_OAUTH_CALLBACK_PATH
 import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
@@ -762,4 +763,121 @@ internal fun entityBootstrapRetryDelayMs(attempt: Int, baseMs: Long, ceilingMs: 
     if (attempt <= 1) return baseMs.coerceAtMost(ceilingMs)
     val widened = baseMs shl (attempt - 1).coerceAtMost(32)
     return if (widened <= 0L || widened > ceilingMs) ceilingMs else widened
+}
+
+/** What the entity-bootstrap watchdog should do on one poll of the held renderer. */
+internal enum class EntityBootstrapWatchdogAction {
+    /** Nothing: the hold is progressing, a scan is running, or no deadline is due. */
+    IDLE,
+    /** Fire the same full catalogue resync the manual sync endpoint provides. */
+    RESYNC,
+    /** Ask Home Assistant whether the held dashboard changed, without resyncing the catalogue. */
+    PROBE,
+    /** Stop impersonating progress: present the problem screen with its retry and disable actions. */
+    PRESENT_PROBLEM,
+}
+
+/**
+ * The entity-bootstrap watchdog as a clock-injected state machine.
+ *
+ * The hold is structurally forbidden from being terminal, but the recovery it offers must match the
+ * reason for the hold. A scan that has not answered, or failed, is repaired by resyncing; the commonest
+ * cause is Home Assistant not being up yet, so the resync keeps being offered on a widening interval.
+ * A scan that HAS answered and is blocked only on a person's decision about a flagged dashboard rule is
+ * a different state: no resync can supply that decision, and one panel performed 794 full catalogue
+ * resyncs over 2.75 days against exactly this hold. In that state the watchdog never resyncs and never
+ * gives up; it asks Home Assistant, on a much wider cadence, whether the dashboard itself changed, which
+ * is the only external input that can change the answer without anybody at the panel.
+ *
+ * Every transition between the two states rebases the clocks, so the sync a late approval starts is
+ * measured from the approval rather than from days ago, and the rerun latch inside the manager is never
+ * primed by a watchdog resync landing on top of it. A running scan is never doubled.
+ */
+internal class EntityBootstrapWatchdog(
+    private val retryMs: Long,
+    private val retryCeilingMs: Long,
+    private val problemMs: Long,
+    private val probeMs: Long,
+    private val probeCeilingMs: Long,
+) {
+    init {
+        require(retryMs in 1..retryCeilingMs)
+        require(probeMs in 1..probeCeilingMs)
+        require(problemMs > 0L)
+    }
+
+    private var holdSinceMs = 0L
+    private var nextRetryMs = 0L
+    private var nextProbeMs = 0L
+    private var decisionHeld = false
+
+    /** Full resyncs fired since the clocks were last rebased. */
+    var resyncs = 0
+        private set
+
+    /** Dashboard probes fired since the clocks were last rebased. */
+    var probes = 0
+        private set
+
+    /** Past the give-up deadline the hold presents as a problem so the retry and disable actions appear. */
+    var gaveUp = false
+        private set
+
+    /** True while the only thing holding the renderer is an unanswered decision about flagged rules. */
+    val heldOnDecision: Boolean get() = decisionHeld
+
+    /** The hold ended: forget everything, so the next hold starts its clocks afresh. */
+    fun reset() {
+        holdSinceMs = 0L
+        rebase(0L)
+        decisionHeld = false
+    }
+
+    /** A person pressed the retry action: measure from now and offer the full ladder again. */
+    fun restart(nowMs: Long) {
+        reset()
+        holdSinceMs = nowMs
+    }
+
+    fun tick(
+        nowMs: Long,
+        blockingIssues: Int,
+        problem: EntityBootstrapProblem?,
+        syncRunning: Boolean,
+    ): EntityBootstrapWatchdogAction {
+        if (holdSinceMs == 0L) holdSinceMs = nowMs
+        val decision = blockingIssues > 0 && problem == null
+        if (decision != decisionHeld) {
+            decisionHeld = decision
+            holdSinceMs = nowMs
+            rebase(nowMs)
+        }
+        if (decision) {
+            if (syncRunning || nowMs < nextProbeMs) return EntityBootstrapWatchdogAction.IDLE
+            probes += 1
+            nextProbeMs = nowMs + entityBootstrapRetryDelayMs(probes + 1, probeMs, probeCeilingMs)
+            return EntityBootstrapWatchdogAction.PROBE
+        }
+        val heldMs = nowMs - holdSinceMs
+        if (!syncRunning && heldMs > retryMs && nowMs >= nextRetryMs) {
+            resyncs += 1
+            nextRetryMs = nowMs + entityBootstrapRetryDelayMs(resyncs, retryMs, retryCeilingMs)
+            return EntityBootstrapWatchdogAction.RESYNC
+        }
+        if (heldMs > problemMs && !gaveUp) {
+            gaveUp = true
+            return EntityBootstrapWatchdogAction.PRESENT_PROBLEM
+        }
+        return EntityBootstrapWatchdogAction.IDLE
+    }
+
+    private fun rebase(nowMs: Long) {
+        nextRetryMs = 0L
+        // The first probe waits one full interval: a person answering within minutes of the hold, or a
+        // scan the approval starts, must not race a question whose answer cannot yet have changed.
+        nextProbeMs = if (nowMs == 0L) 0L else nowMs + probeMs
+        resyncs = 0
+        probes = 0
+        gaveUp = false
+    }
 }

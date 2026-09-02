@@ -173,6 +173,16 @@ object DashboardConfigurationLint {
         fun retainedGroups(): List<FindingGroup> = listOfNotNull(overflow) + blocking.values + advisory.values
     }
 
+    /**
+     * The durable identity of a dashboard configuration, written at commit and compared by the held
+     * renderer's change probe. One definition, over canonical JSON, so semantic key ordering cannot
+     * create a second revision or force needless re-approval, and a probe cannot disagree with a scan.
+     */
+    fun revision(configJson: String): String = revision(JSONObject(configJson))
+
+    private fun revision(root: JSONObject): String =
+        EntityLearningProtocol.hash(EntityLearningProtocol.canonical(root))
+
     fun analyze(
         configJson: String,
         catalog: Collection<String>,
@@ -182,9 +192,7 @@ object DashboardConfigurationLint {
         registryMetadataComplete: Boolean = false,
     ): Result {
         val root = JSONObject(configJson)
-        // This is also the durable dashboard identity written at commit, so semantic JSON key ordering
-        // cannot create a second definition of a revision or force needless re-approval.
-        val dashboardRevision = EntityLearningProtocol.hash(EntityLearningProtocol.canonical(root))
+        val dashboardRevision = revision(root)
         val catalogIds = catalog.asSequence().map(String::lowercase)
             .filter(ENTITY_ID::matches).distinct().sorted().toList()
         val registryIds = metadataJson.keys.asSequence().map(String::lowercase)

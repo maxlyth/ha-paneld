@@ -111,11 +111,14 @@ internal fun deferReadyEntityBootstrapUntilWake(screenAwake: Boolean): Boolean =
 
 internal fun shouldKeepBuiltInRendererScreenOn(preventIdleDim: Boolean): Boolean = preventIdleDim
 
-internal fun entityFilterAttentionDetail(blockingIssues: Int): String {
+internal fun entityFilterAttentionDetail(blockingIssues: Int, entitiesAddress: String? = null): String {
     require(blockingIssues > 0) { "blocking issue count must be positive" }
+    val remote = entitiesAddress?.takeIf(String::isNotBlank)
+        ?.let { " The same choices are available from another device at $it." }
+        .orEmpty()
     return "Nothing is wrong with Home Assistant. The panel needs an answer about safety checks " +
         "found while reading your entities before it can open the dashboard. " +
-        "Number requiring review: $blockingIssues."
+        "Number requiring review: $blockingIssues.$remote"
 }
 
 private data class EntityFilterNativeHold(val error: String, val detail: String)
@@ -452,13 +455,17 @@ class DashboardActivity : AppCompatActivity() {
     private var waitingEstimateMs = 0L
     private var waitingEstimateLearned = false
     private var entityBootstrapBlockedCount = -1
-    private var entityBootstrapHoldSinceMs = 0L
     private var entityBootstrapMilestoneView: TextView? = null
-    /** When the next watchdog resync may fire. Zero means the first deadline has not been reached. */
-    private var entityBootstrapNextRetryMs = 0L
-    private var entityBootstrapRetries = 0
-    /** Past the give-up deadline the hold presents as a problem (retry/disable buttons) — see the check. */
-    private var entityBootstrapWatchdogGaveUp = false
+    /** Owns every deadline of the hold: resync ladder, give-up, and the decision-hold probe cadence. */
+    private val entityBootstrapWatchdog = EntityBootstrapWatchdog(
+        retryMs = BOOTSTRAP_WATCHDOG_RETRY_MS,
+        retryCeilingMs = BOOTSTRAP_WATCHDOG_RETRY_CEILING_MS,
+        problemMs = BOOTSTRAP_WATCHDOG_PROBLEM_MS,
+        probeMs = BOOTSTRAP_WATCHDOG_PROBE_MS,
+        probeCeilingMs = BOOTSTRAP_WATCHDOG_PROBE_CEILING_MS,
+    )
+    /** The decision hold announces itself in the log once, not once per poll. */
+    private var entityBootstrapDecisionLogged = false
     private var entityBootstrapProblem: EntityBootstrapProblem? = null
     private var waitingStartedAt = 0L
     private val waitingTick = object : Runnable {
@@ -486,36 +493,59 @@ class DashboardActivity : AppCompatActivity() {
             if (holdForEntityBootstrap(config)) {
                 // The hold is structurally forbidden from being terminal. The enable-time sync has died
                 // silently on hardware more than once, each time leaving a happy spinner over a dead
-                // process until a human intervened. Two deadlines: at 2 minutes fire the same recovery
-                // the manual sync endpoint provides (once); at 4 minutes stop impersonating progress and
-                // show the problem screen, whose retry/disable buttons already exist.
-                val now = SystemClock.elapsedRealtime()
-                if (entityBootstrapHoldSinceMs == 0L) entityBootstrapHoldSinceMs = now
-                val heldMs = now - entityBootstrapHoldSinceMs
+                // process until a human intervened. Two deadlines: at 30 seconds fire the same recovery
+                // the manual sync endpoint provides; at 90 seconds stop impersonating progress and show
+                // the problem screen, whose retry/disable buttons already exist.
+                //
                 // Firing the recovery once was not enough. The commonest reason the scan cannot answer is
                 // that Home Assistant is not up yet — a power cut brings the panel back first — and a
                 // one-shot retry means the panel is still holding, or already on the problem screen, long
                 // after HA returned. Nothing else re-drives it: the periodic sync skips a freshly-synced
                 // catalogue and skips again while the screen is awake, and no HA-reconnect trigger exists.
                 // So keep retrying on a widening interval, capped, for as long as the hold lasts.
-                if (heldMs > BOOTSTRAP_WATCHDOG_RETRY_MS && now >= entityBootstrapNextRetryMs) {
-                    entityBootstrapRetries += 1
-                    val backoff = entityBootstrapRetryDelayMs(
-                        entityBootstrapRetries,
-                        BOOTSTRAP_WATCHDOG_RETRY_MS,
-                        BOOTSTRAP_WATCHDOG_RETRY_CEILING_MS,
-                    )
-                    entityBootstrapNextRetryMs = now + backoff
-                    Log.w(TAG, "entity bootstrap held ${heldMs}ms — watchdog resync ${entityBootstrapRetries}, next in ${backoff}ms")
-                    EntityLearningRuntime.retryBootstrap()
-                }
-                if (heldMs > BOOTSTRAP_WATCHDOG_PROBLEM_MS && !entityBootstrapWatchdogGaveUp) {
-                    entityBootstrapWatchdogGaveUp = true
-                    showWaitingForEntityBootstrap()
-                    return
-                }
+                //
+                // Unless the scan HAS answered and a flagged rule is waiting on a person. A resync cannot
+                // supply that decision, and one panel performed 794 of them over 2.75 days waiting for
+                // somebody to walk up to it. There the watchdog asks Home Assistant, on a much wider
+                // cadence, whether the dashboard itself changed, and otherwise stays quiet. The state
+                // machine owns every clock; see EntityBootstrapWatchdog.
+                val now = SystemClock.elapsedRealtime()
                 val blocking = EntityLearningRuntime.blockingIssueCount()
                 val problem = EntityLearningRuntime.bootstrapProblem()
+                val action = entityBootstrapWatchdog.tick(
+                    nowMs = now,
+                    blockingIssues = blocking,
+                    problem = problem,
+                    syncRunning = EntityLearningRuntime.syncRunning(),
+                )
+                if (entityBootstrapWatchdog.heldOnDecision && !entityBootstrapDecisionLogged) {
+                    entityBootstrapDecisionLogged = true
+                    Log.i(
+                        TAG,
+                        "entity bootstrap held on a decision about $blocking flagged rule(s); catalogue resync " +
+                            "suspended until the dashboard changes or the rule is answered",
+                    )
+                } else if (!entityBootstrapWatchdog.heldOnDecision) {
+                    entityBootstrapDecisionLogged = false
+                }
+                when (action) {
+                    EntityBootstrapWatchdogAction.RESYNC -> {
+                        Log.w(
+                            TAG,
+                            "entity bootstrap held — watchdog resync ${entityBootstrapWatchdog.resyncs}",
+                        )
+                        EntityLearningRuntime.retryBootstrap()
+                    }
+                    EntityBootstrapWatchdogAction.PROBE -> {
+                        Log.i(TAG, "entity bootstrap held on a decision — dashboard change probe ${entityBootstrapWatchdog.probes}")
+                        EntityLearningRuntime.probeDashboardChange()
+                    }
+                    EntityBootstrapWatchdogAction.PRESENT_PROBLEM -> {
+                        showWaitingForEntityBootstrap()
+                        return
+                    }
+                    EntityBootstrapWatchdogAction.IDLE -> Unit
+                }
                 if (blocking != entityBootstrapBlockedCount || problem != entityBootstrapProblem) {
                     showWaitingForEntityBootstrap()
                     return
@@ -528,10 +558,8 @@ class DashboardActivity : AppCompatActivity() {
                 main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
                 return
             }
-            entityBootstrapHoldSinceMs = 0L
-            entityBootstrapNextRetryMs = 0L
-            entityBootstrapRetries = 0
-            entityBootstrapWatchdogGaveUp = false
+            entityBootstrapWatchdog.reset()
+            entityBootstrapDecisionLogged = false
             // A sync may finish after the panel went dark. Do not create a WebView whose timers have no
             // connection callback or dark-settle owner; the next poll after a real wake will build it.
             if (deferReadyEntityBootstrapUntilWake(screenAwake)) {
@@ -3199,6 +3227,12 @@ class DashboardActivity : AppCompatActivity() {
         main.postDelayed(entityFilterAnswerCheck, ENTITY_FILTER_ANSWER_CHECK_MS)
     }
 
+    /** Where the decision on the hold screen can also be answered from another device. */
+    private fun entitiesPageAddress(): String {
+        val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
+        return if (ip != null) "http://$ip:8888/entities" else "port 8888 of this panel's IP address"
+    }
+
     private fun showWaitingForEntityBootstrap() {
         cancelAdmissionAutoRetry()
         main.removeCallbacks(entityBootstrapCheck)
@@ -3209,7 +3243,7 @@ class DashboardActivity : AppCompatActivity() {
         // Past the watchdog's give-up deadline a formless hold PRESENTS as a synchronization problem so
         // the retry/disable buttons appear — the happy spinner must never be terminal.
         val bootstrapProblem = EntityLearningRuntime.bootstrapProblem()
-            ?: if (entityBootstrapWatchdogGaveUp) EntityBootstrapProblem.SYNCHRONIZATION else null
+            ?: if (entityBootstrapWatchdog.gaveUp) EntityBootstrapProblem.SYNCHRONIZATION else null
         entityBootstrapBlockedCount = blockingIssues
         entityBootstrapProblem = bootstrapProblem
         val surface = statusSurface()
@@ -3242,7 +3276,7 @@ class DashboardActivity : AppCompatActivity() {
                     "${filterHold.detail} Home Assistant has not been opened, because loading every entity would make this panel slow. Try again, or turn the entity filter off under Configure, in the Dashboard settings."
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
-                        entityFilterAttentionDetail(blockingIssues)
+                        entityFilterAttentionDetail(blockingIssues, entitiesPageAddress())
                     } else {
                         "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open entity settings to simplify the dashboard, or tap Disable entity filter."
                     }
@@ -3273,10 +3307,7 @@ class DashboardActivity : AppCompatActivity() {
             if (filterHold == null && bootstrapProblem != null) rows += surface.action("Try again") {
                 // A user-driven retry restores hope: the watchdog clock restarts and the screen
                 // returns to the progress presentation until the new deadline.
-                entityBootstrapWatchdogGaveUp = false
-                entityBootstrapNextRetryMs = 0L
-                entityBootstrapRetries = 0
-                entityBootstrapHoldSinceMs = SystemClock.elapsedRealtime()
+                entityBootstrapWatchdog.restart(SystemClock.elapsedRealtime())
                 if (EntityLearningRuntime.retryBootstrap()) showWaitingForEntityBootstrap()
             }
             if (filterHold == null && blockingIssues > 0) {
@@ -3687,6 +3718,10 @@ class DashboardActivity : AppCompatActivity() {
         private const val BOOTSTRAP_WATCHDOG_PROBLEM_MS = 90_000L
         /** The widening retry never idles longer than this, so a panel converges once HA answers. */
         private const val BOOTSTRAP_WATCHDOG_RETRY_CEILING_MS = 300_000L
+        // While the hold waits on a person's decision, the only useful question is whether the dashboard
+        // changed. One authenticated read, five minutes after the hold settles, then widening to hourly.
+        private const val BOOTSTRAP_WATCHDOG_PROBE_MS = 300_000L
+        private const val BOOTSTRAP_WATCHDOG_PROBE_CEILING_MS = 3_600_000L
         private const val INITIAL_HANDSHAKE_MS = 25_000L        // generous: a cold PX30 frontend can need 20s+
         private const val RELOAD_INTERVAL_MS = 6 * 60 * 60 * 1000L   // shed WebView memory at a screen-off, ~6h
         private const val RELOAD_HARD_MS = 26 * 60 * 60 * 1000L      // force a visible reload if never idle-dark

@@ -235,6 +235,8 @@ class EntityLearningManager(
     private val effectGeneration = AtomicLong(0)
     private val telemetryWriteBarrier = EntityTelemetryWriteBarrier(effectGeneration::get)
     @Volatile private var syncJob: Job? = null
+    /** The held renderer's single-flight dashboard change probe; never runs beside a scan. */
+    @Volatile private var probeJob: Job? = null
 
     /** Set when [syncNow] found a run already active; consumed on that run's NORMAL completion. */
     private var syncRerunReason: String? = null
@@ -378,7 +380,15 @@ class EntityLearningManager(
                 if (!config.dashboardEntityLearningEnabled || BuiltinDashboard.screenAwakeNow) continue
                 val s = store.snapshot(instance(), dashboardPath())
                 if (!isActive || !config.dashboardEntityLearningEnabled) continue
-                if (System.currentTimeMillis() - s.lastSyncAt >= DAILY_SYNC_MS) syncNow("daily")
+                when (periodicMaintenanceAction(
+                    sinceLastSyncMs = System.currentTimeMillis() - s.lastSyncAt,
+                    dailyMs = DAILY_SYNC_MS,
+                    heldOnDecision = s.blockingIssueCount > 0 && classifyEntityBootstrapProblem(s.state, s.error) == null,
+                )) {
+                    PeriodicMaintenanceAction.SYNC -> syncNow("daily")
+                    PeriodicMaintenanceAction.PROBE -> probeDashboardChange("daily")
+                    PeriodicMaintenanceAction.NONE -> Unit
+                }
             }
         }
     }
@@ -397,6 +407,8 @@ class EntityLearningManager(
             promotionJob?.cancel()
             promotionJob = null
             syncJob = supersedeEntityLearningSync(syncJob) { syncRerunReason = null }
+            probeJob?.cancel()
+            probeJob = null
         }
         telemetryPipeline.close { pending ->
             val dropped = pending.discard()
@@ -635,6 +647,96 @@ class EntityLearningManager(
         true
     }
 
+    /** True while a catalogue scan is in flight. The held renderer's watchdog never doubles one. */
+    fun syncRunning(): Boolean = syncJob?.isActive == true
+
+    /**
+     * Ask Home Assistant whether the held dashboard changed, without resyncing the catalogue.
+     *
+     * While the renderer is held only on a person's decision about a flagged rule, the catalogue is
+     * settled and a full resync cannot change the answer. What CAN change it without anybody at the
+     * panel is the dashboard itself: an edit that removes the rule, or the account default moving to a
+     * different dashboard. This is one authenticated read of the resolved dashboard's configuration,
+     * compared with the revision the last scan committed and the scope it was bound to. A change starts
+     * exactly one scan; no change commits nothing to the catalogue. It is single-flight, never runs
+     * beside a scan, and honours the same generation checks as a scan, so a target that moves under it
+     * abandons the probe rather than acting on a stale answer.
+     *
+     * Failures are logged, not persisted, with one exception: a credential rejection is a fault the
+     * person has to fix, so it is recorded exactly as a failed scan would record it and the renderer's
+     * hold screen names the sign-in rather than the decision.
+     */
+    fun probeDashboardChange(reason: String): Boolean = synchronized(this) {
+        ensureInitialized()
+        if (syncJob?.isActive == true || probeJob?.isActive == true) return@synchronized false
+        val requestGeneration = effectGeneration.get()
+        Log.i(TAG, "dashboard change probe launched ($reason)")
+        probeJob = scope.launch {
+            val fallbackInstance = instance(); val fallbackPath = dashboardPath()
+            runCatching { withEntityLearningDeadline(PROBE_TIMEOUT_MS) { probeDashboard() } }
+                .onSuccess { outcome ->
+                    Log.i(TAG, "dashboard change probe completed ($reason): ${outcome.name.lowercase()}")
+                    if (outcome == DashboardProbeOutcome.CHANGED) syncNow("dashboard-changed")
+                }
+                .onFailure {
+                    if (it is CancellationException && it !is TimeoutCancellationException) return@onFailure
+                    Log.w(TAG, "dashboard change probe failed ($reason): ${it.message}")
+                    if (probeFailureSurfacesProblem(it.message) &&
+                        shouldPersistEntityLearningFailure(
+                            requestGeneration,
+                            effectGeneration.get(),
+                            fallbackInstance,
+                            fallbackPath,
+                            instance(),
+                            dashboardPath(),
+                        )
+                    ) {
+                        store.markStatus(fallbackInstance, fallbackPath, "degraded", it.message ?: it.javaClass.simpleName)
+                    }
+                }
+        }
+        true
+    }
+
+    private suspend fun probeDashboard(): DashboardProbeOutcome = withContext(Dispatchers.IO) {
+        val target = captureAuthenticatedTarget()
+        val snapshot = captureSyncSnapshot(target)
+        var outcome = DashboardProbeOutcome.UNCHANGED
+        withHaSocket(snapshot.baseUrl, snapshot.authToken) { request ->
+            val resolved = homeDashboardAuthority.resolve(
+                snapshot.homeDashboardAuthorityKey,
+                stillCurrent = {
+                    config.homeDashboard.trim() == snapshot.configuredHomeDashboard &&
+                        snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())
+                },
+                forceLive = homeDashboardResolutionMustBeLive(snapshot.configuredHomeDashboard),
+            ) {
+                readHomeDashboardResolution(request, snapshot.configuredHomeDashboard)
+            }?.path ?: error("Home Assistant reported no legal dashboard")
+            if (resolvedScopeRequiresRebind(snapshot.dashboardPath, resolved)) {
+                outcome = DashboardProbeOutcome.CHANGED
+                return@withHaSocket
+            }
+            // Named apart from the scan's fetch so the source contract that pins the scan's ordering
+            // keeps pointing at the scan.
+            val probedUrlPath = EntityLearningProtocol.dashboardUrlPath(resolved)
+            val command = JSONObject().put("type", "lovelace/config")
+            if (probedUrlPath.isNotBlank()) command.put("url_path", probedUrlPath)
+            val configJson = (request(command).opt("result") as? JSONObject)?.toString()
+                ?: error("dashboard configuration unavailable")
+            outcome = dashboardProbeOutcome(
+                resolvedPath = resolved,
+                boundPath = snapshot.dashboardPath,
+                liveRevision = DashboardConfigurationLint.revision(configJson),
+                storedRevision = store.dashboardConfigHash(snapshot.instanceKey, snapshot.dashboardPath),
+            )
+        }
+        check(snapshot.matchesCurrent(effectGeneration.get(), currentEffectState())) {
+            "entity-learning target or policy changed during the probe"
+        }
+        outcome
+    }
+
     private suspend fun synchronize() = withContext(Dispatchers.IO) {
         val syncCost = FeatureCosts.registry.span(FeatureCostOperation.ENTITY_SYNC)
         var syncWork = 0L
@@ -706,13 +808,55 @@ class EntityLearningManager(
         // Persist ordinary, explicitly ignorable compatibility findings as ignored on the first
         // successful bootstrap; they remain visible in Entities and can be re-enabled there. Hard
         // diagnostic/resource fences are never ignorable and therefore still hold the renderer.
+        //
+        // The same courtesy is owed to an upgrade. The default-resolver migration disables a filter the
+        // panel was already running and forces this re-bootstrap; a dashboard rule the new analyzer
+        // flags must not then hold that panel behind a decision until somebody walks up to it, because
+        // the panel was working a minute ago and nothing on the dashboard changed. The condition is
+        // narrow: the migration latch is pending, the retained allow-list is non-empty, and the set this
+        // scan would restore is non-empty too. An empty recovery is a blank dashboard, which is the
+        // destructive outcome the hold exists to prevent, so there the decision stays load-bearing.
+        //
+        // The preview must be exactly what the apply below would commit, and it is computed before the
+        // commit, so it deliberately does NOT count this catalogue's static rows: `commitSync` clears
+        // `referenced_by_config` and re-sets it only for THIS scan's derived ids, so the previous scan's
+        // static rows are counted here and dropped there. That is the one direction the error cannot be
+        // allowed to run in — an analyzer-policy upgrade on a dashboard with no pins and no in-retention
+        // runtime evidence would otherwise pass this check and commit the empty sentinel. Pins and
+        // runtime rows do survive the commit, and this scan's own literal and server-expanded ids are
+        // added directly, projected through the ignore set this recovery would create.
+        val storedIgnoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath)
+        val candidateIgnoredFingerprints = storedIgnoredFingerprints + ignorableIssueFingerprints(rawIssues)
+        val upgradeRecovery = snapshot.upgradeRebootstrapPending && upgradeRecoveryRestoresFilter(
+            upgradeRebootstrapPending = snapshot.upgradeRebootstrapPending,
+            retainedFilterIds = snapshot.filterIds,
+            recoveredIds = desiredIds(
+                System.currentTimeMillis(), snapshot.instanceKey, snapshot.dashboardPath,
+                includeStatic = false,
+                includeRuntime = snapshot.autoRuntime,
+            ) + (
+                if (snapshot.autoStatic) {
+                    deriveStaticEntityIds(
+                        scan.entityIds, catalogIds, expanded,
+                        effectiveLintEntityIds(lint, candidateIgnoredFingerprints),
+                    )
+                } else emptySet()
+            ),
+        )
         val defaultIgnoredFingerprints = defaultIgnoredIssueFingerprints(
             initialActivationPending = snapshot.initialActivationPending,
             bootstrap = bootstrap,
             issues = rawIssues,
+            upgradeRecovery = upgradeRecovery,
         )
-        val ignoredFingerprints = store.ignoredIssueFingerprints(snapshot.instanceKey, snapshot.dashboardPath) +
-            defaultIgnoredFingerprints
+        if (upgradeRecovery && defaultIgnoredFingerprints.isNotEmpty()) {
+            Log.i(
+                TAG,
+                "upgrade re-bootstrap: ${defaultIgnoredFingerprints.size} ignorable dashboard rule(s) recorded as " +
+                    "ignored so the filter this panel already ran can be restored; review them under Entities",
+            )
+        }
+        val ignoredFingerprints = storedIgnoredFingerprints + defaultIgnoredFingerprints
         val lintIds = effectiveLintEntityIds(lint, ignoredFingerprints)
         // Context-free literals still require a live-catalog match to discard entity-shaped prose.
         // Server-expanded targets and registry-backed linter results are authoritative structural
@@ -1142,6 +1286,11 @@ class EntityLearningManager(
             val visibleIssueJson = visibleIssues.toString()
             val visibleIssueCounts = EntityCatalogIssuePersistence.counts(visibleIssueJson)
             val held = shouldHoldRendererForEntityBootstrap(learningEnabled, filtered)
+            val holdReason = entityBootstrapHoldReason(
+                held = held,
+                blockingIssues = s.blockingIssueCount,
+                problem = classifyEntityBootstrapProblem(s.state, s.error),
+            )
             val desired = desiredIds(
                 System.currentTimeMillis(), currentInstance, currentPath,
                 includeStatic = autoStatic,
@@ -1174,6 +1323,8 @@ class EntityLearningManager(
                 .put("ignored_issue_count", EntityCatalogIssuePersistence.ignoredCount(visibleIssueJson))
                 .put("automatic_activation_blocked", s.blockingIssueCount > 0)
                 .put("stream_mode", when { held -> "held"; filtered -> "filtered"; else -> "unfiltered" })
+                .put("hold_reason", holdReason?.wireName ?: JSONObject.NULL)
+                .put("resync_suspended", holdReason == EntityBootstrapHoldReason.DECISION)
                 .put("stream_entity_count", when { held -> 0; filtered -> filterIds.size; else -> s.catalogCount })
                 .put("stream_filter_hash", if (filtered) EntityFilterProtocol.hash(filterIds) else "")
                 .put("unresolved_count", s.unresolvedCount)
@@ -1425,6 +1576,8 @@ class EntityLearningManager(
             promotionJob = null
             if (cancelSync) {
                 syncJob = supersedeEntityLearningSync(syncJob) { syncRerunReason = null }
+                probeJob?.cancel()
+                probeJob = null
             }
         }
     }
@@ -1640,6 +1793,7 @@ class EntityLearningManager(
         overrides = config.dashboardEntityOverrides,
         forceBootstrap = resetBootstrapPending,
         initialActivationPending = config.dashboardEntityInitialActivationPending,
+        upgradeRebootstrapPending = config.dashboardEntityDefaultResolverRebootstrapPending,
     )
 
     private suspend fun captureAuthenticatedTarget(): AuthenticatedTarget {
@@ -1947,6 +2101,7 @@ class EntityLearningManager(
         private const val MAX_PERFORMANCE_PENDING = 24
         private const val PERFORMANCE_FLUSH_MS = 60_000L
         private const val SYNC_TIMEOUT_MS = 120_000L
+        private const val PROBE_TIMEOUT_MS = 60_000L
         private const val MAX_WS_FRAME = 32L * 1024 * 1024
         private const val WS_CONNECT_TIMEOUT_MS = 15_000L
         private const val WS_AUTH_TIMEOUT_MS = 15_000L
@@ -2529,6 +2684,8 @@ internal data class EntityLearningEffectState(
     val overrides: Map<String, String>,
     val forceBootstrap: Boolean,
     val initialActivationPending: Boolean = false,
+    /** The default-resolver migration disabled a running filter and owes this target a re-bootstrap. */
+    val upgradeRebootstrapPending: Boolean = false,
 )
 
 /**
@@ -2560,6 +2717,7 @@ internal data class EntityLearningSyncSnapshot(
     val overrides get() = state.overrides
     val forceBootstrap get() = state.forceBootstrap
     val initialActivationPending get() = state.initialActivationPending
+    val upgradeRebootstrapPending get() = state.upgradeRebootstrapPending
 
     fun matchesCurrent(currentGeneration: Long, currentState: EntityLearningEffectState): Boolean =
         generation == currentGeneration && state == currentState
@@ -2841,17 +2999,110 @@ internal fun shouldBootstrapEntityLearning(
     configuredIds: Collection<String>,
 ): Boolean = learningEnabled && !applied && configuredIds.isEmpty()
 
-/** First-run compatibility defaults are durable choices, not a blanket weakening of later scans. */
+/**
+ * First-run compatibility defaults are durable choices, not a blanket weakening of later scans.
+ *
+ * [upgradeRecovery] extends the same default to a re-bootstrap the default-resolver migration forced on
+ * a panel that was already running a filter; see [upgradeRecoveryRestoresFilter] for the conditions.
+ * Neither path reaches a non-ignorable fence.
+ */
 internal fun defaultIgnoredIssueFingerprints(
     initialActivationPending: Boolean,
     bootstrap: Boolean,
     issues: Collection<JSONObject>,
+    upgradeRecovery: Boolean = false,
 ): Set<String> {
-    if (!initialActivationPending || !bootstrap) return emptySet()
-    return issues.asSequence()
-        .filter(EntityCatalogIssuePersistence::canIgnore)
-        .mapNotNull { it.optString("fingerprint").takeIf(String::isNotBlank) }
-        .toSet()
+    if (!bootstrap || !(initialActivationPending || upgradeRecovery)) return emptySet()
+    return ignorableIssueFingerprints(issues)
+}
+
+/** The blocking findings a default may take: never a fence, and never an advisory that blocks nothing. */
+internal fun ignorableIssueFingerprints(issues: Collection<JSONObject>): Set<String> = issues.asSequence()
+    .filter(EntityCatalogIssuePersistence::canIgnore)
+    .mapNotNull { it.optString("fingerprint").takeIf(String::isNotBlank) }
+    .toSet()
+
+/**
+ * Whether an upgrade-forced re-bootstrap may record ignorable blocking rules as ignored and restore
+ * the filter the panel already ran, rather than hold the renderer behind a decision.
+ *
+ * All three conditions carry weight. The migration latch is the only trigger: a person's own "Reset
+ * learned data" also forces a bootstrap, but that person is looking at the Entities page where the
+ * rules are shown, and deciding for them there would be a surprise. A retained allow-list is the
+ * evidence that filtering on this dashboard was accepted before. And the set this scan would restore
+ * must be non-empty: the ids committed at apply time come from the catalogue rows, not the retained
+ * preference, so an install whose rows did not survive would otherwise pass the first two checks and
+ * commit the fail-closed empty sentinel, a blank dashboard where a working one existed.
+ */
+internal fun upgradeRecoveryRestoresFilter(
+    upgradeRebootstrapPending: Boolean,
+    retainedFilterIds: Collection<String>,
+    recoveredIds: Collection<String>,
+): Boolean = upgradeRebootstrapPending && retainedFilterIds.isNotEmpty() && recoveredIds.isNotEmpty()
+
+internal enum class DashboardProbeOutcome { UNCHANGED, CHANGED }
+
+/**
+ * Whether a held dashboard changed in a way that gives a new scan something to say.
+ *
+ * A different resolved dashboard is a change even when both revisions match, because the scope the
+ * catalogue is bound to no longer describes what the panel would open. A blank stored revision means no
+ * scan ever committed; a live revision is always a hash, so the comparison owes a scan there too.
+ */
+internal fun dashboardProbeOutcome(
+    resolvedPath: String,
+    boundPath: String,
+    liveRevision: String,
+    storedRevision: String,
+): DashboardProbeOutcome = when {
+    resolvedScopeRequiresRebind(boundPath, resolvedPath) -> DashboardProbeOutcome.CHANGED
+    liveRevision != storedRevision -> DashboardProbeOutcome.CHANGED
+    else -> DashboardProbeOutcome.UNCHANGED
+}
+
+/** A probe failure is transient unless it is the one fault a person has to repair. */
+internal fun probeFailureSurfacesProblem(message: String?): Boolean =
+    classifyEntityBootstrapProblem("degraded", message.orEmpty()) == EntityBootstrapProblem.AUTHENTICATION
+
+internal enum class PeriodicMaintenanceAction { NONE, SYNC, PROBE }
+
+/**
+ * What the daily maintenance tick owes a catalogue. A catalogue synced within the day owes nothing. One
+ * held only on a person's decision is settled: resyncing it cannot change the answer, so the tick asks
+ * whether the dashboard changed instead and lets the answer decide whether a scan follows.
+ */
+internal fun periodicMaintenanceAction(
+    sinceLastSyncMs: Long,
+    dailyMs: Long,
+    heldOnDecision: Boolean,
+): PeriodicMaintenanceAction = when {
+    sinceLastSyncMs < dailyMs -> PeriodicMaintenanceAction.NONE
+    heldOnDecision -> PeriodicMaintenanceAction.PROBE
+    else -> PeriodicMaintenanceAction.SYNC
+}
+
+/** Why the renderer is held, for the status surface and the person reading it off-panel. */
+enum class EntityBootstrapHoldReason(val wireName: String) {
+    /** The scan answered and a flagged rule awaits a person's decision; catalogue resync is suspended. */
+    DECISION("decision"),
+    /** Home Assistant rejected the panel's credential; the sign-in needs repair. */
+    AUTHENTICATION("authentication"),
+    /** The scan did not finish; the watchdog keeps retrying it. */
+    SYNCHRONIZATION("synchronization"),
+    /** The first scan has not answered yet. */
+    SYNCHRONIZING("synchronizing"),
+}
+
+internal fun entityBootstrapHoldReason(
+    held: Boolean,
+    blockingIssues: Int,
+    problem: EntityBootstrapProblem?,
+): EntityBootstrapHoldReason? = when {
+    !held -> null
+    problem == EntityBootstrapProblem.AUTHENTICATION -> EntityBootstrapHoldReason.AUTHENTICATION
+    problem == EntityBootstrapProblem.SYNCHRONIZATION -> EntityBootstrapHoldReason.SYNCHRONIZATION
+    blockingIssues > 0 -> EntityBootstrapHoldReason.DECISION
+    else -> EntityBootstrapHoldReason.SYNCHRONIZING
 }
 
 /** Ignoring a saturated selector means omitting its complete linter projection, never a partial set. */
@@ -2947,6 +3198,9 @@ object EntityLearningRuntime {
     fun bootstrapProblem(): EntityBootstrapProblem? = current?.bootstrapProblem()
     /** Explicit user retry only. syncNow rejects the request while an existing scan is active. */
     fun retryBootstrap(): Boolean = current?.syncNow("dashboard-retry") ?: false
+    fun syncRunning(): Boolean = current?.syncRunning() ?: false
+    /** The held renderer asking whether the dashboard changed; never a catalogue resync. */
+    fun probeDashboardChange(): Boolean = current?.probeDashboardChange("dashboard-hold") ?: false
 
     /** Live bring-up milestones for the panel's hold screen — real signals, never a bare spinner. */
     fun bootstrapMilestone(): String {
