@@ -253,8 +253,14 @@ class EntityCatalogStorageHealthContractTest {
             "if (freedPages == 0L && !abandoned())" in vacuum)
         // Stepping via `count` fills the window once; a moveToNext walk could re-execute the pragma
         // on a window refill and free another slice beyond the cap.
-        assertTrue("the slice must be stepped through the cursor count, not a moveToNext walk",
-            "cursor.count.toLong()" in vacuum && "while (cursor.moveToNext())" !in vacuum)
+        // The whole count, unaltered. A mutation that clamped it to one page per slice survived an
+        // earlier battery round: nothing asserted that the pages credited are the pages freed, so
+        // reclamation could have crawled at one page a pass exactly as the original defect did.
+        assertTrue("the slice must credit the full cursor count, unclamped",
+            ".use { cursor -> cursor.count.toLong() }" in vacuum &&
+                "while (cursor.moveToNext())" !in vacuum)
+        assertTrue("and that count must be what accumulates against the per-pass cap",
+            "freedPages += sliceFreedPages" in vacuum)
         // A reader-blocked checkpoint leaves the freelist at its floor, so only the pending flag can
         // bring a later pass back to the checkpoint that returns those bytes.
         assertTrue("a deferred checkpoint must be retried on a later pass",
