@@ -4471,3 +4471,42 @@ browserTest('A panel with no camera card never polls for one, and never stalls t
   assert.equal(await page.evaluate(() => !!document.getElementById('camtbl')), false, 'the fixture has no camera card');
   assert.equal(served.length, 0, 'a board with no camera asks the camera route nothing');
 });
+
+browserTest('A camera held open for a snapshot is not called idle, and is not called free', async (t) => {
+  const { page } = await startCameraHarness(t, cameraStatus({
+    clients: 1, stream_clients: 0, encoder: null, encode_width: null, encode_height: null,
+    encode_fps: null, encode_kbps: null, delivered_fps: null, delivered_kbps: null,
+  }));
+
+  await untilCamera(page, 'no stream is encoding');
+  const text = await cameraText(page);
+  assert.match(text, /open · 1 client/, 'the session is open, and one subscriber is holding it');
+  assert.match(text, /the camera is open for a snapshot/, 'the reason nothing is encoding is named');
+  assert.equal(text.includes('costs the panel nothing'), false,
+    'a snapshot client pays for every frame it converts — only a closed camera is free');
+  assert.equal(await cameraHeader(page), '· open');
+});
+
+browserTest('A stream that stops delivering says so, rather than starting for ever', async (t) => {
+  const { page, state } = await startCameraHarness(t, cameraStatus({
+    delivered_fps: null, delivered_kbps: null, last_frame_age_ms: 30_000,
+  }));
+
+  // The delivered rate is absent exactly as it is before the first frames arrive, so a card that read
+  // both the same way would show a broken stream as a warming-up one for as long as it stayed broken.
+  await untilCamera(page, 'no frames for 30s');
+  const stalled = await cameraText(page);
+  assert.equal(stalled.includes('starting…'), false, 'a stalled stream is not a starting one');
+  assert.match(stalled, /not delivering/, 'the verdict says what is happening, not that it is measuring');
+  assert.match(stalled, /the encoder is bound to the session but no frames are arriving/);
+
+  state.payload = cameraStatus({
+    state: 'degraded', fault: 'stream_encoder', consecutive_failures: 3,
+    delivered_fps: null, delivered_kbps: null, last_frame_age_ms: null,
+    action: 'no hardware H.264 encoder fits the camera bitrate cap; snapshots still work, streaming does not',
+  });
+  await untilCamera(page, 'stopped — stream encoder');
+  const faulted = await cameraText(page);
+  assert.match(faulted, /stopped retrying after 3 failures/, 'the session row carries the panel’s own account');
+  assert.match(faulted, /no hardware H\.264 encoder fits the camera bitrate cap/, 'the panel’s action is passed through');
+});

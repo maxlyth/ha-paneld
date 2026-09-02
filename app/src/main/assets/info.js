@@ -298,15 +298,31 @@ function cameraCard(tbl,hdr){
    var enc=(typeof d.encoder==='string'&&d.encoder)?d.encoder:null;
    var w=n(d.encode_width),h=n(d.encode_height),want=n(d.encode_fps),cap=n(d.encode_kbps);
    var got=n(d.delivered_fps),gotKbps=n(d.delivered_kbps);
+   var act=(typeof d.action==='string'&&d.action&&d.action!=='none')?d.action:null;
    if(!enc){
-    // Nothing is encoding, so there is nothing to compare and no verdict to keep. Saying so is the
-    // honest reading of a closed camera: it is not delivering badly, it is not delivering at all.
-    rows.push({label:'Encoding',val:'nothing is being encoded',col:'#888',suf:'· an idle camera costs the panel nothing'});
+    // Nothing is encoding, so there is nothing to compare and no verdict to keep. WHY nothing is
+    // encoding differs, though, and "idle costs nothing" is true only of a camera that is actually
+    // closed — a snapshot client holds it open and pays for every frame it converts, so saying the
+    // panel is spending nothing there would be exactly the comfortable lie this card exists to avoid.
+    if(d.state==='idle')rows.push({label:'Encoding',val:'nothing is being encoded',col:'#888',suf:'· an idle camera costs the panel nothing'});
+    else if(d.state==='live'||d.state==='opening')rows.push({label:'Encoding',val:'no stream is encoding',col:'#888',suf:'· the camera is open for a snapshot'});
+    else rows.push({label:'Encoding',val:'no stream is encoding',col:'#888',suf:act?'· '+act:''});
     forget();
     head('· '+session(d));
    }else{
     rows.push({label:'Encoder',val:enc,suf:(w&&h)?'· '+w+'×'+h:'· output size unavailable'});
-    if(got==null){
+    // An encoder bound to a session that has stopped receiving frames reports no delivered rate at
+    // all, exactly as one that has not started yet does. Reading both as "starting…" would leave a
+    // stalled stream looking like a warming-up one for as long as it stayed broken, so a classified
+    // fault, or a captured frame older than the panel's own five-second delivery window, is named.
+    var age=n(d.last_frame_age_ms);
+    var fault=(typeof d.fault==='string'&&d.fault&&d.fault!=='none')?d.fault.replace(/_/g,' '):null;
+    var stalled=got!=null?null:(fault?'stopped — '+fault:((age!=null&&age>5000)?'no frames for '+Math.round(age/1000)+'s':null));
+    if(stalled){
+     rows.push({label:'Frame rate',val:stalled,col:'#d9a528',bold:true,suf:want?'· asked for '+want+' fps':''});
+     forget();
+     head('· '+stalled);
+    }else if(got==null){
      rows.push({label:'Frame rate',val:'starting…',col:'#888',suf:want?'· asked for '+want+' fps':'· requested rate unavailable'});
      forget();
      head('· starting');
@@ -324,10 +340,14 @@ function cameraCard(tbl,hdr){
     // Bitrate is a cap, never a target: a still scene needs fewer bits and using fewer is the encoder
     // working, not failing. It is shown for the trade — resolution and rate are what spend it — and it
     // is deliberately kept out of the shortfall verdict, which is about frame rate alone.
-    if(gotKbps==null)rows.push({label:'Bitrate',val:'starting…',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
+    if(stalled)rows.push({label:'Bitrate',val:'nothing delivered',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
+    else if(gotKbps==null)rows.push({label:'Bitrate',val:'starting…',col:'#888',suf:cap?'· cap '+cap+' kbps':'· cap unavailable'});
     else if(!cap)rows.push({label:'Bitrate',val:gotKbps+' kbps',col:'#888',suf:'· cap unavailable'});
     else rows.push({label:'Bitrate',val:gotKbps+' of '+cap+' kbps cap',suf:'· under the cap is normal for a still scene'});
-    rows.push(verdict==='short'
+    rows.push(stalled
+     ?{label:'Delivery',val:'not delivering',col:'#d9a528',bold:true,
+       suf:act?'· '+act:'· the encoder is bound to the session but no frames are arriving'}
+     :verdict==='short'
      ?{label:'Delivery',val:'not keeping up',col:'#d9a528',bold:true,
        suf:'· lower the frame rate or the resolution on Configure → Camera, or accept the rate this panel can give; a dim room can also hold the sensor below its target'}
      :verdict==='ok'
