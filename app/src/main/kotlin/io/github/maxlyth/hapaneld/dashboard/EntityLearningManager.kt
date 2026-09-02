@@ -3062,7 +3062,11 @@ internal fun upgradeRecoveryPreservesFilter(
     retainedFilterIds: Collection<String>,
     recoveredIds: Collection<String>,
 ): Boolean {
-    if (retainedFilterIds.isEmpty() || recoveredIds.isEmpty()) return false
+    // Nothing retained means nothing to preserve, and `containsAll` would vacuously agree. An empty
+    // candidate needs no clause of its own: it cannot contain a non-empty retained list, so the
+    // superset check below is the single place this policy lives. A separate emptiness guard was tried
+    // and removed — the mutation battery proved no test could tell it from its absence.
+    if (retainedFilterIds.isEmpty()) return false
     return recoveredIds.toSet().containsAll(retainedFilterIds.toSet())
 }
 
