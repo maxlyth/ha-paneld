@@ -1,11 +1,13 @@
 package io.github.maxlyth.hapaneld.i18n
 
+import io.github.maxlyth.hapaneld.http.PaneldServer
 import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import sun.misc.Unsafe
 
 class HtmlUiCatalogueContractTest {
     private val assets = File("src/main/assets")
@@ -80,6 +82,87 @@ class HtmlUiCatalogueContractTest {
         assertTrue("Dashboard hydration must retain an explicit browser language override", info.contains("fetch(localizedInfoUrl())"))
     }
 
+    @Test fun `every human tab keeps an explicit Simplified Chinese shell and navigation`() {
+        val source = server.readText()
+        val routes = listOf("setup", "profiles", "install", "fleet", "logs", "entities")
+
+        routes.forEach { route ->
+            val body = routeBody(source, route)
+            assertTrue(
+                "/$route must resolve the request locale so GET /$route?lang=zh-Hans emits a Chinese shell",
+                body.contains("requestStrings(call)"),
+            )
+            assertTrue("/$route must render its translated section title", body.contains("strings.get(\"shell.nav."))
+            assertTrue("/$route must report its mixed shell/body languages", body.contains("HttpHeaders.ContentLanguage"))
+        }
+
+        val chinese = CatalogueLoader { name -> File(assets, name).readText() }.strings("zh-Hans")
+        assertEquals("zh-Hans", chinese.requestedLocale)
+        assertFalse("the Dashboard shell sentinel must be translated", chinese.get("shell.nav.dashboard") == "Dashboard")
+        assertFalse("the Configure shell sentinel must be translated", chinese.get("shell.nav.configure") == "Configure")
+
+        val serverInstance = unsafe().allocateInstance(PaneldServer::class.java) as PaneldServer
+        val localizedHref = PaneldServer::class.java.getDeclaredMethod(
+            "localizedHref",
+            String::class.java,
+            Strings::class.java,
+        ).apply { isAccessible = true }
+        assertEquals(
+            "/configure?lang=zh-Hans#cfg-camera",
+            localizedHref.invoke(serverInstance, "/configure#cfg-camera", chinese),
+        )
+        assertEquals(
+            "/install?repair=1&lang=zh-Hans#camera",
+            localizedHref.invoke(serverInstance, "/install?repair=1#camera", chinese),
+        )
+        assertFalse(
+            "Dashboard edit links must not drop an explicit ?lang=zh-Hans override",
+            Regex("href=\\\"/(?:configure|install)#").containsMatchIn(functionBody(source, "infoHtml")),
+        )
+    }
+
+    @Test fun `visible Camera dashboard copy is catalogue-backed and promoted for Simplified Chinese`() {
+        val serverCamera = functionBody(server.readText(), "infoHtml")
+        val scriptCamera = javascriptFunctionBody(File(assets, "info.js").readText(), "cameraCard")
+
+        listOf(
+            ">Camera stream ",
+            ">reading…<",
+            ">What the stream was asked for and what it is delivering.",
+        ).forEach { literal ->
+            assertFalse("server-rendered Camera copy is still hard-coded: $literal", serverCamera.contains(literal))
+        }
+        listOf(
+            "{label:'Session'",
+            "{label:'Encoding'",
+            "{label:'Encoder'",
+            "{label:'Requested'",
+            "{label:'Frame rate'",
+            "{label:'Bitrate'",
+            "?{label:'Delivery'",
+            "paint(tbl,[{label:'Camera',val:'status unavailable'",
+        ).forEach { literal ->
+            assertFalse("dynamic Camera copy is still hard-coded: $literal", scriptCamera.contains(literal))
+        }
+
+        val keys = literalKeys(serverCamera, "strings\\.get") + literalKeys(scriptCamera, "i18nText")
+        val cameraKeys = keys.filterTo(sortedSetOf()) { it.startsWith("dashboard.camera.") }
+        assertTrue("the visible Camera card must consume dashboard.camera catalogue keys", cameraKeys.size >= 20)
+
+        val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
+        val target = TargetCatalogue.parse(File(assets, "i18n/zh-Hans.json").readText(), source)
+        cameraKeys.forEach { key ->
+            val english = checkNotNull(source.strings[key]) { "$key is used but absent from English" }
+            val chinese = checkNotNull(target.strings[key]) { "zh-Hans is missing $key" }
+            assertEquals("zh-Hans has stale source text for $key", english.sourceHash, chinese.sourceHash)
+            assertTrue(
+                "zh-Hans must promote $key before the collaborator preview",
+                chinese.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                    chinese.state == TranslationState.COMMUNITY_CORRECTED,
+            )
+        }
+    }
+
     @Test fun `dynamic scripts use the browser helper only through an English-safe adapter`() {
         listOf("info.js", "configure.js").forEach { name ->
             val source = File(assets, name).readText()
@@ -109,5 +192,25 @@ class HtmlUiCatalogueContractTest {
             ?: error("missing function $name")
         val next = source.indexOf("\n    private fun ", start + 1).takeIf { it >= 0 } ?: source.length
         return source.substring(start, next)
+    }
+
+    private fun routeBody(source: String, path: String): String {
+        val marker = "get(\"/$path\")"
+        val start = source.indexOf(marker).also { require(it >= 0) { "missing /$path route" } }
+        val next = source.indexOf("\n                get(\"/", start + marker.length)
+            .takeIf { it >= 0 } ?: source.length
+        return source.substring(start, next)
+    }
+
+    private fun javascriptFunctionBody(source: String, name: String): String {
+        val start = source.indexOf("function $name(").also { require(it >= 0) { "missing function $name" } }
+        val next = source.indexOf("\nfunction ", start + 1).takeIf { it >= 0 } ?: source.length
+        return source.substring(start, next)
+    }
+
+    private fun unsafe(): Unsafe {
+        val field = Unsafe::class.java.getDeclaredField("theUnsafe")
+        field.isAccessible = true
+        return field.get(null) as Unsafe
     }
 }

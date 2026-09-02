@@ -13,13 +13,16 @@ function json(body, status = 200) {
   return { status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
 }
 
-function fixture() {
+function fixture(translations = {}, locale = 'en') {
   return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/info.css"></head><body>
     <span id="hardened-approval-description"></span><span id="hardened-approval-conditional-description"></span>
     <button id="tab-basic"></button><button id="tab-adv"></button>
     <p id="cfg-msg"></p><p id="cfg-status"></p><div id="cfg-groups"></div>
     <div id="proximity-learning-mount"></div><div id="savebar" hidden><button id="savebtn" onclick="cfgSave()"></button></div>
-    <script>window.CardColumnAlignment={attach:()=>()=>{}};</script>
+    <script>window.CardColumnAlignment={attach:()=>()=>{}};window.HaI18n={locale:${JSON.stringify(locale)},t:(key,fallback,values)=>{
+      var catalogue=${JSON.stringify(translations)},text=Object.prototype.hasOwnProperty.call(catalogue,key)?catalogue[key]:fallback;
+      return String(text).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(placeholder,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):placeholder);
+    }};</script>
     <script src="/configure.js"></script><script src="/proximity-learning.js"></script>
   </body></html>`;
 }
@@ -486,7 +489,7 @@ browserTest('A partially applied locale save releases overrides and preserves it
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
     if (path === '/health') return { body: 'ok cfg=locale-partial' };
-  }, () => { state.documents++; return fixture(); });
+  }, () => { state.documents++; return fixture({ 'configure.save.failed': '保存失败。' }); });
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(3_000);
@@ -510,7 +513,7 @@ browserTest('A partially applied locale save releases overrides and preserves it
     message: 'Language was saved, but touch sound was rejected.',
   }, 500));
   await navigation;
-  await page.getByText('Language was saved, but touch sound was rejected.', { exact: true }).waitFor();
+  await page.getByText('保存失败。', { exact: true }).waitFor();
   await page.getByText('Anzeigename', { exact: true }).waitFor();
   assert.equal(state.dialogs, 0);
   assert.equal(state.haStatusGets, 2);
@@ -547,7 +550,10 @@ browserTest('Unrelated and failed saves preserve the supported browser language 
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
     if (path === '/health') return { body: 'ok cfg=locale-negative' };
-  }, () => { state.documents++; return fixture(); });
+  }, () => { state.documents++; return fixture({
+    'configure.save.saved': '已保存。',
+    'configure.save.failed': '保存失败。',
+  }); });
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(3_000);
@@ -557,13 +563,13 @@ browserTest('Unrelated and failed saves preserve the supported browser language 
 
   await page.locator('#cfg-friendly_name input').fill('Renamed panel');
   await page.locator('#savebtn').click();
-  await page.getByText('Saved.', { exact: true }).waitFor();
+  await page.getByText('已保存。', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), '"fr"');
   assert.equal(state.documents, 1);
 
   await page.locator('#cfg-ui_language select').selectOption('en');
   await page.locator('#savebtn').click();
-  await page.getByText('Locale save refused.', { exact: true }).waitFor();
+  await page.getByText('保存失败。', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => localStorage.getItem('selectedLanguage')), '"fr"');
   assert.equal(state.documents, 1);
   assert.deepEqual(state.posts, [
@@ -1408,7 +1414,7 @@ browserTest('Sensitivity preview survives transient HA source loss during save',
   assert.equal(await page.locator('[data-config-group="Display"]').count(), 1);
   assert.equal(sensitivity, '10');
 });
-browserTest('Configure keeps an approval challenge visible instead of treating it as a save', async (t) => {
+browserTest('Configure keeps a localized approval challenge visible instead of treating it as a save', async (t) => {
   const schema = [{ key: 'update_channel', label: 'Update channel', group: 'Updates', type: 'STRING', available: true }];
   const harness = await startHarness((path, request) => {
     if (path === '/api/v1/config/schema') return json(schema);
@@ -1419,7 +1425,7 @@ browserTest('Configure keeps an approval challenge visible instead of treating i
     if (path === '/api/v1/apps') return json({ apps: [] });
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
-  });
+  }, () => fixture({ 'configure.approval.retry': '请在面板上批准此请求，然后重试。' }));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(1_500);
@@ -1427,8 +1433,49 @@ browserTest('Configure keeps an approval challenge visible instead of treating i
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   await page.locator('#cfg-update_channel input').fill('beta');
   await page.locator('#savebtn').click();
-  await assert.doesNotReject(page.locator('#cfg-msg').getByText('Approve this change on the panel.').waitFor());
+  await assert.doesNotReject(page.locator('#cfg-msg').getByText('请在面板上批准此请求，然后重试。').waitFor());
   await assert.doesNotReject(page.locator('#savebtn').isEnabled());
+});
+
+browserTest('Configure preserves the selected locale in its Display Sizing deep link', async (t) => {
+  const schema = [{
+    key: 'dashboard_zoom', label: '缩放', help: '帮助', helpLanguage: 'zh-Hans', group: 'Dashboard',
+    type: 'INT', min: 50, max: 200, available: true, displaySizingAvailable: true,
+  }];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { dashboard_zoom: '100' }, ha_expose: {}, ha_auth: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+  }, () => fixture({ 'configure.display.sizing': '显示尺寸' }, 'zh-Hans'));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  assert.equal(await page.getByRole('link', { name: '显示尺寸' }).getAttribute('href'), '/install?lang=zh-Hans#cfg-display');
+});
+
+browserTest('Configure localizes unavailable adaptive brightness without displaying backend prose', async (t) => {
+  const schema = [{ key: 'auto_brightness', label: '自动亮度', group: 'Display', type: 'BOOL', available: true }];
+  const rawDetail = 'Adaptive brightness runtime is not connected.';
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { auto_brightness: 'true' }, ha_expose: {}, ha_auth: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/auto-brightness') return json({ available: false, localSourcePresent: true, sourceRevision: 1, detail: rawDetail });
+    if (path === '/api/v1/auto-brightness/history') return json({ points: [], sourceRevision: 1 });
+  }, () => fixture({ 'configure.brightness.runtime_unavailable': '自适应亮度运行时不可用。' }, 'zh-Hans'));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.getByText('自适应亮度运行时不可用。', { exact: true }).waitFor();
+  assert.equal((await page.locator('body').textContent()).includes(rawDetail), false);
 });
 
 browserTest('Unrelated Configure saves preserve the connected HA identity without probing again', async (t) => {
@@ -1903,7 +1950,9 @@ browserTest('Configure accepts durable pending apply without retrying or losing 
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
     if (path === '/health') return { body: 'ok cfg=pending' };
-  });
+  }, () => fixture({
+    'configure.save.hardware_pending': '已保存所需值；硬件应用仍在等待。',
+  }, 'zh-Hans'));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(2_000);
@@ -1912,7 +1961,7 @@ browserTest('Configure accepts durable pending apply without retrying or losing 
 
   await page.locator('#cfg-touch_sound [role=switch]').click();
   await page.locator('#savebtn').click();
-  await page.getByText('Settings were saved; retrying hardware apply: touch_sound. If they remain pending, restart the service.').waitFor();
+  await page.locator('#cfg-msg').getByText('已保存所需值；硬件应用仍在等待。').waitFor();
   assert.equal(new URLSearchParams(posted).get('touch_sound'), 'true');
   assert.equal(Array.from(new URLSearchParams(posted).keys()).length, 1);
   assert.equal(posts, 1);
@@ -2127,7 +2176,7 @@ browserTest('Configure reconciles structured partial failure instead of blindly 
     if (path === '/api/v1/apps') return json({ apps: [] });
     if (path === '/api/v1/radio') return json({ present: false });
     if (path === '/api/v1/proximity') return json({ present: false });
-  });
+  }, () => fixture({ 'configure.save.failed': '保存失败。' }, 'zh-Hans'));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(2_000);
@@ -2137,7 +2186,7 @@ browserTest('Configure reconciles structured partial failure instead of blindly 
   await page.locator('#cfg-friendly_name input').fill('Kitchen');
   await page.locator('#cfg-touch_sound [role=switch]').click();
   await page.locator('#savebtn').click();
-  await page.getByText('Panel name was saved, but touch_sound could not be durably accepted.').waitFor();
+  await page.getByText('保存失败。').waitFor();
   assert.equal(await page.locator('#cfg-friendly_name input').inputValue(), 'Kitchen');
   assert.equal(await page.locator('#cfg-touch_sound [role=switch]').getAttribute('aria-checked'), 'false');
   assert.equal(await page.locator('#savebtn').isDisabled(), true);
@@ -4347,7 +4396,7 @@ browserTest('The search status line reserves its height, so feedback shifts noth
 // it was asked for — so these cover what it says when it does not know yet, when it does, and when
 // the facts go away. A verdict that survives a gap in the facts is the defect they exist to catch.
 
-function cameraFixture() {
+function cameraFixture(translations = {}) {
   return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/info.css"></head>
     <body data-hydrate="0" data-hardened="0">
     <canvas id="perfchart" width="600" height="96"></canvas><canvas id="respchart" width="600" height="150"></canvas>
@@ -4357,7 +4406,10 @@ function cameraFixture() {
     <div id="dashboard-cards"><div class="card" data-layout-key="camera-stream">
       <h2>Camera stream <small id="camhdr"></small></h2>
       <table id="camtbl"><tr><td style="color:#888">reading…</td></tr></table></div></div>
-    <script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/info.js"></script></body></html>`;
+    <script>window.CardColumnAlignment={attach:()=>()=>{}};window.HaI18n={t:(key,fallback,values)=>{
+      var catalogue=${JSON.stringify(translations)},text=Object.prototype.hasOwnProperty.call(catalogue,key)?catalogue[key]:fallback;
+      return String(text).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(placeholder,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):placeholder);
+    }};</script><script src="/info.js"></script></body></html>`;
 }
 
 // A board whose profile declares no camera: the server omits the card entirely, so nothing here mounts.
@@ -4443,6 +4495,28 @@ const cameraHeader = (page) => page.evaluate(() => document.getElementById('camh
 const untilCamera = (page, needle) => page.waitForFunction(
   (text) => document.getElementById('camtbl').textContent.includes(text), needle, { timeout: 20_000 },
 );
+
+browserTest('Camera runtime rows render the selected catalogue instead of stale English', async (t) => {
+  const translations = {
+    'dashboard.camera.label.session': '会话',
+    'dashboard.camera.session.closed': '已关闭',
+    'dashboard.camera.watchers.none': '无人观看',
+    'dashboard.camera.label.encoding': '编码',
+    'dashboard.camera.encoding.nothing': '当前未编码',
+    'dashboard.camera.encoding.idle_cost': '· 空闲摄像头不消耗面板资源',
+  };
+  const { page } = await startCameraHarness(t, cameraIdle, () => cameraFixture(translations));
+
+  await untilCamera(page, '当前未编码');
+  const text = await cameraText(page);
+  assert.match(text, /会话/);
+  assert.match(text, /已关闭/);
+  assert.match(text, /无人观看/);
+  assert.match(text, /编码/);
+  assert.match(text, /空闲摄像头不消耗面板资源/);
+  assert.doesNotMatch(text, /Session|Encoding|nothing is being encoded|nobody is watching/);
+  assert.equal(await cameraHeader(page), '· 已关闭');
+});
 
 browserTest('An idle camera reports that nothing is encoding, and offers no rate to judge', async (t) => {
   const { page } = await startCameraHarness(t, cameraIdle);

@@ -160,7 +160,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains("\\\"labelLanguage\\\":${'$'}{s(label.language)}"))
         assertTrue(server.contains("\\\"helpLanguage\\\":${'$'}helpLanguageJson"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))
-        assertTrue(configure.contains("href: \"/install#cfg-display\", text: i18nText(\"configure.display.sizing\", \"Display Sizing\")"))
+        assertTrue(configure.contains("href: localizedPageHref(\"/install#cfg-display\"), text: i18nText(\"configure.display.sizing\", \"Display Sizing\")"))
         assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))
         assertTrue(server.contains("spec.key == \"dashboard_zoom\" && displaySizingAvailable"))
         assertTrue(server.contains("""<div class="cards" id="install-cards" data-card-size-page="install"""))
@@ -323,7 +323,10 @@ class DiagCapabilityPolicyTest {
         val configure = source.substring(source.indexOf("private fun configureBody"), source.indexOf("private fun profilesBody"))
         val install = source.substring(source.indexOf("private fun installBody"), source.indexOf("private fun installWarning"))
 
-        listOf("displayCardHtml(management.privilege.typedShellControlReady, displaySizing)", "tameCardHtml(root)").forEach {
+        listOf(
+            "displayCardHtml(management.privilege.typedShellControlReady, displaySizing, strings)",
+            "tameCardHtml(root, strings)",
+        ).forEach {
             assertFalse(it in configure)
             assertTrue(it in install)
         }
@@ -331,8 +334,8 @@ class DiagCapabilityPolicyTest {
         assertFalse("/assets/prox.js" in source)
         assertFalse("proximityCardHtml()" in source)
         assertTrue("configImport(this)" in source.substring(source.indexOf("private fun backupCardHtml"), source.indexOf("private fun apkCardHtml")))
-        assertTrue("""installIcon("cfg-display")""" in source)
-        assertTrue("""cfgIcon("cfg-wake_on_wave")""" in source)
+        assertTrue("""installIcon("cfg-display", strings)""" in source)
+        assertTrue("""cfgIcon("cfg-wake_on_wave", strings)""" in source)
         assertTrue("/install#cfg-tame" in source)
     }
 

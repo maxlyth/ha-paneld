@@ -58,8 +58,8 @@ class ManagementObservationContractTest {
         assertTrue(status.contains("management.capabilityRows"))
         assertFalse(status.contains("DiagReader.capabilities"))
         assertFalse(rows.contains("DiagReader.capabilities"))
-        assertTrue(server.contains("capRowsHtml(s.capabilityRows)"))
-        assertTrue(server.contains("s?.let { capRowsHtml(it.capabilityRows) }"))
+        assertTrue(server.contains("capRowsHtml(s.capabilityRows, strings)"))
+        assertTrue(server.contains("s?.let { capRowsHtml(it.capabilityRows, strings) }"))
     }
 
     @Test fun serviceFactsLiveValuesAndCapabilitiesReuseOneControllerObservation() {
@@ -145,16 +145,16 @@ class ManagementObservationContractTest {
     @Test fun installRenderingReusesOneSnapshotWhileEffectAdmissionRemainsLive() {
         val server = source("http/PaneldServer.kt")
         val install = server.substring(
-            server.indexOf("private fun installBody()"),
+            server.indexOf("private fun installBody(strings: AppStrings)"),
             server.indexOf("private fun installWarning"),
         )
 
         assertEquals(1, Regex("snapStaleOk\\(\\)").findAll(install).count())
         assertTrue(install.contains("val root = management.privilege.rootControlReady"))
         assertTrue(install.contains("val installer = management.privilege.typedShellControlReady"))
-        assertTrue(install.contains("tameCardHtml(root)"))
+        assertTrue(install.contains("tameCardHtml(root, strings)"))
         assertTrue(install.contains("val displaySizing = densityCache.peek()"))
-        assertTrue(install.contains("displayCardHtml(management.privilege.typedShellControlReady, displaySizing)"))
+        assertTrue(install.contains("displayCardHtml(management.privilege.typedShellControlReady, displaySizing, strings)"))
         assertFalse(install.contains("densityCache.get()"))
         assertFalse(install.contains("rootOk()"))
         assertFalse(install.contains("HelperClient.available()"))
@@ -256,7 +256,10 @@ class ManagementObservationContractTest {
         val installRoute = server.substring(server.indexOf("get(\"/install\")"), server.indexOf("get(\"/fleet\")"))
         val statusRoute = server.substring(server.indexOf("get(\"/status\")"), server.indexOf("post(\"/updates/ignore\")"))
 
-        assertTrue(installRoute.contains("withContext(Dispatchers.IO) { page(\"install\", \"Install\", installBody()) }"))
+        val compactInstallRoute = installRoute.replace(Regex("\\s+"), " ")
+        assertTrue(compactInstallRoute.contains(
+            "withContext(Dispatchers.IO) { page(\"install\", strings.get(\"shell.nav.install\"), installBody(strings), strings) }",
+        ))
         assertTrue(statusRoute.contains("withContext(Dispatchers.IO)"))
         assertTrue(statusRoute.contains("statusJson("))
         assertTrue(statusRoute.indexOf("refreshedStatusStorage(") < statusRoute.indexOf("statusJson("))
