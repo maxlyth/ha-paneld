@@ -70,6 +70,10 @@ if "$BUILD_TOOLS/apksigner" verify \
   "$SIGNED_APK" >"$TMP/corrupt.out" 2>"$TMP/corrupt.err"; then
   printf 'Pinned apksigner accepted a corrupt V4 sidecar.\n' >&2
   exit 1
+elif ! grep -Fq 'Invalid signature version.' "$TMP/corrupt.err"; then
+  printf 'Pinned apksigner rejected the corrupt V4 sidecar for an unexpected reason.\n' >&2
+  sed -n '1,20p' "$TMP/corrupt.err" >&2
+  exit 1
 fi
 "$BUILD_TOOLS/zipalign" -c -P 16 4 "$SIGNED_APK"
 badging="$("$BUILD_TOOLS/aapt" dump badging "$SIGNED_APK")"

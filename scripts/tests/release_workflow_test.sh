@@ -427,7 +427,10 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -n "$v4_signature_file" ]; then
   [ "$v4_signature_file" = "$apk.idsig" ] || exit 94
-  grep -Fxq 'APK Signature Scheme v4 fixture' "$v4_signature_file" || exit 95
+  if ! grep -Fxq 'APK Signature Scheme v4 fixture' "$v4_signature_file"; then
+    printf 'V4 signature fixture is invalid.\n' >&2
+    exit 95
+  fi
 fi
 printf '%s\n' 'Signer #1 certificate SHA-256 digest: ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339'
 EOF
@@ -623,7 +626,8 @@ if ! (
     RELEASE_TAG=v1.2.3-rc1 \
     RUNNER_TEMP="$descriptor_case/runner-temp" \
     bash <<<"$test_final_step"
-) > "$descriptor_case/corrupt-idsig-final.log" 2>&1; then
+) > "$descriptor_case/corrupt-idsig-final.log" 2>&1 && \
+   grep -Fq 'V4 signature fixture is invalid.' "$descriptor_case/corrupt-idsig-final.log"; then
   pass "final pre-upload verification rejects a corrupt V4 signature sidecar"
 else
   fail_test "final pre-upload verification rejects a corrupt V4 signature sidecar"
