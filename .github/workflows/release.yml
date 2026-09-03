@@ -462,7 +462,7 @@ jobs:
           helper_arm_name="ha-paneld-helper-${RELEASE_TAG}-armeabi-v7a"
           helper_arm64_name="ha-paneld-helper-${RELEASE_TAG}-arm64-v8a"
           signed_apk="dist/$apk_name"
-          mkdir -p dist
+          /usr/bin/install -d -m 0755 dist
 
           "$build_tools/apksigner" sign \
             --ks "$keystore" \
@@ -473,6 +473,7 @@ jobs:
             "$unsigned_apk"
           "$build_tools/apksigner" verify --verbose --print-certs "$signed_apk"
           "$build_tools/zipalign" -c -P 16 4 "$signed_apk"
+          /usr/bin/chmod 0644 "$signed_apk"
 
           badging=$("$build_tools/aapt" dump badging "$signed_apk")
           package_line=${badging%%$'\n'*}

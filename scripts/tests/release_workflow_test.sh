@@ -311,6 +311,13 @@ fi
 descriptor_step_yaml="$(extract_named_step_yaml 'Generate bounded install descriptor without release credentials')"
 proof_step_yaml="$(extract_named_step_yaml 'Sign and authenticate release proofs')"
 final_step_yaml="$(extract_named_step_yaml 'Final exact verification before publication')"
+asset_step="$(extract_named_step 'Sign and validate release APK')"
+if grep -Fq '/usr/bin/install -d -m 0755 dist' <<<"$asset_step" && \
+   grep -Fq '/usr/bin/chmod 0644 "$signed_apk"' <<<"$asset_step"; then
+  pass "signed APK is readable by the credential-free descriptor generator"
+else
+  fail_test "signed APK is readable by the credential-free descriptor generator"
+fi
 if [ "$(grep -Fc 'if [ "${#RELEASE_TAG}" -gt 64 ] || [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)' "$WORKFLOW")" -eq 2 ] && \
    ! grep -Eq '^[[:space:]]*if:[[:space:]]*(\$\{\{[[:space:]]*)?false' <<<"$descriptor_step_yaml$proof_step_yaml$final_step_yaml" && \
    ! grep -Eq '^[[:space:]]*continue-on-error:[[:space:]]*true' <<<"$descriptor_step_yaml$proof_step_yaml$final_step_yaml" && \
