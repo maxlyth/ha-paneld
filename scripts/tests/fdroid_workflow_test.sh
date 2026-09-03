@@ -5,6 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/fdroid.yml"
 PUBLISHER="$ROOT/tools/fdroid/publish-r2.sh"
+PREFLIGHT="$ROOT/tools/fdroid/public_origin_preflight.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -17,6 +18,12 @@ if bash -n "$PUBLISHER"; then
   pass "R2 publisher shell is syntactically valid"
 else
   fail_test "R2 publisher shell is syntactically valid"
+fi
+
+if python3 -m py_compile "$PREFLIGHT"; then
+  pass "public-origin preflight Python is syntactically valid"
+else
+  fail_test "public-origin preflight Python is syntactically valid"
 fi
 
 if [ -x "$ROOT/tools/fdroid/publish-r2.sh" ] &&
@@ -54,6 +61,7 @@ else
   fail_test "production publishers queue and cannot cancel a partial index update"
 fi
 
+preflight_job="$(awk '/^  preflight:$/ { in_job=1 } /^  build:$/ { exit } in_job' "$WORKFLOW")"
 build_job="$(awk '/^  build:$/ { in_job=1 } /^  deploy:$/ { exit } in_job' "$WORKFLOW")"
 deploy_job="$(awk '/^  deploy:$/ { in_job=1 } in_job' "$WORKFLOW")"
 if ! grep -Eq 'FDROID_R2_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)|AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)' <<<"$build_job" &&
@@ -62,6 +70,39 @@ if ! grep -Eq 'FDROID_R2_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)|AWS_(ACCESS_KEY_ID|SE
   pass "R2 credentials are confined to a default-branch-only optional deploy job"
 else
   fail_test "R2 credentials are confined to a default-branch-only optional deploy job"
+fi
+
+if grep -Fq 'run: python3 tools/fdroid/public_origin_preflight.py' <<<"$preflight_job" &&
+   ! grep -Eq '^[[:space:]]+environment:|secrets\.|FDROID_R2_|AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)|GH_TOKEN|GITHUB_TOKEN' <<<"$preflight_job" &&
+   grep -Fq 'needs: preflight' <<<"$build_job" &&
+   grep -Fq 'needs: build' <<<"$deploy_job"; then
+  pass "credential-free public-origin preflight gates signing, build and R2 publication"
+else
+  fail_test "credential-free public-origin preflight gates signing, build and R2 publication"
+fi
+
+deploy_preflight_line="$(grep -nF 'name: Preflight public F-Droid origin on publication runner' <<<"$deploy_job" | cut -d: -f1)"
+download_line="$(grep -nF 'uses: actions/download-artifact@' <<<"$deploy_job" | cut -d: -f1)"
+credential_guard_line="$(grep -nF 'name: Guard — R2 deployment configuration present' <<<"$deploy_job" | cut -d: -f1)"
+publish_line="$(grep -nF 'name: Publish and verify F-Droid repository' <<<"$deploy_job" | cut -d: -f1)"
+deploy_preflight_step="$({
+  found=false
+  while IFS= read -r line; do
+    if [[ "$line" == *'name: Preflight public F-Droid origin on publication runner'* ]]; then
+      found=true
+    elif [ "$found" = true ] && [[ "$line" == '      - '* ]]; then
+      break
+    fi
+    [ "$found" = false ] || printf '%s\n' "$line"
+  done <<<"$deploy_job"
+})"
+if [ "$(grep -Fc 'run: python3 tools/fdroid/public_origin_preflight.py' "$WORKFLOW")" -eq 2 ] &&
+   [ -n "$deploy_preflight_line" ] && [ "$deploy_preflight_line" -lt "$download_line" ] &&
+   [ "$download_line" -lt "$credential_guard_line" ] && [ "$credential_guard_line" -lt "$publish_line" ] &&
+   ! grep -Eq 'env:|secrets\.|FDROID_R2_|AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)|GH_TOKEN|GITHUB_TOKEN' <<<"$deploy_preflight_step"; then
+  pass "actual publication runner is probed without credentials before artifacts and R2 access"
+else
+  fail_test "actual publication runner is probed without credentials before artifacts and R2 access"
 fi
 
 site="$TMP/site"
