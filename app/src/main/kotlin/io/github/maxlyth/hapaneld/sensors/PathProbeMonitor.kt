@@ -43,7 +43,10 @@ internal class PathProbeMonitor(
      * Taken from the live connection rather than resolved here, so the probe always measures the path
      * the dashboard is using even when the two families disagree about which one works.
      */
-    fun onRouteConnected(address: InetAddress) {
+    fun onRouteConnected(address: InetAddress) = synchronized(lock) {
+        // A replacement connection owns a new route generation even when DNS selected the same
+        // address. Let an old silence burst finish, but never attribute its result to the new socket.
+        if (target != null) generation++
         target = address
     }
 

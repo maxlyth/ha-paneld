@@ -97,6 +97,20 @@ class PathProbeMonitorTest {
         assertEquals(PathProbeAvailability.UNPROVEN, snap.availability)
     }
 
+    @Test fun aResultFromAReplacedSocketIsDiscardedEvenWithoutAStoppedState() {
+        val monitor = live(FakeSource())
+        val claim = requireNotNull(monitor.claimBurst(0L))
+        // Ordinary reconnects report CONNECTING and then a replacement route without STOPPED.
+        // The old burst must not become evidence for that replacement socket.
+        monitor.onSocketState(HaSocketState.CONNECTING)
+        monitor.onRouteConnected(InetAddress.getByName("127.0.0.2"))
+        monitor.onSocketState(HaSocketState.LIVE)
+        monitor.runBurst(claim, clock)
+        val snap = requireNotNull(monitor.snapshot(0L))
+        assertEquals("stale route evidence must be discarded", 0, snap.bursts)
+        assertEquals(PathProbeAvailability.UNPROVEN, snap.availability)
+    }
+
     @Test fun aStoppedSocketDiscardsTheEvidenceAndTheCadence() {
         val monitor = live(FakeSource())
         val claim = requireNotNull(monitor.claimBurst(0L))
