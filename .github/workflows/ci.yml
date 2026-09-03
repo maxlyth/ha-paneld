@@ -121,6 +121,9 @@ jobs:
             grep -Fq '6f696400 1a000000' <<<"$android_note"
           done
 
+      - name: Verify V4 release signature sidecar contract
+        run: scripts/tests/release_idsig_test.sh
+
       - name: Upload debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

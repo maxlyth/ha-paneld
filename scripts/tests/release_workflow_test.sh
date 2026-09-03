@@ -313,10 +313,15 @@ proof_step_yaml="$(extract_named_step_yaml 'Sign and authenticate release proofs
 final_step_yaml="$(extract_named_step_yaml 'Final exact verification before publication')"
 asset_step="$(extract_named_step 'Sign and validate release APK')"
 if grep -Fq '/usr/bin/install -d -m 0755 dist' <<<"$asset_step" && \
-   grep -Fq '/usr/bin/chmod 0644 "$signed_apk"' <<<"$asset_step"; then
-  pass "signed APK is readable by the credential-free descriptor generator"
+   grep -Fq 'apk_idsig="$signed_apk.idsig"' <<<"$asset_step" && \
+   grep -Fq 'APK Signature Scheme v4 sidecar is not one regular nofollow file.' <<<"$asset_step" && \
+   grep -Fq 'APK Signature Scheme v4 sidecar is empty or exceeds 1 MiB.' <<<"$asset_step" && \
+   grep -Fq '/usr/bin/chmod 0644 "$signed_apk" "$apk_idsig"' <<<"$asset_step" && \
+   grep -Fq '"$apk_name.idsig" \' <<<"$final_step" && \
+   grep -Fq 'Final APK Signature Scheme v4 sidecar is empty or exceeds 1 MiB.' <<<"$final_step"; then
+  pass "signed APK and bounded V4 sidecar remain in the exact readable release set"
 else
-  fail_test "signed APK is readable by the credential-free descriptor generator"
+  fail_test "signed APK and bounded V4 sidecar remain in the exact readable release set"
 fi
 if [ "$(grep -Fc 'if [ "${#RELEASE_TAG}" -gt 64 ] || [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)' "$WORKFLOW")" -eq 2 ] && \
    ! grep -Eq '^[[:space:]]*if:[[:space:]]*(\$\{\{[[:space:]]*)?false' <<<"$descriptor_step_yaml$proof_step_yaml$final_step_yaml" && \
@@ -476,6 +481,7 @@ printf 'arm helper fixture\n' > "$descriptor_case/dist/ha-paneld-helper-v1.2.3-r
 printf 'arm64 helper fixture\n' > "$descriptor_case/dist/ha-paneld-helper-v1.2.3-rc1-arm64-v8a"
 printf '{}\n' > "$descriptor_case/dist/ha-paneld-v1.2.3-rc1-android-gradle-runtime.cdx.json"
 printf '{}\n' > "$descriptor_case/dist/ha-paneld-v1.2.3-rc1-profile-editor-runtime.cdx.json"
+printf 'APK Signature Scheme v4 fixture\n' > "$descriptor_case/dist/$apk_name.idsig"
 (
   cd "$descriptor_case/dist" || exit 1
   for subject in \
