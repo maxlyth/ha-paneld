@@ -223,12 +223,12 @@ class ManagementObservationContractTest {
 
     @Test fun passivePageRenderingNeverStartsColdHardwareProbes() {
         val server = source("http/PaneldServer.kt")
-        val logs = server.substring(server.indexOf("private fun logsBody()"), server.indexOf("private fun fleetBody()"))
+        val logs = server.substring(server.indexOf("private fun logsBody(strings: AppStrings)"), server.indexOf("private fun fleetBody(strings: AppStrings)"))
         val banners = server.substring(server.indexOf("private fun bannersHtml("), server.indexOf("private fun adHocWarnings("))
         val display = server.substring(server.indexOf("private fun displayCardHtml("), server.indexOf("private fun asset("))
 
         assertFalse(logs.contains("suCache."))
-        assertTrue(logs.contains("Root availability is checked when the stream opens"))
+        assertTrue(logs.contains("strings.get(\"logs.source.system_root_check\")"))
         assertTrue(banners.contains("companionServersForRender()"))
         assertFalse(banners.contains("companionServersStaleOk()"))
         assertFalse(display.contains("densityCache.get()"))
@@ -236,7 +236,7 @@ class ManagementObservationContractTest {
 
     @Test fun logsToolbarUsesSharedResponsiveControls() {
         val server = source("http/PaneldServer.kt")
-        val logs = server.substring(server.indexOf("private fun logsBody()"), server.indexOf("private fun fleetBody()"))
+        val logs = server.substring(server.indexOf("private fun logsBody(strings: AppStrings)"), server.indexOf("private fun fleetBody(strings: AppStrings)"))
         val css = File("src/main/assets/info.css").readText()
 
         assertTrue(logs.contains("<div class=\"log-toolbar\">"))

@@ -13,6 +13,14 @@
   // threadtime: "MM-DD HH:MM:SS.mmm  PID  TID L TAG: msg" — pull the level char for filter/colour.
   var levelRe = /^\d\d-\d\d \d\d:\d\d:\d\d\.\d+\s+\d+\s+\d+\s+([VDIWEF])\s/;
 
+  function i18nText(key, fallback, vars) {
+    return window.HaI18n && typeof window.HaI18n.t === "function"
+      ? window.HaI18n.t(key, fallback, vars)
+      : String(fallback == null ? "" : fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (placeholder, name) {
+        return vars && Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : placeholder;
+      });
+  }
+
   function state(msg) { document.getElementById("lg-state").textContent = "· " + msg; }
 
   function levelOf(line) {
@@ -61,10 +69,14 @@
     if (es) es.close();
     buf = [];
     out.textContent = "";
-    state("connecting…");
+    state(i18nText("logs.state.connecting", "connecting…"));
     es = new EventSource("/api/v1/logs/stream?source=" + source);
-    es.onopen = function () { state(source === "app" ? "app · live" : "system · live"); };
-    es.onerror = function () { state("reconnecting…"); };   // EventSource retries itself
+    es.onopen = function () {
+      state(source === "app"
+        ? i18nText("logs.state.app_live", "app · live")
+        : i18nText("logs.state.system_live", "system · live"));
+    };
+    es.onerror = function () { state(i18nText("logs.state.reconnecting", "reconnecting…")); };   // EventSource retries itself
     es.onmessage = function (e) { append({ raw: e.data, lvl: levelOf(e.data) }); };
   }
 
@@ -78,9 +90,19 @@
 
   window.lgPause = function () {
     paused = !paused;
-    document.getElementById("lg-pause").textContent = paused ? "▶ Resume" : "⏸ Pause";
+    document.getElementById("lg-pause").textContent = paused
+      ? "▶ " + i18nText("logs.action.resume", "Resume")
+      : "⏸ " + i18nText("logs.action.pause", "Pause");
     if (!paused) window.lgRender();                          // flush what buffered while paused
-    state((source === "app" ? "app" : "system") + (paused ? " · paused" : " · live"));
+    if (source === "app") {
+      state(paused
+        ? i18nText("logs.state.app_paused", "app · paused")
+        : i18nText("logs.state.app_live", "app · live"));
+    } else {
+      state(paused
+        ? i18nText("logs.state.system_paused", "system · paused")
+        : i18nText("logs.state.system_live", "system · live"));
+    }
   };
 
   window.lgClear = function () { buf = []; out.textContent = ""; };
@@ -111,7 +133,7 @@
   // Stop the stream (and with it the panel-side logcat subprocess) when the page is hidden for a
   // while; reconnect on return. Closing the tab closes the SSE socket → server unsubscribes.
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) { if (es) { es.close(); es = null; state("paused (tab hidden)"); } }
+    if (document.hidden) { if (es) { es.close(); es = null; state(i18nText("logs.state.hidden", "paused (tab hidden)")); } }
     else if (!es) connect();
   });
 

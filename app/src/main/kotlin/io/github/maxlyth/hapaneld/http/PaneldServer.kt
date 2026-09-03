@@ -2133,11 +2133,10 @@ class PaneldServer internal constructor(
                     call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
                     call.response.headers.append(
                         HttpHeaders.ContentLanguage,
-                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
-                            .distinct().sorted().joinToString(", "),
+                        strings.languages(setOf("shell.", "configure.hardened.", "fleet.")).joinToString(", "),
                     )
                     call.respondText(
-                        page("fleet", strings.get("shell.nav.fleet"), fleetBody(), strings),
+                        page("fleet", strings.get("shell.nav.fleet"), fleetBody(strings), strings),
                         ContentType.Text.Html,
                     )
                 }
@@ -2146,11 +2145,10 @@ class PaneldServer internal constructor(
                     call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
                     call.response.headers.append(
                         HttpHeaders.ContentLanguage,
-                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
-                            .distinct().sorted().joinToString(", "),
+                        strings.languages(setOf("shell.", "configure.hardened.", "logs.")).joinToString(", "),
                     )
                     call.respondText(
-                        page("logs", strings.get("shell.nav.logs"), logsBody(), strings),
+                        page("logs", strings.get("shell.nav.logs"), logsBody(strings), strings),
                         ContentType.Text.Html,
                     )
                 }
@@ -4571,37 +4569,36 @@ ${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs(str
 <div class="comppick">$action</div></div>"""
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
-    private fun logsBody(): String {
+    private fun logsBody(strings: AppStrings): String {
         // Deliberately NOT inside a `.cards` masonry container — the log card wants the full page width.
         return """
-<div class="card"><h2>Live logs <small id="lg-state" class="muted">· connecting…</small></h2>
+<div class="card"><h2>${esc(strings.get("logs.title"))} <small id="lg-state" class="muted">· ${esc(strings.get("logs.state.connecting"))}</small></h2>
 <div class="log-toolbar">
- <span class="log-source"><button id="lg-src-app" class="pbtn on" onclick="lgSource('app')">App</button><button id="lg-src-system" class="pbtn" onclick="lgSource('system')" title="Root availability is checked when the stream opens">System</button></span>
- <select id="lg-level" onchange="lgRender()" title="Minimum level">
-  <option value="V" selected>Verbose+</option><option value="D">Debug+</option><option value="I">Info+</option>
-  <option value="W">Warning+</option><option value="E">Error+</option>
+ <span class="log-source"><button id="lg-src-app" class="pbtn on" onclick="lgSource('app')">${esc(strings.get("logs.source.app"))}</button><button id="lg-src-system" class="pbtn" onclick="lgSource('system')" title="${esc(strings.get("logs.source.system_root_check"))}">${esc(strings.get("logs.source.system"))}</button></span>
+ <select id="lg-level" onchange="lgRender()" title="${esc(strings.get("logs.level.minimum"))}">
+  <option value="V" selected>${esc(strings.get("logs.level.verbose"))}</option><option value="D">${esc(strings.get("logs.level.debug"))}</option><option value="I">${esc(strings.get("logs.level.info"))}</option>
+  <option value="W">${esc(strings.get("logs.level.warning"))}</option><option value="E">${esc(strings.get("logs.level.error"))}</option>
  </select>
- <input id="lg-filter" class="log-filter" placeholder="filter text…" oninput="lgRender()">
+ <input id="lg-filter" class="log-filter" placeholder="${esc(strings.get("logs.filter.placeholder"))}" oninput="lgRender()">
  <span class="log-actions">
-  <label class="log-follow muted"><input type="checkbox" id="lg-follow" checked> Follow</label>
-  <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ Pause</button>
-  <button class="pbtn" onclick="lgClear()">Clear</button>
+  <label class="log-follow muted"><input type="checkbox" id="lg-follow" checked> ${esc(strings.get("logs.action.follow"))}</label>
+  <button id="lg-pause" class="pbtn" onclick="lgPause()">⏸ ${esc(strings.get("logs.action.pause"))}</button>
+  <button class="pbtn" onclick="lgClear()">${esc(strings.get("logs.action.clear"))}</button>
  </span>
 </div>
 <div id="lg-out" class="logview" onscroll="lgScrolled()"></div>
-<p class="note">App = ha-paneld's own process log (no root needed). System = the full device logcat (root).
-Tokens/passwords are redacted before display; the stream is LAN-only and stops when this page closes.
-Raw stream: <code>curl -N http://&lt;panel&gt;:${config.httpPort}/api/v1/logs/stream</code></p></div>
+<p class="note">${esc(strings.get("logs.note.sources"))}
+${esc(strings.get("logs.note.privacy"))}
+${esc(strings.get("logs.note.raw_stream"))} <code>curl -N http://&lt;panel&gt;:${esc(config.httpPort.toString())}/api/v1/logs/stream</code></p></div>
 <script src="/assets/logs.js"></script>"""
     }
 
     /** Fleet tab — placeholder (discovery hooks exist; the roster lands later). */
-    private fun fleetBody(): String = """
-<div class="cards"><div class="card"><h2>Fleet overview <small>· coming soon</small></h2>
-<p class="note">A multi-panel roster — name · IP · health, with a link to each panel's UI — will live here.
-Every ha-paneld already advertises itself over mDNS (<code>${esc(Config.MDNS_SERVICE_TYPE)}</code>) and
-publishes MQTT availability, so the discovery hooks are in place.</p>
-<p class="note">For now, open another panel directly at <code>http://&lt;its-ip&gt;:${config.httpPort}/</code>.</p></div></div>"""
+    private fun fleetBody(strings: AppStrings): String = """
+<div class="cards"><div class="card"><h2>${esc(strings.get("fleet.title"))} <small>· ${esc(strings.get("fleet.state.coming_soon"))}</small></h2>
+<p class="note">${esc(strings.get("fleet.note.roster"))}
+${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERVICE_TYPE)}</code>) ${esc(strings.get("fleet.note.discovery_suffix"))}</p>
+<p class="note">${esc(strings.get("fleet.note.direct"))} <code>http://&lt;its-ip&gt;:${esc(config.httpPort.toString())}/</code>.</p></div></div>"""
 
     /** One renderer-aware warning shared by JSON status and the Dashboard/Install banners. */
     private fun dashboardRecoveryWarning(): String? = dashboardRecoveryWarning(

@@ -28,7 +28,7 @@ class PanelNavigationSourceTest {
         assertTrue("tab(\"fleet\"" !in nav, "The Fleet placeholder must not be public navigation")
         assertTrue("href=\"/fleet\"" !in nav, "The Fleet placeholder must not be linked directly")
         assertTrue("get(\"/fleet\")" in source, "Existing /fleet bookmarks should remain available")
-        assertTrue("private fun fleetBody()" in source, "The dormant Fleet implementation should remain intact")
+        assertTrue("private fun fleetBody(strings: AppStrings)" in source, "The dormant Fleet implementation should remain intact")
     }
 
     @Test

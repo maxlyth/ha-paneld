@@ -3868,6 +3868,161 @@
       "state": "machine-cross-checked",
       "text": "已设置"
     },
+    "fleet.note.direct": {
+      "sourceHash": "e1c2a22afad5337db44569d030a1c44a11da9827b984f1860ccf0c9a933810f3",
+      "state": "machine-cross-checked",
+      "text": "目前，可通过以下地址直接打开另一块面板"
+    },
+    "fleet.note.discovery_prefix": {
+      "sourceHash": "837241e255815b61c78cddfcfec2a745b5ef37494f8ada692cf1c438e23f5034",
+      "state": "machine-cross-checked",
+      "text": "每个 ha-paneld 都已通过 mDNS 发布自身服务"
+    },
+    "fleet.note.discovery_suffix": {
+      "sourceHash": "f5ec3d4269c475a35daaf7465d8677889d6fbb542a95d3c9699523ec6ed75cf0",
+      "state": "machine-cross-checked",
+      "text": "并发布 MQTT 可用性，因此发现机制已就绪。"
+    },
+    "fleet.note.roster": {
+      "sourceHash": "9058c25917877ba67309d5c1fda25eb950e7871e7aab0994abd7690db1ba9eb9",
+      "state": "machine-cross-checked",
+      "text": "这里将显示多面板列表，包括名称、IP、运行状况以及各面板 UI 的链接。"
+    },
+    "fleet.state.coming_soon": {
+      "sourceHash": "62bfdf0b726cbcc51d7ad57cfd2f03c007306a8a74d477500f92863236d79c13",
+      "state": "machine-cross-checked",
+      "text": "即将推出"
+    },
+    "fleet.title": {
+      "sourceHash": "90a0e533f9a804dc15a95e46a99ad3e186250b1066fdbf749e1c7dfd048f72d7",
+      "state": "machine-cross-checked",
+      "text": "多面板概览"
+    },
+    "logs.action.clear": {
+      "sourceHash": "83b12c2216efb4fdc924e1deb5182e905e4926ed0c1c324d467107f46d5a26a9",
+      "state": "machine-cross-checked",
+      "text": "清除"
+    },
+    "logs.action.follow": {
+      "sourceHash": "641d1ef657bdfd9fa2064ab5ae3f0e44186e5161dcd36b63839f3a76a79883bc",
+      "state": "machine-cross-checked",
+      "text": "跟随"
+    },
+    "logs.action.pause": {
+      "sourceHash": "858e4ba7a29fd38b630ed73a79e2738333b3fc6778fafa90252f5556c1262fdc",
+      "state": "machine-cross-checked",
+      "text": "暂停"
+    },
+    "logs.action.resume": {
+      "sourceHash": "d640c7421da066618a39daf4266da5f61f66a9b1afcd626481b831a17064965d",
+      "state": "machine-cross-checked",
+      "text": "继续"
+    },
+    "logs.filter.placeholder": {
+      "sourceHash": "ae971215cb8c61ad320d3ed1a22ba7d9c064a1861809d9c178f32fbc7336a516",
+      "state": "machine-cross-checked",
+      "text": "筛选文本…"
+    },
+    "logs.level.debug": {
+      "sourceHash": "650078a3fdbf539835537f5e636170771cb7f187d982e13c51bf67cb8dd60d75",
+      "state": "machine-cross-checked",
+      "text": "调试及以上"
+    },
+    "logs.level.error": {
+      "sourceHash": "2d606673e9efb04b58a12d914f2db444d1beb1cc5006d23845493ab2e680279c",
+      "state": "machine-cross-checked",
+      "text": "错误及以上"
+    },
+    "logs.level.info": {
+      "sourceHash": "b7fd9a78a43453084006ae6dcbd6d1d75473cb1451483461da02e3a7a9c83437",
+      "state": "machine-cross-checked",
+      "text": "信息及以上"
+    },
+    "logs.level.minimum": {
+      "sourceHash": "b7bfe49aa148fc0b3b356e5a96f8227b2f9fec03c55364bda8724496fa699791",
+      "state": "machine-cross-checked",
+      "text": "最低级别"
+    },
+    "logs.level.verbose": {
+      "sourceHash": "f48e7c4847225d28a324d11ea52ca7e3b95594e1796e80ba100908a54d70e620",
+      "state": "machine-cross-checked",
+      "text": "详细及以上"
+    },
+    "logs.level.warning": {
+      "sourceHash": "299907c3fb2181750e03f743656f907b8048bfca575a6e4c5409ebe66c398cf0",
+      "state": "machine-cross-checked",
+      "text": "警告及以上"
+    },
+    "logs.note.privacy": {
+      "sourceHash": "17998dd43d953a451f90eb220c1f9575589f7e9c9eb7916357833d75fd9f548a",
+      "state": "machine-cross-checked",
+      "text": "令牌和密码会在显示前被隐去；日志流仅限 LAN 访问，并会在此页面关闭时停止。"
+    },
+    "logs.note.raw_stream": {
+      "sourceHash": "274e34ddb494266b9106b7319dd1c673e96b57c7205322db619d39a63e8e4a4c",
+      "state": "machine-cross-checked",
+      "text": "原始日志流："
+    },
+    "logs.note.sources": {
+      "sourceHash": "ec021900e6169b9a82e2d3aacfd2142bd80c0d7c6207659ed43694aa72d6185d",
+      "state": "machine-cross-checked",
+      "text": "应用 = ha-paneld 自身的进程日志（无需 root）。系统 = 完整的设备 logcat（需要 root）。"
+    },
+    "logs.source.app": {
+      "sourceHash": "0d04bfeb7d64b71c74fc925cca93d683154e8cc7e6e5838faced498e34c9984d",
+      "state": "machine-cross-checked",
+      "text": "应用"
+    },
+    "logs.source.system": {
+      "sourceHash": "6725e7bbcd28f3a8a586fa34bf191fd72dde8b61756932cd3237c17a6f196f1a",
+      "state": "machine-cross-checked",
+      "text": "系统"
+    },
+    "logs.source.system_root_check": {
+      "sourceHash": "f74d2182c66a5b84c7bfb6d61a1a87b50aafacf82d60f7b9d8df62239008a259",
+      "state": "machine-cross-checked",
+      "text": "打开日志流时会检查 root 是否可用"
+    },
+    "logs.state.app_live": {
+      "sourceHash": "30f051b05d0ec7e9b1931b2d8f036f92ba4b3d8987408e6b778a36aeea0a1f73",
+      "state": "machine-cross-checked",
+      "text": "应用 · 实时"
+    },
+    "logs.state.app_paused": {
+      "sourceHash": "4d106ae829cf0ba1564dca282f36069b544c5abadc2847f4c3c323c680aaf286",
+      "state": "machine-cross-checked",
+      "text": "应用 · 已暂停"
+    },
+    "logs.state.connecting": {
+      "sourceHash": "4b6394535d80d9a6d4d5f7adf96ceb8ff432ad9ab70e47bfe2c2391acdb52ea0",
+      "state": "machine-cross-checked",
+      "text": "正在连接…"
+    },
+    "logs.state.hidden": {
+      "sourceHash": "173ed65ff0dab272a14111375a074c8f1bee5b1b470f5b7027165f6bab55f818",
+      "state": "machine-cross-checked",
+      "text": "已暂停（标签页隐藏）"
+    },
+    "logs.state.reconnecting": {
+      "sourceHash": "9e2607d856198562d72be58e0efeb56ffc393906cf3eabfbd497d55796c666e3",
+      "state": "machine-cross-checked",
+      "text": "正在重新连接…"
+    },
+    "logs.state.system_live": {
+      "sourceHash": "7d6dd07af12bbd5a399eeb87620bd266881ce893d1215a33320003c82781b163",
+      "state": "machine-cross-checked",
+      "text": "系统 · 实时"
+    },
+    "logs.state.system_paused": {
+      "sourceHash": "c12ac7b68e0bd60dd136296827ac6fc6e67e3c6a121c57d7e27c8ed39c9eb74d",
+      "state": "machine-cross-checked",
+      "text": "系统 · 已暂停"
+    },
+    "logs.title": {
+      "sourceHash": "a60eb9b8f87dc926287ed3ef7acfa1ebadd4007139e8423e99f09b33f47fd7c0",
+      "state": "machine-cross-checked",
+      "text": "实时日志"
+    },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
       "state": "machine-cross-checked",
