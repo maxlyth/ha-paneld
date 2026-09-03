@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -180,6 +181,46 @@ class HaWebSocketClientsFailoverTest {
             }
         }
         assertEquals("callback must expose the socket peer used by the WebSocket", expected, connected.get())
+    }
+
+    @Test fun routeCallbackIgnoresARejectedWebSocketUpgrade() {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        val connected = AtomicReference<InetAddress>()
+        val accepted = CountDownLatch(1)
+        ServerSocket().apply { bind(InetSocketAddress(loopback, 0), 4) }.use { rejecting ->
+            val server = Thread {
+                runCatching {
+                    rejecting.accept().use { socket ->
+                        accepted.countDown()
+                        socket.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 403 Forbidden\r\n" +
+                                    "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray(),
+                            )
+                            flush()
+                        }
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+            val client = HaWebSocketClients.client(
+                onRouteConnected = { connected.set(it) },
+            )
+            try {
+                val result = runCatching {
+                    runBlocking {
+                        withTimeout(15_000) {
+                            client.webSocketSession("ws://127.0.0.1:${rejecting.localPort}/api/websocket")
+                        }
+                    }
+                }
+                assertTrue("a rejected upgrade must fail the WebSocket session", result.isFailure)
+                assertTrue("the server never observed the TCP connection", accepted.await(5, TimeUnit.SECONDS))
+                assertNull("a failed upgrade must not publish its TCP peer", connected.get())
+            } finally {
+                client.close()
+                server.join(2_000)
+            }
+        }
     }
 
     @Test fun refusedRouteFallsBackToTheNextAddress() {

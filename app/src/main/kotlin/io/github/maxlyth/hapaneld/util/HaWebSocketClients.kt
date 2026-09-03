@@ -53,10 +53,37 @@ internal object HaWebSocketClients {
      */
     internal class TlsTrust(val socketFactory: SSLSocketFactory, val trustManager: X509TrustManager)
 
-    private class RouteReportingSocketFactory(
+    private class ConnectedRouteTracker(
         private val onConnected: (InetAddress) -> Unit,
+    ) {
+        private data class Record(val sequence: Long, val socket: Socket)
+
+        private val sockets = mutableListOf<Record>()
+        private var sequence = 0L
+
+        @Synchronized fun mark(): Long = sequence
+
+        @Synchronized fun newSocket(): Socket = Socket().also { socket ->
+            sockets += Record(++sequence, socket)
+        }
+
+        fun publishUniqueConnectedAfter(mark: Long) {
+            val address = synchronized(this) {
+                val candidates = sockets.filter {
+                    it.sequence > mark && it.socket.isConnected && !it.socket.isClosed
+                }
+                val selected = candidates.singleOrNull()?.socket?.inetAddress
+                sockets.removeAll { it.socket.isClosed }
+                selected
+            }
+            address?.let { runCatching { onConnected(it) } }
+        }
+    }
+
+    private class RouteTrackingSocketFactory(
+        private val tracker: ConnectedRouteTracker,
     ) : SocketFactory() {
-        override fun createSocket(): Socket = RouteReportingSocket(onConnected)
+        override fun createSocket(): Socket = tracker.newSocket()
 
         override fun createSocket(host: String, port: Int): Socket =
             connected(InetSocketAddress(host, port))
@@ -79,30 +106,10 @@ internal object HaWebSocketClients {
         ): Socket = connected(InetSocketAddress(address, port), InetSocketAddress(localAddress, localPort))
 
         private fun connected(remote: SocketAddress, local: SocketAddress? = null): Socket =
-            RouteReportingSocket(onConnected).apply {
+            tracker.newSocket().apply {
                 if (local != null) bind(local)
                 connect(remote)
             }
-    }
-
-    private class RouteReportingSocket(
-        private val onConnected: (InetAddress) -> Unit,
-    ) : Socket() {
-        override fun connect(endpoint: SocketAddress) {
-            super.connect(endpoint, 0)
-            reportRoute()
-        }
-
-        override fun connect(endpoint: SocketAddress, timeout: Int) {
-            super.connect(endpoint, timeout)
-            reportRoute()
-        }
-
-        private fun reportRoute() {
-            runCatching { inetAddress }
-                .getOrNull()
-                ?.let { address -> runCatching { onConnected(address) } }
-        }
     }
 
     fun client(
@@ -124,7 +131,9 @@ internal object HaWebSocketClients {
          * address to an owner that can take it from there.
          */
         onRouteConnected: ((InetAddress) -> Unit)? = null,
-    ): HttpClient = HttpClient(OkHttp) {
+    ): HttpClient {
+        val routeTracker = onRouteConnected?.let { ConnectedRouteTracker(it) }
+        return HttpClient(OkHttp) {
         // No engine-level maxFrameSize: the OkHttp engine REJECTS any custom value at session
         // start ("Max frame size switch is not supported"), pinned by HaWebSocketClientsFailoverTest.
         // The former per-site inbound bounds are enforced instead by [open], which every caller
@@ -144,14 +153,22 @@ internal object HaWebSocketClients {
                     },
                 )
                 if (tls != null) sslSocketFactory(tls.socketFactory, tls.trustManager)
-                if (onRouteConnected != null) {
-                    // OkHttp WebSockets suppress application EventListeners and skip network
-                    // interceptors. The socket factory is retained, including through TLS wrapping,
-                    // and reports only after the selected route's TCP connect succeeds.
-                    socketFactory(RouteReportingSocketFactory(onRouteConnected))
+                if (routeTracker != null) {
+                    socketFactory(RouteTrackingSocketFactory(routeTracker))
+                    addInterceptor { chain ->
+                        val mark = routeTracker.mark()
+                        val response = chain.proceed(chain.request())
+                        // OkHttp WebSockets suppress application EventListeners and skip network
+                        // interceptors. Application interceptors do observe the successful upgrade;
+                        // publish only its one surviving newly-created socket, never a race loser or
+                        // a route whose TLS/upgrade failed.
+                        if (response.code == 101) routeTracker.publishUniqueConnectedAfter(mark)
+                        response
+                    }
                 }
             }
         }
+    }
     }
 
     /**
