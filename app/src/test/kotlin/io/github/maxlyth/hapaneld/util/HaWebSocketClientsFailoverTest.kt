@@ -172,7 +172,11 @@ class HaWebSocketClientsFailoverTest {
             try {
                 runBlocking {
                     val session = withTimeout(15_000) {
-                        client.webSocketSession("ws://127.0.0.1:${server.port}/api/websocket")
+                        HaWebSocketClients.open(
+                            client,
+                            "ws://127.0.0.1:${server.port}/api/websocket",
+                            16L * 1024 * 1024,
+                        )
                     }
                     session.close()
                 }
@@ -209,13 +213,59 @@ class HaWebSocketClientsFailoverTest {
                 val result = runCatching {
                     runBlocking {
                         withTimeout(15_000) {
-                            client.webSocketSession("ws://127.0.0.1:${rejecting.localPort}/api/websocket")
+                            HaWebSocketClients.open(
+                                client,
+                                "ws://127.0.0.1:${rejecting.localPort}/api/websocket",
+                                16L * 1024 * 1024,
+                            )
                         }
                     }
                 }
                 assertTrue("a rejected upgrade must fail the WebSocket session", result.isFailure)
                 assertTrue("the server never observed the TCP connection", accepted.await(5, TimeUnit.SECONDS))
                 assertNull("a failed upgrade must not publish its TCP peer", connected.get())
+            } finally {
+                client.close()
+                server.join(2_000)
+            }
+        }
+    }
+
+    @Test fun routeCallbackIgnoresAMalformedSwitchingProtocolsResponse() {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        val connected = AtomicReference<InetAddress>()
+        ServerSocket().apply { bind(InetSocketAddress(loopback, 0), 4) }.use { malformed ->
+            val server = Thread {
+                runCatching {
+                    malformed.accept().use { socket ->
+                        socket.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 101 Switching Protocols\r\n" +
+                                    "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+                                    "Sec-WebSocket-Accept: invalid\r\n\r\n").toByteArray(),
+                            )
+                            flush()
+                        }
+                    }
+                }
+            }.apply { isDaemon = true; start() }
+            val client = HaWebSocketClients.client(
+                onRouteConnected = { connected.set(it) },
+            )
+            try {
+                val result = runCatching {
+                    runBlocking {
+                        withTimeout(15_000) {
+                            HaWebSocketClients.open(
+                                client,
+                                "ws://127.0.0.1:${malformed.localPort}/api/websocket",
+                                16L * 1024 * 1024,
+                            )
+                        }
+                    }
+                }
+                assertTrue("an invalid accept hash must fail the WebSocket session", result.isFailure)
+                assertNull("a malformed 101 must not publish its TCP peer", connected.get())
             } finally {
                 client.close()
                 server.join(2_000)

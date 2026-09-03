@@ -10,6 +10,7 @@ import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.Frame
 import io.ktor.websocket.FrameTooBigException
 import io.ktor.websocket.close
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.produce
 import okhttp3.Dns
@@ -39,6 +40,8 @@ import javax.net.ssl.X509TrustManager
  * certificate hostname verification and the Host header remain the platform defaults throughout.
  */
 internal object HaWebSocketClients {
+
+    private val routeTrackerKey = AttributeKey<ConnectedRouteTracker>("HaWebSocketConnectedRouteTracker")
 
     /**
      * Bound on one route attempt. Worst case before a live sibling family is reached under
@@ -119,7 +122,7 @@ internal object HaWebSocketClients {
         tls: TlsTrust? = null,
         resolver: ((String) -> List<InetAddress>)? = null,
         /**
-         * The address a route actually connected on, reported once per successful connect.
+         * The address used by a successfully upgraded WebSocket session.
          *
          * Only the exact-entity stream passes this, and only so a layer-3 probe can measure THE PATH
          * THE DASHBOARD IS USING rather than a fresh resolution of the same hostname. The two differ
@@ -127,13 +130,13 @@ internal object HaWebSocketClients {
          * family race put the socket on IPv4, and a probe that re-resolved would have measured the
          * dead family and blamed a path nothing was riding.
          *
-         * Called on an OkHttp connection thread, so an implementation must do nothing but hand the
-         * address to an owner that can take it from there.
+         * Called immediately after Ktor validates the WebSocket upgrade; implementations must only
+         * hand the address to an owner that can take it from there.
          */
         onRouteConnected: ((InetAddress) -> Unit)? = null,
     ): HttpClient {
         val routeTracker = onRouteConnected?.let { ConnectedRouteTracker(it) }
-        return HttpClient(OkHttp) {
+        val client = HttpClient(OkHttp) {
         // No engine-level maxFrameSize: the OkHttp engine REJECTS any custom value at session
         // start ("Max frame size switch is not supported"), pinned by HaWebSocketClientsFailoverTest.
         // The former per-site inbound bounds are enforced instead by [open], which every caller
@@ -155,20 +158,12 @@ internal object HaWebSocketClients {
                 if (tls != null) sslSocketFactory(tls.socketFactory, tls.trustManager)
                 if (routeTracker != null) {
                     socketFactory(RouteTrackingSocketFactory(routeTracker))
-                    addInterceptor { chain ->
-                        val mark = routeTracker.mark()
-                        val response = chain.proceed(chain.request())
-                        // OkHttp WebSockets suppress application EventListeners and skip network
-                        // interceptors. Application interceptors do observe the successful upgrade;
-                        // publish only its one surviving newly-created socket, never a race loser or
-                        // a route whose TLS/upgrade failed.
-                        if (response.code == 101) routeTracker.publishUniqueConnectedAfter(mark)
-                        response
-                    }
                 }
             }
         }
-    }
+        }
+        if (routeTracker != null) client.attributes.put(routeTrackerKey, routeTracker)
+        return client
     }
 
     /**
@@ -184,7 +179,15 @@ internal object HaWebSocketClients {
         urlString: String,
         maxInboundFrameBytes: Long,
     ): DefaultClientWebSocketSession {
+        val routeTracker = client.attributes.getOrNull(routeTrackerKey)
+        val routeMark = routeTracker?.mark()
         val session = client.webSocketSession(urlString)
+        if (routeTracker != null && routeMark != null) {
+            // webSocketSession returns only after OkHttp validates the complete 101 upgrade. At
+            // that point canceled fast-fallback contenders are closed and the one surviving socket
+            // is the authenticated stream's actual route.
+            routeTracker.publishUniqueConnectedAfter(routeMark)
+        }
         return DefaultClientWebSocketSession(
             session.call,
             InboundBoundedWebSocketSession(session, maxInboundFrameBytes),
