@@ -11,15 +11,56 @@
 (function () {
   "use strict";
   var LB = document.body.getAttribute("data-build") || "";
+  function interpolateFallback(fallback, values) {
+    if (!values || typeof values !== "object") return fallback;
+    return fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (placeholder, name) {
+      return Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : placeholder;
+    });
+  }
+  function i18nText(key, fallback, values) {
+    return window.HaI18n && typeof window.HaI18n.t === "function"
+      ? window.HaI18n.t(key, fallback, values)
+      : interpolateFallback(fallback, values);
+  }
+  function requestedLocale() {
+    var locale = window.HaI18n && typeof window.HaI18n.locale === "string"
+      ? window.HaI18n.locale
+      : (document.documentElement && document.documentElement.lang) || "en";
+    try {
+      new Intl.NumberFormat(locale).format(0);
+      return locale;
+    } catch (_) {
+      return "en";
+    }
+  }
+  function localizedNumber(value) {
+    return new Intl.NumberFormat(requestedLocale()).format(Number(value));
+  }
+  function ownValue(values, key) {
+    return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null;
+  }
   function dirty() {
     if (document.querySelector("input:focus,textarea:focus")) return true;
     var save = document.getElementById("savebtn");
     return !!(save && !save.disabled); // enabled Save = unsaved Configure edits
   }
-  function banner(text) {
+  function clearNode(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+  function banner(key, english) {
     var b = document.getElementById("verbar");
     if (!b) return;
-    b.innerHTML = "⟳ " + text + " — <a href=\"#\" onclick=\"location.reload();return false\">reload</a> to show it.";
+    clearNode(b);
+    b.appendChild(document.createTextNode("⟳ " + i18nText(key, english) + " — "));
+    var reload = document.createElement("a");
+    reload.href = "#";
+    reload.textContent = i18nText("shell.action.reload", "reload");
+    reload.addEventListener("click", function (event) {
+      event.preventDefault();
+      location.reload();
+    });
+    b.appendChild(reload);
+    b.appendChild(document.createTextNode(" " + i18nText("shell.new_version.refresh_suffix", "to refresh this page.")));
     b.style.display = "";
   }
   // Home Assistant lifecycle. /health carries `ha=<state>` only while the panel is watching, so an
@@ -31,30 +72,39 @@
   // was deliberate, so the stronger wording requires ha_src=socket by name and everything else (a
   // broker will, or no attributed source) claims only that Home Assistant is gone.
   var HA_TEXT = {
-    shutting_down: "⚠ Home Assistant has gone offline — controls may be temporarily unavailable.",
-    starting: "⟳ Home Assistant is starting — controls will return shortly.",
-    back_online: "✓ Home Assistant is back online."
+    shutting_down: { key: "shell.runtime.ha_lifecycle.offline", text: "Home Assistant has gone offline — controls may be temporarily unavailable.", glyph: "⚠" },
+    starting: { key: "shell.runtime.ha_lifecycle.starting", text: "Home Assistant is starting — controls will return shortly.", glyph: "⟳" },
+    back_online: { key: "shell.runtime.ha_lifecycle.back_online", text: "Home Assistant is back online.", glyph: "✓" }
   };
   var HA_TEXT_SOCKET = {
-    shutting_down: "⚠ Home Assistant is shutting down — controls may be temporarily unavailable."
+    shutting_down: { key: "shell.runtime.ha_lifecycle.shutting_down", text: "Home Assistant is shutting down — controls may be temporarily unavailable.", glyph: "⚠" }
   };
   // The diagnostics row's idle wording, kept here so the row and the banner are rendered from the SAME
   // /health observation. A server-rendered advisory used to sit beside them; it could not retract
   // itself after recovery, so it was removed rather than kept in step.
   var HA_ROW_REFUSED = "watching; Home Assistant does not permit WebSocket lifecycle events for this user";
   function haBanner(state, src, refused) {
+    var copy = (src === "socket" && ownValue(HA_TEXT_SOCKET, state)) || ownValue(HA_TEXT, state);
+    var text = copy ? i18nText(copy.key, copy.text) : "";
     var b = document.getElementById("halifebar");
     if (b) {
-      var text = (src === "socket" && HA_TEXT_SOCKET[state]) || HA_TEXT[state];
-      if (!text) { b.style.display = "none"; } else { b.textContent = text; b.style.display = ""; }
+      if (!text) { b.style.display = "none"; } else { b.textContent = copy.glyph + " " + text; b.style.display = ""; }
     }
     var row = document.getElementById("halifecell");
     if (!row) return;
     if (!state) { row.textContent = ""; return; }
-    var full = (src === "socket" && HA_TEXT_SOCKET[state]) || HA_TEXT[state];
-    if (full) { row.textContent = full.replace(/^[^A-Za-z]+/, ""); return; }
-    if (state === "connection_lost") { row.textContent = "connection lost"; return; }
-    row.textContent = refused ? HA_ROW_REFUSED : "watching";
+    if (text) { row.textContent = text; return; }
+    if (state === "connection_lost") {
+      row.textContent = i18nText("dashboard.runtime.ha_connection_lost", "connection lost");
+      return;
+    }
+    if (state === "normal") {
+      row.textContent = refused
+        ? i18nText("dashboard.runtime.ha_events_refused", HA_ROW_REFUSED)
+        : i18nText("dashboard.runtime.ha_watching", "watching");
+      return;
+    }
+    row.textContent = "";
   }
   // Home Assistant network path. /health carries `ha_net=<healthy|warning|severe>` plus terse numbers
   // only while the panel holds a Home Assistant socket, so an absent token means "not measured", and
@@ -74,22 +124,53 @@
   var HA_RESP_CLAUSE = { healthy: "", warning: "Home Assistant answering slowly; ", severe: "Home Assistant answering very slowly; " };
   // An empty window is two facts: a socket that has only just connected, and a stream that parked
   // and stopped probing. Only the age of the last reply tells them apart (same wording as Kotlin).
-  function haNetAge(ms) { return ms < 60000 ? Math.floor(ms / 1000) + " s" : Math.floor(ms / 60000) + " min"; }
-  function haNetEvidence(p95, n, miss, age) {
-    if (!n) {
-      return age < 0 ? "no probes yet in the last 5 min"
-        : "no probe answered in the last 5 min; last reply " + haNetAge(age) + " ago";
+  function haNetAge(ms) {
+    if (ms < 60000) {
+      var seconds = localizedNumber(Math.floor(ms / 1000));
+      return i18nText("shell.runtime.duration_seconds", "{count} s", { count: seconds });
     }
-    var head = p95 < 0 ? "no reply" : "p95 " + Number(p95).toLocaleString("en-GB") + " ms";
-    var misses = miss > 0 ? miss + " of " + n + " probes missed" : "no misses";
-    return head + ", " + misses + " in the last 5 min";
+    var minutes = localizedNumber(Math.floor(ms / 60000));
+    return i18nText("shell.runtime.duration_minutes", "{count} min", { count: minutes });
+  }
+  function haNetEvidence(p95, n, miss, age) {
+    var keyPrefix = "shell.runtime.ha_network_evidence_";
+    if (!n) {
+      return age < 0
+        ? i18nText(keyPrefix + "no_probes", "no probes yet in the last 5 min")
+        : i18nText(
+          keyPrefix + "no_answer",
+          "no probe answered in the last 5 min; last reply {lastReplyAge} ago",
+          { lastReplyAge: haNetAge(age) }
+        );
+    }
+    var values = {
+      p95Ms: localizedNumber(p95),
+      missCount: localizedNumber(miss),
+      probeCount: localizedNumber(n)
+    };
+    if (p95 < 0 && miss > 0) {
+      return i18nText(keyPrefix + "no_reply_missed", "no reply, {missCount} of {probeCount} probes missed in the last 5 min", values);
+    }
+    if (p95 < 0) {
+      return i18nText(keyPrefix + "no_reply_no_misses", "no reply, no misses in the last 5 min");
+    }
+    if (miss > 0) {
+      return i18nText(keyPrefix + "p95_missed", "p95 {p95Ms} ms, {missCount} of {probeCount} probes missed in the last 5 min", values);
+    }
+    return i18nText(keyPrefix + "p95_no_misses", "p95 {p95Ms} ms, no misses in the last 5 min", values);
   }
   function haNetBanner(state, resp, p95, n, miss, age) {
     var b = document.getElementById("hanetbar");
     if (b) {
-      var text = HA_NET_TEXT[state];
+      var text = ownValue(HA_NET_TEXT, state);
       if (!text) { b.style.display = "none"; } else {
-        b.textContent = text + ": " + haNetEvidence(p95, n, miss, age) + ". " + HA_NET_ADVICE;
+        var bannerEvidence = haNetEvidence(p95, n, miss, age);
+        var bannerKey = state === "severe"
+          ? "shell.runtime.ha_network.banner_severe"
+          : "shell.runtime.ha_network.banner_warning";
+        var bannerFallback = text.substring(2) + ": {evidence}. " + HA_NET_ADVICE;
+        text = "⚠ " + i18nText(bannerKey, bannerFallback, { evidence: bannerEvidence });
+        b.textContent = text;
         b.className = state === "severe" ? "setup crit" : "setup";
         b.style.display = "";
       }
@@ -97,9 +178,23 @@
     var row = document.getElementById("hanetcell");
     if (!row) return;
     if (!state) { row.textContent = ""; return; }
-    if (state === "settling") { row.textContent = HA_NET_ROW.settling; return; }
+    if (state === "settling") {
+      row.textContent = i18nText("dashboard.runtime.ha_network_settling", HA_NET_ROW.settling);
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(HA_NET_ROW, state) || !Object.prototype.hasOwnProperty.call(HA_RESP_CLAUSE, resp)) {
+      row.textContent = "";
+      return;
+    }
+    var evidence = haNetEvidence(p95, n, miss, age);
     var clause = HA_RESP_CLAUSE[resp] || "";
-    row.textContent = (HA_NET_ROW[state] || state) + "; " + clause + haNetEvidence(p95, n, miss, age);
+    var suffix = clause ? (resp === "severe" ? "_very_slow" : "_slow") : "";
+    var rowStem = { healthy: "healthy", warning: "losing_probes", severe: "failing" }[state];
+    var rowKey = state === "healthy" && !suffix
+      ? "dashboard.runtime.ha_network_healthy"
+      : "dashboard.runtime.ha_network_" + rowStem + suffix;
+    var rowFallback = HA_NET_ROW[state] + "; " + clause + "{evidence}";
+    row.textContent = i18nText(rowKey, rowFallback, { evidence: evidence });
   }
   function vc() {
     fetch("/health").then(function (r) { return r.text(); }).then(function (t) {
@@ -116,13 +211,13 @@
       haNetBanner(mn ? mn[1] : "", mrs ? mrs[1] : "", mp ? parseInt(mp[1], 10) : -1, mc ? parseInt(mc[1], 10) : 0, mm ? parseInt(mm[1], 10) : 0, ma ? parseInt(ma[1], 10) : -1);
       var mb = t.match(/build=(\S+)/);
       if (mb && LB && mb[1] !== LB) {
-        if (dirty()) banner("A newer ha-paneld is installed"); else location.reload();
+        if (dirty()) banner("shell.new_version.installed", "A newer ha-paneld is installed"); else location.reload();
         return;
       }
       var mc = t.match(/cfg=(\S+)/);
       var LC = document.body.getAttribute("data-cfg") || "";
       if (mc && LC && mc[1] !== LC && location.pathname.indexOf("/configure") === 0) {
-        if (dirty()) banner("Settings were changed outside this page"); else location.reload();
+        if (dirty()) banner("shell.settings_changed.externally", "Settings were changed outside this page"); else location.reload();
       }
     }).catch(function () {});
   }

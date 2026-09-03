@@ -16,11 +16,18 @@ class HtmlUiCatalogueContractTest {
     private val releaseTargetLocales = AppLocale.RELEASE_LOCALES.filterNot { it == AppLocale.ENGLISH }
 
     @Test fun `shell dashboard and Configure literal keys are present and owned by their source surface`() {
+        val buildwatch = File(assets, "buildwatch.js").readText()
+        val switcher = File(assets, "switcher.js").readText()
         val usages = linkedMapOf(
-            "shell" to literalKeys(server.readText(), "strings\\.get"),
+            "shell" to (
+                literalKeys(server.readText(), "strings\\.get") +
+                    literalKeys(buildwatch, "i18nText") +
+                    literalKeys(switcher, "i18nText")
+                ).filterTo(sortedSetOf()) { it.startsWith("shell.") },
             "dashboard" to (
                 literalKeys(server.readText(), "strings\\.get") +
                     literalKeys(File(assets, "info.js").readText(), "i18nText") +
+                    literalKeys(buildwatch, "i18nText") +
                     dynamicFactKeys(server.readText())
                 ).filterTo(sortedSetOf()) { it.startsWith("dashboard.") },
             "configure" to (
@@ -44,13 +51,13 @@ class HtmlUiCatalogueContractTest {
         val prefixes = listOf("shell.", "dashboard.", "configure.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 1207, source.strings.size)
-        assertEquals("the declared HTML UI preview scope must not shrink silently", 793, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 1232, source.strings.size)
+        assertEquals("the declared HTML UI preview scope must not shrink silently", 818, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
-                "$locale must contain the complete 1207-key release catalogue",
-                1207,
+                "$locale must contain the complete 1232-key release catalogue",
+                1232,
                 target.strings.size,
             )
             assertEquals(
@@ -268,10 +275,13 @@ class HtmlUiCatalogueContractTest {
     }
 
     @Test fun `dynamic scripts use the browser helper only through an English-safe adapter`() {
-        listOf("info.js", "configure.js").forEach { name ->
+        listOf("info.js", "configure.js", "buildwatch.js", "switcher.js").forEach { name ->
             val source = File(assets, name).readText()
             assertTrue("$name must expose one local English-fallback adapter", source.contains("function i18nText(key"))
-            assertTrue("$name must guard a missing helper", source.contains("window.HaI18n&&") || source.contains("window.HaI18n &&"))
+            assertTrue(
+                "$name must guard a missing helper",
+                source.contains("window.HaI18n&&") || source.contains("window.HaI18n &&"),
+            )
             assertTrue(
                 "$name must verify the helper function before calling it",
                 Regex("typeof\\s+window\\.HaI18n\\.t\\s*===\\s*[\\\"']function[\\\"']").containsMatchIn(source),
@@ -280,10 +290,99 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
+    @Test fun `shared runtime literal English fallbacks match their authoritative records`() {
+        val scripts = listOf("buildwatch.js", "switcher.js").associateWith { File(assets, it).readText() }
+        val bindings = scripts.flatMap { (name, source) ->
+            literalFallbackBindings(source).map { (key, fallback) -> Triple(name, key, fallback) }
+        }
+
+        assertTrue("shared runtime scripts must expose auditable literal fallback bindings", bindings.isNotEmpty())
+        bindings.forEach { (name, key, fallback) ->
+            assertTrue("$name consumes $key but English does not define it", catalogue.has(key))
+            assertEquals(
+                "$name fallback for $key drifted from i18n/en.json",
+                catalogue.getJSONObject(key).getString("text"),
+                fallback,
+            )
+        }
+
+        // Lifecycle entries are deliberately held in a closed data map and selected by wire state;
+        // bind that map's literal key/text pairs as strongly as direct i18nText calls.
+        val lifecycleBindings = Regex(
+            "key:\\s*[\\\"']((?:shell|dashboard)\\.[a-z0-9._-]+)[\\\"']\\s*,\\s*" +
+                "text:\\s*[\\\"']([^\\\"']*)[\\\"']",
+        ).findAll(checkNotNull(scripts["buildwatch.js"]))
+            .map { it.groupValues[1] to it.groupValues[2] }
+            .toList()
+        assertEquals("the lifecycle map must remain a finite four-state projection", 4, lifecycleBindings.size)
+        lifecycleBindings.forEach { (key, fallback) ->
+            assertEquals(
+                "buildwatch.js lifecycle fallback for $key drifted from i18n/en.json",
+                catalogue.getJSONObject(key).getString("text"),
+                fallback,
+            )
+        }
+    }
+
+    @Test fun `shared runtime chrome owns exactly its finite 25-key catalogue addition`() {
+        val addedKeys = setOf(
+            "shell.settings_changed.externally",
+            "shell.runtime.ha_lifecycle.offline",
+            "shell.runtime.ha_lifecycle.starting",
+            "shell.runtime.ha_lifecycle.back_online",
+            "shell.runtime.ha_lifecycle.shutting_down",
+            "shell.runtime.ha_network.banner_warning",
+            "shell.runtime.ha_network.banner_severe",
+            "shell.runtime.duration_seconds",
+            "shell.runtime.duration_minutes",
+            "shell.runtime.ha_network_evidence_no_probes",
+            "shell.runtime.ha_network_evidence_no_answer",
+            "shell.runtime.ha_network_evidence_no_reply_no_misses",
+            "shell.runtime.ha_network_evidence_no_reply_missed",
+            "shell.runtime.ha_network_evidence_p95_no_misses",
+            "shell.runtime.ha_network_evidence_p95_missed",
+            "shell.panel_switcher.title",
+            "dashboard.runtime.ha_network_healthy_slow",
+            "dashboard.runtime.ha_network_healthy_very_slow",
+            "dashboard.runtime.ha_network_losing_probes",
+            "dashboard.runtime.ha_network_losing_probes_slow",
+            "dashboard.runtime.ha_network_losing_probes_very_slow",
+            "dashboard.runtime.ha_network_failing",
+            "dashboard.runtime.ha_network_failing_slow",
+            "dashboard.runtime.ha_network_failing_very_slow",
+            "dashboard.runtime.ha_network_settling",
+        )
+        assertEquals("the reviewed shared-runtime addition changed", 25, addedKeys.size)
+        assertEquals("shared copy needed outside Dashboard must project through the shell", 16, addedKeys.count { it.startsWith("shell.") })
+        assertEquals("only diagnostics-row templates belong to Dashboard", 9, addedKeys.count { it.startsWith("dashboard.") })
+        addedKeys.forEach { key ->
+            assertTrue("English is missing shared-runtime key $key", catalogue.has(key))
+            assertEquals(
+                "$key is assigned to the wrong projection surface",
+                key.substringBefore('.'),
+                catalogue.getJSONObject(key).getString("surface"),
+            )
+        }
+    }
+
     private fun literalKeys(source: String, function: String): Set<String> =
         Regex("$function\\(\\s*[\\\"']((?:shell|dashboard|configure)\\.[a-z0-9._-]+)[\\\"']")
             .findAll(source)
             .mapTo(sortedSetOf()) { it.groupValues[1] }
+
+    private fun literalFallbackBindings(source: String): List<Pair<String, String>> =
+        Regex(
+            "i18nText\\(\\s*([\\\"'])((?:shell|dashboard)\\.[a-z0-9._-]+)\\1\\s*,\\s*" +
+                "([\\\"'])((?:\\\\.|(?!\\3).)*)\\3",
+        ).findAll(source).map { match ->
+            match.groupValues[2] to decodeJsLiteral(match.groupValues[4])
+        }.toList()
+
+    private fun decodeJsLiteral(value: String): String = value
+        .replace("\\\\'", "'")
+        .replace("\\\\\"", "\"")
+        .replace("\\\\n", "\n")
+        .replace("\\\\\\\\", "\\")
 
     private fun targetText(locale: String, key: String): String {
         val strings = JSONObject(File(assets, "i18n/$locale.json").readText()).getJSONObject("strings")

@@ -9,6 +9,12 @@
   var selfId = el.getAttribute('data-self-id') || '';
   var selfName = el.getAttribute('data-self-name') || '';
 
+  function i18nText(key, fallback) {
+    return window.HaI18n && typeof window.HaI18n.t === 'function'
+      ? window.HaI18n.t(key, fallback)
+      : fallback;
+  }
+
   function isSelf(p) { return p.self === true || p.panel_id === selfId; }
 
   // Deterministic, locale-independent name sort — identical on every panel.
@@ -34,7 +40,10 @@
     var sel = document.createElement('select');
     var targets = [];
     sel.className = 'pswitch-sel';
-    sel.title = 'Switch to another ha-paneld panel (keeps the current view)';
+    sel.title = i18nText(
+      'shell.panel_switcher.title',
+      'Switch to another ha-paneld panel (keeps the current view)'
+    );
     sel.setAttribute('autocomplete', 'off');   // don't let the browser restore a stale selection
     all.forEach(function (p) {
       var o = document.createElement('option');

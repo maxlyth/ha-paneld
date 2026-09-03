@@ -9573,6 +9573,65 @@
       "softMaxChars": 114,
       "hardMaxChars": 162
     },
+    "dashboard.runtime.ha_network_failing": {
+      "text": "failing; {evidence}",
+      "sourceHash": "6f6d79370acaca16ce643baf92f423497ffa6ac5091490b6892d5ccc8782d337",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for a failing Home Assistant network path with normal response latency.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_failing_slow",
+        "dashboard.runtime.ha_network_failing_very_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "{evidence}"
+      ],
+      "softMaxChars": 36,
+      "hardMaxChars": 52
+    },
+    "dashboard.runtime.ha_network_failing_slow": {
+      "text": "failing; Home Assistant answering slowly; {evidence}",
+      "sourceHash": "0c4343bac1746d7045d16a513c6b7ae5ec6defdd15ad250d2c3f49b5826b112b",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for a failing Home Assistant network path with slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_failing",
+        "dashboard.runtime.ha_network_failing_very_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 72,
+      "hardMaxChars": 104
+    },
+    "dashboard.runtime.ha_network_failing_very_slow": {
+      "text": "failing; Home Assistant answering very slowly; {evidence}",
+      "sourceHash": "df107af05db2d7602d2d0d328109255984d31dedfcfb46a0d388df8074504c2c",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for a failing Home Assistant network path with very slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_failing",
+        "dashboard.runtime.ha_network_failing_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 80,
+      "hardMaxChars": 116
+    },
     "dashboard.runtime.ha_network_healthy": {
       "text": "healthy; {evidence}",
       "sourceHash": "bc9986678384fbf5e9ce507e7d1a91d76e34b08bf58a8a20eb366b0982245703",
@@ -9591,6 +9650,105 @@
       "softMaxChars": 27,
       "hardMaxChars": 38
     },
+    "dashboard.runtime.ha_network_healthy_slow": {
+      "text": "healthy; Home Assistant answering slowly; {evidence}",
+      "sourceHash": "78143bc4e451242c36bb5a2c1c943e945f51b17b49e369174bd70c254136d43f",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for a healthy Home Assistant network path with slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_healthy",
+        "dashboard.runtime.ha_network_healthy_very_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 72,
+      "hardMaxChars": 104
+    },
+    "dashboard.runtime.ha_network_healthy_very_slow": {
+      "text": "healthy; Home Assistant answering very slowly; {evidence}",
+      "sourceHash": "9284011dde06ac10f4d06d1c6a7668da3f6dc951897ca3bd4ec48c080bb895f8",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for a healthy Home Assistant network path with very slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_healthy",
+        "dashboard.runtime.ha_network_healthy_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 80,
+      "hardMaxChars": 116
+    },
+    "dashboard.runtime.ha_network_losing_probes": {
+      "text": "losing probes; {evidence}",
+      "sourceHash": "80879344403c1f1f32cefbcb1eb4604dfd85b99a366f1ac4a49b95d4fc4475ad",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for partial Home Assistant network-path loss with normal response latency.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_losing_probes_slow",
+        "dashboard.runtime.ha_network_losing_probes_very_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "{evidence}"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 60
+    },
+    "dashboard.runtime.ha_network_losing_probes_slow": {
+      "text": "losing probes; Home Assistant answering slowly; {evidence}",
+      "sourceHash": "c7eb828d98e083fe6edeaf656eaabfa8f9d313f4d00714ad94658ab1fa00f3a7",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for partial Home Assistant network-path loss with slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_losing_probes",
+        "dashboard.runtime.ha_network_losing_probes_very_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 76,
+      "hardMaxChars": 108
+    },
+    "dashboard.runtime.ha_network_losing_probes_very_slow": {
+      "text": "losing probes; Home Assistant answering very slowly; {evidence}",
+      "sourceHash": "3b9ae1fd448e2a1cd254e170b929e3166077f3a8b7c52537414e1197b0d6a579",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row for partial Home Assistant network-path loss with very slow responses.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_losing_probes",
+        "dashboard.runtime.ha_network_losing_probes_slow"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "{evidence}"
+      ],
+      "softMaxChars": 84,
+      "hardMaxChars": 120
+    },
     "dashboard.runtime.ha_network_not_measured": {
       "text": "not measured; this panel holds no authenticated Home Assistant socket",
       "sourceHash": "0cecb6edb9d044c440671a9fab915ce705b495fd6d898e9d7db9bb02981fbb67",
@@ -9608,6 +9766,21 @@
       ],
       "softMaxChars": 97,
       "hardMaxChars": 138
+    },
+    "dashboard.runtime.ha_network_settling": {
+      "text": "settling after startup; no verdict yet",
+      "sourceHash": "c45b8d624d6e049fe75cf223a5860df0b642f1e46fc31613b41465176c12511c",
+      "surface": "dashboard",
+      "context": "Runtime diagnostics row before enough post-startup Home Assistant network-path evidence exists for a verdict.",
+      "risk": "ordinary",
+      "siblings": [
+        "dashboard.runtime.ha_network_healthy",
+        "dashboard.runtime.ha_network_not_measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 72,
+      "hardMaxChars": 80
     },
     "dashboard.runtime.ha_network_severe": {
       "text": "severely degraded; {evidence}",
@@ -17110,6 +17283,312 @@
       ],
       "softMaxChars": 20,
       "hardMaxChars": 40
+    },
+    "shell.panel_switcher.title": {
+      "text": "Switch to another ha-paneld panel (keeps the current view)",
+      "sourceHash": "18099935ffa7e381e72b5614358626beac066ee14193dbccb31826af8f30abef",
+      "surface": "shell",
+      "context": "Accessible title for the shared panel switcher; peer names remain untranslated opaque values.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "ha-paneld"
+      ],
+      "softMaxChars": 80,
+      "hardMaxChars": 112
+    },
+    "shell.runtime.duration_minutes": {
+      "text": "{count} min",
+      "sourceHash": "1829c58ba472520fd39e61f9e337a1b7da27e86299332dde5bfdea355c3895a8",
+      "surface": "shell",
+      "context": "Short localized elapsed-duration value in minutes for shared runtime network-path evidence.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.duration_seconds"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "{count}"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "shell.runtime.duration_seconds": {
+      "text": "{count} s",
+      "sourceHash": "e4e6c0fbc1a49d45c3bd828a8f1db1b256b17db672e68d19b15d5cf58ca0aa52",
+      "surface": "shell",
+      "context": "Short localized elapsed-duration value in seconds for shared runtime network-path evidence.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.duration_minutes"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "{count}"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "shell.runtime.ha_lifecycle.back_online": {
+      "text": "Home Assistant is back online.",
+      "sourceHash": "938f565142c69816f7acb66d1ac9276462f027ce189f7cc78cb626fd6b504c89",
+      "surface": "shell",
+      "context": "Shared Home Assistant lifecycle banner and dashboard diagnostic value when Home Assistant reconnects.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_lifecycle.offline",
+        "shell.runtime.ha_lifecycle.shutting_down",
+        "shell.runtime.ha_lifecycle.starting"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 48,
+      "hardMaxChars": 72
+    },
+    "shell.runtime.ha_lifecycle.offline": {
+      "text": "Home Assistant has gone offline — controls may be temporarily unavailable.",
+      "sourceHash": "bc0771747fb73bf88b5191f576ebbccc4ec6687e7de8f6437a0249f368117a76",
+      "surface": "shell",
+      "context": "Shared Home Assistant lifecycle banner and dashboard diagnostic value when Home Assistant disappears without a socket-confirmed shutdown.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_lifecycle.back_online",
+        "shell.runtime.ha_lifecycle.shutting_down",
+        "shell.runtime.ha_lifecycle.starting"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 96,
+      "hardMaxChars": 136
+    },
+    "shell.runtime.ha_lifecycle.shutting_down": {
+      "text": "Home Assistant is shutting down — controls may be temporarily unavailable.",
+      "sourceHash": "1a8b1c2ba3df8a092796db2f9d3e427244b27a32d69dacbcbdb12929190a5f3e",
+      "surface": "shell",
+      "context": "Shared Home Assistant lifecycle banner and dashboard diagnostic value only when its socket reports an intentional shutdown.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_lifecycle.back_online",
+        "shell.runtime.ha_lifecycle.offline",
+        "shell.runtime.ha_lifecycle.starting"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 112,
+      "hardMaxChars": 144
+    },
+    "shell.runtime.ha_lifecycle.starting": {
+      "text": "Home Assistant is starting — controls will return shortly.",
+      "sourceHash": "5ba1d019d11a080f325c121c03788d2dd20c17c6e87dae9d6261af2a07233ce3",
+      "surface": "shell",
+      "context": "Shared Home Assistant lifecycle banner and dashboard diagnostic value while Home Assistant is starting.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_lifecycle.back_online",
+        "shell.runtime.ha_lifecycle.offline",
+        "shell.runtime.ha_lifecycle.shutting_down"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 92,
+      "hardMaxChars": 116
+    },
+    "shell.runtime.ha_network.banner_severe": {
+      "text": "The network path to Home Assistant is failing: {evidence}. Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.",
+      "sourceHash": "a0604e58e3dc82e450c3d696c5cae33f4449228cf6246c592677dd3743c9e1dc",
+      "surface": "shell",
+      "context": "Shared severe banner for a failing Home Assistant network path; evidence is a localized bounded diagnostic summary.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network.banner_warning"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "Wi-Fi",
+        "{evidence}"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 320
+    },
+    "shell.runtime.ha_network.banner_warning": {
+      "text": "Probes to Home Assistant are going missing: {evidence}. Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.",
+      "sourceHash": "fb7cc6147f03ef52ad2f09f02f66dc4980cec9d33e72ed47df1251d72d8ebfed",
+      "surface": "shell",
+      "context": "Shared warning banner for partial Home Assistant network-path loss; evidence is a localized bounded diagnostic summary.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network.banner_severe"
+      ],
+      "placeholders": [
+        "{evidence}"
+      ],
+      "frozen": [
+        "Home Assistant",
+        "Wi-Fi",
+        "{evidence}"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 320
+    },
+    "shell.runtime.ha_network_evidence_no_answer": {
+      "text": "no probe answered in the last 5 min; last reply {lastReplyAge} ago",
+      "sourceHash": "61d66bd6d22069ccd67549427d92a05db60734b8063501a0fed935a5887cbf81",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence when no probe received a reply in the current window but an older reply age is known.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_probes",
+        "shell.runtime.ha_network_evidence_no_reply_no_misses",
+        "shell.runtime.ha_network_evidence_no_reply_missed",
+        "shell.runtime.ha_network_evidence_p95_no_misses",
+        "shell.runtime.ha_network_evidence_p95_missed"
+      ],
+      "placeholders": [
+        "{lastReplyAge}"
+      ],
+      "frozen": [
+        "{lastReplyAge}"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 132
+    },
+    "shell.runtime.ha_network_evidence_no_probes": {
+      "text": "no probes yet in the last 5 min",
+      "sourceHash": "ae90ef3d81c59edb8074aee5e29e6687d38be76209872b9883bddc6cbd041231",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence when a new Home Assistant socket has not yet issued probes.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_answer",
+        "shell.runtime.ha_network_evidence_no_reply_no_misses",
+        "shell.runtime.ha_network_evidence_no_reply_missed",
+        "shell.runtime.ha_network_evidence_p95_no_misses",
+        "shell.runtime.ha_network_evidence_p95_missed"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 64,
+      "hardMaxChars": 76
+    },
+    "shell.runtime.ha_network_evidence_no_reply_missed": {
+      "text": "no reply, {missCount} of {probeCount} probes missed in the last 5 min",
+      "sourceHash": "91632b179b17726f8beecc801ba088b2c4a7a243b4aa897260e0705df5e0a1d9",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence template for a measured window with no reply latency and one or more missed probes.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_answer",
+        "shell.runtime.ha_network_evidence_no_probes",
+        "shell.runtime.ha_network_evidence_no_reply_no_misses",
+        "shell.runtime.ha_network_evidence_p95_no_misses",
+        "shell.runtime.ha_network_evidence_p95_missed"
+      ],
+      "placeholders": [
+        "{missCount}",
+        "{probeCount}"
+      ],
+      "frozen": [
+        "{missCount}",
+        "{probeCount}"
+      ],
+      "softMaxChars": 92,
+      "hardMaxChars": 132
+    },
+    "shell.runtime.ha_network_evidence_no_reply_no_misses": {
+      "text": "no reply, no misses in the last 5 min",
+      "sourceHash": "fed3de412af67c81a2d9919ce2f95cbe85a66cf5f703cb83f8b57d65ce7d0528",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence template for a measured window with no reply latency and no missed probes.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_answer",
+        "shell.runtime.ha_network_evidence_no_probes",
+        "shell.runtime.ha_network_evidence_no_reply_missed",
+        "shell.runtime.ha_network_evidence_p95_no_misses",
+        "shell.runtime.ha_network_evidence_p95_missed"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 72,
+      "hardMaxChars": 80
+    },
+    "shell.runtime.ha_network_evidence_p95_missed": {
+      "text": "p95 {p95Ms} ms, {missCount} of {probeCount} probes missed in the last 5 min",
+      "sourceHash": "29a99757d7b4706415aea5c8666e6fdaaee9cc74e7a29e4c9e958572a78c1572",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence template with p95 reply latency and one or more missed probes.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_answer",
+        "shell.runtime.ha_network_evidence_no_probes",
+        "shell.runtime.ha_network_evidence_no_reply_missed",
+        "shell.runtime.ha_network_evidence_no_reply_no_misses",
+        "shell.runtime.ha_network_evidence_p95_no_misses"
+      ],
+      "placeholders": [
+        "{p95Ms}",
+        "{missCount}",
+        "{probeCount}"
+      ],
+      "frozen": [
+        "p95",
+        "{p95Ms}",
+        "{missCount}",
+        "{probeCount}"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 144
+    },
+    "shell.runtime.ha_network_evidence_p95_no_misses": {
+      "text": "p95 {p95Ms} ms, no misses in the last 5 min",
+      "sourceHash": "a08cd2009df8200e13ce7cdb0024bd922a85da3afde81dcc4c13bafa1749ae99",
+      "surface": "shell",
+      "context": "Shared runtime network-path evidence template with p95 reply latency and no missed probes.",
+      "risk": "ordinary",
+      "siblings": [
+        "shell.runtime.ha_network_evidence_no_answer",
+        "shell.runtime.ha_network_evidence_no_probes",
+        "shell.runtime.ha_network_evidence_no_reply_missed",
+        "shell.runtime.ha_network_evidence_no_reply_no_misses",
+        "shell.runtime.ha_network_evidence_p95_missed"
+      ],
+      "placeholders": [
+        "{p95Ms}"
+      ],
+      "frozen": [
+        "p95",
+        "{p95Ms}"
+      ],
+      "softMaxChars": 64,
+      "hardMaxChars": 92
+    },
+    "shell.settings_changed.externally": {
+      "text": "Settings were changed outside this page",
+      "sourceHash": "8324516c95d16846ef9c995a13bb55f3f6523b39a779e6d678bab9f791f47682",
+      "surface": "shell",
+      "context": "Shared configuration-change banner shown when this page has unsaved edits and the panel settings change elsewhere.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 64,
+      "hardMaxChars": 80
     },
     "shell.setup_progress.next": {
       "text": "The dashboard setup step appears next.",

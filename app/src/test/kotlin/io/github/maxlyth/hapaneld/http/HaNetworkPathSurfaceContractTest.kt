@@ -93,6 +93,36 @@ class HaNetworkPathSurfaceContractTest {
         assertFalse("latency must not reach the banner", banner.contains("HA_NET_TEXT[resp]"))
     }
 
+    @Test fun localizedRowsRemainAClosedProjectionOfKnownHealthTokens() {
+        val banner = buildwatch.substringAfter("function haNetBanner").substringBefore("function vc()")
+        assertTrue(
+            "an unknown path token must clear the row instead of becoming a catalogue key or visible copy",
+            banner.contains("!Object.prototype.hasOwnProperty.call(HA_NET_ROW, state)"),
+        )
+        assertTrue(
+            "an absent or unknown responsiveness token must clear the row",
+            banner.contains("!Object.prototype.hasOwnProperty.call(HA_RESP_CLAUSE, resp)"),
+        )
+        assertTrue(
+            "known path states must map through an explicit finite catalogue-stem table",
+            banner.contains("{ healthy: \"healthy\", warning: \"losing_probes\", severe: \"failing\" }[state]"),
+        )
+        assertTrue(
+            "known responsiveness states must select only the finite base, slow, and very-slow suffixes",
+            banner.contains("resp === \"severe\" ? \"_very_slow\" : \"_slow\"") &&
+                banner.contains("var suffix = clause ?") &&
+                banner.contains(": \"\";"),
+        )
+        assertFalse(
+            "raw wire state must never be appended to a catalogue namespace",
+            banner.contains("dashboard.runtime.ha_network_\" + state"),
+        )
+        assertFalse(
+            "raw responsiveness must never be appended to a catalogue namespace",
+            banner.contains("dashboard.runtime.ha_network_\" + resp"),
+        )
+    }
+
     @Test fun theScriptAndTheKotlinPresentationShareOneCopy() {
         assertTrue(buildwatch.contains("warning: \"${HaNetworkPathPresentation.BANNER_WARNING_PREFIX}\""))
         assertTrue(buildwatch.contains("severe: \"${HaNetworkPathPresentation.BANNER_SEVERE_PREFIX}\""))

@@ -724,6 +724,12 @@ class CatalogueTest(unittest.TestCase):
         for pair, expected in {
             ("de", "setup.progress.name"): "Name",
             ("de", "setup.progress.server"): "Server",
+            ("es", "shell.runtime.duration_minutes"): "{count} min",
+            ("es", "shell.runtime.duration_seconds"): "{count} s",
+            ("fr", "shell.runtime.duration_minutes"): "{count} min",
+            ("fr", "shell.runtime.duration_seconds"): "{count} s",
+            ("it", "shell.runtime.duration_minutes"): "{count} min",
+            ("it", "shell.runtime.duration_seconds"): "{count} s",
         }.items():
             self.assertEqual(expected, i18n.UNCHANGED_TARGET_EXCEPTIONS.get(pair))
         for (locale, key), text in i18n.UNCHANGED_TARGET_EXCEPTIONS.items():

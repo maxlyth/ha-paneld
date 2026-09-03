@@ -6037,6 +6037,131 @@
       "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
       "state": "machine-cross-checked",
       "text": "MQTT 设置已保存——正在验证消息代理连接。保存后可能需要等待片刻。"
+    },
+    "dashboard.runtime.ha_network_failing": {
+      "text": "出现故障；{evidence}",
+      "sourceHash": "6f6d79370acaca16ce643baf92f423497ffa6ac5091490b6892d5ccc8782d337",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_failing_slow": {
+      "text": "出现故障；Home Assistant 响应缓慢；{evidence}",
+      "sourceHash": "0c4343bac1746d7045d16a513c6b7ae5ec6defdd15ad250d2c3f49b5826b112b",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_failing_very_slow": {
+      "text": "出现故障；Home Assistant 响应非常缓慢；{evidence}",
+      "sourceHash": "df107af05db2d7602d2d0d328109255984d31dedfcfb46a0d388df8074504c2c",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_healthy_slow": {
+      "text": "正常；Home Assistant 响应缓慢；{evidence}",
+      "sourceHash": "78143bc4e451242c36bb5a2c1c943e945f51b17b49e369174bd70c254136d43f",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_healthy_very_slow": {
+      "text": "正常；Home Assistant 响应非常缓慢；{evidence}",
+      "sourceHash": "9284011dde06ac10f4d06d1c6a7668da3f6dc951897ca3bd4ec48c080bb895f8",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes": {
+      "text": "正在丢失探测；{evidence}",
+      "sourceHash": "80879344403c1f1f32cefbcb1eb4604dfd85b99a366f1ac4a49b95d4fc4475ad",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes_slow": {
+      "text": "正在丢失探测；Home Assistant 响应缓慢；{evidence}",
+      "sourceHash": "c7eb828d98e083fe6edeaf656eaabfa8f9d313f4d00714ad94658ab1fa00f3a7",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes_very_slow": {
+      "text": "正在丢失探测；Home Assistant 响应非常缓慢；{evidence}",
+      "sourceHash": "3b9ae1fd448e2a1cd254e170b929e3166077f3a8b7c52537414e1197b0d6a579",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_settling": {
+      "text": "启动后正在稳定；尚无诊断结论",
+      "sourceHash": "c45b8d624d6e049fe75cf223a5860df0b642f1e46fc31613b41465176c12511c",
+      "state": "machine-cross-checked"
+    },
+    "shell.panel_switcher.title": {
+      "text": "切换到另一个 ha-paneld 面板（保留当前视图）",
+      "sourceHash": "18099935ffa7e381e72b5614358626beac066ee14193dbccb31826af8f30abef",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.duration_minutes": {
+      "text": "{count} 分钟",
+      "sourceHash": "1829c58ba472520fd39e61f9e337a1b7da27e86299332dde5bfdea355c3895a8",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.duration_seconds": {
+      "text": "{count} 秒",
+      "sourceHash": "e4e6c0fbc1a49d45c3bd828a8f1db1b256b17db672e68d19b15d5cf58ca0aa52",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_lifecycle.back_online": {
+      "text": "Home Assistant 已重新上线。",
+      "sourceHash": "938f565142c69816f7acb66d1ac9276462f027ce189f7cc78cb626fd6b504c89",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_lifecycle.offline": {
+      "text": "Home Assistant 已离线——控件可能暂时不可用。",
+      "sourceHash": "bc0771747fb73bf88b5191f576ebbccc4ec6687e7de8f6437a0249f368117a76",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_lifecycle.shutting_down": {
+      "text": "Home Assistant 正在关闭——控件可能暂时不可用。",
+      "sourceHash": "1a8b1c2ba3df8a092796db2f9d3e427244b27a32d69dacbcbdb12929190a5f3e",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_lifecycle.starting": {
+      "text": "Home Assistant 正在启动——控件很快会恢复。",
+      "sourceHash": "5ba1d019d11a080f325c121c03788d2dd20c17c6e87dae9d6261af2a07233ce3",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_severe": {
+      "text": "通往 Home Assistant 的网络路径出现故障：{evidence}。数据包未能送达。请检查此面板与 Home Assistant 之间的 Wi-Fi 路径，再判断是否为面板故障。",
+      "sourceHash": "a0604e58e3dc82e450c3d696c5cae33f4449228cf6246c592677dd3743c9e1dc",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_warning": {
+      "text": "发送到 Home Assistant 的探测正在丢失：{evidence}。数据包未能送达。请检查此面板与 Home Assistant 之间的 Wi-Fi 路径，再判断是否为面板故障。",
+      "sourceHash": "fb7cc6147f03ef52ad2f09f02f66dc4980cec9d33e72ed47df1251d72d8ebfed",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_no_answer": {
+      "text": "过去 5 分钟内没有探测得到响应；上次响应在 {lastReplyAge} 前",
+      "sourceHash": "61d66bd6d22069ccd67549427d92a05db60734b8063501a0fed935a5887cbf81",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_no_probes": {
+      "text": "过去 5 分钟内尚无探测",
+      "sourceHash": "ae90ef3d81c59edb8074aee5e29e6687d38be76209872b9883bddc6cbd041231",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_no_reply_missed": {
+      "text": "无响应，过去 5 分钟内 {probeCount} 次探测有 {missCount} 次丢失",
+      "sourceHash": "91632b179b17726f8beecc801ba088b2c4a7a243b4aa897260e0705df5e0a1d9",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_no_reply_no_misses": {
+      "text": "无响应，过去 5 分钟内无探测丢失",
+      "sourceHash": "fed3de412af67c81a2d9919ce2f95cbe85a66cf5f703cb83f8b57d65ce7d0528",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_p95_missed": {
+      "text": "p95 {p95Ms} 毫秒，过去 5 分钟内 {probeCount} 次探测有 {missCount} 次丢失",
+      "sourceHash": "29a99757d7b4706415aea5c8666e6fdaaee9cc74e7a29e4c9e958572a78c1572",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network_evidence_p95_no_misses": {
+      "text": "p95 {p95Ms} 毫秒，过去 5 分钟内无探测丢失",
+      "sourceHash": "a08cd2009df8200e13ce7cdb0024bd922a85da3afde81dcc4c13bafa1749ae99",
+      "state": "machine-cross-checked"
+    },
+    "shell.settings_changed.externally": {
+      "text": "设置已在此页面之外更改",
+      "sourceHash": "8324516c95d16846ef9c995a13bb55f3f6523b39a779e6d678bab9f791f47682",
+      "state": "machine-cross-checked"
     }
   }
 }
