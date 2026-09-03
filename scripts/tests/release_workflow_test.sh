@@ -316,8 +316,13 @@ if grep -Fq '/usr/bin/install -d -m 0755 dist' <<<"$asset_step" && \
    grep -Fq 'apk_idsig="$signed_apk.idsig"' <<<"$asset_step" && \
    grep -Fq 'APK Signature Scheme v4 sidecar is not one regular nofollow file.' <<<"$asset_step" && \
    grep -Fq 'APK Signature Scheme v4 sidecar is empty or exceeds 1 MiB.' <<<"$asset_step" && \
+   [ "$(grep -Fc -- '--v4-signature-file "$apk_idsig"' <<<"$asset_step")" -eq 2 ] && \
    grep -Fq '/usr/bin/chmod 0644 "$signed_apk" "$apk_idsig"' <<<"$asset_step" && \
+   grep -Fq 'apk_idsig="$signed_apk.idsig"' <<<"$proof_step" && \
+   [ "$(grep -Fc -- '--v4-signature-file "$apk_idsig"' <<<"$proof_step")" -eq 2 ] && \
    grep -Fq '"$apk_name.idsig" \' <<<"$final_step" && \
+   grep -Fq 'apk_idsig="dist/$apk_name.idsig"' <<<"$final_step" && \
+   [ "$(grep -Fc -- '--v4-signature-file "$apk_idsig"' <<<"$final_step")" -eq 2 ] && \
    grep -Fq 'Final APK Signature Scheme v4 sidecar is empty or exceeds 1 MiB.' <<<"$final_step"; then
   pass "signed APK and bounded V4 sidecar remain in the exact readable release set"
 else
@@ -407,6 +412,23 @@ EOF
 cat > "$descriptor_case/android/build-tools/36.0.0/apksigner" <<'EOF'
 #!/usr/bin/env bash
 set -eu
+v4_signature_file=
+apk=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --v4-signature-file)
+      [ "$#" -ge 2 ] || exit 93
+      v4_signature_file=$2
+      shift 2
+      ;;
+    --*) shift ;;
+    *) apk=$1; shift ;;
+  esac
+done
+if [ -n "$v4_signature_file" ]; then
+  [ "$v4_signature_file" = "$apk.idsig" ] || exit 94
+  grep -Fxq 'APK Signature Scheme v4 fixture' "$v4_signature_file" || exit 95
+fi
 printf '%s\n' 'Signer #1 certificate SHA-256 digest: ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339'
 EOF
 chmod 0755 "$descriptor_case/android/build-tools/36.0.0/aapt" \
@@ -592,6 +614,21 @@ else
   sed -n '1,120p' "$descriptor_case/final.log" >&2
   fail_test "final pre-upload step behaviorally verifies the exact asset set, checksums, APK signer, and signatures"
 fi
+
+cp "$descriptor_case/dist/$apk_name.idsig" "$descriptor_case/original.idsig"
+printf 'corrupt V4 signature fixture\n' > "$descriptor_case/dist/$apk_name.idsig"
+if ! (
+  cd "$descriptor_case" || exit 1
+  ANDROID_HOME="$descriptor_case/android" \
+    RELEASE_TAG=v1.2.3-rc1 \
+    RUNNER_TEMP="$descriptor_case/runner-temp" \
+    bash <<<"$test_final_step"
+) > "$descriptor_case/corrupt-idsig-final.log" 2>&1; then
+  pass "final pre-upload verification rejects a corrupt V4 signature sidecar"
+else
+  fail_test "final pre-upload verification rejects a corrupt V4 signature sidecar"
+fi
+mv "$descriptor_case/original.idsig" "$descriptor_case/dist/$apk_name.idsig"
 
 openssl pkcs12 \
   -in "$key_store" \
