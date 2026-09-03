@@ -43,7 +43,7 @@ jobs:
 
       - name: Validate release tag and source commit
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+          if [ "${#RELEASE_TAG}" -gt 64 ] || [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "::error::Release tag is not an accepted vX.Y.Z or vX.Y.Z-suffix version: $RELEASE_TAG"
             exit 1
           fi
@@ -140,7 +140,7 @@ jobs:
 
       - name: Validate release tag and source commit
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+          if [ "${#RELEASE_TAG}" -gt 64 ] || [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "::error::Release tag is not an accepted vX.Y.Z or vX.Y.Z-suffix version: $RELEASE_TAG"
             exit 1
           fi
@@ -249,6 +249,7 @@ jobs:
           fi
           test -s app/build/reports/cyclonedx-direct/bom.json
           cp app/build/reports/cyclonedx-direct/bom.json release-input/android-gradle-runtime.cdx.json
+          cp scripts/generate_install_descriptor.py release-input/generate_install_descriptor.py
           apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
           echo "APK_NAME=$apk_name" >> "$GITHUB_ENV"
 
@@ -330,6 +331,7 @@ jobs:
         run: |
           expected=$(printf '%s\n' \
             android-gradle-runtime.cdx.json \
+            generate_install_descriptor.py \
             "ha-paneld-installer-${RELEASE_TAG}.sh" \
             "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
@@ -345,7 +347,7 @@ jobs:
           fi
           (
             cd release-input
-            sha256sum android-gradle-runtime.cdx.json "ha-paneld-installer-${RELEASE_TAG}.sh" "ha-paneld-provision-${RELEASE_TAG}.sh" ha-paneld-unsigned.apk hapaneld-helper-arm64-v8a hapaneld-helper-armeabi-v7a profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
+            sha256sum android-gradle-runtime.cdx.json generate_install_descriptor.py "ha-paneld-installer-${RELEASE_TAG}.sh" "ha-paneld-provision-${RELEASE_TAG}.sh" ha-paneld-unsigned.apk hapaneld-helper-arm64-v8a hapaneld-helper-armeabi-v7a profile-editor-runtime.cdx.json release-body.md > MANIFEST.sha256
           )
           sha256=$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -394,6 +396,7 @@ jobs:
           expected=$(printf '%s\n' \
             MANIFEST.sha256 \
             android-gradle-runtime.cdx.json \
+            generate_install_descriptor.py \
             "ha-paneld-installer-${RELEASE_TAG}.sh" \
             "ha-paneld-provision-${RELEASE_TAG}.sh" \
             ha-paneld-unsigned.apk \
@@ -428,7 +431,7 @@ jobs:
           test "$(sha256sum release-input/MANIFEST.sha256 | cut -d' ' -f1)" = "$EXPECTED_MANIFEST_SHA256"
           (cd release-input && sha256sum --check MANIFEST.sha256)
 
-      - name: Sign and authenticate release APK
+      - name: Sign and validate release APK
         id: asset
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -436,6 +439,8 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          umask 077
           for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is required; refusing to publish a debug-signed release asset."
@@ -444,10 +449,7 @@ jobs:
           done
 
           keystore="$RUNNER_TEMP/release-keystore"
-          pkcs12="$RUNNER_TEMP/release-signing.p12"
-          private_key="$RUNNER_TEMP/release-signing-key.pem"
-          public_key="$RUNNER_TEMP/release-signing-public.pem"
-          trap 'rm -f "$keystore" "$pkcs12" "$private_key" "$public_key"' EXIT
+          trap 'unset KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; /usr/bin/rm -f "$keystore"' EXIT
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore"
           chmod 600 "$keystore"
 
@@ -512,45 +514,407 @@ jobs:
           (cd dist && sha256sum "$helper_arm_name" > "$helper_arm_name.sha256")
           (cd dist && sha256sum "$helper_arm64_name" > "$helper_arm64_name.sha256")
 
-          pkcs12_password=$(openssl rand -hex 32)
-          keytool -importkeystore \
-            -srckeystore "$keystore" \
-            -srcstorepass "$KEYSTORE_PASSWORD" \
-            -srcalias "$KEY_ALIAS" \
-            -srckeypass "$KEY_PASSWORD" \
-            -destkeystore "$pkcs12" \
-            -deststoretype PKCS12 \
-            -deststorepass "$pkcs12_password" \
-            -destkeypass "$pkcs12_password" \
-            -noprompt
-          openssl pkcs12 -in "$pkcs12" -passin "pass:$pkcs12_password" -nocerts -nodes -out "$private_key"
-          chmod 600 "$private_key"
-          openssl pkey -in "$private_key" -pubout -out "$public_key"
-          release_key_digest=$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum | cut -d' ' -f1)
-          for trust_asset in \
-            "release-input/ha-paneld-installer-${RELEASE_TAG}.sh" \
-            "release-input/$provisioner_name"; do
-            embedded_key="$RUNNER_TEMP/$(basename "$trust_asset").public.pem"
-            awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1} copy{print} /^-----END PUBLIC KEY-----$/{exit}' \
-              "$trust_asset" > "$embedded_key"
-            embedded_key_digest=$(openssl pkey -pubin -in "$embedded_key" -outform DER | sha256sum | cut -d' ' -f1)
-            if [ "$embedded_key_digest" != "$release_key_digest" ]; then
-              echo "::error::Embedded release key in $(basename "$trust_asset") does not match the signing keystore."
-              exit 1
-            fi
-          done
-          openssl dgst -sha256 -sign "$private_key" -out "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
-          openssl dgst -sha256 -verify "$public_key" -signature "dist/$apk_name.sha256.sig" "dist/$apk_name.sha256"
-          openssl dgst -sha256 -sign "$private_key" -out "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
-          openssl dgst -sha256 -verify "$public_key" -signature "dist/$provisioner_name.sha256.sig" "dist/$provisioner_name.sha256"
-          for helper_name in "$helper_arm_name" "$helper_arm64_name"; do
-            openssl dgst -sha256 -sign "$private_key" -out "dist/$helper_name.sha256.sig" "dist/$helper_name.sha256"
-            openssl dgst -sha256 -verify "$public_key" -signature "dist/$helper_name.sha256.sig" "dist/$helper_name.sha256"
-          done
-
           echo "apk_name=$apk_name" >> "$GITHUB_OUTPUT"
           echo "android_sbom_name=$android_sbom_name" >> "$GITHUB_OUTPUT"
           echo "profile_editor_sbom_name=$profile_editor_sbom_name" >> "$GITHUB_OUTPUT"
+
+      - name: Generate bounded install descriptor without release credentials
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -n "${!name:-}" ]; then
+              echo "::error::Release credentials must not enter the descriptor-generation step."
+              exit 1
+            fi
+          done
+
+          workspace=$(/usr/bin/pwd -P)
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
+          descriptor_name="ha-paneld-${RELEASE_TAG}-install.json"
+          descriptor_stage=$(/usr/bin/mktemp -d "$RUNNER_TEMP/install-descriptor.XXXXXX")
+          sandbox_source=$(/usr/bin/mktemp "$RUNNER_TEMP/install-descriptor-sandbox.XXXXXX.c")
+          sandbox_binary=${sandbox_source%.c}
+          current_uid=$(/usr/bin/id -u)
+          current_gid=$(/usr/bin/id -g)
+          root_command=()
+          if [ "$current_uid" -ne 0 ]; then
+            root_command=(/usr/bin/sudo --non-interactive)
+          fi
+          cleanup_descriptor_stage() {
+            "${root_command[@]}" /usr/bin/rm -rf -- "$descriptor_stage" "$sandbox_source" "$sandbox_binary"
+          }
+          trap cleanup_descriptor_stage EXIT
+          /usr/bin/tee "$sandbox_source" >/dev/null <<'LANDLOCK_SOURCE'
+          #define _GNU_SOURCE
+          #include <errno.h>
+          #include <fcntl.h>
+          #include <linux/landlock.h>
+          #include <stddef.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <sys/prctl.h>
+          #include <sys/syscall.h>
+          #include <unistd.h>
+
+          static int add_path_rule(int ruleset_fd, const char *path, __u64 allowed_access) {
+              int path_fd = open(path, O_PATH | O_CLOEXEC);
+              if (path_fd < 0) return -1;
+              struct landlock_path_beneath_attr rule = {
+                  .allowed_access = allowed_access,
+                  .parent_fd = path_fd,
+              };
+              int result = syscall(SYS_landlock_add_rule, ruleset_fd,
+                                   LANDLOCK_RULE_PATH_BENEATH, &rule, 0);
+              int saved_errno = errno;
+              close(path_fd);
+              errno = saved_errno;
+              return result;
+          }
+
+          int main(int argc, char **argv) {
+              if (argc < 3) {
+                  fputs("usage: sandbox OUTPUT-DIRECTORY PROGRAM [ARG...]\n", stderr);
+                  return 64;
+              }
+              int abi = syscall(SYS_landlock_create_ruleset, NULL, 0,
+                                LANDLOCK_CREATE_RULESET_VERSION);
+              if (abi < 3) {
+                  fputs("Landlock ABI 3 or newer is required\n", stderr);
+                  return 70;
+              }
+              __u64 read_access = LANDLOCK_ACCESS_FS_EXECUTE |
+                  LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR;
+              __u64 write_access = LANDLOCK_ACCESS_FS_WRITE_FILE |
+                  LANDLOCK_ACCESS_FS_REMOVE_DIR | LANDLOCK_ACCESS_FS_REMOVE_FILE |
+                  LANDLOCK_ACCESS_FS_MAKE_CHAR | LANDLOCK_ACCESS_FS_MAKE_DIR |
+                  LANDLOCK_ACCESS_FS_MAKE_REG | LANDLOCK_ACCESS_FS_MAKE_SOCK |
+                  LANDLOCK_ACCESS_FS_MAKE_FIFO | LANDLOCK_ACCESS_FS_MAKE_BLOCK |
+                  LANDLOCK_ACCESS_FS_MAKE_SYM | LANDLOCK_ACCESS_FS_REFER |
+                  LANDLOCK_ACCESS_FS_TRUNCATE;
+              struct landlock_ruleset_attr ruleset = {
+                  .handled_access_fs = read_access | write_access,
+              };
+              int ruleset_fd = syscall(SYS_landlock_create_ruleset, &ruleset,
+                                       sizeof(ruleset), 0);
+              if (ruleset_fd < 0 || add_path_rule(ruleset_fd, "/", read_access) < 0 ||
+                  add_path_rule(ruleset_fd, "/dev", read_access) < 0 ||
+                  add_path_rule(ruleset_fd, "/proc", read_access) < 0 ||
+                  add_path_rule(ruleset_fd, "/sys", read_access) < 0 ||
+                  add_path_rule(ruleset_fd, argv[1], read_access | write_access) < 0 ||
+                  prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 ||
+                  syscall(SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
+                  perror("install descriptor sandbox");
+                  return 70;
+              }
+              close(ruleset_fd);
+              execv(argv[2], &argv[2]);
+              perror("install descriptor sandbox exec");
+              return 70;
+          }
+          LANDLOCK_SOURCE
+          /usr/bin/cc -O2 -Wall -Wextra -Werror -o "$sandbox_binary" "$sandbox_source"
+          /usr/bin/chmod 0755 "$sandbox_binary"
+          "${root_command[@]}" /usr/bin/chown 65534:65534 "$descriptor_stage"
+          "${root_command[@]}" /usr/bin/chmod 0700 "$descriptor_stage"
+
+          "${root_command[@]}" /usr/bin/setpriv \
+            --reuid=65534 \
+            --regid=65534 \
+            --clear-groups \
+            --no-new-privs \
+            --inh-caps=-all \
+            --ambient-caps=-all \
+            --bounding-set=-all \
+            "$sandbox_binary" "$descriptor_stage" \
+              /usr/bin/env -i \
+                "HOME=$descriptor_stage" \
+                "JAVA_HOME=$JAVA_HOME" \
+                'LC_ALL=C.UTF-8' \
+                'PATH=/usr/bin:/bin' \
+                'PYTHONDONTWRITEBYTECODE=1' \
+                'PYTHONHASHSEED=0' \
+                "TMPDIR=$descriptor_stage" \
+                /usr/bin/python3 "$workspace/release-input/generate_install_descriptor.py" \
+                  --apk "$workspace/dist/$apk_name" \
+                  --release-tag "$RELEASE_TAG" \
+                  --aapt "$build_tools/aapt" \
+                  --apksigner "$build_tools/apksigner" \
+                  --output "$descriptor_stage/$descriptor_name"
+
+          staged_entries=$("${root_command[@]}" /usr/bin/find "$descriptor_stage" -mindepth 1 -maxdepth 1 -printf '%f\n' | /usr/bin/sort)
+          if [ "$staged_entries" != "$descriptor_name" ]; then
+            echo "::error::Descriptor generator did not produce exactly the expected output."
+            exit 1
+          fi
+          if ! "${root_command[@]}" /usr/bin/test -f "$descriptor_stage/$descriptor_name" || \
+             "${root_command[@]}" /usr/bin/test -L "$descriptor_stage/$descriptor_name"; then
+            echo "::error::Descriptor generator output is not one regular nofollow file."
+            exit 1
+          fi
+          "${root_command[@]}" /usr/bin/install \
+            --owner="$current_uid" \
+            --group="$current_gid" \
+            --mode=0644 \
+            "$descriptor_stage/$descriptor_name" \
+            "$workspace/dist/$descriptor_name"
+
+      - name: Sign and authenticate release proofs
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required to authenticate release proofs."
+              exit 1
+            fi
+          done
+
+          build_tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
+          descriptor_name="ha-paneld-${RELEASE_TAG}-install.json"
+          provisioner_name="ha-paneld-provision-${RELEASE_TAG}.sh"
+          helper_arm_name="ha-paneld-helper-${RELEASE_TAG}-armeabi-v7a"
+          helper_arm64_name="ha-paneld-helper-${RELEASE_TAG}-arm64-v8a"
+          signed_apk="dist/$apk_name"
+          proof_dir=$(/usr/bin/mktemp -d "$RUNNER_TEMP/release-proof.XXXXXX")
+          keystore="$proof_dir/release-keystore"
+          pkcs12="$proof_dir/release-key.p12"
+          private_key="$proof_dir/release-private-key.pem"
+          public_key="$proof_dir/release-public-key.pem"
+          installer_public_key="$proof_dir/installer-public-key.pem"
+          provisioner_public_key="$proof_dir/provisioner-public-key.pem"
+          expected_descriptor="$proof_dir/expected-install.json"
+          cleanup_release_proofs() {
+            unset KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD HAPANELD_PKCS12_PASSWORD
+            /usr/bin/rm -rf -- "$proof_dir"
+          }
+          trap cleanup_release_proofs EXIT
+
+          if [ ! -f "$signed_apk" ] || [ -L "$signed_apk" ]; then
+            echo "::error::Signed release APK is not one regular nofollow file."
+            exit 1
+          fi
+          apk_size=$(/usr/bin/stat --format='%s' "$signed_apk")
+          if [ "$apk_size" -le 0 ] || [ "$apk_size" -gt 67108864 ]; then
+            echo "::error::Signed release APK is empty or exceeds the 64 MiB installer limit."
+            exit 1
+          fi
+          "$build_tools/apksigner" verify --verbose --print-certs "$signed_apk"
+          mapfile -t signer_digests < <("$build_tools/apksigner" verify --print-certs "$signed_apk" | /usr/bin/sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p')
+          if [ "${#signer_digests[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one APK signer, found ${#signer_digests[@]}."
+            exit 1
+          fi
+          signer_digest=$(/usr/bin/printf '%s' "${signer_digests[0]}" | /usr/bin/tr '[:upper:]' '[:lower:]')
+          expected_signer_digest=ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339
+          if [ "$signer_digest" != "$expected_signer_digest" ]; then
+            echo "::error::Signed APK certificate SHA-256 does not match the release authority."
+            exit 1
+          fi
+
+          apk_sha256=$(/usr/bin/sha256sum "$signed_apk" | /usr/bin/cut -d' ' -f1)
+          /usr/bin/printf '%s  %s\n' "$apk_sha256" "$apk_name" > "$proof_dir/$apk_name.sha256"
+          if ! /usr/bin/cmp --silent "$proof_dir/$apk_name.sha256" "dist/$apk_name.sha256" || \
+             ! (cd dist && /usr/bin/sha256sum --strict --check "$apk_name.sha256"); then
+            echo "::error::Signed APK checksum record does not bind the exact APK."
+            exit 1
+          fi
+
+          badging=$("$build_tools/aapt" dump badging "$signed_apk")
+          mapfile -t package_lines < <(/usr/bin/grep '^package:' <<<"$badging")
+          mapfile -t sdk_lines < <(/usr/bin/grep '^sdkVersion:' <<<"$badging")
+          mapfile -t launch_lines < <(/usr/bin/grep '^launchable-activity:' <<<"$badging")
+          mapfile -t native_lines < <(/usr/bin/grep '^native-code:' <<<"$badging")
+          if [ "${#package_lines[@]}" -ne 1 ] || [ "${#sdk_lines[@]}" -ne 1 ] || \
+             [ "${#launch_lines[@]}" -ne 1 ] || [ "${#native_lines[@]}" -ne 1 ]; then
+            echo "::error::Signed APK badging is ambiguous or incomplete."
+            exit 1
+          fi
+          package_name=$(/usr/bin/sed -n "s/.* name='\([^']*\)'.*/\1/p" <<<"${package_lines[0]}")
+          version_code=$(/usr/bin/sed -n "s/.* versionCode='\([^']*\)'.*/\1/p" <<<"${package_lines[0]}")
+          version_name=$(/usr/bin/sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<<"${package_lines[0]}")
+          min_sdk=$(/usr/bin/sed -n "s/^sdkVersion:'\([^']*\)'$/\1/p" <<<"${sdk_lines[0]}")
+          launch_activity=$(/usr/bin/sed -n "s/.* name='\([^']*\)'.*/\1/p" <<<"${launch_lines[0]}")
+          mapfile -t supported_abis < <(/usr/bin/grep -o "'[^']*'" <<<"${native_lines[0]}" | /usr/bin/tr -d "'" | /usr/bin/sort)
+          expected_version_name="${RELEASE_TAG#v}"
+          if [ "$package_name" != io.github.maxlyth.hapaneld ] || \
+             [ "$version_name" != "$expected_version_name" ] || \
+             [ "$launch_activity" != io.github.maxlyth.hapaneld.MainActivity ] || \
+             [[ ! "$version_code" =~ ^[1-9][0-9]*$ ]] || [ "${#version_code}" -gt 10 ] || \
+             [ "$version_code" -gt 2147483647 ] || \
+             [[ ! "$min_sdk" =~ ^[1-9][0-9]*$ ]] || [ "${#min_sdk}" -gt 3 ] || [ "$min_sdk" -gt 100 ] || \
+             [ "${#supported_abis[@]}" -ne 2 ] || \
+             [ "${supported_abis[0]}" != arm64-v8a ] || [ "${supported_abis[1]}" != armeabi-v7a ]; then
+            echo "::error::Signed APK package, version, platform, ABI, or launcher contract is invalid."
+            exit 1
+          fi
+
+          xmltree=$("$build_tools/aapt" dump xmltree "$signed_apk" AndroidManifest.xml)
+          database_contracts=$(/usr/bin/printf '%s\n' "$xmltree" | /usr/bin/awk -v wanted='io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY' '
+            function quoted(line, start, rest, stop) {
+              start=index(line, "=\""); if (!start) return ""
+              rest=substr(line, start + 2); stop=index(rest, "\"")
+              return stop ? substr(rest, 1, stop - 1) : ""
+            }
+            function indentation(line, copy) { copy=line; sub(/[^ ].*/, "", copy); return length(copy) }
+            function flush_meta() {
+              if (!inside) return
+              if (saw_wanted) {
+                if (direct_meta && name_count == 1 && name == wanted && value_count == 1) print value
+                else invalid=1
+              }
+              inside=0
+            }
+            /^[[:space:]]*E:/ {
+              flush_meta()
+              indent=indentation($0)
+              entity=$0; sub(/^[[:space:]]*E:[[:space:]]*/, "", entity); sub(/[[:space:](].*/, "", entity)
+              parent=""; parent_node_id=-1; parent_indent=-1
+              for (level in stack) if ((level + 0) < indent && (level + 0) > parent_indent) {
+                parent=stack[level]; parent_node_id=stack_node[level]; parent_indent=level + 0
+              }
+              for (level in stack) if ((level + 0) >= indent) {
+                delete stack[level]; delete stack_node[level]
+              }
+              node_id++
+              stack[indent]=entity; stack_node[indent]=node_id
+              if (entity == "manifest" && parent_indent == -1) {
+                manifest_count++; manifest_node_id=node_id
+              }
+              if (entity == "application" && parent == "manifest" && parent_node_id == manifest_node_id) {
+                application_count++; application_node_id=node_id
+              }
+              if (entity == "meta-data") {
+                inside=1; name=""; value=""; name_count=0; value_count=0; saw_wanted=0
+                direct_meta=(parent == "application" && parent_node_id == application_node_id)
+              }
+              next
+            }
+            inside && /A: (android:|http:\/\/schemas\.android\.com\/apk\/res\/android:)name/ {
+              candidate=quoted($0); name_count++; name=candidate; if (candidate == wanted) saw_wanted=1
+            }
+            inside && /A: (android:|http:\/\/schemas\.android\.com\/apk\/res\/android:)value/ {
+              value_count++; value=quoted($0)
+            }
+            END {
+              flush_meta()
+              if (manifest_count != 1 || application_count != 1 || invalid) print "__INVALID_APPLICATION_METADATA__"
+            }
+          ')
+          mapfile -t database_records < <(/usr/bin/awk 'NF' <<<"$database_contracts")
+          if [ "${#database_records[@]}" -ne 1 ] || \
+             [[ ! "${database_records[0]}" =~ ^hapaneld-db:v1:ha-paneld\.db:([1-9][0-9]*):([1-9][0-9]*)$ ]]; then
+            echo "::error::Signed APK database compatibility contract is invalid."
+            exit 1
+          fi
+          database_min=${BASH_REMATCH[1]}
+          database_max=${BASH_REMATCH[2]}
+          if [ "${#database_min}" -gt 10 ] || [ "${#database_max}" -gt 10 ] || \
+             [ "$database_min" -gt 2147483647 ] || [ "$database_max" -gt 2147483647 ] || \
+             [ "$database_min" -gt "$database_max" ]; then
+            echo "::error::Signed APK database compatibility bounds are invalid."
+            exit 1
+          fi
+          database_contract=${database_records[0]}
+
+          if [ ! -f "dist/$descriptor_name" ] || [ -L "dist/$descriptor_name" ] || \
+             [ "$(/usr/bin/stat --format='%s' "dist/$descriptor_name")" -gt 4096 ]; then
+            echo "::error::Install descriptor is not a bounded regular nofollow file."
+            exit 1
+          fi
+          /usr/bin/jq -cnS \
+            --arg apk_name "$apk_name" \
+            --arg apk_sha256 "$apk_sha256" \
+            --argjson apk_size "$apk_size" \
+            --arg database_compatibility "$database_contract" \
+            --argjson min_sdk "$min_sdk" \
+            --arg release_tag "$RELEASE_TAG" \
+            --argjson version_code "$version_code" \
+            --arg version_name "$version_name" \
+            '{apkName:$apk_name,apkSha256:$apk_sha256,apkSize:$apk_size,databaseCompatibility:$database_compatibility,launchComponent:"io.github.maxlyth.hapaneld/.MainActivity",minSdk:$min_sdk,packageId:"io.github.maxlyth.hapaneld",releaseTag:$release_tag,schema:"io.github.maxlyth.hapaneld.install.v1",signerCertificateSha256:"ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339",supportedAbis:["arm64-v8a","armeabi-v7a"],versionCode:$version_code,versionName:$version_name}' \
+            > "$expected_descriptor"
+          if ! /usr/bin/cmp --silent "$expected_descriptor" "dist/$descriptor_name"; then
+            echo "::error::Install descriptor is not the exact canonical 13-field APK contract."
+            exit 1
+          fi
+
+          for source in "dist/ha-paneld-installer-${RELEASE_TAG}.sh" "dist/$provisioner_name"; do
+            if [ ! -f "$source" ] || [ -L "$source" ] || \
+               [ "$(/usr/bin/grep -c '^-----BEGIN PUBLIC KEY-----$' "$source")" -ne 1 ] || \
+               [ "$(/usr/bin/grep -c '^-----END PUBLIC KEY-----$' "$source")" -ne 1 ]; then
+              echo "::error::Release script does not contain exactly one trusted public key."
+              exit 1
+            fi
+          done
+          /usr/bin/awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1} copy{print} /^-----END PUBLIC KEY-----$/{exit}' \
+            "dist/ha-paneld-installer-${RELEASE_TAG}.sh" > "$installer_public_key"
+          /usr/bin/awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1} copy{print} /^-----END PUBLIC KEY-----$/{exit}' \
+            "dist/$provisioner_name" > "$provisioner_public_key"
+          if ! /usr/bin/cmp --silent "$installer_public_key" "$provisioner_public_key"; then
+            echo "::error::Release scripts disagree on the trusted public key."
+            exit 1
+          fi
+          trusted_public_key_sha256=$(/usr/bin/openssl pkey -pubin -in "$installer_public_key" -outform DER | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)
+          if [ "$trusted_public_key_sha256" != 502bf38874682ff337f187022b904adbc3ab0b387fd7ceb4043ce722997273f3 ]; then
+            echo "::error::Release scripts do not embed the release proof authority."
+            exit 1
+          fi
+
+          printf '%s' "$KEYSTORE_B64" | /usr/bin/base64 --decode > "$keystore"
+          /usr/bin/chmod 0600 "$keystore"
+          HAPANELD_PKCS12_PASSWORD=$(/usr/bin/openssl rand -hex 32)
+          export HAPANELD_PKCS12_PASSWORD
+          "$JAVA_HOME/bin/keytool" -importkeystore \
+            -srckeystore "$keystore" \
+            -srcstorepass:env KEYSTORE_PASSWORD \
+            -srcalias "$KEY_ALIAS" \
+            -srckeypass:env KEY_PASSWORD \
+            -destkeystore "$pkcs12" \
+            -deststoretype PKCS12 \
+            -deststorepass:env HAPANELD_PKCS12_PASSWORD \
+            -destkeypass:env HAPANELD_PKCS12_PASSWORD \
+            -noprompt
+          /usr/bin/openssl pkcs12 \
+            -in "$pkcs12" \
+            -nodes \
+            -nocerts \
+            -passin env:HAPANELD_PKCS12_PASSWORD \
+            -out "$private_key"
+          /usr/bin/chmod 0600 "$private_key"
+          /usr/bin/openssl pkey -in "$private_key" -pubout -out "$public_key"
+          signing_public_key_sha256=$(/usr/bin/openssl pkey -pubin -in "$public_key" -outform DER | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)
+          if [ "$signing_public_key_sha256" != "$trusted_public_key_sha256" ]; then
+            echo "::error::APK signing key does not match the release proof authority."
+            exit 1
+          fi
+          unset KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD HAPANELD_PKCS12_PASSWORD
+
+          for proof_name in "$provisioner_name" "$helper_arm_name" "$helper_arm64_name"; do
+            if [ ! -f "dist/$proof_name" ] || [ -L "dist/$proof_name" ]; then
+              echo "::error::Release proof subject is not a regular nofollow file: $proof_name"
+              exit 1
+            fi
+            /usr/bin/sha256sum "dist/$proof_name" | /usr/bin/sed "s|  dist/|  |" > "$proof_dir/$proof_name.sha256"
+            if ! /usr/bin/cmp --silent "$proof_dir/$proof_name.sha256" "dist/$proof_name.sha256" || \
+               ! (cd dist && /usr/bin/sha256sum --strict --check "$proof_name.sha256"); then
+              echo "::error::Release checksum record does not bind the exact asset: $proof_name"
+              exit 1
+            fi
+          done
+
+          /usr/bin/openssl dgst -sha256 -sign "$private_key" -out "dist/$descriptor_name.sig" "dist/$descriptor_name"
+          /usr/bin/openssl dgst -sha256 -verify "$public_key" -signature "dist/$descriptor_name.sig" "dist/$descriptor_name"
+          for checksum_name in "$apk_name.sha256" "$provisioner_name.sha256" "$helper_arm_name.sha256" "$helper_arm64_name.sha256"; do
+            /usr/bin/openssl dgst -sha256 -sign "$private_key" -out "dist/$checksum_name.sig" "dist/$checksum_name"
+            /usr/bin/openssl dgst -sha256 -verify "$public_key" -signature "dist/$checksum_name.sig" "dist/$checksum_name"
+          done
 
       - name: Attest release asset provenance
         continue-on-error: true
@@ -571,6 +935,93 @@ jobs:
         with:
           subject-path: dist/${{ steps.asset.outputs.apk_name }}
           sbom-path: dist/${{ steps.asset.outputs.profile_editor_sbom_name }}
+
+      - name: Final exact verification before publication
+        run: |
+          set -euo pipefail
+          apk_name="ha-paneld-${RELEASE_TAG}-manual-setup-required.apk"
+          descriptor_name="ha-paneld-${RELEASE_TAG}-install.json"
+          provisioner_name="ha-paneld-provision-${RELEASE_TAG}.sh"
+          helper_arm_name="ha-paneld-helper-${RELEASE_TAG}-armeabi-v7a"
+          helper_arm64_name="ha-paneld-helper-${RELEASE_TAG}-arm64-v8a"
+          expected=$(/usr/bin/printf '%s\n' \
+            "ha-paneld-${RELEASE_TAG}-android-gradle-runtime.cdx.json" \
+            "$descriptor_name" \
+            "$descriptor_name.sig" \
+            "$helper_arm64_name" \
+            "$helper_arm64_name.sha256" \
+            "$helper_arm64_name.sha256.sig" \
+            "$helper_arm_name" \
+            "$helper_arm_name.sha256" \
+            "$helper_arm_name.sha256.sig" \
+            "ha-paneld-installer-${RELEASE_TAG}.sh" \
+            "$apk_name" \
+            "$apk_name.sha256" \
+            "$apk_name.sha256.sig" \
+            "ha-paneld-${RELEASE_TAG}-profile-editor-runtime.cdx.json" \
+            "$provisioner_name" \
+            "$provisioner_name.sha256" \
+            "$provisioner_name.sha256.sig" | /usr/bin/sort)
+          actual=$(/usr/bin/find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | /usr/bin/sort)
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Final release asset set is not exact."
+            /usr/bin/diff -u <(/usr/bin/printf '%s\n' "$expected") <(/usr/bin/printf '%s\n' "$actual") || true
+            exit 1
+          fi
+          while IFS= read -r asset; do
+            if [ ! -f "dist/$asset" ] || [ -L "dist/$asset" ]; then
+              echo "::error::Release asset is not a regular nofollow file: $asset"
+              exit 1
+            fi
+          done <<<"$expected"
+
+          final_dir=$(/usr/bin/mktemp -d "$RUNNER_TEMP/final-release-proof.XXXXXX")
+          trap '/usr/bin/rm -rf -- "$final_dir"' EXIT
+          public_key="$final_dir/release-public-key.pem"
+          installer="dist/ha-paneld-installer-${RELEASE_TAG}.sh"
+          if [ "$(/usr/bin/grep -c '^-----BEGIN PUBLIC KEY-----$' "$installer")" -ne 1 ] || \
+             [ "$(/usr/bin/grep -c '^-----END PUBLIC KEY-----$' "$installer")" -ne 1 ]; then
+            echo "::error::Release installer does not contain exactly one trusted public key."
+            exit 1
+          fi
+          /usr/bin/awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1} copy{print} /^-----END PUBLIC KEY-----$/{exit}' \
+            "$installer" > "$public_key"
+          trusted_public_key_sha256=$(/usr/bin/openssl pkey -pubin -in "$public_key" -outform DER | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)
+          if [ "$trusted_public_key_sha256" != 502bf38874682ff337f187022b904adbc3ab0b387fd7ceb4043ce722997273f3 ]; then
+            echo "::error::Final release proof authority is not trusted."
+            exit 1
+          fi
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "dist/$apk_name"
+          mapfile -t signer_digests < <("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "dist/$apk_name" | /usr/bin/sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p')
+          signer_digest=$(/usr/bin/printf '%s' "${signer_digests[0]:-}" | /usr/bin/tr '[:upper:]' '[:lower:]')
+          if [ "${#signer_digests[@]}" -ne 1 ] || \
+             [ "$signer_digest" != ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339 ]; then
+            echo "::error::Final release APK signer is not the release authority."
+            exit 1
+          fi
+
+          for checksum_name in "$apk_name.sha256" "$provisioner_name.sha256" "$helper_arm_name.sha256" "$helper_arm64_name.sha256"; do
+            (cd dist && /usr/bin/sha256sum --strict --check "$checksum_name")
+            /usr/bin/openssl dgst -sha256 -verify "$public_key" -signature "dist/$checksum_name.sig" "dist/$checksum_name"
+          done
+          /usr/bin/openssl dgst -sha256 -verify "$public_key" -signature "dist/$descriptor_name.sig" "dist/$descriptor_name"
+          final_apk_sha256=$(/usr/bin/sha256sum "dist/$apk_name" | /usr/bin/cut -d' ' -f1)
+          final_apk_size=$(/usr/bin/stat --format='%s' "dist/$apk_name")
+          if ! /usr/bin/jq -e \
+            --arg apk_name "$apk_name" \
+            --arg apk_sha256 "$final_apk_sha256" \
+            --argjson apk_size "$final_apk_size" \
+            --arg release_tag "$RELEASE_TAG" \
+            'keys == ["apkName","apkSha256","apkSize","databaseCompatibility","launchComponent","minSdk","packageId","releaseTag","schema","signerCertificateSha256","supportedAbis","versionCode","versionName"] and
+             .apkName == $apk_name and .apkSha256 == $apk_sha256 and .apkSize == $apk_size and
+             .releaseTag == $release_tag and .schema == "io.github.maxlyth.hapaneld.install.v1" and
+             .packageId == "io.github.maxlyth.hapaneld" and
+             .signerCertificateSha256 == "ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339"' \
+            "dist/$descriptor_name" >/dev/null; then
+            echo "::error::Final signed descriptor does not bind the exact final release APK."
+            exit 1
+          fi
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2

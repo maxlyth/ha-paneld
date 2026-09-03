@@ -6965,16 +6965,16 @@ if grep -Fq 'hapaneld-helper-arm64-v8a \' "$RELEASE_WORKFLOW" && \
 else
   fail_test "release workflow seals both helper inputs and publishes checksums"
 fi
-if grep -Fq 'for helper_name in "$helper_arm_name" "$helper_arm64_name"' "$RELEASE_WORKFLOW" && \
-   grep -Fq '"dist/$helper_name.sha256.sig"' "$RELEASE_WORKFLOW"; then
+if grep -Fq 'for checksum_name in "$apk_name.sha256" "$provisioner_name.sha256" "$helper_arm_name.sha256" "$helper_arm64_name.sha256"' "$RELEASE_WORKFLOW" && \
+   grep -Fq '"dist/$checksum_name.sig"' "$RELEASE_WORKFLOW"; then
   pass "release workflow signs both helper checksum records"
 else
   fail_test "release workflow signs both helper checksum records"
 fi
-if grep -Fq 'release_key_digest=$(openssl pkey -pubin -in "$public_key" -outform DER | sha256sum' "$RELEASE_WORKFLOW" && \
-   grep -Fq "awk '/^-----BEGIN PUBLIC KEY-----$/{copy=1}" "$RELEASE_WORKFLOW" && \
-   grep -Fq 'embedded_key_digest=$(openssl pkey -pubin -in "$embedded_key" -outform DER | sha256sum' "$RELEASE_WORKFLOW" && \
-   grep -Fq 'if [ "$embedded_key_digest" != "$release_key_digest" ]; then' "$RELEASE_WORKFLOW"; then
+if grep -Fq 'trusted_public_key_sha256=$(/usr/bin/openssl pkey -pubin -in "$installer_public_key" -outform DER' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'if ! /usr/bin/cmp --silent "$installer_public_key" "$provisioner_public_key"; then' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'signing_public_key_sha256=$(/usr/bin/openssl pkey -pubin -in "$public_key" -outform DER' "$RELEASE_WORKFLOW" && \
+   grep -Fq 'if [ "$signing_public_key_sha256" != "$trusted_public_key_sha256" ]; then' "$RELEASE_WORKFLOW"; then
   pass "release signing fails before publication when installer trust keys drift from the keystore"
 else
   fail_test "release signing fails before publication when installer trust keys drift from the keystore"
