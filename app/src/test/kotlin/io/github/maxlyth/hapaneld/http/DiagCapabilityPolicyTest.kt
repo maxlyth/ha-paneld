@@ -146,7 +146,8 @@ class DiagCapabilityPolicyTest {
         assertTrue(configure.contains("""} else if (f.key === "auto_sleep") {
       help = el("small", { lang: f.helpLanguage, text: f.help });"""))
         assertTrue(configure.contains("""var labelText = el("span", { lang: f.labelLanguage })"""))
-        assertFalse(configure.contains("document.documentElement.lang"))
+        assertTrue(configure.contains("? window.HaI18n.locale : (document.documentElement.lang || \"en\")"))
+        assertTrue(Regex("""document\.documentElement\.lang""").findAll(configure).count() == 1)
         assertTrue(server.contains("""get("/configure") {
                     val strings = requestStrings(call)"""))
         assertTrue(server.contains("""strings.languages(setOf("shell.", "configure.")).joinToString(", ")"""))

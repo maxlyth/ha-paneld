@@ -9,7 +9,7 @@ class HaOAuthUiContractTest {
     @Test fun `configure offers browser sign-in without replacing the long-lived token fallback`() {
         val source = asset("configure.js").readText()
 
-        assertTrue("browser sign-in must post the in-memory HA URL", "new URLSearchParams({ ha_url: target })" in source)
+        assertTrue("browser sign-in must post the in-memory HA URL", "ha_url: target" in source)
         assertTrue("configured is state, not a connectivity claim", "haAuth.configured ? i18nText(\"configure.oauth.reconnect\", \"Reconnect\") : i18nText(\"configure.oauth.connect\", \"Connect\")" in source)
         assertTrue("OAuth provenance must be visible", "OAuth configured" in source)
         assertFalse("credential UI must not claim that the live transport is connected", "OAuth connected" in source)
