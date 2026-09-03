@@ -37,7 +37,7 @@ updates:
       # one means regenerating artifact-verification metadata, which bootstraps trust in whichever
       # signing keys the new artifacts carry. That is a review step, not an automated one, so the
       # proposals are switched off rather than repaired by a robot. SECURITY.md states the policy;
-      # a bump is landed by the documented local regeneration recipe instead.
+      # a bump is landed locally instead, by regenerating the locks and reviewing the trust change.
       #
       # Two patterns, because a Gradle dependency name takes two shapes and no single glob can
       # say "everything except the wrapper" (dependabot-core's matcher has no negation: it

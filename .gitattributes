@@ -17,3 +17,13 @@ CMakeLists.txt          linguist-detectable=false
 # stable across checkout platforms so the same source revision cannot produce a different identity.
 app/src/main/assets/device-profiles/*.yaml text eol=lf
 docs/profiles/unofficial/*.yaml            text eol=lf
+
+# The Gradle wrapper scripts are regenerated verbatim whenever the wrapper version is bumped, and
+# Dependabot commits them through the GitHub API, which does not apply these filters. Store the bytes
+# exactly as Gradle emits them, LF for the shell script and CRLF for the batch file, so a bump diff
+# shows the version change instead of a whole-file rewrite.
+#
+# `text eol=` is deliberately not used. It normalizes the stored batch-file blob to LF, which puts the
+# repository back in permanent conflict with the CRLF bytes every regeneration produces.
+gradlew                                    -text
+gradlew.bat                                -text
