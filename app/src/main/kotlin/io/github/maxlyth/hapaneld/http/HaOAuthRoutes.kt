@@ -295,6 +295,7 @@ internal fun oauthStartSelection(
     }
     val preserve = when (rawPreserveExplicitEnglish) {
         null -> false
+        "0" -> false
         "1" -> true
         else -> return HaOAuthStartSelection(AppLocale.ENGLISH, HaOAuthReturnSurface.CONFIGURE, false)
     }

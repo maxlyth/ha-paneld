@@ -258,6 +258,43 @@ class HaOAuthRoutesTest {
         assertTrue(body.contains("location.assign(\"/setup?lang=zh-Hans\")"))
     }
 
+    @Test fun `browser false flag preserves localized Setup callback context`() = testApplication {
+        val harness = Harness().apply {
+            context = HaOAuthStartContext(
+                locale = "de",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                copy = localizedCopy(),
+                contentLanguages = setOf("de"),
+            )
+        }
+        application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
+
+        val started = client.post("/api/v1/ha/oauth/start") {
+            panelHost()
+            header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
+            setBody(
+                "ha_url=https%3A%2F%2Fha.example&" +
+                    "$HA_OAUTH_UI_LOCALE_FIELD=de&" +
+                    "$HA_OAUTH_RETURN_SURFACE_FIELD=setup&" +
+                    "$HA_OAUTH_PRESERVE_ENGLISH_FIELD=0",
+            )
+        }
+        assertEquals(HttpStatusCode.OK, started.status)
+
+        val response = callback(
+            client,
+            JSONObject(started.bodyAsText()).getString("authorization_url"),
+            "browser-false",
+        )
+        val body = response.bodyAsText()
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("de", response.headers[HttpHeaders.ContentLanguage])
+        assertTrue(body.contains("<html lang=\"de\""))
+        assertTrue(body.contains("href=\"/setup?lang=de\""))
+        assertTrue(body.contains("location.assign(\"/setup?lang=de\")"))
+    }
+
     @Test fun `claimed failure is localized but pre-claim failures disclose no stored context`() = testApplication {
         val harness = Harness().apply {
             context = HaOAuthStartContext(
@@ -317,6 +354,10 @@ class HaOAuthRoutesTest {
         assertEquals(
             HaOAuthStartSelection("zh-Hans", HaOAuthReturnSurface.SETUP, false),
             oauthStartSelection("zh-CN", "setup", null),
+        )
+        assertEquals(
+            HaOAuthStartSelection("de", HaOAuthReturnSurface.SETUP, false),
+            oauthStartSelection("de", "setup", "0"),
         )
         assertEquals(
             HaOAuthStartSelection("en", HaOAuthReturnSurface.CONFIGURE, false),
