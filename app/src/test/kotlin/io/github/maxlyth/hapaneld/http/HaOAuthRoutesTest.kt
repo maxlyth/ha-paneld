@@ -21,6 +21,7 @@ import io.ktor.utils.io.writeFully
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.URI
@@ -137,6 +138,24 @@ class HaOAuthRoutesTest {
         assertEquals(1, harness.exchanges)
     }
 
+    @Test fun `legacy successful callback retains dynamic Setup return without context fields`() = testApplication {
+        val harness = Harness()
+        application {
+            routing {
+                route("/api/v1") {
+                    haOAuthRoutes(harness.dependencies().copy(successReturnPath = { "/setup" }))
+                }
+            }
+        }
+
+        val response = callback(client, start(client), "legacy-setup")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals("en", response.headers[HttpHeaders.ContentLanguage])
+        assertTrue(response.bodyAsText().contains("href=\"/setup\""))
+        assertTrue(response.bodyAsText().contains("location.assign(\"/setup\")"))
+    }
+
     @Test fun `callback needs no browser cookie or session from the client which started sign-in`() = testApplication {
         val harness = Harness()
         application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
@@ -216,6 +235,153 @@ class HaOAuthRoutesTest {
         assertTrue(success.bodyAsText().contains("ambient-light source needs attention"))
     }
 
+    @Test fun `claimed Setup callback keeps its canonical locale localized copy and closed return path`() = testApplication {
+        val harness = Harness().apply {
+            context = HaOAuthStartContext(
+                locale = "zh-Hans",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                copy = localizedCopy(),
+                contentLanguages = setOf("zh-Hans"),
+            )
+        }
+        application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
+
+        val success = callback(client, start(client, uiLocale = "zh-CN", returnSurface = "setup"), "localized")
+        val body = success.bodyAsText()
+
+        assertEquals(HttpStatusCode.OK, success.status)
+        assertEquals("zh-Hans", success.headers[HttpHeaders.ContentLanguage])
+        assertTrue(body.contains("<html lang=\"zh-Hans\""))
+        assertTrue(body.contains("已配置 Home Assistant"))
+        assertTrue(body.contains("继续 &amp; 返回"))
+        assertTrue(body.contains("href=\"/setup?lang=zh-Hans\""))
+        assertTrue(body.contains("location.assign(\"/setup?lang=zh-Hans\")"))
+    }
+
+    @Test fun `claimed failure is localized but pre-claim failures disclose no stored context`() = testApplication {
+        val harness = Harness().apply {
+            context = HaOAuthStartContext(
+                locale = "de",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                preserveExplicitEnglish = false,
+                copy = localizedCopy(),
+                contentLanguages = setOf("de"),
+            )
+        }
+        application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
+
+        val cancelledUrl = start(client, uiLocale = "de-DE", returnSurface = "setup")
+        val cancelled = client.get(
+            "/api/v1/ha/oauth/callback?state=${state(cancelledUrl)}&error=access_denied",
+        ) { panelHost() }
+        assertEquals("de", cancelled.headers[HttpHeaders.ContentLanguage])
+        assertTrue(cancelled.bodyAsText().contains("Anmeldung abgebrochen"))
+        assertTrue(cancelled.bodyAsText().contains("Zurück zur Einrichtung"))
+        assertTrue(cancelled.bodyAsText().contains("href=\"/setup?lang=de\""))
+
+        val wrongOriginUrl = start(client, uiLocale = "de", returnSurface = "setup")
+        val wrongOrigin = client.get(
+            "/api/v1/ha/oauth/callback?state=${state(wrongOriginUrl)}&code=secret",
+        ) { header(HttpHeaders.Host, "other.local:8888") }
+        assertEquals("en", wrongOrigin.headers[HttpHeaders.ContentLanguage])
+        assertTrue(wrongOrigin.bodyAsText().contains("<html lang=\"en\""))
+        assertTrue(wrongOrigin.bodyAsText().contains("different panel address"))
+        assertFalse(wrongOrigin.bodyAsText().contains("Anmeldung abgebrochen"))
+    }
+
+    @Test fun `OAuth return context admits only canonical locales and closed destinations`() {
+        assertEquals(
+            "/setup?lang=en",
+            HaOAuthStartContext(
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                preserveExplicitEnglish = true,
+            ).returnPath(),
+        )
+        assertEquals(
+            "/configure?lang=fr#cfg-ha_url",
+            HaOAuthStartContext(locale = "fr").returnPath(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            HaOAuthStartContext(locale = "fr-FR")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HaOAuthStartContext(preserveExplicitEnglish = true)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HaOAuthStartContext(
+                locale = "fr",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                preserveExplicitEnglish = true,
+            )
+        }
+        assertEquals(
+            HaOAuthStartSelection("zh-Hans", HaOAuthReturnSurface.SETUP, false),
+            oauthStartSelection("zh-CN", "setup", null),
+        )
+        assertEquals(
+            HaOAuthStartSelection("en", HaOAuthReturnSurface.CONFIGURE, false),
+            oauthStartSelection("de", "https://attacker.example", null),
+        )
+        assertEquals(
+            HaOAuthStartSelection("en", HaOAuthReturnSurface.CONFIGURE, false),
+            oauthStartSelection("en", "setup", "true"),
+        )
+        assertEquals(null, oauthStartSelection(null, null, null))
+        assertEquals(
+            HaOAuthStartSelection("en", HaOAuthReturnSurface.CONFIGURE, false),
+            oauthStartSelection("en-XA", "setup", null, allowPseudo = false),
+        )
+        assertEquals(
+            HaOAuthStartSelection("en-XA", HaOAuthReturnSurface.SETUP, false),
+            oauthStartSelection("en-XA", "setup", null, allowPseudo = true),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            HaOAuthStartContext(locale = "de", contentLanguages = setOf("fr"))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HaOAuthStartContext(locale = "de", contentLanguages = emptySet())
+        }
+    }
+
+    @Test fun `mixed callback copy reports requested locale and English fallback in stable order`() = testApplication {
+        val harness = Harness().apply {
+            context = HaOAuthStartContext(
+                locale = "de",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                copy = localizedCopy(),
+                contentLanguages = linkedSetOf("en", "de"),
+            )
+        }
+        application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
+
+        val response = callback(client, start(client, uiLocale = "de", returnSurface = "setup"), "mixed")
+
+        assertEquals("de, en", response.headers[HttpHeaders.ContentLanguage])
+        assertTrue(response.bodyAsText().contains("已配置 Home Assistant"))
+        assertTrue(response.bodyAsText().contains(HaOAuthCallbackCopy.ENGLISH.configured))
+    }
+
+    @Test fun `mismatched localized context fails closed to complete English Configure context`() = testApplication {
+        val harness = Harness().apply {
+            context = HaOAuthStartContext(
+                locale = "de",
+                returnSurface = HaOAuthReturnSurface.SETUP,
+                copy = localizedCopy(),
+                contentLanguages = setOf("de"),
+            )
+        }
+        application { routing { route("/api/v1") { haOAuthRoutes(harness.dependencies()) } } }
+
+        val response = callback(client, start(client, uiLocale = "fr", returnSurface = "setup"), "mismatch")
+        val body = response.bodyAsText()
+
+        assertEquals("en", response.headers[HttpHeaders.ContentLanguage])
+        assertTrue(body.contains("<html lang=\"en\""))
+        assertTrue(body.contains("Home Assistant configured"))
+        assertTrue(body.contains("href=\"/configure#cfg-ha_url\""))
+        assertFalse(body.contains("已配置"))
+    }
+
     @Test fun `a newer start during exchange makes the claimed callback stale`() = testApplication {
         val harness = Harness()
         harness.enforceCurrentEpoch = true
@@ -247,15 +413,22 @@ class HaOAuthRoutesTest {
         )
         var exchangeResult: HaLink.AuthorizationCodeExchange = HaLink.AuthorizationCodeExchange.Success(TOKENS)
         var completionResult: HaOAuthCompletion = HaOAuthCompletion.Success()
+        var context: HaOAuthStartContext = HaOAuthStartContext.ENGLISH_CONFIGURE
 
-        fun startAttempt(haUrl: String, origin: String): HaOAuthStart {
+        fun startAttempt(
+            haUrl: String,
+            origin: String,
+            startContext: HaOAuthStartContext = HaOAuthStartContext.LEGACY_ENGLISH_CONFIGURE,
+        ): HaOAuthStart {
             starts++
-            return flow.start(haUrl, origin, HaOAuthAttemptAuthority(OWNER, ++epoch))
+            return flow.start(haUrl, origin, HaOAuthAttemptAuthority(OWNER, ++epoch), startContext)
         }
 
         fun dependencies() = HaOAuthRouteDependencies(
             panelPort = 8888,
-            start = ::startAttempt,
+            start = { haUrl, origin -> startAttempt(haUrl, origin) },
+            startWithContext = ::startAttempt,
+            startContext = { context },
             claim = flow::claim,
             exchange = { attempt, _ -> exchanges++; onExchange?.invoke(attempt); exchangeResult },
             complete = { attempt, _ ->
@@ -270,6 +443,15 @@ class HaOAuthRoutesTest {
         val OWNER = HaAuthOwner("", "", "", "")
         val TOKENS = HaLink.OAuthTokens("access", "refresh", 3_600L)
 
+        fun localizedCopy() = HaOAuthCallbackCopy.ENGLISH.copy(
+            successHeading = "已配置 Home Assistant",
+            failureHeading = "Home Assistant Anmeldung nicht abgeschlossen",
+            continueAction = "继续 & 返回",
+            backToConfigureAction = "Zurück zur Konfiguration",
+            backToSetupAction = "Zurück zur Einrichtung",
+            cancelled = "Anmeldung abgebrochen.",
+        )
+
         fun tokenChar(index: Int): String = ('a'.code + index).toChar().toString()
 
         fun io.ktor.client.request.HttpRequestBuilder.panelHost() {
@@ -279,11 +461,18 @@ class HaOAuthRoutesTest {
         suspend fun start(
             client: io.ktor.client.HttpClient,
             haUrl: String = "https://ha.example",
+            uiLocale: String? = null,
+            returnSurface: String? = null,
+            preserveExplicitEnglish: Boolean = false,
         ): String {
             val response = client.post("/api/v1/ha/oauth/start") {
                 panelHost()
                 header(HttpHeaders.ContentType, ContentType.Application.FormUrlEncoded.toString())
-                setBody("ha_url=" + java.net.URLEncoder.encode(haUrl, "UTF-8"))
+                val fields = mutableListOf("ha_url=" + java.net.URLEncoder.encode(haUrl, "UTF-8"))
+                uiLocale?.let { fields += "$HA_OAUTH_UI_LOCALE_FIELD=" + java.net.URLEncoder.encode(it, "UTF-8") }
+                returnSurface?.let { fields += "$HA_OAUTH_RETURN_SURFACE_FIELD=" + java.net.URLEncoder.encode(it, "UTF-8") }
+                if (preserveExplicitEnglish) fields += "$HA_OAUTH_PRESERVE_ENGLISH_FIELD=1"
+                setBody(fields.joinToString("&"))
             }
             assertEquals(HttpStatusCode.OK, response.status)
             return JSONObject(response.bodyAsText()).getString("authorization_url")

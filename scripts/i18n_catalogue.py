@@ -68,6 +68,8 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "logs.source.system"): "System",
     ("de", "logs.state.app_live"): "App · live",
     ("de", "logs.state.system_live"): "System · live",
+    ("de", "setup.progress.name"): "Name",
+    ("de", "setup.progress.server"): "Server",
     ("de", "shell.nav.dashboard"): "Dashboard",
     ("es", "logs.level.error"): "Error+",
     ("es", "logs.level.info"): "Info+",
@@ -99,6 +101,8 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("it", "settings.dashboard_zoom.label"): "Zoom (%)",
     ("it", "settings.mqtt_password.label"): "Password",
     ("it", "settings.zigbee_router.label"): "Router Zigbee",
+    ("it", "setup.mqtt.password.label"): "Password",
+    ("it", "setup.progress.server"): "Server",
 }
 TARGET_LITERAL_EXCEPTIONS = {
     ("zh-Hans", "settings.camera_exposure.help"): ("EV",),
@@ -106,6 +110,7 @@ TARGET_LITERAL_EXCEPTIONS = {
     ("zh-Hans", "settings.voice_enabled.help"): ("Assist",),
     ("zh-Hans", "settings.voice_pipelines.help"): ("Assist", "ID"),
     ("zh-Hans", "settings.webview_auto_update.help"): ("Google Play",),
+    ("zh-Hans", "setup.mqtt.help.body"): ("broker",),
 }
 CONTEXT_ROOT_KEYS = {
     "schema", "id", "productContext", "instruction", "license", "notice", "sources", "terms",

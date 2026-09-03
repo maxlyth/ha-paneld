@@ -453,6 +453,10 @@ body.hdr-hide-brand .hdr .brand{display:none}
 .wiz-fld>b{display:block;margin-bottom:5px;font-size:.92rem}
 .wiz-fld>small{display:block;color:var(--dim);margin-top:5px;line-height:1.45}
 .wiz-consequence{color:var(--dim);font-size:.88rem;line-height:1.5;margin:10px 0 0;border-left:3px solid var(--divider);padding-left:10px}
+/* Live entity-id preview and wizard banners can contain maximum-length entity IDs or opaque backend
+   values with no break opportunities. Keep those values inside the Setup card without changing the
+   wrapping policy of banners on the other management pages. */
+.wiz-preview,.wiz .setup{overflow-wrap:anywhere;word-break:break-word}
 /* Live entity-id preview: the consequence of the panel-id choice, shown rather than explained. */
 .wiz-preview{margin:8px 0 0;padding:8px 10px;background:var(--input-bg);border:1px solid var(--divider);border-radius:8px;font:.8rem/1.6 ui-monospace,Menlo,Consolas,monospace;color:var(--dim)}
 .wiz-preview b{color:var(--text);font-weight:600}

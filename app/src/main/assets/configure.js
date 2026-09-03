@@ -382,10 +382,17 @@
     haOauthAuthorizationUrl = "";
     haOauthTargetUrl = "";
     haOauthLinks.hidden = true;
+    var oauthLocale = window.HaI18n && typeof window.HaI18n.locale === "string"
+      ? window.HaI18n.locale : (document.documentElement.lang || "en");
     fetch("/api/v1/ha/oauth/start", {
       method: "POST",
       headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ ha_url: target }).toString()
+      body: new URLSearchParams({
+        ha_url: target,
+        ui_locale: oauthLocale,
+        return_surface: "configure",
+        preserve_explicit_english: new URLSearchParams(location.search).has("lang") && oauthLocale === "en" ? "1" : "0"
+      }).toString()
     }).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
         if (!response.ok || !body.authorization_url) {

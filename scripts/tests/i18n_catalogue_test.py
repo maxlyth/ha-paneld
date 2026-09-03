@@ -721,6 +721,11 @@ class CatalogueTest(unittest.TestCase):
         latin_locales = ("de", "es", "fr", "it")
         catalogue_dir = SCRIPT.parents[1] / "app/src/main/assets/i18n"
         source = i18n.validate_source(catalogue_dir / "en.json")
+        for pair, expected in {
+            ("de", "setup.progress.name"): "Name",
+            ("de", "setup.progress.server"): "Server",
+        }.items():
+            self.assertEqual(expected, i18n.UNCHANGED_TARGET_EXCEPTIONS.get(pair))
         for (locale, key), text in i18n.UNCHANGED_TARGET_EXCEPTIONS.items():
             target = i18n.validate_target(
                 catalogue_dir / f"{locale}.json",
@@ -788,6 +793,16 @@ class CatalogueTest(unittest.TestCase):
         ):
             with self.subTest(key=key, text=text), self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target_language(key, text, "zh-Hans", voice)
+
+        mqtt_help = source["strings"]["setup.mqtt.help.body"]
+        reviewed = "请在 Home Assistant 中打开 Mosquitto broker。"
+        i18n.validate_target_language("setup.mqtt.help.body", reviewed, "zh-Hans", mqtt_help)
+        for key, text in (
+            ("setup.mqtt.help.title", reviewed),
+            ("setup.mqtt.help.body", reviewed.replace("broker", "brokers")),
+        ):
+            with self.subTest(key=key, text=text), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_language(key, text, "zh-Hans", mqtt_help)
 
     def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
         with tempfile.TemporaryDirectory() as directory:

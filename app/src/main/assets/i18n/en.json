@@ -11328,6 +11328,174 @@
       "softMaxChars": 16,
       "hardMaxChars": 32
     },
+    "oauth.callback.action.back_to_configure": {
+      "text": "Back to Configure",
+      "sourceHash": "a0f4256308c84cf409a7cb89b9e26df1dfd97c0ca01d8ecca683942416b7d2d3",
+      "surface": "setup",
+      "context": "Browser OAuth callback action returning to the localized ha-paneld Configure tab.",
+      "risk": "ordinary",
+      "siblings": ["oauth.callback.action.back_to_setup", "oauth.callback.action.continue"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 28,
+      "hardMaxChars": 44
+    },
+    "oauth.callback.action.back_to_setup": {
+      "text": "Back to Setup",
+      "sourceHash": "36118dce42fa127b083224f02006ded929b453e30a8d6fa8e6e8d6b4a9685469",
+      "surface": "setup",
+      "context": "Browser OAuth callback action returning to the localized guided Setup wizard.",
+      "risk": "ordinary",
+      "siblings": ["oauth.callback.action.back_to_configure", "oauth.callback.action.continue"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "oauth.callback.action.continue": {
+      "text": "Continue",
+      "sourceHash": "31fbef162594de01bab0cd525c51f74de7bcb15063029fa1a54b2cf5944c80d8",
+      "surface": "setup",
+      "context": "Browser OAuth callback action after a successful sign-in.",
+      "risk": "ordinary",
+      "siblings": ["oauth.callback.action.back_to_configure", "oauth.callback.action.back_to_setup"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 16,
+      "hardMaxChars": 28
+    },
+    "oauth.callback.ambient_warning": {
+      "text": "Home Assistant is configured, but the selected ambient-light source needs attention.",
+      "sourceHash": "c78fcf2f6d3db79e150a52552aea094c1fa8af3dad4accfd061ef4a5dc5fa251",
+      "surface": "setup",
+      "context": "Browser OAuth callback after a successful sign-in; optional warning suffix when the selected ambient-light source needs attention.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.configured", "oauth.callback.reload_may_be_needed"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 112,
+      "hardMaxChars": 160
+    },
+    "oauth.callback.cancelled": {
+      "text": "Home Assistant sign-in was cancelled.",
+      "sourceHash": "bc6f63caa4e9e3e6944cd829484eccb083e4340234b12c7aad3f9476fc7bbd5d",
+      "surface": "setup",
+      "context": "Browser OAuth callback after Home Assistant reports that the user cancelled sign-in.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.invalid_code", "oauth.callback.rejected"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 56,
+      "hardMaxChars": 80
+    },
+    "oauth.callback.commit_failed": {
+      "text": "The panel could not save this sign-in. Start a new sign-in.",
+      "sourceHash": "14adb3c9d684fccb2b5060d61f59d9b3f97eadc3a3984e60aa605c6ae186aa06",
+      "surface": "setup",
+      "context": "Browser OAuth callback when valid Home Assistant credentials could not be committed; Configure names the localized ha-paneld tab.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.stale", "oauth.callback.transient"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 104,
+      "hardMaxChars": 148
+    },
+    "oauth.callback.configured": {
+      "text": "Home Assistant is configured.",
+      "sourceHash": "2b0d8802f485ff8b0e8f11a506d4eded08ab990ff9c10a4f9b44b7f3bd9973d1",
+      "surface": "setup",
+      "context": "Browser OAuth callback after a successful sign-in; primary confirmation sentence.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.ambient_warning", "oauth.callback.reload_may_be_needed"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 44,
+      "hardMaxChars": 64
+    },
+    "oauth.callback.failure_heading": {
+      "text": "Home Assistant sign-in not completed",
+      "sourceHash": "307ec132c2f53423bf416be9f90cbb2a20b3c17c07f404691b1a126869831d80",
+      "surface": "setup",
+      "context": "Browser OAuth callback heading when a claimed sign-in attempt does not complete.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.success_heading"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 52,
+      "hardMaxChars": 76
+    },
+    "oauth.callback.invalid_code": {
+      "text": "Home Assistant did not return a valid sign-in code.",
+      "sourceHash": "d4985ef9c7cd04e3f6e9fdb41bcd3eb60f0a8779ef26c634e9d311a326301bd8",
+      "surface": "setup",
+      "context": "Browser OAuth callback when Home Assistant returns no usable authorization code.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.cancelled", "oauth.callback.rejected"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 72,
+      "hardMaxChars": 104
+    },
+    "oauth.callback.rejected": {
+      "text": "Home Assistant did not accept this sign-in. Start a new sign-in.",
+      "sourceHash": "0c42e20662969717f5ccd5148ec3f479107e7adc49c7c7bc96e24581f3d1d30a",
+      "surface": "setup",
+      "context": "Browser OAuth callback when Home Assistant rejects the authorization-code exchange; Configure names the localized ha-paneld tab.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.cancelled", "oauth.callback.invalid_code"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 112,
+      "hardMaxChars": 160
+    },
+    "oauth.callback.reload_may_be_needed": {
+      "text": "The dashboard may need a manual reload.",
+      "sourceHash": "4b4b7b8ab047d3e32f58824bb9e92f45928bfdf5a26e9c78615758b7f778d647",
+      "surface": "setup",
+      "context": "Browser OAuth callback after a successful sign-in; optional operational suffix.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.ambient_warning", "oauth.callback.configured"],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 60,
+      "hardMaxChars": 88
+    },
+    "oauth.callback.stale": {
+      "text": "Home Assistant settings changed while sign-in was open. Start a new sign-in.",
+      "sourceHash": "453e015499c34d971376e4670845e3b60943c834fdd580b9731ff407b4352467",
+      "surface": "setup",
+      "context": "Browser OAuth callback when Home Assistant settings changed during the attempt; Configure names the localized ha-paneld tab.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.commit_failed", "oauth.callback.transient"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 128,
+      "hardMaxChars": 180
+    },
+    "oauth.callback.success_heading": {
+      "text": "Home Assistant configured",
+      "sourceHash": "1f27f6d6853c921607e96982dd0ce5661e0df8d0cdebee3adefa58ec1bc5179d",
+      "surface": "setup",
+      "context": "Browser OAuth callback heading after a successful sign-in.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.failure_heading"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 40,
+      "hardMaxChars": 60
+    },
+    "oauth.callback.transient": {
+      "text": "The panel could not complete sign-in. Check its Home Assistant connection and try again.",
+      "sourceHash": "b82711df2e8cca03acbe44eb3d653f4de11b47e54170f363ac5474dc91f853ef",
+      "surface": "setup",
+      "context": "Browser OAuth callback when the panel cannot complete the Home Assistant exchange because of a transient problem.",
+      "risk": "setup",
+      "siblings": ["oauth.callback.commit_failed", "oauth.callback.stale"],
+      "placeholders": [],
+      "frozen": ["Home Assistant"],
+      "softMaxChars": 120,
+      "hardMaxChars": 172
+    },
     "settings.auto_brightness.help": {
       "text": "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
@@ -13403,6 +13571,3319 @@
       "frozen": ["Zigbee"],
       "softMaxChars": 32,
       "hardMaxChars": 32
+    },
+    "setup.action.panel_dashboard": {
+      "text": "Panel dashboard",
+      "sourceHash": "3db3c314463f71ee6dfd052b3b46cdd2851593ad49f19dcac17289eae7969c00",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; action label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.action.save_continue"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.action.save_continue": {
+      "text": "Save and continue",
+      "sourceHash": "6880daf172a2e6c51f2de1720698f696b73bac86b4b73f3c281f63d1113dc869",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; action label.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.action.panel_dashboard"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.area.admin_help": {
+      "text": "Where this panel lives. Home Assistant uses areas to build dashboards automatically.",
+      "sourceHash": "e8def03c2693689cc85bed2fd7666da8ee99749f36848ef921c5d30df1ce8494",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.label",
+        "setup.area.locked_note",
+        "setup.area.non_admin_help",
+        "setup.area.none",
+        "setup.area.none_yet"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.area.label": {
+      "text": "Set the HA Area that your panel is in",
+      "sourceHash": "4e7a4dcffefda5ae807e8f0bd8f42e71f78354cdd1ad7f9ce2eb3530c5d0d12e",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.admin_help",
+        "setup.area.locked_note",
+        "setup.area.non_admin_help",
+        "setup.area.none",
+        "setup.area.none_yet"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "HA"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.area.locked_note": {
+      "text": "This panel is already registered in Home Assistant, so its area can only be changed there by an HA admin user — this panel will follow whatever is set.",
+      "sourceHash": "010860028168077f6b7e67b81e55c6c980c27d1012f3bd4426c56af0110c5700",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.admin_help",
+        "setup.area.label",
+        "setup.area.non_admin_help",
+        "setup.area.none",
+        "setup.area.none_yet"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "HA"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.area.non_admin_help": {
+      "text": "Where this panel lives. Your choice is saved and applies when the panel registers, or when a Home Assistant admin next signs in.",
+      "sourceHash": "a1a82f6c7a40fc0939b547dd53868e25454b5b5ced02fc1ccfbe97283d33f168",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.admin_help",
+        "setup.area.label",
+        "setup.area.locked_note",
+        "setup.area.none",
+        "setup.area.none_yet"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.area.none": {
+      "text": "No area",
+      "sourceHash": "3fd59f11b54e96933a2b02aa304ac4702497072e362651bddfe49cffc8ba393d",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.admin_help",
+        "setup.area.label",
+        "setup.area.locked_note",
+        "setup.area.non_admin_help",
+        "setup.area.none_yet"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.area.none_yet": {
+      "text": "No area yet — pick one",
+      "sourceHash": "b4db738a6df76b81c63a39c1bd6aa29b427e08ba267ffa3941d830533d1384b8",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.area.admin_help",
+        "setup.area.label",
+        "setup.area.locked_note",
+        "setup.area.non_admin_help",
+        "setup.area.none"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.attest.lead": {
+      "text": "The dashboard app manages its own connection, so only you can confirm this.",
+      "sourceHash": "1e568c7ed3d6d14ef69f35b5374fffcb203b626b66f22ac1db1731bc1782f830",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.attest.no",
+        "setup.attest.title",
+        "setup.attest.yes"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.attest.no": {
+      "text": "No — it’s blank or wrong",
+      "sourceHash": "ef3c7d7d0f3d50f8afa0b6ec09fb18e59dcce91bbcb4dbb96cf461cfee792c7d",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.attest.lead",
+        "setup.attest.title",
+        "setup.attest.yes"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.attest.title": {
+      "text": "Is your dashboard on the panel now?",
+      "sourceHash": "8938631d2dfc617ea0caaa45f7d0fb698146852f1728438fb67cf4dba81e1cc3",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.attest.lead",
+        "setup.attest.no",
+        "setup.attest.yes"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.attest.yes": {
+      "text": "Yes, it’s there",
+      "sourceHash": "577b22597b20c5d1bf65a7968a8292c2212be4319337e6c6b14f597295ea433d",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.attest.lead",
+        "setup.attest.no",
+        "setup.attest.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.dashboard.action.follow_default": {
+      "text": "Follow the account’s default",
+      "sourceHash": "6c6cfb2c5bf349ea601bc08b9f6737cd027a15697c3e5012db95d114b8bff1a8",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.action.use"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.dashboard.action.use": {
+      "text": "Use this dashboard",
+      "sourceHash": "d9395d97350965b957bc22b70c2465e8faf01cfbac479a9cc0986da7db0bfda7",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.action.follow_default"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.dashboard.error.choose_first": {
+      "text": "Pick a dashboard first.",
+      "sourceHash": "f96d635d9ea8cdd2ed22f3eb6d2a265459c97fe3d3a08e5df971d119f1205958",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.dashboard.error.path_required"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.dashboard.error.path_required": {
+      "text": "Enter a dashboard path, for example /dashboard-name/tab-name.",
+      "sourceHash": "c0ae666863efc9c5ed525ca0de61951df35d2da243668d71cc3a42a90a71bbe8",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.dashboard.error.choose_first"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "/dashboard-name/tab-name"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.dashboard.fetch_failed.continue": {
+      "text": "Continue with the account’s default below.",
+      "sourceHash": "bacf492386070db8a7643fa9a7eb1431691747007576c440d2223ac2fdc2cd18",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.fetch_failed.explanation",
+        "setup.dashboard.fetch_failed.retry",
+        "setup.dashboard.fetch_failed.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.fetch_failed.explanation": {
+      "text": "That can happen right after signing in.",
+      "sourceHash": "f0c4e217c9fae5b20583b49878cbd3abbd5d75bd688dac4d979f4dc4fb8ae8ea",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; explanatory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.fetch_failed.continue",
+        "setup.dashboard.fetch_failed.retry",
+        "setup.dashboard.fetch_failed.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.fetch_failed.retry": {
+      "text": "Try again",
+      "sourceHash": "d8b8392e2c542950ca64867168e4ef87d4ad606882d5898f826b51c6d553988f",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.fetch_failed.continue",
+        "setup.dashboard.fetch_failed.explanation",
+        "setup.dashboard.fetch_failed.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.dashboard.fetch_failed.title": {
+      "text": "Couldn’t fetch the dashboard list from Home Assistant yet.",
+      "sourceHash": "2482fdeca1c4575dd6b57bf9cf7ee85c092eb6b631b66e0debe43958f7e8e6fe",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.fetch_failed.continue",
+        "setup.dashboard.fetch_failed.explanation",
+        "setup.dashboard.fetch_failed.retry"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.dashboard.group.ha": {
+      "text": "Home Assistant dashboards",
+      "sourceHash": "3fc2a7583aa9e04b174dc19dc792089a3bd00e4e1d1081077f2a2904f566462b",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection group.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.group.user"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.dashboard.group.user": {
+      "text": "Your dashboards",
+      "sourceHash": "1eae7261ac3538d5d912509465916c3a33d7fad19970a0ce27d53c37ba115203",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection group.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.group.ha"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.dashboard.lead": {
+      "text": "The dashboard this panel keeps returning to — after a reload, after idle, on boot.",
+      "sourceHash": "a704ac0a80953f11601df013cacc7a9b2d6669530a77eb7d8820817644d3099f",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.no_default",
+        "setup.dashboard.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.dashboard.no_default": {
+      "text": "This account has no default dashboard set — pick the dashboard this panel should show.",
+      "sourceHash": "d491bed061c60e1745eb3212c40ff7fd554851354c2d8b4d9c8a31b873f65ec8",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.lead",
+        "setup.dashboard.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.dashboard.none_accessible.explanation": {
+      "text": "Create a dashboard or grant this account access, then try again.",
+      "sourceHash": "c7f65239bab0c1cc6264841d55afb782b46cab2887d5091dbc9fcb36d772bdde",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; explanatory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.none_accessible.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.dashboard.none_accessible.title": {
+      "text": "This account cannot access any Home Assistant dashboards.",
+      "sourceHash": "ebfd039978b9ba39ae291eb2cde865e667caca70c22ebc63eefeb788d129e86d",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.none_accessible.explanation"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.dashboard.option.auto_default": {
+      "text": "Auto — follow this account’s default",
+      "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection option.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.option.auto_none",
+        "setup.dashboard.option.choose",
+        "setup.dashboard.option.custom"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.option.auto_none": {
+      "text": "Auto — no default set for this account",
+      "sourceHash": "7b82f22b1413e07c8671b4d4a7b847856157697f2b735396d3b9af343799326c",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection option.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.option.auto_default",
+        "setup.dashboard.option.choose",
+        "setup.dashboard.option.custom"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.option.choose": {
+      "text": "Choose a dashboard…",
+      "sourceHash": "f5b194568dd03790bb8a8b1afdb5d170330c3ebb00148c0250743823a61541c5",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection option.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.option.auto_default",
+        "setup.dashboard.option.auto_none",
+        "setup.dashboard.option.custom"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.dashboard.option.custom": {
+      "text": "Custom — enter a dashboard path…",
+      "sourceHash": "354213584eda4f955950c5954d8ffd233f23e57b87147153f0c369d21d2390f4",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; selection option.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.option.auto_default",
+        "setup.dashboard.option.auto_none",
+        "setup.dashboard.option.choose"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.path.help": {
+      "text": "A path on this Home Assistant, starting with a dashboard from the list.",
+      "sourceHash": "031e231cf22729051dca86224a935cc74e6f20675d88ce414ce2b3fe2cefa899",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.path.label",
+        "setup.dashboard.path.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.dashboard.path.label": {
+      "text": "Dashboard path",
+      "sourceHash": "08e0f39c31b74ee65647b268f819ae96f3669dc62daa2345760e91b396585937",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.path.help",
+        "setup.dashboard.path.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.dashboard.path.unknown": {
+      "text": "{root} is not a dashboard this account can see — the panel will fall back to its default until that dashboard exists.",
+      "sourceHash": "e371a4824fa6f48df44ac47f2b2a6d4b9f7e16cffb36ccb5fe803d6dfe1dd816",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.path.help",
+        "setup.dashboard.path.label"
+      ],
+      "placeholders": [
+        "{root}"
+      ],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.dashboard.state.fetching": {
+      "text": "Fetching your dashboards from Home Assistant…",
+      "sourceHash": "50c3dfe6b88d6f9d26ed26df8e21d83ac3f96cc0fbe2b0793341cd8498c81c9b",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; live status.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.dashboard.title": {
+      "text": "Select the HA dashboard for this panel",
+      "sourceHash": "6ce8c026eddc7e15e707af0a65d3f2873d4e78e98cec7b4c8a0c7630a27139e1",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant dashboard or area step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.dashboard.lead",
+        "setup.dashboard.no_default"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "HA"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.discovery.found": {
+      "text": "Found on your network: {value}. Change it if that’s not right.",
+      "sourceHash": "1bd3ae94a54c3e9446bb243cd96b0f3e7858f8eac7a9b3900fd7314c90d0627c",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [],
+      "placeholders": [
+        "{value}"
+      ],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.discovery.unavailable.broker_not_on_link": {
+      "text": "We couldn’t find this automatically — Home Assistant is on a different network segment from this panel, and automatic discovery only works within one segment. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "60000992bc1cb98758c2f5c927ddf87b6bf01a5710c6c3ff3872363d37e9fe03",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.error",
+        "setup.discovery.unavailable.generic",
+        "setup.discovery.unavailable.mdns_not_running",
+        "setup.discovery.unavailable.no_multicast_lock",
+        "setup.discovery.unavailable.no_responses_at_all"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.discovery.unavailable.error": {
+      "text": "We couldn’t find this automatically — this panel’s network discovery attempt failed. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "7b47377022930368a5a4c581149b3b9edc3f717bf9d85f617183030d78cf3f68",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; validation error.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.broker_not_on_link",
+        "setup.discovery.unavailable.generic",
+        "setup.discovery.unavailable.mdns_not_running",
+        "setup.discovery.unavailable.no_multicast_lock",
+        "setup.discovery.unavailable.no_responses_at_all"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.discovery.unavailable.generic": {
+      "text": "We couldn’t find this automatically. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "949c67847ab8dd12b8329fefa4a85cdad3d1fc2a816a68f1ddd3e1d7969c902b",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.broker_not_on_link",
+        "setup.discovery.unavailable.error",
+        "setup.discovery.unavailable.mdns_not_running",
+        "setup.discovery.unavailable.no_multicast_lock",
+        "setup.discovery.unavailable.no_responses_at_all"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.discovery.unavailable.mdns_not_running": {
+      "text": "We couldn’t find this automatically — this panel’s network discovery service is not running. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "66d2c8429c4a9b102eff209963011bf3d44e8267ea7457ab8fe72776ccd2d904",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.broker_not_on_link",
+        "setup.discovery.unavailable.error",
+        "setup.discovery.unavailable.generic",
+        "setup.discovery.unavailable.no_multicast_lock",
+        "setup.discovery.unavailable.no_responses_at_all"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.discovery.unavailable.no_multicast_lock": {
+      "text": "We couldn’t find this automatically — this panel cannot receive network discovery traffic. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "6970651bef2273450c24d8ba4c41bfe6846bf04bd61b23345e3f828d1a6de658",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.broker_not_on_link",
+        "setup.discovery.unavailable.error",
+        "setup.discovery.unavailable.generic",
+        "setup.discovery.unavailable.mdns_not_running",
+        "setup.discovery.unavailable.no_responses_at_all"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.discovery.unavailable.no_responses_at_all": {
+      "text": "We couldn’t find this automatically — nothing answered this panel’s discovery request, so Home Assistant may be on another network segment or discovery traffic may be blocked. That’s normal on some networks — type it below; it works exactly the same.",
+      "sourceHash": "8053098bad44436c2f186c4e6285a21ec802cfef2795a96d854fccd765bca37d",
+      "surface": "setup",
+      "context": "Setup wizard local-network discovery result; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.discovery.unavailable.broker_not_on_link",
+        "setup.discovery.unavailable.error",
+        "setup.discovery.unavailable.generic",
+        "setup.discovery.unavailable.mdns_not_running",
+        "setup.discovery.unavailable.no_multicast_lock"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.done.action.configure": {
+      "text": "Configure the panel",
+      "sourceHash": "2fd565639231606a819c15ed7c1f9c2cfae635bb48c2b38a3fa9e57cc282a857",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.action.dashboard"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.done.action.dashboard": {
+      "text": "Panel dashboard",
+      "sourceHash": "3db3c314463f71ee6dfd052b3b46cdd2851593ad49f19dcac17289eae7969c00",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.action.configure"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.done.configure_note": {
+      "text": "Everything else — brightness, sleep, sounds, behaviour — is on the Configure tab, and the defaults are sensible, so there’s nothing you have to change.",
+      "sourceHash": "757739c4bc0ae5e756963d2084fb258949f4e865524355a5bd8482da6a1b1ed6",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.filter_note",
+        "setup.done.taming_intro",
+        "setup.done.taming_link",
+        "setup.done.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.done.filter_note": {
+      "text": "Entity filter is on — it’s learning which entities to show; review the list any time on the Entities tab. The panel’s dashboard may reload a few times in the first minutes while that settles — nothing is wrong.",
+      "sourceHash": "bb421be7eb8fb60a13c614cf636556c3f10a8f2e43f1f78fff1b89eb5be6c559",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.configure_note",
+        "setup.done.taming_intro",
+        "setup.done.taming_link",
+        "setup.done.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.done.status.attested_mqtt": {
+      "text": "MQTT connected · Dashboard confirmed by you.",
+      "sourceHash": "bf75407b2be24c38c564c7301bf294831d3c6747ffa74c6af2b96efec3b73816",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; completion status.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.status.attested_no_mqtt",
+        "setup.done.status.rendering_mqtt",
+        "setup.done.status.rendering_no_mqtt"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "MQTT"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.done.status.attested_no_mqtt": {
+      "text": "Dashboard confirmed by you.",
+      "sourceHash": "ba90b9105459a9d9d2fb652b2358f0f42af7732d1f1cafe7cdf64e1e0e8bd879",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; completion status.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.status.attested_mqtt",
+        "setup.done.status.rendering_mqtt",
+        "setup.done.status.rendering_no_mqtt"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.done.status.rendering_mqtt": {
+      "text": "MQTT connected · Home Assistant is rendering on the panel.",
+      "sourceHash": "03a4e83b75b9f9913caca04ebcc4c9649179c283a50a7d37682467d4fe41ebcb",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; completion status.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.status.attested_mqtt",
+        "setup.done.status.attested_no_mqtt",
+        "setup.done.status.rendering_no_mqtt"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "MQTT"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.done.status.rendering_no_mqtt": {
+      "text": "Home Assistant is rendering on the panel.",
+      "sourceHash": "dcd8160cc85f6016d90daf4256a58f4434aa6b9718c3fa0f258323b3d9fa2234",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; completion status.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.status.attested_mqtt",
+        "setup.done.status.attested_no_mqtt",
+        "setup.done.status.rendering_mqtt"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.done.taming_intro": {
+      "text": "Optional: panels often ship with vendor apps that pop up over the dashboard. ha-paneld can quieten them.",
+      "sourceHash": "df51327092a8655bdb336547196c85ecc908233391c308ae6085a8e18c2519b8",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.configure_note",
+        "setup.done.filter_note",
+        "setup.done.taming_link",
+        "setup.done.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "ha-paneld"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.done.taming_link": {
+      "text": "Package taming is on the Install tab.",
+      "sourceHash": "956a23e9e8dd79a2ed5b094a9725e0ac7d1dbaccd3ca53d7c5389c8faaaaaa89",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.configure_note",
+        "setup.done.filter_note",
+        "setup.done.taming_intro",
+        "setup.done.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.done.title": {
+      "text": "✓ This panel is set up",
+      "sourceHash": "c6ad1bbcbe7c666057dd4fb83add8e06c1d7b2d57ec8fd18222ab62bed902316",
+      "surface": "setup",
+      "context": "Setup wizard completion summary; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.done.configure_note",
+        "setup.done.filter_note",
+        "setup.done.taming_intro",
+        "setup.done.taming_link"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.error.approval_required": {
+      "text": "Approve this request on the panel, then save again.",
+      "sourceHash": "f13edc21eed9b6db17aafc75e5fdd3e20121e23c18732d4ececf3bc3a40d3f99",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.error.http_refused",
+        "setup.error.panel_unreachable"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.error.http_refused": {
+      "text": "The panel refused this (HTTP {status}).",
+      "sourceHash": "d643704f298cf69c67b9220ee7cc8736b29796a7ad39cffb95b424da6dc3842e",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.error.approval_required",
+        "setup.error.panel_unreachable"
+      ],
+      "placeholders": [
+        "{status}"
+      ],
+      "frozen": [
+        "HTTP"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.error.panel_unreachable": {
+      "text": "Couldn’t reach the panel — check the connection and try again.",
+      "sourceHash": "2be3f1e8e9d75bdb27791e7cee16ede79bd5a9937932171579180c443e4d8f15",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.error.approval_required",
+        "setup.error.http_refused"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.filter.action.disable": {
+      "text": "Load the dashboard unfiltered",
+      "sourceHash": "104b78f4c5f5a5e6078e2d76d7dd8f8f55d30190ce2c5d2fc827c403a28305b3",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; action label.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.filter.action.enable",
+        "setup.filter.action.enabling",
+        "setup.filter.action.loading"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.action.enable": {
+      "text": "Turn on filtering and load the dashboard",
+      "sourceHash": "971afbafc8f8aa4d42da3bd871a938fb56376601e0685d462133c1abbd925608",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; action label.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.filter.action.disable",
+        "setup.filter.action.enabling",
+        "setup.filter.action.loading"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.action.enabling": {
+      "text": "Turning on filtering…",
+      "sourceHash": "812de48bdc29e7d077d3a4ae9ff11c6990d765db65345ffca18ee4de98f03cd9",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.action.disable",
+        "setup.filter.action.enable",
+        "setup.filter.action.loading"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.filter.action.loading": {
+      "text": "Loading the dashboard…",
+      "sourceHash": "3718517a80b70e19a3975ba60bf6b8d4c11bd0473c47c2763a244ac8cb6b2c37",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.action.disable",
+        "setup.filter.action.enable",
+        "setup.filter.action.enabling"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.filter.amber.consequence": {
+      "text": "Unfiltered, the panel spends its time keeping up with entities nothing on screen is showing. You can change this later on the Configure tab.",
+      "sourceHash": "cf4d2d14f40cccfc2e0408e9e8971d30671ce568c0376bd9bf8fb5c1a208b5cc",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.amber.estimated",
+        "setup.filter.amber.head",
+        "setup.filter.amber.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.filter.amber.estimated": {
+      "text": "That is a lot of updates for this chip. We have not measured this exact combination, so this is a judgement from the panel’s hardware and your entity count, not a measurement.",
+      "sourceHash": "f698d9140d4b65655b852cdc2eeb0d7b867ed446f72b8c3e6bc621e467b85e23",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.amber.consequence",
+        "setup.filter.amber.head",
+        "setup.filter.amber.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.filter.amber.head": {
+      "text": "Filtering is worth turning on",
+      "sourceHash": "31b047dcdec300226364773a622ef3a0aa61decc4527e3635d61624a9e2a90fd",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.amber.consequence",
+        "setup.filter.amber.estimated",
+        "setup.filter.amber.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.amber.measured": {
+      "text": "We have measured this chip at about this many entities, and filtering made a clear difference.",
+      "sourceHash": "8f8622081f808b401c15bdf8b47735b82d465b70890ed70a401862bf65f6dd6e",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.amber.consequence",
+        "setup.filter.amber.estimated",
+        "setup.filter.amber.head"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.filter.confidence.counting": {
+      "text": "Counting",
+      "sourceHash": "ce3d843ea3eba387b24e5632e809ccd0f66b46b6e44c8f3d3bb00526185304d8",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.confidence.counting_explanation",
+        "setup.filter.confidence.estimated",
+        "setup.filter.confidence.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.confidence.counting_explanation": {
+      "text": "Reading your entity list. The recommendation will settle when the count finishes.",
+      "sourceHash": "e40620797658003121ff4aa9917df9e43c82e0a4c9071859e03d5a5911756b68",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.confidence.counting",
+        "setup.filter.confidence.estimated",
+        "setup.filter.confidence.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.filter.confidence.estimated": {
+      "text": "Estimated",
+      "sourceHash": "b774599a9cd1f9a734a815fc5cf99ad188547aee7c727468d51b73dfd02988f9",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.confidence.counting",
+        "setup.filter.confidence.counting_explanation",
+        "setup.filter.confidence.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.confidence.measured": {
+      "text": "Measured",
+      "sourceHash": "9298c8f4b3ffb73d86ee1d20f7c954236e534e60c2cfc10adb3c3c35c8365b1d",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.confidence.counting",
+        "setup.filter.confidence.counting_explanation",
+        "setup.filter.confidence.estimated"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.counting.amber": {
+      "text": "Filtering is looking worthwhile",
+      "sourceHash": "b9742823d1bb302729de16a1df81047cc65bfc182c60a65de40dad8289893479",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.counting.green",
+        "setup.filter.counting.red"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.counting.green": {
+      "text": "Counting what Home Assistant would send…",
+      "sourceHash": "6b5df0b503ba9a5a9be2443bfd8c15bebf38664f295d4efa150caead6abccc22",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.counting.amber",
+        "setup.filter.counting.red"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.counting.red": {
+      "text": "Heading past what this panel can keep up with",
+      "sourceHash": "10f1f05a101203f22e8bce7990f866b9f3e70b835af7b87b41c0c0307ad719cb",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.counting.amber",
+        "setup.filter.counting.green"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.details.body": {
+      "text": "The panel asks Home Assistant for updates on a named list of entities instead of all of them. It builds that list by reading your dashboard, then adds anything it sees the dashboard reach for while running. Nothing is hidden from you — the full list is on the Entities tab.",
+      "sourceHash": "c4b530aa8cc08488adebe2f92f8fc727337c654dacbc938cd6f4ca76a133f530",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; explanatory body.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.details.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 460,
+      "hardMaxChars": 620
+    },
+    "setup.filter.details.title": {
+      "text": "What filtering actually does",
+      "sourceHash": "9b2736049ff9acab153954b360afe3987fa67e89b9661da42476e5ec4231dbd8",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.details.body"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.filter.fact.entities": {
+      "text": "Entities in Home Assistant",
+      "sourceHash": "5e4fc2933cb35aa3c344d8b7b146c97698a3ec8c9eac8f2ebf503beba013bbbe",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; summary fact.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.fact.panel"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.filter.fact.panel": {
+      "text": "This panel",
+      "sourceHash": "07b0bb2d72884e16eacd20c0500f0118952f2b0c04adfd3827b66e4286178bf4",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; summary fact.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.filter.fact.entities"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.green.consequence": {
+      "text": "Filtering is still worth turning on — it keeps things quick as your setup grows, and you can change it later on the Configure tab.",
+      "sourceHash": "67d02e994972201b5c55e28b3edba21ffb3384ea23c04611b4eb69b9b2ce2a79",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.green.estimated",
+        "setup.filter.green.head",
+        "setup.filter.green.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.filter.green.estimated": {
+      "text": "This looks like a comfortable load for this panel, judging from its hardware and your entity count.",
+      "sourceHash": "6f9cf269ad55c0089d9f96f723416c2b00ee3de7c320bad14c7c24735d4857e8",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.green.consequence",
+        "setup.filter.green.head",
+        "setup.filter.green.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.filter.green.head": {
+      "text": "Your dashboard should feel fine either way",
+      "sourceHash": "54b026a7c1095c33531c0f58da8880a84f960cd881f5b83ced1beb6cb59fd19d",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.green.consequence",
+        "setup.filter.green.estimated",
+        "setup.filter.green.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.filter.green.measured": {
+      "text": "A panel with this chip handles this many entities without trouble — we have measured it at about this load.",
+      "sourceHash": "d11fd9feb324056b792ba839b42d4c2adf15a6c6d8c0f413cc2a7350a587685d",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.green.consequence",
+        "setup.filter.green.estimated",
+        "setup.filter.green.head"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.filter.lead": {
+      "text": "Home Assistant will send this panel a live update for every entity it can see. Filtering cuts that down to the ones your dashboard actually uses.",
+      "sourceHash": "841a7559f79cb96311a9c33f2e42e34ec4bedb184b281785573bdfa134243366",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.filter.red.consequence": {
+      "text": "You can still load it unfiltered if you want to see the difference for yourself. It will work — it will just feel very slow and laggy.",
+      "sourceHash": "b25e0b2f36ae4dff1d5921b7a9720527a6b5abf33138ab6c17d57e6c6af4d8f0",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.red.estimated",
+        "setup.filter.red.head",
+        "setup.filter.red.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.filter.red.estimated": {
+      "text": "That is far more updates than this chip is likely to keep up with, judging from its hardware and your entity count.",
+      "sourceHash": "3eb153c16c649dab20b33bad67490c249062482521d65fe873d61b11a28a9367",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.red.consequence",
+        "setup.filter.red.head",
+        "setup.filter.red.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.filter.red.head": {
+      "text": "Turn filtering on — this panel will struggle without it",
+      "sourceHash": "446d24e9d116fad39a65894fa0fe3ed52f7f483a85390c0676ea6a5ec4a17df1",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.red.consequence",
+        "setup.filter.red.estimated",
+        "setup.filter.red.measured"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.filter.red.measured": {
+      "text": "We tested this on the same chip with about this many entities. Unfiltered, the part of the panel that draws your dashboard was busy 81% of the time instead of 6%, and it took roughly 60% longer to respond to a touch.",
+      "sourceHash": "7878b513a5c08ab953c30dd50e2cb8d4ec9e39dc3642e450882b53e9809d65f6",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.red.consequence",
+        "setup.filter.red.estimated",
+        "setup.filter.red.head"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "81%",
+        "6%",
+        "60%"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.filter.state.still_counting": {
+      "text": "still counting",
+      "sourceHash": "2f9d1dd836a60e47f175e9820a5fbb45bb7c3e865d090917ffa2442a57ba26bf",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; live status.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.tier.capable": {
+      "text": "A capable panel",
+      "sourceHash": "3a812aa6bcbcbd15613dab61d6053584199869c39ab3767b70be86134ea97987",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.tier.middling",
+        "setup.filter.tier.modest",
+        "setup.filter.tier.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.tier.middling": {
+      "text": "A mid-range panel",
+      "sourceHash": "46e5c272561d6430f34e998251059aabec33f3a41a9ee8db1aba36f8f528446b",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.tier.capable",
+        "setup.filter.tier.modest",
+        "setup.filter.tier.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.filter.tier.modest": {
+      "text": "A modest panel",
+      "sourceHash": "af3d96663112ddcf5b64444f7d71d230ae1ef101bdd4233ab0021d709cb8777c",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.tier.capable",
+        "setup.filter.tier.middling",
+        "setup.filter.tier.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.tier.unknown": {
+      "text": "This panel",
+      "sourceHash": "07b0bb2d72884e16eacd20c0500f0118952f2b0c04adfd3827b66e4286178bf4",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.tier.capable",
+        "setup.filter.tier.middling",
+        "setup.filter.tier.modest"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.filter.title": {
+      "text": "One thing before we load your dashboard",
+      "sourceHash": "61cfd94fb149adcd5e78ab772fa7d11922b55d7b3cc84fe365e202ef242d4d5d",
+      "surface": "setup",
+      "context": "Setup wizard entity-filter recommendation step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.filter.lead"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.frame.loading": {
+      "text": "Loading setup…",
+      "sourceHash": "f0e4e00078be3f48ea68569a89f1abfed01ba10f4f6090cce5f58f2611619e14",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.frame.progress_label",
+        "setup.frame.skip_exit"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.frame.progress_label": {
+      "text": "Setup progress",
+      "sourceHash": "e9b4495ace7263301df379aa8775e027d543b8860baac2b82354d057de9e7656",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.frame.loading",
+        "setup.frame.skip_exit"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.frame.skip_exit": {
+      "text": "Skip and exit the wizard →",
+      "sourceHash": "c1d9cdc6985f3ab46d4ec20644fbdac8d5a68ca0e0a4083a7d3ab399fefa3e91",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.frame.loading",
+        "setup.frame.progress_label"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "→"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.ha_url.error.scheme": {
+      "text": "The URL needs to start with http:// or https://.",
+      "sourceHash": "3ee6ebecdcd3c42228a623102aed95334a9d75ee98d8b8658c99aedfba9752a0",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; validation error.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "URL",
+        "http://",
+        "https://"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.ha_url.help": {
+      "text": "The address you open Home Assistant at, e.g. http://homeassistant.local:8123.",
+      "sourceHash": "c236973b764d018af53248ebd56203ba203f9a875bd7d42418df34aa8bb51570",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.ha_url.label",
+        "setup.ha_url.lead",
+        "setup.ha_url.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "homeassistant.local",
+        "http://homeassistant.local:8123"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.ha_url.label": {
+      "text": "Home Assistant URL",
+      "sourceHash": "d8d89efc512baff4d9d1924b627322b9b007a8c08ed95af6976dfbc684d308fa",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.ha_url.help",
+        "setup.ha_url.lead",
+        "setup.ha_url.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "URL"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.ha_url.lead": {
+      "text": "The built-in dashboard loads straight from your Home Assistant.",
+      "sourceHash": "3d2e4fa5486d2038320ca45ee59ad91670561de7b72ff6718b2340b2da47260d",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.ha_url.help",
+        "setup.ha_url.label",
+        "setup.ha_url.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.ha_url.title": {
+      "text": "Where is Home Assistant?",
+      "sourceHash": "126500fcbadd9986d91fc4d51f440439f6785bdb9e91b34c7f10544468c0aa7e",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.ha_url.help",
+        "setup.ha_url.label",
+        "setup.ha_url.lead"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.identity.error.name_required": {
+      "text": "The panel needs a name — letters and digits.",
+      "sourceHash": "626d6142a57e7fd8de4f4d915ff55619113d6da54ed097c94b7fa64e7bb6f76c",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; validation error.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.identity.friendly_name.help": {
+      "text": "Just the label in Home Assistant. Safe to change any time.",
+      "sourceHash": "c0cb163ff36450f4c08b82bbcc86f62b0906aa096da711e7c455a582dea9e9d7",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.friendly_name.label"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.identity.friendly_name.label": {
+      "text": "Friendly Name",
+      "sourceHash": "073ec5dba8e66ce812d7f817ecc72af2330d9ab22e99d5429d794de3cf5ba4ea",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.friendly_name.help"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.identity.lead": {
+      "text": "A name, your Home Assistant server and sign-in, the dashboard to show, then your MQTT broker — a few quick questions and you’re done. You can stop and come back; nothing is lost.",
+      "sourceHash": "bfc7d286a61350637080e535e4000818caaa3edd74b0ab385f530f0201743e55",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.preview_intro",
+        "setup.identity.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "MQTT"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.identity.panel_id.consequence": {
+      "text": "You can change this later, but it renames every one of those entities, so anything already pointing at them (automations, dashboards, scripts) would need updating too. Most people set it once, here.",
+      "sourceHash": "11391c9e4db33e3d19c5a78512029ed387422d250909887f45dc4564c19d14a4",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.panel_id.help",
+        "setup.identity.panel_id.label"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.identity.panel_id.help": {
+      "text": "Pick something you’ll recognise in a long list — where it is, usually. Lowercase letters, digits and underscores.",
+      "sourceHash": "6b8a1893b1ff302f07af0482468ae3e77a15d0b326a7d1ff3c970b231d48cdea",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.panel_id.consequence",
+        "setup.identity.panel_id.label"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.identity.panel_id.label": {
+      "text": "Panel ID",
+      "sourceHash": "e738d52375d65eb02067cf41e0807c06c4e21f391d5334bb5bed79e9a2e61daf",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.panel_id.consequence",
+        "setup.identity.panel_id.help"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "ID"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.identity.preview_intro": {
+      "text": "Home Assistant will name everything on this panel from it:",
+      "sourceHash": "e7f49c706a6165932f89dfca00f5e5860835e3ac7a7152aba9652ba9a08be786",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.lead",
+        "setup.identity.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.identity.title": {
+      "text": "Name this panel",
+      "sourceHash": "42054cbac53831e343a3982e3c7326fdeb206ef490271d88aaed7b799f5951d4",
+      "surface": "setup",
+      "context": "Setup wizard panel identity step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.identity.lead",
+        "setup.identity.preview_intro"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.action.cancel_edit": {
+      "text": "Cancel and edit these details",
+      "sourceHash": "f23b12931ce871291c67ed2055c72e93362c6ca6b40ea9478c1b3a5d0e39e23e",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; action label.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.action.checking_address",
+        "setup.mqtt.action.checking_connection",
+        "setup.mqtt.action.save_anyway"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.mqtt.action.checking_address": {
+      "text": "Checking the address…",
+      "sourceHash": "4e4170d1a4d2acf6a7f3490e6ed813134358d469376d2d8516cb771927beab25",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.action.cancel_edit",
+        "setup.mqtt.action.checking_connection",
+        "setup.mqtt.action.save_anyway"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.action.checking_connection": {
+      "text": "Checking the connection…",
+      "sourceHash": "33f8dde16b75e05f2f08b6617999a7b6ef2568ee2a6e0fc416c27a76ec13cff7",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.action.cancel_edit",
+        "setup.mqtt.action.checking_address",
+        "setup.mqtt.action.save_anyway"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.action.save_anyway": {
+      "text": "Save anyway",
+      "sourceHash": "ef4c87b5083fbe4867b0bfb4e2575ecb106bdd4612160ef40f8f022c415cbdac",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; action label.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.action.cancel_edit",
+        "setup.mqtt.action.checking_address",
+        "setup.mqtt.action.checking_connection"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.broker.help": {
+      "text": "Usually tcp:// then your Home Assistant’s address and :1883.",
+      "sourceHash": "3cb757053af4d021d4cb57a1d0e71ac958723841508673850218df3a2d55fb6d",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.broker.label"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "tcp://",
+        "1883"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.broker.label": {
+      "text": "Broker URL",
+      "sourceHash": "cad88e3df28153445c8d1c488bc534a1f3e191acf3d636d9c1a5cc734c0f1675",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.broker.help"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "URL"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.error.invalid_address": {
+      "text": "That address isn’t a broker URL the panel can use — it needs tcp:// (or ssl://) and a host.",
+      "sourceHash": "b9add1e3ccf51bf66889b0971c892221981c071133811735c8f221fbd798ee27",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.error.nothing_listening",
+        "setup.mqtt.error.scheme",
+        "setup.mqtt.error.unresolvable"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "tcp://",
+        "ssl://",
+        "URL"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.error.nothing_listening": {
+      "text": "Nothing is listening at {host}:{port} — check the address and port. Press again to save anyway.",
+      "sourceHash": "1033c7bfa571cbb694463132fd61755a77712535237c1d9263a51eec29295cfe",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.error.invalid_address",
+        "setup.mqtt.error.scheme",
+        "setup.mqtt.error.unresolvable"
+      ],
+      "placeholders": [
+        "{host}",
+        "{port}"
+      ],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.error.scheme": {
+      "text": "The broker URL needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883.",
+      "sourceHash": "6b4f430225e310e979907a561eecf28a5269e3c109fe670b681f592d535af389",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.error.invalid_address",
+        "setup.mqtt.error.nothing_listening",
+        "setup.mqtt.error.unresolvable"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "tcp://",
+        "mqtt://",
+        "ssl://",
+        "mqtts://",
+        "tls://",
+        "1883",
+        "URL",
+        "tcp://192.168.1.10:1883"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.error.unresolvable": {
+      "text": "“{host}” doesn’t resolve on the panel’s network — check the address. Press again to save anyway.",
+      "sourceHash": "36c1caa17d21b6c26c66cd820898b653f791775c1a79a23f8806c03a5491d8b0",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; validation error.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.error.invalid_address",
+        "setup.mqtt.error.nothing_listening",
+        "setup.mqtt.error.scheme"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.failure.auth.address_ok": {
+      "text": "Good news: the address is right. The credentials aren’t.",
+      "sourceHash": "3c129ef68b4305b718118c35214716154f0b36739abb6fdc601de84080329c3f",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.auth.retype",
+        "setup.mqtt.failure.auth.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.failure.auth.retype": {
+      "text": "The password isn’t shown back to you, so it can’t be checked by eye — please type it again. The username is a Home Assistant user account, not the add-on’s name.",
+      "sourceHash": "adf19d688956cedb6b8339461eff10dba0d8c8f57b7278e62331223ad7f9bd0a",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.auth.address_ok",
+        "setup.mqtt.failure.auth.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.mqtt.failure.auth.title": {
+      "text": "The broker is there, but it rejected this username and password.",
+      "sourceHash": "c513587c0fd73976bf9bc5100afb177486b5cafaea549ce1cc35060868f14213",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; heading.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.auth.address_ok",
+        "setup.mqtt.failure.auth.retype"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.failure.config.explanation": {
+      "text": "It needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883.",
+      "sourceHash": "6e83b26eb6fab768d9b4ab0bb65aa4217d4a67bf661f593265033dc44269d8d7",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; explanatory guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.config.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "tcp://",
+        "mqtt://",
+        "ssl://",
+        "mqtts://",
+        "tls://",
+        "1883",
+        "tcp://192.168.1.10:1883"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.failure.config.title": {
+      "text": "That address isn’t a broker URL the panel can use.",
+      "sourceHash": "00e6ecde54d76d867f4e99f5d949a17166bcf2b6f31a911b08bd1d6e765df8cb",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; heading.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.config.explanation"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "URL"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.failure.unreachable.confirmed_body": {
+      "text": "The panel reached the network but found no MQTT broker there. Worth checking: the broker’s IP address, the port (1883 for plain, 8883 for TLS), and that the Mosquitto add-on is running.",
+      "sourceHash": "c440a30ca8175a84108e62fc8e5639ce768b79ad94e52af2f7a45dcf77a80d43",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.unreachable.confirmed_title",
+        "setup.mqtt.failure.unreachable.presumed_body",
+        "setup.mqtt.failure.unreachable.presumed_title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Mosquitto",
+        "MQTT",
+        "1883",
+        "8883",
+        "IP",
+        "TLS"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.mqtt.failure.unreachable.confirmed_title": {
+      "text": "Nothing answered at {host}.",
+      "sourceHash": "a431b7be909e09256dd9b36c8362ca1bdc1de91b7acacccb3bf36fa59167ca0e",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.unreachable.confirmed_body",
+        "setup.mqtt.failure.unreachable.presumed_body",
+        "setup.mqtt.failure.unreachable.presumed_title"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.failure.unreachable.presumed_body": {
+      "text": "The panel is still trying in the background, but this usually means the address or port is wrong. Worth checking: the broker’s IP address, the port (1883 for plain, 8883 for TLS), and that the Mosquitto add-on is running.",
+      "sourceHash": "d823f63cb15926469341671ed7b82153de68ba03ce26c4ca440310105c32de4c",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.unreachable.confirmed_body",
+        "setup.mqtt.failure.unreachable.confirmed_title",
+        "setup.mqtt.failure.unreachable.presumed_title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Mosquitto",
+        "1883",
+        "8883",
+        "IP",
+        "TLS"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.mqtt.failure.unreachable.presumed_title": {
+      "text": "We can’t reach {host} yet.",
+      "sourceHash": "efec83f6283200c9e00e63f00cc2b7c283b1540801fe38c55d945ddfa98ffddd",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.mqtt.failure.unreachable.confirmed_body",
+        "setup.mqtt.failure.unreachable.confirmed_title",
+        "setup.mqtt.failure.unreachable.presumed_body"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.help.body": {
+      "text": "In Home Assistant: Settings → Add-ons → Mosquitto broker. The address is usually tcp:// followed by your Home Assistant IP and :1883. The username and password are a Home Assistant user — Settings → People → Add person, with “Allow login” on.",
+      "sourceHash": "2b6c76952afc7a0b34ae075bacd4113d2c5b79ba562ed3c745847ff2d359b0ef",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; explanatory body.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.help.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "Mosquitto",
+        "tcp://",
+        "1883",
+        "→",
+        "IP"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.mqtt.help.title": {
+      "text": "Where do I find these?",
+      "sourceHash": "c8dd4203215d6efdabd359a01e0d9d3d9a363a131e5b4fd6a6f005f06ca85ea2",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.help.body"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.host_fallback": {
+      "text": "the broker",
+      "sourceHash": "a2c667ac11921f76e2ccbc1f3f44478c46c4009c055ec56a52a921fcd6d0c20c",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.lead",
+        "setup.mqtt.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.lead": {
+      "text": "MQTT is how the panel and Home Assistant talk. Without it, Home Assistant can’t see the panel at all.",
+      "sourceHash": "4cc11cbe9723c293ed59d810f605e61ed5487255a5ca7fae573ff9f2cf2b78ef",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.host_fallback",
+        "setup.mqtt.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "MQTT"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.password.help_existing": {
+      "text": "The password isn’t shown for security. Leave it blank to keep the current one, or type a new one.",
+      "sourceHash": "629b0265230fadbeaecd6f7796027888b16a28ae26b971b6fb94120ddfe32f2b",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.password.help_new",
+        "setup.mqtt.password.label",
+        "setup.mqtt.password.unchanged"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.password.help_new": {
+      "text": "The password for that Home Assistant user.",
+      "sourceHash": "84973d7101c349ba67a750088114547f70b42719491986f5d8de997c77519e8b",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.password.help_existing",
+        "setup.mqtt.password.label",
+        "setup.mqtt.password.unchanged"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.mqtt.password.label": {
+      "text": "Password",
+      "sourceHash": "e7cf3ef4f17c3999a94f2c6f612e8a888e5b1026878e4e19398b23bd38ec221a",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.password.help_existing",
+        "setup.mqtt.password.help_new",
+        "setup.mqtt.password.unchanged"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.password.unchanged": {
+      "text": "(unchanged)",
+      "sourceHash": "5c0dc8efedbfd8f8e3c437eb42d1a534009fc1318e48f09fa4b5076f05d1100f",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.password.help_existing",
+        "setup.mqtt.password.help_new",
+        "setup.mqtt.password.label"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.state.checking": {
+      "text": "Checking the broker…",
+      "sourceHash": "a5bcbf22d2c6a0ddf91f7db36d6529776cd7aa4d1d8f8efd3197298448d8d397",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.state.checking_address": {
+      "text": "Checking the address from the panel…",
+      "sourceHash": "ffcbb57282f6e961676662a651a6281962148008533d546bfc0d4f6153478d32",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.mqtt.state.checking_long": {
+      "text": "Checking the broker… This usually takes a second or two.",
+      "sourceHash": "dd3ca5aabdb29d179dcc47e0f41941cf2b97efa2871dfcca214060c06f05c8f8",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.state.checking_sign_in": {
+      "text": "Checking the sign-in with {host}…",
+      "sourceHash": "9f92b9ba2fd6383f35fa79b612e071fa02ff38057c3e9502fca81d4e58920143",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.mqtt.state.connected": {
+      "text": "✓ Connected to {host}.",
+      "sourceHash": "27cd4153c8e0745787f861ef4ff98933cf547109339258cf96aa1d5bac8ed80d",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.mqtt.state.rebuilding": {
+      "text": "Still working — the panel is rebuilding its broker connection.",
+      "sourceHash": "7b451d5ca91bb4ca0e971e6f9e13546fb6c22b9fa0c7bfff4212257225ef1eed",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.state.saving_details": {
+      "text": "Saving these details to the panel…",
+      "sourceHash": "a25153f4225c51889674a8db895ced6aac961a1f7e126c1422967e2e2e330ce9",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.still_trying",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.mqtt.state.still_trying": {
+      "text": "Still trying to reach {host}… A wrong address or port usually looks like this.",
+      "sourceHash": "943b0055672f9d3b19c92735abbed1111a3464da36a85436fcc8effedc744fe5",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.unusually_slow"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.mqtt.state.unusually_slow": {
+      "text": "Unusually slow — the panel is still trying to reach {host}. You can keep waiting, or cancel and check the details.",
+      "sourceHash": "6ce83682e6f03ff78a3b0dc32db645a8153ca4d066330759a13bbae3a9400177",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.mqtt.state.checking",
+        "setup.mqtt.state.checking_address",
+        "setup.mqtt.state.checking_long",
+        "setup.mqtt.state.checking_sign_in",
+        "setup.mqtt.state.connected",
+        "setup.mqtt.state.rebuilding",
+        "setup.mqtt.state.saving_details",
+        "setup.mqtt.state.still_trying"
+      ],
+      "placeholders": [
+        "{host}"
+      ],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.mqtt.title": {
+      "text": "Connect to MQTT",
+      "sourceHash": "5125599de93725fd5360573bc326871a7b490ec9e996b14ecc7e3cdf32ad4d6d",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.host_fallback",
+        "setup.mqtt.lead"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "MQTT"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.mqtt.username.help": {
+      "text": "Usually your Home Assistant login name — the name typed on HA’s sign-in screen, not the display name. Many people create a dedicated HA user just for panels.",
+      "sourceHash": "0825a3d176baffd5b5fd5f8e3d7e39c951b07afc8b1605ff585ae155022cdcff",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; field help.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.username.label"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant",
+        "HA"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.mqtt.username.label": {
+      "text": "Username",
+      "sourceHash": "e3b89e9d33f88e523083d8b4436adcc3726c89e97fd3179a2e102d765d1b16ed",
+      "surface": "setup",
+      "context": "Setup wizard MQTT broker and connection step; field label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.mqtt.username.help"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.dashboard": {
+      "text": "HA dash",
+      "sourceHash": "f4e60256299043246476ebc93bb0a35f178a41494faee700dcfcd2a94e211011",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.mqtt",
+        "setup.progress.name",
+        "setup.progress.optimize",
+        "setup.progress.server",
+        "setup.progress.sign_in"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "HA"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.mqtt": {
+      "text": "MQTT",
+      "sourceHash": "51b197a5083739756d3f8634ae444e9874b51e7703a7b6e72276385d54cf4db3",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.dashboard",
+        "setup.progress.name",
+        "setup.progress.optimize",
+        "setup.progress.server",
+        "setup.progress.sign_in"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "MQTT"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.name": {
+      "text": "Name",
+      "sourceHash": "dcd1d5223f73b3a965c07e3ff5dbee3eedcfedb806686a05b9b3868a2c3d6d50",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.dashboard",
+        "setup.progress.mqtt",
+        "setup.progress.optimize",
+        "setup.progress.server",
+        "setup.progress.sign_in"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.optimize": {
+      "text": "Optimize",
+      "sourceHash": "aa5f530acb509a3547fc2a5cc3f1c92da93af2f5b466417527e59d0f50f00c7b",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.dashboard",
+        "setup.progress.mqtt",
+        "setup.progress.name",
+        "setup.progress.server",
+        "setup.progress.sign_in"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.server": {
+      "text": "Server",
+      "sourceHash": "aef7de28d52977f1b5cd0fecfdc151717610adf41e0aa33b4d9f7522a43337ef",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.dashboard",
+        "setup.progress.mqtt",
+        "setup.progress.name",
+        "setup.progress.optimize",
+        "setup.progress.sign_in"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.progress.sign_in": {
+      "text": "HA sign-in",
+      "sourceHash": "5ee3862fa2ccf451111bf31ad62398c5f18893b1732631180dbe331b72401f04",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; progress label.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.progress.dashboard",
+        "setup.progress.mqtt",
+        "setup.progress.name",
+        "setup.progress.optimize",
+        "setup.progress.server"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "HA"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.proof.dashboard_help": {
+      "text": "The Dashboard tab lists anything that’s wrong.",
+      "sourceHash": "099b789842ad17573a047cbd3d877adbf7b84a8d123e9af4507a25dcff19cbff",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.slow_prompt",
+        "setup.proof.state",
+        "setup.proof.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.proof.milestone.applied": {
+      "text": "✓ Filtered set applied",
+      "sourceHash": "501134e0fdf7b170636955195ef1278143a0aa4335fe6527cd07bb9e17bcb734",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.apply_pending",
+        "setup.proof.milestone.build_pending",
+        "setup.proof.milestone.building",
+        "setup.proof.milestone.entities_read",
+        "setup.proof.milestone.loading"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.milestone.apply_pending": {
+      "text": "○ Apply it — the dashboard will reload",
+      "sourceHash": "c8d99e0e5aeeb53921b05885d5be324571327e1aafe52a5a44ecc35712a2e732",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.applied",
+        "setup.proof.milestone.build_pending",
+        "setup.proof.milestone.building",
+        "setup.proof.milestone.entities_read",
+        "setup.proof.milestone.loading"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "○"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.proof.milestone.build_pending": {
+      "text": "○ Build the filtered set",
+      "sourceHash": "efcd854ff336f043f61a4fd7fd722c46939e8d092f7a9de511013966fecd0d77",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.applied",
+        "setup.proof.milestone.apply_pending",
+        "setup.proof.milestone.building",
+        "setup.proof.milestone.entities_read",
+        "setup.proof.milestone.loading"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "○"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.milestone.building": {
+      "text": "● Building the filtered set…",
+      "sourceHash": "618221e51c196886e971d2c06069a7cfa9aad9abacc2b48d52ae152c00d77596",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.applied",
+        "setup.proof.milestone.apply_pending",
+        "setup.proof.milestone.build_pending",
+        "setup.proof.milestone.entities_read",
+        "setup.proof.milestone.loading"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "●"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.milestone.entities_read": {
+      "text": "✓ Entities read",
+      "sourceHash": "b7da12071a30921c68a801a8c185a26fcff580a1baff8c4bba9be156877ed0d7",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.applied",
+        "setup.proof.milestone.apply_pending",
+        "setup.proof.milestone.build_pending",
+        "setup.proof.milestone.building",
+        "setup.proof.milestone.loading"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.proof.milestone.entities_read_count.one": {
+      "text": "✓ Entities read ({count})",
+      "sourceHash": "cae6b70b078df3414f2bedd7117beea5f09754226b276d9f18ab3cd8ddac5270",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.entities_read_count.other"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.milestone.entities_read_count.other": {
+      "text": "✓ Entities read ({count})",
+      "sourceHash": "cae6b70b078df3414f2bedd7117beea5f09754226b276d9f18ab3cd8ddac5270",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.entities_read_count.one"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "✓"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.milestone.loading": {
+      "text": "● Loading the dashboard — it may reload once or twice more as the panel fine-tunes",
+      "sourceHash": "10373fe801f25404a411d4f625bc9407b2f57720321b24290fc36e557c27f5e8",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.applied",
+        "setup.proof.milestone.apply_pending",
+        "setup.proof.milestone.build_pending",
+        "setup.proof.milestone.building",
+        "setup.proof.milestone.entities_read"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "●"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.proof.milestone.reading.one": {
+      "text": "● Reading your entities — {count} so far",
+      "sourceHash": "0011d951542a81e43c8ad7173cf89c470caa42b2bbded3b697decd6b5c6cc856",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.reading.other"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "●"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.proof.milestone.reading.other": {
+      "text": "● Reading your entities — {count} so far",
+      "sourceHash": "0011d951542a81e43c8ad7173cf89c470caa42b2bbded3b697decd6b5c6cc856",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.milestone.reading.one"
+      ],
+      "placeholders": [
+        "{count}"
+      ],
+      "frozen": [
+        "●"
+      ],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.proof.slow_prompt": {
+      "text": "Taking too long?",
+      "sourceHash": "d83ea75e407a427c6cf32c47ffc4ab85b190f5ee7465e32c162e684924d71209",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; completion evidence.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.dashboard_help",
+        "setup.proof.state",
+        "setup.proof.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.proof.state": {
+      "text": "The panel should be setting up its dashboard now. This page will confirm when Home Assistant is rendering.",
+      "sourceHash": "b615c935f105b2be8bd5823406f7dc98af95d833c436b1903f77dbdde1442727",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; live status.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.dashboard_help",
+        "setup.proof.slow_prompt",
+        "setup.proof.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.proof.title": {
+      "text": "Almost there",
+      "sourceHash": "750a358a4affcdd22d5a3a8fa8dae764132b73e8a95ff2be408fe71907aefb8b",
+      "surface": "setup",
+      "context": "Setup wizard dashboard proof or user attestation step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.proof.dashboard_help",
+        "setup.proof.slow_prompt",
+        "setup.proof.state"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.renderer.action.open_dashboard_setting": {
+      "text": "Open the Dashboard setting",
+      "sourceHash": "c5d268cd415c70ca4aea5846a37468004b27384beabc5f9ca171e7ed1ecb484d",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; action label.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.renderer.failure.explanation": {
+      "text": "Pick ha-paneld’s built-in renderer (or another installed app) in the Dashboard card of All settings, then return here.",
+      "sourceHash": "7231ee927e2894750e5b28a26096bb451b8dbaf5e9a3b0bb87a7929cdb7b1fbf",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; explanatory guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.renderer.failure.package_missing",
+        "setup.renderer.failure.title",
+        "setup.renderer.failure.unresolved"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "ha-paneld"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.renderer.failure.package_missing": {
+      "text": "“{package}” is set as the dashboard app but isn’t installed on this panel.",
+      "sourceHash": "70b629f6057b064596a9a4cb7b121cbb963a31ce656d180885977d33164934a1",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.renderer.failure.explanation",
+        "setup.renderer.failure.title",
+        "setup.renderer.failure.unresolved"
+      ],
+      "placeholders": [
+        "{package}"
+      ],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.renderer.failure.title": {
+      "text": "The selected dashboard app isn’t available.",
+      "sourceHash": "f124b11bac29595c963cc2bec57abe03fe65161d516c1286e2b3f30659aebfa5",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; heading.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.renderer.failure.explanation",
+        "setup.renderer.failure.package_missing",
+        "setup.renderer.failure.unresolved"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.renderer.failure.unresolved": {
+      "text": "No dashboard app could be resolved for this panel.",
+      "sourceHash": "7ad3852774eb0101f6c42c6d1e007d4bc14470995d3c423ee636462f1f138429",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; failure guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.renderer.failure.explanation",
+        "setup.renderer.failure.package_missing",
+        "setup.renderer.failure.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.renderer.title": {
+      "text": "Choose what shows on this screen",
+      "sourceHash": "14aa0862ea25962ece822547492ce334ceb761d669208f16d5cd99754182021d",
+      "surface": "setup",
+      "context": "Setup wizard renderer or Home Assistant URL step; heading.",
+      "risk": "setup",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.repair.explanation": {
+      "text": "Its settings are still here — nothing has been reset. One thing needs attention below.",
+      "sourceHash": "c4ab1bbb196d9f326a880ca9ccae6bb7379404d0dc3a3b093419128d3e366684",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; explanatory guidance.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.repair.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.repair.title": {
+      "text": "This panel has stopped working fully.",
+      "sourceHash": "9bdb93d664d81388f48ec5691545733067f9c97140a7d065d57e9eaf51d1b175",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; heading.",
+      "risk": "consequential",
+      "siblings": [
+        "setup.repair.explanation"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.revisit.continue": {
+      "text": "Continue setup →",
+      "sourceHash": "e91e73300eb0a7c785c9ef3ab67a355f3b9301912c0dc363d6a83e13e8235ec8",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.revisit.notice"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "→"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.revisit.notice": {
+      "text": "You’re revisiting an earlier step.",
+      "sourceHash": "1eda0d6d519704cf03777c93baa662b2346af8223bd8f4e19da72b0297b938b0",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; user-visible copy.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.revisit.continue"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.sign_in.browser.account_note": {
+      "text": "If this browser is already signed in to Home Assistant, the panel may connect as you. To keep the panel on its own account, sign in as that account when the login appears.",
+      "sourceHash": "c21e7c5554bc9af38c7d63cc4e03ff6c1e810f9196a2deeee327be571239ff30",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.browser.action",
+        "setup.sign_in.browser.explanation",
+        "setup.sign_in.browser.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.sign_in.browser.action": {
+      "text": "Sign in from this browser",
+      "sourceHash": "2156d3d0ffec67754113b031381746b97f114d4f288f7ef1440cca95d4de94ad",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; action label.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.browser.account_note",
+        "setup.sign_in.browser.explanation",
+        "setup.sign_in.browser.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.sign_in.browser.explanation": {
+      "text": "You’ll get the Home Assistant login here — sign in as whichever account you want the panel to use. You’ll leave this page and come back automatically.",
+      "sourceHash": "b232e258d00a920f5a7c26708084cd52f240d4fa2af1d7453a71f0c05f7448c1",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; explanatory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.browser.account_note",
+        "setup.sign_in.browser.action",
+        "setup.sign_in.browser.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.sign_in.browser.title": {
+      "text": "Sign in from this browser",
+      "sourceHash": "2156d3d0ffec67754113b031381746b97f114d4f288f7ef1440cca95d4de94ad",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.browser.account_note",
+        "setup.sign_in.browser.action",
+        "setup.sign_in.browser.explanation"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.sign_in.lead": {
+      "text": "The built-in dashboard needs permission to read your Home Assistant.",
+      "sourceHash": "088032bf3fc995e05ac29732a9b253cb50aa22702caa3b62d039b28e3d9bdda4",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; introductory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.recommended",
+        "setup.sign_in.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.sign_in.panel.explanation": {
+      "text": "The panel shows its own Home Assistant login on its screen. It never reuses another login, so you always get a fresh one there — handy if you want to be sure the panel uses a dedicated account. Sign in on the panel and this page will notice.",
+      "sourceHash": "054bf5b81047b2c639b8ef4dacb8c87dca5d459fbdfc40335b90887774e243f8",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; explanatory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.panel.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.sign_in.panel.title": {
+      "text": "Or sign in on the panel",
+      "sourceHash": "86780e3183bad5435e24db04f8ebd8edfebbbe2312b73c7d3f6772b473e0d535",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.panel.explanation"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.sign_in.recommended": {
+      "text": "recommended",
+      "sourceHash": "dd6d876548037ec722252b45795206575e7040eba1ca076cf1732a4a903cadba",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.lead",
+        "setup.sign_in.title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.sign_in.state.in_progress": {
+      "text": "A sign-in is in progress… finish it here or on the panel.",
+      "sourceHash": "4eca2929c8f06dc9d764f830e4aa3ea03cff84f3a3857487281d0d21d9fa25be",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.sign_in.state.waiting"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.sign_in.state.waiting": {
+      "text": "Choose an option above. This page updates by itself once you’ve signed in.",
+      "sourceHash": "d6dfb33f6411d1945de51bbd39f41ea4eac18e28b1050ff36036a809768fec9f",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.sign_in.state.in_progress"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 100,
+      "hardMaxChars": 140
+    },
+    "setup.sign_in.title": {
+      "text": "Sign in to Home Assistant",
+      "sourceHash": "e4a8bccd1b2c38a0eb5ce9801af2a2d6907bb2f70952a39b45ab265c0ac33895",
+      "surface": "setup",
+      "context": "Setup wizard Home Assistant sign-in step; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.sign_in.lead",
+        "setup.sign_in.recommended"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 40,
+      "hardMaxChars": 64
+    },
+    "setup.state.saving": {
+      "text": "Saving…",
+      "sourceHash": "23e39291d6135814ed7c936e278974544b0df5fbf0eb0427b6700979b7472a93",
+      "surface": "setup",
+      "context": "Setup wizard frame, shared action, status, or progress copy; live status.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.webview.action.update": {
+      "text": "Update the panel’s browser engine",
+      "sourceHash": "314e0cd759cc66a9ddbb26e2b1eab85935143c012e8d2f309bdf0c80f757d131",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; action label.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
+    },
+    "setup.webview.companion_does_not_help": {
+      "text": "Choosing the Home Assistant app instead will not help — it draws the dashboard using the same engine.",
+      "sourceHash": "4171f88e5b4a771642eb0eb6f9f3b801f333f3770ccaea54ee59339ced8b07fe",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.webview.explanation",
+        "setup.webview.fixable_note",
+        "setup.webview.manual_note",
+        "setup.webview.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.webview.explanation": {
+      "text": "This panel’s browser engine is too old to show a current Home Assistant dashboard. Everything else can be set up perfectly and the dashboard will still come up blank or broken, so this is worth fixing first.",
+      "sourceHash": "8e3d6c18386c6ca7d5aff8cfc2a6b145770278275ba6d881c421e2b9afa01e0f",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; explanatory guidance.",
+      "risk": "setup",
+      "siblings": [
+        "setup.webview.companion_does_not_help",
+        "setup.webview.fixable_note",
+        "setup.webview.manual_note",
+        "setup.webview.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.webview.fixable_note": {
+      "text": "ha-paneld installs the build known to work on this hardware. The panel restarts once to switch to it, which takes a minute or two.",
+      "sourceHash": "8a3b1bb25e78c03726a64b0b02054e389a04cf19850680c62b4e004cb348562c",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.webview.companion_does_not_help",
+        "setup.webview.explanation",
+        "setup.webview.manual_note",
+        "setup.webview.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "ha-paneld"
+      ],
+      "softMaxChars": 220,
+      "hardMaxChars": 300
+    },
+    "setup.webview.manual_note": {
+      "text": "There is no known-good engine bundled for this panel model, so this one needs updating by hand — usually through the panel’s own system update, or by installing a current Android System WebView.",
+      "sourceHash": "464dc553f785e31bb4878a421d52a46a91c913d436bd9b65f5fbd4a0ff59c885",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; user-visible copy.",
+      "risk": "setup",
+      "siblings": [
+        "setup.webview.companion_does_not_help",
+        "setup.webview.explanation",
+        "setup.webview.fixable_note",
+        "setup.webview.title"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Android System WebView"
+      ],
+      "softMaxChars": 320,
+      "hardMaxChars": 440
+    },
+    "setup.webview.state.installing": {
+      "text": "Installing the recommended engine on the panel. It restarts once when it finishes, then this page continues by itself.",
+      "sourceHash": "0e6b5fc4b901e48f22008eee43a344913908974aa311394b77abc5dadac92bc8",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.webview.state.installing_short"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 150,
+      "hardMaxChars": 210
+    },
+    "setup.webview.state.installing_short": {
+      "text": "Installing…",
+      "sourceHash": "530bcc355f0a3cd6a75a5216f1648e3dc48da5615ee41f56e033f4732982a3df",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; live status.",
+      "risk": "ordinary",
+      "siblings": [
+        "setup.webview.state.installing"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
+    "setup.webview.title": {
+      "text": "The panel’s browser engine needs updating",
+      "sourceHash": "c408def35c0373230b7dd6da75056046236ddd96415495d4935697de526844fa",
+      "surface": "setup",
+      "context": "Setup wizard WebView compatibility blocker; heading.",
+      "risk": "setup",
+      "siblings": [
+        "setup.webview.companion_does_not_help",
+        "setup.webview.explanation",
+        "setup.webview.fixable_note",
+        "setup.webview.manual_note"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 62,
+      "hardMaxChars": 89
     },
     "shell.action.reload": {
       "text": "reload",

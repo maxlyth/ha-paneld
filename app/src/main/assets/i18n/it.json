@@ -4023,6 +4023,76 @@
       "state": "machine-cross-checked",
       "text": "Log live"
     },
+    "oauth.callback.action.back_to_configure": {
+      "sourceHash": "a0f4256308c84cf409a7cb89b9e26df1dfd97c0ca01d8ecca683942416b7d2d3",
+      "state": "machine-cross-checked",
+      "text": "Torna a Configura"
+    },
+    "oauth.callback.action.back_to_setup": {
+      "sourceHash": "36118dce42fa127b083224f02006ded929b453e30a8d6fa8e6e8d6b4a9685469",
+      "state": "machine-cross-checked",
+      "text": "Torna a Configurazione"
+    },
+    "oauth.callback.action.continue": {
+      "sourceHash": "31fbef162594de01bab0cd525c51f74de7bcb15063029fa1a54b2cf5944c80d8",
+      "state": "machine-cross-checked",
+      "text": "Continua"
+    },
+    "oauth.callback.ambient_warning": {
+      "sourceHash": "c78fcf2f6d3db79e150a52552aea094c1fa8af3dad4accfd061ef4a5dc5fa251",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant è configurato, ma la sorgente di luce ambientale selezionata richiede attenzione."
+    },
+    "oauth.callback.cancelled": {
+      "sourceHash": "bc6f63caa4e9e3e6944cd829484eccb083e4340234b12c7aad3f9476fc7bbd5d",
+      "state": "machine-cross-checked",
+      "text": "L’accesso a Home Assistant è stato annullato."
+    },
+    "oauth.callback.commit_failed": {
+      "sourceHash": "14adb3c9d684fccb2b5060d61f59d9b3f97eadc3a3984e60aa605c6ae186aa06",
+      "state": "machine-cross-checked",
+      "text": "Il pannello non ha potuto salvare questo accesso. Avviane uno nuovo."
+    },
+    "oauth.callback.configured": {
+      "sourceHash": "2b0d8802f485ff8b0e8f11a506d4eded08ab990ff9c10a4f9b44b7f3bd9973d1",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant è configurato."
+    },
+    "oauth.callback.failure_heading": {
+      "sourceHash": "307ec132c2f53423bf416be9f90cbb2a20b3c17c07f404691b1a126869831d80",
+      "state": "machine-cross-checked",
+      "text": "Accesso a Home Assistant non completato"
+    },
+    "oauth.callback.invalid_code": {
+      "sourceHash": "d4985ef9c7cd04e3f6e9fdb41bcd3eb60f0a8779ef26c634e9d311a326301bd8",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant non ha restituito un codice di accesso valido."
+    },
+    "oauth.callback.rejected": {
+      "sourceHash": "0c42e20662969717f5ccd5148ec3f479107e7adc49c7c7bc96e24581f3d1d30a",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant non ha accettato questo accesso. Avviane uno nuovo."
+    },
+    "oauth.callback.reload_may_be_needed": {
+      "sourceHash": "4b4b7b8ab047d3e32f58824bb9e92f45928bfdf5a26e9c78615758b7f778d647",
+      "state": "machine-cross-checked",
+      "text": "Potrebbe servire ricaricare manualmente la plancia."
+    },
+    "oauth.callback.stale": {
+      "sourceHash": "453e015499c34d971376e4670845e3b60943c834fdd580b9731ff407b4352467",
+      "state": "machine-cross-checked",
+      "text": "Le impostazioni di Home Assistant sono cambiate mentre l’accesso era in corso. Avviane uno nuovo."
+    },
+    "oauth.callback.success_heading": {
+      "sourceHash": "1f27f6d6853c921607e96982dd0ce5661e0df8d0cdebee3adefa58ec1bc5179d",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant configurato"
+    },
+    "oauth.callback.transient": {
+      "sourceHash": "b82711df2e8cca03acbe44eb3d653f4de11b47e54170f363ac5474dc91f853ef",
+      "state": "machine-cross-checked",
+      "text": "Il pannello non ha potuto completare l’accesso. Controlla la connessione del pannello a Home Assistant e riprova."
+    },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
       "state": "machine-cross-checked",
@@ -4887,6 +4957,986 @@
       "sourceHash": "76c68d99b8cb9505d0771ff7291ab23f70e4fcba5fa81daa256c4e50461286f5",
       "state": "machine-cross-checked",
       "text": "Router Zigbee"
+    },
+    "setup.action.panel_dashboard": {
+      "sourceHash": "3db3c314463f71ee6dfd052b3b46cdd2851593ad49f19dcac17289eae7969c00",
+      "state": "machine-cross-checked",
+      "text": "Plancia del pannello"
+    },
+    "setup.action.save_continue": {
+      "sourceHash": "6880daf172a2e6c51f2de1720698f696b73bac86b4b73f3c281f63d1113dc869",
+      "state": "machine-cross-checked",
+      "text": "Salva e continua"
+    },
+    "setup.area.admin_help": {
+      "sourceHash": "e8def03c2693689cc85bed2fd7666da8ee99749f36848ef921c5d30df1ce8494",
+      "state": "machine-cross-checked",
+      "text": "La posizione del pannello. Home Assistant usa le aree per creare automaticamente le plance."
+    },
+    "setup.area.label": {
+      "sourceHash": "4e7a4dcffefda5ae807e8f0bd8f42e71f78354cdd1ad7f9ce2eb3530c5d0d12e",
+      "state": "machine-cross-checked",
+      "text": "Imposta l’area HA del pannello"
+    },
+    "setup.area.locked_note": {
+      "sourceHash": "010860028168077f6b7e67b81e55c6c980c27d1012f3bd4426c56af0110c5700",
+      "state": "machine-cross-checked",
+      "text": "Il pannello è già registrato in Home Assistant, quindi la sua area può essere modificata solo lì da un amministratore HA; il pannello seguirà l’impostazione scelta."
+    },
+    "setup.area.non_admin_help": {
+      "sourceHash": "a1a82f6c7a40fc0939b547dd53868e25454b5b5ced02fc1ccfbe97283d33f168",
+      "state": "machine-cross-checked",
+      "text": "La posizione del pannello. La scelta viene salvata e applicata quando il pannello si registra o al prossimo accesso di un amministratore di Home Assistant."
+    },
+    "setup.area.none": {
+      "sourceHash": "3fd59f11b54e96933a2b02aa304ac4702497072e362651bddfe49cffc8ba393d",
+      "state": "machine-cross-checked",
+      "text": "Nessuna area"
+    },
+    "setup.area.none_yet": {
+      "sourceHash": "b4db738a6df76b81c63a39c1bd6aa29b427e08ba267ffa3941d830533d1384b8",
+      "state": "machine-cross-checked",
+      "text": "Ancora nessuna area — scegline una"
+    },
+    "setup.attest.lead": {
+      "sourceHash": "1e568c7ed3d6d14ef69f35b5374fffcb203b626b66f22ac1db1731bc1782f830",
+      "state": "machine-cross-checked",
+      "text": "L’app della plancia gestisce autonomamente la connessione, quindi solo tu puoi confermarlo."
+    },
+    "setup.attest.no": {
+      "sourceHash": "ef3c7d7d0f3d50f8afa0b6ec09fb18e59dcce91bbcb4dbb96cf461cfee792c7d",
+      "state": "machine-cross-checked",
+      "text": "No — è vuota o errata"
+    },
+    "setup.attest.title": {
+      "sourceHash": "8938631d2dfc617ea0caaa45f7d0fb698146852f1728438fb67cf4dba81e1cc3",
+      "state": "machine-cross-checked",
+      "text": "La plancia è ora visibile sul pannello?"
+    },
+    "setup.attest.yes": {
+      "sourceHash": "577b22597b20c5d1bf65a7968a8292c2212be4319337e6c6b14f597295ea433d",
+      "state": "machine-cross-checked",
+      "text": "Sì, è visibile"
+    },
+    "setup.dashboard.action.follow_default": {
+      "sourceHash": "6c6cfb2c5bf349ea601bc08b9f6737cd027a15697c3e5012db95d114b8bff1a8",
+      "state": "machine-cross-checked",
+      "text": "Segui la predefinita dell’account"
+    },
+    "setup.dashboard.action.use": {
+      "sourceHash": "d9395d97350965b957bc22b70c2465e8faf01cfbac479a9cc0986da7db0bfda7",
+      "state": "machine-cross-checked",
+      "text": "Usa questa plancia"
+    },
+    "setup.dashboard.error.choose_first": {
+      "sourceHash": "f96d635d9ea8cdd2ed22f3eb6d2a265459c97fe3d3a08e5df971d119f1205958",
+      "state": "machine-cross-checked",
+      "text": "Scegli prima una plancia."
+    },
+    "setup.dashboard.error.path_required": {
+      "sourceHash": "c0ae666863efc9c5ed525ca0de61951df35d2da243668d71cc3a42a90a71bbe8",
+      "state": "machine-cross-checked",
+      "text": "Inserisci un percorso della plancia, ad esempio /dashboard-name/tab-name."
+    },
+    "setup.dashboard.fetch_failed.continue": {
+      "sourceHash": "bacf492386070db8a7643fa9a7eb1431691747007576c440d2223ac2fdc2cd18",
+      "state": "machine-cross-checked",
+      "text": "Continua qui sotto con la predefinita dell’account."
+    },
+    "setup.dashboard.fetch_failed.explanation": {
+      "sourceHash": "f0c4e217c9fae5b20583b49878cbd3abbd5d75bd688dac4d979f4dc4fb8ae8ea",
+      "state": "machine-cross-checked",
+      "text": "Può succedere subito dopo l’accesso."
+    },
+    "setup.dashboard.fetch_failed.retry": {
+      "sourceHash": "d8b8392e2c542950ca64867168e4ef87d4ad606882d5898f826b51c6d553988f",
+      "state": "machine-cross-checked",
+      "text": "Riprova"
+    },
+    "setup.dashboard.fetch_failed.title": {
+      "sourceHash": "2482fdeca1c4575dd6b57bf9cf7ee85c092eb6b631b66e0debe43958f7e8e6fe",
+      "state": "machine-cross-checked",
+      "text": "Non è ancora stato possibile recuperare l’elenco delle plance da Home Assistant."
+    },
+    "setup.dashboard.group.ha": {
+      "sourceHash": "3fc2a7583aa9e04b174dc19dc792089a3bd00e4e1d1081077f2a2904f566462b",
+      "state": "machine-cross-checked",
+      "text": "Plance di Home Assistant"
+    },
+    "setup.dashboard.group.user": {
+      "sourceHash": "1eae7261ac3538d5d912509465916c3a33d7fad19970a0ce27d53c37ba115203",
+      "state": "machine-cross-checked",
+      "text": "Le tue plance"
+    },
+    "setup.dashboard.lead": {
+      "sourceHash": "a704ac0a80953f11601df013cacc7a9b2d6669530a77eb7d8820817644d3099f",
+      "state": "machine-cross-checked",
+      "text": "La plancia a cui il pannello torna sempre: dopo un ricaricamento, dopo l’inattività e all’avvio."
+    },
+    "setup.dashboard.no_default": {
+      "sourceHash": "d491bed061c60e1745eb3212c40ff7fd554851354c2d8b4d9c8a31b873f65ec8",
+      "state": "machine-cross-checked",
+      "text": "Questo account non ha una plancia predefinita: scegli quella che il pannello deve mostrare."
+    },
+    "setup.dashboard.none_accessible.explanation": {
+      "sourceHash": "c7f65239bab0c1cc6264841d55afb782b46cab2887d5091dbc9fcb36d772bdde",
+      "state": "machine-cross-checked",
+      "text": "Crea una plancia o concedi l’accesso a questo account, quindi riprova."
+    },
+    "setup.dashboard.none_accessible.title": {
+      "sourceHash": "ebfd039978b9ba39ae291eb2cde865e667caca70c22ebc63eefeb788d129e86d",
+      "state": "machine-cross-checked",
+      "text": "Questo account non può accedere ad alcuna plancia di Home Assistant."
+    },
+    "setup.dashboard.option.auto_default": {
+      "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
+      "state": "machine-cross-checked",
+      "text": "Automatica — segui la predefinita dell’account"
+    },
+    "setup.dashboard.option.auto_none": {
+      "sourceHash": "7b82f22b1413e07c8671b4d4a7b847856157697f2b735396d3b9af343799326c",
+      "state": "machine-cross-checked",
+      "text": "Automatica — nessuna predefinita per l’account"
+    },
+    "setup.dashboard.option.choose": {
+      "sourceHash": "f5b194568dd03790bb8a8b1afdb5d170330c3ebb00148c0250743823a61541c5",
+      "state": "machine-cross-checked",
+      "text": "Scegli una plancia…"
+    },
+    "setup.dashboard.option.custom": {
+      "sourceHash": "354213584eda4f955950c5954d8ffd233f23e57b87147153f0c369d21d2390f4",
+      "state": "machine-cross-checked",
+      "text": "Personalizzata — inserisci il percorso di una plancia…"
+    },
+    "setup.dashboard.path.help": {
+      "sourceHash": "031e231cf22729051dca86224a935cc74e6f20675d88ce414ce2b3fe2cefa899",
+      "state": "machine-cross-checked",
+      "text": "Un percorso su questo Home Assistant, che inizi con una plancia dell’elenco."
+    },
+    "setup.dashboard.path.label": {
+      "sourceHash": "08e0f39c31b74ee65647b268f819ae96f3669dc62daa2345760e91b396585937",
+      "state": "machine-cross-checked",
+      "text": "Percorso della plancia"
+    },
+    "setup.dashboard.path.unknown": {
+      "sourceHash": "e371a4824fa6f48df44ac47f2b2a6d4b9f7e16cffb36ccb5fe803d6dfe1dd816",
+      "state": "machine-cross-checked",
+      "text": "{root} non è una plancia visibile a questo account; il pannello userà quella predefinita finché tale plancia non esisterà."
+    },
+    "setup.dashboard.state.fetching": {
+      "sourceHash": "50c3dfe6b88d6f9d26ed26df8e21d83ac3f96cc0fbe2b0793341cd8498c81c9b",
+      "state": "machine-cross-checked",
+      "text": "Recupero delle dashboard da Home Assistant…"
+    },
+    "setup.dashboard.title": {
+      "sourceHash": "6ce8c026eddc7e15e707af0a65d3f2873d4e78e98cec7b4c8a0c7630a27139e1",
+      "state": "machine-cross-checked",
+      "text": "Seleziona la dashboard HA per questo pannello"
+    },
+    "setup.discovery.found": {
+      "sourceHash": "1bd3ae94a54c3e9446bb243cd96b0f3e7858f8eac7a9b3900fd7314c90d0627c",
+      "state": "machine-cross-checked",
+      "text": "Trovato sulla rete: {value}. Modificalo se non è corretto."
+    },
+    "setup.discovery.unavailable.broker_not_on_link": {
+      "sourceHash": "60000992bc1cb98758c2f5c927ddf87b6bf01a5710c6c3ff3872363d37e9fe03",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita: Home Assistant è su un segmento di rete diverso e il rilevamento funziona solo nello stesso segmento. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.discovery.unavailable.error": {
+      "sourceHash": "7b47377022930368a5a4c581149b3b9edc3f717bf9d85f617183030d78cf3f68",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita: il tentativo di rilevamento di rete del pannello è fallito. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.discovery.unavailable.generic": {
+      "sourceHash": "949c67847ab8dd12b8329fefa4a85cdad3d1fc2a816a68f1ddd3e1d7969c902b",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.discovery.unavailable.mdns_not_running": {
+      "sourceHash": "66d2c8429c4a9b102eff209963011bf3d44e8267ea7457ab8fe72776ccd2d904",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita: il servizio di rilevamento di rete del pannello non è attivo. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.discovery.unavailable.no_multicast_lock": {
+      "sourceHash": "6970651bef2273450c24d8ba4c41bfe6846bf04bd61b23345e3f828d1a6de658",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita: il pannello non può ricevere il traffico di rilevamento. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.discovery.unavailable.no_responses_at_all": {
+      "sourceHash": "8053098bad44436c2f186c4e6285a21ec802cfef2795a96d854fccd765bca37d",
+      "state": "machine-cross-checked",
+      "text": "Ricerca automatica non riuscita: nessuno ha risposto, quindi Home Assistant potrebbe essere su un altro segmento o il traffico di rilevamento potrebbe essere bloccato. È normale su alcune reti: inseriscilo qui sotto, funzionerà allo stesso modo."
+    },
+    "setup.done.action.configure": {
+      "sourceHash": "2fd565639231606a819c15ed7c1f9c2cfae635bb48c2b38a3fa9e57cc282a857",
+      "state": "machine-cross-checked",
+      "text": "Configura il pannello"
+    },
+    "setup.done.action.dashboard": {
+      "sourceHash": "3db3c314463f71ee6dfd052b3b46cdd2851593ad49f19dcac17289eae7969c00",
+      "state": "machine-cross-checked",
+      "text": "Dashboard del pannello"
+    },
+    "setup.done.configure_note": {
+      "sourceHash": "757739c4bc0ae5e756963d2084fb258949f4e865524355a5bd8482da6a1b1ed6",
+      "state": "machine-cross-checked",
+      "text": "Tutto il resto — luminosità, sospensione, suoni e comportamento — è nella scheda Configura. Le impostazioni predefinite sono ragionevoli, quindi non devi modificare nulla."
+    },
+    "setup.done.filter_note": {
+      "sourceHash": "bb421be7eb8fb60a13c614cf636556c3f10a8f2e43f1f78fff1b89eb5be6c559",
+      "state": "machine-cross-checked",
+      "text": "Il filtro entità è attivo e sta imparando quali entità mostrare; puoi controllare l’elenco in qualsiasi momento nella scheda Entità. Nei primi minuti, mentre si assesta, la dashboard del pannello potrebbe ricaricarsi alcune volte: è normale."
+    },
+    "setup.done.status.attested_mqtt": {
+      "sourceHash": "bf75407b2be24c38c564c7301bf294831d3c6747ffa74c6af2b96efec3b73816",
+      "state": "machine-cross-checked",
+      "text": "MQTT connesso · Dashboard confermata da te."
+    },
+    "setup.done.status.attested_no_mqtt": {
+      "sourceHash": "ba90b9105459a9d9d2fb652b2358f0f42af7732d1f1cafe7cdf64e1e0e8bd879",
+      "state": "machine-cross-checked",
+      "text": "Dashboard confermata da te."
+    },
+    "setup.done.status.rendering_mqtt": {
+      "sourceHash": "03a4e83b75b9f9913caca04ebcc4c9649179c283a50a7d37682467d4fe41ebcb",
+      "state": "machine-cross-checked",
+      "text": "MQTT connesso · Home Assistant è visualizzato sul pannello."
+    },
+    "setup.done.status.rendering_no_mqtt": {
+      "sourceHash": "dcd8160cc85f6016d90daf4256a58f4434aa6b9718c3fa0f258323b3d9fa2234",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant è visualizzato sul pannello."
+    },
+    "setup.done.taming_intro": {
+      "sourceHash": "df51327092a8655bdb336547196c85ecc908233391c308ae6085a8e18c2519b8",
+      "state": "machine-cross-checked",
+      "text": "Facoltativo: i pannelli spesso includono app del produttore che compaiono sopra la dashboard. ha-paneld può renderle meno invasive."
+    },
+    "setup.done.taming_link": {
+      "sourceHash": "956a23e9e8dd79a2ed5b094a9725e0ac7d1dbaccd3ca53d7c5389c8faaaaaa89",
+      "state": "machine-cross-checked",
+      "text": "La gestione dei pacchetti è nella scheda Installa."
+    },
+    "setup.done.title": {
+      "sourceHash": "c6ad1bbcbe7c666057dd4fb83add8e06c1d7b2d57ec8fd18222ab62bed902316",
+      "state": "machine-cross-checked",
+      "text": "✓ Questo pannello è configurato"
+    },
+    "setup.error.approval_required": {
+      "sourceHash": "f13edc21eed9b6db17aafc75e5fdd3e20121e23c18732d4ececf3bc3a40d3f99",
+      "state": "machine-cross-checked",
+      "text": "Approva la richiesta sul pannello, quindi salva di nuovo."
+    },
+    "setup.error.http_refused": {
+      "sourceHash": "d643704f298cf69c67b9220ee7cc8736b29796a7ad39cffb95b424da6dc3842e",
+      "state": "machine-cross-checked",
+      "text": "Il pannello ha rifiutato la richiesta (HTTP {status})."
+    },
+    "setup.error.panel_unreachable": {
+      "sourceHash": "2be3f1e8e9d75bdb27791e7cee16ede79bd5a9937932171579180c443e4d8f15",
+      "state": "machine-cross-checked",
+      "text": "Impossibile raggiungere il pannello: controlla la connessione e riprova."
+    },
+    "setup.filter.action.disable": {
+      "sourceHash": "104b78f4c5f5a5e6078e2d76d7dd8f8f55d30190ce2c5d2fc827c403a28305b3",
+      "state": "machine-cross-checked",
+      "text": "Carica la plancia senza filtro"
+    },
+    "setup.filter.action.enable": {
+      "sourceHash": "971afbafc8f8aa4d42da3bd871a938fb56376601e0685d462133c1abbd925608",
+      "state": "machine-cross-checked",
+      "text": "Attiva il filtro e carica la plancia"
+    },
+    "setup.filter.action.enabling": {
+      "sourceHash": "812de48bdc29e7d077d3a4ae9ff11c6990d765db65345ffca18ee4de98f03cd9",
+      "state": "machine-cross-checked",
+      "text": "Attivazione del filtro…"
+    },
+    "setup.filter.action.loading": {
+      "sourceHash": "3718517a80b70e19a3975ba60bf6b8d4c11bd0473c47c2763a244ac8cb6b2c37",
+      "state": "machine-cross-checked",
+      "text": "Caricamento della dashboard…"
+    },
+    "setup.filter.amber.consequence": {
+      "sourceHash": "cf4d2d14f40cccfc2e0408e9e8971d30671ce568c0376bd9bf8fb5c1a208b5cc",
+      "state": "machine-cross-checked",
+      "text": "Senza filtro, il pannello passa il tempo a stare dietro a entità che nulla sullo schermo mostra. Puoi cambiarlo in seguito nella scheda Configura."
+    },
+    "setup.filter.amber.estimated": {
+      "sourceHash": "f698d9140d4b65655b852cdc2eeb0d7b867ed446f72b8c3e6bc621e467b85e23",
+      "state": "machine-cross-checked",
+      "text": "Sono molti aggiornamenti per questo chip. Non abbiamo misurato questa combinazione esatta: è una stima basata sull’hardware del pannello e sul numero delle tue entità, non una misurazione."
+    },
+    "setup.filter.amber.head": {
+      "sourceHash": "31b047dcdec300226364773a622ef3a0aa61decc4527e3635d61624a9e2a90fd",
+      "state": "machine-cross-checked",
+      "text": "Conviene attivare il filtro"
+    },
+    "setup.filter.amber.measured": {
+      "sourceHash": "8f8622081f808b401c15bdf8b47735b82d465b70890ed70a401862bf65f6dd6e",
+      "state": "machine-cross-checked",
+      "text": "Abbiamo misurato questo chip con circa questo numero di entità e il filtro ha fatto una chiara differenza."
+    },
+    "setup.filter.confidence.counting": {
+      "sourceHash": "ce3d843ea3eba387b24e5632e809ccd0f66b46b6e44c8f3d3bb00526185304d8",
+      "state": "machine-cross-checked",
+      "text": "Conteggio in corso"
+    },
+    "setup.filter.confidence.counting_explanation": {
+      "sourceHash": "e40620797658003121ff4aa9917df9e43c82e0a4c9071859e03d5a5911756b68",
+      "state": "machine-cross-checked",
+      "text": "Lettura dell’elenco delle entità. Il consiglio sarà definitivo al termine del conteggio."
+    },
+    "setup.filter.confidence.estimated": {
+      "sourceHash": "b774599a9cd1f9a734a815fc5cf99ad188547aee7c727468d51b73dfd02988f9",
+      "state": "machine-cross-checked",
+      "text": "Stimato"
+    },
+    "setup.filter.confidence.measured": {
+      "sourceHash": "9298c8f4b3ffb73d86ee1d20f7c954236e534e60c2cfc10adb3c3c35c8365b1d",
+      "state": "machine-cross-checked",
+      "text": "Misurato"
+    },
+    "setup.filter.counting.amber": {
+      "sourceHash": "b9742823d1bb302729de16a1df81047cc65bfc182c60a65de40dad8289893479",
+      "state": "machine-cross-checked",
+      "text": "Il filtro sembra utile"
+    },
+    "setup.filter.counting.green": {
+      "sourceHash": "6b5df0b503ba9a5a9be2443bfd8c15bebf38664f295d4efa150caead6abccc22",
+      "state": "machine-cross-checked",
+      "text": "Conteggio di ciò che Home Assistant invierebbe…"
+    },
+    "setup.filter.counting.red": {
+      "sourceHash": "10f1f05a101203f22e8bce7990f866b9f3e70b835af7b87b41c0c0307ad719cb",
+      "state": "machine-cross-checked",
+      "text": "Superamento della capacità del pannello"
+    },
+    "setup.filter.details.body": {
+      "sourceHash": "c4b530aa8cc08488adebe2f92f8fc727337c654dacbc938cd6f4ca76a133f530",
+      "state": "machine-cross-checked",
+      "text": "Il pannello chiede a Home Assistant gli aggiornamenti per un elenco specifico di entità anziché per tutte. Crea l’elenco leggendo la dashboard, poi aggiunge ciò che la dashboard usa durante l’esecuzione. Non viene nascosto nulla: l’elenco completo è nella scheda Entità."
+    },
+    "setup.filter.details.title": {
+      "sourceHash": "9b2736049ff9acab153954b360afe3987fa67e89b9661da42476e5ec4231dbd8",
+      "state": "machine-cross-checked",
+      "text": "Che cosa fa realmente il filtro"
+    },
+    "setup.filter.fact.entities": {
+      "sourceHash": "5e4fc2933cb35aa3c344d8b7b146c97698a3ec8c9eac8f2ebf503beba013bbbe",
+      "state": "machine-cross-checked",
+      "text": "Entità in Home Assistant"
+    },
+    "setup.filter.fact.panel": {
+      "sourceHash": "07b0bb2d72884e16eacd20c0500f0118952f2b0c04adfd3827b66e4286178bf4",
+      "state": "machine-cross-checked",
+      "text": "Questo pannello"
+    },
+    "setup.filter.green.consequence": {
+      "sourceHash": "67d02e994972201b5c55e28b3edba21ffb3384ea23c04611b4eb69b9b2ce2a79",
+      "state": "machine-cross-checked",
+      "text": "Vale comunque la pena attivare il filtro: mantiene tutto reattivo man mano che la configurazione cresce e potrai cambiarlo in seguito nella scheda Configura."
+    },
+    "setup.filter.green.estimated": {
+      "sourceHash": "6f9cf269ad55c0089d9f96f723416c2b00ee3de7c320bad14c7c24735d4857e8",
+      "state": "machine-cross-checked",
+      "text": "Il carico sembra agevole per il pannello, considerando hardware e numero di entità."
+    },
+    "setup.filter.green.head": {
+      "sourceHash": "54b026a7c1095c33531c0f58da8880a84f960cd881f5b83ced1beb6cb59fd19d",
+      "state": "machine-cross-checked",
+      "text": "La dashboard dovrebbe essere fluida in entrambi i casi"
+    },
+    "setup.filter.green.measured": {
+      "sourceHash": "d11fd9feb324056b792ba839b42d4c2adf15a6c6d8c0f413cc2a7350a587685d",
+      "state": "machine-cross-checked",
+      "text": "Un pannello con questo chip gestisce senza problemi questo numero di entità: lo abbiamo misurato con un carico simile."
+    },
+    "setup.filter.lead": {
+      "sourceHash": "841a7559f79cb96311a9c33f2e42e34ec4bedb184b281785573bdfa134243366",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant invierà a questo pannello un aggiornamento in tempo reale per ogni entità che riesce a vedere. Il filtro riduce gli aggiornamenti alle sole entità effettivamente usate dalla dashboard."
+    },
+    "setup.filter.red.consequence": {
+      "sourceHash": "b25e0b2f36ae4dff1d5921b7a9720527a6b5abf33138ab6c17d57e6c6af4d8f0",
+      "state": "machine-cross-checked",
+      "text": "Puoi comunque caricarla senza filtro per vedere la differenza. Funzionerà, ma sarà molto lenta e poco reattiva."
+    },
+    "setup.filter.red.estimated": {
+      "sourceHash": "3eb153c16c649dab20b33bad67490c249062482521d65fe873d61b11a28a9367",
+      "state": "machine-cross-checked",
+      "text": "Sono molti più aggiornamenti di quanti il chip possa probabilmente gestire, considerando hardware e numero di entità."
+    },
+    "setup.filter.red.head": {
+      "sourceHash": "446d24e9d116fad39a65894fa0fe3ed52f7f483a85390c0676ea6a5ec4a17df1",
+      "state": "machine-cross-checked",
+      "text": "Attiva il filtro: senza, il pannello sarà in difficoltà"
+    },
+    "setup.filter.red.measured": {
+      "sourceHash": "7878b513a5c08ab953c30dd50e2cb8d4ec9e39dc3642e450882b53e9809d65f6",
+      "state": "machine-cross-checked",
+      "text": "Abbiamo testato lo stesso chip con circa questo numero di entità. Senza filtro, il componente che disegna la dashboard era occupato per l’81% del tempo anziché il 6% e impiegava circa il 60% in più a rispondere a un tocco."
+    },
+    "setup.filter.state.still_counting": {
+      "sourceHash": "2f9d1dd836a60e47f175e9820a5fbb45bb7c3e865d090917ffa2442a57ba26bf",
+      "state": "machine-cross-checked",
+      "text": "conteggio in corso"
+    },
+    "setup.filter.tier.capable": {
+      "sourceHash": "3a812aa6bcbcbd15613dab61d6053584199869c39ab3767b70be86134ea97987",
+      "state": "machine-cross-checked",
+      "text": "Un pannello potente"
+    },
+    "setup.filter.tier.middling": {
+      "sourceHash": "46e5c272561d6430f34e998251059aabec33f3a41a9ee8db1aba36f8f528446b",
+      "state": "machine-cross-checked",
+      "text": "Un pannello di fascia media"
+    },
+    "setup.filter.tier.modest": {
+      "sourceHash": "af3d96663112ddcf5b64444f7d71d230ae1ef101bdd4233ab0021d709cb8777c",
+      "state": "machine-cross-checked",
+      "text": "Un pannello modesto"
+    },
+    "setup.filter.tier.unknown": {
+      "sourceHash": "07b0bb2d72884e16eacd20c0500f0118952f2b0c04adfd3827b66e4286178bf4",
+      "state": "machine-cross-checked",
+      "text": "Questo pannello"
+    },
+    "setup.filter.title": {
+      "sourceHash": "61cfd94fb149adcd5e78ab772fa7d11922b55d7b3cc84fe365e202ef242d4d5d",
+      "state": "machine-cross-checked",
+      "text": "Ancora una cosa prima di caricare la dashboard"
+    },
+    "setup.frame.loading": {
+      "sourceHash": "f0e4e00078be3f48ea68569a89f1abfed01ba10f4f6090cce5f58f2611619e14",
+      "state": "machine-cross-checked",
+      "text": "Caricamento procedura…"
+    },
+    "setup.frame.progress_label": {
+      "sourceHash": "e9b4495ace7263301df379aa8775e027d543b8860baac2b82354d057de9e7656",
+      "state": "machine-cross-checked",
+      "text": "Avanzamento procedura"
+    },
+    "setup.frame.skip_exit": {
+      "sourceHash": "c1d9cdc6985f3ab46d4ec20644fbdac8d5a68ca0e0a4083a7d3ab399fefa3e91",
+      "state": "machine-cross-checked",
+      "text": "Salta ed esci dalla procedura guidata →"
+    },
+    "setup.ha_url.error.scheme": {
+      "sourceHash": "3ee6ebecdcd3c42228a623102aed95334a9d75ee98d8b8658c99aedfba9752a0",
+      "state": "machine-cross-checked",
+      "text": "L’URL deve iniziare con http:// o https://."
+    },
+    "setup.ha_url.help": {
+      "sourceHash": "c236973b764d018af53248ebd56203ba203f9a875bd7d42418df34aa8bb51570",
+      "state": "machine-cross-checked",
+      "text": "L’indirizzo con cui apri Home Assistant, ad esempio http://homeassistant.local:8123."
+    },
+    "setup.ha_url.label": {
+      "sourceHash": "d8d89efc512baff4d9d1924b627322b9b007a8c08ed95af6976dfbc684d308fa",
+      "state": "machine-cross-checked",
+      "text": "URL di Home Assistant"
+    },
+    "setup.ha_url.lead": {
+      "sourceHash": "3d2e4fa5486d2038320ca45ee59ad91670561de7b72ff6718b2340b2da47260d",
+      "state": "machine-cross-checked",
+      "text": "La dashboard integrata viene caricata direttamente da Home Assistant."
+    },
+    "setup.ha_url.title": {
+      "sourceHash": "126500fcbadd9986d91fc4d51f440439f6785bdb9e91b34c7f10544468c0aa7e",
+      "state": "machine-cross-checked",
+      "text": "Dove si trova Home Assistant?"
+    },
+    "setup.identity.error.name_required": {
+      "sourceHash": "626d6142a57e7fd8de4f4d915ff55619113d6da54ed097c94b7fa64e7bb6f76c",
+      "state": "machine-cross-checked",
+      "text": "Il pannello deve avere un nome composto da lettere e numeri."
+    },
+    "setup.identity.friendly_name.help": {
+      "sourceHash": "c0cb163ff36450f4c08b82bbcc86f62b0906aa096da711e7c455a582dea9e9d7",
+      "state": "machine-cross-checked",
+      "text": "È solo l’etichetta in Home Assistant. Puoi cambiarla in qualsiasi momento senza problemi."
+    },
+    "setup.identity.friendly_name.label": {
+      "sourceHash": "073ec5dba8e66ce812d7f817ecc72af2330d9ab22e99d5429d794de3cf5ba4ea",
+      "state": "machine-cross-checked",
+      "text": "Nome descrittivo"
+    },
+    "setup.identity.lead": {
+      "sourceHash": "bfc7d286a61350637080e535e4000818caaa3edd74b0ab385f530f0201743e55",
+      "state": "machine-cross-checked",
+      "text": "Un nome, il server Home Assistant e l’accesso, la plancia da mostrare e poi il broker MQTT: poche domande rapide e hai finito. Puoi interrompere e riprendere senza perdere nulla."
+    },
+    "setup.identity.panel_id.consequence": {
+      "sourceHash": "11391c9e4db33e3d19c5a78512029ed387422d250909887f45dc4564c19d14a4",
+      "state": "machine-cross-checked",
+      "text": "Puoi cambiarlo in seguito, ma così rinomineresti tutte quelle entità e dovresti aggiornare anche automazioni, plance e script che già le usano. In genere lo si imposta una sola volta, qui."
+    },
+    "setup.identity.panel_id.help": {
+      "sourceHash": "6b8a1893b1ff302f07af0482468ae3e77a15d0b326a7d1ff3c970b231d48cdea",
+      "state": "machine-cross-checked",
+      "text": "Scegli qualcosa di riconoscibile in un lungo elenco, di solito il luogo. Usa lettere minuscole, numeri e trattini bassi."
+    },
+    "setup.identity.panel_id.label": {
+      "sourceHash": "e738d52375d65eb02067cf41e0807c06c4e21f391d5334bb5bed79e9a2e61daf",
+      "state": "machine-cross-checked",
+      "text": "ID pannello"
+    },
+    "setup.identity.preview_intro": {
+      "sourceHash": "e7f49c706a6165932f89dfca00f5e5860835e3ac7a7152aba9652ba9a08be786",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant userà questo valore per nominare ogni elemento del pannello:"
+    },
+    "setup.identity.title": {
+      "sourceHash": "42054cbac53831e343a3982e3c7326fdeb206ef490271d88aaed7b799f5951d4",
+      "state": "machine-cross-checked",
+      "text": "Dai un nome al pannello"
+    },
+    "setup.mqtt.action.cancel_edit": {
+      "sourceHash": "f23b12931ce871291c67ed2055c72e93362c6ca6b40ea9478c1b3a5d0e39e23e",
+      "state": "machine-cross-checked",
+      "text": "Annulla e modifica i dati"
+    },
+    "setup.mqtt.action.checking_address": {
+      "sourceHash": "4e4170d1a4d2acf6a7f3490e6ed813134358d469376d2d8516cb771927beab25",
+      "state": "machine-cross-checked",
+      "text": "Controllo dell’indirizzo…"
+    },
+    "setup.mqtt.action.checking_connection": {
+      "sourceHash": "33f8dde16b75e05f2f08b6617999a7b6ef2568ee2a6e0fc416c27a76ec13cff7",
+      "state": "machine-cross-checked",
+      "text": "Controllo della connessione…"
+    },
+    "setup.mqtt.action.save_anyway": {
+      "sourceHash": "ef4c87b5083fbe4867b0bfb4e2575ecb106bdd4612160ef40f8f022c415cbdac",
+      "state": "machine-cross-checked",
+      "text": "Salva comunque"
+    },
+    "setup.mqtt.broker.help": {
+      "sourceHash": "3cb757053af4d021d4cb57a1d0e71ac958723841508673850218df3a2d55fb6d",
+      "state": "machine-cross-checked",
+      "text": "Di solito tcp:// seguito dall’indirizzo di Home Assistant e da :1883."
+    },
+    "setup.mqtt.broker.label": {
+      "sourceHash": "cad88e3df28153445c8d1c488bc534a1f3e191acf3d636d9c1a5cc734c0f1675",
+      "state": "machine-cross-checked",
+      "text": "URL del broker"
+    },
+    "setup.mqtt.error.invalid_address": {
+      "sourceHash": "b9add1e3ccf51bf66889b0971c892221981c071133811735c8f221fbd798ee27",
+      "state": "machine-cross-checked",
+      "text": "Questo indirizzo non è un URL del broker utilizzabile dal pannello: servono tcp:// (o ssl://) e un host."
+    },
+    "setup.mqtt.error.nothing_listening": {
+      "sourceHash": "1033c7bfa571cbb694463132fd61755a77712535237c1d9263a51eec29295cfe",
+      "state": "machine-cross-checked",
+      "text": "Nessun servizio in ascolto su {host}:{port}. Controlla indirizzo e porta. Premi di nuovo per salvare comunque."
+    },
+    "setup.mqtt.error.scheme": {
+      "sourceHash": "6b4f430225e310e979907a561eecf28a5269e3c109fe670b681f592d535af389",
+      "state": "machine-cross-checked",
+      "text": "L’URL del broker deve iniziare con tcp://, mqtt://, ssl://, mqtts:// o tls://, ad esempio tcp://192.168.1.10:1883."
+    },
+    "setup.mqtt.error.unresolvable": {
+      "sourceHash": "36c1caa17d21b6c26c66cd820898b653f791775c1a79a23f8806c03a5491d8b0",
+      "state": "machine-cross-checked",
+      "text": "“{host}” non viene risolto sulla rete del pannello: controlla l’indirizzo. Premi di nuovo per salvare comunque."
+    },
+    "setup.mqtt.failure.auth.address_ok": {
+      "sourceHash": "3c129ef68b4305b718118c35214716154f0b36739abb6fdc601de84080329c3f",
+      "state": "machine-cross-checked",
+      "text": "Buone notizie: l’indirizzo è corretto, ma le credenziali no."
+    },
+    "setup.mqtt.failure.auth.retype": {
+      "sourceHash": "adf19d688956cedb6b8339461eff10dba0d8c8f57b7278e62331223ad7f9bd0a",
+      "state": "machine-cross-checked",
+      "text": "La password non viene mostrata, quindi non puoi controllarla a vista: digitala di nuovo. Il nome utente è un account utente di Home Assistant, non il nome dell’add-on."
+    },
+    "setup.mqtt.failure.auth.title": {
+      "sourceHash": "c513587c0fd73976bf9bc5100afb177486b5cafaea549ce1cc35060868f14213",
+      "state": "machine-cross-checked",
+      "text": "Il broker è raggiungibile, ma ha rifiutato nome utente e password."
+    },
+    "setup.mqtt.failure.config.explanation": {
+      "sourceHash": "6e83b26eb6fab768d9b4ab0bb65aa4217d4a67bf661f593265033dc44269d8d7",
+      "state": "machine-cross-checked",
+      "text": "Deve iniziare con tcp://, mqtt://, ssl://, mqtts:// o tls://, ad esempio tcp://192.168.1.10:1883."
+    },
+    "setup.mqtt.failure.config.title": {
+      "sourceHash": "00e6ecde54d76d867f4e99f5d949a17166bcf2b6f31a911b08bd1d6e765df8cb",
+      "state": "machine-cross-checked",
+      "text": "Questo indirizzo non è un URL del broker utilizzabile dal pannello."
+    },
+    "setup.mqtt.failure.unreachable.confirmed_body": {
+      "sourceHash": "c440a30ca8175a84108e62fc8e5639ce768b79ad94e52af2f7a45dcf77a80d43",
+      "state": "machine-cross-checked",
+      "text": "Il pannello ha raggiunto la rete, ma lì non ha trovato alcun broker MQTT. Vale la pena controllare l’indirizzo IP del broker, la porta (1883 in chiaro, 8883 per TLS) e che l’add-on Mosquitto sia in esecuzione."
+    },
+    "setup.mqtt.failure.unreachable.confirmed_title": {
+      "sourceHash": "a431b7be909e09256dd9b36c8362ca1bdc1de91b7acacccb3bf36fa59167ca0e",
+      "state": "machine-cross-checked",
+      "text": "Nessuna risposta da {host}."
+    },
+    "setup.mqtt.failure.unreachable.presumed_body": {
+      "sourceHash": "d823f63cb15926469341671ed7b82153de68ba03ce26c4ca440310105c32de4c",
+      "state": "machine-cross-checked",
+      "text": "Il pannello continua a provare in background, ma di solito questo significa che l’indirizzo o la porta sono errati. Vale la pena controllare l’indirizzo IP del broker, la porta (1883 in chiaro, 8883 per TLS) e che l’add-on Mosquitto sia in esecuzione."
+    },
+    "setup.mqtt.failure.unreachable.presumed_title": {
+      "sourceHash": "efec83f6283200c9e00e63f00cc2b7c283b1540801fe38c55d945ddfa98ffddd",
+      "state": "machine-cross-checked",
+      "text": "{host} non è ancora raggiungibile."
+    },
+    "setup.mqtt.help.body": {
+      "sourceHash": "2b6c76952afc7a0b34ae075bacd4113d2c5b79ba562ed3c745847ff2d359b0ef",
+      "state": "machine-cross-checked",
+      "text": "In Home Assistant: Impostazioni → Componenti aggiuntivi → Mosquitto broker. Di solito l’indirizzo è tcp:// seguito dall’IP di Home Assistant e da :1883. Nome utente e password sono quelli di un utente di Home Assistant: Impostazioni → Persone → Aggiungi persona, con «Consenti l’accesso» attivo."
+    },
+    "setup.mqtt.help.title": {
+      "sourceHash": "c8dd4203215d6efdabd359a01e0d9d3d9a363a131e5b4fd6a6f005f06ca85ea2",
+      "state": "machine-cross-checked",
+      "text": "Dove trovo questi dati?"
+    },
+    "setup.mqtt.host_fallback": {
+      "sourceHash": "a2c667ac11921f76e2ccbc1f3f44478c46c4009c055ec56a52a921fcd6d0c20c",
+      "state": "machine-cross-checked",
+      "text": "il broker"
+    },
+    "setup.mqtt.lead": {
+      "sourceHash": "4cc11cbe9723c293ed59d810f605e61ed5487255a5ca7fae573ff9f2cf2b78ef",
+      "state": "machine-cross-checked",
+      "text": "MQTT è il modo in cui il pannello e Home Assistant comunicano. Senza di esso, Home Assistant non può vedere affatto il pannello."
+    },
+    "setup.mqtt.password.help_existing": {
+      "sourceHash": "629b0265230fadbeaecd6f7796027888b16a28ae26b971b6fb94120ddfe32f2b",
+      "state": "machine-cross-checked",
+      "text": "Per sicurezza, la password non viene mostrata. Lascia vuoto per mantenere quella attuale oppure inseriscine una nuova."
+    },
+    "setup.mqtt.password.help_new": {
+      "sourceHash": "84973d7101c349ba67a750088114547f70b42719491986f5d8de997c77519e8b",
+      "state": "machine-cross-checked",
+      "text": "La password di quell’utente di Home Assistant."
+    },
+    "setup.mqtt.password.label": {
+      "sourceHash": "e7cf3ef4f17c3999a94f2c6f612e8a888e5b1026878e4e19398b23bd38ec221a",
+      "state": "machine-cross-checked",
+      "text": "Password"
+    },
+    "setup.mqtt.password.unchanged": {
+      "sourceHash": "5c0dc8efedbfd8f8e3c437eb42d1a534009fc1318e48f09fa4b5076f05d1100f",
+      "state": "machine-cross-checked",
+      "text": "(invariata)"
+    },
+    "setup.mqtt.state.checking": {
+      "sourceHash": "a5bcbf22d2c6a0ddf91f7db36d6529776cd7aa4d1d8f8efd3197298448d8d397",
+      "state": "machine-cross-checked",
+      "text": "Controllo del broker…"
+    },
+    "setup.mqtt.state.checking_address": {
+      "sourceHash": "ffcbb57282f6e961676662a651a6281962148008533d546bfc0d4f6153478d32",
+      "state": "machine-cross-checked",
+      "text": "Controllo dell’indirizzo dal pannello…"
+    },
+    "setup.mqtt.state.checking_long": {
+      "sourceHash": "dd3ca5aabdb29d179dcc47e0f41941cf2b97efa2871dfcca214060c06f05c8f8",
+      "state": "machine-cross-checked",
+      "text": "Controllo del broker… Di solito richiede uno o due secondi."
+    },
+    "setup.mqtt.state.checking_sign_in": {
+      "sourceHash": "9f92b9ba2fd6383f35fa79b612e071fa02ff38057c3e9502fca81d4e58920143",
+      "state": "machine-cross-checked",
+      "text": "Controllo dell’accesso con {host}…"
+    },
+    "setup.mqtt.state.connected": {
+      "sourceHash": "27cd4153c8e0745787f861ef4ff98933cf547109339258cf96aa1d5bac8ed80d",
+      "state": "machine-cross-checked",
+      "text": "✓ Connessione con {host} riuscita."
+    },
+    "setup.mqtt.state.rebuilding": {
+      "sourceHash": "7b451d5ca91bb4ca0e971e6f9e13546fb6c22b9fa0c7bfff4212257225ef1eed",
+      "state": "machine-cross-checked",
+      "text": "Operazione ancora in corso: il pannello sta ricreando la connessione al broker."
+    },
+    "setup.mqtt.state.saving_details": {
+      "sourceHash": "a25153f4225c51889674a8db895ced6aac961a1f7e126c1422967e2e2e330ce9",
+      "state": "machine-cross-checked",
+      "text": "Salvataggio dei dati sul pannello…"
+    },
+    "setup.mqtt.state.still_trying": {
+      "sourceHash": "943b0055672f9d3b19c92735abbed1111a3464da36a85436fcc8effedc744fe5",
+      "state": "machine-cross-checked",
+      "text": "Si tenta ancora di raggiungere {host}… Di solito succede con un indirizzo o una porta errati."
+    },
+    "setup.mqtt.state.unusually_slow": {
+      "sourceHash": "6ce83682e6f03ff78a3b0dc32db645a8153ca4d066330759a13bbae3a9400177",
+      "state": "machine-cross-checked",
+      "text": "Tempi insolitamente lunghi: il pannello tenta ancora di raggiungere {host}. Puoi attendere oppure annullare e controllare i dati."
+    },
+    "setup.mqtt.title": {
+      "sourceHash": "5125599de93725fd5360573bc326871a7b490ec9e996b14ecc7e3cdf32ad4d6d",
+      "state": "machine-cross-checked",
+      "text": "Connetti a MQTT"
+    },
+    "setup.mqtt.username.help": {
+      "sourceHash": "0825a3d176baffd5b5fd5f8e3d7e39c951b07afc8b1605ff585ae155022cdcff",
+      "state": "machine-cross-checked",
+      "text": "Di solito è il nome di accesso a Home Assistant, cioè quello digitato nella schermata di accesso di HA, non il nome visualizzato. Molti creano un utente HA dedicato solo ai pannelli."
+    },
+    "setup.mqtt.username.label": {
+      "sourceHash": "e3b89e9d33f88e523083d8b4436adcc3726c89e97fd3179a2e102d765d1b16ed",
+      "state": "machine-cross-checked",
+      "text": "Nome utente"
+    },
+    "setup.progress.dashboard": {
+      "sourceHash": "f4e60256299043246476ebc93bb0a35f178a41494faee700dcfcd2a94e211011",
+      "state": "machine-cross-checked",
+      "text": "Dashboard HA"
+    },
+    "setup.progress.mqtt": {
+      "sourceHash": "51b197a5083739756d3f8634ae444e9874b51e7703a7b6e72276385d54cf4db3",
+      "state": "machine-cross-checked",
+      "text": "MQTT"
+    },
+    "setup.progress.name": {
+      "sourceHash": "dcd1d5223f73b3a965c07e3ff5dbee3eedcfedb806686a05b9b3868a2c3d6d50",
+      "state": "machine-cross-checked",
+      "text": "Nome"
+    },
+    "setup.progress.optimize": {
+      "sourceHash": "aa5f530acb509a3547fc2a5cc3f1c92da93af2f5b466417527e59d0f50f00c7b",
+      "state": "machine-cross-checked",
+      "text": "Ottimizzazione"
+    },
+    "setup.progress.server": {
+      "sourceHash": "aef7de28d52977f1b5cd0fecfdc151717610adf41e0aa33b4d9f7522a43337ef",
+      "state": "machine-cross-checked",
+      "text": "Server"
+    },
+    "setup.progress.sign_in": {
+      "sourceHash": "5ee3862fa2ccf451111bf31ad62398c5f18893b1732631180dbe331b72401f04",
+      "state": "machine-cross-checked",
+      "text": "Accesso HA"
+    },
+    "setup.proof.dashboard_help": {
+      "sourceHash": "099b789842ad17573a047cbd3d877adbf7b84a8d123e9af4507a25dcff19cbff",
+      "state": "machine-cross-checked",
+      "text": "La scheda Dashboard elenca eventuali problemi."
+    },
+    "setup.proof.milestone.applied": {
+      "sourceHash": "501134e0fdf7b170636955195ef1278143a0aa4335fe6527cd07bb9e17bcb734",
+      "state": "machine-cross-checked",
+      "text": "✓ Set filtrato applicato"
+    },
+    "setup.proof.milestone.apply_pending": {
+      "sourceHash": "c8d99e0e5aeeb53921b05885d5be324571327e1aafe52a5a44ecc35712a2e732",
+      "state": "machine-cross-checked",
+      "text": "○ Applica il set: la dashboard verrà ricaricata"
+    },
+    "setup.proof.milestone.build_pending": {
+      "sourceHash": "efcd854ff336f043f61a4fd7fd722c46939e8d092f7a9de511013966fecd0d77",
+      "state": "machine-cross-checked",
+      "text": "○ Crea il set filtrato"
+    },
+    "setup.proof.milestone.building": {
+      "sourceHash": "618221e51c196886e971d2c06069a7cfa9aad9abacc2b48d52ae152c00d77596",
+      "state": "machine-cross-checked",
+      "text": "● Creazione del set filtrato…"
+    },
+    "setup.proof.milestone.entities_read": {
+      "sourceHash": "b7da12071a30921c68a801a8c185a26fcff580a1baff8c4bba9be156877ed0d7",
+      "state": "machine-cross-checked",
+      "text": "✓ Entità lette"
+    },
+    "setup.proof.milestone.entities_read_count.one": {
+      "sourceHash": "cae6b70b078df3414f2bedd7117beea5f09754226b276d9f18ab3cd8ddac5270",
+      "state": "machine-cross-checked",
+      "text": "✓ Entità lette ({count})"
+    },
+    "setup.proof.milestone.entities_read_count.other": {
+      "sourceHash": "cae6b70b078df3414f2bedd7117beea5f09754226b276d9f18ab3cd8ddac5270",
+      "state": "machine-cross-checked",
+      "text": "✓ Entità lette ({count})"
+    },
+    "setup.proof.milestone.loading": {
+      "sourceHash": "10373fe801f25404a411d4f625bc9407b2f57720321b24290fc36e557c27f5e8",
+      "state": "machine-cross-checked",
+      "text": "● Caricamento della dashboard: potrebbe ricaricarsi ancora una o due volte mentre il pannello esegue le ultime ottimizzazioni"
+    },
+    "setup.proof.milestone.reading.one": {
+      "sourceHash": "0011d951542a81e43c8ad7173cf89c470caa42b2bbded3b697decd6b5c6cc856",
+      "state": "machine-cross-checked",
+      "text": "● Lettura delle entità: {count} finora"
+    },
+    "setup.proof.milestone.reading.other": {
+      "sourceHash": "0011d951542a81e43c8ad7173cf89c470caa42b2bbded3b697decd6b5c6cc856",
+      "state": "machine-cross-checked",
+      "text": "● Lettura delle entità: {count} finora"
+    },
+    "setup.proof.slow_prompt": {
+      "sourceHash": "d83ea75e407a427c6cf32c47ffc4ab85b190f5ee7465e32c162e684924d71209",
+      "state": "machine-cross-checked",
+      "text": "Ci sta mettendo troppo?"
+    },
+    "setup.proof.state": {
+      "sourceHash": "b615c935f105b2be8bd5823406f7dc98af95d833c436b1903f77dbdde1442727",
+      "state": "machine-cross-checked",
+      "text": "Il pannello dovrebbe star configurando la dashboard in questo momento. Questa pagina confermerà quando Home Assistant sarà visualizzato."
+    },
+    "setup.proof.title": {
+      "sourceHash": "750a358a4affcdd22d5a3a8fa8dae764132b73e8a95ff2be408fe71907aefb8b",
+      "state": "machine-cross-checked",
+      "text": "Ci siamo quasi"
+    },
+    "setup.renderer.action.open_dashboard_setting": {
+      "sourceHash": "c5d268cd415c70ca4aea5846a37468004b27384beabc5f9ca171e7ed1ecb484d",
+      "state": "machine-cross-checked",
+      "text": "Apri l’impostazione Dashboard"
+    },
+    "setup.renderer.failure.explanation": {
+      "sourceHash": "7231ee927e2894750e5b28a26096bb451b8dbaf5e9a3b0bb87a7929cdb7b1fbf",
+      "state": "machine-cross-checked",
+      "text": "Scegli il renderer integrato di ha-paneld (o un’altra app installata) nella scheda Dashboard di Tutte le impostazioni, quindi torna qui."
+    },
+    "setup.renderer.failure.package_missing": {
+      "sourceHash": "70b629f6057b064596a9a4cb7b121cbb963a31ce656d180885977d33164934a1",
+      "state": "machine-cross-checked",
+      "text": "“{package}” è impostato come app della plancia, ma non è installato su questo pannello."
+    },
+    "setup.renderer.failure.title": {
+      "sourceHash": "f124b11bac29595c963cc2bec57abe03fe65161d516c1286e2b3f30659aebfa5",
+      "state": "machine-cross-checked",
+      "text": "L’app selezionata per la plancia non è disponibile."
+    },
+    "setup.renderer.failure.unresolved": {
+      "sourceHash": "7ad3852774eb0101f6c42c6d1e007d4bc14470995d3c423ee636462f1f138429",
+      "state": "machine-cross-checked",
+      "text": "Non è stato possibile determinare un’app della plancia per questo pannello."
+    },
+    "setup.renderer.title": {
+      "sourceHash": "14aa0862ea25962ece822547492ce334ceb761d669208f16d5cd99754182021d",
+      "state": "machine-cross-checked",
+      "text": "Scegli cosa mostrare su questo schermo"
+    },
+    "setup.repair.explanation": {
+      "sourceHash": "c4ab1bbb196d9f326a880ca9ccae6bb7379404d0dc3a3b093419128d3e366684",
+      "state": "machine-cross-checked",
+      "text": "Le impostazioni sono ancora presenti: non è stato reimpostato nulla. Un elemento qui sotto richiede attenzione."
+    },
+    "setup.repair.title": {
+      "sourceHash": "9bdb93d664d81388f48ec5691545733067f9c97140a7d065d57e9eaf51d1b175",
+      "state": "machine-cross-checked",
+      "text": "Questo pannello non funziona più correttamente."
+    },
+    "setup.revisit.continue": {
+      "sourceHash": "e91e73300eb0a7c785c9ef3ab67a355f3b9301912c0dc363d6a83e13e8235ec8",
+      "state": "machine-cross-checked",
+      "text": "Continua la configurazione →"
+    },
+    "setup.revisit.notice": {
+      "sourceHash": "1eda0d6d519704cf03777c93baa662b2346af8223bd8f4e19da72b0297b938b0",
+      "state": "machine-cross-checked",
+      "text": "Stai tornando a un passaggio precedente."
+    },
+    "setup.sign_in.browser.account_note": {
+      "sourceHash": "c21e7c5554bc9af38c7d63cc4e03ff6c1e810f9196a2deeee327be571239ff30",
+      "state": "machine-cross-checked",
+      "text": "Se questo browser ha già eseguito l’accesso a Home Assistant, il pannello potrebbe connettersi con il tuo account. Per tenere il pannello su un account dedicato, accedi con quello quando compare la schermata di accesso."
+    },
+    "setup.sign_in.browser.action": {
+      "sourceHash": "2156d3d0ffec67754113b031381746b97f114d4f288f7ef1440cca95d4de94ad",
+      "state": "machine-cross-checked",
+      "text": "Accedi da questo browser"
+    },
+    "setup.sign_in.browser.explanation": {
+      "sourceHash": "b232e258d00a920f5a7c26708084cd52f240d4fa2af1d7453a71f0c05f7448c1",
+      "state": "machine-cross-checked",
+      "text": "Qui comparirà la schermata di accesso di Home Assistant: accedi con l’account che vuoi far usare al pannello. Uscirai da questa pagina e tornerai automaticamente."
+    },
+    "setup.sign_in.browser.title": {
+      "sourceHash": "2156d3d0ffec67754113b031381746b97f114d4f288f7ef1440cca95d4de94ad",
+      "state": "machine-cross-checked",
+      "text": "Accedi da questo browser"
+    },
+    "setup.sign_in.lead": {
+      "sourceHash": "088032bf3fc995e05ac29732a9b253cb50aa22702caa3b62d039b28e3d9bdda4",
+      "state": "machine-cross-checked",
+      "text": "La plancia integrata deve essere autorizzata a leggere il tuo Home Assistant."
+    },
+    "setup.sign_in.panel.explanation": {
+      "sourceHash": "054bf5b81047b2c639b8ef4dacb8c87dca5d459fbdfc40335b90887774e243f8",
+      "state": "machine-cross-checked",
+      "text": "Il pannello mostra sul proprio schermo un accesso a Home Assistant separato. Non riutilizza mai un altro accesso, quindi lì ottieni sempre un accesso nuovo: utile se vuoi avere la certezza che il pannello usi un account dedicato. Accedi sul pannello e questa pagina se ne accorgerà."
+    },
+    "setup.sign_in.panel.title": {
+      "sourceHash": "86780e3183bad5435e24db04f8ebd8edfebbbe2312b73c7d3f6772b473e0d535",
+      "state": "machine-cross-checked",
+      "text": "Oppure accedi dal pannello"
+    },
+    "setup.sign_in.recommended": {
+      "sourceHash": "dd6d876548037ec722252b45795206575e7040eba1ca076cf1732a4a903cadba",
+      "state": "machine-cross-checked",
+      "text": "consigliato"
+    },
+    "setup.sign_in.state.in_progress": {
+      "sourceHash": "4eca2929c8f06dc9d764f830e4aa3ea03cff84f3a3857487281d0d21d9fa25be",
+      "state": "machine-cross-checked",
+      "text": "Accesso in corso… completalo qui o sul pannello."
+    },
+    "setup.sign_in.state.waiting": {
+      "sourceHash": "d6dfb33f6411d1945de51bbd39f41ea4eac18e28b1050ff36036a809768fec9f",
+      "state": "machine-cross-checked",
+      "text": "Scegli un’opzione qui sopra. Dopo l’accesso, la pagina si aggiornerà automaticamente."
+    },
+    "setup.sign_in.title": {
+      "sourceHash": "e4a8bccd1b2c38a0eb5ce9801af2a2d6907bb2f70952a39b45ab265c0ac33895",
+      "state": "machine-cross-checked",
+      "text": "Accedi a Home Assistant"
+    },
+    "setup.state.saving": {
+      "sourceHash": "23e39291d6135814ed7c936e278974544b0df5fbf0eb0427b6700979b7472a93",
+      "state": "machine-cross-checked",
+      "text": "Salvataggio…"
+    },
+    "setup.webview.action.update": {
+      "sourceHash": "314e0cd759cc66a9ddbb26e2b1eab85935143c012e8d2f309bdf0c80f757d131",
+      "state": "machine-cross-checked",
+      "text": "Aggiorna il motore del browser del pannello"
+    },
+    "setup.webview.companion_does_not_help": {
+      "sourceHash": "4171f88e5b4a771642eb0eb6f9f3b801f333f3770ccaea54ee59339ced8b07fe",
+      "state": "machine-cross-checked",
+      "text": "Scegliere invece l’app Home Assistant non serve: disegna la plancia con lo stesso motore."
+    },
+    "setup.webview.explanation": {
+      "sourceHash": "8e3d6c18386c6ca7d5aff8cfc2a6b145770278275ba6d881c421e2b9afa01e0f",
+      "state": "machine-cross-checked",
+      "text": "Il motore browser di questo pannello è troppo vecchio per mostrare una plancia Home Assistant attuale. Tutto il resto può essere configurato perfettamente, ma la plancia risulterà comunque vuota o malfunzionante: conviene risolvere prima questo problema."
+    },
+    "setup.webview.fixable_note": {
+      "sourceHash": "8a3b1bb25e78c03726a64b0b02054e389a04cf19850680c62b4e004cb348562c",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld installa la build compatibile con questo hardware. Il pannello si riavvia una volta per attivarla; servono uno o due minuti."
+    },
+    "setup.webview.manual_note": {
+      "sourceHash": "464dc553f785e31bb4878a421d52a46a91c913d436bd9b65f5fbd4a0ff59c885",
+      "state": "machine-cross-checked",
+      "text": "Per questo modello di pannello non è incluso un motore compatibile, quindi va aggiornato manualmente: di solito tramite l’aggiornamento di sistema del pannello stesso o installando un Android System WebView recente."
+    },
+    "setup.webview.state.installing": {
+      "sourceHash": "0e6b5fc4b901e48f22008eee43a344913908974aa311394b77abc5dadac92bc8",
+      "state": "machine-cross-checked",
+      "text": "Installazione del motore consigliato sul pannello. Al termine il pannello si riavvia una volta, poi la pagina continua automaticamente."
+    },
+    "setup.webview.state.installing_short": {
+      "sourceHash": "530bcc355f0a3cd6a75a5216f1648e3dc48da5615ee41f56e033f4732982a3df",
+      "state": "machine-cross-checked",
+      "text": "Installazione…"
+    },
+    "setup.webview.title": {
+      "sourceHash": "c408def35c0373230b7dd6da75056046236ddd96415495d4935697de526844fa",
+      "state": "machine-cross-checked",
+      "text": "Il motore browser del pannello deve essere aggiornato"
     },
     "shell.action.reload": {
       "sourceHash": "4027f515418b77482d033970fe4e6cc2c9b6dbd8d19201c31afd06d080a07f41",

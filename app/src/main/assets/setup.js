@@ -27,11 +27,54 @@
   var pollTimer = null;
   var ladderTimer = null;
 
+  /* Guarded like every secondary page: a missing or malformed catalogue projection must leave the
+   * complete English wizard usable. Call sites remain the authority for that fallback copy. */
+  function i18nText(key, fallback, values) {
+    if (window.HaI18n && typeof window.HaI18n.t === "function") {
+      return window.HaI18n.t(key, fallback, values);
+    }
+    return String(fallback == null ? "" : fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g,
+      function (placeholder, name) {
+        return values && Object.prototype.hasOwnProperty.call(values, name)
+          ? String(values[name]) : placeholder;
+      });
+  }
+
+  function requestedLocale() {
+    return window.HaI18n && typeof window.HaI18n.locale === "string"
+      ? window.HaI18n.locale : (document.documentElement.lang || "en");
+  }
+
+  function localizedNumber(value) {
+    try { return Number(value).toLocaleString(requestedLocale()); }
+    catch (_) { return Number(value).toLocaleString(); }
+  }
+
+  function pluralCategory(value) {
+    try { return new Intl.PluralRules(requestedLocale()).select(Number(value)); }
+    catch (_) { return Number(value) === 1 ? "one" : "other"; }
+  }
+
+  /* Authored links stay in the request locale. Opaque external OAuth and discovered URLs never pass
+   * through this helper. Fragment-only links already retain the current query by browser semantics. */
+  function internalHref(path) {
+    var params = new URLSearchParams(location.search);
+    // en-XA is emitted only by debug builds, but when it is the server-resolved locale its authored
+    // links must retain the pseudolocale just like every release locale.
+    var supported = ["en", "de", "es", "fr", "it", "zh-Hans", "en-XA"];
+    if (!params.has("lang") && !params.has("ha_lang")) return path;
+    var lang = requestedLocale();
+    if (supported.indexOf(lang) === -1) return path;
+    var url = new URL(path, location.origin);
+    if (url.origin !== location.origin) return path;
+    url.searchParams.set("lang", lang);
+    return url.pathname + url.search + url.hash;
+  }
+
   function el(tag, attrs, kids) {
     var n = document.createElement(tag);
     Object.keys(attrs || {}).forEach(function (k) {
       if (k === "text") n.textContent = attrs[k];
-      else if (k === "html") n.innerHTML = attrs[k]; // wizard-authored strings only, never user input
       else if (k.indexOf("on") === 0) n.addEventListener(k.slice(2), attrs[k]);
       else n.setAttribute(k, attrs[k]);
     });
@@ -74,8 +117,8 @@
       body: new URLSearchParams(fields).toString(),
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
-        if (r.status === 202) throw { approval: true, message: body.message || "Approve this request on the panel, then save again." };
-        if (!r.ok) throw { message: body.error || body.message || ("The panel refused this (HTTP " + r.status + ").") };
+        if (r.status === 202 && body.error === "approval-required") throw { approval: true, message: i18nText("setup.error.approval_required", "Approve this request on the panel, then save again.") };
+        if (!r.ok) throw { message: body.error || body.message || i18nText("setup.error.http_refused", "The panel refused this (HTTP {status}).", { status: r.status }) };
         return body;
       });
     }, function (networkError) {
@@ -89,7 +132,7 @@
         return new Promise(function (resolve) { setTimeout(resolve, delay); })
           .then(function () { return postFormAttempt(path, fields, retriesLeft - 1); });
       }
-      throw { message: "Couldn’t reach the panel — check the connection and try again." };
+      throw { message: i18nText("setup.error.panel_unreachable", "Couldn’t reach the panel — check the connection and try again.") };
     });
   }
 
@@ -119,7 +162,11 @@
     if (journey.repair) { dotsHost.textContent = ""; dotsHost.hidden = true; return; }
     dotsHost.hidden = false;
     // Dot 1 covers the renderer choice AND the HA server address; dot 3 is which HA dashboard shows.
-    var labels = ["Name", "Server", "HA sign-in", "HA dash", "MQTT", "Optimize"];
+    var labels = [
+      i18nText("setup.progress.name", "Name"), i18nText("setup.progress.server", "Server"),
+      i18nText("setup.progress.sign_in", "HA sign-in"), i18nText("setup.progress.dashboard", "HA dash"),
+      i18nText("setup.progress.mqtt", "MQTT"), i18nText("setup.progress.optimize", "Optimize")
+    ];
     var currentIdx = journey.complete ? labels.length : (DOT_OF_STAGE[journey.next] !== undefined ? DOT_OF_STAGE[journey.next] : labels.length);
     var anyInFlight = (journey.steps || []).some(function (s) {
       return s.status === "in_flight" && DOT_OF_STAGE[s.stage] === currentIdx;
@@ -225,8 +272,8 @@
     // told their settings survived BEFORE they see an empty-looking password field and conclude a wipe.
     if (journey && journey.repair && key !== "done") {
       stepHost.appendChild(el("div", { class: "setup info" }, [
-        el("b", { text: "This panel has stopped working fully. " }),
-        document.createTextNode("Its settings are still here — nothing has been reset. One thing needs attention below."),
+        el("b", { text: i18nText("setup.repair.title", "This panel has stopped working fully.") + " " }),
+        document.createTextNode(i18nText("setup.repair.explanation", "Its settings are still here — nothing has been reset. One thing needs attention below.")),
       ]));
     }
     kids.forEach(function (k) { if (k) stepHost.appendChild(k); });
@@ -241,20 +288,25 @@
     var preview = el("div", { class: "wiz-preview", "aria-hidden": "true" });
     function paint(v) {
       var s = slug(v) || "panel";
-      preview.innerHTML = "Home Assistant will name everything on this panel from it:<br>" +
-        ["sensor." + s + "_temperature", "light." + s + "_screen", "button." + s + "_restart"]
-          .map(function (x) { return "&nbsp;&nbsp;<b>" + x + "</b>"; }).join("<br>");
+      preview.textContent = "";
+      preview.appendChild(document.createTextNode(i18nText("setup.identity.preview_intro",
+        "Home Assistant will name everything on this panel from it:")));
+      ["sensor." + s + "_temperature", "light." + s + "_screen", "button." + s + "_restart"]
+        .forEach(function (entityId) {
+          preview.appendChild(el("br"));
+          preview.appendChild(document.createTextNode("\u00a0\u00a0"));
+          preview.appendChild(el("b", { text: entityId }));
+        });
     }
     paint(id);
-    var body = card("Name this panel",
+    var body = card(i18nText("setup.identity.title", "Name this panel"),
       // Matches the real journey (the six dots above): name, what the screen shows, the sign-in, the
       // dashboard, then the broker and the entity question. Kept loose ("a few quick questions") rather
       // than a count, because several steps are skipped for a Companion-app renderer.
-      "A name, your Home Assistant server and sign-in, the dashboard to show, then your MQTT broker — " +
-      "a few quick questions and you’re done. You can stop and come back; nothing is lost.", [
+      i18nText("setup.identity.lead", "A name, your Home Assistant server and sign-in, the dashboard to show, then your MQTT broker — a few quick questions and you’re done. You can stop and come back; nothing is lost."), [
       el("fieldset", { id: "wiz-fs", style: "border:0;padding:0;margin:0" }, [
-        field("panel_id", "Panel ID",
-          "Pick something you’ll recognise in a long list — where it is, usually. Lowercase letters, digits and underscores.",
+        field("panel_id", i18nText("setup.identity.panel_id.label", "Panel ID"),
+          i18nText("setup.identity.panel_id.help", "Pick something you’ll recognise in a long list — where it is, usually. Lowercase letters, digits and underscores."),
           {
             // Home Assistant object_ids are [a-z0-9_], so prohibited characters are converted as typed
             // rather than silently rewritten on save: what the field shows is what gets stored.
@@ -263,12 +315,10 @@
             oninputExtra: function (e) { paint(e.target.value); },
           }),
         preview,
-        el("p", { class: "wiz-consequence", text:
-          "You can change this later, but it renames every one of those entities, so anything already " +
-          "pointing at them (automations, dashboards, scripts) would need updating too. Most people set it once, here." }),
-        field("friendly_name", "Friendly Name", "Just the label in Home Assistant. Safe to change any time.",
+        el("p", { class: "wiz-consequence", text: i18nText("setup.identity.panel_id.consequence", "You can change this later, but it renames every one of those entities, so anything already pointing at them (automations, dashboards, scripts) would need updating too. Most people set it once, here.") }),
+        field("friendly_name", i18nText("setup.identity.friendly_name.label", "Friendly Name"), i18nText("setup.identity.friendly_name.help", "Just the label in Home Assistant. Safe to change any time."),
           { value: typed.friendly_name !== undefined ? typed.friendly_name : (journey.panel && journey.panel.name || "") }),
-        primary("Save and continue", saveIdentity),
+        primary(i18nText("setup.action.save_continue", "Save and continue"), saveIdentity),
       ]),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ]);
@@ -278,7 +328,7 @@
   function saveIdentity() {
     var fields = {};
     var id = typed.panel_id !== undefined ? typed.panel_id : (journey.panel && journey.panel.id || "");
-    if (slug(id) === "") { stepErr("The panel needs a name — letters and digits."); return; }
+    if (slug(id) === "") { stepErr(i18nText("setup.identity.error.name_required", "The panel needs a name — letters and digits.")); return; }
     if (typed.panel_id !== undefined) fields.panel_id = typed.panel_id;
     if (typed.friendly_name !== undefined) fields.friendly_name = typed.friendly_name;
     var startKey = renderedKey;
@@ -296,13 +346,20 @@
   function discoveryNote(forField) {
     var d = journey.discovery || {};
     if (discovery && discovery[forField] && typed[forField] === undefined) {
-      return el("div", { class: "setup info", text:
-        "Found on your network: " + discovery[forField] + ". Change it if that’s not right." });
+      return el("div", { class: "setup info", text: i18nText("setup.discovery.found", "Found on your network: {value}. Change it if that’s not right.", { value: discovery[forField] }) });
     }
     if (d.outcome === "unavailable") {
-      var why = d.explanation ? (" — " + d.explanation + "." ) : ".";
-      return el("div", { class: "setup info", text:
-        "We couldn’t find this automatically" + why + " That’s normal on some networks — type it below; it works exactly the same." });
+      var reasons = {
+        broker_not_on_link: ["setup.discovery.unavailable.broker_not_on_link", "We couldn’t find this automatically — Home Assistant is on a different network segment from this panel, and automatic discovery only works within one segment. That’s normal on some networks — type it below; it works exactly the same."],
+        mdns_not_running: ["setup.discovery.unavailable.mdns_not_running", "We couldn’t find this automatically — this panel’s network discovery service is not running. That’s normal on some networks — type it below; it works exactly the same."],
+        no_multicast_lock: ["setup.discovery.unavailable.no_multicast_lock", "We couldn’t find this automatically — this panel cannot receive network discovery traffic. That’s normal on some networks — type it below; it works exactly the same."],
+        no_responses_at_all: ["setup.discovery.unavailable.no_responses_at_all", "We couldn’t find this automatically — nothing answered this panel’s discovery request, so Home Assistant may be on another network segment or discovery traffic may be blocked. That’s normal on some networks — type it below; it works exactly the same."],
+        error: ["setup.discovery.unavailable.error", "We couldn’t find this automatically — this panel’s network discovery attempt failed. That’s normal on some networks — type it below; it works exactly the same."]
+      };
+      var reasonCopy = reasons[d.reason];
+      return el("div", { class: "setup info", text: reasonCopy
+        ? i18nText(reasonCopy[0], reasonCopy[1])
+        : i18nText("setup.discovery.unavailable.generic", "We couldn’t find this automatically. That’s normal on some networks — type it below; it works exactly the same.") });
     }
     return null;
   }
@@ -322,45 +379,41 @@
     }
     var creds = step("mqtt_credentials");
     var pwHelp = creds.status === "satisfied"
-      ? "The password isn’t shown for security. Leave it blank to keep the current one, or type a new one."
-      : "The password for that Home Assistant user.";
+      ? i18nText("setup.mqtt.password.help_existing", "The password isn’t shown for security. Leave it blank to keep the current one, or type a new one.")
+      : i18nText("setup.mqtt.password.help_new", "The password for that Home Assistant user.");
     var kids = [
       // A failure means an address was already entered — repeating "we couldn't find one automatically"
       // next to "nothing answered at X" is two banners saying less than one.
       failure ? null : discoveryNote("mqtt_broker"),
       failure,
       el("fieldset", { id: "wiz-fs", style: "border:0;padding:0;margin:0" }, [
-        field("mqtt_broker", "Broker URL", "Usually tcp:// then your Home Assistant’s address and :1883.",
+        field("mqtt_broker", i18nText("setup.mqtt.broker.label", "Broker URL"), i18nText("setup.mqtt.broker.help", "Usually tcp:// then your Home Assistant’s address and :1883."),
           { input: { inputmode: "url", placeholder: "tcp://192.168.1.10:1883" },
             value: discovery && discovery.mqtt_broker || "" }),
         // Prefilled with the signed-in account's LOGIN name when readable (admin accounts only — HA
         // exposes the shortname nowhere else): the Mosquitto add-on authenticates against HA users, so
         // it is the likely MQTT username. Visibly editable like every suggestion.
-        field("mqtt_user", "Username",
-          "Usually your Home Assistant login name — the name typed on HA’s sign-in screen, not the display " +
-          "name. Many people create a dedicated HA user just for panels.",
+        field("mqtt_user", i18nText("setup.mqtt.username.label", "Username"),
+          i18nText("setup.mqtt.username.help", "Usually your Home Assistant login name — the name typed on HA’s sign-in screen, not the display name. Many people create a dedicated HA user just for panels."),
           { value: (hdArea && hdArea.ha_username) || "" }),
-        field("mqtt_password", "Password", pwHelp, { input: { type: "password", placeholder: creds.status === "satisfied" ? "(unchanged)" : "" } }),
+        field("mqtt_password", i18nText("setup.mqtt.password.label", "Password"), pwHelp, { input: { type: "password", placeholder: creds.status === "satisfied" ? i18nText("setup.mqtt.password.unchanged", "(unchanged)") : "" } }),
         el("details", {}, [
-          el("summary", { text: "Where do I find these?" }),
-          el("p", { text:
-            "In Home Assistant: Settings → Add-ons → Mosquitto broker. The address is usually tcp:// followed by " +
-            "your Home Assistant IP and :1883. The username and password are a Home Assistant user — " +
-            "Settings → People → Add person, with “Allow login” on." }),
+          el("summary", { text: i18nText("setup.mqtt.help.title", "Where do I find these?") }),
+          el("p", { text: i18nText("setup.mqtt.help.body", "In Home Assistant: Settings → Add-ons → Mosquitto broker. The address is usually tcp:// followed by your Home Assistant IP and :1883. The username and password are a Home Assistant user — Settings → People → Add person, with “Allow login” on.") }),
         ]),
-        primary("Save and continue", saveMqtt),
+        primary(i18nText("setup.action.save_continue", "Save and continue"), saveMqtt),
       ]),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ];
-    show([card("Connect to MQTT",
-      "MQTT is how the panel and Home Assistant talk. Without it, Home Assistant can’t see the panel at all.",
+    show([card(i18nText("setup.mqtt.title", "Connect to MQTT"),
+      i18nText("setup.mqtt.lead", "MQTT is how the panel and Home Assistant talk. Without it, Home Assistant can’t see the panel at all."),
       kids)], "mqtt" + (failure ? ":fail" : ""));
   }
 
   function saveMqtt() {
     var broker = (typed.mqtt_broker !== undefined ? typed.mqtt_broker : (discovery && discovery.mqtt_broker || "")).trim();
     if (!/^(tcp|mqtt|ssl|mqtts|tls):\/\//i.test(broker)) {
-      stepErr("The broker URL needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883.");
+      stepErr(i18nText("setup.mqtt.error.scheme", "The broker URL needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883."));
       focusField("mqtt_broker");
       return;
     }
@@ -375,8 +428,8 @@
     // again (seen on hardware review). lockStep disables it; the label change is what makes it read.
     lockStep(true);
     var saveBtn = stepHost.querySelector("button.wiz-primary");
-    if (saveBtn) saveBtn.textContent = "Checking the address…";
-    setLive("Checking the address from the panel…");
+    if (saveBtn) saveBtn.textContent = i18nText("setup.mqtt.action.checking_address", "Checking the address…");
+    setLive(i18nText("setup.mqtt.state.checking_address", "Checking the address from the panel…"));
     // PRE-FLIGHT before committing anything: the panel resolves the host and touches the port in ~2s,
     // so a typo'd hostname gets a named verdict immediately instead of a slow connect workflow (user
     // request after editing the hostname mid-walk). Advisory: a second press saves anyway, and a probe
@@ -390,27 +443,27 @@
       if (!p.ok && p.error !== undefined) {
         mqttPreflightWaived = broker; // the next press on the SAME address saves anyway
         lockStep(false);
-        if (saveBtn) saveBtn.textContent = "Save anyway";
+        if (saveBtn) saveBtn.textContent = i18nText("setup.mqtt.action.save_anyway", "Save anyway");
         setLive("");
         stepErr(p.error === "unresolvable"
-          ? "“" + (p.host || brokerHost(broker)) + "” doesn’t resolve on the panel’s network — check the address. Press again to save anyway."
+          ? i18nText("setup.mqtt.error.unresolvable", "“{host}” doesn’t resolve on the panel’s network — check the address. Press again to save anyway.", { host: p.host || brokerHost(broker) })
           : p.error === "invalid-url"
-            ? "That address isn’t a broker URL the panel can use — it needs tcp:// (or ssl://) and a host."
-            : "Nothing is listening at " + (p.host || brokerHost(broker)) + ":" + (p.port || 1883) + " — check the address and port. Press again to save anyway.");
+            ? i18nText("setup.mqtt.error.invalid_address", "That address isn’t a broker URL the panel can use — it needs tcp:// (or ssl://) and a host.")
+            : i18nText("setup.mqtt.error.nothing_listening", "Nothing is listening at {host}:{port} — check the address and port. Press again to save anyway.", { host: p.host || brokerHost(broker), port: p.port || 1883 }));
         return;
       }
-      if (saveBtn) saveBtn.textContent = "Saving…";
-      setLive("Saving these details to the panel…");
+      if (saveBtn) saveBtn.textContent = i18nText("setup.state.saving", "Saving…");
+      setLive(i18nText("setup.mqtt.state.saving_details", "Saving these details to the panel…"));
       postForm("/api/v1/config", fields)
         .then(function () {
-          if (saveBtn) saveBtn.textContent = "Checking the connection…";
+          if (saveBtn) saveBtn.textContent = i18nText("setup.mqtt.action.checking_connection", "Checking the connection…");
           verify = { t0: Date.now(), host: brokerHost(broker) };
           runLadder();
           schedule(1500);
         })
         .catch(function (e) {
           lockStep(false);
-          if (saveBtn) saveBtn.textContent = "Save and continue";
+          if (saveBtn) saveBtn.textContent = i18nText("setup.action.save_continue", "Save and continue");
           setLive("");
           stepErr(e.message);
         });
@@ -421,14 +474,14 @@
    * The panel keeps retrying in the background either way — only the PRESENTATION gives up. */
   function runLadder() {
     clearInterval(ladderTimer);
-    var host = verify.host || "the broker";
+    var host = verify.host || i18nText("setup.mqtt.host_fallback", "the broker");
     ladderTimer = setInterval(function () {
       if (!verify) { clearInterval(ladderTimer); return; }
       var t = Date.now() - verify.t0;
       var conn = step("mqtt_connection");
       if (conn.status === "satisfied") {
         clearInterval(ladderTimer);
-        setLive("✓ Connected to " + host + ".", true);
+        setLive(i18nText("setup.mqtt.state.connected", "✓ Connected to {host}.", { host: host }), true);
         setTimeout(function () { verify = null; typed = {}; refresh(); }, 1200);
         return;
       }
@@ -441,7 +494,7 @@
         if (conn.detail === "auth_failed") {
           if (verify.authSeenAt === undefined) { verify.authSeenAt = t; }
           if (t - verify.authSeenAt < 5000) {
-            setLive("Checking the sign-in with " + host + "…");
+            setLive(i18nText("setup.mqtt.state.checking_sign_in", "Checking the sign-in with {host}…", { host: host }));
             return;
           }
         }
@@ -471,19 +524,19 @@
         lockStep(false);
         mqttCard(mqttFailure("unreachable", host, true));
       } else if (t > 30000) {
-        setLive("Unusually slow — the panel is still trying to reach " + host + ". You can keep waiting, or cancel and check the details.");
+        setLive(i18nText("setup.mqtt.state.unusually_slow", "Unusually slow — the panel is still trying to reach {host}. You can keep waiting, or cancel and check the details.", { host: host }));
         revealCancel();
       } else if (t > 10000) {
         setLive(inFlight
-          ? "Still working — the panel is rebuilding its broker connection."
-          : "Still trying to reach " + host + "… A wrong address or port usually looks like this.");
+          ? i18nText("setup.mqtt.state.rebuilding", "Still working — the panel is rebuilding its broker connection.")
+          : i18nText("setup.mqtt.state.still_trying", "Still trying to reach {host}… A wrong address or port usually looks like this.", { host: host }));
         revealCancel();
       } else if (t > 6000) {
         revealCancel();
       } else if (t > 3000) {
-        setLive("Checking the broker… This usually takes a second or two.");
+        setLive(i18nText("setup.mqtt.state.checking_long", "Checking the broker… This usually takes a second or two."));
       } else {
-        setLive("Checking the broker…");
+        setLive(i18nText("setup.mqtt.state.checking", "Checking the broker…"));
       }
     }, 1000);
   }
@@ -492,54 +545,51 @@
     if (kind === "auth_failed") {
       typed.mqtt_password = undefined;
       setTimeout(function () { var f = focusField("mqtt_password"); if (f) f.value = ""; }, 120);
-      return failBanner("The broker is there, but it rejected this username and password.", [
-        "Good news: the address is right. The credentials aren’t.",
-        "The password isn’t shown back to you, so it can’t be checked by eye — please type it again. " +
-        "The username is a Home Assistant user account, not the add-on’s name.",
+      return failBanner(i18nText("setup.mqtt.failure.auth.title", "The broker is there, but it rejected this username and password."), [
+        i18nText("setup.mqtt.failure.auth.address_ok", "Good news: the address is right. The credentials aren’t."),
+        i18nText("setup.mqtt.failure.auth.retype", "The password isn’t shown back to you, so it can’t be checked by eye — please type it again. The username is a Home Assistant user account, not the add-on’s name."),
       ], true);
     }
     if (kind === "config_error") {
       setTimeout(function () { focusField("mqtt_broker"); }, 120);
-      return failBanner("That address isn’t a broker URL the panel can use.", [
-        "It needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883.",
+      return failBanner(i18nText("setup.mqtt.failure.config.title", "That address isn’t a broker URL the panel can use."), [
+        i18nText("setup.mqtt.failure.config.explanation", "It needs to start with tcp://, mqtt://, ssl://, mqtts:// or tls:// — for example tcp://192.168.1.10:1883."),
       ], true);
     }
     setTimeout(function () { focusField("mqtt_broker"); }, 120);
     return failBanner(
-      presumed ? ("We can’t reach " + host + " yet.") : ("Nothing answered at " + host + "."),
-      [
-        (presumed ? "The panel is still trying in the background, but this usually means the address or port is wrong. "
-                  : "The panel reached the network but found no MQTT broker there. ") +
-        "Worth checking: the broker’s IP address, the port (1883 for plain, 8883 for TLS), and that the " +
-        "Mosquitto add-on is running.",
-      ], true);
+      presumed ? i18nText("setup.mqtt.failure.unreachable.presumed_title", "We can’t reach {host} yet.", { host: host })
+        : i18nText("setup.mqtt.failure.unreachable.confirmed_title", "Nothing answered at {host}.", { host: host }),
+      [presumed
+        ? i18nText("setup.mqtt.failure.unreachable.presumed_body", "The panel is still trying in the background, but this usually means the address or port is wrong. Worth checking: the broker’s IP address, the port (1883 for plain, 8883 for TLS), and that the Mosquitto add-on is running.")
+        : i18nText("setup.mqtt.failure.unreachable.confirmed_body", "The panel reached the network but found no MQTT broker there. Worth checking: the broker’s IP address, the port (1883 for plain, 8883 for TLS), and that the Mosquitto add-on is running.")], true);
   }
 
   /* ---------- step 3: renderer (only when genuinely blocked — Auto resolves this for almost everyone) */
 
   function rendererCard() {
     var r = step("renderer");
-    show([card("Choose what shows on this screen", null, [
-      failBanner("The selected dashboard app isn’t available.", [
-        r.detail ? ("“" + r.detail + "” is set as the dashboard app but isn’t installed on this panel.") :
-          "No dashboard app could be resolved for this panel.",
-        "Pick ha-paneld’s built-in renderer (or another installed app) in the Dashboard card of All settings, then return here.",
+    show([card(i18nText("setup.renderer.title", "Choose what shows on this screen"), null, [
+      failBanner(i18nText("setup.renderer.failure.title", "The selected dashboard app isn’t available."), [
+        r.detail ? i18nText("setup.renderer.failure.package_missing", "“{package}” is set as the dashboard app but isn’t installed on this panel.", { package: r.detail }) :
+          i18nText("setup.renderer.failure.unresolved", "No dashboard app could be resolved for this panel."),
+        i18nText("setup.renderer.failure.explanation", "Pick ha-paneld’s built-in renderer (or another installed app) in the Dashboard card of All settings, then return here."),
       ]),
-      el("p", {}, [el("a", { class: "pbtn", href: "/configure#cfg-dashboard_package", text: "Open the Dashboard setting" })]),
+      el("p", {}, [el("a", { class: "pbtn", href: internalHref("/configure#cfg-dashboard_package"), text: i18nText("setup.renderer.action.open_dashboard_setting", "Open the Dashboard setting") })]),
     ])], "renderer");
   }
 
   /* ---------- step 3½: Home Assistant URL (built-in renderer only) ---------- */
 
   function haUrlCard() {
-    show([card("Where is Home Assistant?",
-      "The built-in dashboard loads straight from your Home Assistant.", [
+    show([card(i18nText("setup.ha_url.title", "Where is Home Assistant?"),
+      i18nText("setup.ha_url.lead", "The built-in dashboard loads straight from your Home Assistant."), [
       discoveryNote("ha_url"),
       el("fieldset", { id: "wiz-fs", style: "border:0;padding:0;margin:0" }, [
-        field("ha_url", "Home Assistant URL", "The address you open Home Assistant at, e.g. http://homeassistant.local:8123.",
+        field("ha_url", i18nText("setup.ha_url.label", "Home Assistant URL"), i18nText("setup.ha_url.help", "The address you open Home Assistant at, e.g. http://homeassistant.local:8123."),
           { input: { inputmode: "url", placeholder: "http://homeassistant.local:8123" },
             value: discovery && discovery.ha_url || "" }),
-        primary("Save and continue", saveHaUrl),
+        primary(i18nText("setup.action.save_continue", "Save and continue"), saveHaUrl),
       ]),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ])], "ha_url");
@@ -547,10 +597,10 @@
 
   function saveHaUrl() {
     var url = (typed.ha_url !== undefined ? typed.ha_url : (discovery && discovery.ha_url || "")).trim();
-    if (!/^https?:\/\//i.test(url)) { stepErr("The URL needs to start with http:// or https://."); focusField("ha_url"); return; }
+    if (!/^https?:\/\//i.test(url)) { stepErr(i18nText("setup.ha_url.error.scheme", "The URL needs to start with http:// or https://.")); focusField("ha_url"); return; }
     var startKey = renderedKey;
     lockStep(true);
-    setLive("Saving…");
+    setLive(i18nText("setup.state.saving", "Saving…"));
     postForm("/api/v1/config", { ha_url: url })
       .then(function () { typed = {}; refresh(); })
       .catch(function (e) { lockStep(false); if (renderedKey === startKey) { setLive(""); stepErr(e.message); } });
@@ -565,34 +615,32 @@
     // you control over the panel's account. The "connects as you" case is softened to "may", because it
     // only happens when this browser is already logged in to Home Assistant — not the common case.
     var browserRoute = el("div", { class: "wiz-route recommended" }, [
-      el("b", { text: "Sign in from this browser" }),
-      el("span", { class: "wiz-badge", text: "recommended" }),
-      el("p", { text:
-        "You’ll get the Home Assistant login here — sign in as whichever account you want the panel to use. " +
-        "You’ll leave this page and come back automatically." }),
-      el("p", { class: "muted", text:
-        "If this browser is already signed in to Home Assistant, the panel may connect as you. To keep the " +
-        "panel on its own account, sign in as that account when the login appears." }),
-      el("button", { class: "wiz-primary", type: "button", text: "Sign in from this browser", onclick: function (e) {
+      el("b", { text: i18nText("setup.sign_in.browser.title", "Sign in from this browser") }),
+      el("span", { class: "wiz-badge", text: i18nText("setup.sign_in.recommended", "recommended") }),
+      el("p", { text: i18nText("setup.sign_in.browser.explanation", "You’ll get the Home Assistant login here — sign in as whichever account you want the panel to use. You’ll leave this page and come back automatically.") }),
+      el("p", { class: "muted", text: i18nText("setup.sign_in.browser.account_note", "If this browser is already signed in to Home Assistant, the panel may connect as you. To keep the panel on its own account, sign in as that account when the login appears.") }),
+      el("button", { class: "wiz-primary", type: "button", text: i18nText("setup.sign_in.browser.action", "Sign in from this browser"), onclick: function (e) {
         e.target.disabled = true;
-        postForm("/api/v1/ha/oauth/start", { ha_url: haUrl })
+        postForm("/api/v1/ha/oauth/start", {
+          ha_url: haUrl,
+          ui_locale: requestedLocale(),
+          return_surface: "setup",
+          preserve_explicit_english: new URLSearchParams(location.search).has("lang") && requestedLocale() === "en" ? "1" : "0",
+        })
           .then(function (body) { location.assign(body.authorization_url); })
           .catch(function (err) { e.target.disabled = false; stepErr(err.message); });
       } }),
     ]);
     var panelRoute = el("div", { class: "wiz-route" }, [
-      el("b", { text: "Or sign in on the panel" }),
-      el("p", { text:
-        "The panel shows its own Home Assistant login on its screen. It never reuses another login, so you " +
-        "always get a fresh one there — handy if you want to be sure the panel uses a dedicated account. " +
-        "Sign in on the panel and this page will notice." }),
+      el("b", { text: i18nText("setup.sign_in.panel.title", "Or sign in on the panel") }),
+      el("p", { text: i18nText("setup.sign_in.panel.explanation", "The panel shows its own Home Assistant login on its screen. It never reuses another login, so you always get a fresh one there — handy if you want to be sure the panel uses a dedicated account. Sign in on the panel and this page will notice.") }),
     ]);
-    show([card("Sign in to Home Assistant",
-      "The built-in dashboard needs permission to read your Home Assistant.", [
+    show([card(i18nText("setup.sign_in.title", "Sign in to Home Assistant"),
+      i18nText("setup.sign_in.lead", "The built-in dashboard needs permission to read your Home Assistant."), [
       browserRoute,
       panelRoute,
-      statusLine(inFlight ? "A sign-in is in progress… finish it here or on the panel." :
-        "Choose an option above. This page updates by itself once you’ve signed in."),
+      statusLine(inFlight ? i18nText("setup.sign_in.state.in_progress", "A sign-in is in progress… finish it here or on the panel.") :
+        i18nText("setup.sign_in.state.waiting", "Choose an option above. This page updates by itself once you’ve signed in.")),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ])], "signin");
   }
@@ -607,17 +655,17 @@
     if (!ef.enabled) return null;
     var steps = [];
     if (l.scanned >= 0) {
-      steps.push("● Reading your entities — " + l.scanned.toLocaleString() + " so far");
-      steps.push("○ Build the filtered set");
-      steps.push("○ Apply it — the dashboard will reload");
+      steps.push(i18nText(pluralCategory(l.scanned) === "one" ? "setup.proof.milestone.reading.one" : "setup.proof.milestone.reading.other", "● Reading your entities — {count} so far", { count: localizedNumber(l.scanned) }));
+      steps.push(i18nText("setup.proof.milestone.build_pending", "○ Build the filtered set"));
+      steps.push(i18nText("setup.proof.milestone.apply_pending", "○ Apply it — the dashboard will reload"));
     } else if (!l.applied) {
-      steps.push("✓ Entities read" + (l.catalog >= 0 ? " (" + l.catalog.toLocaleString() + ")" : ""));
-      steps.push("● Building the filtered set…");
-      steps.push("○ Apply it — the dashboard will reload");
+      steps.push(l.catalog >= 0 ? i18nText(pluralCategory(l.catalog) === "one" ? "setup.proof.milestone.entities_read_count.one" : "setup.proof.milestone.entities_read_count.other", "✓ Entities read ({count})", { count: localizedNumber(l.catalog) }) : i18nText("setup.proof.milestone.entities_read", "✓ Entities read"));
+      steps.push(i18nText("setup.proof.milestone.building", "● Building the filtered set…"));
+      steps.push(i18nText("setup.proof.milestone.apply_pending", "○ Apply it — the dashboard will reload"));
     } else {
-      steps.push("✓ Entities read" + (l.catalog >= 0 ? " (" + l.catalog.toLocaleString() + ")" : ""));
-      steps.push("✓ Filtered set applied");
-      steps.push("● Loading the dashboard — it may reload once or twice more as the panel fine-tunes");
+      steps.push(l.catalog >= 0 ? i18nText(pluralCategory(l.catalog) === "one" ? "setup.proof.milestone.entities_read_count.one" : "setup.proof.milestone.entities_read_count.other", "✓ Entities read ({count})", { count: localizedNumber(l.catalog) }) : i18nText("setup.proof.milestone.entities_read", "✓ Entities read"));
+      steps.push(i18nText("setup.proof.milestone.applied", "✓ Filtered set applied"));
+      steps.push(i18nText("setup.proof.milestone.loading", "● Loading the dashboard — it may reload once or twice more as the panel fine-tunes"));
     }
     return el("div", { class: "wiz-milestones" }, steps.map(function (s) {
       return el("p", { class: "wiz-milestone", text: s });
@@ -625,25 +673,25 @@
   }
 
   function proofCard() {
-    show([card("Almost there",
+    show([card(i18nText("setup.proof.title", "Almost there"),
       null, [
-      statusLine("The panel should be setting up its dashboard now. This page will confirm when Home Assistant is rendering."),
+      statusLine(i18nText("setup.proof.state", "The panel should be setting up its dashboard now. This page will confirm when Home Assistant is rendering.")),
       learningMilestones(),
       el("p", { class: "muted" }, [
-        document.createTextNode("Taking too long? "),
-        el("a", { href: "/", text: "The Dashboard tab lists anything that’s wrong." }),
+        document.createTextNode(i18nText("setup.proof.slow_prompt", "Taking too long?") + " "),
+        el("a", { href: internalHref("/"), text: i18nText("setup.proof.dashboard_help", "The Dashboard tab lists anything that’s wrong.") }),
       ]),
     ])], "proof");
   }
 
   function attestCard() {
-    show([card("Is your dashboard on the panel now?",
-      "The dashboard app manages its own connection, so only you can confirm this.", [
-      primary("Yes, it’s there", function () {
+    show([card(i18nText("setup.attest.title", "Is your dashboard on the panel now?"),
+      i18nText("setup.attest.lead", "The dashboard app manages its own connection, so only you can confirm this."), [
+      primary(i18nText("setup.attest.yes", "Yes, it’s there"), function () {
         postForm("/api/v1/setup/attest", {}).then(refresh).catch(function (e) { stepErr(e.message); });
       }),
-      el("a", { class: "wiz-secondary", style: "display:block;text-align:center;padding:10px", href: "/",
-        text: "No — it’s blank or wrong" }),
+      el("a", { class: "wiz-secondary", style: "display:block;text-align:center;padding:10px", href: internalHref("/"),
+        text: i18nText("setup.attest.no", "No — it’s blank or wrong") }),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ])], "attest");
   }
@@ -656,44 +704,41 @@
    * for a panel that was never going to render. */
   function webViewCard(fixable) {
     var body = [
-      el("p", { class: "wiz-lead", text:
-        "This panel's browser engine is too old to show a current Home Assistant dashboard. Everything else " +
-        "can be set up perfectly and the dashboard will still come up blank or broken, so this is worth " +
-        "fixing first." }),
+      el("p", { class: "wiz-lead", text: i18nText("setup.webview.explanation", "This panel’s browser engine is too old to show a current Home Assistant dashboard. Everything else can be set up perfectly and the dashboard will still come up blank or broken, so this is worth fixing first.") }),
       // Said plainly because it is the wrong turn people take next: both renderers draw the dashboard in the
       // panel's one system WebView, so switching to the Home Assistant app does not avoid this.
-      el("p", { class: "wiz-consequence", text:
-        "Choosing the Home Assistant app instead will not help — it draws the dashboard using the same engine." }),
+      el("p", { class: "wiz-consequence", text: i18nText("setup.webview.companion_does_not_help", "Choosing the Home Assistant app instead will not help — it draws the dashboard using the same engine.") }),
     ];
     if (fixable) {
-      body.push(primary("Update the panel's browser engine", function (e) {
+      body.push(primary(i18nText("setup.webview.action.update", "Update the panel’s browser engine"), function (e) {
         e.target.disabled = true;
-        e.target.textContent = "Installing…";
+        e.target.textContent = i18nText("setup.webview.state.installing_short", "Installing…");
         postForm("/api/v1/webview/heal", {})
-          .then(function () {
-            setLive("Installing the recommended engine on the panel. It restarts once when it finishes, " +
-              "then this page continues by itself.");
+          .then(function (body) {
+            if (body.status !== "started") {
+              e.target.disabled = false;
+              e.target.textContent = i18nText("setup.webview.action.update", "Update the panel’s browser engine");
+              refresh();
+              return;
+            }
+            setLive(i18nText("setup.webview.state.installing", "Installing the recommended engine on the panel. It restarts once when it finishes, then this page continues by itself."));
           })
           .catch(function (err) {
             e.target.disabled = false;
-            e.target.textContent = "Update the panel's browser engine";
+            e.target.textContent = i18nText("setup.webview.action.update", "Update the panel’s browser engine");
             stepErr(err.message);
           });
       }));
-      body.push(el("p", { class: "muted", text:
-        "ha-paneld installs the build known to work on this hardware. The panel restarts once to switch to " +
-        "it, which takes a minute or two." }));
+      body.push(el("p", { class: "muted", text: i18nText("setup.webview.fixable_note", "ha-paneld installs the build known to work on this hardware. The panel restarts once to switch to it, which takes a minute or two.") }));
     } else {
       // No pinned build for this panel: say so rather than offering a button that cannot work.
-      body.push(el("p", { class: "wiz-consequence", text:
-        "There is no known-good engine bundled for this panel model, so this one needs updating by hand — " +
-        "usually through the panel's own system update, or by installing a current Android System WebView." }));
+      body.push(el("p", { class: "wiz-consequence", text: i18nText("setup.webview.manual_note", "There is no known-good engine bundled for this panel model, so this one needs updating by hand — usually through the panel’s own system update, or by installing a current Android System WebView.") }));
       body.push(el("p", { class: "wiz-cta" }, [
-        el("a", { class: "pbtn", href: "/", text: "Panel dashboard" }),
+        el("a", { class: "pbtn", href: internalHref("/"), text: i18nText("setup.action.panel_dashboard", "Panel dashboard") }),
       ]));
     }
     body.push(el("p", { class: "muted", id: "wiz-err", role: "alert" }));
-    show([card("The panel's browser engine needs updating", null, body)], "webview");
+    show([card(i18nText("setup.webview.title", "The panel’s browser engine needs updating"), null, body)], "webview");
   }
 
   /* ---------- step 4½: which dashboard this panel shows ----------
@@ -727,14 +772,13 @@
 
   function homeDashboardCard() {
     var body = [
-      el("p", { class: "wiz-lead", text:
-        "The dashboard this panel keeps returning to — after a reload, after idle, on boot." }),
-      el("div", { id: "hd-host" }, [statusLine("Fetching your dashboards from Home Assistant…")]),
+      el("p", { class: "wiz-lead", text: i18nText("setup.dashboard.lead", "The dashboard this panel keeps returning to — after a reload, after idle, on boot.") }),
+      el("div", { id: "hd-host" }, [statusLine(i18nText("setup.dashboard.state.fetching", "Fetching your dashboards from Home Assistant…"))]),
       el("div", { id: "hd-area" }),
-      primary("Use this dashboard", function (e) { answerHomeDashboard(e.target); }),
+      primary(i18nText("setup.dashboard.action.use", "Use this dashboard"), function (e) { answerHomeDashboard(e.target); }),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ];
-    show([card("Select the HA dashboard for this panel", null, body)], "home_dashboard");
+    show([card(i18nText("setup.dashboard.title", "Select the HA dashboard for this panel"), null, body)], "home_dashboard");
     loadHomeDashboardCatalog();
   }
 
@@ -763,7 +807,7 @@
     if (!hdArea || !hdArea.queried) return; // could not ask HA — the area is a bonus, never a blocker
     var current = hdArea.device && hdArea.device.found ? (hdArea.device.area_name || "") : "";
     var editable = hdArea.admin || !current;
-    host.appendChild(el("b", { class: "hd-area-label", text: "Set the HA Area that your panel is in" }));
+    host.appendChild(el("b", { class: "hd-area-label", text: i18nText("setup.area.label", "Set the HA Area that your panel is in") }));
     if (!editable) {
       // A DISABLED select, not bare text: it must read as "a control you don't have permission for",
       // not as missing UI (hardware-review note). Same control either way; only the permission differs.
@@ -771,14 +815,12 @@
       locked.appendChild(el("option", { text: current }));
       locked.disabled = true;
       host.appendChild(locked);
-      host.appendChild(el("small", { class: "hd-area-note", text:
-        "This panel is already registered in Home Assistant, so its area can only be changed there by an " +
-        "HA admin user — this panel will follow whatever is set." }));
+      host.appendChild(el("small", { class: "hd-area-note", text: i18nText("setup.area.locked_note", "This panel is already registered in Home Assistant, so its area can only be changed there by an HA admin user — this panel will follow whatever is set.") }));
       return;
     }
     var sel = el("select", { id: "wiz-ha_area",
       onchange: function (e) { typed.ha_area = e.target.value; } });
-    sel.appendChild(el("option", { value: "", text: current ? "No area" : "No area yet — pick one" }));
+    sel.appendChild(el("option", { value: "", text: current ? i18nText("setup.area.none", "No area") : i18nText("setup.area.none_yet", "No area yet — pick one") }));
     var chosenArea = typed.ha_area !== undefined ? typed.ha_area : (current || hdArea.requested || "");
     (hdArea.areas || []).forEach(function (a) {
       if (!a || !a.name) return;
@@ -788,10 +830,10 @@
     });
     host.appendChild(sel);
     host.appendChild(el("small", { class: "hd-area-note", text: hdArea.admin
-      ? "Where this panel lives. Home Assistant uses areas to build dashboards automatically."
+      ? i18nText("setup.area.admin_help", "Where this panel lives. Home Assistant uses areas to build dashboards automatically.")
       // Non-admin with an unregistered/area-less device: the choice is recorded and applied by the
       // first registration (suggested_area) or by the reconcile pass when an admin next signs in.
-      : "Where this panel lives. Your choice is saved and applies when the panel registers, or when a Home Assistant admin next signs in." }));
+      : i18nText("setup.area.non_admin_help", "Where this panel lives. Your choice is saved and applies when the panel registers, or when a Home Assistant admin next signs in.") }));
   }
 
   function paintHomeDashboards() {
@@ -802,20 +844,20 @@
     host.textContent = "";
     if (!hdCatalog || !hdCatalog.queried) {
       host.appendChild(el("div", { class: "setup info" }, [
-        el("b", { text: "Couldn’t fetch the dashboard list from Home Assistant yet. " }),
-        document.createTextNode("That can happen right after signing in. "),
-        el("a", { href: "#", text: "Try again", onclick: function (ev) {
+        el("b", { text: i18nText("setup.dashboard.fetch_failed.title", "Couldn’t fetch the dashboard list from Home Assistant yet.") + " " }),
+        document.createTextNode(i18nText("setup.dashboard.fetch_failed.explanation", "That can happen right after signing in.") + " "),
+        el("a", { href: "#", text: i18nText("setup.dashboard.fetch_failed.retry", "Try again"), onclick: function (ev) {
           ev.preventDefault();
           host.textContent = "";
-          host.appendChild(statusLine("Fetching your dashboards from Home Assistant…"));
+          host.appendChild(statusLine(i18nText("setup.dashboard.state.fetching", "Fetching your dashboards from Home Assistant…")));
           loadHomeDashboardCatalog();
         } }),
-        document.createTextNode(" — or continue with the account’s default below."),
+        el("span", { text: " " + i18nText("setup.dashboard.fetch_failed.continue", "Continue with the account’s default below.") }),
       ]));
     } else if (!items.length) {
       host.appendChild(el("div", { class: "setup problem" }, [
-        el("b", { text: "This account cannot access any Home Assistant dashboards. " }),
-        document.createTextNode("Create a dashboard or grant this account access, then try again."),
+        el("b", { text: i18nText("setup.dashboard.none_accessible.title", "This account cannot access any Home Assistant dashboards.") + " " }),
+        document.createTextNode(i18nText("setup.dashboard.none_accessible.explanation", "Create a dashboard or grant this account access, then try again.")),
       ]));
     }
     var current = typed.home_dashboard !== undefined ? typed.home_dashboard
@@ -827,19 +869,20 @@
     // never leave the sentinel sitting in the answer, even transiently.
     var sel = el("select", { id: "wiz-home_dashboard" });
     if (preselect === null) {
-      var ph = el("option", { value: "", text: "Choose a dashboard…" });
+      var ph = el("option", { value: "", text: i18nText("setup.dashboard.option.choose", "Choose a dashboard…") });
       ph.disabled = true; ph.selected = true;
       sel.appendChild(ph);
     }
     var auto = el("option", { value: "", text: def.explicit
-      ? "Auto — follow this account’s default" : "Auto — no default set for this account" });
+      ? i18nText("setup.dashboard.option.auto_default", "Auto — follow this account’s default")
+      : i18nText("setup.dashboard.option.auto_none", "Auto — no default set for this account") });
     if (preselect === "") auto.selected = true;
     sel.appendChild(auto);
     var seen = { "": true };
     ["panel", "dashboard"].forEach(function (group) {
       var members = items.filter(function (d) { return (d.group || "dashboard") === group; });
       if (!members.length) return;
-      var og = el("optgroup", { label: group === "panel" ? "Home Assistant dashboards" : "Your dashboards" });
+      var og = el("optgroup", { label: group === "panel" ? i18nText("setup.dashboard.group.ha", "Home Assistant dashboards") : i18nText("setup.dashboard.group.user", "Your dashboards") });
       members.forEach(function (d) {
         if (!d.path || seen[d.path]) return;
         seen[d.path] = true;
@@ -854,18 +897,17 @@
     // that is not in the list opens here rather than as an uneditable row, which is what finally lets
     // it be corrected on the panel itself.
     var customActive = !!preselect && !seen[preselect];
-    sel.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: "Custom — enter a dashboard path…" }));
+    sel.appendChild(el("option", { value: CUSTOM_DASHBOARD, text: i18nText("setup.dashboard.option.custom", "Custom — enter a dashboard path…") }));
     if (customActive) { hdCustom = true; typed.home_dashboard = preselect; }
     if (hdCustom) sel.value = CUSTOM_DASHBOARD;
     if (!def.explicit && !current) {
-      host.appendChild(el("p", { class: "wiz-consequence", text:
-        "This account has no default dashboard set — pick the dashboard this panel should show." }));
+      host.appendChild(el("p", { class: "wiz-consequence", text: i18nText("setup.dashboard.no_default", "This account has no default dashboard set — pick the dashboard this panel should show.") }));
     }
     host.appendChild(sel);
     var customValue = hdCustom && typed.home_dashboard !== undefined ? typed.home_dashboard
       : (preselect || "");
     var customInput = el("input", { type: "text", id: "wiz-home_dashboard_custom", class: "hd-custom-input",
-      value: customValue, placeholder: "/dashboard-name/tab-name", "aria-label": "Dashboard path",
+      value: customValue, placeholder: "/dashboard-name/tab-name", "aria-label": i18nText("setup.dashboard.path.label", "Dashboard path"),
       "aria-describedby": "wiz-home_dashboard_custom_note" });
     var customNote = el("small", { class: "hd-area-note hd-custom-note",
       id: "wiz-home_dashboard_custom_note", role: "status", "aria-live": "polite" });
@@ -878,9 +920,8 @@
       var root = dashboardRootOf(typed.home_dashboard);
       var unknown = root && hdCatalog && hdCatalog.queried && items.length && !seen[root];
       customNote.textContent = unknown
-        ? root + " is not a dashboard this account can see — the panel will fall back to its default"
-          + " until that dashboard exists."
-        : "A path on this Home Assistant, starting with a dashboard from the list.";
+        ? i18nText("setup.dashboard.path.unknown", "{root} is not a dashboard this account can see — the panel will fall back to its default until that dashboard exists.", { root: root })
+        : i18nText("setup.dashboard.path.help", "A path on this Home Assistant, starting with a dashboard from the list.");
       customNote.classList.toggle("warn", !!unknown);
     }
     customInput.addEventListener("input", function () {
@@ -914,7 +955,7 @@
     // and silently following the account default is the opposite of what Custom was chosen for.
     var customIncomplete = hdCustom && !(chosen && wellFormedDashboardPath(chosen));
     b.disabled = chosen === undefined || customIncomplete || (noDashboards && !hdCustom);
-    b.textContent = chosen === "" && !hdCustom ? "Follow the account’s default" : "Use this dashboard";
+    b.textContent = chosen === "" && !hdCustom ? i18nText("setup.dashboard.action.follow_default", "Follow the account’s default") : i18nText("setup.dashboard.action.use", "Use this dashboard");
   }
 
   /* Save the SETTING first and record the ANSWER second — same load-bearing order as the entity filter:
@@ -925,17 +966,17 @@
     var chosen = typed.home_dashboard !== undefined ? typed.home_dashboard
       : (journey.home_dashboard && journey.home_dashboard.value ||
         (hdCatalog === null ? undefined : (def.explicit ? def.path : undefined)));
-    if (chosen === undefined) { stepErr("Pick a dashboard first."); return; }
+    if (chosen === undefined) { stepErr(i18nText("setup.dashboard.error.choose_first", "Pick a dashboard first.")); return; }
     // The button is already disabled for this, so reaching here means the DOM was driven some other
     // way. Refuse rather than post a blank as Auto — the server would accept it, and the panel would
     // quietly follow the account default instead of the view the user came here to set.
     if (hdCustom && !(chosen && wellFormedDashboardPath(chosen))) {
-      stepErr("Enter a dashboard path, for example /dashboard-name/tab-name.");
+      stepErr(i18nText("setup.dashboard.error.path_required", "Enter a dashboard path, for example /dashboard-name/tab-name."));
       return;
     }
     lockStep(true);
     button.disabled = true;
-    button.textContent = "Saving…";
+    button.textContent = i18nText("setup.state.saving", "Saving…");
     var fields = { home_dashboard: chosen };
     // The area rides in the same save when the user touched it; HA remains canonical afterwards.
     if (typed.ha_area !== undefined) fields.ha_area = typed.ha_area;
@@ -956,31 +997,22 @@
    * confidence tag beside them says whether we measured it or inferred it. */
   var EF_COPY = {
     green: {
-      head: "Your dashboard should feel fine either way",
-      measured: "A panel with this chip handles this many entities without trouble — we have measured it at " +
-        "about this load.",
-      estimated: "This looks like a comfortable load for this panel, judging from its hardware and your " +
-        "entity count.",
-      consequence: "Filtering is still worth turning on — it keeps things quick as your setup grows, and you " +
-        "can change it later on the Configure tab.",
+      head: i18nText("setup.filter.green.head", "Your dashboard should feel fine either way"),
+      measured: i18nText("setup.filter.green.measured", "A panel with this chip handles this many entities without trouble — we have measured it at about this load."),
+      estimated: i18nText("setup.filter.green.estimated", "This looks like a comfortable load for this panel, judging from its hardware and your entity count."),
+      consequence: i18nText("setup.filter.green.consequence", "Filtering is still worth turning on — it keeps things quick as your setup grows, and you can change it later on the Configure tab."),
     },
     amber: {
-      head: "Filtering is worth turning on",
-      measured: "We have measured this chip at about this many entities, and filtering made a clear difference.",
-      estimated: "That is a lot of updates for this chip. We have not measured this exact combination, so this " +
-        "is a judgement from the panel’s hardware and your entity count, not a measurement.",
-      consequence: "Unfiltered, the panel spends its time keeping up with entities nothing on screen is " +
-        "showing. You can change this later on the Configure tab.",
+      head: i18nText("setup.filter.amber.head", "Filtering is worth turning on"),
+      measured: i18nText("setup.filter.amber.measured", "We have measured this chip at about this many entities, and filtering made a clear difference."),
+      estimated: i18nText("setup.filter.amber.estimated", "That is a lot of updates for this chip. We have not measured this exact combination, so this is a judgement from the panel’s hardware and your entity count, not a measurement."),
+      consequence: i18nText("setup.filter.amber.consequence", "Unfiltered, the panel spends its time keeping up with entities nothing on screen is showing. You can change this later on the Configure tab."),
     },
     red: {
-      head: "Turn filtering on — this panel will struggle without it",
-      measured: "We tested this on the same chip with about this many entities. Unfiltered, the part of the " +
-        "panel that draws your dashboard was busy 81% of the time instead of 6%, and it took roughly 60% " +
-        "longer to respond to a touch.",
-      estimated: "That is far more updates than this chip is likely to keep up with, judging from its hardware " +
-        "and your entity count.",
-      consequence: "You can still load it unfiltered if you want to see the difference for yourself. It will " +
-        "work — it will just feel very slow and laggy.",
+      head: i18nText("setup.filter.red.head", "Turn filtering on — this panel will struggle without it"),
+      measured: i18nText("setup.filter.red.measured", "We tested this on the same chip with about this many entities. Unfiltered, the part of the panel that draws your dashboard was busy 81% of the time instead of 6%, and it took roughly 60% longer to respond to a touch."),
+      estimated: i18nText("setup.filter.red.estimated", "That is far more updates than this chip is likely to keep up with, judging from its hardware and your entity count."),
+      consequence: i18nText("setup.filter.red.consequence", "You can still load it unfiltered if you want to see the difference for yourself. It will work — it will just feel very slow and laggy."),
     },
   };
 
@@ -1011,7 +1043,7 @@
     var delta = efTarget - efShown;
     efShown += Math.abs(delta) < 4 ? delta : Math.round(delta * 0.18);
     var n = document.getElementById("ef-count");
-    if (n) n.textContent = efShown.toLocaleString();
+    if (n) n.textContent = localizedNumber(efShown);
     efApplyTone();
     if (efShown !== efTarget) efAnim = setTimeout(efTween, 60);
   }
@@ -1028,9 +1060,9 @@
     var level = counting ? efLevelOf(efShown) : (ef.level || "green");
     v.className = "ef-verdict " + level;
     if (counting) {
-      head.textContent = level === "red" ? "Heading past what this panel can keep up with"
-        : level === "amber" ? "Filtering is looking worthwhile"
-        : "Counting what Home Assistant would send…";
+      head.textContent = level === "red" ? i18nText("setup.filter.counting.red", "Heading past what this panel can keep up with")
+        : level === "amber" ? i18nText("setup.filter.counting.amber", "Filtering is looking worthwhile")
+        : i18nText("setup.filter.counting.green", "Counting what Home Assistant would send…");
     } else {
       head.textContent = (EF_COPY[level] || EF_COPY.green).head;
     }
@@ -1039,9 +1071,7 @@
 
   function entityFilterCard() {
     var body = [
-      el("p", { class: "wiz-lead", text:
-        "Home Assistant will send this panel a live update for every entity it can see. Filtering cuts that " +
-        "down to the ones your dashboard actually uses." }),
+      el("p", { class: "wiz-lead", text: i18nText("setup.filter.lead", "Home Assistant will send this panel a live update for every entity it can see. Filtering cuts that down to the ones your dashboard actually uses.") }),
       el("div", { class: "ef-verdict", id: "ef-verdict" }, [
         el("p", { class: "ef-verdict-head" }, [
           el("span", { class: "ef-dot" }),
@@ -1049,14 +1079,14 @@
         ]),
         el("div", { class: "ef-facts" }, [
           el("p", { class: "ef-fact" }, [
-            el("span", { text: "Entities in Home Assistant" }),
+            el("span", { text: i18nText("setup.filter.fact.entities", "Entities in Home Assistant") }),
             el("b", {}, [
               el("span", { id: "ef-count", text: "0" }),
-              el("span", { class: "ef-counting", id: "ef-counting", text: "still counting" }),
+              el("span", { class: "ef-counting", id: "ef-counting", text: i18nText("setup.filter.state.still_counting", "still counting") }),
             ]),
           ]),
           el("p", { class: "ef-fact" }, [
-            el("span", { text: "This panel" }),
+            el("span", { text: i18nText("setup.filter.fact.panel", "This panel") }),
             el("b", { id: "ef-panel" }),
           ]),
         ]),
@@ -1066,21 +1096,18 @@
         ]),
       ]),
       el("p", { class: "wiz-consequence", id: "ef-consequence" }),
-      primary("Turn on filtering and load the dashboard", function (e) {
+      primary(i18nText("setup.filter.action.enable", "Turn on filtering and load the dashboard"), function (e) {
         answerEntityFilter(true, e.target);
       }),
       el("button", { class: "wiz-secondary", type: "button", id: "ef-decline",
-        text: "Load the dashboard unfiltered", onclick: function (e) { answerEntityFilter(false, e.target); } }),
+        text: i18nText("setup.filter.action.disable", "Load the dashboard unfiltered"), onclick: function (e) { answerEntityFilter(false, e.target); } }),
       el("details", {}, [
-        el("summary", { text: "What filtering actually does" }),
-        el("p", { text:
-          "The panel asks Home Assistant for updates on a named list of entities instead of all of them. It " +
-          "builds that list by reading your dashboard, then adds anything it sees the dashboard reach for " +
-          "while running. Nothing is hidden from you — the full list is on the Entities tab." }),
+        el("summary", { text: i18nText("setup.filter.details.title", "What filtering actually does") }),
+        el("p", { text: i18nText("setup.filter.details.body", "The panel asks Home Assistant for updates on a named list of entities instead of all of them. It builds that list by reading your dashboard, then adds anything it sees the dashboard reach for while running. Nothing is hidden from you — the full list is on the Entities tab.") }),
       ]),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ];
-    show([card("One thing before we load your dashboard", null, body)], "entity_filter");
+    show([card(i18nText("setup.filter.title", "One thing before we load your dashboard"), null, body)], "entity_filter");
     efShown = 0;
     paintEntityFilter();
   }
@@ -1094,7 +1121,7 @@
     if (!v) return;
     var counting = !!ef.counting;
 
-    document.getElementById("ef-panel").textContent = ef.tier_label || TIER_WORDS[ef.tier] || "this panel";
+    document.getElementById("ef-panel").textContent = ef.tier_label || TIER_WORDS[ef.tier] || i18nText("setup.filter.tier.unknown", "This panel");
     document.getElementById("ef-counting").hidden = !counting;
 
     efTarget = ef.count || 0;
@@ -1104,7 +1131,7 @@
     if (efReduceMotion() || efShown > efTarget) {
       // Never animate downwards: a settled total below the last partial would read as losing entities.
       efShown = efTarget;
-      document.getElementById("ef-count").textContent = efShown.toLocaleString();
+      document.getElementById("ef-count").textContent = localizedNumber(efShown);
     } else if (!efAnim) {
       efAnim = setTimeout(efTween, 60);
     }
@@ -1118,18 +1145,21 @@
       // A verdict that moves while counting must read as measurement in progress, never as the panel
       // changing its mind — so it stays provisional and says so until the scan finishes.
       basis.className = "ef-basis counting";
-      tag.textContent = "Counting";
-      text.textContent = "Reading your entity list. The recommendation will settle when the count finishes.";
+      tag.textContent = i18nText("setup.filter.confidence.counting", "Counting");
+      text.textContent = i18nText("setup.filter.confidence.counting_explanation", "Reading your entity list. The recommendation will settle when the count finishes.");
     } else {
       basis.className = "ef-basis " + (ef.confidence === "measured" ? "measured" : "estimated");
-      tag.textContent = ef.confidence === "measured" ? "Measured" : "Estimated";
+      tag.textContent = ef.confidence === "measured" ? i18nText("setup.filter.confidence.measured", "Measured") : i18nText("setup.filter.confidence.estimated", "Estimated");
       text.textContent = ef.confidence === "measured" ? copy.measured : copy.estimated;
     }
     document.getElementById("ef-consequence").textContent = copy.consequence;
   }
 
   var TIER_WORDS = {
-    capable: "A capable panel", middling: "A mid-range panel", modest: "A modest panel", unknown: "This panel",
+    capable: i18nText("setup.filter.tier.capable", "A capable panel"),
+    middling: i18nText("setup.filter.tier.middling", "A mid-range panel"),
+    modest: i18nText("setup.filter.tier.modest", "A modest panel"),
+    unknown: i18nText("setup.filter.tier.unknown", "This panel"),
   };
 
   /* Enabling posts the SETTING first and records the ANSWER second, and the order is load-bearing: the
@@ -1140,7 +1170,7 @@
     button.disabled = true;
     var other = document.getElementById(enable ? "ef-decline" : "");
     if (other) other.disabled = true;
-    button.textContent = enable ? "Turning on filtering…" : "Loading the dashboard…";
+    button.textContent = enable ? i18nText("setup.filter.action.enabling", "Turning on filtering…") : i18nText("setup.filter.action.loading", "Loading the dashboard…");
     var chain = enable
       ? postForm("/api/v1/config", { dashboard_entity_learning: "true" })
       : Promise.resolve();
@@ -1151,7 +1181,7 @@
         lockStep(false);
         button.disabled = false;
         if (other) other.disabled = false;
-        button.textContent = enable ? "Turn on filtering and load the dashboard" : "Load the dashboard unfiltered";
+        button.textContent = enable ? i18nText("setup.filter.action.enable", "Turn on filtering and load the dashboard") : i18nText("setup.filter.action.disable", "Load the dashboard unfiltered");
         stepErr(e.message);
       });
   }
@@ -1160,37 +1190,33 @@
 
   function doneCard() {
     var proof = step("render_proof");
-    var how = proof.detail === "user_attested" ? "Dashboard confirmed by you"
-      : "Home Assistant is rendering on the panel";
+    var attested = proof.detail === "user_attested";
     var mqttOk = step("mqtt_connection").status === "satisfied";
     var ef = journey.entity_filter || {};
 
-    var top = [statusLine((mqttOk ? "MQTT connected · " : "") + how + ".", true)];
+    var completeStatus = attested
+      ? (mqttOk ? i18nText("setup.done.status.attested_mqtt", "MQTT connected · Dashboard confirmed by you.") : i18nText("setup.done.status.attested_no_mqtt", "Dashboard confirmed by you."))
+      : (mqttOk ? i18nText("setup.done.status.rendering_mqtt", "MQTT connected · Home Assistant is rendering on the panel.") : i18nText("setup.done.status.rendering_no_mqtt", "Home Assistant is rendering on the panel."));
+    var top = [statusLine(completeStatus, true)];
     // Confirm the filter state so answering the question earlier is never a silent no-op.
     if (ef.relevant && ef.enabled) {
-      top.push(el("p", { class: "muted", text:
-        "Entity filter is on — it’s learning which entities to show; review the list any time on the Entities tab. " +
-        "The panel’s dashboard may reload a few times in the first minutes while that settles — nothing is wrong." }));
+      top.push(el("p", { class: "muted", text: i18nText("setup.done.filter_note", "Entity filter is on — it’s learning which entities to show; review the list any time on the Entities tab. The panel’s dashboard may reload a few times in the first minutes while that settles — nothing is wrong.") }));
     }
-    top.push(el("p", { class: "wiz-lead", text:
-      "Everything else — brightness, sleep, sounds, behaviour — is on the Configure tab, and the defaults " +
-      "are sensible, so there’s nothing you have to change." }));
+    top.push(el("p", { class: "wiz-lead", text: i18nText("setup.done.configure_note", "Everything else — brightness, sleep, sounds, behaviour — is on the Configure tab, and the defaults are sensible, so there’s nothing you have to change.") }));
     // The two things a new owner actually wants next, as prominent buttons rather than quiet links: keep
     // configuring, or look at the panel overview. Labels match the nav tabs so they’re recognisable.
     top.push(el("p", { class: "wiz-cta" }, [
-      el("a", { class: "pbtn primary", href: "/configure", text: "Configure the panel" }),
-      el("a", { class: "pbtn", href: "/", text: "Panel dashboard" }),
+      el("a", { class: "pbtn primary", href: internalHref("/configure"), text: i18nText("setup.done.action.configure", "Configure the panel") }),
+      el("a", { class: "pbtn", href: internalHref("/"), text: i18nText("setup.done.action.dashboard", "Panel dashboard") }),
     ]));
     // The entity filter is NOT offered here any more. It is its own step, asked before the first render,
     // because on a weak panel an unfiltered first load is slow and laggy and that is the first thing a new
     // owner sees — so by the time this screen appears the question has already been answered.
-    var cards = [card("✓ This panel is set up", null, top)];
+    var cards = [card(i18nText("setup.done.title", "✓ This panel is set up"), null, top)];
     // A tip, not a step, and explicitly optional.
     cards.push(el("p", { class: "wiz-lead" }, [
-      document.createTextNode("Optional: panels often ship with vendor apps that pop up over the dashboard. " +
-        "ha-paneld can quieten them — "),
-      el("a", { href: "/install", text: "package taming, on the Install tab" }),
-      document.createTextNode("."),
+      document.createTextNode(i18nText("setup.done.taming_intro", "Optional: panels often ship with vendor apps that pop up over the dashboard. ha-paneld can quieten them.") + " "),
+      el("a", { href: internalHref("/install"), text: i18nText("setup.done.taming_link", "Package taming is on the Install tab.") }),
     ]));
     show(cards, "done");
     var escape = document.querySelector(".wiz-escape");
@@ -1210,7 +1236,7 @@
   function revealCancel() {
     if (document.getElementById("wiz-cancel")) return;
     var b = el("button", { id: "wiz-cancel", class: "wiz-secondary", type: "button",
-      text: "Cancel and edit these details", onclick: function () {
+      text: i18nText("setup.mqtt.action.cancel_edit", "Cancel and edit these details"), onclick: function () {
         clearInterval(ladderTimer);
         verify = null;
         // Unlock and FORCE the rebuild: the card key hasn't changed, so a plain refresh() short-circuits
@@ -1290,7 +1316,7 @@
       case "mqtt": return mqttCard(null);
       case "mqtt:fail":
         // A rejected login routes `next` to CREDENTIALS while the detail lives on CONNECTION.
-        return mqttCard(mqttFailure(step("mqtt_connection").detail, brokerHost(typed.mqtt_broker || "") || "the broker", false));
+        return mqttCard(mqttFailure(step("mqtt_connection").detail, brokerHost(typed.mqtt_broker || "") || i18nText("setup.mqtt.host_fallback", "the broker"), false));
       case "webview": return webViewCard(step("renderer").detail === "webview_too_old_fixable");
       case "renderer": return rendererCard();
       case "ha_url": return haUrlCard();
@@ -1328,8 +1354,8 @@
     if (forced) {
       // Revisits must never read as the journey moving backwards: say what this is, offer the way on.
       stepHost.insertBefore(el("div", { class: "setup info" }, [
-        el("b", { text: "You’re revisiting an earlier step. " }),
-        el("a", { href: "#", text: "Continue setup →", onclick: function (ev) {
+        el("b", { text: i18nText("setup.revisit.notice", "You’re revisiting an earlier step.") + " " }),
+        el("a", { href: "#", text: i18nText("setup.revisit.continue", "Continue setup →"), onclick: function (ev) {
           ev.preventDefault();
           clearRevisit();
           renderedKey = "";

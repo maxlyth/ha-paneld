@@ -1630,6 +1630,18 @@ class PaneldServer internal constructor(
         allowPseudo = BuildConfig.DEBUG,
         catalogueLoader = catalogueLoader,
     )
+
+    /** Carry admitted browser locale signals through the unfinished-journey redirect without changing
+     * their precedence: `lang` remains explicit, while `ha_lang` remains below the persisted setting.
+     * Canonical values only are reflected into the Location header. */
+    private fun setupRedirectLocation(call: ApplicationCall): String {
+        val query = mutableListOf<String>()
+        AppLocale.canonical(call.request.queryParameters["lang"], allowPseudo = BuildConfig.DEBUG)
+            ?.let { query += "lang=$it" }
+        AppLocale.canonical(call.request.queryParameters["ha_lang"], allowPseudo = false)
+            ?.let { query += "ha_lang=$it" }
+        return if (query.isEmpty()) "/setup" else "/setup?${query.joinToString("&")}"
+    }
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null
@@ -1812,7 +1824,7 @@ class PaneldServer internal constructor(
                 if (call.request.uri.substringBefore('?') in WIZARD_REDIRECT_PAGES &&
                     call.request.cookies["wiz_escape"] == null && setupNeedsUser()
                 ) {
-                    call.respondRedirect("/setup")
+                    call.respondRedirect(setupRedirectLocation(call))
                     return@intercept finish()
                 }
                 // CSRF guard: a LAN browser on a malicious page must not be able to silently drive a
@@ -2075,11 +2087,14 @@ class PaneldServer internal constructor(
                 }
                 get("/setup") {
                     val strings = requestStrings(call)
+                    val preserveExplicitEnglish = AppLocale.canonical(
+                        call.request.queryParameters["lang"],
+                        allowPseudo = BuildConfig.DEBUG,
+                    ) == AppLocale.ENGLISH
                     call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
                     call.response.headers.append(
                         HttpHeaders.ContentLanguage,
-                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
-                            .distinct().sorted().joinToString(", "),
+                        strings.languages(setOf("shell.", "setup.")).joinToString(", "),
                     )
                     // No data-cfg, unlike every other page: buildwatch.js reloads /configure when settings
                     // change underneath it, and that same reload mid-step would throw away what the user is
@@ -2091,8 +2106,10 @@ class PaneldServer internal constructor(
                             sectionTitle = strings.get("shell.nav.setup"),
                             bodyAttrs = """data-build="${buildToken()}"""",
                             rightControls = ghLink(strings),
-                            body = setupBody(),
+                            body = setupBody(strings, preserveExplicitEnglish),
                             strings = strings,
+                            translationPrefixes = setOf("shell.", "setup."),
+                            preserveExplicitEnglish = preserveExplicitEnglish,
                         ),
                         ContentType.Text.Html,
                     )
@@ -2393,7 +2410,21 @@ class PaneldServer internal constructor(
                     haOAuthRoutes(
                         HaOAuthRouteDependencies(
                             panelPort = config.httpPort,
-                            start = ::startHaOAuth,
+                            start = { haUrl, panelOrigin -> startHaOAuth(haUrl, panelOrigin) },
+                            startWithContext = { haUrl, panelOrigin, context ->
+                                startHaOAuth(haUrl, panelOrigin, context)
+                            },
+                            startContext = { selection ->
+                                val strings = catalogueLoader.strings(selection.locale)
+                                HaOAuthStartContext(
+                                    locale = selection.locale,
+                                    returnSurface = selection.returnSurface,
+                                    preserveExplicitEnglish = selection.preserveExplicitEnglish,
+                                    copy = haOAuthCallbackCopy(strings),
+                                    contentLanguages = strings.languages(setOf("oauth.callback.")).toSet(),
+                                )
+                            },
+                            allowPseudoLocale = BuildConfig.DEBUG,
                             claim = haOAuthFlow::claim,
                             exchange = { attempt, code -> withContext(Dispatchers.IO) {
                                 haOAuthExchange(attempt.haUrl, code, attempt.clientId)
@@ -3866,6 +3897,20 @@ class PaneldServer internal constructor(
         return "$address${separator}lang=${esc(strings.requestedLocale)}$fragment"
     }
 
+    /** Setup is the only server page whose browser code carries an explicit locale between journey
+     * steps. Keep an explicit English override in its server-rendered links too, while naturally
+     * negotiated English remains URL-clean everywhere. */
+    private fun setupHref(path: String, strings: AppStrings, preserveExplicitEnglish: Boolean): String {
+        if (!preserveExplicitEnglish || strings.requestedLocale != AppLocale.ENGLISH) {
+            return localizedHref(path, strings)
+        }
+        val fragmentAt = path.indexOf('#')
+        val address = if (fragmentAt < 0) path else path.substring(0, fragmentAt)
+        val fragment = if (fragmentAt < 0) "" else path.substring(fragmentAt)
+        val separator = if ('?' in address) '&' else '?'
+        return "$address${separator}lang=${esc(AppLocale.ENGLISH)}$fragment"
+    }
+
     /** JSON inside a script data block: escape HTML-significant bytes as JSON unicode escapes so a
      * translated value can never terminate the element or become markup. */
     private fun browserI18nPayload(strings: AppStrings, prefixes: Set<String>): String {
@@ -3880,9 +3925,13 @@ class PaneldServer internal constructor(
             .replace("\u2029", "\\u2029")
     }
 
-    private fun navBar(active: String, strings: AppStrings): String {
+    private fun navBar(
+        active: String,
+        strings: AppStrings,
+        preserveExplicitEnglish: Boolean = false,
+    ): String {
         fun tab(id: String, href: String, label: String): String =
-            """<a href="${localizedHref(href, strings)}"${if (id == active) " class=\"active\"" else ""}>${esc(label)}</a>"""
+            """<a href="${setupHref(href, strings, preserveExplicitEnglish)}"${if (id == active) " class=\"active\"" else ""}>${esc(label)}</a>"""
         // The guided setup tab exists only while the journey is unfinished, then disappears — a healthy
         // panel's navigation is exactly what it was before the wizard existed. Placed first because on an
         // unfinished panel it IS the primary destination (the QR points at it).
@@ -3899,7 +3948,7 @@ class PaneldServer internal constructor(
             // Keep the dormant /fleet route available to old bookmarks without presenting the
             // placeholder as a near-term product commitment.
             tab("logs", "/logs", strings.get("shell.nav.logs")) +
-            """<a href="${localizedHref("/api", strings)}">API</a></div>"""
+            """<a href="${setupHref("/api", strings, preserveExplicitEnglish)}">API</a></div>"""
     }
 
     private fun entitiesBody(): String = if (!config.dashboardEntityLearningEnabled || !effectiveDashboardIsBuiltin()) {
@@ -3984,6 +4033,7 @@ class PaneldServer internal constructor(
         extraScripts: String = "",
         strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
         translationPrefixes: Set<String> = setOf("shell."),
+        preserveExplicitEnglish: Boolean = false,
     ): String {
         // Capture panel identity once so title, switcher metadata and visible name cannot disagree if a
         // concurrent config save replaces the live identity while this response is being rendered.
@@ -4003,7 +4053,7 @@ class PaneldServer internal constructor(
 <script src="/assets/i18n.js"></script></head><body $bodyAttrs><div class="wrap">
 <div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="${esc(strings.get("shell.menu.label"))}">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
  <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
-${navBar(active, strings)}</div>
+${navBar(active, strings, preserveExplicitEnglish)}</div>
 <!-- Load switcher.js immediately after the header it measures so responsive collapse finishes before page
      content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
 <script src="/assets/switcher.js"></script>
@@ -4068,13 +4118,13 @@ $approvalKeyAfter""",
      * The markup here is only a frame. Steps are rendered by setup.js from GET /api/v1/setup, so the panel
      * and the browser read the same authority and cannot disagree about what comes next.
      */
-    private fun setupBody(): String = """
+    private fun setupBody(strings: AppStrings, preserveExplicitEnglish: Boolean): String = """
 <div class="wiz" id="wiz">
-  <ol class="wiz-dots" id="wiz-dots" aria-label="Setup progress"></ol>
+  <ol class="wiz-dots" id="wiz-dots" aria-label="${esc(strings.get("setup.frame.progress_label"))}"></ol>
   <div id="wiz-step" class="wiz-step" role="region" aria-live="polite" aria-atomic="false">
-    <p class="muted">Loading setup…</p>
+    <p class="muted">${esc(strings.get("setup.frame.loading"))}</p>
   </div>
-  <p class="wiz-escape"><a href="/configure" onclick="document.cookie='wiz_escape=1;path=/;max-age=3600'">Skip and exit the wizard &rarr;</a></p>
+  <p class="wiz-escape"><a href="${setupHref("/configure", strings, preserveExplicitEnglish)}" onclick="document.cookie='wiz_escape=1;path=/;max-age=3600'">${esc(strings.get("setup.frame.skip_exit"))}</a></p>
 </div>
 <script src="/assets/setup.js"></script>"""
 
@@ -6374,10 +6424,31 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         }
     }
 
-    private fun startHaOAuth(haUrl: String, panelOrigin: String): HaOAuthStart = synchronized(haOAuthStartLock) {
+    private fun startHaOAuth(
+        haUrl: String,
+        panelOrigin: String,
+        context: HaOAuthStartContext = HaOAuthStartContext.ENGLISH_CONFIGURE,
+    ): HaOAuthStart = synchronized(haOAuthStartLock) {
         val authority = config.beginHaOAuthAttempt()
-        haOAuthFlow.start(haUrl, panelOrigin, authority)
+        haOAuthFlow.start(haUrl, panelOrigin, authority, context)
     }
+
+    private fun haOAuthCallbackCopy(strings: AppStrings): HaOAuthCallbackCopy = HaOAuthCallbackCopy(
+        successHeading = strings.get("oauth.callback.success_heading"),
+        failureHeading = strings.get("oauth.callback.failure_heading"),
+        continueAction = strings.get("oauth.callback.action.continue"),
+        backToConfigureAction = strings.get("oauth.callback.action.back_to_configure"),
+        backToSetupAction = strings.get("oauth.callback.action.back_to_setup"),
+        cancelled = strings.get("oauth.callback.cancelled"),
+        invalidCode = strings.get("oauth.callback.invalid_code"),
+        rejected = strings.get("oauth.callback.rejected"),
+        transient = strings.get("oauth.callback.transient"),
+        stale = strings.get("oauth.callback.stale"),
+        commitFailed = strings.get("oauth.callback.commit_failed"),
+        configured = strings.get("oauth.callback.configured"),
+        reloadMayBeNeeded = strings.get("oauth.callback.reload_may_be_needed"),
+        ambientWarning = strings.get("oauth.callback.ambient_warning"),
+    )
 
     private suspend fun completeHaOAuth(
         attempt: HaOAuthAttempt,

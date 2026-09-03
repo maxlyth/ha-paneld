@@ -44,13 +44,13 @@ class HtmlUiCatalogueContractTest {
         val prefixes = listOf("shell.", "dashboard.", "configure.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 997, source.strings.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 1207, source.strings.size)
         assertEquals("the declared HTML UI preview scope must not shrink silently", 793, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
-                "$locale must contain the complete 997-key release catalogue",
-                997,
+                "$locale must contain the complete 1207-key release catalogue",
+                1207,
                 target.strings.size,
             )
             assertEquals(

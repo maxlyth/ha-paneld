@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.config.SettingValue
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.config.Validation
+import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.sensors.HaCurrentUserStatus
 import io.github.maxlyth.hapaneld.util.HaLink
 import io.github.maxlyth.hapaneld.util.Json
@@ -21,6 +22,9 @@ import kotlinx.coroutines.CancellationException
 
 internal const val MAX_HA_OAUTH_START_BODY_BYTES = 4L * 1024L
 internal const val MAX_HA_OAUTH_CODE_CHARS = 4 * 1024
+internal const val HA_OAUTH_UI_LOCALE_FIELD = "ui_locale"
+internal const val HA_OAUTH_RETURN_SURFACE_FIELD = "return_surface"
+internal const val HA_OAUTH_PRESERVE_ENGLISH_FIELD = "preserve_explicit_english"
 
 internal sealed class HaOAuthCompletion {
     data class Success(
@@ -35,6 +39,19 @@ internal sealed class HaOAuthCompletion {
 internal data class HaOAuthRouteDependencies(
     val panelPort: Int,
     val start: (haUrl: String, panelOrigin: String) -> HaOAuthStart,
+    /** Optional context-aware start used by localized callers. Keeping the legacy start preserves the
+     * on-panel and Configure paths until their server wiring supplies trusted request context. */
+    val startWithContext: ((haUrl: String, panelOrigin: String, context: HaOAuthStartContext) -> HaOAuthStart)? = null,
+    /** Add catalogue copy to an already canonicalized, closed request selection. */
+    val startContext: (selection: HaOAuthStartSelection) -> HaOAuthStartContext = {
+        HaOAuthStartContext(
+            locale = it.locale,
+            returnSurface = it.returnSurface,
+            preserveExplicitEnglish = it.preserveExplicitEnglish,
+        )
+    },
+    /** Debug builds alone may admit the opt-in pseudolocale. */
+    val allowPseudoLocale: Boolean = false,
     val claim: (state: String, panelOrigin: String) -> HaOAuthClaim,
     val exchange: suspend (attempt: HaOAuthAttempt, code: String) -> HaLink.AuthorizationCodeExchange,
     val complete: suspend (attempt: HaOAuthAttempt, tokens: HaLink.OAuthTokens) -> HaOAuthCompletion,
@@ -93,7 +110,16 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                 )
                 return@post
             }
-            val started = dependencies.start(haUrl, panelOrigin)
+            val started = dependencies.startOAuth(
+                haUrl,
+                panelOrigin,
+                oauthStartSelection(
+                    parameters[HA_OAUTH_UI_LOCALE_FIELD],
+                    parameters[HA_OAUTH_RETURN_SURFACE_FIELD],
+                    parameters[HA_OAUTH_PRESERVE_ENGLISH_FIELD],
+                    dependencies.allowPseudoLocale,
+                ),
+            )
             call.respondText(
                 """{"ok":true,"authorization_url":${Json.str(started.authorizationUrl)}}""",
                 ContentType.Application.Json,
@@ -121,7 +147,16 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                 )
                 return@get
             }
-            val started = dependencies.start(haUrl, panelOrigin)
+            val started = dependencies.startOAuth(
+                haUrl,
+                panelOrigin,
+                oauthStartSelection(
+                    call.request.queryParameters[HA_OAUTH_UI_LOCALE_FIELD],
+                    call.request.queryParameters[HA_OAUTH_RETURN_SURFACE_FIELD],
+                    call.request.queryParameters[HA_OAUTH_PRESERVE_ENGLISH_FIELD],
+                    dependencies.allowPseudoLocale,
+                ),
+            )
             call.respondRedirect(started.authorizationUrl)
         }
 
@@ -141,13 +176,15 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                     "This sign-in link was opened on a different panel address.",
                 )
             }
+            val context = attempt.startContext
+            val copy = context.copy
             if (!call.request.queryParameters["error"].isNullOrBlank()) {
-                call.respondHaOAuthPage(false, "Home Assistant sign-in was cancelled.")
+                call.respondHaOAuthPage(false, copy.cancelled, context)
                 return@get
             }
             val code = call.request.queryParameters["code"].orEmpty()
             if (code.isBlank() || code.length > MAX_HA_OAUTH_CODE_CHARS) {
-                call.respondHaOAuthPage(false, "Home Assistant did not return a valid sign-in code.")
+                call.respondHaOAuthPage(false, copy.invalidCode, context)
                 return@get
             }
             val exchange = try {
@@ -162,14 +199,16 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
                 HaLink.AuthorizationCodeExchange.Rejected -> {
                     call.respondHaOAuthPage(
                         false,
-                        "Home Assistant did not accept this sign-in. Start a new sign-in from Configure.",
+                        copy.rejected,
+                        context,
                     )
                     return@get
                 }
                 HaLink.AuthorizationCodeExchange.Transient -> {
                     call.respondHaOAuthPage(
                         false,
-                        "The panel could not complete sign-in. Check its Home Assistant connection and try again.",
+                        copy.transient,
+                        context,
                     )
                     return@get
                 }
@@ -184,26 +223,85 @@ internal fun Route.haOAuthRoutes(dependencies: HaOAuthRouteDependencies) {
             when (completion) {
                 HaOAuthCompletion.Stale -> call.respondHaOAuthPage(
                     false,
-                    "Home Assistant settings changed while sign-in was open. Start a new sign-in from Configure.",
+                    copy.stale,
+                    context,
                 )
                 HaOAuthCompletion.CommitFailed -> call.respondHaOAuthPage(
                     false,
-                    "The panel could not save this sign-in. Start a new sign-in from Configure.",
+                    copy.commitFailed,
+                    context,
                 )
                 is HaOAuthCompletion.Success -> {
-                    val reload = if (completion.reloadMayBeNeeded) " The dashboard may need a manual reload." else ""
+                    val reload = if (completion.reloadMayBeNeeded) " ${copy.reloadMayBeNeeded}" else ""
                     val ambient = if (completion.ambientWarning) {
-                        " Home Assistant is configured, but the selected ambient-light source needs attention."
+                        " ${copy.ambientWarning}"
                     } else ""
+                    val successContext = if (!context.useLegacySuccessReturn) context else {
+                        // Compatibility for callers not yet carrying context in the attempt. Admit only
+                        // the two historical server destinations; any other value fails closed.
+                        context.copy(
+                            returnSurface = if (dependencies.successReturnPath() == "/setup") {
+                                HaOAuthReturnSurface.SETUP
+                            } else {
+                                HaOAuthReturnSurface.CONFIGURE
+                            },
+                            useLegacySuccessReturn = false,
+                        )
+                    }
                     call.respondHaOAuthPage(
                         true,
-                        "Home Assistant is configured.$reload$ambient",
-                        returnPath = dependencies.successReturnPath(),
+                        "${copy.configured}$reload$ambient",
+                        successContext,
                     )
                 }
             }
         }
     }
+}
+
+private fun HaOAuthRouteDependencies.startOAuth(
+    haUrl: String,
+    panelOrigin: String,
+    selection: HaOAuthStartSelection?,
+): HaOAuthStart {
+    if (selection == null || startWithContext == null) return start(haUrl, panelOrigin)
+    val context = runCatching { startContext(selection) }.getOrNull()
+        ?.takeIf {
+            it.locale == selection.locale &&
+                it.returnSurface == selection.returnSurface &&
+                it.preserveExplicitEnglish == selection.preserveExplicitEnglish
+        }
+        ?: HaOAuthStartContext.ENGLISH_CONFIGURE
+    return startWithContext.invoke(haUrl, panelOrigin, context)
+}
+
+/** All fields absent means a legacy caller. Any partial/malformed request uses a complete closed
+ * English Configure selection, never a partially trusted locale or destination. */
+internal fun oauthStartSelection(
+    rawLocale: String?,
+    rawSurface: String?,
+    rawPreserveExplicitEnglish: String?,
+    allowPseudo: Boolean = false,
+): HaOAuthStartSelection? {
+    if (rawLocale == null && rawSurface == null && rawPreserveExplicitEnglish == null) return null
+    if (!allowPseudo && rawLocale?.trim()?.replace('_', '-')?.equals(AppLocale.PSEUDO, ignoreCase = true) == true) {
+        return HaOAuthStartSelection(AppLocale.ENGLISH, HaOAuthReturnSurface.CONFIGURE, false)
+    }
+    val locale = AppLocale.canonical(rawLocale, allowPseudo = allowPseudo)
+    val surface = when (rawSurface) {
+        "configure" -> HaOAuthReturnSurface.CONFIGURE
+        "setup" -> HaOAuthReturnSurface.SETUP
+        else -> null
+    }
+    val preserve = when (rawPreserveExplicitEnglish) {
+        null -> false
+        "1" -> true
+        else -> return HaOAuthStartSelection(AppLocale.ENGLISH, HaOAuthReturnSurface.CONFIGURE, false)
+    }
+    if (locale == null || surface == null || (preserve && (locale != AppLocale.ENGLISH || surface != HaOAuthReturnSurface.SETUP))) {
+        return HaOAuthStartSelection(AppLocale.ENGLISH, HaOAuthReturnSurface.CONFIGURE, false)
+    }
+    return HaOAuthStartSelection(locale, surface, preserve)
 }
 
 internal fun ApplicationCall.noStoreHaOAuth() {
@@ -218,24 +316,29 @@ internal fun ApplicationCall.noStoreHaOAuth() {
 private suspend fun ApplicationCall.respondHaOAuthPage(
     success: Boolean,
     message: String,
-    returnPath: String = "/configure#cfg-ha_url",
+    context: HaOAuthStartContext = HaOAuthStartContext.ENGLISH_CONFIGURE,
 ) {
-    val heading = if (success) "Home Assistant configured" else "Home Assistant sign-in not completed"
+    response.headers.append(HttpHeaders.ContentLanguage, context.contentLanguages.sorted().joinToString(", "))
+    val heading = if (success) context.copy.successHeading else context.copy.failureHeading
     val status = if (success) "success" else "failure"
     // On success the browser is sent onward automatically: the wizard tab navigated here during
     // sign-in, so a still-open tab to broadcast to no longer exists — this fresh page IS the return
     // path. A short pause lets the user read the confirmation first. A failure keeps a manual link only,
     // since auto-forwarding an error would hide it. The path is a server-chosen constant, safe to inline.
-    val safeReturn = escapeHaOAuthHtml(returnPath)
-    val link = if (success) "Continue" else "Back to Configure"
+    val safeReturn = escapeHaOAuthHtml(context.returnPath())
+    val link = when {
+        success -> context.copy.continueAction
+        context.returnSurface == HaOAuthReturnSurface.SETUP -> context.copy.backToSetupAction
+        else -> context.copy.backToConfigureAction
+    }
     val forward = if (success) {
         """setTimeout(function(){location.assign("$safeReturn");},1400);"""
     } else ""
     respondText(
-        """<!doctype html><html lang="en"><head><meta charset="utf-8">
+        """<!doctype html><html lang="${escapeHaOAuthHtml(context.locale)}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHaOAuthHtml(heading)}</title>
 <link rel="stylesheet" href="/info.css"></head><body><div class="wrap"><div class="card">
-<h1>${escapeHaOAuthHtml(heading)}</h1><p>${escapeHaOAuthHtml(message)}</p><p><a class="pbtn" href="$safeReturn">$link</a></p>
+<h1>${escapeHaOAuthHtml(heading)}</h1><p>${escapeHaOAuthHtml(message)}</p><p><a class="pbtn" href="$safeReturn">${escapeHaOAuthHtml(link)}</a></p>
 </div></div><script>document.body.dataset.haOauthStatus="$status";history.replaceState(null,"","$HA_OAUTH_CALLBACK_PATH");if("BroadcastChannel" in window){var c=new BroadcastChannel("ha-paneld-ha-oauth");c.postMessage({status:"$status"});}$forward</script>
 </body></html>""",
         ContentType.Text.Html,

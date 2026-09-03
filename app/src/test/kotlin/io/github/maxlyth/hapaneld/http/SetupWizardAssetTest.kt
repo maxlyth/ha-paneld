@@ -4,6 +4,7 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.json.JSONObject
 import org.junit.Test
 
 /**
@@ -21,6 +22,13 @@ class SetupWizardAssetTest {
         File("src/main/assets/info.css"),
         File("app/src/main/assets/info.css"),
     ).first { it.isFile }.readText()
+
+    private val english = JSONObject(listOf(
+        File("src/main/assets/i18n/en.json"),
+        File("app/src/main/assets/i18n/en.json"),
+    ).first { it.isFile }.readText()).getJSONObject("strings")
+
+    private fun english(key: String): String = english.getJSONObject(key).getString("text")
 
     @Test fun theWizardNeverReadsTheRedactedConfigEndpoint() {
         // GET /api/v1/config blanks every secret, and a POST assembled from its output has previously
@@ -83,11 +91,19 @@ class SetupWizardAssetTest {
         // and the inherit-your-session case is softened to "may" because it only happens when this browser
         // already holds a Home Assistant session. Must stay jargon-free.
         val signin = js.substring(js.indexOf("function signinCard"))
-        assertTrue("browser route must be the recommended one", signin.indexOf("recommended") < signin.indexOf("Or sign in on the panel"))
-        assertTrue(signin.contains("the panel may connect as you"))
-        assertFalse("must not overstate the inherited-session case", signin.contains("connect as YOU"))
+        assertTrue(
+            "browser route must be the recommended one",
+            signin.indexOf("setup.sign_in.recommended") < signin.indexOf("setup.sign_in.panel.title"),
+        )
+        val visibleCopy = listOf(
+            "setup.sign_in.browser.explanation",
+            "setup.sign_in.browser.account_note",
+            "setup.sign_in.panel.explanation",
+        ).joinToString(" ", transform = ::english)
+        assertTrue(visibleCopy.contains("the panel may connect as you"))
+        assertFalse("must not overstate the inherited-session case", visibleCopy.contains("connect as YOU"))
         listOf("OAuth", "session", "cookie", "private window", "incognito").forEach {
-            assertFalse("\"$it\" is jargon for this audience", js.contains(it, ignoreCase = it != "OAuth"))
+            assertFalse("\"$it\" is jargon for this audience", visibleCopy.contains(it, ignoreCase = it != "OAuth"))
         }
     }
 
@@ -258,16 +274,16 @@ class SetupWizardAssetTest {
         // ahead of the render, and the completion card must not carry the offer at all.
         val done = js.substring(js.indexOf("function doneCard()"))
         assertFalse("the offer must not return to the completion card", done.contains("dashboard_entity_learning"))
-        assertTrue(done.contains("Entity filter is on")) // confirmation only, so answering is never silent
+        assertTrue(done.contains("setup.done.filter_note")) // confirmation only, so answering is never silent
         // The completion screen is a SUBSEQUENT page whose job is the two things a new owner wants next.
-        assertTrue(done.contains("Configure the panel") && done.contains("Panel dashboard"))
+        assertTrue(done.contains("setup.done.action.configure") && done.contains("setup.done.action.dashboard"))
         // The taming pointer is a tip with a link, not a step with a button.
-        assertTrue(done.contains("package taming, on the Install tab"))
+        assertTrue(done.contains("setup.done.taming_link"))
 
         val ask = js.substring(js.indexOf("function entityFilterCard()"))
         assertTrue(ask.contains("dashboard_entity_learning: \"true\""))
         // Both answers must lead to a dashboard: declining is a real choice, not a dead end.
-        assertTrue(ask.contains("Load the dashboard unfiltered"))
+        assertTrue(ask.contains("setup.filter.action.disable"))
         assertTrue(js.contains("function answerEntityFilter("))
         // Order is load-bearing: the SETTING commits before the ANSWER, because the answer is what releases
         // the renderer. Reversed, the panel would start its first load unfiltered — the whole failure this
@@ -301,10 +317,13 @@ class SetupWizardAssetTest {
         // reads as unreliable. With it, the same movement reads as the panel doing its homework.
         val paint = js.substring(js.indexOf("function paintEntityFilter()"))
         assertTrue(paint.contains("if (counting)"))
-        assertTrue(paint.contains("tag.textContent = \"Counting\""))
-        assertTrue(paint.contains("will settle when the count finishes"))
+        assertTrue(paint.contains("tag.textContent = i18nText(\"setup.filter.confidence.counting\""))
+        assertTrue(paint.contains("text.textContent = i18nText(\"setup.filter.confidence.counting_explanation\""))
         // Confidence is never asserted as measurement when it was inferred.
-        assertTrue(paint.contains("ef.confidence === \"measured\" ? \"Measured\" : \"Estimated\""))
+        assertTrue(
+            paint.contains("ef.confidence === \"measured\" ? i18nText(\"setup.filter.confidence.measured\"") &&
+                paint.contains(": i18nText(\"setup.filter.confidence.estimated\""),
+        )
         // The displayed count must never run backwards — a settled total below the last partial would read
         // as the panel losing entities.
         assertTrue(paint.contains("efShown > efTarget"))
