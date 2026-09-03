@@ -28,6 +28,16 @@ internal class PathProbeMonitor(
     private var measuring = false
 
     /**
+     * Which authenticated session the current evidence belongs to.
+     *
+     * A burst outlives the moment it was claimed in: it blocks for as long as its echoes take, and
+     * the socket can be torn down and re-established underneath it. Without an identity to check on
+     * the way back, a burst measured against a dead route lands in a successor session's history and
+     * the panel reports evidence about a path it is no longer using.
+     */
+    private var generation = 0L
+
+    /**
      * The address the shared socket actually connected on, as reported by the transport.
      *
      * Taken from the live connection rather than resolved here, so the probe always measures the path
@@ -47,6 +57,9 @@ internal class PathProbeMonitor(
                 schedule.reset()
                 history.reset()
                 target = null
+                // Any burst still in flight belongs to the session that just ended; advancing the
+                // generation is what makes its result discardable when it returns.
+                generation++
             }
         }
     }
@@ -69,20 +82,31 @@ internal class PathProbeMonitor(
      * flight always wins: bursts must never overlap, or their echoes race for the same sequence
      * numbers and the loss figure becomes fiction.
      */
-    fun claimBurst(nowMs: Long): InetAddress? = synchronized(lock) {
+    fun claimBurst(nowMs: Long): Claim? = synchronized(lock) {
         val address = target ?: return null
         if (!measuring) return null
         if (!schedule.due(nowMs)) return null
         if (!bursting.compareAndSet(false, true)) return null
         schedule.started(nowMs)
-        address
+        Claim(address, generation)
     }
 
-    /** Run the claimed burst. Blocking; the caller must already be off the socket's probe path. */
-    fun runBurst(target: InetAddress, nowMs: () -> Long) {
+    /** One claimed burst, carrying the session it belongs to. */
+    data class Claim(val target: InetAddress, val generation: Long)
+
+    /**
+     * Run the claimed burst. Blocking; the caller must already be off the socket's probe path.
+     *
+     * Fail-soft by construction: nothing thrown here may escape into the dispatching coroutine, and
+     * a result whose session has ended is discarded rather than recorded.
+     */
+    fun runBurst(claim: Claim, nowMs: () -> Long) {
         try {
-            val burst = source.burst(target, echoesPerBurst, perEchoTimeoutMs, nowMs)
+            val burst = source.burst(claim.target, echoesPerBurst, perEchoTimeoutMs, nowMs)
             synchronized(lock) {
+                // The socket this was measured for is gone: the evidence describes a route the panel
+                // is no longer using, so it is dropped rather than attributed to its successor.
+                if (claim.generation != generation) return@synchronized
                 if (burst == null) {
                     // The platform withholds the capability. Nothing here will ever be measured, and
                     // the panel keeps the verdict its WebSocket can support.
@@ -92,6 +116,10 @@ internal class PathProbeMonitor(
                     schedule.completed(nowMs(), clean = burst.clean)
                 }
             }
+        } catch (cancellation: kotlin.coroutines.cancellation.CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            // A diagnostic must never take the process with it.
         } finally {
             bursting.set(false)
         }

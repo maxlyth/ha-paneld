@@ -613,10 +613,12 @@ internal class HaExactEntityStreamOwner(
         if (!changed) return
         // Demand on or off is what makes the path verdict reportable; a change of union or watch
         // bits with the socket still wanted is not a demand change and is not announced.
-        if (demandChanged) pathObserver?.let { observer ->
-            safeCallback {
-                observer.onSocketState(if (next.active) HaSocketState.CONNECTING else HaSocketState.STOPPED)
-            }
+        if (demandChanged) {
+            val state = if (next.active) HaSocketState.CONNECTING else HaSocketState.STOPPED
+            pathObserver?.let { observer -> safeCallback { observer.onSocketState(state) } }
+            // The echo probe follows the same ownership. Demand going off ends its session, which is
+            // what discards a burst still in flight against the route that is going away.
+            pathProbe?.let { probe -> safeCallback { probe.onSocketState(state) } }
         }
         if (next.ambient == null) publishAmbientStatus(
             run,
@@ -628,6 +630,7 @@ internal class HaExactEntityStreamOwner(
     override fun close() {
         var drain = false
         var pathObserver: HaNetworkPathObserver? = null
+        var probeAtClose: PathProbeMonitor? = null
         var hadDemand = false
         synchronized(lock) {
             if (stopped) return
@@ -637,6 +640,7 @@ internal class HaExactEntityStreamOwner(
             sourceJob = null
             hadDemand = request.active
             pathObserver = networkPathObserver
+            probeAtClose = pathProbe
             networkPathObserver = null
             request = Request(null, emptySet())
             callbackQueue.clear()
@@ -662,12 +666,29 @@ internal class HaExactEntityStreamOwner(
             }
         }
         // A closed owner holds no socket, so the verdict it fed becomes unreportable with it.
-        if (hadDemand) pathObserver?.let { observer -> safeCallback { observer.onSocketState(HaSocketState.STOPPED) } }
+        if (hadDemand) {
+            pathObserver?.let { observer -> safeCallback { observer.onSocketState(HaSocketState.STOPPED) } }
+            probeAtClose?.let { probe -> safeCallback { probe.onSocketState(HaSocketState.STOPPED) } }
+        }
         if (drain) drainCallbacks()
     }
 
     private fun reportPath(kind: HaPathFailureKind) {
         networkPathObserver?.let { observer -> safeCallback { observer.onConnectionFailure(kind) } }
+    }
+
+    /**
+     * Start a layer-3 burst if one is due, off this coroutine.
+     *
+     * The burst blocks for as long as its echoes take, so it must never sit on the socket's own
+     * probe path. `runBurst` contains its own failures, and the launch adds a second boundary so a
+     * diagnostic can never reach the supervisor and take the process down.
+     */
+    private fun dispatchPathBurst(probe: PathProbeMonitor) {
+        val claim = runCatching { probe.claimBurst(monotonicMillis()) }.getOrNull() ?: return
+        scope.launch(Dispatchers.IO) {
+            runCatching { probe.runBurst(claim, monotonicMillis) }
+        }
     }
 
     /** Publish the socket's own state to the network-path monitor; it owns nothing else. */
@@ -985,20 +1006,20 @@ internal class HaExactEntityStreamOwner(
                     // Silence for the whole pong timeout is the original liveness verdict: dead.
                     PongWait.SilentTimeout -> {
                         networkPathObserver?.let { observer -> safeCallback { observer.onProbeTimeout() } }
-                        // Ask layer 3 immediately: a pong that never came is exactly the observation
-                        // the echo probe exists to attribute, and it is about to be torn down anyway.
-                        pathProbe?.let { probe -> safeCallback { probe.onSocketSilence(monotonicMillis()) } }
+                        // Ask layer 3 NOW, and dispatch before the throw. Escalating and leaving the
+                        // burst to the next loop iteration would make the answer wait on a reconnect
+                        // that may never complete — during precisely the outage this exists to
+                        // attribute. The burst runs on its own dispatcher and outlives the teardown;
+                        // its result is discarded if the session it belongs to does not come back.
+                        pathProbe?.let { probe ->
+                            safeCallback { probe.onSocketSilence(monotonicMillis()) }
+                            dispatchPathBurst(probe)
+                        }
                         throw HaStreamLivenessException()
                     }
                 }
-                // Piggyback the layer-3 burst on this cadence rather than running a second loop. The
-                // burst itself blocks for as long as its echoes take, so it is dispatched away from
-                // this coroutine: the socket's own probe must never wait on it.
-                pathProbe?.let { probe ->
-                    probe.claimBurst(monotonicMillis())?.let { target ->
-                        scope.launch(Dispatchers.IO) { probe.runBurst(target, monotonicMillis) }
-                    }
-                }
+                // Piggyback the layer-3 burst on this cadence rather than running a second loop.
+                pathProbe?.let { probe -> dispatchPathBurst(probe) }
                 nextProbeAtMs = monotonicMillis() + probeIntervalMs
             }
         } finally {

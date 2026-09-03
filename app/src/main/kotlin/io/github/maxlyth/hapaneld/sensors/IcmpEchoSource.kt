@@ -48,7 +48,23 @@ internal interface PathEchoSource {
 internal class IcmpEchoSource : PathEchoSource {
     private val random = SecureRandom()
 
-    override fun burst(target: InetAddress, echoes: Int, perEchoTimeoutMs: Long, nowMs: () -> Long): PathBurst? {
+    override fun burst(target: InetAddress, echoes: Int, perEchoTimeoutMs: Long, nowMs: () -> Long): PathBurst? =
+        try {
+            attemptBurst(target, echoes, perEchoTimeoutMs, nowMs)
+        } catch (cancellation: kotlin.coroutines.cancellation.CancellationException) {
+            // Cooperative cancellation is not a platform refusal and must keep propagating.
+            throw cancellation
+        } catch (_: Throwable) {
+            // EVERY other failure of the complete operation means the same thing to the panel: this
+            // platform will not let it measure layer 3. The boundary is around the WHOLE operation
+            // rather than the socket call alone, because a refusal peculiar to one OEM can surface
+            // from connect, poll, read or a missing method just as easily as from socket(), and an
+            // escaping throwable here would reach a coroutine that can take the process down. A
+            // diagnostic must never be able to crash the app it is diagnosing.
+            null
+        }
+
+    private fun attemptBurst(target: InetAddress, echoes: Int, perEchoTimeoutMs: Long, nowMs: () -> Long): PathBurst? {
         val v6 = target is Inet6Address
         val fd: FileDescriptor = try {
             Os.socket(
@@ -59,11 +75,6 @@ internal class IcmpEchoSource : PathEchoSource {
         } catch (_: ErrnoException) {
             return null
         } catch (_: SecurityException) {
-            return null
-        } catch (_: Throwable) {
-            // Anything else the platform can throw here — a missing syscall, a stripped framework —
-            // means the same thing to us: this panel cannot probe layer 3. It is never a fault in
-            // the network and it must never escape into the socket's probe path.
             return null
         }
 
